@@ -1261,14 +1261,14 @@ The Operator owns this real-world check after focused Acceptance receipts pass:
 
 ### Console host ownership before cleanup
 
-Run `scripts/Get-ConsoleOwnership.ps1` before any console or terminal cleanup. Generic Terminal entries, OpenConsole and conhost names do not establish ownership. Never select processes for cleanup by age, count, parentlessness or process name alone.
+Run `console-ownership` before any console or terminal cleanup. Generic Terminal entries, OpenConsole and conhost names do not establish ownership. Never select processes for cleanup by age, count, parentlessness or process name alone.
 
 ```powershell
-.\scripts\Invoke-RepoScript.ps1 scripts\Get-ConsoleOwnership.ps1 -HarnessProcessId <current-harness-pid> -LaunchReceiptsPath <receipts.json>
-.\scripts\Invoke-RepoScript.ps1 scripts\Get-ConsoleOwnership.ps1 -SnapshotPath <snapshot.json> -HarnessProcessId <current-harness-pid> -LaunchReceiptsPath <receipts.json>
+.\mcg-orchestrator.cmd console-ownership --harness-pid <current-harness-pid> --receipts <receipts.json>
+.\mcg-orchestrator.cmd console-ownership --snapshot <snapshot.json> --harness-pid <current-harness-pid> --receipts <receipts.json> --json
 ```
 
-Omit `-SnapshotPath` for one live inventory capture through the repository process inspector. An unavailable capture refuses attribution. Both input files contain JSON arrays. Snapshot records have `processId`, `parentProcessId` (zero when absent), `name`, `startTime` and `commandLine`. Receipt records have `processId`, `startTime` and nonempty `dispatchId`. Supply receipts from the launch owner; automatic receipt recording is follow-up work. For example:
+Omit `--snapshot` for one live inventory capture through the repository process inspector. An unavailable capture refuses attribution. Both input files contain JSON arrays. Snapshot records have `processId`, `parentProcessId` (zero when absent), `name`, `startTime` and `commandLine`. Receipt records have `processId`, `startTime` and nonempty `dispatchId`. Supply receipts from the launch owner; automatic receipt recording is follow-up work. There is no default receipts path. `--json` emits one object with summary counts, result, refusal and withheld, unplaced and candidate arrays; suppressed groups have no candidates. Pre-classification refusals have null counts, an explicit refusal reason and detail, and empty arrays. For example:
 
 ```json
 [{"processId":52301,"parentProcessId":0,"name":"OpenConsole.exe","startTime":"2026-11-14T05:57:30.207Z","commandLine":"OpenConsole.exe -Embedding"}]
@@ -1280,9 +1280,9 @@ Omit `-SnapshotPath` for one live inventory capture through the repository proce
 
 Times must be ISO 8601 strings with an explicit offset or `Z`. Identity comparison normalizes to UTC and permits at most one second of precision difference, inclusive; reports use UTC milliseconds. Harness-owned hosts are always withheld, even with a receipt. The harness chain includes the harness itself, its ancestors and console hosts descended from the harness, with each parent hop guarded by start times. Siblings beneath a shared terminal ancestor are outside that chain. A parent starting later than its child cannot establish ancestry. A candidate needs a receipt matching its own identity, or the identity of its immediate launched parent present in the snapshot, with that parent's start time no later than the host. Parent links alone never authorize a candidate, and receipt attribution does not propagate through arbitrary descendants.
 
-On ambiguity the helper exits non-zero, reports unplaced hosts and suppresses the entire candidate group, including otherwise matched hosts. Missing, unreadable or malformed receipts also cause refusal. Stop cleanup and obtain the missing attribution evidence; do not guess from the process inventory. A sibling console host outside the harness chain may legitimately force refusal.
+On ambiguity the verb exits non-zero, reports unplaced hosts and suppresses the entire candidate group, including otherwise matched hosts. Missing, unreadable or malformed receipts also cause refusal. Stop cleanup and obtain the missing attribution evidence; do not guess from the process inventory. A sibling console host outside the harness chain may legitimately force refusal.
 
-After a resolved report, stop only its printed exact candidate ids through `scripts/Stop-RepoProcess.ps1`, one id per invocation. Immediately before stopping, re-run the helper and confirm that both the id and start time still identify the intended process. A report is an observation, not durable authorization for a reused id. The helper itself only reports; it never modifies a process.
+After a resolved report, stop only its printed exact candidate ids through `scripts/Stop-RepoProcess.ps1`, one id per invocation. Immediately before stopping, re-run the verb and confirm that both the id and start time still identify the intended process. A report is an observation, not durable authorization for a reused id. The verb itself only reports; it never modifies a process.
 
 ```powershell
 .\scripts\Invoke-RepoScript.ps1 scripts\Stop-RepoProcess.ps1 -Id <printed-candidate-pid>
