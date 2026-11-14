@@ -111,7 +111,7 @@ public sealed class DeferredNoChangeEvidenceOwnerFallbackTests
             Directory.CreateDirectory(project);
             File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\" />");
-            File.WriteAllText(Path.Combine(project, "DeferredAlphaTests.cs"), "public class DeferredAlphaTests {}");
+            File.WriteAllText(Path.Combine(project, "DeferredAlphaTests.cs"), "public class DeferredAlphaTests { [Xunit.Fact] public void Runs() {} }");
         }
 
         public ConductorDriver Driver()

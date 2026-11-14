@@ -73,7 +73,7 @@ public sealed class ConductorDriverTestsDeferredNoChangePrefixCoverage
         public TaskSpec Tester { get; }
         public CandidateIdentity Identity { get; } = new("deferred-candidate", "base", "manifest");
 
-        public Scenario(bool passTester, string testSource = "public abstract class DeferredAlphaTests {}")
+        public Scenario(bool passTester, string testSource = "public abstract class DeferredAlphaTests { [Xunit.Fact] public void Runs() {} }")
         {
             (Kernel, Goal) = SoftwareGoal("Deferred no-change candidate evidence");
             Developer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -146,5 +146,4 @@ public sealed class ConductorDriverTestsDeferredNoChangePrefixCoverage
         public void Dispose() => Directory.Delete(Root, recursive: true);
     }
 }
-
 

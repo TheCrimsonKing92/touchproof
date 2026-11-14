@@ -11,7 +11,7 @@ public static class WorkerStandingRules
         "Name each new test file after its public test class.",
         "A new test class in a non-parallel xunit collection must contain that collection's acceptance-lane substring in its class name.",
         "Tests never decide pass or fail on wall-clock time; bounded waits are hang-only and name the event that did not happen.",
-        "Do not run dotnet test directly; report the test classes to run as `tests: deferred - ClassA, ClassB`.",
+        "Do not run dotnet test directly; report the test classes to run as `tests: deferred - ClassA, ClassB`. List only classes that contain test methods, never fixture or harness files.",
         "Before changing any message, reason or diagnostic text, search the tests for exact-equality assertions on it, and if one exists put new information in a separate field instead of editing the asserted text."
     ]);
 

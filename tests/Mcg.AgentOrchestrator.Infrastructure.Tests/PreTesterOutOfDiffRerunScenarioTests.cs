@@ -231,7 +231,7 @@ public sealed class PreTesterOutOfDiffRerunScenarioTests
             var project = Path.Combine(worktree, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
             Directory.CreateDirectory(project);
             File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " {}");
+            File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " { [Xunit.Fact] public void Runs() {} }");
         }
 
         public void SeedRed(string[]? notRun = null, bool selected = true)

@@ -276,7 +276,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             foreach (var name in classNames)
-                File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " {}");
+                File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " { [Xunit.Fact] public void Runs() {} }");
         }
 
         public ConductorDriver Driver(

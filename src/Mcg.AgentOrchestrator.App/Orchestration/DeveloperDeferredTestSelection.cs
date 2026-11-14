@@ -11,8 +11,24 @@ internal static class DeveloperDeferredTestSelections
 {
     internal static DeveloperDeferredTestSelection Resolve(
         string worktreePath, string testsField, string? projectHomeDirectory = null)
-        => DeclaredTestEvidenceSelectors.ForProject(worktreePath, testsField, projectHomeDirectory) ??
-            ResolveNames(worktreePath, DeveloperDeferredTestClassNames.Parse(testsField));
+    {
+        var declared = DeclaredTestEvidenceSelectors.ForProject(worktreePath, testsField, projectHomeDirectory);
+        if (declared is not null) return declared;
+        var resolved = ResolveNames(worktreePath, DeveloperDeferredTestClassNames.Parse(testsField));
+        var probe = new DeferredTestClassTestMethodProbe();
+        var selections = new List<FindingEvidenceSelection>();
+        var notRun = resolved.NotRun.ToList();
+        foreach (var selection in resolved.Selections)
+        {
+            // Preserve existing resolution for conventional test names, including source-only stubs.
+            if (selection.TestClass.EndsWith("Tests", StringComparison.Ordinal) ||
+                probe.DeclaresTestMethod(Path.Combine(worktreePath, "tests", selection.TestProject), selection.TestClass))
+                selections.Add(selection);
+            else
+                notRun.Add(selection.TestClass);
+        }
+        return new(selections, notRun);
+    }
 
     internal static DeveloperDeferredTestSelection ResolveNames(
         string worktreePath, IReadOnlyList<string> distinctNames, bool requireUniqueSourceFile = false)

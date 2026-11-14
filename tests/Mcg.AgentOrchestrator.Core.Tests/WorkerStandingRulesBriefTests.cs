@@ -38,6 +38,7 @@ public sealed class WorkerStandingRulesBriefTests
             AssertSharedRules(rules);
             Assert.Contains("Do not run dotnet test directly", rules[3]);
             Assert.Contains("report the test classes to run as `tests: deferred - ClassA, ClassB`", rules[3]);
+            Assert.Contains("List only classes that contain test methods, never fixture or harness files.", rules[3]);
             Assert.Contains("Before changing any message, reason or diagnostic text, search the tests for exact-equality assertions", rules[4]);
             Assert.Contains("if one exists put new information in a separate field instead of editing the asserted text", rules[4]);
         }
@@ -60,6 +61,7 @@ public sealed class WorkerStandingRulesBriefTests
             Assert.Equal(3, rules.Length);
             AssertSharedRules(rules);
             Assert.DoesNotContain("dotnet test", string.Join('\n', rules));
+            Assert.DoesNotContain("List only classes that contain test methods, never fixture or harness files.", string.Join('\n', rules));
             Assert.DoesNotContain("exact-equality assertions", string.Join('\n', rules));
         }
         finally

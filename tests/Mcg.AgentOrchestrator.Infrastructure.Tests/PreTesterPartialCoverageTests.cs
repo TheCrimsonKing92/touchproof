@@ -368,7 +368,7 @@ public sealed class PreTesterPartialCoverageTests
             Directory.CreateDirectory(project);
             File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             foreach (var name in new[] { "AlphaTests", "BetaTests", "GammaTests" })
-                File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " {}");
+                File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " { [Xunit.Fact] public void Runs() {} }");
         }
 
         public FocusedEvidenceRunResult Green(string request) =>

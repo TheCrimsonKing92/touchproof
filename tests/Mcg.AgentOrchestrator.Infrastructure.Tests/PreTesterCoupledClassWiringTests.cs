@@ -149,7 +149,7 @@ public sealed class PreTesterCoupledClassWiringTests
             Repository = new Fixture(GoalWorktrees.WorktreePath(Root, Goal.Id));
             Repository.Write(Fixture.Source, "public class NewContract {}");
             Repository.Test("ConsumerTests", "NewContract");
-            Repository.Write("tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs", "public class DeclaredCoreTests {}");
+            Repository.Write("tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs", "public class DeclaredCoreTests { [Xunit.Fact] public void Runs() {} }");
         }
         internal PreTesterEvidenceEntry Latest() => Assert.IsType<PreTesterEvidenceEntry>(
             PreTesterEvidenceIndexLines.Latest(Goal, Tester.Id, CandidateSha));

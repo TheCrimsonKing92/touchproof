@@ -16,7 +16,8 @@ public sealed class DeveloperDeferredTestSelectionTests
                 File.WriteAllText(Path.Combine(project, name + ".csproj"), "<Project />");
                 var source = name == "CliTests" ? Path.Combine(project, "Cli") : project;
                 Directory.CreateDirectory(source);
-                File.WriteAllText(Path.Combine(source, name + ".cs"), "public class " + name + " {}");
+                File.WriteAllText(Path.Combine(source, name + ".cs"),
+                    "public class " + name + " { [Xunit.Fact] public void Runs() {} }");
             }
             var selection = DeveloperDeferredTestSelections.Resolve(root,
                 "deferred - " + string.Join(", ", classes));
@@ -38,9 +39,9 @@ public sealed class DeveloperDeferredTestSelectionTests
             File.WriteAllText(Path.Combine(project, "Example.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             File.WriteAllText(Path.Combine(project, "DeclaredTests.cs"),
-                "public class DeclaredTests {}");
+                "public class DeclaredTests { [Xunit.Fact] public void Runs() {} }");
             File.WriteAllText(Path.Combine(project, "mixedcasetests.cs"),
-                "public class MixedCaseTests {}");
+                "public class MixedCaseTests { [Xunit.Fact] public void Runs() {} }");
             var generated = Path.Combine(project, "obj");
             Directory.CreateDirectory(generated);
             File.WriteAllText(Path.Combine(generated, "GeneratedTests.cs"),
@@ -82,5 +83,35 @@ public sealed class DeveloperDeferredTestSelectionTests
         var selection = DeveloperDeferredTestSelections.Resolve("unused", testsField);
         Assert.Empty(selection.Selections);
         Assert.Empty(selection.NotRun);
+    }
+
+    [Fact]
+    public void ResolveFiltersFixtureAndPreservesTestlessTestsSuffix()
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var project = Path.Combine(root, "tests", "Example.Tests");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "Example.Tests.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(project, "BehaviorChecks.cs"),
+                "class BehaviorChecks { [Xunit.Fact] void Runs() {} }");
+            File.WriteAllText(Path.Combine(project, "ConsoleFixture.cs"),
+                "class ConsoleFixture : System.IDisposable { public void Dispose() {} }");
+            File.WriteAllText(Path.Combine(project, "DeferredStubTests.cs"),
+                "class DeferredStubTests {}");
+
+            var selection = DeveloperDeferredTestSelections.Resolve(root,
+                "deferred - BehaviorChecks, ConsoleFixture, DeferredStubTests");
+
+            Assert.Equal(["BehaviorChecks", "DeferredStubTests"],
+                selection.Selections.Select(item => item.TestClass).ToArray());
+            Assert.Equal("ConsoleFixture", Assert.Single(selection.NotRun));
+            Assert.DoesNotContain("DeferredStubTests", selection.NotRun);
+            var fixturesOnly = DeveloperDeferredTestSelections.Resolve(root, "deferred - ConsoleFixture");
+            Assert.Empty(fixturesOnly.Selections);
+            Assert.Equal("ConsoleFixture", Assert.Single(fixturesOnly.NotRun));
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 }

@@ -668,15 +668,15 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             var goalBuildPermit =
                 DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "permit-probe", storageRoot: storageRoot).BuildPermitIndex ?? 0;
             var foreignSlot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(goalBuildPermit == 0 ? 1 : 0, storageRoot: storageRoot);
-            using var foreignSlotLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(foreignSlot);
+            using var foreignSlotLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(foreignSlot);
             var leaseHeldObserved = false;
             var verifier = new ProbeAcceptanceVerifier(stableSlotLease =>
             {
                 Xunit.Assert.True(storageRoot.ContainsPath(stableSlotLease!.Environment.RootPath), $"Acceptance lease root {stableSlotLease.Environment.RootPath} escaped supplied root {storageRoot.RootPath}.");
                 var reacquire = Xunit.Assert.ThrowsAny<IOException>(() =>
-                    DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                    DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
                         stableSlotLease!.Environment,
-                        TimeSpan.FromMilliseconds(50)));
+                        timeout: TimeSpan.FromMilliseconds(50)));
                 Xunit.Assert.IsType<DotnetBuildSlotsBusyException>(reacquire);
                 leaseHeldObserved = true;
             });

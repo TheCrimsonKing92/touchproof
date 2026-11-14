@@ -102,7 +102,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidenceExitNotes
             File.WriteAllText(Path.Combine(project, projectName + ".csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             File.WriteAllText(Path.Combine(project, className + ".cs"),
-                "public class " + className + " {}");
+                "public class " + className + " { [Xunit.Fact] public void Runs() {} }");
         }
 
         public IReadOnlyList<string> ExitNotes() => Goal.Timeline

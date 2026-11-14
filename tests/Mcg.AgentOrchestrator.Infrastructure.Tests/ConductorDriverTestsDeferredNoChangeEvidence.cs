@@ -163,7 +163,7 @@ public sealed class ConductorDriverTestsDeferredNoChangeEvidence
             File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             File.WriteAllText(Path.Combine(project, "DeferredAlphaTests.cs"),
-                "public class DeferredAlphaTests {}");
+                "public class DeferredAlphaTests { [Xunit.Fact] public void Runs() {} }");
         }
 
         public ConductorDriver Driver(

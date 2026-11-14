@@ -11,6 +11,10 @@ public enum ReviewFindingState
     Resolved
 }
 
+// Applied at property level so the parser's options-level enum converter cannot allow integers.
+public sealed class ReviewFindingStateJsonConverter()
+    : JsonStringEnumConverter<ReviewFindingState>(namingPolicy: null, allowIntegerValues: false);
+
 [JsonConverter(typeof(FindingSeverityJsonConverter))]
 public enum FindingSeverity
 {
@@ -452,7 +456,9 @@ public sealed record FindingEvidenceReceipt(
 
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,
-    [property: JsonPropertyName("state")] ReviewFindingState State,
+    [property: JsonPropertyName("state")]
+    [property: JsonConverter(typeof(ReviewFindingStateJsonConverter))]
+    ReviewFindingState State,
     [property: JsonPropertyName("location")] ReviewFindingLocation Location,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("severity")]

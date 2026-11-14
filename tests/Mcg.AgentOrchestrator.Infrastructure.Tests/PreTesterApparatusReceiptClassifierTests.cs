@@ -6,6 +6,48 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class PreTesterApparatusReceiptClassifierTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void InvalidEvidenceRetainsZeroMatchNamesWithoutMatchingRequestOrCoverage(bool inArm, bool unmatched)
+    {
+        var check = new AcceptanceCheckResult("selection", false, 0,
+            "Focused evidence selection apparatus failure: 'selection' had selection(s) matching 0 tests: " +
+            "FullyQualifiedName~OwnerConsoleHarness, FullyQualifiedName~CliAttentionShowDecisionsFixture.",
+            FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+            ExecutedTestCount: 243);
+        var evidence = new FocusedEvidenceRunResult("request", true, false, "apparatus", inArm ? [] : [check],
+            Arms: inArm ? [new(FindingEvidenceArm.Candidate, "candidate", FindingEvidenceArmDisposition.Inconclusive,
+                true, false, "apparatus", [check])] : null);
+        FindingEvidenceSelection[] selections = unmatched ? [new("Other.Tests", "UnrelatedTests")] : [];
+
+        var result = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, true, "candidate", selections, _ => false);
+
+        Assert.Equal("unusable", result.Outcome);
+        Assert.Equal("evidence-invalid", result.Unusable!.Check);
+        Assert.Equal(["CliAttentionShowDecisionsFixture", "OwnerConsoleHarness"], result.Unusable.MissingClasses);
+        Assert.Contains("unusable_classes=CliAttentionShowDecisionsFixture,OwnerConsoleHarness",
+            PreTesterUnusableReason.AppendTo(result.Unusable, "event"));
+    }
+
+    [Theory]
+    [InlineData("focused-selection-apparatus-failure", false, "'selection' executed 0 tests.")]
+    [InlineData("focused-selection-apparatus-failure", false, "'selection' had selection(s) matching 0 tests: .")]
+    [InlineData("build-phase-timeout", false, "'selection' had selection(s) matching 0 tests: FullyQualifiedName~Helper.")]
+    [InlineData("focused-selection-apparatus-failure", true, "'selection' had selection(s) matching 0 tests: FullyQualifiedName~Helper.")]
+    public void MissingNamesAndUnrelatedFailuresDoNotInventAffectedClasses(string classification, bool passed, string detail)
+    {
+        var check = new AcceptanceCheckResult("selection", passed, 0, detail,
+            FailureClassification: classification, ExecutedTestCount: 0);
+        var evidence = new FocusedEvidenceRunResult("request", true, false, "invalid", [check]);
+        var result = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, true, "candidate",
+            [new("Example.Tests", "UnprovenTests")], _ => false);
+        Assert.Equal("evidence-invalid", result.Unusable!.Check);
+        Assert.Empty(result.Unusable.MissingClasses);
+    }
+
+    [Theory]
     [InlineData("build-only", true)]
     [InlineData("mixed-failures", false)]
     [InlineData("non-build", false)]

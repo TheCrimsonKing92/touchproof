@@ -134,7 +134,7 @@ public sealed class ConductorDriverTestsPreTesterRedLoopConvergence
             var project = Path.Combine(Worktree, "tests", projectName);
             Directory.CreateDirectory(project);
             File.WriteAllText(Path.Combine(project, projectName + ".csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " {}");
+            File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " { [Xunit.Fact] public void Runs() {} }");
         }
 
         public void SeedReds(params int[] counts)

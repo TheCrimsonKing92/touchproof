@@ -233,7 +233,7 @@ public sealed class ConductorDriverTestsPreTesterNamedEvidence
             var project = Path.Combine(Worktree, "tests", projectName);
             Directory.CreateDirectory(project);
             File.WriteAllText(Path.Combine(project, projectName + ".csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
-            File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " {}");
+            File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " { [Xunit.Fact] public void Runs() {} }");
         }
 
         public FocusedEvidenceRunResult Green(string request) =>
