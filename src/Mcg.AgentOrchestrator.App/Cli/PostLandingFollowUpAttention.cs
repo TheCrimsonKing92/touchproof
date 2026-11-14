@@ -1,3 +1,4 @@
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -19,27 +20,46 @@ internal static class PostLandingFollowUpAttention
             StringComparison.OrdinalIgnoreCase);
 
     internal static Dictionary<string, object?> WithRows(Dictionary<string, object?> payload,
-        IReadOnlyList<HumanInputRequest> waits, IReadOnlyCollection<Goal>? goals)
-    {
-        var rows = Rows(waits, goals);
-        if (rows.Length > 0)
-            payload.Add("postLandingFollowUps", rows);
-        return payload;
-    }
-
-    internal static object[] Rows(IReadOnlyList<HumanInputRequest> waits, IReadOnlyCollection<Goal>? goals)
+        IReadOnlyList<HumanInputRequest> waits, IReadOnlyCollection<Goal>? goals, DateTimeOffset renderedAt)
     {
         var landed = (goals ?? []).Where(goal => goal.Status == GoalStatus.Completed)
             .ToDictionary(goal => goal.Id);
-        return waits.Where(wait => landed.TryGetValue(wait.GoalId, out var goal) && IsFollowUp(goal, wait))
-            .Select(wait => (object)new
-            {
-                waitId = wait.Id.Value,
-                goalId = wait.GoalId.Value,
-                goalState = "landed",
-                availability = wait.PlannerEvidence!.Availability,
-                owner = wait.EvidenceOwner ?? "operator",
-                nextAction = wait.ResumeCommand
-            }).ToArray();
+        var followUps = waits.Where(wait => landed.TryGetValue(wait.GoalId, out var goal) && IsFollowUp(goal, wait))
+            .ToArray();
+        if (followUps.Length == 0)
+            return payload;
+
+        payload.Add("postLandingFollowUps", followUps.Select(wait => new
+        {
+            waitId = wait.Id.Value,
+            goalId = wait.GoalId.Value,
+            goalState = "landed",
+            availability = wait.PlannerEvidence!.Availability,
+            owner = wait.EvidenceOwner ?? "operator",
+            nextAction = wait.ResumeCommand,
+            requestedAt = wait.RequestedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+            ageSeconds = AgeSeconds(wait, renderedAt)
+        }).ToArray());
+        var oldest = followUps.OrderBy(wait => wait.RequestedAt)
+            .ThenBy(wait => wait.Id.Value, StringComparer.Ordinal).First();
+        payload.Add("postLandingFollowUpSummary", new
+        {
+            open = followUps.Length,
+            oldestAgeSeconds = AgeSeconds(oldest, renderedAt),
+            oldestWaitId = oldest.Id.Value
+        });
+        return payload;
+    }
+
+    private static long AgeSeconds(HumanInputRequest wait, DateTimeOffset renderedAt) =>
+        Math.Max(0L, (renderedAt - wait.RequestedAt).Ticks / TimeSpan.TicksPerSecond);
+
+    // The envelope reads its clock too; freeze it so generatedAt and ages share one instant.
+    internal static TimeProvider CaptureRenderTime(TimeProvider? time) =>
+        new RenderTime((time ?? TimeProvider.System).GetUtcNow());
+
+    private sealed class RenderTime(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

@@ -11,8 +11,10 @@ internal static class AttentionShowAgentReadView
     internal static string Render(string? goalId, IReadOnlyList<HumanInputRequest> waits,
         IReadOnlyList<CollaborationItem> items, Func<CollaborationItem, string?> clarificationId,
         TimeProvider? time = null, IReadOnlyCollection<Goal>? goals = null, OwnerDecisionRead? decisions = null,
-        IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null) =>
-        AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
+        IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null)
+    {
+        var renderTime = PostLandingFollowUpAttention.CaptureRenderTime(time);
+        return AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
             PostLandingFollowUpAttention.WithRows(EnvironmentHoldAttentionView.WithRows(AttentionAgentReadView.WithPostLandingDuties(WithDecisions(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
             {
                 ["goalId"] = goalId,
@@ -70,8 +72,9 @@ internal static class AttentionShowAgentReadView
             }, amendmentHolds), decisions), AttentionAgentReadView.DutyRows(null,
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray())),
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)), waits,
-                (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray()),
-            new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
+                (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray(), renderTime.GetUtcNow()),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web), renderTime);
+    }
 
     private static Dictionary<string, object?> WithDecisions(Dictionary<string, object?> payload,
         OwnerDecisionRead? decisions)

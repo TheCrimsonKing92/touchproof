@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-public enum PreTesterEvidenceRefreshDecision { Reuse, Refresh, EscalateRepeat }
+public enum PreTesterEvidenceRefreshDecision { Reuse, Refresh, ContinueAfterUnusableRefresh }
 
 public sealed record PreTesterEvidenceRefreshMarker(
     string CandidateSha, string SupersededReceiptId, string FreshReceiptId);
@@ -24,7 +24,7 @@ public static class PreTesterEvidenceRefreshRule
     public static PreTesterEvidenceRefreshDecision DecideAfterRun(
         PreTesterEvidenceRefreshMarker? marker, string receiptId, string outcome) =>
         marker?.FreshReceiptId == receiptId && outcome == "unusable"
-            ? PreTesterEvidenceRefreshDecision.EscalateRepeat : PreTesterEvidenceRefreshDecision.Reuse;
+            ? PreTesterEvidenceRefreshDecision.ContinueAfterUnusableRefresh : PreTesterEvidenceRefreshDecision.Reuse;
 
     public static string FormatMarker(PreTesterEvidenceRefreshMarker marker) =>
         Prefix + $"candidate_sha={marker.CandidateSha}; superseded_receipt_id={marker.SupersededReceiptId}; " +
@@ -56,8 +56,8 @@ public static class PreTesterEvidenceRefreshRule
     public static PreTesterEvidenceRefreshMarker? LatestForCandidate(Goal goal, TaskId testerId,
         string candidateSha) => ForCandidate(goal, testerId, candidateSha).LastOrDefault();
 
-    public static string DescribeRepeat(string candidateSha, string supersededReceiptId, string freshReceiptId) =>
-        $"PRE_TESTER_APPARATUS_REFRESH_UNUSABLE: candidate_sha={candidateSha}; " +
+    public static string DescribeContinueAfterUnusableRefresh(string candidateSha, string supersededReceiptId, string freshReceiptId) =>
+        $"candidate_sha={candidateSha}; " +
         $"superseded_receipt_id={supersededReceiptId}; fresh_receipt_id={freshReceiptId}; " +
-        "the single fresh pre-Tester evidence run is unusable; operator intervention is required.";
+        "the single fresh pre-Tester evidence run is unusable; the conductor continues to the Tester.";
 }

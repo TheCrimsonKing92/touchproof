@@ -77,12 +77,24 @@ public sealed class PreTesterEvidenceRefreshRuleTests
     [InlineData("fresh", "green", false)]
     [InlineData("fresh", "red", false)]
     [InlineData("fresh", "actionable-red", false)]
-    public void OnlyUnusableFreshReceiptEscalates(string receipt, string outcome, bool escalate)
+    public void OnlyUnusableFreshReceiptContinuesToTester(string receipt, string outcome, bool continues)
     {
         var marker = new PreTesterEvidenceRefreshMarker("abc1234", "old", "fresh");
-        Assert.Equal(escalate ? PreTesterEvidenceRefreshDecision.EscalateRepeat : PreTesterEvidenceRefreshDecision.Reuse,
+        Assert.Equal(continues ? PreTesterEvidenceRefreshDecision.ContinueAfterUnusableRefresh : PreTesterEvidenceRefreshDecision.Reuse,
             PreTesterEvidenceRefreshRule.DecideAfterRun(marker, receipt, outcome));
         Assert.Equal(PreTesterEvidenceRefreshDecision.Reuse,
             PreTesterEvidenceRefreshRule.DecideAfterRun(null, receipt, outcome));
+    }
+
+    [Fact]
+    public void ContinuationDescriptionNamesCandidateAndBothReceipts()
+    {
+        var description = PreTesterEvidenceRefreshRule.DescribeContinueAfterUnusableRefresh("abc1234", "old", "fresh");
+
+        Assert.Contains("candidate_sha=abc1234", description, StringComparison.Ordinal);
+        Assert.Contains("superseded_receipt_id=old", description, StringComparison.Ordinal);
+        Assert.Contains("fresh_receipt_id=fresh", description, StringComparison.Ordinal);
+        Assert.Contains("continues to the Tester", description, StringComparison.Ordinal);
+        Assert.DoesNotContain("operator", description, StringComparison.OrdinalIgnoreCase);
     }
 }
