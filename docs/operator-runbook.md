@@ -91,6 +91,8 @@ On a clean checkout, a read-only launcher may report that its current artifact a
 
 For exact process ownership, command-line, or lineage inspection, use `.\scripts\Invoke-RepoScript.ps1 scripts\Get-RepoProcessInfo.ps1 -Id <pid> -IncludeChildren` (optionally `-Newest <n>`). It replaces ad-hoc `Get-CimInstance` and inline process-tree snippets. Keep every Codex harness command shell-plain and single-purpose: do not join commands with `;`, `|`, or `&`, and do not construct PID lists with comma expressions. Those forms are evaluated as separate or unmatched permission segments and cause avoidable approval prompts or sandbox routing. When an operation needs compound logic, put it in or extend a checked-in repo-bounded helper, then invoke that helper through `Invoke-RepoScript.ps1`.
 
+Before console or terminal cleanup, follow [Console host ownership before cleanup](#console-host-ownership-before-cleanup) and run the attribution helper.
+
 **Codex harness timeout floor:** distinguish the outer shell/tool budget from an orchestrator operation's own timeout. Give `Get-OrchestratorSnapshot.ps1` at least **120 seconds**, even for a bounded goal list; give ordinary foreground status/backlog reads at least **60 seconds**. For a helper that waits, builds, tests, or runs acceptance, set the outer budget to the helper's documented/internal maximum plus at least 30 seconds of startup and result-reconciliation margin. If a tool call yields a running cell, resume that cell with the same remaining budget instead of starting the command again. An outer timeout means the result was not collected; it is not evidence that the underlying operation failed or stalled.
 
 ---
@@ -1256,6 +1258,35 @@ The Operator owns this real-world check after focused Acceptance receipts pass:
 - **Shared-service changes ripple to integration tests.** A brief that changes a widely-consumed service (the failure classifier, the binding resolver, a kernel API) must require the worker to find that service's consumers (a call-site / reverse-dependency search) and run the **dependent integration tests** (e.g. `RunGoalService_*`) in self-verify — not just the changed file's own unit tests. Otherwise the ripple is caught only by the full-suite acceptance gate, costing a Developer-retry cycle. Observed 2026-06-25: two lanes changing `DispatchFailureClassifier` and the binding resolver both escalated at acceptance on `RunGoalService_*` because their briefs scoped self-verify too narrowly.
 - **Reproduce before you theorize.** When an external CLI/model/tool fails, run the smallest reproducing command before concluding a cause.
 - **Retire terminal ghosts durably.** `goal-mark-landed` now writes a retired terminal disposition after out-of-band landing, and terminal sweeps suppress standing retired dispositions. Once 4f970f1d lands, `abandon-goal` will do the same for abandoned goals; until then, treat abandon retirement as in progress rather than guaranteed.
+
+### Console host ownership before cleanup
+
+Run `scripts/Get-ConsoleOwnership.ps1` before any console or terminal cleanup. Generic Terminal entries, OpenConsole and conhost names do not establish ownership. Never select processes for cleanup by age, count, parentlessness or process name alone.
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-ConsoleOwnership.ps1 -HarnessProcessId <current-harness-pid> -LaunchReceiptsPath <receipts.json>
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-ConsoleOwnership.ps1 -SnapshotPath <snapshot.json> -HarnessProcessId <current-harness-pid> -LaunchReceiptsPath <receipts.json>
+```
+
+Omit `-SnapshotPath` for one live inventory capture through the repository process inspector. An unavailable capture refuses attribution. Both input files contain JSON arrays. Snapshot records have `processId`, `parentProcessId` (zero when absent), `name`, `startTime` and `commandLine`. Receipt records have `processId`, `startTime` and nonempty `dispatchId`. Supply receipts from the launch owner; automatic receipt recording is follow-up work. For example:
+
+```json
+[{"processId":52301,"parentProcessId":0,"name":"OpenConsole.exe","startTime":"2026-11-14T05:57:30.207Z","commandLine":"OpenConsole.exe -Embedding"}]
+```
+
+```json
+[{"processId":52301,"startTime":"2026-11-14T05:57:30.207Z","dispatchId":"dispatch-example"}]
+```
+
+Times must be ISO 8601 strings with an explicit offset or `Z`. Identity comparison normalizes to UTC and permits at most one second of precision difference, inclusive; reports use UTC milliseconds. Harness-owned hosts are always withheld, even with a receipt. The harness chain includes the harness itself, its ancestors and console hosts descended from the harness, with each parent hop guarded by start times. Siblings beneath a shared terminal ancestor are outside that chain. A parent starting later than its child cannot establish ancestry. A candidate needs a receipt matching its own identity, or the identity of its immediate launched parent present in the snapshot, with that parent's start time no later than the host. Parent links alone never authorize a candidate, and receipt attribution does not propagate through arbitrary descendants.
+
+On ambiguity the helper exits non-zero, reports unplaced hosts and suppresses the entire candidate group, including otherwise matched hosts. Missing, unreadable or malformed receipts also cause refusal. Stop cleanup and obtain the missing attribution evidence; do not guess from the process inventory. A sibling console host outside the harness chain may legitimately force refusal.
+
+After a resolved report, stop only its printed exact candidate ids through `scripts/Stop-RepoProcess.ps1`, one id per invocation. Immediately before stopping, re-run the helper and confirm that both the id and start time still identify the intended process. A report is an observation, not durable authorization for a reused id. The helper itself only reports; it never modifies a process.
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Stop-RepoProcess.ps1 -Id <printed-candidate-pid>
+```
 
 ### Manual verbs and subscription execution checks
 
