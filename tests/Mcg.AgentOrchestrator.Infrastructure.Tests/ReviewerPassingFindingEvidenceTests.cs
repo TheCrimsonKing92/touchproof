@@ -222,7 +222,10 @@ public sealed class ReviewerPassingFindingEvidenceTests
         Assert.Equal(2, fixture.Retries.Count);
         Assert.Equal(fixture.Developer.Id, fixture.Retries.Last().Task);
         Assert.Single(fixture.Executions);
-        Assert.Equal(ReviewFindingState.Open, Assert.Single(fixture.Reviewer.LastVerification!.MergedReviewFindings!).State);
+        // The Developer retry clears downstream LastVerification but retains the finding history.
+        var retained = Assert.Single(fixture.Reviewer.VerificationHistory.Last().MergedReviewFindings!);
+        Assert.Equal(finding.StableId, retained.StableId);
+        Assert.Equal(ReviewFindingState.Open, retained.State);
     }
 
     [Fact]

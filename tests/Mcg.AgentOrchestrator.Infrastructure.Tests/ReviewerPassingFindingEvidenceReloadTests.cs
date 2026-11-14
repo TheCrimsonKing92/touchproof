@@ -279,7 +279,7 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
         return fixture;
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void MissingActionableTarget_ReloadAndTicks_KeepTypedHold()
     {
@@ -351,7 +351,7 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
         }
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData("docs/operator-runbook.md", FindingCategory.Correctness)]
     [InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterGuardSelections.cs", FindingCategory.TestEvidence)]
