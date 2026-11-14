@@ -20,7 +20,7 @@ internal static class UnitMeasurementCollector
             {
                 if (kinds.HasFlag(UnitCommandKinds.Build) && build is null)
                     Skip(unit, "test", unit.TestCommand, "Test measurement skipped because the requested build did not succeed.");
-                else
+                else if (kinds.HasFlag(UnitCommandKinds.Build) || PrerequisiteBuildSucceeded(unit))
                     test = Measure(unit, UnitCommandKinds.Test, unit.TestCommand);
             }
             if (build is not null || test is not null)
@@ -41,9 +41,33 @@ internal static class UnitMeasurementCollector
             if (result.Seconds is { } seconds)
                 return new ProjectFact<double>(seconds, new FactSource(measurementReference:
                     $"measurement:project-discover/{unit.UnitId}/{label}"), FactConfidence.High);
-            Skip(unit, label, command, $"Measurement failed: {result.Failure}");
+            Skip(unit, label, command, $"Measurement failed: the {label} command failed with cause {FailureDetails(result)}");
             return null;
         }
+
+        bool PrerequisiteBuildSucceeded(UnitCommands unit)
+        {
+            if (unit.TestCommand!.Confidence != FactConfidence.High)
+            {
+                Skip(unit, "test", unit.TestCommand, "Measurement skipped; confirm the command before executing it.");
+                return false;
+            }
+            if (unit.BuildCommand.Confidence != FactConfidence.High)
+            {
+                Skip(unit, "test", unit.BuildCommand,
+                    "Test measurement skipped; confirm the prerequisite build command before executing it.");
+                return false;
+            }
+            var result = measurer.Measure(root, unit.UnitId, UnitCommandKinds.Build, unit.BuildCommand.Value);
+            if (result.Seconds is not null) return true;
+            Skip(unit, "test", unit.BuildCommand,
+                $"Test measurement skipped: the prerequisite build command failed with cause {FailureDetails(result)}");
+            return false;
+        }
+
+        static string FailureDetails(UnitCommandMeasurementResult result) =>
+            $"{result.Cause}. {result.Failure} Output tail:" +
+            (string.IsNullOrEmpty(result.OutputTail) ? " (no output captured)" : $"\n{result.OutputTail}");
 
         void Skip(UnitCommands unit, string label, ProjectFact<string> command, string reason) =>
             ProjectFactHelpers.Ask($"commands/{unit.UnitId}/{label}/duration", reason, command.Source, questions);

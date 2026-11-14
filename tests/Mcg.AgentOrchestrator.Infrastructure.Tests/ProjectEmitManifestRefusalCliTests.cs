@@ -197,8 +197,9 @@ public sealed class ProjectEmitManifestRefusalCliTests
             Assert.True(File.Exists(ModelPath));
             if (measured)
             {
-                Assert.Equal(2, measurer.Calls.Count);
-                Assert.All(measurer.Calls, call => Assert.Equal(UnitCommandKinds.Test, call.Kind));
+                Assert.Equal(4, measurer.Calls.Count);
+                Assert.Equal(new[] { UnitCommandKinds.Build, UnitCommandKinds.Test, UnitCommandKinds.Build, UnitCommandKinds.Test },
+                    measurer.Calls.Select(call => call.Kind));
             }
         }
 

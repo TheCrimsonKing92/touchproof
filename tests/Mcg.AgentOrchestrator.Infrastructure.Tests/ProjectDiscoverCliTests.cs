@@ -225,7 +225,7 @@ public sealed class ProjectDiscoverCliTests
 
     [Theory]
     [InlineData("build", UnitCommandKinds.Build, 3)]
-    [InlineData("TEST", UnitCommandKinds.Test, 2)]
+    [InlineData("TEST", UnitCommandKinds.Test, 4)]
     [InlineData("all", UnitCommandKinds.All, 5)]
     public void MeasureEqualsOptionPassesRequestedKinds(string value, UnitCommandKinds kinds, int count)
     {
@@ -236,7 +236,11 @@ public sealed class ProjectDiscoverCliTests
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "--measure=" + value],
             registry, fixture.Root, null, output, () => fake));
         Assert.Equal(count, fake.Calls.Count);
-        Assert.All(fake.Calls, call => Assert.True(kinds.HasFlag(call.Kind)));
+        if (kinds == UnitCommandKinds.Test)
+            Assert.Equal(new[] { UnitCommandKinds.Build, UnitCommandKinds.Test, UnitCommandKinds.Build, UnitCommandKinds.Test },
+                fake.Calls.Select(call => call.Kind));
+        else
+            Assert.All(fake.Calls, call => Assert.True(kinds.HasFlag(call.Kind)));
     }
 
     [Fact]

@@ -54,7 +54,7 @@ public sealed class LearnedEngineSettingsDeriverTests
         AssertQuestions(learned, true);
         var question = learned.OwnerQuestions[0];
         Assert.Contains("Supply a default timeout", question.Question);
-        Assert.Contains("project discover --measure test", question.Question);
+        Assert.Contains("project discover --measure all", question.Question);
     }
 
     [Fact]
