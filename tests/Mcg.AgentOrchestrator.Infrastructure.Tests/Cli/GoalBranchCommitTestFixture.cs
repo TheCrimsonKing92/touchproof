@@ -69,6 +69,21 @@ internal sealed class GoalBranchCommitTestFixture : IDisposable
         Assert.Equal("", Git("diff", "--name-only"));
     }
 
+    internal void StartPendingMerge()
+    {
+        File.WriteAllText(Path.Combine(Root, "merged.txt"), "branch change\n");
+        RunGit(Root, "add", "merged.txt");
+        RunGit(Root, "commit", "-m", "Change on main");
+        Git("merge", "--no-ff", "--no-commit", "main");
+        File.WriteAllText(Path.Combine(Worktree, "change.txt"), "operator change\n");
+        Git("add", "change.txt");
+        Assert.Equal(RunGit(Root, "rev-parse", "HEAD"), Git("rev-parse", "-q", "--verify", "MERGE_HEAD"));
+        Assert.Equal(PreviousHead, Head);
+        Assert.Equal(new[] { "change.txt", "merged.txt" },
+            Git("diff", "--cached", "--name-only").Split('\n', StringSplitOptions.TrimEntries));
+        Assert.Equal("", Git("diff", "--name-only"));
+    }
+
     internal (int ExitCode, string Output, string Error) Run(bool resume = false, IOperatorIntentStore? store = null)
     {
         string[] args = resume ? ["goal-branch-commit", GoalId.Value[..8], "--resume"]
