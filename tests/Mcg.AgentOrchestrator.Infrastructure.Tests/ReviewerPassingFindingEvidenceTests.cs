@@ -194,13 +194,72 @@ public sealed class ReviewerPassingFindingEvidenceTests
         Assert.Single(fixture.Executions);
     }
 
-    [Theory]
-    [InlineData("I disagree with the passing receipt.")]
-    [InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterGuardSelections.cs:34")]
-    public void DeliveredGreen_NoRemainingChange_HoldsWithOpenFinding(string description)
+    [Fact]
+    public void DeliveredGreen_StructuralFinding_RoutesDeveloperCorrection()
     {
         using var fixture = new ReviewerPassingFindingEvidenceFixture();
-        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding() with { Description = description };
+        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding() with
+        {
+            StableId = "sibling-list-captures-prose-word",
+            Location = new("src/Mcg.AgentOrchestrator.App/Orchestration/BriefPlannedTestLaneReadiness.cs", "109"),
+            Description = "ListBuilder captures the prose word and returns the sibling list with a null collection."
+        };
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+        Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
+        fixture.Report([finding]);
+
+        Assert.True(fixture.Decide(out var observation));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingRouteObserved, observation.Kind);
+        Assert.Equal(fixture.Developer.Id, observation.TargetTaskId);
+        Assert.Equal(RetryCause.NewSourceFinding, observation.ObservedCause);
+        Assert.Contains("REVIEWER_PASSING_EVIDENCE_CORRECTION", observation.Evidence);
+        Assert.Contains(finding.StableId, observation.Evidence);
+        Assert.DoesNotContain("actionable-change-unavailable", observation.Evidence);
+        Assert.DoesNotContain("REVIEWER_PASSING_EVIDENCE_HOLD", observation.Evidence);
+
+        Assert.IsNotType<ConductorAdvanceOutcome.Held>(fixture.AdvanceToDecision().Outcome);
+        Assert.Equal(2, fixture.Retries.Count);
+        Assert.Equal(fixture.Developer.Id, fixture.Retries.Last().Task);
+        Assert.Single(fixture.Executions);
+        Assert.Equal(ReviewFindingState.Open, Assert.Single(fixture.Reviewer.LastVerification!.MergedReviewFindings!).State);
+    }
+
+    [Fact]
+    public void DeliveredGreen_BlankRetainedRegion_HoldsWithOpenFinding()
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding();
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+        fixture.Report([finding]);
+        // Reviewer output requires a region; retained ledger entries are the router's input.
+        var review = fixture.Reviewer.LastVerification!;
+        fixture.ReattachVerification(review with
+        {
+            MergedReviewFindings = [Assert.Single(review.MergedReviewFindings!) with
+            { Location = finding.Location with { Region = "" } }]
+        });
+
+        Assert.True(fixture.Decide(out var hold));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, hold.Kind);
+        Assert.Null(hold.TargetTaskId);
+        Assert.Contains("actionable-change-unavailable", hold.Evidence);
+        Assert.Contains(finding.StableId, hold.Evidence);
+        Assert.Contains(Assert.Single(fixture.Receipts).ReceiptId, hold.Evidence);
+        Assert.Single(fixture.Retries);
+        Assert.Single(fixture.Executions);
+        Assert.Equal(ReviewFindingState.Open, Assert.Single(fixture.Reviewer.LastVerification!.MergedReviewFindings!).State);
+    }
+
+    [Theory]
+    [InlineData("docs/operator-runbook.md", FindingCategory.Correctness)]
+    [InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterGuardSelections.cs", FindingCategory.TestEvidence)]
+    public void DeliveredGreen_IneligibleStructure_HoldsWithOpenFinding(string file, FindingCategory category)
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding() with
+        { Location = new(file, "34-37"), Category = category };
         fixture.Report([finding]);
         fixture.AdvanceToDecision();
         fixture.Report([finding]);

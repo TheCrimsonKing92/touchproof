@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using static Mcg.AgentOrchestrator.App.Orchestration.ConductorDriver;
@@ -203,16 +202,13 @@ internal static class ReviewerPassingFindingEvidenceRouter
              item.Message.Contains("stable_id: " + episode.Finding.StableId + ";", StringComparison.Ordinal) &&
              episode.ReceiptIds.All(id => Field(item.Message, "receipt_ids").Split(',').Contains(id, StringComparer.Ordinal))));
 
-    // Conservative source actionability: an owned anchor plus a concrete scenario/defect or
-    // requested change. A location alone or disagreement with green evidence cannot authorize repair.
+    // Repair requires a Developer target without operator escalation and a region in an owned area.
     private static bool HasActionableChange(ReviewFinding finding) =>
         ReviewFindingRouting.Project([finding], finding.Description).Single() is
             { TargetRole: AgentRole.Developer, EscalateToOperator: false } &&
         !string.IsNullOrWhiteSpace(finding.Location.Region) &&
         (RepositoryOwnershipMap.Classify(finding.Location.File).Area is
-            RepositoryOwnershipArea.Source or RepositoryOwnershipArea.Test or RepositoryOwnershipArea.SharedInfrastructure) &&
-        Regex.IsMatch(finding.Description, @"(?i)\b(missing|skips?|only|regardless|drops?|loses?|does not|must|add|restore|preserve|suppress|retain|handle|reject|leaks?)\b") &&
-        Regex.IsMatch(finding.Description, @"(?i)(`[^`]+`|\b(when|if|during|after|before|resumption|scenario|regression|coverage)\b)");
+            RepositoryOwnershipArea.Source or RepositoryOwnershipArea.Test or RepositoryOwnershipArea.SharedInfrastructure);
 
     private static string Field(string message, string name) => message.Split(';')
         .Select(item => item.Trim()).FirstOrDefault(item => item.StartsWith(name + "=", StringComparison.Ordinal))?

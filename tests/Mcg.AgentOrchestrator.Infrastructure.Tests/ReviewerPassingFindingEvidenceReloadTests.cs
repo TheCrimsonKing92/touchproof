@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
@@ -265,10 +267,11 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
                     new Mcg.AgentOrchestrator.Infrastructure.AcceptanceGateEngineSettings()), new(1, 4), out observation);
     }
 
-    private static ReviewerPassingFindingEvidenceFixture Delivered(FindingCategory category = FindingCategory.Correctness)
+    private static ReviewerPassingFindingEvidenceFixture Delivered(FindingCategory category = FindingCategory.Correctness,
+        ReviewFinding? finding = null)
     {
         var fixture = new ReviewerPassingFindingEvidenceFixture();
-        fixture.Report([ReviewerPassingFindingEvidenceFixture.CliFinding() with { Category = category }]);
+        fixture.Report([finding ?? ReviewerPassingFindingEvidenceFixture.CliFinding() with { Category = category }]);
         fixture.AdvanceToDecision();
         Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
         Assert.Single(fixture.Executions);
@@ -276,13 +279,97 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
         return fixture;
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
     public void MissingActionableTarget_ReloadAndTicks_KeepTypedHold()
     {
         using var fixture = Delivered();
-        fixture.Report([ReviewerPassingFindingEvidenceFixture.CliFinding() with { Description = "The receipt does not answer my concern." }]);
+        fixture.Report([ReviewerPassingFindingEvidenceFixture.CliFinding()]);
+        var retained = Assert.Single(fixture.Reviewer.LastVerification!.MergedReviewFindings!);
+        var blank = retained with { Location = retained.Location with { Region = "" } };
+        // Keep the parsed Reviewer output valid while restoring a structurally incomplete ledger.
+        var json = JsonSerializer.Serialize(fixture.Kernel.ExportSnapshot());
+        Assert.Contains(JsonSerializer.Serialize(retained), json);
+        json = json.Replace(JsonSerializer.Serialize(retained), JsonSerializer.Serialize(blank), StringComparison.Ordinal);
+        var kernel = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!);
+        var tick = 0;
+        var driver = CreateDriver();
+        AssertRetainedFinding();
+
+        var result = Advance();
+        for (var step = 0; step < 8 && result.Outcome is not ConductorAdvanceOutcome.Held; step++)
+            result = Advance();
+        var before = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("actionable-change-unavailable", before.Reason);
+        Assert.Contains(retained.StableId, before.Reason);
+        Assert.Contains(Assert.Single(fixture.Receipts).ReceiptId, before.Reason);
+        Assert.NotNull(before.Decision);
+        Assert.Equal("Hold", before.Decision.Action);
+
+        kernel = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(
+            JsonSerializer.Serialize(kernel.ExportSnapshot()))!);
+        driver = CreateDriver();
+        AssertRetainedFinding();
+        for (var step = 0; step < 3; step++)
+        {
+            var after = Assert.IsType<ConductorAdvanceOutcome.Held>(Advance().Outcome);
+            Assert.Equal(before.Reason, after.Reason);
+            Assert.NotNull(after.Decision);
+            Assert.Equal("Hold", after.Decision.Action);
+            Assert.Equal(before.Decision.DiscriminatingEvidence, after.Decision.DiscriminatingEvidence);
+            AssertRetainedFinding();
+        }
+        Assert.Single(fixture.Retries);
+        Assert.Single(fixture.Executions);
+        Assert.Equal(2, kernel.GetTask(fixture.Goal.Id, fixture.Reviewer.Id).DispatchHistory.Count);
+
+        ConductorDriver CreateDriver() => ConductorDriverTests.MakeDriver(
+            getPreReviewEvidenceContext: _ => ConductorDriverTests.NoPreReviewContext(fixture.Candidate),
+            resolveFindingEvidenceSiblingClasses: (_, _, testClass) => [testClass],
+            runFocusedEvidence: (_, _) => throw new InvalidOperationException("Delivered evidence must not be executed again."),
+            retryTaskWithCause: (goal, task, message, kind, cause) =>
+            {
+                fixture.Retries.Add((task, cause, message));
+                return kernel.RetryTask(goal, task, message, retryRoundKind: kind, retryCause: cause);
+            });
+
+        ConductorAdvanceResult Advance()
+        {
+            driver.BeginTick(kernel, ++tick);
+            return driver.AdvanceOnce(kernel.GetGoal(fixture.Goal.Id), ConductorAutonomyPolicy.Permissive);
+        }
+
+        void AssertRetainedFinding()
+        {
+            var review = kernel.GetTask(fixture.Goal.Id, fixture.Reviewer.Id).LastVerification!;
+            var finding = Assert.Single(review.MergedReviewFindings!);
+            Assert.Equal(retained.StableId, finding.StableId);
+            Assert.Equal("", finding.Location.Region);
+            Assert.Equal(ReviewFindingState.Open, finding.State);
+            Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(review, out var round, out _));
+            Assert.False(string.IsNullOrWhiteSpace(Assert.Single(round.Findings).Location.Region));
+        }
+    }
+
+    [Theory(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
+    [InlineData("docs/operator-runbook.md", FindingCategory.Correctness)]
+    [InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterGuardSelections.cs", FindingCategory.TestEvidence)]
+    public void IneligibleStructure_ReloadAndTicks_KeepTypedHold(string file, FindingCategory category)
+    {
+        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding() with
+        { Location = new(file, "34-37"), Category = category };
+        using var fixture = Delivered(finding: finding);
+        fixture.Report([finding]);
+        Assert.True(fixture.Decide(out var observation));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, observation.Kind);
+        Assert.Null(observation.TargetTaskId);
         var before = Assert.IsType<ConductorAdvanceOutcome.Held>(fixture.AdvanceToDecision().Outcome);
         Assert.Contains("actionable-change-unavailable", before.Reason);
+        Assert.Contains(finding.StableId, before.Reason);
+        Assert.Contains(Assert.Single(fixture.Receipts).ReceiptId, before.Reason);
+        Assert.NotNull(before.Decision);
+        Assert.Equal("Hold", before.Decision.Action);
         fixture.Reload();
         for (var tick = 0; tick < 3; tick++)
         {
@@ -291,6 +378,7 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
             Assert.NotNull(after.Decision);
             Assert.Equal("Hold", after.Decision.Action);
             Assert.Equal(before.Decision!.DiscriminatingEvidence, after.Decision.DiscriminatingEvidence);
+            Assert.Equal(ReviewFindingState.Open, Assert.Single(fixture.Reviewer.LastVerification!.MergedReviewFindings!).State);
         }
         Assert.Single(fixture.Retries);
         Assert.Single(fixture.Executions);
