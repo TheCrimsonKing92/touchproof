@@ -20,7 +20,7 @@ internal sealed class AuthorBriefDraftStackCriteria
     internal string Criterion => _stack switch
     {
         null or Toolchain.Dotnet =>
-            "The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. The Tester's evidence_request runs them. Developer owns; Acceptance executes. TEST-VERIFIABLE.",
+            "The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. Developer owns; Acceptance executes. TEST-VERIFIABLE.",
         Toolchain.Go =>
             "The acceptance manifest checks pass: go build -buildvcs=false ./..., go vet ./... and go test -count=1 ./.... Developer owns; Acceptance executes. TEST-VERIFIABLE.",
         _ => $"The acceptance manifest checks pass using {GoalIntakeTargetStack.NeutralBuildTestTool}. Developer owns; Acceptance executes. TEST-VERIFIABLE."
