@@ -12,6 +12,57 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
     private const string SelectedPath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SelectedShadowFixtureTests.cs";
     private readonly string _root = Path.Combine(Path.GetTempPath(), "mcg-shadow-tests", Guid.NewGuid().ToString("N"));
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ForeignProject_WithPartitionNameAndFilter_CannotConstructShadow(bool identical)
+    {
+        // Parallel-safe: both arms own their roots and all revision/filesystem seams.
+        var root = CreateRoot("foreign");
+        var controlRoot = CreateRoot("home");
+        var homeCheck = Partition("ShadowA");
+        var foreignCheck = new AcceptanceManifestCheck
+        {
+            Name = homeCheck.Name, Type = homeCheck.Type, Arguments = homeCheck.Arguments,
+            Project = "tests/Widget/Widget.Tests.csproj"
+        };
+        Assert.True(GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(homeCheck, out _, out _));
+        Assert.False(GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(foreignCheck, out _, out _));
+        var identicalCheck = new AcceptanceManifestCheck
+        {
+            Name = "core tests", Type = "dotnet-test", Project = AcceptancePolicyShardPlanner.CoreTestsProject
+        };
+        var calls = 0;
+        var cache = AcceptancePartitionVerdictCache.Create(new AcceptancePartitionVerdictCacheOptions(
+            Goal, root, [foreignCheck], 5, false,
+            _ => "tree-a", _ => "main-a", _ => "commit-a", () => "attempt-one",
+            () => "manifest-a", () => false, ResolveClosureHash: _ => "closure-a",
+            ResolveChangedFiles: (_, _, _) => { calls++; return [SelectedPath]; },
+            IdenticalTreeChecks: identical ? [identicalCheck] : []));
+        if (identical)
+        {
+            // Exercise the constructor's zero-partition branch even when the cache itself exists.
+            Assert.NotNull(cache);
+            cache.RecordExecution(identicalCheck, Result(identicalCheck, Trx(new TrxCase("Ns.CoreFixtureTests"))));
+            Assert.NotNull(cache.CompleteAttempt());
+            Assert.False(cache.HasPendingShadows);
+            cache.CompleteShadows();
+        }
+        else Assert.Null(cache);
+        Assert.Equal(0, calls);
+        Assert.False(File.Exists(RecordPath(root)));
+
+        // The same name/filter with the built-in project does construct and execute the shadow.
+        var control = CreateCache(controlRoot, [homeCheck], (_, _, _) => { calls++; return [SelectedPath]; });
+        control.RecordExecution(homeCheck, Result(homeCheck, Trx(new TrxCase("Ns.SelectedShadowFixtureTests"))));
+        control.CompleteAttempt();
+        Assert.True(control.HasPendingShadows);
+        control.CompleteShadows();
+        Assert.Equal(1, calls);
+        Assert.True(File.Exists(RecordPath(controlRoot)));
+        Assert.False(File.Exists(RecordPath(root)));
+    }
+
     [Fact]
     public void CompleteAttempt_LeavesShadowRecordToCompleteShadows()
     {

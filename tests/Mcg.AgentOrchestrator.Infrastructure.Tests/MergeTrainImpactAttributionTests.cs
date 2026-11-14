@@ -1,7 +1,9 @@
+using System.Text.Json;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 // Every case owns its project tree and TRX; no ambient repository or shared files.
 public sealed class MergeTrainImpactAttributionTests
@@ -24,6 +26,82 @@ public sealed class MergeTrainImpactAttributionTests
         Assert.Null(MergeTrainRedAttribution.TryAttribute(paths, fixture.Root, members, out _));
         Assert.Same(members[0], MergeTrainImpactAttribution.TryAttribute(paths, fixture.Root, members, out var classes));
         Assert.Equal(new[] { "RepositoryTestImpactFilterResolutionTests" }, classes);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void HomeClassification_PreservesAttributionWithUnreadableManifest(string? home)
+    {
+        using var fixture = new Fixture();
+        fixture.Write("config/acceptance-manifest.json", "{ broken json");
+        var members = new[] { Member('a', CoreSource), Member('b', "docs/b.md") };
+        var paths = fixture.Trx("RepositoryTestImpactFilterResolutionTests");
+        var expected = MergeTrainImpactAttribution.TryAttribute(paths, fixture.Root, members, out var expectedClasses);
+        Assert.Same(members[0], expected);
+        Assert.Equal(new[] { "RepositoryTestImpactFilterResolutionTests" }, expectedClasses);
+        Assert.Same(expected, MergeTrainImpactAttribution.TryAttribute(paths, fixture.Root, members, out var classes, home));
+        Assert.Equal(expectedClasses, classes);
+    }
+
+    [Theory]
+    [InlineData("foreign")]
+    [InlineData("empty")]
+    [InlineData("missing")]
+    [InlineData("unreadable")]
+    [InlineData("locked")]
+    [InlineData("infrastructure-only")]
+    [InlineData("declared")]
+    public void NonHomeManifest_BoundsImpactAndFallbackAttribution(string state)
+    {
+        using var fixture = new Fixture();
+        var home = Path.Combine(fixture.Root, "project-home");
+        var members = new[] { Member('a', CoreSource), Member('b', "docs/b.md") };
+        var paths = fixture.Trx("RepositoryTestImpactFilterResolutionTests");
+        // All arms have the built-in projects present and usable: home must attribute.
+        Assert.Same(members[0], MergeTrainImpactAttribution.TryAttribute(paths, fixture.Root, members, out var homeClasses));
+        Assert.Equal(new[] { "RepositoryTestImpactFilterResolutionTests" }, homeClasses);
+        var projects = state switch
+        {
+            "declared" or "locked" => RepositoryTestImpactPlanner.BuiltInTestProjectPaths,
+            "infrastructure-only" => new[] { AcceptancePolicyShardPlanner.InfrastructureTestsProject },
+            "foreign" => new[] { "tests/Widget/Widget.Tests.csproj" },
+            _ => Array.Empty<string>()
+        };
+        var manifest = JsonSerializer.Serialize(new
+        {
+            checks = projects.Select(project => new { name = project, type = "dotnet-test", project })
+        });
+        if (state != "missing") fixture.Write("project-home/acceptance-manifest.json",
+            state == "unreadable" ? "{ broken json" : manifest);
+        var manifestPath = AcceptanceManifestLocator.Resolve(fixture.Root, home);
+        using var locked = state == "locked" ? new FileStream(manifestPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        var declared = WorkerManifestTestCheckReader.Read(manifestPath);
+        if (state is "missing" or "unreadable" or "locked") Assert.Null(declared);
+        else Assert.NotNull(declared);
+
+        var actual = MergeTrainImpactAttribution.TryAttribute(paths, fixture.Root, members, out var classes, home);
+        // Disable reach attribution; this TRX has no stack or path evidence, so fallback tests forwarding.
+        var fallback = MergeTrainFallbackAttribution.TryAttribute(paths, fixture.Root, members, 1,
+            out var fallbackClasses, out var source, projectHomeDirectory: home);
+        if (state == "declared")
+        {
+            Assert.Same(members[0], actual);
+            Assert.Same(actual, fallback);
+            Assert.Equal(homeClasses, classes);
+            Assert.Equal(classes, fallbackClasses);
+            Assert.Equal("impact", source);
+        }
+        else
+        {
+            Assert.Null(actual);
+            Assert.Empty(classes);
+            Assert.Null(fallback);
+            Assert.Empty(fallbackClasses);
+            foreach (var project in RepositoryTestImpactPlanner.BuiltInTestProjectPaths)
+                Assert.DoesNotContain(project, JsonSerializer.Serialize(new { actual, classes }));
+        }
     }
 
     [Fact]

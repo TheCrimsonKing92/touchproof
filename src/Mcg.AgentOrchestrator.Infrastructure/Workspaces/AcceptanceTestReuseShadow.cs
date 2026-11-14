@@ -63,6 +63,11 @@ internal sealed class AcceptanceTestReuseShadow
 
         try
         {
+            // Non-home targets with no built-in Infrastructure test partition cannot reach this call:
+            // AcceptancePartitionVerdictCache.cs:315 requires the partition predicate in
+            // GoalAcceptanceVerifier.cs:2091; non-home checks come only from the manifest (:1826).
+            // Missing/unreadable manifests fail during loading (:3825), before cache construction.
+            // A non-home manifest explicitly declaring that built-in partition can still reach here.
             var plan = RepositoryTestImpactPlanner.Plan(files, _worktreePath);
             var status = plan.RequiresBroadVerification ? "broad-verification" :
                 plan.ReverseDependencyDegradation is { } degradation ? $"selection-degraded:{degradation.Kind}" :

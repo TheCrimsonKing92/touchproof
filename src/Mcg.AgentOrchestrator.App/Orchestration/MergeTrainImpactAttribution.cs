@@ -10,7 +10,8 @@ internal static class MergeTrainImpactAttribution
         IReadOnlyList<string> resultPaths,
         string workspacePath,
         IReadOnlyList<MergeTrainMemberBinding> members,
-        out IReadOnlyList<string> failingClasses)
+        out IReadOnlyList<string> failingClasses,
+        string? projectHomeDirectory = null)
     {
         failingClasses = [];
         var results = resultPaths.Select(AcceptanceTrxFailureReader.Read).ToArray();
@@ -28,7 +29,21 @@ internal static class MergeTrainImpactAttribution
 
         try
         {
-            var plans = members.Select(member => RepositoryTestImpactPlanner.Plan(member.LandingPaths, workspacePath)).ToArray();
+            // Non-home direct-delivery targets reach here through ConductorDriver.MergeTrains.cs:344;
+            // GroupedAcceptanceAdmission.cs:8 excludes PR delivery, not project-scoped targets.
+            // Use the gate's classification (ConductorDriver.GateProgressAttribution.cs:75).
+            ManifestDeclaredTestCheckSet? declared = null;
+            if (!GoalAcceptanceVerifierHomeImpactScope.Applies(projectHomeDirectory))
+            {
+                declared = WorkerManifestTestCheckReader.Read(AcceptanceManifestLocator.Resolve(workspacePath, projectHomeDirectory));
+                if (declared is null) return null;
+            }
+            var plans = members.Select(member =>
+            {
+                var plan = RepositoryTestImpactPlanner.Plan(member.LandingPaths, workspacePath);
+                // Declared-check fallback widens verification; it cannot establish member attribution.
+                return declared is null ? plan : declared.Filter(plan);
+            }).ToArray();
             if (plans.Any(plan => plan.RequiresBroadVerification || plan.ReverseDependencyDegradation is not null)) return null;
 
             // Operator Option A: a plain whole-project check is usable only if no other
