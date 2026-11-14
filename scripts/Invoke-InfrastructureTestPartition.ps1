@@ -60,7 +60,7 @@ function Complete-MtpInvocation {
 
 try {
     $manifest = Read-MtpTestManifest -Path $manifestPath
-    $partitions = @(Get-MtpLocalPartitions -Manifest $manifest -MetadataOnly:$List)
+    $partitions = @(Get-MtpLocalPartitions -Manifest $manifest)
 }
 catch {
     $diagnostic = "MANIFEST FAILURE - $($_.Exception.Message)"
@@ -73,13 +73,7 @@ if ($List) {
     foreach ($entry in $partitions) {
         Write-Host ("- {0}: {1}" -f $entry.Name, $entry.Description)
         foreach ($lane in $entry.Lanes) {
-            $filterProperty = $lane.PSObject.Properties['filter']
-            $selection = if ($null -ne $filterProperty -and -not [string]::IsNullOrWhiteSpace([string]$filterProperty.Value)) {
-                [string]$filterProperty.Value
-            } else {
-                'Owned collections: ' + (@($lane.ownedCollections) -join ', ')
-            }
-            Write-Host ("  {0}: {1}" -f $lane.name, $selection)
+            Write-Host ("  {0}: {1}" -f $lane.name, $lane.filter)
         }
         foreach ($filter in $entry.AdditionalFilters) {
             Write-Host ("  Additional compatibility coverage: {0}" -f $filter)

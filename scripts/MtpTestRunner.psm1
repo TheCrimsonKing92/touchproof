@@ -463,7 +463,18 @@ function Get-MtpLocalPartitions {
                 }
             }
             foreach ($file in Get-ChildItem -LiteralPath $directory -File -Filter '*.cs') {
-                $source = [regex]::Replace([System.IO.File]::ReadAllText($file.FullName), $maskPattern, {
+                $source = [System.IO.File]::ReadAllText($file.FullName)
+                # The scanner recognises literal collection names only. Files without any
+                # quoted owned name cannot contribute a member and need no masking.
+                $hasOwnedCollection = $false
+                foreach ($collectionName in $collectionMembers.Keys) {
+                    if ($source.Contains('"' + $collectionName + '"')) {
+                        $hasOwnedCollection = $true
+                        break
+                    }
+                }
+                if (-not $hasOwnedCollection) { continue }
+                $source = [regex]::Replace($source, $maskPattern, {
                     param($match)
                     if ($match.Value.StartsWith('[')) { return $match.Value }
                     return [regex]::Replace($match.Value, '[^\r\n]', ' ')
