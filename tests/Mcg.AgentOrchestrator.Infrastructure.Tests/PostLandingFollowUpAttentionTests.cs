@@ -7,6 +7,176 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel safe: private git fixtures and in-memory kernels; landing runner hooks are flow-local.
 public sealed class PostLandingFollowUpAttentionTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
+    private static readonly DateTimeOffset RenderedAt =
+        new DateTimeOffset(2026, 11, 14, 12, 0, 0, TimeSpan.Zero).AddTicks(1234567);
+
+    [Fact]
+    public void AllViews_OpenCheck_ReportsRequestTimeAgeAndSummary()
+    {
+        var clock = new RequestClock(RenderedAt.AddSeconds(-90).ToOffset(TimeSpan.FromHours(5.5)));
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Age of a landed follow-up");
+        var wait = PostLandingOperatorCheckTests.Request(kernel, goal, PostLandingOperatorCheck.Availability);
+        kernel = WithCompletedGoals(kernel);
+
+        foreach (var rendered in RenderViews(kernel, new RenderClock(RenderedAt)))
+        {
+            AssertFollowUpRow(rendered, goal, wait);
+            using var document = JsonDocument.Parse(rendered);
+            Assert.Equal("2026-11-14T12:00:00.1234567Z",
+                document.RootElement.GetProperty("generatedAt").GetString());
+            var payload = document.RootElement.GetProperty("payload");
+            var row = Assert.Single(payload.GetProperty("postLandingFollowUps").EnumerateArray());
+            Assert.Equal("2026-11-14T11:58:30.1234567Z", row.GetProperty("requestedAt").GetString());
+            Assert.Equal("90", row.GetProperty("ageSeconds").GetRawText());
+            AssertSummary(payload, 1, 90, wait.Id.Value);
+        }
+    }
+
+    [Fact]
+    public void AllViews_AdvancingClock_UsesOneInstantForGeneratedAtAndAges()
+    {
+        var kernel = new AgentOrchestratorKernel(new RequestClock(RenderedAt.AddSeconds(-90)));
+        var goal = kernel.CreateGoal("One render instant");
+        PostLandingOperatorCheckTests.Request(kernel, goal, PostLandingOperatorCheck.Availability);
+        kernel = WithCompletedGoals(kernel);
+        var clock = new RenderClock(RenderedAt, TimeSpan.FromSeconds(1));
+
+        foreach (var rendered in RenderViews(kernel, clock))
+        {
+            using var document = JsonDocument.Parse(rendered);
+            var root = document.RootElement;
+            var row = Assert.Single(root.GetProperty("payload").GetProperty("postLandingFollowUps").EnumerateArray());
+            var elapsed = root.GetProperty("generatedAt").GetDateTimeOffset() -
+                row.GetProperty("requestedAt").GetDateTimeOffset();
+            Assert.Equal((long)elapsed.TotalSeconds, row.GetProperty("ageSeconds").GetInt64());
+        }
+        Assert.Equal(3, clock.Reads);
+    }
+
+    [Fact]
+    public void Summary_ThreeChecks_CountsEmittedRowsAndSelectsOldest()
+    {
+        var clock = new RequestClock(RenderedAt.AddSeconds(-10));
+        var kernel = new AgentOrchestratorKernel(clock);
+        var firstGoal = kernel.CreateGoal("First landed goal");
+        var secondGoal = kernel.CreateGoal("Second landed goal");
+        var newest = PostLandingOperatorCheckTests.Request(kernel, firstGoal,
+            PostLandingOperatorCheck.Availability, "Ten-second observation");
+        clock.UtcNow = RenderedAt.AddSeconds(-300);
+        var oldest = PostLandingOperatorCheckTests.Request(kernel, secondGoal,
+            PostLandingOperatorCheck.Availability, "Five-minute observation");
+        clock.UtcNow = RenderedAt.AddSeconds(-45);
+        var middle = PostLandingOperatorCheckTests.Request(kernel, firstGoal,
+            PostLandingOperatorCheck.Availability, "Forty-five-second observation");
+        kernel = WithCompletedGoals(kernel);
+
+        foreach (var rendered in RenderViews(kernel, new RenderClock(RenderedAt)))
+        {
+            using var document = JsonDocument.Parse(rendered);
+            var payload = document.RootElement.GetProperty("payload");
+            Assert.Equal(new[] { newest.Id.Value, oldest.Id.Value, middle.Id.Value },
+                payload.GetProperty("postLandingFollowUps").EnumerateArray()
+                    .Select(row => row.GetProperty("waitId").GetString()).ToArray());
+            AssertSummary(payload, 3, 300, oldest.Id.Value);
+        }
+
+        using var singleGoal = JsonDocument.Parse(AttentionShowAgentReadView.Render(firstGoal.Id.Value,
+            kernel.HumanInputRequests.ToArray(), [], _ => null, new RenderClock(RenderedAt), kernel.Goals));
+        var singlePayload = singleGoal.RootElement.GetProperty("payload");
+        Assert.Equal(2, singlePayload.GetProperty("postLandingFollowUps").GetArrayLength());
+        AssertSummary(singlePayload, 2, 45, middle.Id.Value);
+    }
+
+    [Fact]
+    public void AllViews_FutureRequest_ClampsAgeToZero()
+    {
+        var kernel = new AgentOrchestratorKernel(new RequestClock(RenderedAt.AddMinutes(1)));
+        var goal = kernel.CreateGoal("Future-dated check");
+        var wait = PostLandingOperatorCheckTests.Request(kernel, goal, PostLandingOperatorCheck.Availability);
+        kernel = WithCompletedGoals(kernel);
+
+        foreach (var rendered in RenderViews(kernel, new RenderClock(RenderedAt)))
+        {
+            using var document = JsonDocument.Parse(rendered);
+            var payload = document.RootElement.GetProperty("payload");
+            var row = Assert.Single(payload.GetProperty("postLandingFollowUps").EnumerateArray());
+            Assert.Equal("0", row.GetProperty("ageSeconds").GetRawText());
+            AssertSummary(payload, 1, 0, wait.Id.Value);
+        }
+    }
+
+    [Fact]
+    public void Summary_EqualTimestamps_SelectsOrdinallySmallestWaitId()
+    {
+        var kernel = new AgentOrchestratorKernel(new RequestClock(RenderedAt.AddSeconds(-90.9)));
+        var goal = kernel.CreateGoal("Tied request timestamps");
+        var first = PostLandingOperatorCheckTests.Request(kernel, goal,
+            PostLandingOperatorCheck.Availability, "First observation");
+        var second = PostLandingOperatorCheckTests.Request(kernel, goal,
+            PostLandingOperatorCheck.Availability, "Second observation");
+        kernel = WithCompletedGoals(kernel);
+        var ordered = new[] { first, second }.OrderBy(wait => wait.Id.Value, StringComparer.Ordinal).ToArray();
+
+        // Feed the larger id first so input order cannot accidentally satisfy the tie-break.
+        using var document = JsonDocument.Parse(AttentionAgentReadView.RenderSummary(
+            ordered.Reverse().ToArray(), [], new RenderClock(RenderedAt), goals: kernel.Goals));
+        var payload = document.RootElement.GetProperty("payload");
+        Assert.All(payload.GetProperty("postLandingFollowUps").EnumerateArray(),
+            row => Assert.Equal("90", row.GetProperty("ageSeconds").GetRawText()));
+        AssertSummary(payload, 2, 90, ordered[0].Id.Value);
+    }
+
+    [Fact]
+    public void Summary_SameWholeSecondAge_SelectsEarlierTimestamp()
+    {
+        var clock = new RequestClock(RenderedAt.AddSeconds(-90));
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Subsecond oldest request");
+        var first = PostLandingOperatorCheckTests.Request(kernel, goal,
+            PostLandingOperatorCheck.Availability, "First observation");
+        var second = PostLandingOperatorCheckTests.Request(kernel, goal,
+            PostLandingOperatorCheck.Availability, "Second observation");
+        var ordered = new[] { first, second }.OrderBy(wait => wait.Id.Value, StringComparer.Ordinal).ToArray();
+        var snapshot = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            HumanInputRequests = snapshot.HumanInputRequests.Select(wait => wait with
+            {
+                RequestedAt = wait.Id == ordered[1].Id.Value ? RenderedAt.AddSeconds(-90.9) : RenderedAt.AddSeconds(-90.1)
+            }).ToArray()
+        });
+        kernel = WithCompletedGoals(kernel);
+
+        using var document = JsonDocument.Parse(AttentionAgentReadView.RenderSummary(
+            kernel.HumanInputRequests.ToArray(), [], new RenderClock(RenderedAt), goals: kernel.Goals));
+        AssertSummary(document.RootElement.GetProperty("payload"), 2, 90, ordered[1].Id.Value);
+    }
+
+    [Fact]
+    public void AllViews_NoOpenLandedCheck_OmitsBothKeysAndNeverHoldsLanding()
+    {
+        var kernel = new AgentOrchestratorKernel(new RequestClock(RenderedAt.AddSeconds(-90)));
+        var goal = kernel.CreateGoal("Unlanded check");
+        var wait = PostLandingOperatorCheckTests.Request(kernel, goal, PostLandingOperatorCheck.Availability);
+        Assert.Same(wait, Assert.Single(kernel.GetPendingHumanInput(goal.Id)));
+        Assert.Empty(PostLandingOperatorCheck.HoldingLanding(kernel.GetPendingHumanInput(goal.Id)));
+        Assert.NotEqual(GoalStatus.Completed, goal.Status);
+        AssertFollowUpAbsent(RenderViews(kernel, new RenderClock(RenderedAt)));
+
+        kernel = WithCompletedGoals(kernel);
+        kernel.SubmitHumanInput(wait.Id, "Observed the landed behavior", origin: HumanInputAnswerOrigin.Operator);
+        Assert.True(Assert.Single(kernel.HumanInputRequests).IsCompleted);
+        // Pass the completed request directly: the normal pending-wait query would filter it out first.
+        AssertFollowUpAbsent(RenderViews(kernel, new RenderClock(RenderedAt)));
+
+        kernel = new AgentOrchestratorKernel(new RequestClock(RenderedAt));
+        kernel.CreateGoal("No follow-up check");
+        kernel = WithCompletedGoals(kernel);
+        Assert.Empty(kernel.HumanInputRequests);
+        AssertFollowUpAbsent(RenderViews(kernel, new RenderClock(RenderedAt)));
+    }
+
     [Fact]
     public void Land_OriginalWaitRemainsVisibleAndAnswerableAfterGoalCompletes()
     {
@@ -126,14 +296,69 @@ public sealed class PostLandingFollowUpAttentionTests : Xunit.IClassFixture<Isol
     private static void AssertFollowUpAbsent(AgentOrchestratorKernel kernel, Goal goal)
     {
         var waits = CliCommandHandlers.HumanWaitsForAttention(kernel, goal.Id, false);
-        foreach (var rendered in new[]
+        AssertFollowUpAbsent(new[]
         {
             AttentionAgentReadView.Render(waits, [], goals: kernel.Goals),
+            AttentionAgentReadView.RenderSummary(waits, [], goals: kernel.Goals),
             AttentionShowAgentReadView.Render(goal.Id.Value, waits, [], _ => null, goals: kernel.Goals)
-        })
+        });
+    }
+
+    private static void AssertFollowUpAbsent(IEnumerable<string> views)
+    {
+        foreach (var rendered in views)
         {
             using var document = JsonDocument.Parse(rendered);
             Assert.False(document.RootElement.GetProperty("payload").TryGetProperty("postLandingFollowUps", out _));
+            Assert.False(document.RootElement.GetProperty("payload").TryGetProperty("postLandingFollowUpSummary", out _));
+        }
+    }
+
+    private static void AssertSummary(JsonElement payload, int open, long oldestAge, string oldestId)
+    {
+        var summary = payload.GetProperty("postLandingFollowUpSummary");
+        Assert.Equal(open, summary.GetProperty("open").GetInt32());
+        Assert.Equal(oldestAge, summary.GetProperty("oldestAgeSeconds").GetInt64());
+        Assert.Equal(oldestId, summary.GetProperty("oldestWaitId").GetString());
+    }
+
+    private static string[] RenderViews(AgentOrchestratorKernel kernel, TimeProvider time)
+    {
+        var waits = kernel.HumanInputRequests.ToArray();
+        return
+        [
+            AttentionAgentReadView.Render(waits, [], time, goals: kernel.Goals),
+            AttentionAgentReadView.RenderSummary(waits, [], time, goals: kernel.Goals),
+            AttentionShowAgentReadView.Render(kernel.Goals.Count == 1 ? kernel.Goals.Single().Id.Value : null,
+                waits, [], _ => null, time, kernel.Goals)
+        ];
+    }
+
+    private static AgentOrchestratorKernel WithCompletedGoals(AgentOrchestratorKernel kernel)
+    {
+        var snapshot = kernel.ExportSnapshot();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with { Status = GoalStatus.Completed }).ToArray()
+        });
+    }
+
+    private sealed class RequestClock(DateTimeOffset now) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = now;
+    }
+
+    private sealed class RenderClock(DateTimeOffset now, TimeSpan step = default) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+        public int Reads { get; private set; }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            Reads++;
+            var result = _now;
+            _now += step;
+            return result;
         }
     }
 }
