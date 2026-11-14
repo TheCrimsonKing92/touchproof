@@ -62,7 +62,16 @@ public static class SharedTestSupport
 
         var attempts = 0;
         var clearedReadOnly = false;
-        Exception lastError;
+        var diagnostics = Stopwatch.StartNew();
+        var removals = new List<string>();
+        var attributePass = "Attribute pass: not run.";
+
+        if (!Directory.Exists(path)) return;
+        if (OperatingSystem.IsWindows() && ContainsGitObjectStore(path))
+        {
+            RunAttributePass("before first removal");
+        }
+
         while (true)
         {
             if (!Directory.Exists(path))
@@ -71,23 +80,18 @@ public static class SharedTestSupport
             }
 
             attempts++;
-            try
+            var lastError = TryRemove(afterAttributePass: false);
+            if (lastError is null) return;
+            if (lastError is UnauthorizedAccessException && !clearedReadOnly)
             {
-                Directory.Delete(path, recursive: true);
-                return;
-            }
-            catch (DirectoryNotFoundException)
-            {
-                // A holder that released by deleting the tree itself is the same end state.
-                return;
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                lastError = error;
-                if (error is UnauthorizedAccessException && !clearedReadOnly)
+                clearedReadOnly = true;
+                if (OperatingSystem.IsWindows())
                 {
-                    clearedReadOnly = true;
-                    ClearReadOnlyAttributes(path);
+                    RunAttributePass($"after attempt {attempts}");
+                    // Give the changed attributes a removal call before enforcing time or backoff.
+                    // This is part of the same budgeted round, preserving the retry headline count.
+                    lastError = TryRemove(afterAttributePass: true);
+                    if (lastError is null) return;
                 }
             }
 
@@ -101,16 +105,89 @@ public static class SharedTestSupport
             {
                 throw new IOException(
                     $"Failed to remove temp directory '{path}' after {attempts} attempts over "
-                        + $"{spent.TotalMilliseconds:F0} ms. Last error: {lastError.Message}",
+                        + $"{spent.TotalMilliseconds:F0} ms. Last error: {lastError.Message}"
+                        + Environment.NewLine + "Removal calls: " + string.Join("; ", removals)
+                        + Environment.NewLine + attributePass
+                        + Environment.NewLine + DescribeResidual(path),
                     lastError);
             }
 
             delay(backoff);
             backoff = backoff >= backoffCap ? backoffCap : Min(backoff + backoff, backoffCap);
         }
+
+        void RunAttributePass(string when)
+        {
+            clearedReadOnly = true;
+            var started = diagnostics.ElapsedMilliseconds;
+            ClearReadOnlyAttributes(path);
+            attributePass = $"Attribute pass: ran {when}; started at {started} ms; "
+                + $"duration={diagnostics.ElapsedMilliseconds - started} ms.";
+        }
+
+        Exception? TryRemove(bool afterAttributePass)
+        {
+            var started = diagnostics.ElapsedMilliseconds;
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return null;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // A holder that released by deleting the tree itself is the same end state.
+                return null;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                var retry = afterAttributePass ? ", retry after attribute pass" : "";
+                removals.Add($"removal {removals.Count + 1} (attempt {attempts}{retry}): "
+                    + $"duration={diagnostics.ElapsedMilliseconds - started} ms; exception={error.GetType().Name}");
+                return error;
+            }
+        }
     }
 
     private static TimeSpan Min(TimeSpan left, TimeSpan right) => left <= right ? left : right;
+
+    private static bool ContainsGitObjectStore(string path)
+    {
+        try
+        {
+            if (Directory.Exists(Path.Combine(path, ".git", "objects"))) return true;
+            foreach (var child in Directory.EnumerateDirectories(path))
+            {
+                if (Directory.Exists(Path.Combine(child, ".git", "objects"))) return true;
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // Detection is only an optimization; an inaccessible tree takes the reactive path.
+        }
+        return false;
+    }
+
+    internal static string DescribeResidual(string path)
+    {
+        var description = $"Residual root '{path}'";
+        var entries = new List<string>();
+        try
+        {
+            if (!Directory.Exists(path)) return $"Root '{path}' removed.";
+            description += $" attributes={File.GetAttributes(path)}";
+            foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos("*", new EnumerationOptions
+                { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }).Take(8))
+            {
+                entries.Add($"'{entry.FullName}' attributes={entry.Attributes}");
+            }
+        }
+        catch (Exception error)
+        {
+            // Retain partial results and the original cleanup error if inspection also fails.
+            entries.Add($"attribute inspection failed: {error.GetType().Name}: {error.Message}");
+        }
+        return description + "; " + string.Join("; ", entries);
+    }
 
     private static void ClearReadOnlyAttributes(string path)
     {

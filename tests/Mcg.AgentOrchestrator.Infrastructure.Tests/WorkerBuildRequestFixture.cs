@@ -374,20 +374,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         if (!PreserveArtifacts && exited && failures.Count == 0)
             Attempt("directory cleanup", () => SharedTestSupport.RemoveTempDirectory(Root));
         if (failures.Count != 0)
-            throw new AggregateException($"Worker build fixture cleanup failed. {DescribeResidual()}", failures);
-    }
-
-    private string DescribeResidual()
-    {
-        try
-        {
-            if (!Directory.Exists(Root)) return $"Root '{Root}' removed.";
-            var entries = new DirectoryInfo(Root).EnumerateFileSystemInfos("*", new EnumerationOptions
-            { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }).Take(8)
-                .Select(entry => $"'{entry.FullName}' attributes={entry.Attributes}");
-            return $"Residual root '{Root}' attributes={File.GetAttributes(Root)}; " + string.Join("; ", entries);
-        }
-        catch (Exception error) { return $"Residual root '{Root}'; attribute inspection failed: {error.Message}"; }
+            throw new AggregateException($"Worker build fixture cleanup failed. {SharedTestSupport.DescribeResidual(Root)}", failures);
     }
 
     internal sealed class FixtureTime : TimeProvider
