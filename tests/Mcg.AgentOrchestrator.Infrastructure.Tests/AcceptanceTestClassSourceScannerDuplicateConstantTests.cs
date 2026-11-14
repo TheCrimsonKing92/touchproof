@@ -40,7 +40,7 @@ public sealed class AcceptanceTestClassSourceScannerDuplicateConstantTests
         var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot())
             .InfrastructureTestLanes.Select(lane => lane with
             {
-                OwnedCollections = lane.Name == "Process spawning" ? ["SAME"] : []
+                OwnedCollections = lane.Name == "Process spawning" ? ["SAME"] : lane.OwnedCollections
             }).ToArray();
         var singleLanes = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, tree.Root);
         var singleInventory = AcceptanceTestInventorySource.Read(tree.Root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, EmptyMainMetadata);
