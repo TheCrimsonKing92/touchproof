@@ -25,16 +25,6 @@ internal static class GoalSchedulingOrder
             memberIds.Contains(head.Id.Value, StringComparer.Ordinal);
     }
 
-    internal static IReadOnlyList<Goal> BeforeBackstop(IEnumerable<Goal> goals, DateTimeOffset queuedAt, int overtakes)
-    {
-        var baseline = BaseAcceptance(goals);
-        var rank = baseline.Count(goal => AcceptanceWaitingAt(goal) <= queuedAt);
-        var key = new GoalSchedulingKey(GoalEffectivePriorityIndex.EffectiveLevel(GoalPriority.Normal, overtakes), rank);
-        return baseline.Select((goal, index) => (Goal: goal, Key: new GoalSchedulingKey(
-                GoalEffectivePriorityIndex.EffectiveLevel(goal), index < rank ? index : index + 1)))
-            .Where(item => item.Key.CompareTo(key) < 0).OrderBy(item => item.Key).Select(item => item.Goal).ToArray();
-    }
-
     internal static DateTimeOffset AcceptanceWaitingAt(Goal goal) => ParallelAcceptanceVerifiedAt(goal);
 
     private static DateTimeOffset ParallelAcceptanceVerifiedAt(Goal goal)

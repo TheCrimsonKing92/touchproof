@@ -54,6 +54,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             var state = await store.ReadAsync().ConfigureAwait(false) ?? new(previousMain);
             if (await store.HasLandingAsync(goalId, commit).ConfigureAwait(false)) return;
             var ordinal = state.LastLandingOrdinal + 1;
+            var recordedAt = clock();
             var applied = record?.Applied == true || record?.StructuralCoverageScoped == true;
             if (record is null)
                 progress($"SELECTED_EXECUTION_BACKSTOP result=landing-record-unreadable goal={goalId} commit={commit}");
@@ -63,7 +64,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                     .Distinct(StringComparer.Ordinal).ToArray() : []
             };
             await store.WriteAsync(record is null ? "landing-record-unreadable" : "landing", state with
-            { LastLandingOrdinal = ordinal, Landings = state.RangeLandings.Append(landing).ToArray() }, clock(),
+            { LastLandingOrdinal = ordinal, Landings = state.RangeLandings.Append(landing).ToArray(),
+                LandingInstants = state.RecordedLandingInstants.Append(new(ordinal, recordedAt)).ToArray() }, recordedAt,
                 SelectedExecutionBackstopStore.LandingId(goalId, commit)).ConfigureAwait(false);
         }
         finally { _transitions.Release(); }
@@ -76,6 +78,16 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         {
             var state = await store.ReadAsync().ConfigureAwait(false);
             if (state is null) return;
+            var missingInstants = state.Uncovered.Where(landing => !state.RecordedLandingInstants
+                .Any(instant => instant.Ordinal == landing.Ordinal)).ToArray();
+            if (missingInstants.Length > 0)
+            {
+                // Legacy snapshots age from first observation, durably across retries and restarts.
+                var observedAt = clock();
+                state = state with { LandingInstants = state.RecordedLandingInstants.Concat(missingInstants
+                    .Select(landing => new SelectedExecutionBackstopLandingInstant(landing.Ordinal, observedAt))).ToArray() };
+                await store.WriteAsync("landing-instants-observed", state, observedAt).ConfigureAwait(false);
+            }
             state = await ReconcileMissAsync(state).ConfigureAwait(false);
             _admissionOrder = waiting.ToDictionary(goal => goal.Id.Value,
                 goal => (GoalSchedulingOrder.AcceptanceWaitingAt(goal), GoalEffectivePriorityIndex.EffectiveLevel(goal)), StringComparer.Ordinal);
@@ -90,7 +102,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                 Report("queued", request, detail: state.Uncovered.Any(landing => landing.RecordUnreadable) ? "record-unreadable" : null,
                     appliedLandings: state.Uncovered);
             }
-            // A queued entrant keeps its place but covers the newest head when its turn arrives.
+            // Pending requests cover the newest head; interrupted attempts retain their fixed range.
             if (state.Request is { } queued && (queued.Attempts == 0 || queued.RetryPending) && mainHead() is { } newest &&
                 (newest != queued.ToCommit || queued.ThroughOrdinal != state.LastLandingOrdinal))
             {
@@ -98,12 +110,14 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                     GoalIds = state.RangeLandings.Select(landing => landing.GoalId).Distinct(StringComparer.Ordinal).ToArray() } };
                 await store.WriteAsync("coalesced", state, clock()).ConfigureAwait(false);
             }
-            if (state.Request is not { } pending || suppressed || !capacityAvailable ||
-                (pending.RetryPending && waiting.Any(goal => GoalSchedulingOrder.AcceptanceWaitingAt(goal) <= pending.QueuedAt)) ||
-                GoalSchedulingOrder.BeforeBackstop(waiting, pending.QueuedAt, pending.Overtakes).Count > 0) return;
+            if (state.Request is not { } pending || suppressed || !capacityAvailable) return;
+            var rule = SelectedExecutionBackstopYieldPolicy.Decide(waiting.Count, state.Uncovered.Count,
+                state.OldestUncoveredAt is { } oldest ? clock() - oldest : null);
+            if (rule is null) return;
             var started = pending with { Attempts = pending.Attempts + 1, RetryPending = false };
             await store.WriteAsync("started", state with { Request = started }, clock()).ConfigureAwait(false);
-            Report(pending.Attempts > 0 ? "resumed" : "started", started);
+            Report(pending.Attempts > 0 ? "resumed" : "started", started, rule: rule,
+                covered: state.Uncovered.Count(landing => landing.Ordinal <= started.ThroughOrdinal));
             _activeRequestId = started.Id;
             _running = Task.Run(async () =>
             {
@@ -176,7 +190,9 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             {
                 case "green":
                     state = state with { CoveredCommit = request.ToCommit, Request = null,
-                        Landings = state.RangeLandings.Except(covered).ToArray() };
+                        Landings = state.RangeLandings.Except(covered).ToArray(),
+                        LandingInstants = state.RecordedLandingInstants
+                            .Where(instant => !covered.Any(landing => landing.Ordinal == instant.Ordinal)).ToArray() };
                     break;
                 case "red":
                     var classification = SelectedExecutionBackstopMissClassifier.Classify(outcome.FailingTests, covered);
@@ -239,9 +255,10 @@ internal sealed class SelectedExecutionBackstopCoordinator(
     }
 
     private void Report(string result, SelectedExecutionBackstopRequest request, int failingTests = 0, string? detail = null,
-        IReadOnlyList<SelectedExecutionBackstopLanding>? appliedLandings = null) =>
+        IReadOnlyList<SelectedExecutionBackstopLanding>? appliedLandings = null, string? rule = null, int? covered = null) =>
         progress($"SELECTED_EXECUTION_BACKSTOP result={result} from={request.FromCommit} to={request.ToCommit} goals=" +
             $"{(request.GoalIds.Count == 0 ? "none" : string.Join(',', request.GoalIds))} failingTests={failingTests}" +
+            (rule is null ? "" : $" rule={rule} covered={covered}") +
             (appliedLandings is null ? "" : " applied=" + string.Join(',', appliedLandings
                 .Where(landing => landing.Applied).Select(landing => landing.GoalId + "@" + landing.Commit))) +
             (detail is null ? "" : $" detail={detail.Replace('\n', ' ').Replace('\r', ' ')}"));

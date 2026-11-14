@@ -6,19 +6,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class SelectedExecutionBackstopAdmissionTests
 {
     [Fact]
-    public void OrdinaryNormalEntrantUsesWaitingOrderAndExistingOvertakePromotion()
-    {
-        var queued = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
-        var older = GoalAt(queued.AddMinutes(-1));
-        var newer = GoalAt(queued.AddMinutes(1));
-        Assert.Equal(new[] { older }, GoalSchedulingOrder.BeforeBackstop([newer, older], queued, 0));
-        newer = GoalAt(queued.AddMinutes(1), GoalPriority.High);
-        Assert.Equal(new[] { newer, older }, GoalSchedulingOrder.BeforeBackstop([newer, older], queued, 0));
-        Assert.Empty(GoalSchedulingOrder.BeforeBackstop([newer, older], queued, 3));
-        Assert.Equal(GoalEffectivePriorityIndex.EffectiveLevel(GoalPriority.Normal, 3), GoalPriority.Critical);
-    }
-
-    [Fact]
     public async Task CapacityAndSuppressionHoldRequestAndReservationCountsExactlyOnce()
     {
         using var fixture = new SelectedExecutionBackstopFixture();
@@ -48,7 +35,7 @@ public sealed class SelectedExecutionBackstopAdmissionTests
     }
 
     [Fact]
-    public async Task ThreeHigherPriorityOvertakesPersistAndPromoteAcrossRestart()
+    public async Task ThreeOvertakesPersistAcrossRestartButStillYieldToWaitingGoals()
     {
         using var fixture = new SelectedExecutionBackstopFixture();
         await fixture.Land();
@@ -63,6 +50,8 @@ public sealed class SelectedExecutionBackstopAdmissionTests
         Assert.Equal(3, (await fixture.Store.ReadAsync())!.Request!.Overtakes);
         var resumed = fixture.CreateCoordinator();
         await resumed.ServiceAsync(() => fixture.Head, high, true, false);
+        Assert.Empty(fixture.Calls);
+        await resumed.ServiceAsync(() => fixture.Head, [], true, false);
         await resumed.DrainAsync();
         Assert.Equal(3, Assert.Single(fixture.Calls).Overtakes);
     }
