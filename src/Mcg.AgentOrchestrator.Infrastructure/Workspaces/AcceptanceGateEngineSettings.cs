@@ -37,6 +37,8 @@ internal sealed class AcceptanceGateEngineSettings
     public JsonElement SelectedExecutionModeValue { get; init; }
     [JsonIgnore]
     public AcceptanceSelectedExecutionMode SelectedExecutionMode { get; private set; }
+    public int? SelectedExecutionBackstopMaxUncoveredLandings { get; init; }
+    public double? SelectedExecutionBackstopMaxOldestLandingAgeHours { get; init; }
     public long OutputCaptureLimitBytes { get; init; } = DefaultOutputCaptureLimitBytes;
 
     public static AcceptanceGateEngineSettings Load(string worktreePath, string? projectHomeDirectory = null)
@@ -149,6 +151,19 @@ internal sealed class AcceptanceGateEngineSettings
         {
             throw new InvalidDataException(
                 "Acceptance manifest engine partitionVerdictFullRerunEveryN must be at least 1.");
+        }
+
+        if (SelectedExecutionBackstopMaxUncoveredLandings is < 1)
+        {
+            throw new InvalidDataException(
+                "Acceptance manifest engine selectedExecutionBackstopMaxUncoveredLandings must be positive.");
+        }
+
+        if (SelectedExecutionBackstopMaxOldestLandingAgeHours is { } ageHours &&
+            (!double.IsFinite(ageHours) || ageHours <= 0))
+        {
+            throw new InvalidDataException(
+                "Acceptance manifest engine selectedExecutionBackstopMaxOldestLandingAgeHours must be a finite positive number.");
         }
 
         if (OutputCaptureLimitBytes < 1)

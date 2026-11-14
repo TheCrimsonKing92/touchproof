@@ -222,6 +222,56 @@ public sealed class SelectedExecutionBackstopYieldTests
         Assert.Single(fixture.Calls);
     }
 
+    [Fact]
+    public async Task LandingCount_OverrideThree_YieldsAtTwoAndStartsAtThree()
+    {
+        using var fixture = new SelectedExecutionBackstopFixture();
+        var coordinator = new SelectedExecutionBackstopCoordinator(fixture.Store, fixture, fixture.Items,
+            fixture.Home, () => fixture.Now, fixture.Lines.Enqueue,
+            bounds: SelectedExecutionBackstopYieldBounds.Default with { MaxUncoveredLandings = 3 });
+        await coordinator.ServiceAsync(() => fixture.Head, [], [], false, false);
+        var waiting = GoalAt(fixture.Now.AddMinutes(-1));
+        await fixture.Land("goal-1", "main-1");
+        await fixture.Land("goal-2", "main-2");
+
+        await coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
+        await coordinator.DrainAsync();
+        Assert.Empty(fixture.Calls);
+        Assert.Equal(0, (await fixture.Store.ReadAsync())!.Request!.Attempts);
+
+        fixture.Head = "main-3";
+        await fixture.Land("goal-3", fixture.Head);
+        await coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
+        await coordinator.DrainAsync();
+        Assert.Equal(fixture.Head, Assert.Single(fixture.Calls).ToCommit);
+        AssertDecision(fixture, "started", "bound-landings", 3);
+    }
+
+    [Fact]
+    public async Task OldestAge_OverrideHalfHour_YieldsOneTickBeforeAndStartsAtBound()
+    {
+        using var fixture = new SelectedExecutionBackstopFixture();
+        var coordinator = new SelectedExecutionBackstopCoordinator(fixture.Store, fixture, fixture.Items,
+            fixture.Home, () => fixture.Now, fixture.Lines.Enqueue,
+            bounds: SelectedExecutionBackstopYieldBounds.Default with { MaxOldestLandingAgeHours = 0.5 });
+        await coordinator.ServiceAsync(() => fixture.Head, [], [], false, false);
+        var landedAt = fixture.Now;
+        var waiting = GoalAt(landedAt.AddMinutes(-1));
+        await fixture.Land();
+
+        fixture.Now = landedAt + TimeSpan.FromMinutes(30) - TimeSpan.FromTicks(1);
+        await coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
+        await coordinator.DrainAsync();
+        Assert.Empty(fixture.Calls);
+        Assert.Equal(0, (await fixture.Store.ReadAsync())!.Request!.Attempts);
+
+        fixture.Now = landedAt + TimeSpan.FromMinutes(30);
+        await coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
+        await coordinator.DrainAsync();
+        Assert.Single(fixture.Calls);
+        AssertDecision(fixture, "started", "bound-age", 1);
+    }
+
     private static void AssertDecision(SelectedExecutionBackstopFixture fixture, string result, string rule, int covered)
     {
         var line = Assert.Single(fixture.Lines.Where(line => line.Contains("result=" + result + " ", StringComparison.Ordinal)));
