@@ -59,7 +59,8 @@ public sealed class GuidanceTextBudgetTests
         // AGENTS.md is copied into every worker's context as repository guidance.
         // -1833 chars: removed duplicated header pointer lines (subtraction slot).
         // +1755 chars: value-home classification bullet (goal 9037236a).
-        new("AGENTS.md", 25186, () => ReadRepositoryFile("AGENTS.md")),
+        // +1189 chars: cheap-before-rare bullet (goal eb6d54e8).
+        new("AGENTS.md", 26375, () => ReadRepositoryFile("AGENTS.md")),
         // CLAUDE.md is automatically loaded by the Claude harness as repository guidance.
         // -1221 chars: removed duplicated header pointer lines (subtraction slot).
         new("CLAUDE.md", 6369, () => ReadRepositoryFile("CLAUDE.md")),
