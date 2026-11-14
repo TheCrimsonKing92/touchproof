@@ -2,10 +2,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class SelectedExecutionBackstopMissClassifier
 {
-    internal static (bool IsMiss, IReadOnlyList<string> UnmatchedTests) Classify(
+    internal static (bool IsMiss, IReadOnlyList<string> UnmatchedTests,
+        IReadOnlyList<SelectedExecutionBackstopLanding> UnclassifiableLandings) Classify(
         IReadOnlyList<string> failingTests, IEnumerable<SelectedExecutionBackstopLanding> coveredLandings)
     {
-        var skipped = coveredLandings.Where(landing => landing.Applied)
+        var landings = coveredLandings.ToArray();
+        var skipped = landings.Where(landing => landing.Applied)
             .SelectMany(landing => landing.SkippedClasses ?? [])
             .Select(name => name.Replace('+', '.')).ToHashSet(StringComparer.Ordinal);
         var unmatched = new List<string>();
@@ -20,6 +22,6 @@ internal static class SelectedExecutionBackstopMissClassifier
             if (method > 0 && skipped.Contains(test[..method].Replace('+', '.'))) isMiss = true;
             else unmatched.Add(identity);
         }
-        return (isMiss, unmatched);
+        return (isMiss, unmatched, isMiss ? [] : landings.Where(landing => landing.RecordUnreadable).ToArray());
     }
 }

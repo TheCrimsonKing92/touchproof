@@ -26,6 +26,7 @@ public sealed class SelectedExecutionBackstopMissClassifierTests
             [new(1, "goal", "commit", true) { SkippedClasses = [skipped] }]);
         Assert.Equal(expected, result.IsMiss);
         Assert.Equal(expected ? Array.Empty<string>() : [identity], result.UnmatchedTests);
+        Assert.Empty(result.UnclassifiableLandings);
     }
 
     [Theory]
@@ -40,6 +41,27 @@ public sealed class SelectedExecutionBackstopMissClassifierTests
                 { SkippedClasses = evidence == "no-skipped-classes" ? [] : ["Ns.C"] }]);
         Assert.False(result.IsMiss);
         Assert.Equal(identities, result.UnmatchedTests);
+    }
+
+    [Fact]
+    public void UnexplainedRedWithUnreadableLandingIsUnclassifiableForThatLanding()
+    {
+        var unreadable = new SelectedExecutionBackstopLanding(2, "unreadable", "c2", false, true);
+        var result = SelectedExecutionBackstopMissClassifier.Classify(["Other.C.Method"],
+            [new(1, "applied", "c1", true) { SkippedClasses = ["Ns.C"] }, unreadable]);
+        Assert.False(result.IsMiss);
+        Assert.Equal(new[] { "Other.C.Method" }, result.UnmatchedTests);
+        Assert.Equal(unreadable, Assert.Single(result.UnclassifiableLandings));
+    }
+
+    [Fact]
+    public void RedExplainedByAppliedLandingStaysMissDespiteUnreadableLanding()
+    {
+        var result = SelectedExecutionBackstopMissClassifier.Classify(["Ns.C.Method"],
+            [new(1, "applied", "c1", true) { SkippedClasses = ["Ns.C"] },
+                new(2, "unreadable", "c2", false, true)]);
+        Assert.True(result.IsMiss);
+        Assert.Empty(result.UnclassifiableLandings);
     }
 
     [Fact]

@@ -5,6 +5,30 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class SelectedExecutionBackstopLandingIntakeTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnexplainedRedWithUnreadableRecordRetainsPendingRequest(bool noIdentities)
+    {
+        using var fixture = new SelectedExecutionBackstopFixture();
+        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red",
+            noIdentities ? [] : ["Unknown.C.Method"], ["lane"]));
+        await fixture.Coordinator.NoteLandingAsync("unreadable", "main-1", null, "main-0");
+        await fixture.Service(capacity: false);
+        var queued = (await fixture.Store.ReadAsync())!.Request!;
+        await fixture.Finish();
+        var state = (await fixture.Store.ReadAsync())!;
+        Assert.Equal(queued.Id, Assert.IsType<SelectedExecutionBackstopRequest>(state.Request).Id);
+        Assert.True(Assert.Single(state.Uncovered).RecordUnreadable);
+        Assert.Null(state.CoveredCommit);
+        Assert.Null(state.OpenMiss);
+        Assert.Empty(await fixture.Items.ListAsync());
+        Assert.Single(fixture.Calls);
+        Assert.Contains(fixture.Lines, line => line.Contains("result=infrastructure-failure ") &&
+            line.Contains("detail=red-unclassifiable-record-unreadable: unreadable@main-1"));
+        Assert.DoesNotContain(fixture.Lines, line => line.Contains("red-outside-skipped-classes"));
+    }
+
+    [Theory]
     [InlineData("attempt-state", false)]
     [InlineData("attempt-state", true)]
     [InlineData("attempt-owner", false)]
@@ -50,7 +74,7 @@ public sealed class SelectedExecutionBackstopLandingIntakeTests
     [InlineData("missing")]
     [InlineData("mismatched")]
     [InlineData("unidentified")]
-    public async Task MissingOrMismatchedGateEvidenceIsReportedWithoutQueuing(string evidence)
+    public async Task UnreadableGateEvidenceIsUncoveredAndQueuesBackstop(string evidence)
     {
         using var fixture = new SelectedExecutionBackstopFixture();
         var path = Path.Combine(fixture.Home, "attempt" + AcceptanceGateLanePlan.ArtifactSuffix);
@@ -59,8 +83,17 @@ public sealed class SelectedExecutionBackstopLandingIntakeTests
                 { SelectedExecution = SelectedExecutionBackstopFixture.Applied }.ToJson());
         fixture.Coordinator.NoteLanding(new("goal", [], "main-1", GateAttemptId: evidence == "unidentified" ? null : "attempt",
             GateLanePlanPath: evidence == "unidentified" ? null : path, PreviousMainSha: "main-0"), fixture.Home);
+        var landing = Assert.Single((await fixture.Store.ReadAsync())!.Uncovered);
+        Assert.True(landing.RecordUnreadable);
+        Assert.False(landing.Applied);
+        await fixture.Service(capacity: false);
+        var queued = (await fixture.Store.ReadAsync())!.Request;
+        Assert.NotNull(queued);
+        Assert.Equal(new[] { "goal" }, queued.GoalIds);
+        Assert.Contains(fixture.Lines, line => line.Contains("result=queued ") && line.Contains("detail=record-unreadable"));
         await fixture.Finish();
-        Assert.Empty(fixture.Calls);
+        Assert.Equal(new[] { "goal" }, Assert.Single(fixture.Calls).GoalIds);
+        Assert.Equal(fixture.Head, (await fixture.Store.ReadAsync())!.CoveredCommit);
         Assert.Empty((await fixture.Store.ReadAsync())!.Uncovered);
         Assert.Null((await fixture.Store.ReadAsync())!.OpenMiss);
         Assert.Empty(await fixture.Items.ListAsync());

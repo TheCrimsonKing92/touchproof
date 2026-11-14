@@ -630,7 +630,8 @@ public sealed class MergeTrainAcceptanceStore
         receipt.ValidForLanding,
         receipt.Recheck,
         receipt.GateAttemptId,
-        receipt.FailedCheckEvidence);
+        receipt.FailedCheckEvidence,
+        receipt.GateLanePlanPath);
 
     private static MergeTrainReceipt FromDto(ReceiptDto dto) => new MergeTrainReceipt(
         dto.ReceiptId,
@@ -643,7 +644,7 @@ public sealed class MergeTrainAcceptanceStore
         dto.GateTestResultPaths,
         dto.ValidForLanding)
         { GateEvidenceArtifacts = dto.GateEvidenceArtifacts, Recheck = dto.Recheck, GateAttemptId = dto.GateAttemptId,
-            FailedCheckEvidence = dto.FailedCheckEvidence };
+            FailedCheckEvidence = dto.FailedCheckEvidence, GateLanePlanPath = dto.GateLanePlanPath };
 
     private sealed record ReceiptDto(
         string ReceiptId,
@@ -661,5 +662,6 @@ public sealed class MergeTrainAcceptanceStore
         bool ValidForLanding,
         MergeTrainRecheckProvenance? Recheck = null,
         string? GateAttemptId = null,
-        IReadOnlyList<MergeTrainFailedCheckEvidence>? FailedCheckEvidence = null);
+        IReadOnlyList<MergeTrainFailedCheckEvidence>? FailedCheckEvidence = null,
+        string? GateLanePlanPath = null);
 }

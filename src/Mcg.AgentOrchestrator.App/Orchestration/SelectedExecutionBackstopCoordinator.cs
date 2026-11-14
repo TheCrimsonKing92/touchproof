@@ -40,8 +40,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         }
         var record = path is null ? null : new OwnerConsoleGateLanePlanReader().Read(path,
             landing.GateAttemptId ?? Path.GetFileName(path)[..^AcceptanceGateLanePlan.ArtifactSuffix.Length])?.SelectedExecution;
-        // Missing evidence is reported separately; only the gate's record can establish
-        // that a landing applied selection and needs a backstop.
+        // Only the gate's record establishes applied selection. Missing evidence also
+        // requires a backstop, with unreadability retained on the landing.
         NoteLandingAsync(landing.GoalId, landing.LandingSha ?? throw new InvalidDataException("Backstop landing has no commit."),
             record, landing.PreviousMainSha ?? GoalWorktrees.ResolveRequiredRef(worktree, landing.LandingSha + "^")).GetAwaiter().GetResult();
     }
@@ -183,7 +183,10 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                     if (!classification.IsMiss)
                     {
                         outcome = outcome with { Result = "infrastructure-failure", InfrastructureReason =
-                            "red-outside-skipped-classes: " + (outcome.FailingTests.Count == 0
+                            classification.UnclassifiableLandings.Count > 0
+                                ? "red-unclassifiable-record-unreadable: " + string.Join(',', classification.UnclassifiableLandings
+                                    .Select(landing => landing.GoalId + "@" + landing.Commit))
+                                : "red-outside-skipped-classes: " + (outcome.FailingTests.Count == 0
                                 ? "no failing test identities were available"
                                 : "unmatched=" + string.Join("; ", classification.UnmatchedTests)) };
                         break;
