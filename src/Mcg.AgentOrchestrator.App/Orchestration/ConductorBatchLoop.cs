@@ -1492,8 +1492,8 @@ internal sealed partial class ConductorBatchLoop
                     // Changed held advances are already included by the before/after comparison.
                     if (!result.IsHeld)
                         changedGoalIds.Add(goal.Id);
-                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
-                    ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}",
+                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {ConductorOutcomeText.Format(result.Outcome)}");
+                    ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {ConductorOutcomeText.Format(result.Outcome)}",
                         VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(result.Outcome)));
                 }
 
@@ -2488,8 +2488,6 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlyList<string>? runningAttemptExitCodePaths = null) =>
         ConductorWatchSleep.Wait(interval, stopFilePath, wakeSignal, trackedExitCodePaths, runningAttemptExitCodePaths);
 
-    private static string FormatOutcome(ConductorAdvanceOutcome outcome) =>
-        ConductorOutcomeText.Format(outcome);
 }
 
 internal enum WatchSleepResult

@@ -300,26 +300,10 @@ internal sealed partial class ConductorDriver
     }
 
     private bool IsFailedGoalRecoveryContextCurrent(
-        Goal goal,
-        ConductorAutonomyPolicy policy,
-        GoalLifecycleState expectedState,
-        FailedGoalRecoveryDecision decision,
-        out string reason)
-    {
-        var current = GetCurrentGoal(goal);
-        var state = GoalLifecycle.ResolveState(current, GetFacts(current));
-        var currentFacts = BuildFailedGoalRecoveryFacts(current, policy, state);
-        if (state == expectedState &&
-            string.Equals(currentFacts.ContextVersion, decision.Identity.ContextVersion, StringComparison.Ordinal))
-        {
-            reason = string.Empty;
-            return true;
-        }
-
-        reason = $"{decision.Reason} Recovery effects were held because the goal/task/attempt authority changed before application " +
-            $"(stale-recovery-facts; expected={decision.Identity.ContextVersion}; actual={currentFacts.ContextVersion}; state={state}).";
-        return false;
-    }
+        Goal goal, ConductorAutonomyPolicy policy, GoalLifecycleState expectedState,
+        FailedGoalRecoveryDecision decision, out string reason) =>
+        FailedGoalRecoveryContextVersion.IsCurrent(
+            this, GetCurrentGoal(goal), policy, expectedState, decision, out reason);
 
     private void ApplyPendingFailedGoalNotes(Goal goal, IReadOnlyList<FailedGoalPendingNote> notes)
     {
