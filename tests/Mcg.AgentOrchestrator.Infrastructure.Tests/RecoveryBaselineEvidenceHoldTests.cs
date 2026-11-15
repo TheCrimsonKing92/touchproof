@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
-public sealed class ConductorDriverTestsRecoveryBaselineEvidenceHold(ITestOutputHelper output)
+public sealed class RecoveryBaselineEvidenceHoldTests(ITestOutputHelper output)
 {
     [Fact]
     public void UnchangedLiveBaseline_SecondTickDerivesNothing()
