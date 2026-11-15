@@ -1193,6 +1193,7 @@ internal sealed partial class ConductorBatchLoop
 
                 var label = goal.Id.Value[..8];
                 var singleGoalClock = StartDiagnosticTimer();
+                using var goalWalkScope = ConductorTickStepLedger.OpenScope("walk-goal-overhead");
                 void FinishGoalWalk(string result)
                 {
                     if (!singleGoalClock.IsRunning)
@@ -1309,17 +1310,17 @@ internal sealed partial class ConductorBatchLoop
                 else
                 {
                     if (!TryAdvanceGoal(
-                        () =>
+                        () => ConductorTickStepLedger.Measure<ConductorAdvanceResult?>("walk-held-goal", () =>
                         {
                             var beforeRefresh = GoalProjectionCache.BuildFingerprint(goal);
-                            var runningHoldReason = DetachedDispatchHoldReasonBuilder.Build(goal, _refreshGoalDispatchesBeforeAdvance(kernel, goal));
+                            var runningHoldReason = ConductorTickStepLedger.Measure("walk-running-refresh", () => DetachedDispatchHoldReasonBuilder.Build(goal, _refreshGoalDispatchesBeforeAdvance(kernel, goal)));
                             if (_progressiveReviewGlances is not null && watchInterval is not null)
                             {
-                                var glanceResult = _progressiveReviewGlances.Observe(
+                                var glanceResult = ConductorTickStepLedger.Measure("walk-running-glance", () => _progressiveReviewGlances.Observe(
                                     kernel,
                                     [goal],
                                     glanceDurationStats,
-                                    LiveChangesFor);
+                                    LiveChangesFor));
                                 foreach (var line in glanceResult.ProgressLines)
                                 {
                                     EmitProgress(line, tickLines);
@@ -1369,7 +1370,7 @@ internal sealed partial class ConductorBatchLoop
                                     policy,
                                     BuildAcceptanceEngineHoldReason(engineHealth!))
                                 : ConductorTickStepLedger.Measure("walk-advance", () => driver.AdvanceOnce(goal, policy, runningHoldReason));
-                        },
+                        }),
                         kernel,
                         driver,
                         goal,
@@ -1491,8 +1492,8 @@ internal sealed partial class ConductorBatchLoop
                     // Changed held advances are already included by the before/after comparison.
                     if (!result.IsHeld)
                         changedGoalIds.Add(goal.Id);
-                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
-                    ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}",
+                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {ConductorOutcomeText.Format(result.Outcome)}");
+                    ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {ConductorOutcomeText.Format(result.Outcome)}",
                         VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(result.Outcome)));
                 }
 
@@ -2487,8 +2488,6 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlyList<string>? runningAttemptExitCodePaths = null) =>
         ConductorWatchSleep.Wait(interval, stopFilePath, wakeSignal, trackedExitCodePaths, runningAttemptExitCodePaths);
 
-    private static string FormatOutcome(ConductorAdvanceOutcome outcome) =>
-        ConductorOutcomeText.Format(outcome);
 }
 
 internal enum WatchSleepResult

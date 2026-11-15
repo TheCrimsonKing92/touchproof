@@ -33,7 +33,7 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.PreReviewRepeatedFailure.cs : TryHoldRepeatedPreReviewFailure : Repeated evidence failure escalates without attribution.",
         "ConductorDriver.PreTesterDeferredEvidence.cs : TryEscalatePreTesterRedLoop : Repeated pre-tester red evidence escalates without attribution.",
         "ConductorDriver.PreTesterDeferredEvidence.cs : TryRunPreTesterDeferredEvidence : Pending focused evidence helper returns an undecided hold.",
-        "ConductorDriver.cs : AdvanceOnce : Awaiting verification and unknown lifecycle outcomes lack decisions.",
+        "ConductorDriver.cs : AdvanceCore : Awaiting verification and unknown lifecycle outcomes lack decisions.",
         "ConductorDriver.cs : ExecuteDispatchAndStart : Failed dispatch recovery escalates without a decision.",
         "ConductorParallelAcceptanceAttempts.RefusedCarryRelaunch.cs : TryHoldRefusedCarryRelaunch : Refused carry helper result is held without a decision.",
         "ConductorParallelAcceptanceAttempts.cs : FromArtifact : Rehydrated held and escalated outcomes do not restore decisions.",

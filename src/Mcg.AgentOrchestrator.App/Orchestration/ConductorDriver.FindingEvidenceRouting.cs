@@ -643,7 +643,10 @@ internal sealed partial class ConductorDriver
     private bool EveryFailingTestIsInsideCandidateChanges(
         Goal goal,
         FindingEvidenceBatch batch,
-        IReadOnlyList<string> failingTestIdentities)
+        IReadOnlyList<string> failingTestIdentities) => ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-failure-source",
+            () => EveryFailingTestIsInsideCandidateChangesCore(goal, batch, failingTestIdentities));
+
+    private bool EveryFailingTestIsInsideCandidateChangesCore(Goal goal, FindingEvidenceBatch batch, IReadOnlyList<string> failingTestIdentities)
     {
         // The home change/source inventory cannot attribute a failure in another repository.
         // Keyed requests need their selected repository's baseline arm instead.
@@ -662,8 +665,8 @@ internal sealed partial class ConductorDriver
             : _executionDirectory;
         var goalWorktree = GoalWorktrees.TryResolve(sourceRoot, goal.Id);
         // One request per root: each fresh Request re-parses the whole test project on the tick thread.
-        var goalSources = goalWorktree is null ? null : new AcceptanceTestSourceResolver.Request(goalWorktree);
-        var rootSources = new AcceptanceTestSourceResolver.Request(sourceRoot);
+        var goalSources = goalWorktree is null ? null : FindingFailureSources(goalWorktree);
+        var rootSources = FindingFailureSources(sourceRoot);
         return failingTestIdentities.All(identity =>
             batch.TypedRequest.Selections.Any(selection =>
                 (goalSources?.ResolveSourcePaths(selection.TestProject, identity) ?? [])
