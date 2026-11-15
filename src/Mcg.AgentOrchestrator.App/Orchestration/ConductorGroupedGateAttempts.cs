@@ -70,6 +70,7 @@ internal sealed record GroupedGateAttemptOverlap(
 internal sealed class ConductorGroupedGateAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-grouped-gate-attempt";
+    internal const string OpenAttemptsFolderName = "open-attempts";
     private static readonly ConcurrentDictionary<int, HandleListLaunchedProcess> OwnedProcessDrains = new();
     private readonly string _root;
     private readonly string? _stateDirectory;
@@ -90,6 +91,10 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     private AcceptanceHolderLease HolderLease => _holderLease ?? new(utcNow: _utcNow, eventSink: _event);
 
     internal int GenerationId { get; }
+    private long _attemptRecordsRead;
+    private long _openMarkerEntriesRead;
+    internal long AttemptRecordsRead => Interlocked.Read(ref _attemptRecordsRead);
+    internal long OpenMarkerEntriesRead => Interlocked.Read(ref _openMarkerEntriesRead);
 
     internal ConductorGroupedGateAttemptCoordinator(
         string root,
@@ -131,23 +136,126 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     internal IEnumerable<ConductorGroupedGateAttempt> ReadAll() =>
         Directory.Exists(_root)
             ? Directory.EnumerateFiles(_root, "*.attempt.json", SearchOption.AllDirectories)
-                .Select(Read)
+                .Select(ReadAttempt)
                 .OrderBy(attempt => attempt.StartedAt)
                 .ToArray()
             : [];
+
+    internal ConductorGroupedGateAttempt ReadAttempt(string path)
+    {
+        Interlocked.Increment(ref _attemptRecordsRead);
+        return Read(path);
+    }
+
+    internal void ObserveOwnedRuns(IEnumerable<CohortGateRun> runs)
+    {
+        foreach (var run in runs)
+        {
+            if (run.AttemptMetadataPath is not { } path || run.Completion.Task.IsCompleted) continue;
+            var attempt = ReadAttempt(path);
+            if (!ReservesCapacity(attempt))
+                run.Completion.TrySetResult();
+        }
+    }
+
+    internal IReadOnlyList<ConductorGroupedGateAttempt> ReadOpen()
+    {
+        var folder = Path.Combine(_root, OpenAttemptsFolderName);
+        if (!Directory.Exists(folder)) return [];
+        List<ConductorGroupedGateAttempt> open = [];
+        foreach (var marker in Directory.EnumerateFiles(folder))
+        {
+            Interlocked.Increment(ref _openMarkerEntriesRead);
+            string metadataPath;
+            try { metadataPath = File.ReadAllText(marker); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { continue; }
+            ConductorGroupedGateAttempt? attempt;
+            try { attempt = ReadAttempt(metadataPath); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { attempt = null; }
+            if (attempt is null || IsTerminal(attempt))
+            {
+                var removed = TryRemoveOpenMarker(marker);
+                _event?.Invoke($"GROUPED_GATE_OPEN_MARKER attempt={Path.GetFileName(marker)} " +
+                    $"reason={(attempt is null ? "missing-attempt" : "terminal-attempt")} removed={removed.ToString().ToLowerInvariant()}");
+                continue;
+            }
+            open.Add(attempt);
+        }
+        return open.OrderBy(attempt => attempt.StartedAt).ToArray();
+    }
+
+    // Called only by conductor startup. Older writers did not maintain open markers.
+    internal void RecoverOpenAttemptMarkers()
+    {
+        var scanned = 0;
+        var open = 0;
+        var created = 0;
+        foreach (var attempt in ReadAll())
+        {
+            scanned++;
+            if (IsTerminal(attempt)) continue;
+            open++;
+            if (EnsureOpenAttemptMarker(attempt)) created++;
+        }
+        _event?.Invoke($"GROUPED_GATE_OPEN_SCAN scanned={scanned} open={open} created={created}");
+    }
+
+    // Reconciliation alone does not prove that a legacy holder or durable lease released capacity.
+    private bool IsTerminal(ConductorGroupedGateAttempt attempt) =>
+        attempt.ReconciledAt is not null && !ReservesCapacity(attempt);
+
+    private static string OpenAttemptMarkerPath(ConductorGroupedGateAttempt attempt)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(attempt.MetadataPath))!;
+        var root = string.Equals(Path.GetFileName(directory), attempt.AttemptId, StringComparison.OrdinalIgnoreCase)
+            ? Path.GetDirectoryName(directory)! : directory;
+        return Path.Combine(root, OpenAttemptsFolderName, attempt.AttemptId);
+    }
+
+    private static bool EnsureOpenAttemptMarker(ConductorGroupedGateAttempt attempt)
+    {
+        var marker = OpenAttemptMarkerPath(attempt);
+        if (File.Exists(marker)) return false;
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        var temp = attempt.MetadataPath + $".{Guid.NewGuid():N}.marker.tmp";
+        try
+        {
+            File.WriteAllText(temp, Path.GetFullPath(attempt.MetadataPath));
+            try { File.Move(temp, marker); }
+            catch (IOException) when (File.Exists(marker)) { return false; }
+            return true;
+        }
+        finally
+        {
+            if (File.Exists(temp)) File.Delete(temp);
+        }
+    }
+
+    private static bool TryRemoveOpenMarker(string marker)
+    {
+        try { File.Delete(marker); return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
 
     internal static ConductorGroupedGateAttempt Read(string path) =>
         JsonSerializer.Deserialize<ConductorGroupedGateAttempt>(File.ReadAllText(path))
         ?? throw new InvalidDataException($"Grouped gate attempt metadata is empty: {path}");
 
-    internal static void Save(ConductorGroupedGateAttempt attempt)
+    internal static void Save(ConductorGroupedGateAttempt attempt) => Save(attempt, capacityReleased: false);
+
+    private static void Save(ConductorGroupedGateAttempt attempt, bool capacityReleased)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(attempt.MetadataPath)!);
+        var finished = attempt.ReconciledAt is not null && (capacityReleased || HasFinishedResult(attempt));
+        // A coordinator settlement can prove release without a finished child result. Other
+        // callers retain the marker until the identity/lease probes prove release in ReadOpen.
+        if (!finished) EnsureOpenAttemptMarker(attempt);
         var temp = attempt.MetadataPath + $".{Guid.NewGuid():N}.tmp";
         try
         {
             File.WriteAllText(temp, JsonSerializer.Serialize(attempt));
             File.Move(temp, attempt.MetadataPath, overwrite: true);
+            if (finished) TryRemoveOpenMarker(OpenAttemptMarkerPath(attempt));
         }
         finally
         {
@@ -366,13 +474,14 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             }
             return WithMetadataLock(attempt.MetadataPath, () =>
             {
-                var current = Read(attempt.MetadataPath);
+                var current = ReadAttempt(attempt.MetadataPath);
                 if (LegacyHolderSettlementReason(current) is not { } reason) return true;
                 if (current.Outcome == "Running")
                 {
                     if (File.Exists(current.ResultPath)) return true;
+                    // LegacyHolderSettlementReason proved the holder no longer reserves capacity.
                     Save(current with { ReconciledAt = _utcNow(), Outcome = "Reconciled",
-                        Detail = "legacy-holder-settled" });
+                        Detail = "legacy-holder-settled" }, capacityReleased: true);
                 }
                 var binding = AcceptanceHolderBinding.For(current);
                 if (LegacyAcceptanceHolderSettlement.RecordTerminal(binding, current.OwnerProcessId,
@@ -601,7 +710,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     private bool StopRunningAttempt(ConductorGroupedGateAttempt attempt, string holderReason, string detail) =>
         WithMetadataLock(attempt.MetadataPath, () =>
         {
-            var current = Read(attempt.MetadataPath);
+            var current = ReadAttempt(attempt.MetadataPath);
             if (current.ReconciledAt is not null || current.Outcome != "Running" ||
                 File.Exists(current.ResultPath) || File.Exists(current.ExitCodePath)) return false;
             if (!StopHolder(current, holderReason)) return false;
@@ -632,7 +741,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         var reconciled = false;
         attempt = WithMetadataLock(attempt.MetadataPath, () =>
         {
-            var current = Read(attempt.MetadataPath);
+            var current = ReadAttempt(attempt.MetadataPath);
             reconciled = false;
             if (current.ReconciledAt is not null || (current.HolderContractVersion == 1
                 ? HolderLease.Observe(AcceptanceHolderBinding.For(current)).ReservesCapacity

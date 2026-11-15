@@ -27,6 +27,7 @@ internal sealed partial class ConductorDriver
             throw new InvalidOperationException("Grouped gate attempts require production cohort dependencies.");
         _groupedGateAttempts = coordinator ?? OwnedChildAttemptCoordinatorFactory.CreateGroupedGate(
             _cohortWorkspace, _cohortCleanupHooks.BuildStorageRoot);
+        _groupedGateAttempts.RecoverOpenAttemptMarkers();
     }
 
     // The durable record is inspected before a caller reads a receipt. A child may write the primary
@@ -150,17 +151,8 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private void ObserveOwnedGroupedGateAttempts()
-    {
-        if (_groupedGateAttempts is not { } coordinator) return;
-        foreach (var run in _cohortGateRuns.Values)
-        {
-            if (run.AttemptMetadataPath is not { } path || run.Completion.Task.IsCompleted) continue;
-            var attempt = ConductorGroupedGateAttemptCoordinator.Read(path);
-            if (!coordinator.ReservesCapacity(attempt))
-                run.Completion.TrySetResult();
-        }
-    }
+    private void ObserveOwnedGroupedGateAttempts() =>
+        _groupedGateAttempts?.ObserveOwnedRuns(_cohortGateRuns.Values);
 
     private void RestoreRunningGroupedGateAttempts()
     {
@@ -168,7 +160,7 @@ internal sealed partial class ConductorDriver
         lock (_cohortGateRegistrationSync)
         {
             var reserving = new List<ConductorGroupedGateAttempt>();
-            foreach (var attempt in coordinator.ReadAll())
+            foreach (var attempt in coordinator.ReadOpen())
             {
                 if (!coordinator.ReservesCapacity(attempt))
                 {
