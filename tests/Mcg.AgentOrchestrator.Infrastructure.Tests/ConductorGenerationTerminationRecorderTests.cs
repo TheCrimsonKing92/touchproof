@@ -119,6 +119,7 @@ public sealed class ConductorGenerationTerminationRecorderTests
     {
         var launches = 0;
         var stageCount = 0;
+        var sampleClock = new OffsetClock(clock);
         var host = new ScriptedHost((request, token) =>
         {
             var index = launches++;
@@ -132,8 +133,10 @@ public sealed class ConductorGenerationTerminationRecorderTests
             if (index == 1)
             {
                 if (natural) return Task.FromResult(new ConductorSupervisorProcessResult(1, pid));
-                for (var tick = 1; tick <= ActivationAdmissionHealthPolicy.OccupiedWithoutLiveGateTicks; tick++)
+                // End the replay at the supplied time to preserve termination/heartbeat correlation.
+                for (var tick = 1; tick <= 12; tick++)
                 {
+                    sampleClock.Offset = TimeSpan.FromSeconds((tick - 12) * 22);
                     request.OnStandardOutputLine(new ActivationAdmissionSample(tick, false, 3, 13, 0).Format());
                     request.OnStandardOutputLine($"TICK_END tick={tick} activation=true");
                 }
@@ -148,7 +151,7 @@ public sealed class ConductorGenerationTerminationRecorderTests
             ConductorContinuityExitArtifact.Write(request.ExitArtifactPath, new("stop-file", 3, 0, false));
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 102));
         });
-        var supervisor = new ConductorContinuitySupervisor(host, events, timeProvider: clock,
+        var supervisor = new ConductorContinuitySupervisor(host, events, timeProvider: sampleClock,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)],
             stageSuccessor: _ => stageCount++ == 0 ? new("C:\\next", "C:\\next\\Mcg.AgentOrchestrator.App.dll", "head-next", "head-next", "LOOP_START selfCheck=true") : null!,
             appendConductEvent: (_, _, _) => { }, raiseActivationAttention: _ => { },
@@ -159,6 +162,11 @@ public sealed class ConductorGenerationTerminationRecorderTests
         return (exit, launches);
     }
 
+    private sealed class OffsetClock(TimeProvider clock) : TimeProvider
+    {
+        public TimeSpan Offset { get; set; }
+        public override DateTimeOffset GetUtcNow() => clock.GetUtcNow() + Offset;
+    }
     private sealed class FixedClock : TimeProvider { public override DateTimeOffset GetUtcNow() => TerminatedAt; }
     private static string NormalizeTransportIds(RunEventAppend evt) =>
         System.Text.RegularExpressions.Regex.Replace(JsonSerializer.Serialize(evt), "[0-9a-f]{32}", "<transport-id>");

@@ -27,7 +27,7 @@ public sealed class ActivationPermitBlockedAdmissionScenarioTests
         var reverted = false;
         for (var tick = 1; tick <= 13; tick++)
         {
-            scenario.Clock.Advance(TimeSpan.FromSeconds(1));
+            scenario.Clock.Advance(TimeSpan.FromSeconds(22));
             var sample = Sample(scenario.Storage, tick);
             Assert.Equal(5, sample.WaitingVerified);
             Assert.Equal(1, sample.Occupied);

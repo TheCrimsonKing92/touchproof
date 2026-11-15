@@ -28,9 +28,9 @@ public sealed class ActivationAdmissionPreparingOwnerHealthTests
     {
         var tracker = new ActivationAdmissionHealthTracker();
         for (var tick = 1; tick <= 12; tick++)
-            tracker.Observe(new(tick, false, 5, 1, 0), Start.AddSeconds(tick * 13));
+            tracker.Observe(new(tick, false, 5, 1, 0), Start.AddSeconds(tick * 22));
         Assert.Equal(ConductorActivationRevertReason.AdmissionStalled, tracker.Verdict.Reason);
-        Assert.Equal("occupiedNoLiveGateTicks=12 waiting=5 occupied=1 live=0", tracker.Verdict.Detail);
+        Assert.Equal("occupiedNoLiveGateTicks=12 waiting=5 occupied=1 live=0 elapsedSeconds=242", tracker.Verdict.Detail);
     }
 
     [Theory]
@@ -45,9 +45,9 @@ public sealed class ActivationAdmissionPreparingOwnerHealthTests
             tracker.Observe(new(12, false, 5, 1, 0, 0, 1, owners), Start.AddMinutes(4)).State);
         for (var tick = 13; tick <= 23; tick++)
             Assert.Equal(ActivationAdmissionHealthState.StreakOpen,
-                tracker.Observe(new(tick, false, 5, 1, 0), Start.AddMinutes(8).AddSeconds(tick)).State);
+                tracker.Observe(new(tick, false, 5, 1, 0), Start.AddMinutes(8).AddSeconds((tick - 13) * 22)).State);
         Assert.Equal(ConductorActivationRevertReason.AdmissionStalled,
-            tracker.Observe(new(24, false, 5, 1, 0), Start.AddMinutes(8).AddSeconds(24)).Reason);
+            tracker.Observe(new(24, false, 5, 1, 0), Start.AddMinutes(8).AddSeconds(242)).Reason);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public sealed class ActivationAdmissionPreparingOwnerHealthTests
 
         tracker = new(() => elapsed);
         for (var tick = 1; tick <= 8; tick++)
-            tracker.Observe(sample with { Tick = tick, CensusFailed = true }, Start.AddSeconds(tick));
+            tracker.Observe(sample with { Tick = tick, CensusFailed = true }, Start.AddSeconds(tick * 43));
         Assert.Equal(ConductorActivationRevertReason.AdmissionCensusFailing, tracker.Verdict.Reason);
     }
 }

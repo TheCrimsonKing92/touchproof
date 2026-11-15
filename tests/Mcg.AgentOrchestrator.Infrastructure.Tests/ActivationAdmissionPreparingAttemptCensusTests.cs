@@ -13,7 +13,7 @@ public sealed class ActivationAdmissionPreparingAttemptCensusTests
         using var fixture = new HeartbeatFixture();
         var tracker = new ActivationAdmissionHealthTracker();
         var ownerChecks = 0;
-        var ticks = ActivationAdmissionHealthPolicy.OccupiedWithoutLiveGateTicks + 3;
+        var ticks = 15;
 
         for (var tick = 1; tick <= ticks; tick++)
         {
@@ -48,11 +48,11 @@ public sealed class ActivationAdmissionPreparingAttemptCensusTests
         using var fixture = new HeartbeatFixture();
         var tracker = new ActivationAdmissionHealthTracker();
         var ownerChecks = 0;
-        var limit = ActivationAdmissionHealthPolicy.OccupiedWithoutLiveGateTicks;
+        var limit = 12;
 
         for (var tick = 1; tick <= limit; tick++)
         {
-            var now = Start.AddSeconds(tick);
+            var now = Start.AddSeconds(tick * 22);
             fixture.WriteHeartbeat(scenario == "stale"
                 ? now - GateLoadContextProbe.LiveGateHeartbeatFreshness - TimeSpan.FromTicks(1)
                 : now);
@@ -74,7 +74,7 @@ public sealed class ActivationAdmissionPreparingAttemptCensusTests
 
         Assert.Equal(scenario == "dead" ? limit : 0, ownerChecks);
         Assert.Equal(ConductorActivationRevertReason.AdmissionStalled, tracker.Verdict.Reason);
-        Assert.Equal($"occupiedNoLiveGateTicks={limit} waiting=1 occupied=1 live=0",
+        Assert.Equal($"occupiedNoLiveGateTicks={limit} waiting=1 occupied=1 live=0 elapsedSeconds=242",
             tracker.Verdict.Detail);
     }
 

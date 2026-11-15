@@ -12,10 +12,14 @@ public sealed class ConductorContinuitySupervisorAdmissionHealthTests
     {
         await using var scenario = new Scenario();
         await scenario.StartAsync();
-        var limit = failed ? ActivationAdmissionHealthPolicy.CensusFailureTicks :
-            ActivationAdmissionHealthPolicy.OccupiedWithoutLiveGateTicks;
+        var limit = failed ? 8 : 12;
+        var spacing = TimeSpan.FromSeconds(failed ? 43 : 22);
         for (var tick = 1; tick < limit; tick++)
+        {
+            scenario.Deadlines.Advance(spacing);
             await scenario.EmitHeldTickAsync(tick, failed, waiting: 3, occupied: 13);
+        }
+        scenario.Deadlines.Advance(spacing);
         scenario.EmitTick(limit, failed, waiting: 3, occupied: 13);
         await scenario.AssertRestoredAsync(reason);
         var reverted = scenario.Activation("reverted");
@@ -40,7 +44,7 @@ public sealed class ConductorContinuitySupervisorAdmissionHealthTests
     {
         await using var scenario = new Scenario();
         await scenario.StartAsync();
-        for (var tick = 1; tick < ActivationAdmissionHealthPolicy.CensusFailureTicks; tick++)
+        for (var tick = 1; tick < 8; tick++)
             await scenario.EmitHeldTickAsync(tick, failed: true);
         scenario.EmitTick(8, failed: false);
         await scenario.WaitForAdoptionAsync(8);
@@ -84,8 +88,12 @@ public sealed class ConductorContinuitySupervisorAdmissionHealthTests
     {
         await using var scenario = new Scenario(restoreFailedHealth: true);
         await scenario.StartAsync();
-        for (var tick = 1; tick < ActivationAdmissionHealthPolicy.CensusFailureTicks; tick++)
+        for (var tick = 1; tick < 8; tick++)
+        {
+            scenario.Deadlines.Advance(TimeSpan.FromSeconds(43));
             await scenario.EmitHeldTickAsync(tick, failed: true);
+        }
+        scenario.Deadlines.Advance(TimeSpan.FromSeconds(43));
         scenario.EmitTick(8, failed: true);
         await scenario.AssertRestoredAsync("AdmissionCensusFailing");
         Assert.Single(scenario.Events.Snapshot().Where(evt => evt.Status == "reverted"));
@@ -135,9 +143,10 @@ public sealed class ConductorContinuitySupervisorAdmissionHealthTests
                     return _successorExit.Task;
                 }
                 Assert.Equal(2, index);
-                var ticks = restoreFailedHealth ? ActivationAdmissionHealthPolicy.CensusFailureTicks : 3;
+                var ticks = restoreFailedHealth ? 8 : 3;
                 for (var tick = 1; tick <= ticks; tick++)
                 {
+                    Deadlines.Advance(TimeSpan.FromSeconds(43));
                     request.OnStandardOutputLine(new ActivationAdmissionSample(tick, restoreFailedHealth, 3, 13, 0).Format());
                     request.OnStandardOutputLine($"TICK_END tick={tick} activation=true");
                 }
@@ -230,8 +239,10 @@ public sealed class ConductorContinuitySupervisorAdmissionHealthTests
         private readonly object _gate = new();
         private TaskCompletionSource _registered = NewSignal();
         private int _count;
+        private DateTimeOffset _now = DateTimeOffset.UnixEpoch;
         public int Count { get { lock (_gate) return _count; } }
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
+        public override DateTimeOffset GetUtcNow() { lock (_gate) return _now; }
+        public void Advance(TimeSpan duration) { lock (_gate) _now += duration; }
 
         public Task Delay(TimeSpan duration, CancellationToken token)
         {
