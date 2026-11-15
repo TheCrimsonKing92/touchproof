@@ -26,7 +26,8 @@ internal sealed record AcceptanceCohortLandingResult(
     AcceptanceCohortLandingOutcome Outcome,
     string Message,
     string? CommitRevision = null,
-    IReadOnlyList<AcceptanceCohortCoverage>? Coverage = null)
+    IReadOnlyList<AcceptanceCohortCoverage>? Coverage = null,
+    MergeTrainLandingEvidenceGaps? EvidenceGaps = null)
 {
     public bool MainAdvanced => Outcome == AcceptanceCohortLandingOutcome.Advanced;
 }

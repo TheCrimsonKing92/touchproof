@@ -10,7 +10,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
     : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Fact]
-    public void PendingHumanInputHoldsReceiptOnlyReplayUntilKernelAnswer()
+    public void PendingHumanInputEjectsFromReceiptReplayUntilKernelAnswer()
     {
         using var fixture = CreatePassedTrain(materializeReceipt: true);
         var goal = fixture.Goals[1];
@@ -23,11 +23,12 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
         var held = fixture.Driver.RunMergeTrain(selection, fixture.Goals, ConductorAutonomyPolicy.Permissive,
             landFromReceiptOnly: true, expectedGateIdentity: fixture.Receipt.Identity.Value);
 
-        Assert.Equal(fixture.Receipt.ReceiptId, held.Receipt?.ReceiptId);
-        Assert.True(held.Receipt?.HasAuthoritativeLandingEvidence);
-        Assert.All(held.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
-        Assert.Contains(goal.Id.Value, held.Detail, StringComparison.Ordinal);
-        Assert.Contains(wait.Id.Value, held.Detail, StringComparison.Ordinal);
+        Assert.Null(held.Receipt);
+        Assert.Empty(held.MemberResults);
+        var ejection = Assert.Single(held.Ejections);
+        Assert.Equal(goal.Id, ejection.GoalId);
+        Assert.Equal(MergeTrainEjectionReason.LandingEvidenceGap, ejection.Reason);
+        Assert.Contains(wait.Id.Value, ejection.Detail, StringComparison.Ordinal);
         Assert.Equal(fixture.Receipt.Identity.ObservedMainRevision, RunGitOutput(fixture.Repo, "rev-parse", "main").Trim());
         Assert.Empty(RunGitOutput(fixture.Repo, "for-each-ref", "--format=%(objectname)", "refs/heads/integration").Trim());
         Assert.Empty(landings);
@@ -36,11 +37,21 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
         Assert.Equal(0, fixture.Verifier.RunCount);
         Assert.Equal(0, fixture.Pending.StartCount);
 
+        var replay = fixture.Driver.RunMergeTrain(selection, fixture.Goals, ConductorAutonomyPolicy.Permissive,
+            landFromReceiptOnly: true, expectedGateIdentity: fixture.Receipt.Identity.Value);
+        Assert.Null(replay.Receipt);
+        Assert.Single(replay.Ejections);
+        var store = new MergeTrainAcceptanceStore(Path.Combine(
+            OrchestratorWorkspace.ForDirectory(fixture.Repo).OrchestratorDirectory, "merge-train-acceptance.db"));
+        var persistedEjection = Assert.Single(store.ReadAttemptEjections(
+            fixture.Receipt.GateAttemptId ?? fixture.Receipt.ReceiptId));
+        Assert.Equal(ejection.Detail, persistedEjection.Detail);
+
         fixture.Kernel.SubmitHumanInput(wait.Id, "Operator verified the required receipt", supersedeSiblings: false);
         var landed = fixture.Driver.RunMergeTrain(selection, fixture.Goals, ConductorAutonomyPolicy.Permissive,
             landFromReceiptOnly: true, expectedGateIdentity: fixture.Receipt.Identity.Value);
 
-        Assert.Equal(held.Receipt?.ReceiptId, landed.Receipt?.ReceiptId);
+        Assert.Equal(fixture.Receipt.ReceiptId, landed.Receipt?.ReceiptId);
         Assert.Equal(fixture.Receipt.Identity.Value, landed.Receipt?.Identity.Value);
         Assert.Equal(fixture.Receipt.GateTestResultPaths, landed.Receipt?.GateTestResultPaths);
         Assert.All(landed.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Executed>(member.Outcome));
@@ -388,9 +399,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
     public void PendingLanding_LandHeldBeforeMutation_ClearsOnExpiryOrResolution(string resolution)
     {
         using var fixture = CreatePassedTrain(materializeReceipt: true);
-        var wait = fixture.Kernel.RequestHumanInputDeduplicated(fixture.Goals[1].Id, null,
-            "Required landing receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
-            evidenceOwner: "Acceptance").Request;
+        fixture.Driver.LandingMutationBlocker = () => "Operator paused landing";
         var selection = ProjectTrainSelection(fixture.Driver, fixture.Goals);
         var outsider = CreateCompletedGoal(fixture.Kernel, "Independent gate candidate", fixture.Repo);
         var outsiderProjection = new GateReadyCandidateProjectionResult.Ready(new GateReadyCandidateProjection(
@@ -451,7 +460,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
         var first = Apply(1);
         AssertHeld(first);
         Assert.Contains(first.Progress, line => line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal) &&
-            line.Contains("landing held before mutation", StringComparison.Ordinal));
+            line.Contains("landing held at mutation boundary", StringComparison.Ordinal));
         if (resolution == "expired")
         {
             now += TimeSpan.FromMinutes(30) - TimeSpan.FromSeconds(1);
@@ -461,7 +470,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
             now += TimeSpan.FromSeconds(1);
         }
         else if (resolution == "landed")
-            fixture.Kernel.SubmitHumanInput(wait.Id, "Receipt verified", supersedeSiblings: false);
+            fixture.Driver.LandingMutationBlocker = null;
         else
             hasReceipt = false;
 
@@ -472,7 +481,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
             Assert.Contains(cleared.Progress, line => line ==
                 $"PENDING_LANDING_HOLD_EXPIRED tick=3 receipt={fixture.Receipt.ReceiptId} reason=hold-limit limitMinutes=30");
             Assert.Contains(cleared.Progress, line => line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal) &&
-                line.Contains("landing held before mutation", StringComparison.Ordinal));
+                line.Contains("landing held at mutation boundary", StringComparison.Ordinal));
             now += TimeSpan.FromMinutes(1);
         }
         else if (resolution == "landed")

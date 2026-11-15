@@ -110,7 +110,10 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                     ExitCode: 0,
                     OutputTail: null,
                     Checks: [new AcceptanceCheckResult("merge train", true, 0, null)],
-                    TestResultPaths: [WritePassingTrx(repo, "receipt-train-shared.trx")])
+                    TestResultPaths: [WritePassingTrx(repo, "receipt-train-shared.trx")]),
+                new AcceptanceVerificationResult(true, false, 0, null,
+                    Checks: [new AcceptanceCheckResult("survivor train", true, 0, null)],
+                    TestResultPaths: [WritePassingTrx(repo, "receipt-train-survivors.trx")])
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
@@ -150,13 +153,15 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
             var callbacks = 0;
             driver.LandingMutationBlocker = () =>
             {
-                if (scenario == "late-legacy" && ++callbacks == 2) wait = CreateLegacyWait();
-                if (scenario == "submission-failure")
+                callbacks++;
+                if (scenario == "late-legacy" && callbacks == 2) wait = CreateLegacyWait();
+                if (scenario == "submission-failure" && callbacks == 1)
                 {
                     var blockedPath = Path.Combine(workspace.OrchestratorDirectory, "blocked-answer-events");
                     if (!File.Exists(blockedPath)) File.WriteAllText(blockedPath, "Not an event directory");
                     kernel.SetEventWriter(new GoalLifecycleEventWriter(blockedPath));
                 }
+                else if (scenario == "submission-failure") kernel.SetEventWriter(null);
                 return null;
             };
             var statuses = new[] { firstGoal.Status, secondGoal.Status, thirdGoal.Status };
@@ -168,7 +173,40 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                 [firstGoal, secondGoal, thirdGoal],
                 ConductorAutonomyPolicy.Permissive);
 
-            if (scenario is not "none" and not "typed")
+            if (scenario is not "none" and not "typed" and not "late-legacy")
+            {
+                var blockedWait = legacy ?? Assert.IsType<HumanInputRequest>(wait);
+                var ejection = Assert.Single(result.Ejections);
+                Assert.Equal(secondGoal.Id, ejection.GoalId);
+                Assert.Equal(MergeTrainEjectionReason.LandingEvidenceGap, ejection.Reason);
+                Assert.Contains(blockedWait.Id.Value, ejection.Detail, StringComparison.Ordinal);
+                Assert.False(blockedWait.IsCompleted);
+                Assert.Null(blockedWait.Answer);
+                Assert.Equal(GoalStatus.Verified, secondGoal.Status);
+                Assert.Null(secondGoal.LatestAcceptanceFailure);
+                Assert.Equal(2, verifier.RunCount);
+                Assert.Equal(2, result.MemberResults.Count);
+                Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Executed>(member.Outcome));
+                Assert.Equal(new[] { firstGoal.Id, thirdGoal.Id }, result.Receipt!.Identity.Members.Select(member => member.GoalId));
+                Assert.Equal(2, landings.Count);
+                Assert.All(landings, landing => Assert.Equal(result.Receipt.Identity.TrainTreeRevision,
+                    RunGitOutput(repo, "rev-parse", $"{landing.LandingSha}^{{tree}}").Trim()));
+                Assert.All(new[] { firstGoal, thirdGoal }, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
+                if (scenario == "submission-failure")
+                {
+                    Assert.Contains("submission failed:", ejection.Detail, StringComparison.Ordinal);
+                    Assert.Empty(blockedWait.AnswerHistory);
+                }
+                if (scenario == "typed-with-legacy")
+                {
+                    Assert.True(wait!.IsCompleted);
+                    Assert.Equal(HumanInputAnswerOrigin.Worker, wait.AuthoritativeAnswer!.Origin);
+                }
+                Assert.False(unrelatedWait.IsCompleted);
+                AssertNoMergeTrainWorkspaces(repo);
+                return;
+            }
+            if (scenario == "late-legacy")
             {
                 var blockedWait = legacy ?? Assert.IsType<HumanInputRequest>(wait);
                 Assert.Equal(MergeTrainGateOutcome.Passed, result.Receipt?.Outcome);
@@ -328,6 +366,10 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                 0,
                 [WritePassingTrx(repo, "receipt-train-held.trx")],
                 ValidForLanding: true));
+            RunGit(repo, "update-ref", $"refs/heads/{LandingExecutor.IntegrationBranchName}", main);
+            var refsBefore = RunGitOutput(repo, "for-each-ref", "--format=%(refname):%(objectname)");
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             var result = LandingExecutor.ExecuteMergeTrain(
                 kernel,
@@ -345,6 +387,10 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                 result.Message,
                 StringComparison.Ordinal);
             Assert.Equal(main, RunGitOutput(repo, "rev-parse", "main").Trim());
+            Assert.Equal(refsBefore, RunGitOutput(repo, "for-each-ref", "--format=%(refname):%(objectname)"));
+            var metadata = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+            Assert.Equal(goals.Length, metadata.Count);
+            Assert.All(metadata, row => Assert.Null(row.PromotionFact));
             Assert.All(goals, goal => Assert.Null(
                 GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(repo, goal.Id))));
             if (missingObligations)

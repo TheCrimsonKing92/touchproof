@@ -75,12 +75,13 @@ internal static partial class LandingExecutor
             }
         }
 
-        var pendingInput = DescribeGroupedPendingHumanInput(kernel, goals, workspace,
-            goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
-        if (pendingInput is not null)
+        var evidenceGaps = new List<KeyValuePair<GoalId, string>>();
+        foreach (var goal in goals)
         {
-            return new AcceptanceCohortLandingResult(AcceptanceCohortLandingOutcome.RetryableHold,
-                $"Merge train landing held before mutation because {pendingInput}");
+            var pendingInput = EvaluatePendingHumanInput(kernel, goal, workspace,
+                receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision).HoldDescription;
+            if (pendingInput is not null)
+                evidenceGaps.Add(new(goal.Id, pendingInput));
         }
 
         foreach (var goal in goals)
@@ -88,23 +89,20 @@ internal static partial class LandingExecutor
             var gap = AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal);
             if (gap is not null)
             {
-                return new AcceptanceCohortLandingResult(
-                    AcceptanceCohortLandingOutcome.RetryableHold,
-                    $"Merge train landing held before mutation because goal {goal.Id.Value[..8]}: {gap}");
+                evidenceGaps.Add(new(goal.Id, $"goal {goal.Id.Value[..8]}: {gap}"));
             }
         }
 
-        var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-            goals,
-            goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
-            kernel,
-            $"merge-train-receipt:{receipt.ReceiptId}", workspace.IntegrationBranch,
-            executionDirectory);
-        if (evidenceDiagnostic is not null)
+        foreach (var goal in goals)
         {
-            return new AcceptanceCohortLandingResult(
-                AcceptanceCohortLandingOutcome.RetryableHold,
-                $"Merge train landing held before mutation because {evidenceDiagnostic}");
+            var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+                goal,
+                receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision,
+                kernel,
+                $"merge-train-receipt:{receipt.ReceiptId}", workspace.IntegrationBranch,
+                executionDirectory);
+            if (evidenceDiagnostic is not null)
+                evidenceGaps.Add(new(goal.Id, $"goal {goal.Id.Value[..8]}: {evidenceDiagnostic}"));
         }
 
         foreach (var goal in goals)
@@ -112,9 +110,7 @@ internal static partial class LandingExecutor
             var completionRefusal = kernel.DescribeMergeEvidenceCompletionRefusal(goal.Id);
             if (completionRefusal is not null)
             {
-                return new AcceptanceCohortLandingResult(
-                    AcceptanceCohortLandingOutcome.RetryableHold,
-                    $"Merge train landing held before mutation because {completionRefusal}");
+                evidenceGaps.Add(new(goal.Id, completionRefusal));
             }
         }
 
@@ -167,6 +163,12 @@ internal static partial class LandingExecutor
             return new AcceptanceCohortLandingResult(
                 AcceptanceCohortLandingOutcome.RetryableHold, $"Merge train landing held: {checkoutInspection.Reason}");
         }
+
+        // Whole-train blockers take precedence over actionable member attribution.
+        if (evidenceGaps.Count > 0)
+            return new AcceptanceCohortLandingResult(AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Merge train landing held before mutation because {string.Join("; ", evidenceGaps.Select(item => item.Value))}",
+                EvidenceGaps: new MergeTrainLandingEvidenceGaps(evidenceGaps));
 
         store.PrepareLanding(receipt, commit, priorIntegrationRevision);
         foreach (var goal in goals)
@@ -282,5 +284,55 @@ internal static partial class LandingExecutor
             $"Landed exact tested merge train tree for {string.Join(',', goals.Select(goal => goal.Id.Value[..8]))}.",
             commit,
             coverage.Select(item => new AcceptanceCohortCoverage(item.GoalId, item.TrainId, item.ReceiptId, item.Landed)).ToArray());
+    }
+}
+
+// Maps a train landing to member results and completes its post-landing effects.
+// Evidence attribution, ejection and the decision to re-gate remain with the conductor.
+internal static class MergeTrainLandingCompletion
+{
+    internal static Dictionary<string, ConductorAdvanceResult> Hold(
+        IReadOnlyList<Goal> goals, ConductorAutonomyPolicy policy, string detail) =>
+        goals.ToDictionary(
+            goal => goal.Id.Value,
+            goal => new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8], policy.Name,
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, detail)),
+            StringComparer.Ordinal);
+
+    internal static ConductorMergeTrainRunResult Complete(
+        MergeTrainReceipt receipt, AcceptanceCohortLandingResult landing, IReadOnlyList<Goal> goals,
+        IReadOnlyList<string> changedFiles, MergeTrainAcceptanceStore store, ConductorAutonomyPolicy policy,
+        int attempt, IReadOnlyList<MergeTrainEjection> ejections, Action<ConductorLandingReceipt>? landingSink,
+        Action<Goal, LandingResult> afterSuccessfulLanding)
+    {
+        if (!landing.MainAdvanced)
+            throw new InvalidOperationException("Merge train landing completion requires an advanced main.");
+        foreach (var goal in goals)
+        {
+            var result = new LandingResult(
+                goal.Id.Value,
+                goal.Id.Value[..8],
+                new LandingDecision.Promote(),
+                $"train/{receipt.Identity.Value}",
+                true,
+                landing.Message,
+                landing.CommitRevision,
+                changedFiles);
+            landingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, changedFiles, landing.CommitRevision,
+                GateLanePlanPath: receipt.GateLanePlanPath, PreviousMainSha: receipt.Identity.ObservedMainRevision));
+            afterSuccessfulLanding(goal, result);
+        }
+        store.CompleteLandingEffects(receipt.Identity.Value, receipt.ReceiptId);
+        return new ConductorMergeTrainRunResult(
+            receipt,
+            goals.ToDictionary(
+                goal => goal.Id.Value,
+                goal => new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8], policy.Name,
+                    new ConductorAdvanceOutcome.Executed(
+                        GoalLifecycleState.Verified,
+                        $"Landed by merge train receipt {receipt.ReceiptId}.")),
+                StringComparer.Ordinal),
+            ejections,
+            $"outcome=passed attempts={attempt + 1} landings={goals.Count} receipt={receipt.ReceiptId}", landing.Outcome);
     }
 }

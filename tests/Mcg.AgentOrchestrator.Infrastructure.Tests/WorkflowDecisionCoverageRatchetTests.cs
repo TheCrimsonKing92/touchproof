@@ -24,7 +24,6 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.GitAndLeaseHelpers.cs : ReplacementEvidenceMutationHeld : Replacement mutation hold factory leaves attribution to callers.",
         "ConductorDriver.LandingCompletion.cs : Escalate : Escalation factory leaves attribution to callers.",
         "ConductorDriver.LandingCompletionDecisions.cs : EscalateOrBeginConflictIntegration : Conflict integration refusal and fallback escalations have no typed decisions.",
-        "ConductorDriver.MergeTrains.cs : RunMergeTrain : Failed merge train creates an undecided hold.",
         "ConductorDriver.ParallelAcceptance.cs : EscalateParallelLandingAcceptance : Parallel landing escalation delegates without attaching a decision.",
         "ConductorDriver.PreDispatchIntegration.cs : TryIntegrateMainBeforeReadOnlyDispatch : Integration refusal escalations have no decisions.",
         "ConductorDriver.PreReviewEvidence.cs : TryRunPreReviewEvidenceStage : Evidence failure escalation branches have no decisions.",
@@ -37,6 +36,7 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.cs : ExecuteDispatchAndStart : Failed dispatch recovery escalates without a decision.",
         "ConductorParallelAcceptanceAttempts.RefusedCarryRelaunch.cs : TryHoldRefusedCarryRelaunch : Refused carry helper result is held without a decision.",
         "ConductorParallelAcceptanceAttempts.cs : FromArtifact : Rehydrated held and escalated outcomes do not restore decisions.",
+        "LandingExecutor.MergeTrains.cs : Hold : Merge train hold factory leaves attribution to callers.",
         "MultiRepositoryAcceptanceGate.cs : MultiRepositoryAcceptanceGate : Primary-constructor attribution covers repository receipt waiting holds without decisions."
     ];
 

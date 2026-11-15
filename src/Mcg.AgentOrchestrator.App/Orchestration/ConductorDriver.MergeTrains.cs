@@ -303,38 +303,39 @@ internal sealed partial class ConductorDriver
                     LandingMutationBlocker);
                 if (!landing.MainAdvanced)
                 {
+                    if (landing.Outcome == AcceptanceCohortLandingOutcome.RetryableHold &&
+                        landing.EvidenceGaps is { ByGoal.Count: > 0 } gaps &&
+                        gaps.ByGoal.Keys.All(id => members.Any(member => member.GoalId == id)))
+                    {
+                        var survivors = members.Where(member => !gaps.ByGoal.ContainsKey(member.GoalId))
+                            .Select(member => member.GoalId).ToHashSet();
+                        if (survivors.Count < 2 || attempt == 1)
+                            return Fallback($"landing evidence gap fallback=ordinary: {BoundCohortDetail(landing.Message)}");
+
+                        var evidenceAttemptId = receipt.GateAttemptId ?? receipt.ReceiptId;
+                        var recorded = _mergeTrainAcceptanceStore.ReadAttemptEjections(evidenceAttemptId);
+                        foreach (var gap in gaps.ByGoal)
+                        {
+                            var evidenceEjection = new MergeTrainEjection(
+                                gap.Key, MergeTrainEjectionReason.LandingEvidenceGap, [], gap.Value);
+                            allEjections.Add(evidenceEjection);
+                            if (recorded.Any(item => item.GoalId == gap.Key && item.Reason == evidenceEjection.Reason &&
+                                item.Detail == evidenceEjection.Detail))
+                                continue;
+                            _mergeTrainAcceptanceStore.RecordEjections(evidenceAttemptId, [evidenceEjection]);
+                            AppendTrainEjectionObservation(outerAttemptId ?? evidenceAttemptId,
+                                receipt.Identity, gap.Key, evidenceEjection.Reason);
+                        }
+                        composition = originalBindings.Where(member => survivors.Contains(member.GoalId)).ToArray();
+                        redDropped = null;
+                        pendingRecheck = null;
+                        continue;
+                    }
                     return new ConductorMergeTrainRunResult(receipt, Hold(goals, landing.Message), allEjections, landing.Message, landing.Outcome);
                 }
-                foreach (var goal in goals)
-                {
-                    var result = new LandingResult(
-                        goal.Id.Value,
-                        goal.Id.Value[..8],
-                        new LandingDecision.Promote(),
-                        $"train/{identity.Value}",
-                        true,
-                        landing.Message,
-                        landing.CommitRevision,
-                        changedFiles);
-                    SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, changedFiles, landing.CommitRevision,
-                        GateLanePlanPath: receipt.GateLanePlanPath, PreviousMainSha: identity.ObservedMainRevision));
-                    _afterSuccessfulLanding(goal, result);
-                }
-                _mergeTrainAcceptanceStore.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
-                return new ConductorMergeTrainRunResult(
-                    receipt,
-                    goals.ToDictionary(
-                        goal => goal.Id.Value,
-                        goal => MakeResult(
-                            goal.Id.Value,
-                            goal.Id.Value[..8],
-                            policy,
-                            new ConductorAdvanceOutcome.Executed(
-                                GoalLifecycleState.Verified,
-                                $"Landed by merge train receipt {receipt.ReceiptId}.")),
-                        StringComparer.Ordinal),
-                    allEjections,
-                    $"outcome=passed attempts={attempt + 1} landings={goals.Length} receipt={receipt.ReceiptId}", landing.Outcome);
+                return MergeTrainLandingCompletion.Complete(receipt, landing, goals, changedFiles,
+                    _mergeTrainAcceptanceStore, policy, attempt, allEjections,
+                    item => SuccessfulLandingSink?.Invoke(item), _afterSuccessfulLanding);
             }
 
             var attributed = MergeTrainRedAttribution.TryAttribute(receipt, workspace.Path, members, out var subjects);
@@ -445,14 +446,7 @@ internal sealed partial class ConductorDriver
             detail) { RecordedReceipt = lastRecordedReceipt };
 
         Dictionary<string, ConductorAdvanceResult> Hold(IReadOnlyList<Goal> goals, string detail) =>
-            goals.ToDictionary(
-                goal => goal.Id.Value,
-                goal => MakeResult(
-                    goal.Id.Value,
-                    goal.Id.Value[..8],
-                    policy,
-                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, detail)),
-                StringComparer.Ordinal);
+            MergeTrainLandingCompletion.Hold(goals, policy, detail);
 
         ConductorMergeTrainRunResult InFlight(CohortGateRun run)
         {
