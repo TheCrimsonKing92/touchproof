@@ -43,14 +43,20 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
                 Path.Combine(fixture.Root, "worker.out.log"), Path.Combine(fixture.Root, "worker.err.log"));
             worker = Process.GetProcessById(fixture.Worker.Process.Id);
             _ = worker.SafeHandle; // Hold this process identity through the finally-block stop.
-            workerIdentity = SpawnProcessIdentityReader.ReadForRegistration(worker).Identity;
             fixture.Worker.Resume();
             Assert.True(await Task.Run(() => ready.WaitOne(TestHangGuard.HangSafetyBound)),
                 "Worker descendant did not signal its named readiness event.");
+            // MainModule is unavailable before the suspended worker initializes. The child's
+            // readiness event proves the worker has started and is waiting for that child.
+            var workerRead = SpawnProcessIdentityReader.ReadForRegistration(worker);
+            workerIdentity = workerRead.Identity;
+            Assert.True(workerRead.Succeeded, workerRead.Evidence);
             var descendantId = int.Parse(File.ReadAllText(childPidPath), System.Globalization.CultureInfo.InvariantCulture);
             descendant = Process.GetProcessById(descendantId);
             _ = descendant.SafeHandle;
-            descendantIdentity = SpawnProcessIdentityReader.ReadForRegistration(descendant).Identity;
+            var descendantRead = SpawnProcessIdentityReader.ReadForRegistration(descendant);
+            descendantIdentity = descendantRead.Identity;
+            Assert.True(descendantRead.Succeeded, descendantRead.Evidence);
             var descendantName = descendant.ProcessName;
             Assert.False(worker.HasExited);
             Assert.False(descendant.HasExited);
