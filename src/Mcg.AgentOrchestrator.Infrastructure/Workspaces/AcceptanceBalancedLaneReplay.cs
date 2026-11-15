@@ -8,6 +8,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // attempt id. Replay is retrospective reconstruction and never updates history.
 internal sealed class AcceptanceBalancedLaneReplay
 {
+    // Real TRX rows differ between duration and endTime minus startTime by up to about 15 ms.
+    private const double TrxDurationToleranceSeconds = 0.05;
+
     internal sealed record LaneInput(string Name, string[] TrxPaths);
     internal sealed record GateInput(string GateId, string ReceiptsPath, LaneInput[] Lanes,
         AcceptanceTestClassDescriptor[]? Classes = null, int? SlotCount = null);
@@ -113,7 +116,7 @@ internal sealed class AcceptanceBalancedLaneReplay
             if (!DateTimeOffset.TryParse((string?)row.Attribute("startTime"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var start) ||
                 !DateTimeOffset.TryParse((string?)row.Attribute("endTime"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var end) || end < start ||
                 !TimeSpan.TryParse((string?)row.Attribute("duration"), CultureInfo.InvariantCulture, out var duration) ||
-                Math.Abs(duration.TotalSeconds - (end - start).TotalSeconds) > 0.01)
+                Math.Abs(duration.TotalSeconds - (end - start).TotalSeconds) > TrxDurationToleranceSeconds)
                 throw new InvalidDataException($"Missing or inconsistent TRX start/end/duration in '{path}'.");
             first = first is null || start < first ? start : first;
             last = last is null || end > last ? end : last;
