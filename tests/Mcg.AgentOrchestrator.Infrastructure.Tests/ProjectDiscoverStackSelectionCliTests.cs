@@ -52,6 +52,7 @@ public sealed class ProjectDiscoverStackSelectionCliTests
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal($"Project model: {modelPath}", lines[0]);
         Assert.Equal("Integration branch: not learned", lines[1]);
-        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(2));
+        Assert.Equal($"Kept 0 unit measurements; {model.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration", lines[2]);
+        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(3));
     }
 }

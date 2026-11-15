@@ -33,9 +33,10 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         Assert.Equal(Path.Combine(OrchestratorWorkspace.ForProject("sample-repo", root,
             dataRootDirectory: registry.DataRootDirectory).OrchestratorDirectory, "project-model.json"), modelPath);
         Assert.True(File.Exists(modelPath));
-        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}" +
-            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}", output.ToString());
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
+        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}" +
+            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}" +
+            $"Kept 0 unit measurements; {model.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration{Environment.NewLine}", output.ToString());
         Assert.Equal(2, model.Units.Count);
         Assert.False(model.Units.Single(unit => unit.Id == "src/Plain.Library/Plain.Library.csproj").IsTest.Value);
         Assert.Single(model.TestSetups);
@@ -71,9 +72,11 @@ public sealed class ProjectDiscoverUnregisteredRootTests
 
         var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory, "project-model.json");
         Assert.True(File.Exists(modelPath));
+        var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
         Assert.Equal($"Project model: {modelPath}{Environment.NewLine}" +
-            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}", output.ToString());
-        Assert.Equal(3, ProjectModelJson.Deserialize(File.ReadAllText(modelPath)).Units.Count);
+            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}" +
+            $"Kept 0 unit measurements; {model.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration{Environment.NewLine}", output.ToString());
+        Assert.Equal(3, model.Units.Count);
         Assert.False(Directory.Exists(Path.Combine(home.Root, ".orchestrator", "projects")));
     }
 
@@ -99,9 +102,11 @@ public sealed class ProjectDiscoverUnregisteredRootTests
 
         var modelPath = Path.Combine(registry.DataRootDirectory, "projects", name, "project-model.json");
         Assert.True(File.Exists(modelPath));
+        var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
         Assert.Equal($"Project model: {modelPath}{Environment.NewLine}" +
-            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}", output.ToString());
-        Assert.Equal(2, ProjectModelJson.Deserialize(File.ReadAllText(modelPath)).Units.Count);
+            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}" +
+            $"Kept 0 unit measurements; {model.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration{Environment.NewLine}", output.ToString());
+        Assert.Equal(2, model.Units.Count);
         Assert.False(Directory.Exists(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory));
         Assert.False(File.Exists(registry.RegistryPath));
     }

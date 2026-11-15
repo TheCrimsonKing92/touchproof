@@ -76,7 +76,14 @@ public sealed class ProjectCheckManifestCliTests
 
         Assert.Equal(1, exit);
         Assert.Equal(new[] { $"Differs sample at byte offset {offset} line {line}",
-            $"  installed: {installedLine}", $"  learned: {learnedLine}" }, lines);
+            $"  installed: {installedLine}", $"  learned: {learnedLine}" }.Concat(change switch
+            {
+                "digit" => new[] { "  kind: Other", "  sections: added=- missing=- changed=engine",
+                    "  checks: added=- missing=- changed=-" },
+                "truncate" or "crlf" => new[] { "  kind: Other", "  sections: added=- missing=- changed=-",
+                    "  checks: added=- missing=- changed=-" },
+                _ => Array.Empty<string>()
+            }), lines);
     }
 
     [Theory]

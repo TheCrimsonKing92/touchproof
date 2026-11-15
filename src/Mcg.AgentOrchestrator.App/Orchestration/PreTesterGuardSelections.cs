@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -38,7 +39,8 @@ internal sealed class PreTesterGuardSelections
         Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? reverseDependencySelector = null,
         Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? reverseDependencyCostDecision = null)
     {
-        var (changedFileGuards, provenance) = cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision);
+        var (changedFileGuards, provenance) = ConductorTickStepLedger.Measure("walk-pretester-changed-file-guards",
+            () => cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision));
         foreach (var selection in changedFileGuards.Selections)
         {
             var guard = provenance.Single(item => item.Class == selection.TestClass);
@@ -46,26 +48,34 @@ internal sealed class PreTesterGuardSelections
                 $"PRE_TESTER_GUARD_SELECTED class={guard.Class} kind={guard.Kind} path={guard.Path}");
         }
         var cli = priorSelections is null
-            ? PreTesterCliSurfaceSelections.Select(worktreePath, changedPaths, settings)
+            ? ConductorTickStepLedger.Measure("walk-pretester-cli-surface",
+                () => PreTesterCliSurfaceSelections.Select(worktreePath, changedPaths, settings))
             : (Selections: (IReadOnlyList<FindingEvidenceSelection>)[],
                 Provenance: (IReadOnlyList<PreTesterChangedFileGuardClasses.Provenance>)[]);
         foreach (var reason in cli.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
-        var structuralPaths = changedPaths.Any(PreTesterLiveTreeStructuralSelections.IsTreePath)
-            ? (structuralPathReader ?? PreTesterCoupledClassSelections.ReadStructuralPaths)(worktreePath, mainRevision)
-            : [];
-        var coupled = PreTesterCoupledClassSelections.Select(worktreePath, changedPaths, settings, progress, structuralPaths);
+        var coupled = ConductorTickStepLedger.Measure("walk-pretester-coupled-class", () =>
+        {
+            var structuralPaths = changedPaths.Any(PreTesterLiveTreeStructuralSelections.IsTreePath)
+                ? (structuralPathReader ?? PreTesterCoupledClassSelections.ReadStructuralPaths)(worktreePath, mainRevision)
+                : [];
+            return PreTesterCoupledClassSelections.Select(worktreePath, changedPaths, settings, progress, structuralPaths);
+        });
         foreach (var reason in coupled.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
-        var reverse = PreTesterReverseDependencySelections.Select(worktreePath, changedPaths, progress,
-            reverseDependencySelector, reverseDependencyCostDecision);
+        var reverse = ConductorTickStepLedger.Measure("walk-pretester-reverse-dependency",
+            () => PreTesterReverseDependencySelections.Select(worktreePath, changedPaths, progress,
+                reverseDependencySelector, reverseDependencyCostDecision));
         foreach (var reason in reverse.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
-        return new(changedFileGuards, PreTesterAlwaysRunGuardTestClasses.Select(worktreePath)
-            .Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths))
+        var alwaysRun = ConductorTickStepLedger.Measure("walk-pretester-always-run",
+            () => PreTesterAlwaysRunGuardTestClasses.Select(worktreePath).ToArray());
+        var testSource = ConductorTickStepLedger.Measure("walk-pretester-test-source",
+            () => PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths).ToArray());
+        return new(changedFileGuards, alwaysRun.Concat(testSource)
             .Concat(changedFileGuards.Selections).ToArray(), cli.Selections,
             coupled.Selections.Concat(reverse.Selections).Distinct().ToArray(), reverse.Selections,
             PreTesterReverseDependencySelections.ShippingSourcePaths(changedPaths).Length != 0);
@@ -207,6 +217,47 @@ internal sealed class PreTesterGuardSelections
             !PreTesterChangedFileGuardClasses.ContainsClass(
                 _reverseDependencySelections, AcceptanceTestSourceResolver.ExtractClassName(test))).ToArray();
         return otherFailures.Length == 0 || otherFailuresAreInsideChanges(otherFailures);
+    }
+}
+
+// A single reconciliation's result survives selection if a live attempt completes during observation.
+internal sealed record PreTesterAttemptObservation(
+    bool Completed, FocusedEvidenceRunResult Evidence, ConductorParallelAcceptanceAttempt? Attempt,
+    FailedGoalFindingObservation Decision, ConductorParallelAcceptanceAttemptDecisionKind? Kind)
+{
+    internal bool IsPending => !Completed &&
+        (Kind is not (ConductorParallelAcceptanceAttemptDecisionKind.Completed or
+                      ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun) ||
+         PreTesterApparatusReceiptClassifier.IsTransientAttemptOutcome(Attempt?.Outcome) ||
+         Kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed &&
+         Decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending);
+
+    internal static PreTesterAttemptObservation? ReadRunning(
+        Goal goal, PreTesterEvidenceEntry? prior, string candidateSha, ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceAttemptCoordinator coordinator, PreTesterOutOfDiffRerun.ReconcileAttempt reconcile)
+    {
+        if (prior is not { Outcome: "started" } ||
+            coordinator.ReadLiveFocusedReceiptAttempt(goal.Id, prior.ReceiptId, candidateSha) is not { } attempt)
+            return null;
+        try
+        {
+            return Reconcile(goal, policy, string.Join("; ", prior.Selections), candidateSha, null, reconcile, attempt);
+        }
+        catch (InvalidDataException)
+        {
+            // Observation revalidates identity; a raced transition must use the normal path.
+            return null;
+        }
+    }
+
+    internal static PreTesterAttemptObservation Reconcile(
+        Goal goal, ConductorAutonomyPolicy policy, string request, string? candidateSha,
+        ConductorFocusedEvidenceRequestContext? context, PreTesterOutOfDiffRerun.ReconcileAttempt reconcile,
+        ConductorParallelAcceptanceAttempt? existingAttempt = null)
+    {
+        var completed = reconcile(goal, policy, request, candidateSha, "pre-tester-deferred", context,
+            out var evidence, out var attempt, out var decision, out var kind, existingAttempt);
+        return new(completed, evidence, attempt, decision, kind);
     }
 }
 

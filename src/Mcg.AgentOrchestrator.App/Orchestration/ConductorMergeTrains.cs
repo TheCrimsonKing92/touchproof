@@ -42,7 +42,8 @@ internal static class ConductorMergeTrainSelector
         IReadOnlySet<string>? suppressedPairFingerprints = null,
         IReadOnlySet<string>? ineligibleGoalIds = null,
         IReadOnlySet<string>? attributedMemberKeys = null,
-        IReadOnlySet<string>? trainImplicatedMemberKeys = null)
+        IReadOnlySet<string>? trainImplicatedMemberKeys = null,
+        Action<GoalId, ConductorMergeTrainSkipReason>? onSkipped = null)
     {
         ArgumentNullException.ThrowIfNull(orderedCandidates);
         var selected = new List<GateReadyCandidateProjection>(MaximumMembers);
@@ -53,22 +54,10 @@ internal static class ConductorMergeTrainSelector
                 continue;
             }
             var projection = ready.Projection;
-            if (ineligibleGoalIds?.Contains(candidate.GoalId.Value) == true ||
-                attributedMemberKeys?.Contains(ConductorAcceptanceCohortAttributedMembers.Key(
-                    candidate.GoalId, projection.CandidateRevision)) == true ||
-                trainImplicatedMemberKeys?.Contains(ConductorAcceptanceCohortAttributedMembers.Key(
-                    candidate.GoalId, projection.CandidateRevision)) == true ||
-                projection.GoalId != candidate.GoalId ||
-                projection.LandingPaths.Count == 0 ||
-                projection.ResourceKeys.Count == 0 ||
-                GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(projection.LandingPaths) ==
-                    DotnetShardDisposition.DocsTreeOnlyCandidate ||
-                OwnerProtectedLandingPaths.Contains(projection.LandingPaths) ||
-                (selected.Count > 0 && !projection.MainRevision.Equals(selected[0].MainRevision, StringComparison.Ordinal)) ||
-                selected.Any(existing => Overlaps(existing, projection) ||
-                    suppressedPairFingerprints?.Contains(
-                        ConductorAcceptanceCohortSelector.PairFingerprint(existing, projection)) == true))
+            if (SkipReason(candidate.GoalId, projection, selected, suppressedPairFingerprints,
+                    ineligibleGoalIds, attributedMemberKeys, trainImplicatedMemberKeys) is { } reason)
             {
+                onSkipped?.Invoke(candidate.GoalId, reason);
                 continue;
             }
             selected.Add(projection);
@@ -80,6 +69,35 @@ internal static class ConductorMergeTrainSelector
         return selected.Count >= MinimumMembers
             ? new ConductorMergeTrainSelection(Array.AsReadOnly(selected.ToArray()))
             : null;
+    }
+
+    private static ConductorMergeTrainSkipReason? SkipReason(
+        GoalId goalId, GateReadyCandidateProjection projection,
+        IReadOnlyList<GateReadyCandidateProjection> selected,
+        IReadOnlySet<string>? suppressedPairFingerprints, IReadOnlySet<string>? ineligibleGoalIds,
+        IReadOnlySet<string>? attributedMemberKeys, IReadOnlySet<string>? trainImplicatedMemberKeys)
+    {
+        if (ineligibleGoalIds?.Contains(goalId.Value) == true)
+            return ConductorMergeTrainSkipReason.IneligibleCriterionEvidence;
+        if (attributedMemberKeys?.Contains(ConductorAcceptanceCohortAttributedMembers.Key(goalId, projection.CandidateRevision)) == true)
+            return ConductorMergeTrainSkipReason.CohortAttributedMember;
+        if (trainImplicatedMemberKeys?.Contains(ConductorAcceptanceCohortAttributedMembers.Key(goalId, projection.CandidateRevision)) == true)
+            return ConductorMergeTrainSkipReason.TrainImplicatedMember;
+        if (projection.GoalId != goalId) return ConductorMergeTrainSkipReason.ProjectionGoalMismatch;
+        if (projection.LandingPaths.Count == 0) return ConductorMergeTrainSkipReason.NoLandingPaths;
+        if (projection.ResourceKeys.Count == 0) return ConductorMergeTrainSkipReason.NoResourceKeys;
+        if (GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(projection.LandingPaths) == DotnetShardDisposition.DocsTreeOnlyCandidate)
+            return ConductorMergeTrainSkipReason.DocsTreeOnly;
+        if (OwnerProtectedLandingPaths.Contains(projection.LandingPaths)) return ConductorMergeTrainSkipReason.OwnerProtectedPath;
+        if (selected.Count > 0 && !projection.MainRevision.Equals(selected[0].MainRevision, StringComparison.Ordinal))
+            return ConductorMergeTrainSkipReason.MainRevisionMismatch;
+        foreach (var existing in selected)
+        {
+            if (Overlaps(existing, projection)) return ConductorMergeTrainSkipReason.OverlapsSelectedMember;
+            if (suppressedPairFingerprints?.Contains(ConductorAcceptanceCohortSelector.PairFingerprint(existing, projection)) == true)
+                return ConductorMergeTrainSkipReason.SuppressedPair;
+        }
+        return null;
     }
 
     private static bool Overlaps(GateReadyCandidateProjection left, GateReadyCandidateProjection right) =>

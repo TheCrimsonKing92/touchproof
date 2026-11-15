@@ -72,8 +72,15 @@ internal sealed partial class ConductorDriver
                 DeveloperDeferredTestClassNames.Parse(testsField));
             return false;
         }
-        var declaration = DeveloperDeferredTestSelections.Resolve(
-            worktreePath, testsField, _cohortWorkspace?.ProjectHomeDirectoryOrNull);
+        var observation = PreTesterAttemptObservation.ReadRunning(
+            goal, prior, candidateSha!, policy, _focusedEvidenceAttemptCoordinator, TryReconcileFocusedEvidenceAttempt);
+        if (observation is { Completed: false, Kind: ConductorParallelAcceptanceAttemptDecisionKind.Running })
+        {
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, FocusedEvidencePendingHeld(fromState, observation.Decision, observation.Kind));
+            return true;
+        }
+        var declaration = ConductorTickStepLedger.Measure("walk-pretester-declared-resolve",
+            () => DeveloperDeferredTestSelections.Resolve(worktreePath, testsField, _cohortWorkspace?.ProjectHomeDirectoryOrNull));
         if (declaration.Selections.Count == 0)
         {
             if (PreTesterStartedEvidence.TryAbandon(prior, nameof(PreTesterDeferredEvidenceExit.NoResolvedClasses), (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line)))
@@ -81,8 +88,7 @@ internal sealed partial class ConductorDriver
             RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
                 PreTesterDeferredEvidenceExit.NoResolvedClasses, prior?.Outcome, declaration.NotRun);
             return false;
-        }
-
+}
         var settings = _getFindingEvidenceEngineSettings(goal);
         var normalizedDeclaration = DeveloperDeferredTestSelectionNormalization.Normalize(declaration, settings);
         var selected = new List<FindingEvidenceSelection>(normalizedDeclaration.Selections);
@@ -147,16 +153,10 @@ internal sealed partial class ConductorDriver
             [], ExecutionBasisIdentity: BuildFindingEvidenceExecutionBasisIdentity(settings), ReceiptId: receiptId);
         if (prior is null && needsReplacementStartedEntry)
             PreTesterStartedEvidence.RecordStarted(candidateSha!, receiptId, selectionNames, notRun, (entry, line) => recorder.Request(goal.Id, tester.Id, entry, line));
-        var completed = TryReconcileFocusedEvidenceAttempt(
-            goal, policy, request, candidateSha, "pre-tester-deferred", requestContext,
-            out var evidence, out var attempt, out var decision, out var kind);
-        var transientFailure = PreTesterApparatusReceiptClassifier.IsTransientAttemptOutcome(attempt?.Outcome);
-        if (!completed &&
-            (kind is not (ConductorParallelAcceptanceAttemptDecisionKind.Completed or
-                          ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun) ||
-             transientFailure ||
-             kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed &&
-             decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending))
+        observation ??= PreTesterAttemptObservation.Reconcile(
+            goal, policy, request, candidateSha, requestContext, TryReconcileFocusedEvidenceAttempt);
+        var (completed, evidence, attempt, decision, kind) = observation;
+        if (observation.IsPending)
         {
             if (prior is null && !needsReplacementStartedEntry && kind == ConductorParallelAcceptanceAttemptDecisionKind.Started)
                 PreTesterStartedEvidence.RecordStarted(candidateSha!, receiptId, selectionNames, notRun, (entry, line) => recorder.Request(goal.Id, tester.Id, entry, line));

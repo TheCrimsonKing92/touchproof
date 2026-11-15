@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+// Parallel-safe: each probe owns its directory, transport and manual clock.
 public sealed class ConductorRemoteExecutorProbeTests
 {
     [Xunit.Fact]
@@ -122,7 +123,7 @@ public sealed class ConductorRemoteExecutorProbeTests
         probe.Evaluate();
         await Event(probe.CurrentProbe!, "recovery probe completed");
         Assert.Equal(2, fixture.Events().Count);
-        Assert.Equal("REMOTE_EXECUTOR_RECOVERED executor=one task_state=Running power_online=true", fixture.Events()[1]);
+        Assert.Equal("REMOTE_EXECUTOR_RECOVERED executor=one task_state=Running power_online=true disk_free_bytes=null sshd_sessions=null", fixture.Events()[1]);
         Assert.Empty(fixture.Rows()[1].Reasons);
     }
 
@@ -185,8 +186,219 @@ public sealed class ConductorRemoteExecutorProbeTests
         Assert.Null(ConductEventOperatorClassifier.Classify("remote-executor-health", "REMOTE_EXECUTOR_WARNING_FAKE"));
     }
 
-    private static GoalAcceptanceVerifier.CommandResult Result(string? state, bool? power) => new(0,
-        JsonSerializer.Serialize(new { task = state is null ? null : $"\"mcg-executor-lane\",\"N/A\",\"{state}\"", powerOnline = power }));
+    [Xunit.Fact]
+    public async Task ReadyExecutor_OffersWithoutAcceptance_WarnsWithLatestReasonAndCount()
+    {
+        using var fixture = new Fixture();
+        fixture.Outcome("accepted", 61, "old success");
+        fixture.Outcome("lease-expired", 5, "latest lease expired");
+        fixture.Outcome("unreachable", 50, "older connection failure");
+        // Another executor's acceptance must not hide this executor's stall.
+        fixture.Outcome("accepted", 1, "other success", "two");
+        var probe = fixture.Probe((_, _, _, _) => Task.FromResult(Result("Ready", true)));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "ready executor stall probe completed");
+
+        var row = Assert.Single(fixture.Rows());
+        Assert.True(row.Reachable);
+        Assert.Equal("Ready", row.TaskState);
+        Assert.Equal(new[] { "no-accepted-lane" }, row.Reasons);
+        var detail = Assert.Single(fixture.Events());
+        Assert.StartsWith("REMOTE_EXECUTOR_WARNING executor=one", detail);
+        Assert.Contains("reasons=no-accepted-lane", detail);
+        Assert.Contains("offers=2", detail);
+        Assert.Contains("last_offer_reason=latest lease expired", detail);
+        Assert.Equal(ConductEventOperatorClassifier.Decision,
+            ConductEventOperatorClassifier.Classify("remote-executor-health", detail));
+
+        fixture.Clock.Advance(TimeSpan.FromMinutes(10));
+        fixture.Outcome("unreachable", 0, "changed diagnostics");
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "unchanged stall probe completed");
+        Assert.Equal(2, fixture.Rows().Count);
+        Assert.Single(fixture.Events());
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing")]
+    [Xunit.InlineData("old")]
+    [Xunit.InlineData("accepted")]
+    [Xunit.InlineData("non-attempts")]
+    public async Task ReadyExecutor_NoQualifyingStall_EmitsNoWarning(string history)
+    {
+        using var fixture = new Fixture();
+        switch (history)
+        {
+            case "old": fixture.Outcome("unreachable", 61, "old offer"); break;
+            case "accepted":
+                fixture.Outcome("unreachable", 10, "failed offer");
+                fixture.Outcome("accepted", 5, "success");
+                break;
+            case "non-attempts":
+                foreach (var outcome in new[] { "not-eligible-exclusive-resource", "late-after-fallback",
+                    "executor-busy", "preempted-by-gate", "executor-tools-mismatch" })
+                    fixture.Outcome(outcome, 5, "not an offer");
+                break;
+        }
+        var probe = fixture.Probe((_, _, _, _) => Task.FromResult(Result("Ready", true)));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "no stall probe completed");
+        Assert.Empty(Assert.Single(fixture.Rows()).Reasons);
+        Assert.Empty(fixture.Events());
+    }
+
+    [Xunit.Fact]
+    public async Task StalledExecutor_AcceptsLane_RecoversExactlyOnce()
+    {
+        using var fixture = new Fixture();
+        fixture.Outcome("executor-tools-unverified", 5, "digest unavailable");
+        var probe = fixture.Probe((_, _, _, _) => Task.FromResult(Result("Ready", true)));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "stall warning completed");
+        Assert.Equal(new[] { "no-accepted-lane" }, Assert.Single(fixture.Rows()).Reasons);
+        Assert.StartsWith("REMOTE_EXECUTOR_WARNING", Assert.Single(fixture.Events()));
+
+        fixture.Clock.Advance(TimeSpan.FromMinutes(10));
+        fixture.Outcome("accepted", 1, "lane accepted");
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "stall recovery completed");
+        Assert.Empty(fixture.Rows()[1].Reasons);
+        var recovered = fixture.Events()[1];
+        Assert.StartsWith("REMOTE_EXECUTOR_RECOVERED", recovered);
+        Assert.Equal(ConductEventOperatorClassifier.Outcome,
+            ConductEventOperatorClassifier.Classify("remote-executor-health", recovered));
+        fixture.Clock.Advance(TimeSpan.FromMinutes(10));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "post recovery probe completed");
+        Assert.Empty(fixture.Rows()[2].Reasons);
+        Assert.Equal(2, fixture.Events().Count);
+        Assert.Single(fixture.Events().Where(detail => detail.StartsWith("REMOTE_EXECUTOR_RECOVERED")));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(4123456789L, 54)]
+    [Xunit.InlineData(0L, 0)]
+    public async Task Telemetry_WarningAndRecovery_PersistsAndReportsMeasurements(long bytes, int sessions)
+    {
+        using var fixture = new Fixture();
+        var result = Result("Disabled", true, bytes, sessions);
+        var probe = fixture.Probe((_, _, _, _) => Task.FromResult(result));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "telemetry warning completed");
+        var row = Assert.Single(fixture.Rows());
+        Assert.Equal(bytes, row.DiskFreeBytes);
+        Assert.Equal(sessions, row.SshdSessionCount);
+        var warning = Assert.Single(fixture.Events());
+        Assert.StartsWith("REMOTE_EXECUTOR_WARNING", warning);
+        Assert.Contains($"disk_free_bytes={bytes}", warning);
+        Assert.Contains($"sshd_sessions={sessions}", warning);
+        Assert.DoesNotContain("offers=", warning);
+
+        fixture.Clock.Advance(TimeSpan.FromMinutes(10));
+        result = Result("Running", true, bytes, sessions);
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "telemetry recovery completed");
+        Assert.Empty(fixture.Rows()[1].Reasons);
+        Assert.Equal(bytes, fixture.Rows()[1].DiskFreeBytes);
+        Assert.Equal(sessions, fixture.Rows()[1].SshdSessionCount);
+        Assert.Equal(2, fixture.Events().Count);
+        var recovery = fixture.Events()[1];
+        Assert.StartsWith("REMOTE_EXECUTOR_RECOVERED", recovery);
+        Assert.Contains($"disk_free_bytes={bytes}", recovery);
+        Assert.Contains($"sshd_sessions={sessions}", recovery);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Ready", "REMOTE_EXECUTOR_RECOVERED")]
+    [Xunit.InlineData("Disabled", "REMOTE_EXECUTOR_WARNING")]
+    public async Task Stall_AgesOut_UsesRemainingProbeReasons(string state, string nextEvent)
+    {
+        using var fixture = new Fixture();
+        fixture.Outcome("unreachable", 55, "offer nearing expiry");
+        var probe = fixture.Probe((_, _, _, _) => Task.FromResult(Result(state, true)));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "initial stall probe completed");
+        Assert.Contains("no-accepted-lane", Assert.Single(fixture.Rows()).Reasons);
+        Assert.Contains("offers=1", Assert.Single(fixture.Events()));
+
+        fixture.Clock.Advance(TimeSpan.FromMinutes(10));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "expired stall probe completed");
+        Assert.Equal(2, fixture.Rows().Count);
+        Assert.Equal(state == "Ready" ? Array.Empty<string>() : new[] { "task-not-ready" }, fixture.Rows()[1].Reasons);
+        Assert.Equal(2, fixture.Events().Count);
+        Assert.StartsWith(nextEvent, fixture.Events()[1]);
+        Assert.DoesNotContain("no-accepted-lane", fixture.Events()[1]);
+        Assert.DoesNotContain("offers=", fixture.Events()[1]);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(255, "unreachable")]
+    [Xunit.InlineData(17, "probe-failed")]
+    public async Task TransportFault_WithStalledHistory_RecordsBothReasons(int exitCode, string reason)
+    {
+        using var fixture = new Fixture();
+        fixture.Outcome("lease-expired", 5, null);
+        var probe = fixture.Probe((_, _, _, _) =>
+            Task.FromResult(new GoalAcceptanceVerifier.CommandResult(exitCode, "{}")));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "fault and stall probe completed");
+        var row = Assert.Single(fixture.Rows());
+        Assert.Equal(new[] { reason, "no-accepted-lane" }, row.Reasons);
+        Assert.Null(row.DiskFreeBytes);
+        Assert.Null(row.SshdSessionCount);
+        var detail = Assert.Single(fixture.Events());
+        Assert.Contains("last_offer_reason=null", detail);
+        Assert.Contains("disk_free_bytes=null sshd_sessions=null", detail);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("null", "54", null, 54)]
+    [Xunit.InlineData("4123456789", "null", 4123456789L, null)]
+    [Xunit.InlineData("\"unavailable\"", "{}", null, null)]
+    [Xunit.InlineData("9223372036854775808", "2147483648", null, null)]
+    [Xunit.InlineData("1.5", "1.5", null, null)]
+    public async Task Telemetry_UnavailableOrMalformed_PreservesIndependentValues(
+        string disk, string sessions, long? expectedDisk, int? expectedSessions)
+    {
+        using var fixture = new Fixture();
+        var output = "{\"task\":\"\\\"mcg-executor-lane\\\",\\\"N/A\\\",\\\"Ready\\\"\",\"powerOnline\":true," +
+            $"\"diskFreeBytes\":{disk},\"sshdSessionCount\":{sessions}" + "}";
+        var probe = fixture.Probe((_, _, _, _) =>
+            Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, output)));
+        probe.Evaluate();
+        await Event(probe.CurrentProbe!, "optional telemetry probe completed");
+        var row = Assert.Single(fixture.Rows());
+        Assert.Empty(row.Reasons);
+        Assert.Equal(expectedDisk, row.DiskFreeBytes);
+        Assert.Equal(expectedSessions, row.SshdSessionCount);
+        Assert.Empty(fixture.Events());
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(",\"disk_free_bytes\":null,\"sshd_session_count\":null")]
+    [Xunit.InlineData(",\"disk_free_bytes\":\"bad\",\"sshd_session_count\":1.5")]
+    public void ProbeLedger_LegacyOrUnavailableTelemetry_ReadsNulls(string telemetry)
+    {
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Ledger)!);
+        File.WriteAllText(fixture.Ledger,
+            "{\"observed_at\":\"2026-10-06T00:00:00Z\",\"executor_id\":\"one\",\"reachable\":true," +
+            "\"exit_code\":0,\"timed_out\":false,\"task_state\":\"Ready\",\"power_online\":true," +
+            "\"reasons\":[],\"stderr_tail\":\"\"" + telemetry + "}\n");
+        var rows = RemoteExecutorReportReader.ReadProbes(fixture.Ledger, out var unreadable);
+        Assert.Equal(0, unreadable);
+        var row = Assert.Single(rows);
+        Assert.Equal("Ready", row.TaskState);
+        Assert.Null(row.DiskFreeBytes);
+        Assert.Null(row.SshdSessionCount);
+    }
+
+    private static GoalAcceptanceVerifier.CommandResult Result(string? state, bool? power,
+        long? diskFreeBytes = null, int? sshdSessionCount = null) => new(0,
+        JsonSerializer.Serialize(new { task = state is null ? null : $"\"mcg-executor-lane\",\"N/A\",\"{state}\"",
+            powerOnline = power, diskFreeBytes, sshdSessionCount }));
     private static async Task Event(Task task, string name)
     {
         try { await task.WaitAsync(TimeSpan.FromSeconds(30)); }
@@ -211,6 +423,14 @@ public sealed class ConductorRemoteExecutorProbeTests
             Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> transport) =>
             new(Root, Configuration, Clock, transport, RemoteExecutorOccupancy.DefaultStartTime,
                 new ConductEventLogWriter(EventsPath));
+        internal void Outcome(string outcome, int minutesAgo, string? reason, string executorId = "one")
+        {
+            var path = Path.Combine(Root, ".orchestrator", RemoteExecutorHealthLedger.FileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllText(path, JsonSerializer.Serialize(new RemoteExecutorOutcomeRow(
+                Clock.GetUtcNow().AddMinutes(-minutesAgo), executorId, "gate", "lane", outcome, reason),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }) + "\n");
+        }
         internal IReadOnlyList<RemoteExecutorProbeRow> Rows() => RemoteExecutorReportReader.ReadProbes(Ledger, out _);
         internal IReadOnlyList<string> Events() => File.Exists(EventsPath) ? File.ReadAllLines(EventsPath).Select(line =>
         {

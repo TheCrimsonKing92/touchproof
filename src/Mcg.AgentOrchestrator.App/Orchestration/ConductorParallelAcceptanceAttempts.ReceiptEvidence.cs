@@ -317,6 +317,29 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             .FirstOrDefault();
     }
 
+    internal ConductorParallelAcceptanceAttempt? ReadLiveFocusedReceiptAttempt(
+        GoalId goalId, string receiptId, string candidateSha)
+    {
+        var directory = Path.Combine(_rootDirectory, goalId.Value);
+        if (!Directory.Exists(directory)) return null;
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json"))
+            {
+                var attempt = ReadCanonicalAttempt(path, goalId.Value);
+                if (attempt.FocusedEvidenceReceiptId == receiptId &&
+                    string.Equals(attempt.BranchHeadSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                    IsLiveAttempt(attempt))
+                    return attempt;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        {
+            return null;
+        }
+        return null;
+    }
+
     // Include reconciled attempts: reconciliation does not revoke a receipt's evidence.
     internal FocusedEvidenceRunResult? ReadFocusedReceiptEvidence(GoalId goalId, string receiptId, string candidateSha)
     {
