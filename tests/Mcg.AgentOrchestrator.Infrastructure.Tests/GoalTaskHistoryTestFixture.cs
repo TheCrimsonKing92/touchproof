@@ -95,6 +95,30 @@ internal sealed class GoalTaskHistoryTestFixture : IDisposable
         FROM goal_task_history ORDER BY goal_id, task_id, kind, sequence
         """);
 
+    internal void MarkStoredHistory(string goalId, bool keepInline = false)
+    {
+        var document = System.Text.Json.Nodes.JsonNode.Parse(RawGoal(goalId))!;
+        foreach (var task in document["Tasks"]!.AsArray())
+        {
+            task!["HistoryInTable"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["Verification"] = task["VerificationHistory"]?.AsArray().Count,
+                ["Dispatch"] = task["DispatchHistory"]?.AsArray().Count
+            };
+            if (!keepInline)
+            {
+                task.AsObject().Remove("VerificationHistory");
+                task.AsObject().Remove("DispatchHistory");
+            }
+        }
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE goals SET snapshot_json = $json, version = version + 1 WHERE id = $id";
+        command.Parameters.AddWithValue("$json", document.ToJsonString(Options));
+        command.Parameters.AddWithValue("$id", goalId);
+        Assert.Equal(1, command.ExecuteNonQuery());
+    }
+
     internal async Task AssertMirroredAsync(GoalSnapshot goal)
     {
         using var connection = Open();

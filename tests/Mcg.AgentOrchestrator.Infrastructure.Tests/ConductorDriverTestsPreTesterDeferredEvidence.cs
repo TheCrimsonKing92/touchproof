@@ -10,6 +10,13 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
 {
     private const string CandidateSha = "bbb2222";
     private const string BaseSha = "aaa1111";
+    private const string GuardPath = "src/X/Y.cs";
+    private static readonly string[] SelectionSteps =
+    [
+        "walk-pretester-declared-resolve", "walk-pretester-changed-file-guards", "walk-pretester-cli-surface",
+        "walk-pretester-coupled-class", "walk-pretester-reverse-dependency", "walk-pretester-always-run",
+        "walk-pretester-test-source"
+    ];
 
     [Fact]
     public void TruncatedStartedEntryIsAbandonedAndEvidenceIsRequestedAgain()
@@ -167,10 +174,12 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         Assert.Equal([AgentRole.Tester], roles);
     }
 
-    [Fact]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
     public void StartedBackgroundAttemptHoldsTesterAcrossTicks()
     {
         using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        scenario.AddObservedGuard();
         var roles = new List<AgentRole>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(scenario.Root, "background-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
@@ -179,16 +188,173 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             acquireStableSlotLease: (_, _) => null);
         var driver = scenario.Driver(
             _ => throw new Xunit.Sdk.XunitException("Background runner must not run inline."),
-            roles.Add, coordinator: coordinator);
+            roles.Add, coordinator: coordinator, changedPaths: [GuardPath]);
+        var mainReads = 0;
+        driver.PreTesterMainRevision = _ => { mainReads++; return "fixture-main-revision"; };
 
-        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
-        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+        var first = MeasureAdvance(driver, scenario.Goal);
+        Assert.Equal(SelectionSteps, first.Parts);
+        Assert.Contains("PRE_TESTER_GUARD_SELECTED class=ObservedSourceTests", first.Console, StringComparison.Ordinal);
+        Assert.Equal(1, mainReads);
+        var attempt = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(scenario.Goal.Id.Value));
+        var prior = Assert.IsType<PreTesterEvidenceEntry>(PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha));
+        Assert.Equal(attempt.FocusedEvidenceReceiptId, prior.ReceiptId);
+        Assert.Equal("started", prior.Outcome);
+
+        var second = MeasureAdvance(driver, scenario.Goal);
+
+        Assert.Empty(second.Parts);
+        Assert.DoesNotContain("PRE_TESTER_GUARD_SELECTED", second.Console, StringComparison.Ordinal);
+        Assert.Equal(1, mainReads);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(second.Result.Outcome);
+        Assert.Equal($"Background pre-tester-deferred focused evidence is running in attempt {attempt.AttemptId}.", held.Reason);
+        Assert.Equal(ConductorHoldOwner.BackgroundAttempt, held.Owner);
 
         Assert.Empty(roles);
         Assert.Single(scenario.Goal.Timeline.Where(evt =>
             evt.TaskId == scenario.Tester.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
             evt.Message.StartsWith("finding-evidence pre-tester outcome=started;", StringComparison.Ordinal)));
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    [InlineData("result-artifact")]
+    [InlineData("reconciled")]
+    [InlineData("build-slot-blocked")]
+    [InlineData("different-candidate")]
+    [InlineData("no-prior-entry")]
+    [InlineData("different-receipt")]
+    public void NonLiveRecordedAttempt_ComputesSelectionAndKeepsOutcome(string state)
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        scenario.AddObservedGuard();
+        var roles = new List<AgentRole>();
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(scenario.Root, "background-attempts"), TrunkBranchName.Default,
+            runInline: state == "build-slot-blocked",
+            isProcessAlive: processId => processId == 7103,
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103),
+            acquireStableSlotLease: (_, _) => state == "build-slot-blocked"
+                ? throw new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy("pre-tester-evidence", []))
+                : null);
+        ConductorDriver Driver(string sha = CandidateSha) => scenario.Driver(
+            _ => throw new Xunit.Sdk.XunitException("Background runner must not run inline."),
+            roles.Add, coordinator: coordinator, changedPaths: [GuardPath], candidateSha: sha);
+        var driver = Driver();
+        var candidateSha = CandidateSha;
+        if (state != "no-prior-entry")
+        {
+            var first = MeasureAdvance(driver, scenario.Goal);
+            Assert.Equal(SelectionSteps, first.Parts);
+            Assert.IsType<ConductorAdvanceOutcome.Held>(first.Result.Outcome);
+            var attempt = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(scenario.Goal.Id.Value));
+            if (state == "result-artifact")
+                CompleteAttempt(scenario, coordinator, attempt);
+            else if (state == "reconciled")
+            {
+                coordinator.MarkReconciled(attempt);
+                Assert.NotNull(coordinator.TryReadLatest(scenario.Goal.Id.Value)!.ReconciledAt);
+            }
+            else if (state == "build-slot-blocked")
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, attempt.Outcome);
+            else if (state == "different-candidate")
+            {
+                candidateSha = "ccc3333";
+                Assert.NotEqual(candidateSha, attempt.BranchHeadSha);
+                driver = Driver(candidateSha);
+            }
+
+            var prior = PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha);
+            if (state is "build-slot-blocked" or "different-candidate" or "different-receipt")
+                scenario.Kernel.RecordFindingEvidenceRequest(scenario.Goal.Id, scenario.Tester.Id,
+                    PreTesterEvidenceIndexLines.FormatMarker(new("started", candidateSha,
+                        state == "different-receipt" ? "unrelated-receipt" : attempt.FocusedEvidenceReceiptId!,
+                        prior?.Selections ?? attempt.FocusedEvidenceRequest!.Split("; ", StringSplitOptions.RemoveEmptyEntries), [], null, [])));
+            var started = Assert.IsType<PreTesterEvidenceEntry>(PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, candidateSha));
+            Assert.Equal("started", started.Outcome);
+            Assert.Null(coordinator.ReadLiveFocusedReceiptAttempt(scenario.Goal.Id, started.ReceiptId, candidateSha));
+        }
+
+        var measured = MeasureAdvance(driver, scenario.Goal);
+
+        Assert.Equal(state == "no-prior-entry" ? SelectionSteps : SelectionSteps.Where(name => name != "walk-pretester-cli-surface"), measured.Parts);
+        Assert.Contains("PRE_TESTER_GUARD_SELECTED class=ObservedSourceTests", measured.Console, StringComparison.Ordinal);
+        var latest = Assert.IsType<PreTesterEvidenceEntry>(PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, candidateSha));
+        if (state == "result-artifact")
+        {
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(measured.Result.Outcome);
+            Assert.Equal([AgentRole.Tester], roles);
+            Assert.Equal("green", latest.Outcome);
+        }
+        else
+        {
+            Assert.Empty(roles);
+            Assert.Equal("started", latest.Outcome);
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(measured.Result.Outcome);
+            Assert.StartsWith(state == "build-slot-blocked"
+                ? "Background pre-tester-deferred focused evidence did not run (BlockedBuildSlot)"
+                : "Background pre-tester-deferred focused evidence is running in attempt ", held.Reason, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void CompletionDuringLiveRead_ConsumesGreenEvidenceOnce()
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        Action? onLiveness = null;
+        var roles = new List<AgentRole>();
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(scenario.Root, "background-attempts"), TrunkBranchName.Default,
+            isProcessAlive: processId => { onLiveness?.Invoke(); return processId == 7103; },
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103),
+            acquireStableSlotLease: (_, _) => null);
+        var driver = scenario.Driver(_ => throw new Xunit.Sdk.XunitException("Must not run inline."), roles.Add, coordinator: coordinator);
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+        var attempt = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(scenario.Goal.Id.Value));
+        var completions = 0;
+        onLiveness = () =>
+        {
+            onLiveness = null;
+            completions++;
+            CompleteAttempt(scenario, coordinator, attempt);
+        };
+
+        var measured = MeasureAdvance(driver, scenario.Goal);
+
+        Assert.Equal(1, completions);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(measured.Result.Outcome);
+        Assert.Equal([AgentRole.Tester], roles);
+        Assert.Equal(SelectionSteps.Where(name => name != "walk-pretester-cli-surface"), measured.Parts);
+        Assert.Single(scenario.Goal.Timeline.Where(evt => evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+            PreTesterEvidenceIndexLines.Parse(evt.Message)?.Outcome == "green"));
+        Assert.Equal(attempt.AttemptId, coordinator.TryReadLatest(scenario.Goal.Id.Value)!.AttemptId);
+    }
+
+    private static (ConductorAdvanceResult Result, string Console, List<string> Parts) MeasureAdvance(ConductorDriver driver, Goal goal)
+    {
+        var parts = new List<string>();
+        var ledger = new ConductorTickStepLedger(() => TimeSpan.Zero, name =>
+        {
+            if (SelectionSteps.Contains(name, StringComparer.Ordinal)) parts.Add(name);
+        });
+        using var active = ledger.Activate();
+        ConductorAdvanceResult result = null!;
+        var console = AsyncLocalConsoleRouter.Capture(() => result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
+        return (result, console, parts);
+    }
+
+    private static void CompleteAttempt(Scenario scenario, ConductorParallelAcceptanceAttemptCoordinator coordinator,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        var candidate = ConductorParallelAcceptanceCandidate.Create(scenario.Goal, 0, [], branchHeadSha: CandidateSha);
+        coordinator.RunAttemptForTests(attempt, candidate, ConductorAutonomyPolicy.Conservative,
+            (current, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(current,
+                ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                    scenario.Root, attempt.FocusedEvidenceRequest!, CandidateSha)));
+        Assert.True(File.Exists(attempt.ResultPath), "The completed attempt must have a result artifact.");
+        Assert.NotNull(coordinator.ReadFocusedReceiptEvidence(scenario.Goal.Id, attempt.FocusedEvidenceReceiptId!, CandidateSha));
     }
 
     [Fact]
@@ -441,11 +607,12 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             Action<string>? feedback = null,
             ConductorParallelAcceptanceAttemptCoordinator? coordinator = null,
             IReadOnlyList<string>? changedPaths = null,
-            Action<string>? notes = null)
+            Action<string>? notes = null,
+            string candidateSha = CandidateSha)
         {
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-                getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
+                getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                 getLandingFileScopes: _ => changedPaths ?? [],
                 focusedEvidenceAttemptCoordinator: coordinator ?? new ConductorParallelAcceptanceAttemptCoordinator(
                     Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
@@ -469,6 +636,19 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             driver.OverrideDeveloperCompletionStructuralPreflightForTests(
                 _ => new DeveloperCompletionStructuralFindings(false, "clean"), TimeSpan.FromSeconds(5));
             return driver;
+        }
+
+        public void AddObservedGuard()
+        {
+            var project = Path.Combine(GoalWorktrees.WorktreePath(Root, Goal.Id), "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+            File.WriteAllText(Path.Combine(project, "ObservedSourceTests.cs"), """
+                public class ObservedSourceTests {
+                    [Xunit.Fact] public void ReadsChangedSource() {
+                        var path = Path.Combine(FindRoot(), "src", "X", "Y.cs");
+                        var source = File.ReadAllText(path);
+                    }
+                }
+                """);
         }
 
         public void Dispose() => Directory.Delete(Root, recursive: true);

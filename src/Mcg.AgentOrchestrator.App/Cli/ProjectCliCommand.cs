@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -135,6 +136,18 @@ internal static class ProjectCliCommand
         model = DeliveryOwnerQuestion.Apply(model, deliveryProbe, project.IntegrationBranch, project.DeliveryAnswer is not null);
         Directory.CreateDirectory(workspaceDirectory);
         var modelPath = Path.Combine(workspaceDirectory, "project-model.json");
+        if (measuredKinds is null)
+        {
+            try
+            {
+                var stored = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
+                model = StoredMeasurementCarryOver.Apply(model, stored);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+            {
+                // An unavailable previous snapshot does not prevent fresh discovery.
+            }
+        }
         var temporaryPath = Path.Combine(workspaceDirectory, $".project-model-{Guid.NewGuid():N}.tmp");
         try
         {
@@ -154,6 +167,8 @@ internal static class ProjectCliCommand
             : "";
         output.WriteLine(branch is null ? "Integration branch: not learned"
             : $"Integration branch: {branch.Value} ({branch.Confidence}{branchSource})");
+        if (measuredKinds is null)
+            output.WriteLine(StoredMeasurementCarryOver.SummaryLine(model));
         var (answers, answerError) = ProjectAnswerCommand.ReadAnswersForOutput(workspaceDirectory);
         var applied = answers.Count == 0 ? null : OwnerAnswerApplier.Apply(model, answers);
         foreach (var question in applied?.OpenQuestions ?? model.OwnerQuestions)

@@ -9,13 +9,7 @@ internal static class RemoteExecutorReportReader
     internal static RemoteExecutorReport Read(OrchestratorWorkspace workspace, DateTimeOffset? since, int last,
         DateTimeOffset? noExecutorSince = null)
     {
-        var outcomes = ReadLines(RemoteExecutorHealthLedger.ResolveStorePath(workspace.RootDirectory), root =>
-        {
-            var (seconds, startedAt) = ReadAttempt(root);
-            return new RemoteExecutorOutcomeRow(root.GetProperty("observed_at").GetDateTimeOffset(),
-                RequiredString(root, "executor_id"), RequiredString(root, "gate_attempt_id"),
-                RequiredString(root, "lane"), RequiredString(root, "outcome"), OptionalString(root, "reason"), seconds, startedAt);
-        }, out var unreadable);
+        var outcomes = ReadOutcomes(RemoteExecutorHealthLedger.ResolveStorePath(workspace.RootDirectory), out var unreadable);
         var probes = ReadProbes(RemoteExecutorProbeLedger.ResolveStorePath(workspace.RootDirectory), out var unreadableProbes);
         var executors = RemoteLaneExecutorConfiguration.LoadExecutors(RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.RootDirectory));
         var slots = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -24,6 +18,15 @@ internal static class RemoteExecutorReportReader
             since, last, unreadable, unreadableProbes, slots, noExecutorSince,
             executors.ToDictionary(entry => entry.Id, entry => entry.AdmissionEnabled, StringComparer.Ordinal));
     }
+
+    internal static IReadOnlyList<RemoteExecutorOutcomeRow> ReadOutcomes(string path, out int unreadable) =>
+        ReadLines(path, root =>
+        {
+            var (seconds, startedAt) = ReadAttempt(root);
+            return new RemoteExecutorOutcomeRow(root.GetProperty("observed_at").GetDateTimeOffset(),
+                RequiredString(root, "executor_id"), RequiredString(root, "gate_attempt_id"),
+                RequiredString(root, "lane"), RequiredString(root, "outcome"), OptionalString(root, "reason"), seconds, startedAt);
+        }, out unreadable);
 
     private static (double? Seconds, DateTimeOffset? StartedAt) ReadAttempt(JsonElement root)
     {
@@ -51,7 +54,8 @@ internal static class RemoteExecutorReportReader
             OptionalString(root, "task_state"),
             root.GetProperty("power_online").ValueKind == JsonValueKind.Null ? null : root.GetProperty("power_online").GetBoolean(),
             root.GetProperty("reasons").EnumerateArray().Select(value => value.GetString() ?? throw new JsonException()).ToArray(),
-            RequiredString(root, "stderr_tail")), out unreadable);
+            RequiredString(root, "stderr_tail"), OptionalInt64(root, "disk_free_bytes"),
+            OptionalInt32(root, "sshd_session_count")), out unreadable);
 
     private static IReadOnlyList<T> ReadLines<T>(string path, Func<JsonElement, T> parse, out int unreadable)
     {
@@ -71,6 +75,12 @@ internal static class RemoteExecutorReportReader
     }
     private static string RequiredString(JsonElement root, string name) =>
         root.GetProperty(name).GetString() ?? throw new JsonException();
+    private static long? OptionalInt64(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number &&
+        value.TryGetInt64(out var number) ? number : null;
+    private static int? OptionalInt32(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number &&
+        value.TryGetInt32(out var number) ? number : null;
     private static string? OptionalString(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null ? value.GetString() : null;
 }
