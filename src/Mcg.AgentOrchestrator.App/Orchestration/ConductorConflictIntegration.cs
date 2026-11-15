@@ -15,7 +15,7 @@ internal sealed partial class ConductorConflictIntegration(
     Func<string, OrchestratorBuildCheckResult>? buildCheck = null,
     Func<string, string?>? objectiveReader = null, string? projectHomeDirectory = null,
     Func<string, string[], GitCli.GitResult>? restoreGit = null,
-    Func<string, string[], GitCli.GitResult>? mergeGit = null)
+    Func<string, string[], GitCli.GitResult>? mergeGit = null, string? statePath = null)
 {
     internal const string OperationName = "conductor:conflict-integration";
     private sealed record Round(string OriginalHead, string MainSha, string[] ConflictPaths,
@@ -187,6 +187,7 @@ internal sealed partial class ConductorConflictIntegration(
                 line.StartsWith(">>>>>>> ", StringComparison.Ordinal) || line == "======="))
                 return "conflict marker check: " + path;
         }
+        using var qos = statePath is null ? null : HostedVerifierRunQos.Begin(statePath);
         var build = buildCheck is null ? RatchetConflictDispatchIntegration.BuildChangedProjects(worktree, round.OriginalHead, head, projectHomeDirectory) : buildCheck(worktree);
         buildOutput = VerificationTextBounds.BoundText(build.Output, path: null);
         if ((!build.Ran || build.ExitCode != 0) && !ManifestCommandBuildCheck.IsNoBuildDeclared(build)) return "build check: " + buildOutput;

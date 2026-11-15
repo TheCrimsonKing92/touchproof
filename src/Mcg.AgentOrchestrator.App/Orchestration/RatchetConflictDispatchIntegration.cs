@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class RatchetConflictDispatchIntegration(
     AgentOrchestratorKernel kernel, string executionDirectory, string integrationBranch,
     string conductEventsLogPath, Func<string, OrchestratorBuildCheckResult>? buildCheck = null,
-    string? projectHomeDirectory = null)
+    string? projectHomeDirectory = null, string? statePath = null)
 {
     private readonly FailedRoundCheckpointPreDispatch _inner = new(kernel, executionDirectory, integrationBranch);
 
@@ -40,7 +40,11 @@ internal sealed class RatchetConflictDispatchIntegration(
             check = new(false, -1, "Resolved merge parent identities could not be verified.");
         else
         {
-            try { check = buildCheck is null ? BuildChangedProjects(worktree, oldHead, newHead, projectHomeDirectory) : buildCheck(worktree); }
+            try
+            {
+                using var qos = statePath is null ? null : HostedVerifierRunQos.Begin(statePath);
+                check = buildCheck is null ? BuildChangedProjects(worktree, oldHead, newHead, projectHomeDirectory) : buildCheck(worktree);
+            }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             { check = new(false, -1, "Build check failed: " + exception.Message); }
         }
