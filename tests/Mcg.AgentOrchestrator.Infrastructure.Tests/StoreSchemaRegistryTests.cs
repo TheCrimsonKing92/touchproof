@@ -97,6 +97,13 @@ public sealed class StoreSchemaRegistryTests
         // The CLI owns its PRAGMA user_version schema; live-store setup must not create this artifact.
         Assert.Null(replay.CurrentVersion);
         Assert.DoesNotContain(replay.StoreName, StoreSetupRunner.RegisteredStoreNames);
+        var state = Assert.Single(entries.Where(entry => entry.StoreName == "orchestrator-state"));
+        Assert.Null(state.CurrentVersion);
+        Assert.Equal(state.StoreName, StoreSchemaRegistry.StateStoreFormat.StoreName);
+        Assert.Equal(state.Database, StoreSchemaRegistry.StateStoreFormat.Database);
+        Assert.Equal(1, StoreSchemaRegistry.StateStoreFormat.CurrentVersion);
+        Assert.DoesNotContain(StoreSchemaRegistry.StateStoreFormat, entries);
+        Assert.DoesNotContain(state.StoreName, StoreSetupRunner.RegisteredStoreNames);
     }
 
     [Fact]

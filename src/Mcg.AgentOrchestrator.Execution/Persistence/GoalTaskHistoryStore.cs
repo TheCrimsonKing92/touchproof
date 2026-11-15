@@ -92,7 +92,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// Before the first latest-flagged save, the operator must verify no dispatch host older than step 3a
 /// adoption remains alive; let those hosts finish or stop them first. Such an old host loads marked
 /// latest records as null and saves them inline as null (pre-2a also loses history rows).
-/// No runtime fence is added here.
+/// StateStoreFormatFence checks every repository write acquisition and refuses a recorded format
+/// level above the build's level. Level 1 permits history-in-table markers in goal documents.
 /// GoalSnapshotArchive copies the marked text,
 /// retaining rows; its task-less hot stub cannot be saved. Recompression preserves that text;
 /// StateDatabaseOfflineConversion copies the whole database, including history rows.
@@ -100,9 +101,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// no build guarantee: both edit an untyped JSON tree, remove no task, and retain history counts,
 /// lists and rows. Requeue removes the latest flags described above and clears latest execution,
 /// verification, dispatch, process and retry fields, changes status and appends a timeline event only.
-/// Out of contract: running the application dll directly, or a launcher in a checkout/worktree
-/// older than step 3a pointed at a latest-flagged store. Such a build loses flagged latest records
-/// on save (pre-2a also loses history rows). No runtime fence is added here.
+/// Protection begins with the first build carrying StateStoreFormatFence. Earlier builds already
+/// on disk never check it: running their application dll directly or their checkout/worktree's
+/// launcher against a latest-flagged store can still lose flagged latest records on save
+/// (pre-2a also loses history rows). The adoption rule remains the protection against those builds.
 /// Read-only consoles opened before step 3a show null latest records until restarted.
 /// Interactive CLI writers inherit the launcher's build guarantee, checked only at launch.
 /// Those started before step 3a must restart before latest-flagged writes begin: their old build

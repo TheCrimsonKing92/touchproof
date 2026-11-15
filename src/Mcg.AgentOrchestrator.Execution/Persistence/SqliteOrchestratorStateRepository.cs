@@ -309,6 +309,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                         "BEGIN IMMEDIATE",
                         cancellationToken,
                         _writeTelemetry.Options.BeginImmediateCommandTimeoutSeconds);
+                    StateStoreFormatFence.Enforce(conn);
                     return conn;
                 }
                 catch

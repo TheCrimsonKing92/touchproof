@@ -86,6 +86,11 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry RunEvents { get; } =
         new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", 1);
 
+    // Format level 1 permits history-in-table markers in goal documents. This is separate
+    // from the core meta schema_version and from the inventory's setup ownership.
+    public static StoreSchemaEntry StateStoreFormat { get; } =
+        new("orchestrator-state", Persistence + "StateStoreFormatFence.cs", "state.db", "review", 1);
+
     // Source fragments of one database are separate inventory entries, not separate databases.
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(
     [
@@ -143,10 +148,13 @@ public static class StoreSchemaVersions
         return version is null ? null : Convert.ToInt32(version, CultureInfo.InvariantCulture);
     }
 
-    public static StoreSchemaState Verify(SqliteConnection connection, StoreSchemaEntry entry)
+    public static StoreSchemaState Verify(SqliteConnection connection, StoreSchemaEntry entry) =>
+        Verify(connection, entry, out _);
+
+    public static StoreSchemaState Verify(SqliteConnection connection, StoreSchemaEntry entry, out int? recorded)
     {
         var current = RequireVersion(entry);
-        var recorded = Read(connection, entry.StoreName);
+        recorded = Read(connection, entry.StoreName);
         return recorded switch
         {
             null => StoreSchemaState.Missing,
