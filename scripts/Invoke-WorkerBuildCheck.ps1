@@ -5,7 +5,9 @@ param(
     [string]$Configuration = "Debug",
 
     # Explicit operator bridge for worktrees dispatched before pinned scope metadata existed.
-    [string]$InitializeScopeIntegrationBranch
+    [string]$InitializeScopeIntegrationBranch,
+
+    [ValidateRange(1, 2147483)][int]$QueueSeconds = 720
 )
 
 Set-StrictMode -Version Latest
@@ -471,7 +473,7 @@ $lockWaitTimedOut = $false
 try {
     $lockDirectory = Split-Path -Parent $executionLockPath
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
-    $deadline = [DateTime]::UtcNow.AddMinutes(5)
+    $queueStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     while (-not $lockHeld) {
         for ($offset = 0; $offset -lt $buildConcurrencySlotCount; $offset++) {
             $buildSlotIndex = ($hashedBuildSlotIndex + $offset) % $buildConcurrencySlotCount
@@ -491,9 +493,10 @@ try {
         }
 
         if (-not $lockHeld) {
-            if ([DateTime]::UtcNow -ge $deadline) {
+            if ($queueStopwatch.Elapsed.TotalSeconds -ge $QueueSeconds) {
+                $queueStopwatch.Stop()
                 $lockWaitTimedOut = $true
-                throw "Timed out waiting for build lease execution lock: $hashedExecutionLockPath"
+                throw "Build slot queue deadline reached."
             }
 
             Start-Sleep -Milliseconds 100
@@ -668,7 +671,7 @@ try {
 }
 catch {
     $exitCode = 1
-    $apparatusFailure = $_.Exception.Message
+    if (-not $lockWaitTimedOut) { $apparatusFailure = $_.Exception.Message }
 }
 finally {
     if ($null -ne $buildReceiptMeter) { Stop-BuildReceiptMeter -Meter $buildReceiptMeter }
@@ -791,7 +794,10 @@ finally {
 $runStopwatch.Stop()
 if ($null -ne $receiptWarning) { Write-Output $receiptWarning }
 $logSummary = if ([string]::IsNullOrWhiteSpace($runLogRoot)) { "unavailable" } else { $runLogRoot }
-if ($exitCode -eq 0) {
+if ($lockWaitTimedOut) {
+    Write-Output "worker-build-check: outcome=CapacityBeforeStart; queue_seconds=$QueueSeconds; waited_ms=$($queueStopwatch.ElapsedMilliseconds); build-slot capacity: no compiler ran because every host build slot stayed busy for the whole queue wait; this is not a code verdict."
+}
+elseif ($exitCode -eq 0) {
     Write-Output "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=$($projectPaths.Count) warnings=$warningCount captured_chars=$capturedCharacterCount elapsed_ms=$($runStopwatch.ElapsedMilliseconds) logs=$logSummary"
 }
 else {

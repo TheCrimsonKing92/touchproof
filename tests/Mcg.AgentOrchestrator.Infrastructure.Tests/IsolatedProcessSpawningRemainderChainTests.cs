@@ -42,7 +42,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(GateDeclaredTestSettingsTests),
         typeof(WorkerBuildScopeToolCacheTests),
         typeof(WorkerBuildScopeToolCacheDigestTests),
-        typeof(WorkerBuildCheckGoalLeaseOwnerTests)
+        typeof(WorkerBuildCheckGoalLeaseOwnerTests),
+        typeof(WorkerBuildCheckQueueDeadlineTests)
     ];
 
     // Five-gate means: 9a0a3d15, a6926d29, c4014e44, 7dadc55c,
@@ -104,7 +105,9 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         [nameof(WorkerBuildScopeToolCacheDigestTests)] = 12.0,
         // Gate attempt f1519407-gate-20261114100746341, lane infrastructure-tests-balanced-8:
         // the two tests measured 7.65 s + 7.93 s = 15.58 s summed, rounded to 15.6 s; a single gate sample.
-        [nameof(WorkerBuildCheckGoalLeaseOwnerTests)] = 15.6
+        [nameof(WorkerBuildCheckGoalLeaseOwnerTests)] = 15.6,
+        // Provisional estimate, goal 99c66d31; replace after the first gate measurement.
+        [nameof(WorkerBuildCheckQueueDeadlineTests)] = 20.0
     };
 
     // Operator-supplied samples for candidate 822ad7fbc9bd0e3020afecfb850fff6bdb7468c5.
@@ -263,10 +266,10 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         Xunit.Assert.InRange(sums[DeferredContextCollection],
             129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds +
                 MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] +
-                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] - 1e-7,
+                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] + MeanSeconds[nameof(WorkerBuildCheckQueueDeadlineTests)] - 1e-7,
             129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds +
                 MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] +
-                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] + 1e-7);
+                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] + MeanSeconds[nameof(WorkerBuildCheckQueueDeadlineTests)] + 1e-7);
         foreach (var (collection, seconds) in sums)
             Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");
     }
