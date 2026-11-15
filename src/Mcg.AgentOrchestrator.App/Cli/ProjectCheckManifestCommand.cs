@@ -112,6 +112,12 @@ internal static class ProjectCheckManifestCommand
             Verdict("Differs", $"at byte offset {offset} line {line}");
             output.WriteLine($"  installed: {Excerpt(installed, line)}");
             output.WriteLine($"  learned: {Excerpt(learned, line)}");
+            if (ManifestDifferenceClassifier.Classify(Encoding.UTF8.GetString(installed), result.Json) is { } difference)
+            {
+                output.WriteLine($"  kind: {difference.Kind}");
+                output.WriteLine($"  sections: added={Names(difference.SectionsAdded)} missing={Names(difference.SectionsMissing)} changed={Names(difference.SectionsChanged)}");
+                output.WriteLine($"  checks: added={Names(difference.ChecksAdded)} missing={Names(difference.ChecksMissing)} changed={Names(difference.ChecksChanged)}");
+            }
             return "Differs";
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -127,6 +133,8 @@ internal static class ProjectCheckManifestCommand
     }
 
     private static string SingleLine(string text) => text.Replace('\r', ' ').Replace('\n', ' ');
+
+    private static string Names(IReadOnlyList<string> names) => names.Count == 0 ? "-" : SingleLine(string.Join(",", names));
 
     private static string Excerpt(byte[] bytes, int line)
     {

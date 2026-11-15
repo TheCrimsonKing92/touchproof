@@ -5,6 +5,8 @@ internal sealed class AcceptanceChildQos : IDisposable
 {
     private static volatile bool enabled;
     private static readonly AsyncLocal<bool?> Override = new();
+    private static readonly AsyncLocal<SweepTestInputs?> TestInputs = new();
+    private readonly AcceptanceChildQosRun? run;
     private readonly object sync = new();
     private readonly int rootPid;
     private readonly Func<int, IReadOnlyList<int>?> members;
@@ -34,15 +36,27 @@ internal sealed class AcceptanceChildQos : IDisposable
 
     internal static AcceptanceChildQos? StartSweep(int rootPid, bool ownLoop,
         Func<int, IReadOnlyList<int>?>? members = null, Func<int, uint, uint, bool>? setter = null) =>
-        Enabled ? new(rootPid, ownLoop, members ?? EnumerateMembers, setter ?? ProcessExecutionThrottlingOptOut.TrySet) : null;
+        (AcceptanceChildQosRun.Current?.Enabled ?? Enabled) ? new(rootPid, ownLoop,
+            members ?? TestInputs.Value?.Members ?? EnumerateMembers,
+            setter ?? TestInputs.Value?.Setter ?? ProcessExecutionThrottlingOptOut.TrySet,
+            TestInputs.Value?.Interval, AcceptanceChildQosRun.Current) : null;
+
+    internal static IDisposable PushSweepInputsForTests(Func<int, IReadOnlyList<int>?> members,
+        Func<int, uint, uint, bool> setter, TimeSpan interval)
+    {
+        var previous = TestInputs.Value;
+        TestInputs.Value = new(members, setter, interval);
+        return new RestoreScope(() => TestInputs.Value = previous);
+    }
 
     internal static AcceptanceChildQos? StartSweep(bool enabled, int rootPid, TimeSpan interval,
         Func<int, IReadOnlyList<int>?> members, Func<int, uint, uint, bool>? setter = null) =>
         enabled ? new(rootPid, true, members, setter ?? ProcessExecutionThrottlingOptOut.TrySet, interval) : null;
 
     private AcceptanceChildQos(int rootPid, bool ownLoop, Func<int, IReadOnlyList<int>?> members,
-        Func<int, uint, uint, bool> setter, TimeSpan? interval = null)
+        Func<int, uint, uint, bool> setter, TimeSpan? interval = null, AcceptanceChildQosRun? run = null)
     {
+        this.run = run;
         this.rootPid = rootPid;
         this.members = members;
         this.setter = setter;
@@ -87,7 +101,11 @@ internal sealed class AcceptanceChildQos : IDisposable
         cancellation.Cancel();
         try { loop?.GetAwaiter().GetResult(); } catch (Exception) { }
         cancellation.Dispose();
+        run?.Record(TriedCount, OptedOutCount);
     }
+
+    private sealed record SweepTestInputs(Func<int, IReadOnlyList<int>?> Members,
+        Func<int, uint, uint, bool> Setter, TimeSpan Interval);
 
     private sealed class RestoreScope(Action restore) : IDisposable
     {

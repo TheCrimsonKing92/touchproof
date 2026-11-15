@@ -151,7 +151,8 @@ public sealed class ProjectAnswerCliTests
         Assert.Equal(8, model.OwnerQuestions.Count);
         Assert.Equal("trunk", model.IntegrationBranch!.Value);
         var expected = new[] { $"Project model: {project.ModelPath}",
-            "Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1)" }
+            "Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1)",
+            $"Kept 0 unit measurements; {model.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration" }
             .Concat(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"));
         Assert.Equal(Text(expected), result.Output);
         AssertNoAnswerLines(result.Output);
@@ -175,7 +176,8 @@ public sealed class ProjectAnswerCliTests
         Assert.Equal(0, result.Exit);
         Assert.DoesNotContain($"Owner question: {sdkQuestion.Question}", result.Output);
         var expected = new[] { $"Project model: {project.ModelPath}",
-            "Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1)" }
+            "Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1)",
+            $"Kept 0 unit measurements; {original.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration" }
             .Concat(original.OwnerQuestions.Where(question => question.FactKey != SdkKey)
                 .Select(question => $"Owner question: {question.Question}"))
             .Append($"Owner answer: {SdkKey} = 10.0.100 (High, {Stamp})");

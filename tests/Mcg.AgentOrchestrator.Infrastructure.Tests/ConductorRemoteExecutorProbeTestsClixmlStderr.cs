@@ -62,7 +62,9 @@ public sealed class ConductorRemoteExecutorProbeTestsClixmlStderr
         Assert.Equal("$task = schtasks /query /tn mcg-executor-lane /fo csv /nh 2>$null | Select-Object -First 1; " +
             "$power = $null; try { $battery = Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Select-Object -First 1; " +
             "if ($null -ne $battery) { $power = [bool]$battery.PowerOnline } } catch {}; " +
-            "[pscustomobject]@{ task = $task; powerOnline = $power } | ConvertTo-Json -Compress", script[preference.Length..]);
+            "$diskFree = $null; try { $diskFree = [long]([System.IO.DriveInfo]::new($env:SystemDrive).TotalFreeSpace) } catch {}; " +
+            "$sshdSessions = $null; try { $sshdSessions = @(Get-Process -ErrorAction Stop | Where-Object { $_.ProcessName -eq 'sshd' }).Count } catch {}; " +
+            "[pscustomobject]@{ task = $task; powerOnline = $power; diskFreeBytes = $diskFree; sshdSessionCount = $sshdSessions } | ConvertTo-Json -Compress", script[preference.Length..]);
     }
 
     private sealed class Fixture : IDisposable

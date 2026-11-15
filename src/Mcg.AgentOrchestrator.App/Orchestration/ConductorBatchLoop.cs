@@ -2254,7 +2254,7 @@ internal sealed partial class ConductorBatchLoop
             _selectedExecutionBackstop?.ServiceAdmission(_workspace!, state.OrderedEligible.Where(goal => !state.Results.ContainsKey(goal.Id.Value) && !priorityOccupantsBefore.Contains(goal.Id.Value)).ToArray(), SelectedExecutionBackstopWaitingGoals.Select(kernel, driver, policy), state.AcceptanceCensus, configuredAcceptanceWidth, suppressNewAcceptanceAdmission()))
             ?? _selectedExecutionBackstop?.Reserve(state.AcceptanceCensus) ?? state.AcceptanceCensus;
         if (!suppressNewAcceptanceAdmission())
-            ConductorTickStepLedger.Measure("merge-train", () => AdmitMergeTrain(state, driver, kernel, policy, tick, changedGoalLines));
+            ConductorTickStepLedger.Measure("merge-train", () => { if (PairTrainAdmission.CanAdmitTrain(state.GroupedAdmissionOpen, suppressNewAcceptanceAdmission(), DecideLiveAcceptanceAdmission(state.AcceptanceCensus, configuredAcceptanceWidth).IsAdmitted)) AdmitMergeTrain(state, driver, kernel, policy, tick, changedGoalLines); });
         ConductorTickStepLedger.Measure("pair-cohort", () => AdmitPairCohort(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission));
         ConductorTickStepLedger.Measure("hold-cohort-members", () => HoldCohortMembers(state, driver, policy, tick, changedGoalLines));

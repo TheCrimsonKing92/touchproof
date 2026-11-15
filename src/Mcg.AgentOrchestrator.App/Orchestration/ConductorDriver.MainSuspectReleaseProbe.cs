@@ -21,8 +21,8 @@ internal sealed partial class ConductorDriver
             var selection = ConductorAcceptanceCohortFocusedAttribution.TrySelect(tests.ToArray(), []);
             if (selection is null)
                 return new(MainSuspectReleaseProbeOutcome.CouldNotRun, receipt, "selection-unavailable");
-
             var root = workspace.ExecutionDirectory;
+            using var qos = HostedVerifierRunQos.Begin(workspace);
             var checkout = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("main-suspect-release-worktrees"),
                 tip[..Math.Min(12, tip.Length)], Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.GetDirectoryName(checkout)!);
