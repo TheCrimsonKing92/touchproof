@@ -824,6 +824,7 @@ internal static class CliCommandHelp
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
             ["project"] = Flags("--root"),
+            ["branch-report"] = Flags("--json"),
             ["push-adopted"] = Flags("--remote", "--branch"),
             ["status"] = Flags("--tasks-only"),
             ["trial-compare"] = Flags("--spec", "--receipts", "--timeout-seconds", "--format"),
@@ -2014,6 +2015,8 @@ internal static class CliCommandHelp
                     ? CliProviderResetCommand.Usage
                     : command.Equals("finding", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {CliFindingQueryCommand.Usage}"
+                    : command.Equals("branch-report", StringComparison.OrdinalIgnoreCase)
+                    ? CliBranchReportCommand.Usage
                     : $"Usage: {command} [options]",
                 "Run this operator command.",
                 GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),
