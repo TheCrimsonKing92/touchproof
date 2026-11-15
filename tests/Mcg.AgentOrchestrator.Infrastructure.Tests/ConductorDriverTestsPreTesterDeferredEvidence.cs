@@ -174,7 +174,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         Assert.Equal([AgentRole.Tester], roles);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void StartedBackgroundAttemptHoldsTesterAcrossTicks()
     {
@@ -217,7 +217,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             evt.Message.StartsWith("finding-evidence pre-tester outcome=started;", StringComparison.Ordinal)));
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData("result-artifact")]
     [InlineData("reconciled")]
@@ -298,7 +298,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         }
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void CompletionDuringLiveRead_ConsumesGreenEvidenceOnce()
     {
