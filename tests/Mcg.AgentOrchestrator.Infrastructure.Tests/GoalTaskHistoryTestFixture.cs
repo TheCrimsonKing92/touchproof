@@ -100,7 +100,7 @@ internal sealed class GoalTaskHistoryTestFixture : IDisposable
         var document = System.Text.Json.Nodes.JsonNode.Parse(RawGoal(goalId))!;
         foreach (var task in document["Tasks"]!.AsArray())
         {
-            task!["HistoryInTable"] = new System.Text.Json.Nodes.JsonObject
+            task!["HistoryInTable"] ??= new System.Text.Json.Nodes.JsonObject
             {
                 ["Verification"] = task["VerificationHistory"]?.AsArray().Count,
                 ["Dispatch"] = task["DispatchHistory"]?.AsArray().Count
@@ -123,24 +123,39 @@ internal sealed class GoalTaskHistoryTestFixture : IDisposable
     {
         using var connection = Open();
         var raw = RawGoal(goal.Id);
-        Assert.Equal(Json(goal), raw);
         Assert.True(await Store.IsConsistentAsync(connection, goal.Id, raw));
         using var document = JsonDocument.Parse(raw);
         foreach (var task in document.RootElement.GetProperty("Tasks").EnumerateArray())
         {
+            var source = goal.Tasks.Single(source => source.Id == task.GetProperty("Id").GetString());
+            Assert.False(task.TryGetProperty("VerificationHistory", out _));
+            Assert.False(task.TryGetProperty("DispatchHistory", out _));
+            var marker = task.GetProperty("HistoryInTable");
+            Assert.Equal(Json(source.VerificationHistory?.Count), marker.GetProperty("Verification").GetRawText());
+            Assert.Equal(Json(source.DispatchHistory?.Count), marker.GetProperty("Dispatch").GetRawText());
             var history = await Store.ReadAsync(connection, goal.Id, task);
-            foreach (var (property, result) in new[]
+            foreach (var (expectedList, result) in new[]
             {
-                (GoalTaskHistoryStore.VerificationProperty, history.Verification),
-                (GoalTaskHistoryStore.DispatchProperty, history.Dispatch)
+                (JsonSerializer.SerializeToElement(source.VerificationHistory, Options), history.Verification),
+                (JsonSerializer.SerializeToElement(source.DispatchHistory, Options), history.Dispatch)
             })
             {
-                var inline = task.GetProperty(property);
-                var expected = inline.ValueKind == JsonValueKind.Null ? [] : inline.EnumerateArray().Select(entry => entry.GetRawText()).ToArray();
+                var expected = expectedList.ValueKind == JsonValueKind.Null ? [] : expectedList.EnumerateArray().Select(entry => entry.GetRawText()).ToArray();
                 Assert.Equal(expected, result.Entries.Select(entry => entry.GetRawText()));
-                Assert.Equal(expected.Length > 0, result.FromTable);
+                Assert.True(result.FromTable);
+                Assert.Equal(expectedList.ValueKind == JsonValueKind.Null, result.IsNull);
             }
         }
+    }
+
+    internal void ReplaceDocument(string id, string json)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE goals SET snapshot_json = $json WHERE id = $id";
+        command.Parameters.AddWithValue("$json", json);
+        command.Parameters.AddWithValue("$id", id);
+        Assert.Equal(1, command.ExecuteNonQuery());
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);

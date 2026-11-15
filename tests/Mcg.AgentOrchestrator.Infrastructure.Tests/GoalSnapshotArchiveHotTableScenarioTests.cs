@@ -79,7 +79,6 @@ public sealed class GoalSnapshotArchiveHotTableScenarioTests
     {
         using var fixture = new Fixture();
         var goals = await fixture.SeedAsync();
-        var before = fixture.GoalRows();
 
         var result = fixture.Run(new GoalSnapshotArchiveDrain(1, 16));
 
@@ -94,10 +93,11 @@ public sealed class GoalSnapshotArchiveHotTableScenarioTests
             var id = new GoalId(goals[name].Id);
             var hydrated = await fixture.Repository.LoadGoalAsync(id);
             Assert.NotNull(hydrated);
-            Assert.Equal(before[id.Value].Snapshot, JsonSerializer.Serialize(hydrated, JsonOptions));
+            var expected = JsonSerializer.Serialize(goals[name], JsonOptions);
+            Assert.Equal(expected, JsonSerializer.Serialize(hydrated, JsonOptions));
             if (name == "V")
                 Assert.Equal("Verified", hydrated.CurrentHold?.State);
-            Assert.Equal(before[id.Value].Snapshot,
+            Assert.Equal(expected,
                 JsonSerializer.Serialize(hydratedKernel.ExportGoalSnapshot(id), JsonOptions));
             Assert.True(fullKernel.GetGoal(id).IsMetadataOnly);
         }

@@ -39,6 +39,7 @@ public sealed class GoalTaskHistoryLegacyRowTests
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskHistoryTestFixture.Snapshot();
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+        fixture.ReplaceDocument(goal.Id, GoalTaskHistoryTestFixture.Json(goal));
         var expectedReaders = await GoalTaskHistoryReaderParityTests.ReadReadersAsync(fixture, goal);
         var predicate = "WHERE kind = 'verification' AND task_id = '00000000000000000000000000000001'";
         fixture.Execute(defect switch

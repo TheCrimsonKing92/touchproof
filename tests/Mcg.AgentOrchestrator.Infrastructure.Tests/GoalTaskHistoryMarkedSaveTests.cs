@@ -65,7 +65,7 @@ public sealed class GoalTaskHistoryMarkedSaveTests
     }
 
     [Fact]
-    public async Task UnmarkedSave_DocumentAndRows_MatchPreChangeSerializer()
+    public async Task UnmarkedSave_ConvertsToMarkedDocumentWithoutChangingSnapshot()
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskHistoryTestFixture.Snapshot();
@@ -73,8 +73,9 @@ public sealed class GoalTaskHistoryMarkedSaveTests
         options.Converters.Add(new JsonStringEnumConverter());
         var expected = JsonSerializer.SerializeToUtf8Bytes(goal, options);
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
-        Assert.Equal(expected, System.Text.Encoding.UTF8.GetBytes(fixture.RawGoal(goal.Id)));
+        Assert.Equal(expected, JsonSerializer.SerializeToUtf8Bytes(
+            await fixture.Repository.LoadGoalAsync(new(goal.Id)), options));
         await fixture.AssertMirroredAsync(goal);
-        Assert.DoesNotContain("\"HistoryInTable\"", fixture.RawGoal(goal.Id));
+        Assert.Contains("\"HistoryInTable\"", fixture.RawGoal(goal.Id));
     }
 }

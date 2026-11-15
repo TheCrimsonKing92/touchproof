@@ -23,6 +23,9 @@ public sealed class GoalTaskHistoryMarkedReadTests
         }).ToArray() };
         goal = AgentOrchestratorKernel.FromSnapshot(new([goal], [])).ExportGoalSnapshot(new(goal.Id));
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+        using var legacy = new GoalTaskHistoryTestFixture();
+        legacy.InsertLegacy(goal);
+        Assert.Equal(await ReadPathsAsync(legacy, goal), await ReadPathsAsync(fixture, goal));
         var before = await ReadPathsAsync(fixture, goal);
         fixture.MarkStoredHistory(goal.Id, staleInline);
         if (staleInline)

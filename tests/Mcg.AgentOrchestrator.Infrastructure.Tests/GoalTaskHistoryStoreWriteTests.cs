@@ -40,6 +40,7 @@ public sealed class GoalTaskHistoryStoreWriteTests
         var goal = GoalTaskHistoryTestFixture.Snapshot();
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
         var before = fixture.HistoryRows();
+        var document = fixture.RawGoal(goal.Id);
         var version = fixture.Rows("SELECT CAST(version AS TEXT) FROM goals");
         var reachedCommit = false;
         var repository = new SqliteOrchestratorStateRepository(fixture.DatabasePath)
@@ -58,7 +59,7 @@ public sealed class GoalTaskHistoryStoreWriteTests
                     (IReadOnlyList<OrchestratorStateOutboxMessage>)[]))));
         Assert.Equal("history rollback sentinel", error.Message);
         Assert.True(reachedCommit);
-        Assert.Equal(GoalTaskHistoryTestFixture.Json(goal), fixture.RawGoal(goal.Id));
+        Assert.Equal(document, fixture.RawGoal(goal.Id));
         Assert.Equal(version, fixture.Rows("SELECT CAST(version AS TEXT) FROM goals"));
         Assert.Equal(before, fixture.HistoryRows());
     }
