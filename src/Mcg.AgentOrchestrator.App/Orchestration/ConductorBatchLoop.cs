@@ -1193,6 +1193,7 @@ internal sealed partial class ConductorBatchLoop
 
                 var label = goal.Id.Value[..8];
                 var singleGoalClock = StartDiagnosticTimer();
+                using var goalWalkScope = ConductorTickStepLedger.OpenScope("walk-goal-overhead");
                 void FinishGoalWalk(string result)
                 {
                     if (!singleGoalClock.IsRunning)
@@ -1309,17 +1310,17 @@ internal sealed partial class ConductorBatchLoop
                 else
                 {
                     if (!TryAdvanceGoal(
-                        () =>
+                        () => ConductorTickStepLedger.Measure<ConductorAdvanceResult?>("walk-held-goal", () =>
                         {
                             var beforeRefresh = GoalProjectionCache.BuildFingerprint(goal);
-                            var runningHoldReason = DetachedDispatchHoldReasonBuilder.Build(goal, _refreshGoalDispatchesBeforeAdvance(kernel, goal));
+                            var runningHoldReason = ConductorTickStepLedger.Measure("walk-running-refresh", () => DetachedDispatchHoldReasonBuilder.Build(goal, _refreshGoalDispatchesBeforeAdvance(kernel, goal)));
                             if (_progressiveReviewGlances is not null && watchInterval is not null)
                             {
-                                var glanceResult = _progressiveReviewGlances.Observe(
+                                var glanceResult = ConductorTickStepLedger.Measure("walk-running-glance", () => _progressiveReviewGlances.Observe(
                                     kernel,
                                     [goal],
                                     glanceDurationStats,
-                                    LiveChangesFor);
+                                    LiveChangesFor));
                                 foreach (var line in glanceResult.ProgressLines)
                                 {
                                     EmitProgress(line, tickLines);
@@ -1369,7 +1370,7 @@ internal sealed partial class ConductorBatchLoop
                                     policy,
                                     BuildAcceptanceEngineHoldReason(engineHealth!))
                                 : ConductorTickStepLedger.Measure("walk-advance", () => driver.AdvanceOnce(goal, policy, runningHoldReason));
-                        },
+                        }),
                         kernel,
                         driver,
                         goal,

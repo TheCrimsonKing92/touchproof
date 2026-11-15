@@ -865,7 +865,7 @@ internal sealed partial class ConductorDriver
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
         _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
-        _getLandingFileScopes = goal =>
+        _getLandingFileScopes = goal => ConductorTickStepLedger.Measure("walk-changed-files", () =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             var changedFiles = worktreePath is null
@@ -874,7 +874,7 @@ internal sealed partial class ConductorDriver
             return changedFiles.Length == 0
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
-        };
+        });
         EnvironmentGate = EnvironmentContractGate.ForWorkspace(kernel, workspace, agents, profiles);
         FailureDiagnosis = AttributedFailureDiagnosisCoordinator.ForWorkspace(kernel, workspace, agents);
         SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
@@ -890,7 +890,8 @@ internal sealed partial class ConductorDriver
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir, workspace.IntegrationBranch);
-        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace), workspace.OrchestratorDirectory);
+        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.Measure("walk-candidate-context", () => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace), workspace.OrchestratorDirectory));
+        RecoveryCandidateRevision = goal => GoalWorktrees.TryResolve(dir, goal.Id) is { } worktree ? TryResolveGitHead(worktree) : null;
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull;
@@ -904,10 +905,10 @@ internal sealed partial class ConductorDriver
         RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,
             _parallelAcceptanceAttemptCoordinator, dir, goal => _resolveAcceptanceHeads(goal).BranchHeadSha);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
-            FocusedEvidenceSiblingExpansionBound.Shared.Resolve(
+            ConductorTickStepLedger.Measure("walk-finding-sibling-classes", () => FocusedEvidenceSiblingExpansionBound.Shared.Resolve(
                 GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,
                 project, requestedClass,
-                worktree => GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree, workspace.IntegrationBranch)).KeptSiblings;
+                worktree => GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree, workspace.IntegrationBranch)).KeptSiblings);
         RecoverCohortLandingEffects(kernel, workspace, eventWriter, _cohortAcceptanceStore);
         RecoverMergeTrainLandingEffects(kernel, workspace, eventWriter, _mergeTrainAcceptanceStore);
     }
@@ -1089,7 +1090,7 @@ internal sealed partial class ConductorDriver
         _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, _, _, _, _) =>
             (baseline ? _runDualArmFocusedEvidence : _runFocusedEvidence)(goal, request, lease, token);
         _focusedEvidenceRunnerConfigured = runFocusedEvidence is not null;
-        _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??
+        var contextReader = getPreReviewEvidenceContext ??
             (_ => new PreReviewEvidenceContext(
                 CandidateSha: "test-constructor-candidate",
                 SelectedFocusedTests: [],
@@ -1097,10 +1098,11 @@ internal sealed partial class ConductorDriver
                 MappingReason: "test constructor supplied no changed-file mapping",
                 NoApplicableTests: true,
                 MappingNeedsInput: false));
+        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.Measure("walk-candidate-context", () => contextReader(goal));
         _getFindingEvidenceEngineSettings = getFindingEvidenceEngineSettings ??
             (_ => new AcceptanceGateEngineSettings());
-        _resolveFindingEvidenceSiblingClasses = resolveFindingEvidenceSiblingClasses ??
-            ((_, _, _) => []);
+        _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) => ConductorTickStepLedger.Measure("walk-finding-sibling-classes",
+            () => resolveFindingEvidenceSiblingClasses?.Invoke(goal, project, requestedClass) ?? []);
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
         _retryTask = retryTaskWithCause
@@ -1152,7 +1154,7 @@ internal sealed partial class ConductorDriver
         _plannerEvidenceReadiness = PlannerEvidenceReadiness.ForTick(getAmendmentRevisionPending, () => _conductorTickKernel);
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
-        _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
+        _getLandingFileScopes = goal => ConductorTickStepLedger.Measure("walk-changed-files", () => (getLandingFileScopes ?? InferRecordedFileScopes)(goal));
         _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
         _gateReadyCandidateProjector = gateReadyCandidateProjector;
         _runAcceptanceCohortOverride = runAcceptanceCohort;
@@ -1260,20 +1262,19 @@ internal sealed partial class ConductorDriver
         Goal goal,
         ConductorAutonomyPolicy policy,
         string? runningHoldReason = null)
+        => ConductorTickStepLedger.Measure("walk-hold-entry-gates", () => AdvanceCore(goal, policy, runningHoldReason));
+    private ConductorAdvanceResult AdvanceCore(Goal goal, ConductorAutonomyPolicy policy, string? runningHoldReason)
     {
         var goalId = goal.Id.Value;
         var goalPrefix = goalId[..8];
-
-        _conflictIntegration?.ReconcileScopeRequirements(goal);
-
-        FindingStagnationDecisionRecorder.ReconcileResets(_findingStagnationKernel ?? _conductorTickKernel, goal);
-
-        _normalizeLifecycleState(
-            goal,
-            $"Conductor reconciled stale goal/task lifecycle state before lifecycle resolution for goal {goalPrefix}.");
-
-        var facts = GetFacts(goal);
-        var state = GoalLifecycle.ResolveState(goal, facts);
+        ConductorTickStepLedger.Measure("walk-hold-lifecycle-reconcile", () =>
+        {
+            _conflictIntegration?.ReconcileScopeRequirements(goal);
+            FindingStagnationDecisionRecorder.ReconcileResets(_findingStagnationKernel ?? _conductorTickKernel, goal);
+            _normalizeLifecycleState(goal,
+                $"Conductor reconciled stale goal/task lifecycle state before lifecycle resolution for goal {goalPrefix}.");
+        });
+        var state = ConductorTickStepLedger.Measure("walk-hold-lifecycle-facts", () => GoalLifecycle.ResolveState(goal, GetFacts(goal)));
         if (goal.Status == GoalStatus.Parked)
             return MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
@@ -1310,7 +1311,7 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(
                     state,
-                    SandboxPreparationStartStatus.HoldReason(goal, runningHoldReason))),
+                    ConductorTickStepLedger.Measure("walk-running-hold-reason", () => SandboxPreparationStartStatus.HoldReason(goal, runningHoldReason)))),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, AwaitingVerificationHoldReasonBuilder.Build(goal))),
             GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),
@@ -1386,9 +1387,7 @@ internal sealed partial class ConductorDriver
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
         {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingEvidencePending,
-                $"Background {source} focused evidence is running in attempt {attemptDecision.Attempt.AttemptId}.") with { HoldOwner = ConductorHoldOwner.BackgroundAttempt };
+            decision = FindingBaselineAttemptObservation.Pending(source, attemptDecision.Attempt.AttemptId);
             return false;
         }
         if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||
