@@ -31,6 +31,31 @@ public sealed class ProjectDiscoverStackSelectionCliTests
     }
 
     [Fact]
+    public void CrosswalkUnreviewedFramework_PrintsAndStoresNoProbeQuestion()
+    {
+        using var workspace = new ProjectOnboardingFixture("solution");
+        using var source = new ProjectOnboardingFixture("declared-no-marker");
+        var registry = new OrchestratorProjectRegistry(Path.Combine(workspace.Root, "registry"), Path.Combine(workspace.Root, "data"));
+        using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("future-stack", "future-runner");
+        crosswalk.ListTests("suite.test");
+
+        var exit = ProjectCliCommand.Execute(["project", "discover", "--root", source.Root], registry, workspace.Root, null, output,
+            crosswalkReaderFactory: () => crosswalk.Reader);
+
+        Assert.Equal(0, exit);
+        var modelPath = Path.Combine(OrchestratorWorkspace.ForProject(Path.GetFileName(source.Root), source.Root,
+            dataRootDirectory: registry.DataRootDirectory).OrchestratorDirectory, "project-model.json");
+        Assert.True(File.Exists(modelPath));
+        var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
+        Assert.Equal(ProjectStack.Crosswalk, model.Stack);
+        Assert.Contains(model.EnvironmentNeeds, need => need.Name == "crosswalk-test-framework" && need.Value.Value == "future-runner");
+        var question = Assert.Single(model.OwnerQuestions, question => question.FactKey == "environment/tools/future-runner");
+        Assert.Contains("No environment probe was derived for test framework 'future-runner'.", question.Question);
+        Assert.Contains($"Owner question: {question.Question}", output.ToString());
+    }
+
+    [Fact]
     public void SolutionRootStillWritesADotnetModel()
     {
         using var workspace = new ProjectOnboardingFixture("solution");

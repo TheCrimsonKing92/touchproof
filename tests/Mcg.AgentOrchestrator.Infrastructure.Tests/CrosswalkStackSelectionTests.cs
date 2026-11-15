@@ -29,12 +29,21 @@ public sealed class CrosswalkStackSelectionTests
         var item = Assert.Single(evidence.RootElement.EnumerateArray());
         Assert.Equal("build.file", item.GetProperty("path").GetString());
         Assert.Equal("suite declaration", item.GetProperty("reason").GetString());
-        Assert.Empty(model.OwnerQuestions);
+        if (framework == "future-runner")
+        {
+            var question = Assert.Single(model.OwnerQuestions);
+            Assert.Equal("environment/tools/future-runner", question.FactKey);
+            Assert.Contains("No environment probe was derived for test framework 'future-runner'.", question.Question);
+        }
+        else Assert.Empty(model.OwnerQuestions);
 
         var result = LearnedAcceptanceManifest.Build(model, Fixture.Answers());
 
         Assert.Empty(result.Blockers);
         Assert.NotNull(result.Json);
+        if (framework == "future-runner")
+            Assert.DoesNotContain(EnvironmentContract.FromManifest(result.Json).Tools,
+                tool => tool.Name == framework || tool.Command == framework);
         using var manifest = JsonDocument.Parse(result.Json);
         var check = Assert.Single(manifest.RootElement.GetProperty("checks").EnumerateArray());
         Assert.Equal("crosswalk-test .", check.GetProperty("name").GetString());

@@ -41,6 +41,70 @@ public sealed class EnvironmentContractDerivationTests
     }
 
     [Fact]
+    public void CrosswalkProject_NextestUsesCargoAndGradleStaysStandalone()
+    {
+        using var fixture = new ProjectOnboardingFixture("declared-no-marker");
+        foreach (var framework in new[] { "nextest", "  NeXtEsT  ", "gradle" })
+        {
+            using var crosswalk = new FakeCrosswalkProcess("rust", framework);
+            crosswalk.ListTests("suite.test");
+            var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader);
+            Assert.IsType<CrosswalkProjectDiscoveryAdapter>(adapter);
+            var emitted = LearnedAcceptanceManifest.Build(adapter.Discover(fixture.Root), EnvironmentContractTestFixture.Answers());
+
+            Assert.Empty(emitted.Blockers);
+            var tools = EnvironmentContract.FromManifest(emitted.Json!).Tools;
+            var isNextest = framework.Trim().Equals("nextest", StringComparison.OrdinalIgnoreCase);
+            var name = isNextest ? "cargo nextest" : "gradle";
+            Assert.Equal(new[] { name, "crosswalk" }.OrderBy(value => value, StringComparer.Ordinal), tools.Select(tool => tool.Name));
+            var tool = Assert.Single(tools, tool => tool.Name == name);
+            Assert.Equal(isNextest ? "cargo" : "gradle", tool.Command);
+            Assert.Equal(isNextest ? ["nextest", "--version"] : new[] { "--version" }, tool.Arguments);
+            Assert.DoesNotContain(tools, tool => tool.Command == "nextest");
+        }
+    }
+
+    [Theory]
+    [InlineData("crosswalk-test-framework", "pytest", "python")]
+    [InlineData("crosswalk-test-framework", "unittest", "python")]
+    [InlineData("crosswalk-test-framework", "vitest", "node")]
+    [InlineData("crosswalk-test-framework", "jest", "node")]
+    [InlineData("crosswalk-test-framework", "mocha", "node")]
+    [InlineData("crosswalk-test-framework", "junit", "java")]
+    [InlineData("crosswalk-test-framework", "gradle", "gradle")]
+    [InlineData("crosswalk-test-framework", "maven", "mvn")]
+    [InlineData("crosswalk-test-framework", "busted", "busted")]
+    [InlineData("lua-test-framework", "busted", "busted")]
+    public void ReviewedFramework_DerivesEcosystemProbe(string need, string framework, string command)
+    {
+        var model = EnvironmentContractTestFixture.Model(needs:
+            [new(need, new(framework, new FactSource(measurementReference: "test"), FactConfidence.High))]);
+
+        var contract = EnvironmentContractDeriver.Derive(JsonSerializer.SerializeToElement(Array.Empty<object>()), model);
+
+        var tool = Assert.Single(contract.Tools);
+        Assert.Equal(command, tool.Name);
+        Assert.Equal(command, tool.Command);
+        Assert.Equal(["--version"], tool.Arguments);
+    }
+
+    [Theory]
+    [InlineData("future-runner")]
+    [InlineData("")]
+    [InlineData("none")]
+    [InlineData("unknown")]
+    [InlineData("undetermined")]
+    public void UnreviewedOrAbsentFramework_DerivesNoTool(string framework)
+    {
+        var model = EnvironmentContractTestFixture.Model(needs:
+            [new("crosswalk-test-framework", new(framework, new FactSource(measurementReference: "test"), FactConfidence.High))]);
+
+        var contract = EnvironmentContractDeriver.Derive(JsonSerializer.SerializeToElement(Array.Empty<object>()), model);
+
+        Assert.Empty(contract.Tools);
+    }
+
+    [Fact]
     public void LegacyHomeManifest_DerivesContractFromChecks()
     {
         var contract = EnvironmentContract.FromManifest("""{"checks":[{"type":"command","command":"git"},{"type":"dotnet-test"}]}""");
