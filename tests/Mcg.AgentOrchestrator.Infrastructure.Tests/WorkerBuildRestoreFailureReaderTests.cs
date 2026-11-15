@@ -28,6 +28,10 @@ public sealed class WorkerBuildRestoreFailureReaderTests : IDisposable
     [InlineData("error NU1102: Unable to find package 'LibGit2Sharp' with version (>= 0.32.0-beta.1)", "LibGit2Sharp", "0.32.0-beta.1", "NU1102")]
     [InlineData("error NU1101: Unable to find package LibGit2Sharp. No packages exist with this id in source(s): nuget.org", "LibGit2Sharp", null, "NU1101")]
     [InlineData("error NU1301: Unable to load the service index for source https://api.nuget.org/v3/index.json.", null, null, "NU1301")]
+    [InlineData("error NU1202: Package LibGit2Sharp 0.32.0 is not compatible with net8.0", "LibGit2Sharp", "0.32.0", "NU1202")]
+    [InlineData("error NU1605: Warning As Error: Detected package downgrade: System.Text.Json from 8.0.5 to 8.0.4", null, null, "NU1605")]
+    [InlineData("error NU1008: Projects that use central package version management should not define the version on PackageReference items: LibGit2Sharp.", null, null, "NU1008")]
+    [InlineData("error NU1403: Package content hash validation failed for LibGit2Sharp.0.32.0.", null, null, "NU1403")]
     public void Read_NuError_PreservesAvailableMetadata(string line, string? id, string? version, string code)
     {
         File.WriteAllText(Output, line);
@@ -43,6 +47,12 @@ public sealed class WorkerBuildRestoreFailureReaderTests : IDisposable
     [InlineData("warning NU1603: Package LibGit2Sharp 0.32.0 was resolved approximately")]
     [InlineData("Documentation mentions NU1102 for package LibGit2Sharp 0.32.0")]
     [InlineData("error : Access to the path 'C:\\build\\bin\\Feature.dll' is denied.")]
+    [InlineData("warning : Access to the path 'C:\\Users\\fixture\\.nuget\\packages\\libgit2sharp\\0.32.0' is denied.")]
+    [InlineData("warning NU1301: Access to the path 'C:\\Users\\fixture\\.nuget\\packages\\libgit2sharp\\0.32.0' is denied.")]
+    [InlineData("warning : Permission denied: '/home/fixture/.nuget/packages/libgit2sharp/0.32.0'")]
+    [InlineData("error MSB3021: Unable to copy file \"C:\\Users\\fixture\\.nuget\\packages\\libgit2sharp\\0.32.0\\lib\\net8.0\\LibGit2Sharp.dll\" to \"bin\\LibGit2Sharp.dll\". Access to the path 'C:\\repo\\bin\\LibGit2Sharp.dll' is denied.")]
+    [InlineData("warning MSB3026: Could not copy \"C:\\Users\\fixture\\.nuget\\packages\\libgit2sharp\\0.32.0\\lib\\net8.0\\LibGit2Sharp.dll\" to \"bin\\LibGit2Sharp.dll\". Beginning retry 1. Access to the path 'C:\\repo\\bin\\LibGit2Sharp.dll' is denied.")]
+    [InlineData("error : Permission denied: '/repo/bin/LibGit2Sharp.dll'. Source: '/home/fixture/.nuget/packages/libgit2sharp/0.32.0/lib/LibGit2Sharp.dll'")]
     public void Read_UnrelatedFailure_ReturnsNothing(string line)
     {
         File.WriteAllText(Error, line);
@@ -71,6 +81,37 @@ public sealed class WorkerBuildRestoreFailureReaderTests : IDisposable
     {
         File.WriteAllText(Error, "error NU1301: Unable to load service index.\nerror NU1102: Unable to find package Other with version 2.0.0");
         File.WriteAllText(Output, "error NU1102: Unable to find package LibGit2Sharp with version 0.32.0");
+        var result = WorkerBuildRestoreFailureReader.Read(Output, Error);
+        Assert.NotNull(result);
+        Assert.Equal("NU1301", result.ErrorCode);
+        Assert.Null(result.PackageId);
+        Assert.Null(result.PackageVersion);
+    }
+
+    [Fact]
+    public void Read_CacheDenialWarningBeforeCompileError_ReturnsNothing()
+    {
+        File.WriteAllText(Error, "warning : Access to the path 'C:\\Users\\fixture\\.nuget\\packages\\libgit2sharp\\0.32.0' is denied.\nFeature.cs(2,1): error CS1002: ; expected");
+        Assert.Null(WorkerBuildRestoreFailureReader.Read(Output, Error));
+    }
+
+    [Fact]
+    public void Read_CacheDenialWarningBeforeNuError_UsesErrorMetadata()
+    {
+        File.WriteAllText(Error, "warning : Access to the path 'C:\\Users\\fixture\\.nuget\\packages\\libgit2sharp\\0.32.0' is denied.\nerror NU1301: Unable to load service index.");
+        var result = WorkerBuildRestoreFailureReader.Read(Output, Error);
+        Assert.NotNull(result);
+        Assert.Equal("NU1301", result.ErrorCode);
+        Assert.Null(result.PackageId);
+        Assert.Null(result.PackageVersion);
+    }
+
+    [Fact]
+    public void Read_TruncatedErrorLog_StillReadsOutput()
+    {
+        File.WriteAllText(Error, new string('x', 4 * 1024 * 1024) +
+            "error NU1102: Unable to find package LibGit2Sharp with version 0.32.0");
+        File.WriteAllText(Output, "error NU1301: Unable to load service index.");
         var result = WorkerBuildRestoreFailureReader.Read(Output, Error);
         Assert.NotNull(result);
         Assert.Equal("NU1301", result.ErrorCode);
