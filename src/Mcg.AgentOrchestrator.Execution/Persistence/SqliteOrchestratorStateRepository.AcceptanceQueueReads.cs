@@ -9,8 +9,10 @@ public sealed partial class SqliteOrchestratorStateRepository
     {
         await using var connection = OpenConnection();
         using var command = connection.CreateCommand();
+        var latestCompletedAt = GoalTaskHistoryStore.LatestFieldSql(
+            await GoalTaskHistoryStore.HasTableAsync(connection, cancellationToken), "verification", "CompletedAt");
         // Same facts as GoalSchedulingOrder, projected in SQLite rather than hydrating peer Goals.
-        command.CommandText = """
+        command.CommandText = $"""
             SELECT id,
               CASE WHEN COALESCE(json_extract(snapshot_json, '$.PriorityScheduling.GateOvertakes'), 0) >= 3
                 THEN 'Critical' ELSE COALESCE(json_extract(snapshot_json, '$.PriorityScheduling.EffectiveLevel'),
@@ -19,7 +21,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 FROM json_each(goals.snapshot_json, '$.Timeline') evt
                 WHERE json_extract(evt.value, '$.Kind') = 'GoalPolicyDecision'
                   AND instr(lower(json_extract(evt.value, '$.Message')), 'verified') > 0),
-                (SELECT MAX(json_extract(task.value, '$.LastVerification.CompletedAt'))
+                (SELECT MAX({latestCompletedAt})
                   FROM json_each(goals.snapshot_json, '$.Tasks') task),
                 json_extract(snapshot_json, '$.Timeline[0].OccurredAt')),
               json_extract(snapshot_json, '$.Timeline[0].OccurredAt')
