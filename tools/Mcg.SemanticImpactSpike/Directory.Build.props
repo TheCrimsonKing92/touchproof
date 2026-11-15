@@ -1,0 +1,9 @@
+<Project>
+  <Import Project="../../Directory.Build.props" />
+  <PropertyGroup>
+    <!-- Keep experimental package versions out of the host's protected user cache. -->
+    <RestorePackagesPath Condition="'$(ArtifactsPath)' != ''">$(ArtifactsPath)/../packages</RestorePackagesPath>
+    <RestorePackagesPath Condition="'$(RestorePackagesPath)' == ''">$(MSBuildThisFileDirectory)artifacts/packages</RestorePackagesPath>
+    <NuGetPackageRoot>$(RestorePackagesPath)/</NuGetPackageRoot>
+  </PropertyGroup>
+</Project>

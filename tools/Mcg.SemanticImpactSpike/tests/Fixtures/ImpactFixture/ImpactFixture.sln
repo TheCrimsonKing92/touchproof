@@ -1,0 +1,19 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ImpactFixture", "Library\ImpactFixture.csproj", "{6D965F11-2056-4502-9A82-79717BF1CDF1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ImpactFixture.Tests", "FixtureTests\ImpactFixture.Tests.csproj", "{D7237461-475C-4BB5-B754-2D08DBE80B30}"
+EndProject
+Global
+    GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Debug|Any CPU = Debug|Any CPU
+    EndGlobalSection
+    GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {6D965F11-2056-4502-9A82-79717BF1CDF1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {6D965F11-2056-4502-9A82-79717BF1CDF1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {D7237461-475C-4BB5-B754-2D08DBE80B30}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {D7237461-475C-4BB5-B754-2D08DBE80B30}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    EndGlobalSection
+EndGlobal

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Fixtures/**/*.cs" />
+    <ProjectReference Include="../src/Mcg.SemanticImpactSpike.csproj" />
+    <ProjectReference Include="Fixtures/ImpactFixture/FixtureTests/ImpactFixture.Tests.csproj" ReferenceOutputAssembly="false" />
+    <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.11.48" ExcludeAssets="runtime" PrivateAssets="all" />
+    <AssemblyMetadata Include="SpikeRepositoryRoot" Value="$(MSBuildProjectDirectory)/../../.." />
+    <AssemblyMetadata Include="SpikeBuildArtifactsPath" Value="$(ArtifactsPath)" />
+    <AssemblyMetadata Include="SpikeAnalysisArtifactsPath" Value="$(SpikeAnalysisArtifactsPath)" />
+  </ItemGroup>
+</Project>

@@ -10,6 +10,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
     IReadOnlyList<AcceptanceSelectedExecutionLane> Lanes,
     IReadOnlyList<string> FloorLanes, IReadOnlyList<string> GuardClasses, IReadOnlyList<string> ObligationClasses)
 {
+    public IReadOnlyList<AcceptanceSelectedExecutionMethodFormResolution> MethodFormResolutions { get; init; } = [];
+
     internal bool HasPlan => Outcome == ReverseDependencySelectionOutcome.Resolved;
 
     internal static AcceptanceSelectedExecutionPlan Create(IReadOnlyList<string>? changedFiles,
@@ -18,9 +20,11 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         IReadOnlyList<string> guardClasses, IReadOnlyList<string>? obligationSelectors = null)
     {
         var obligations = new HashSet<string>(StringComparer.Ordinal);
+        var methodFormResolutions = new List<AcceptanceSelectedExecutionMethodFormResolution>();
         AcceptanceSelectedExecutionPlan Full(ReverseDependencySelectionOutcome outcome, string? reason) =>
             new(outcome, reason ?? outcome.ToString(), lanes, [], floorLanes, guardClasses,
-                obligations.Order(StringComparer.Ordinal).ToArray());
+                obligations.Order(StringComparer.Ordinal).ToArray())
+            { MethodFormResolutions = methodFormResolutions.ToArray() };
         if (changedFiles is null || !changedFiles.Any())
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate changes are unavailable.");
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved)
@@ -35,12 +39,30 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         foreach (var selector in obligationSelectors ?? [])
         {
             // Validate shape before matching: filters and paths must never certify a partial gate.
-            var matches = Regex.IsMatch(selector,
+            var wellFormed = Regex.IsMatch(selector,
                 @"\A[_\p{L}\p{Nl}][_\p{L}\p{Nl}\p{Nd}\p{Pc}\p{Mn}\p{Mc}\p{Cf}]*(?:[.+][_\p{L}\p{Nl}][_\p{L}\p{Nl}\p{Nd}\p{Pc}\p{Mn}\p{Mc}\p{Cf}]*)*\z",
-                RegexOptions.CultureInvariant) ? Resolve(selector) : [];
+                RegexOptions.CultureInvariant);
+            var matches = wellFormed ? Resolve(selector) : [];
+            var methodForm = false;
+            var separator = selector.LastIndexOf('.');
+            // A final '.' introduces a method; '+' only separates nested types.
+            if (wellFormed && matches.Length == 0 && separator > selector.LastIndexOf('+'))
+            {
+                matches = Resolve(selector[..separator]);
+                methodForm = true;
+            }
             if (matches.Length == 0 || matches.Any(item => !membership.Values.Any(includes => includes(item.FullName))))
                 unresolved ??= selector;
-            else obligations.UnionWith(matches.Select(item => item.FullName));
+            else
+            {
+                obligations.UnionWith(matches.Select(item => item.FullName));
+                if (methodForm)
+                    foreach (var name in matches.Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+                    {
+                        var resolution = new AcceptanceSelectedExecutionMethodFormResolution(selector, name);
+                        if (!methodFormResolutions.Contains(resolution)) methodFormResolutions.Add(resolution);
+                    }
+            }
         }
         var names = new HashSet<string>(StringComparer.Ordinal);
         var guards = new HashSet<string>(StringComparer.Ordinal);
@@ -84,7 +106,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             records.Add(new(lane.Name, disposition, retained, skipped, filter ?? (whole ? lane.Filter : null)));
         }
         return new(ReverseDependencySelectionOutcome.Resolved, null, execution, records, floorLanes,
-            guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray());
+            guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray())
+        { MethodFormResolutions = methodFormResolutions.ToArray() };
     }
 
     internal static bool IsDefaultFloor(string name) =>

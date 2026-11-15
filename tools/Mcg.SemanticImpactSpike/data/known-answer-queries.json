@@ -1,0 +1,320 @@
+{
+  "SchemaVersion": 1,
+  "BaselineRevision": "79361c3d29b3b070acf74fe012bcecf995001ce4",
+  "SourceTree": "edf5da743483d0539507eff2d7ddfa2aa9d38bf5",
+  "TestsTree": "1c533df5fb971d4e831c67c92a316296e98dae45",
+  "Queries": [
+    {
+      "Id": "kernel-partial-call-sites",
+      "OperatorNumber": 1,
+      "Kind": "calls",
+      "Project": "Mcg.AgentOrchestrator.Core",
+      "Targets": [
+        "M:Mcg.AgentOrchestrator.Core.AgentOrchestratorKernel.BuildTaskBrief(Mcg.AgentOrchestrator.Core.GoalId,Mcg.AgentOrchestrator.Core.TaskId,System.String,System.String,System.String,System.String,System.String,System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Nullable{System.Int32},System.Nullable{System.Boolean},System.Collections.Generic.IReadOnlyList{System.String},System.Nullable{System.Int32},System.Collections.Generic.IReadOnlyList{Mcg.AgentOrchestrator.Core.ReviewFindingLocation},System.String,Mcg.AgentOrchestrator.Core.ReviewRetryCapReceipt,System.Boolean)"
+      ],
+      "Expected": [],
+      "Mode": "no ground truth",
+      "Evidence": "rg -n -F BuildTaskBrief( src tests (source-only exclusions in this script). More than 200 hits include helpers and source strings. Exact whole-solution call-site ground truth was not established by reading; no ground truth, unscored. Partial declarations inspected at AgentOrchestratorKernel.TaskBriefProjection.cs:5 and TaskBriefs.cs:440.",
+      "DecisionRequired": false
+    },
+    {
+      "Id": "acceptance-implementers",
+      "OperatorNumber": 2,
+      "Kind": "implementers",
+      "Project": "Mcg.AgentOrchestrator.Infrastructure",
+      "Targets": [
+        "T:Mcg.AgentOrchestrator.Infrastructure.IGoalAcceptanceVerifier"
+      ],
+      "Expected": [
+        "T:AcceptanceCohortWorkflowTests.BlockingAcceptanceVerifier",
+        "T:AcceptanceCohortWorkflowTests.SequenceAcceptanceVerifier",
+        "T:AcceptanceCohortWorkflowTests.ManifestThrowingAcceptanceVerifier",
+        "T:AcceptanceCohortWorkflowTestsAttributionStableSlotLease.LeaseObservingVerifier",
+        "T:GateProgressReportingVerifier",
+        "T:AcceptanceCohortWorkflowTestsFocusedAttribution.FocusedVerifier",
+        "T:AcceptanceCohortWorkflowTestsMainSuspectReleaseProbe.ProbeVerifier",
+        "T:CohortLaneAttributionScenario.RecordingVerifier",
+        "T:AttributionOccupancyHeartbeatTests.ProgressVerifier",
+        "T:BackgroundGateStartHarness.ScriptedAcceptanceVerifier",
+        "T:CliCommandTestBase.ProbeAcceptanceVerifier",
+        "T:CliCommandTestsPersistentRunnerCommandsGraphRepair.GatedVerifier",
+        "T:CohortMemberReopenedGateAbandonmentScenarioTests.UncalledVerifier",
+        "T:ConductorDriverTests.FakeAcceptanceVerifier",
+        "T:ConductorDriverTests.ThrowingAcceptanceVerifier",
+        "T:FocusedAttributionActivationScenarioTests.FocusedVerifier",
+        "T:Mcg.AgentOrchestrator.Infrastructure.Tests.GoalLifecycleEventWriterTests.PassingAcceptanceVerifier",
+        "T:GoalWorktreeFastTests.FakeAcceptanceVerifier",
+        "T:GoalWorktreeTestBase.FakeAcceptanceVerifier",
+        "T:GroupedGateAttemptLegacyRestoreTests.UnexpectedVerifier",
+        "T:HostedVerifierQosFixture.Verifier",
+        "T:KeyedRepositoryEvidenceExecutionTests.RecordingVerifier",
+        "T:LifecycleGoalEpicInheritanceTests.FakeAcceptanceVerifier",
+        "T:MergeTrainBisectSlotLossTests.BisectSlotVerifier",
+        "T:MergeTrainDeferralSharedFixture.GateVerifier",
+        "T:MergeTrainGateCancelReadmissionTests.UncalledVerifier",
+        "T:MergeTrainGateOnlySlotsBusyDeferralTests.GateVerifier",
+        "T:PostLandingCanaryTests.FakeAcceptanceVerifier",
+        "T:PullRequestDeliveryAdmissionTests.UnusedVerifier",
+        "T:PullRequestTrunkDriftTests.NeverRunVerifier",
+        "T:RealWorkerProcessGuardTests.PassingAcceptanceVerifier",
+        "T:SelectedExecutionBackstopTrainLandingIntakeTests.PublishingVerifier",
+        "T:Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier"
+      ],
+      "Mode": "exact",
+      "Evidence": "rg -n IGoalAcceptanceVerifier src tests; read each class declaration (including multiline primary constructors) and containing class. GoalAcceptanceVerifier.cs:249 is shipping; 32 sealed test implementations. No derived implementation classes found. Identity correction after exploratory run: GoalLifecycleEventWriterTests.cs:9 explicitly declares namespace Mcg.AgentOrchestrator.Infrastructure.Tests; its nested verifier at line 588 is therefore namespace-qualified. Initial exploratory mismatch is retained in initial-run.json.",
+      "DecisionRequired": false
+    },
+    {
+      "Id": "four-interface-dispatch-sites",
+      "OperatorNumber": 3,
+      "Kind": "dispatch",
+      "Project": "Mcg.AgentOrchestrator.Infrastructure",
+      "Targets": [
+        "M:Mcg.AgentOrchestrator.Infrastructure.IGoalAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})"
+      ],
+      "Expected": [
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:29 => Mcg.AgentOrchestrator.Infrastructure|M:Mcg.AgentOrchestrator.Infrastructure.IGoalAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:29 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:AcceptanceCohortWorkflowTests.ManifestThrowingAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:29 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:CohortLaneAttributionScenario.RecordingVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:29 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:GroupedGateAttemptLegacyRestoreTests.UnexpectedVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:29 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:MergeTrainBisectSlotLossTests.BisectSlotVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:70 => Mcg.AgentOrchestrator.Infrastructure|M:Mcg.AgentOrchestrator.Infrastructure.IGoalAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:70 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:AcceptanceCohortWorkflowTests.ManifestThrowingAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:70 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:CohortLaneAttributionScenario.RecordingVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:70 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:GroupedGateAttemptLegacyRestoreTests.UnexpectedVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:70 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:MergeTrainBisectSlotLossTests.BisectSlotVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs:93 => Mcg.AgentOrchestrator.Infrastructure|M:Mcg.AgentOrchestrator.Infrastructure.IGoalAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs:93 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:AcceptanceCohortWorkflowTests.ManifestThrowingAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs:93 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:CohortLaneAttributionScenario.RecordingVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs:93 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:GroupedGateAttemptLegacyRestoreTests.UnexpectedVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs:93 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:MergeTrainBisectSlotLossTests.BisectSlotVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.MergeTrains.cs:140 => Mcg.AgentOrchestrator.Infrastructure|M:Mcg.AgentOrchestrator.Infrastructure.IGoalAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.MergeTrains.cs:140 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:AcceptanceCohortWorkflowTests.ManifestThrowingAcceptanceVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.MergeTrains.cs:140 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:CohortLaneAttributionScenario.RecordingVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.MergeTrains.cs:140 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:GroupedGateAttemptLegacyRestoreTests.UnexpectedVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.MergeTrains.cs:140 => Mcg.AgentOrchestrator.Infrastructure.Tests|M:MergeTrainBisectSlotLossTests.BisectSlotVerifier.ComputeEffectivePlanIdentity(System.String,System.Collections.Generic.IReadOnlyList{System.String})"
+      ],
+      "Mode": "exact",
+      "Evidence": "Read the four named sites and receiver declarations as IGoalAcceptanceVerifier. rg -n ComputeEffectivePlanIdentity( src tests: four overrides at AcceptanceCohortWorkflowTests.cs:480, LaneScopedAttribution.cs:165, GroupedGateAttemptLegacyRestoreTests.cs:446, MergeTrainBisectSlotLossTests.cs:329. Other 29 implementations use default body at GoalAcceptanceVerifier.cs:219. Conservative possible implementations, no receiver points-to inference.",
+      "DecisionRequired": true,
+      "Sites": [
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:29",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/GroupedGateIdentityInspector.cs:70",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs:93",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.MergeTrains.cs:140"
+      ]
+    },
+    {
+      "Id": "crosswalk-delegate-seam",
+      "OperatorNumber": 4,
+      "Kind": "delegate",
+      "Project": "Mcg.AgentOrchestrator.App",
+      "Targets": [
+        "M:Mcg.AgentOrchestrator.App.Cli.ProjectCliCommand.Execute(System.Collections.Generic.IReadOnlyList{System.String},Mcg.AgentOrchestrator.App.Orchestration.OrchestratorProjectRegistry,System.String,System.String,System.IO.TextWriter,System.Func{Mcg.AgentOrchestrator.Infrastructure.IUnitCommandMeasurer},System.Func{Mcg.AgentOrchestrator.App.Orchestration.DefaultStateMover},System.Func{Mcg.AgentOrchestrator.Infrastructure.IPullRequestRequirementProbe},System.IO.Stream,System.IO.TextWriter,System.String,Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace,Mcg.AgentOrchestrator.App.Orchestration.WorkspaceInvocationBinding,System.Func{Mcg.AgentOrchestrator.Infrastructure.CrosswalkStackReader})"
+      ],
+      "Expected": [],
+      "Mode": "no ground truth",
+      "Evidence": "rg -n crosswalkReaderFactory: tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g *.cs; ProjectCliCommand.cs:27,67,121 traces the factory to CrosswalkStackReader. Factories in shared test helpers are reused through multiple layers; exact supplier test-class closure not established by independent source reading, no ground truth. Returned classes and reached shipping type remain visible unscored. Input identity correction after exploratory run: OrchestratorWorkspace.cs declares namespace Mcg.AgentOrchestrator.App.Orchestration, not Infrastructure. No reachability expectation was changed.",
+      "DecisionRequired": false
+    },
+    {
+      "Id": "qualified-standing-rules-binding",
+      "OperatorNumber": 5,
+      "Kind": "binding",
+      "Project": "Mcg.AgentOrchestrator.Core",
+      "Targets": [
+        "M:Mcg.AgentOrchestrator.Core.WorkerStandingRules.RenderBriefSection(Mcg.AgentOrchestrator.Core.AgentRole,System.String,System.Nullable{Mcg.AgentOrchestrator.Core.ProjectStack})"
+      ],
+      "Expected": [
+        "Mcg.AgentOrchestrator.Core|M:Mcg.AgentOrchestrator.Core.WorkerStandingRules.RenderBriefSection(Mcg.AgentOrchestrator.Core.AgentRole,System.String,System.Nullable{Mcg.AgentOrchestrator.Core.ProjectStack})"
+      ],
+      "Mode": "exact",
+      "Evidence": "Read AgentOrchestratorKernel.TaskBriefs.cs:440 and WorkerStandingRules.cs:71. Explicit type is WorkerStandingRules; nearby EngineeringPracticeRegistry.RenderBriefSection at line 432 is a different symbol.",
+      "DecisionRequired": true,
+      "Sites": [
+        "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.TaskBriefs.cs:440"
+      ]
+    },
+    {
+      "Id": "selector-callers-without-linq",
+      "OperatorNumber": 6,
+      "Kind": "callers",
+      "Project": "Mcg.AgentOrchestrator.Infrastructure",
+      "Targets": [
+        "M:Mcg.AgentOrchestrator.Infrastructure.ProjectDiscoveryAdapterSelector.Select(System.String,Mcg.AgentOrchestrator.Infrastructure.CrosswalkStackReader)"
+      ],
+      "Expected": [
+        "src/Mcg.AgentOrchestrator.App/Cli/ProjectCheckManifestCommand.cs:56",
+        "src/Mcg.AgentOrchestrator.App/Cli/ProjectCliCommand.cs:100",
+        "src/Mcg.AgentOrchestrator.App/Cli/ProjectCompareManifestCommand.cs:12",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkStackSelectionTests.cs:105",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkStackSelectionTests.cs:13",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkStackSelectionTests.cs:139",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkStackSelectionTests.cs:168",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkStackSelectionTests.cs:67",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkStackSelectionTests.cs:85",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DeclaredProjectOnboardingTests.cs:12",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DeclaredProjectOnboardingTests.cs:129",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/EnvironmentContractDerivationTests.cs:25",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/JunitCommandNodeIntegrationTests.cs:10",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LuaStackDetectionTests.cs:24",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/NodeStackSelectionTests.cs:11",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/NodeStackSelectionTests.cs:19",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/NodeStackSelectionTests.cs:34",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/NodeStackSelectionTests.cs:45",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/NodeStackSelectionTests.cs:54",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:103",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:122",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:13",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:133",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:149",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:166",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:190",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:21",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:33",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:70",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:81",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectDiscoveryAdapterSelectorTests.cs:89",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectStackResolverDecisionTests.cs:97",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:117",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:138",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:14",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:159",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:179",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:32",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:51",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:70",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RootMarkerSelectionWithoutCrosswalkTests.cs:90"
+      ],
+      "Mode": "exact",
+      "Evidence": "rg -n -F ProjectDiscoveryAdapterSelector.Select src tests: 43 expressions, 41 enclosing declarations at this revision. Source-reading aid records declaration identifier line, deduplicated. Read selector declaration Onboarding/ProjectDiscoveryAdapterSelector.cs:8. LINQ Select has a different receiver and is excluded.",
+      "DecisionRequired": true
+    },
+    {
+      "Id": "timeline-method-callers",
+      "OperatorNumber": 7,
+      "Kind": "callers",
+      "Project": "Mcg.AgentOrchestrator.Core",
+      "Targets": [
+        "M:Mcg.AgentOrchestrator.Core.TimelineMessageBound.Bound(System.String,System.String,System.String)"
+      ],
+      "Expected": [
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreTesterDeferredEvidence.cs:22",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreTesterDeferredEvidence.cs:71",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PreTesterLegacyMessageFallbackTests.cs:53",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PreTesterTypedEntryNegativeControlTests.cs:16",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PreTesterTypedEntryRoundTripTests.cs:9",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TimelineMessageBoundTests.cs:105",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TimelineMessageBoundTests.cs:115",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TimelineMessageBoundTests.cs:126",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TimelineMessageBoundTests.cs:133",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TimelineMessageBoundTests.cs:17",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TimelineMessageBoundTests.cs:68",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TimelineMessageBoundTests.cs:89"
+      ],
+      "Mode": "exact",
+      "Evidence": "rg -n -F TimelineMessageBound.Bound src tests: 14 expressions in 12 enclosing methods across five classes. Each method signature was read; declaration identifier lines are the method identity for this corpus. Nine expressions in TimelineMessageBoundTests, two in ConductorDriverTestsPreTesterDeferredEvidence, one in each other file.",
+      "DecisionRequired": true
+    },
+    {
+      "Id": "standing-rule-regression",
+      "OperatorNumber": 8,
+      "Kind": "affected",
+      "Project": "Mcg.AgentOrchestrator.Core",
+      "Targets": [
+        "F:Mcg.AgentOrchestrator.Core.WorkerStandingRules.DeveloperRules",
+        "M:Mcg.AgentOrchestrator.Core.WorkerStandingRules.RulesForRole(Mcg.AgentOrchestrator.Core.AgentRole,System.Nullable{Mcg.AgentOrchestrator.Core.ProjectStack})"
+      ],
+      "Expected": [
+        "WorkerDispatchTestsSubscriptionPreflight"
+      ],
+      "Mode": "required/excluded",
+      "Evidence": "Required/excluded ruling: hub closure too large to enumerate from source. Read WorkerDispatchTestsSubscriptionPreflight.cs:44 -> WorkerProfileDispatcher.cs:557 PrepareSubscriptionTask -> PrepareTask:224 -> BuildTaskBriefSource -> TaskBriefs.cs:440 RenderBriefSection -> WorkerStandingRules.cs:73 RulesForRole -> DeveloperRules:39. Excluded ProjectDiscoveryAdapterSelectorSourceTests.cs:7 only reads files and calls VerifiedRepositoryRoot.Find; no semantic call to kernel or rules. File-name constants are not query targets.",
+      "DecisionRequired": true,
+      "Excluded": [
+        "ProjectDiscoveryAdapterSelectorSourceTests"
+      ]
+    },
+    {
+      "Id": "timeline-file-affected",
+      "OperatorNumber": 9,
+      "Kind": "affected",
+      "Project": "Mcg.AgentOrchestrator.Core",
+      "Targets": [],
+      "Expected": [
+        "TimelineMessageBoundTests",
+        "TimelineMessageBoundPersistenceTests",
+        "ConductorDriverTestsPreTesterDeferredEvidence",
+        "PreTesterLegacyMessageFallbackTests",
+        "PreTesterTypedEntryRoundTripTests",
+        "PreTesterTypedEntryNegativeControlTests"
+      ],
+      "Mode": "exact",
+      "Evidence": "rg -n TimelineMessageBound src tests and read every hit. Five classes call Bound (query 7); TimelineMessageBoundPersistenceTests.cs:21 reads CharacterLimit only. No shipping caller. All references occur in tests, hence exact six-class closure; empty answer would be wrong.",
+      "DecisionRequired": true,
+      "File": "src/Mcg.AgentOrchestrator.Core/Persistence/TimelineMessageBound.cs"
+    },
+    {
+      "Id": "pretester-file-affected",
+      "OperatorNumber": 10,
+      "Kind": "affected",
+      "Project": "Mcg.AgentOrchestrator.App",
+      "Targets": [],
+      "Expected": [
+        "ConductorBatchLoopTestsWalkStepLedger",
+        "ConductorDriverTestsPreTesterAlwaysRunGuards",
+        "PreTesterCoupledClassSelectionsTests",
+        "PreTesterCliSurfaceWiringTests",
+        "PreTesterCliSurfaceSelectionTests",
+        "PreTesterGuardHelperAndScanTests",
+        "PreTesterReverseDependencySelectionTests",
+        "PreTesterStartedSelectionReconciliationTests"
+      ],
+      "Mode": "required/excluded",
+      "Evidence": "Required/excluded ruling: exact transitive closure too large to enumerate by reading. Direct references read in the eight required test classes (lines 154,420,67,97,136,215,85,24 respectively); production hub is ConductorDriver.PreTesterDeferredEvidence.cs:129. RoleRequirementStackGuidanceTests is excluded: whole source read, pure SdlcRolePromptRequirements/Core kernel calls, Core-only project reference and no App subprocess. Unconstrained returned classes are listed separately, never mislabeled proven false positives.",
+      "DecisionRequired": true,
+      "File": "src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterGuardSelections.cs",
+      "Excluded": [
+        "RoleRequirementStackGuidanceTests"
+      ]
+    },
+    {
+      "Id": "inherited-repository-tests",
+      "OperatorNumber": 11,
+      "Kind": "tests",
+      "Project": "Mcg.AgentOrchestrator.Infrastructure.Tests",
+      "Targets": [
+        "T:WorkerDispatchTestsSubscriptionPreflight"
+      ],
+      "Expected": [],
+      "Mode": "no ground truth",
+      "Evidence": "Search abstract class and Fact/Theory in Core/Infrastructure test bases, including WorkerDispatchTestSupport and AcceptanceCohortWorkflowTests: matched facts occur in source strings or separate concrete classes. No repository class with inherited test methods established; no ground truth, unscored. Fixture has an abstract fact base and concrete derived test class.",
+      "DecisionRequired": false
+    },
+    {
+      "Id": "record-construction-sites",
+      "OperatorNumber": 12,
+      "Kind": "construction",
+      "Project": "Mcg.AgentOrchestrator.App",
+      "Targets": [
+        "M:Mcg.AgentOrchestrator.App.Application.AgentDefinitionInput.#ctor(System.String,System.String,System.String,System.String,System.String,System.Nullable{System.Int32},System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.Int32},System.String)"
+      ],
+      "Expected": [
+        "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.Agents.cs:56",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ApplicationLayerHelperEquivalenceTests.cs:68",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ModelReleaseDefaultsTests.cs:10",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ModelReleaseDefaultsTests.cs:11",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ModelReleaseDefaultsTests.cs:15",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ModelReleaseDefaultsTests.cs:16",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ModelReleaseDefaultsTests.cs:36",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ModelReleaseDefaultsTests.cs:37",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsModelSelection.cs:1405",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsModelSelection.cs:1436",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsModelSelection.cs:1470"
+      ],
+      "Mode": "exact",
+      "Evidence": "rg -n AgentDefinitionInput src tests and read all matches: one record declaration, factory parameter, and eleven explicit new expressions. No target-typed constructions or alias uses. Shipping CliCommandHandlers.Goals.Agents.cs:56; tests ApplicationLayerHelperEquivalenceTests.cs:68, ModelReleaseDefaultsTests.cs:10,11,15,16,36,37, WorkerDispatchTestsModelSelection.cs:1405,1436,1470.",
+      "DecisionRequired": false
+    }
+  ]
+}

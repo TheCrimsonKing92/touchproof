@@ -4,6 +4,8 @@ internal sealed record AcceptanceSelectedExecutionLane(string Name, string Dispo
     IReadOnlyList<string> SelectedClasses, IReadOnlyList<string> SkippedClasses, string? Filter,
     string? LaneSkipReason = null, string? ClassSkipReason = null);
 
+internal sealed record AcceptanceSelectedExecutionMethodFormResolution(string Selector, string ClassFullName);
+
 // Counts describe distinct class identities in the candidate inventory, not test outcomes.
 internal sealed record AcceptanceSelectedExecutionRecord(
     string Mode, string Decision, string? Outcome, string? FullGateReason,
@@ -17,6 +19,8 @@ internal sealed record AcceptanceSelectedExecutionRecord(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SuspensionReason = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? BackstopMissId = null)
 {
+    public IReadOnlyList<AcceptanceSelectedExecutionMethodFormResolution> MethodFormResolutions { get; init; } = [];
+
     internal static AcceptanceSelectedExecutionRecord Disabled { get; } =
         new("Off", "disabled", null, "Selected execution is disabled.", [], [], [], [], null, null, null, null, 0, false);
 }

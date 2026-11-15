@@ -34,7 +34,7 @@ public sealed class AcceptanceSelectedExecutionObligationTests
     [InlineData("Missing")]
     [InlineData("FullyQualifiedName~Candidate.B")]
     [InlineData("tests/Package.cs")]
-    [InlineData("Candidate.B.Check")]
+    [InlineData("Candidate.Missing.Check")]
     [InlineData("../Candidate.B")]
     public void UnresolvedSelectorFallsBackBeforeExecution(string selector)
     {
@@ -55,6 +55,181 @@ public sealed class AcceptanceSelectedExecutionObligationTests
             [new("Only A", "FullyQualifiedName=Candidate.A")], Classes, [], [], ["B"]);
         Assert.False(plan.HasPlan);
         Assert.Equal("UnresolvedObligationSelector: B", plan.FullGateReason);
+    }
+
+    [Fact]
+    public void SimpleMethodForm_RetainsWholeClass()
+    {
+        AcceptanceTestClassDescriptor[] classes = [new("Some.Alpha", null), new("Some.Other", null)];
+        AcceptanceTestLane[] lanes = [new("Both", "FullyQualifiedName=Some.Alpha|FullyQualifiedName=Some.Other")];
+        var plan = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            lanes, classes, [], [], ["Alpha.SomeMethod"]);
+
+        Assert.True(plan.HasPlan);
+        var lane = Assert.Single(plan.Lanes);
+        Assert.Equal(new[] { "Some.Alpha" }, lane.SelectedClasses);
+        Assert.Equal(new[] { "Some.Other" }, lane.SkippedClasses);
+        Assert.Equal(new[] { "Some.Alpha" }, plan.ObligationClasses);
+        Assert.Equal("(FullyQualifiedName=Some.Alpha)", Assert.Single(plan.ExecutionLanes).Filter);
+        Assert.Equal(new AcceptanceSelectedExecutionMethodFormResolution("Alpha.SomeMethod", "Some.Alpha"),
+            Assert.Single(plan.MethodFormResolutions));
+    }
+
+    [Fact]
+    public void FullNameMethodForm_PreservesDirectClassResolution()
+    {
+        AcceptanceTestClassDescriptor[] classes = [new("Namespace.Alpha", null), new("Other.Alpha", null)];
+        AcceptanceTestLane[] lanes = [new("Both", "FullyQualifiedName=Namespace.Alpha|FullyQualifiedName=Other.Alpha")];
+        var method = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            lanes, classes, [], [], ["Namespace.Alpha.SomeMethod"]);
+        var direct = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            lanes, classes, [], [], ["Namespace.Alpha"]);
+
+        Assert.True(method.HasPlan);
+        Assert.True(direct.HasPlan);
+        Assert.Equal(new[] { "Namespace.Alpha" }, method.ObligationClasses);
+        Assert.Equal(new[] { "Namespace.Alpha" }, Assert.Single(method.Lanes).SelectedClasses);
+        Assert.Equal(new[] { "Other.Alpha" }, Assert.Single(method.Lanes).SkippedClasses);
+        Assert.Equal(method.ObligationClasses, direct.ObligationClasses);
+        Assert.Equal(Assert.Single(method.Lanes).SelectedClasses, Assert.Single(direct.Lanes).SelectedClasses);
+        Assert.Equal(new AcceptanceSelectedExecutionMethodFormResolution("Namespace.Alpha.SomeMethod", "Namespace.Alpha"),
+            Assert.Single(method.MethodFormResolutions));
+        Assert.Empty(direct.MethodFormResolutions);
+    }
+
+    [Theory]
+    [InlineData("Outer+Inner")]
+    [InlineData("Namespace.Outer+Inner")]
+    public void NestedTypeMethodForm_ResolvesFullName(string classFullName)
+    {
+        var selector = classFullName + ".Method";
+        var plan = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            [new("Nested", "FullyQualifiedName=" + classFullName)], [new(classFullName, null)], [], [], [selector]);
+
+        Assert.True(plan.HasPlan);
+        Assert.Equal(new[] { classFullName }, Assert.Single(plan.Lanes).SelectedClasses);
+        Assert.Equal(new AcceptanceSelectedExecutionMethodFormResolution(selector, classFullName),
+            Assert.Single(plan.MethodFormResolutions));
+    }
+
+    [Theory]
+    [InlineData("Missing.Check")]
+    [InlineData("B.Check")]
+    [InlineData("A.Missing.Check")]
+    [InlineData("A+Missing")]
+    [InlineData("Candidate.A+Missing")]
+    [InlineData("a.Check")]
+    [InlineData("A..Check")]
+    [InlineData("A.Check()")]
+    [InlineData(".A.Check")]
+    [InlineData("A.Check.")]
+    [InlineData(" A.Check")]
+    [InlineData("A.Check ")]
+    [InlineData("A.Check\n")]
+    [InlineData("A.1Check")]
+    [InlineData("")]
+    public void UnresolvedMethodForm_FallsBackWithOriginalSelector(string selector)
+    {
+        AcceptanceTestLane[] lanes = [new("Only A", "FullyQualifiedName=Candidate.A")];
+        var control = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            lanes, Classes, [], [], ["A.Check"]);
+        Assert.True(control.HasPlan);
+        Assert.Equal(new[] { "Candidate.A" }, Assert.Single(control.Lanes).SelectedClasses);
+
+        var plan = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            lanes, Classes, [], [], [selector]);
+
+        Assert.False(plan.HasPlan);
+        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, plan.Outcome);
+        Assert.Equal("UnresolvedObligationSelector: " + selector, plan.FullGateReason);
+        Assert.Empty(plan.ObligationClasses);
+        Assert.Empty(plan.MethodFormResolutions);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DirectClassMatch_TakesPrecedenceOverMethodForm(bool directClassInLane)
+    {
+        AcceptanceTestClassDescriptor[] classes = [new("Alpha", null), new("Alpha.Check", null)];
+        var filter = "FullyQualifiedName=Alpha" + (directClassInLane ? "|FullyQualifiedName=Alpha.Check" : "");
+        var plan = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            [new("Classes", filter)], classes, [], [], ["Alpha.Check"]);
+
+        Assert.Equal(directClassInLane, plan.HasPlan);
+        if (directClassInLane)
+            Assert.Equal(new[] { "Alpha.Check" }, plan.ObligationClasses);
+        else
+        {
+            Assert.Equal("UnresolvedObligationSelector: Alpha.Check", plan.FullGateReason);
+            Assert.Empty(plan.ObligationClasses);
+        }
+        Assert.Empty(plan.MethodFormResolutions);
+    }
+
+    [Fact]
+    public void SharedSimpleNameMethodForm_RecordsAllClassesInOrdinalOrder()
+    {
+        AcceptanceTestClassDescriptor[] classes = [new("Two.B", null), new("One.Nested+B", null), new("One.B", null)];
+        AcceptanceTestLane[] lanes = [new("Both", "FullyQualifiedName~One|FullyQualifiedName~Two")];
+        var plan = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            lanes, classes, [], [], ["B.Check"]);
+
+        Assert.True(plan.HasPlan);
+        Assert.Equal(new[] { "One.B", "One.Nested+B", "Two.B" }, plan.ObligationClasses);
+        Assert.Equal(plan.ObligationClasses, Assert.Single(plan.Lanes).SelectedClasses);
+        Assert.Equal(new[] { ("B.Check", "One.B"), ("B.Check", "One.Nested+B"), ("B.Check", "Two.B") },
+            plan.MethodFormResolutions.Select(item => (item.Selector, item.ClassFullName)));
+    }
+
+    [Fact]
+    public void SharedSimpleNameMethodForm_RejectsAnyClassOutsideLanes()
+    {
+        var plan = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved([]),
+            [new("Only one", "FullyQualifiedName=One.B")], [new("One.B", null), new("Two.B", null)], [], [], ["B.Check"]);
+
+        Assert.False(plan.HasPlan);
+        Assert.Equal("UnresolvedObligationSelector: B.Check", plan.FullGateReason);
+        Assert.Empty(plan.ObligationClasses);
+        Assert.Empty(plan.MethodFormResolutions);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MethodFormRecord_ListsDistinctSelectorClassPairsInLanePlanJson(bool shadow)
+    {
+        var mode = shadow ? AcceptanceSelectedExecutionMode.Shadow : AcceptanceSelectedExecutionMode.Enforce;
+        var session = WithObligations(["B.Check", "Candidate.B.Check", "B", "B.Check", "B.OtherCheck"], mode);
+        var observation = Observe(session);
+        var record = observation.SelectedExecution!;
+        var expected = new[] { ("B.Check", "Candidate.B"), ("Candidate.B.Check", "Candidate.B"), ("B.OtherCheck", "Candidate.B") };
+
+        Assert.Equal("plan", record.Decision);
+        Assert.Equal(mode == AcceptanceSelectedExecutionMode.Enforce, session.Applied);
+        Assert.Equal(new[] { "Candidate.B" }, record.ObligationClasses);
+        Assert.Equal(expected, record.MethodFormResolutions.Select(item => (item.Selector, item.ClassFullName)));
+        using var json = JsonDocument.Parse(observation.ToJson());
+        Assert.Equal(expected, json.RootElement.GetProperty("selectedExecution").GetProperty("methodFormResolutions")
+            .EnumerateArray().Select(item => (item.GetProperty("selector").GetString(), item.GetProperty("classFullName").GetString())));
+        if (mode == AcceptanceSelectedExecutionMode.Shadow)
+            Assert.Equal(Lanes.Select(lane => lane.Name), observation.Scheduled);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AbandonedPlan_PreservesSuccessfulMethodFormResolutions(bool unresolvedFirst)
+    {
+        var selectors = unresolvedFirst ? new[] { "Missing.Check", "B.Check" } : new[] { "B.Check", "Missing.Check" };
+        var record = Observe(WithObligations(selectors)).SelectedExecution!;
+
+        Assert.Equal("full-gate", record.Decision);
+        Assert.Equal("Abandoned", record.Outcome);
+        Assert.Equal("UnresolvedObligationSelector: Missing.Check", record.FullGateReason);
+        Assert.Equal(new[] { "Candidate.B" }, record.ObligationClasses);
+        Assert.Equal(new AcceptanceSelectedExecutionMethodFormResolution("B.Check", "Candidate.B"),
+            Assert.Single(record.MethodFormResolutions));
     }
 
     [Fact]
@@ -121,7 +296,10 @@ public sealed class AcceptanceSelectedExecutionObligationTests
         observed = observed with { SelectedExecution = observed.SelectedExecution! with { SelectionMilliseconds = 0 } };
         var recordJson = JsonSerializer.Serialize(observed.SelectedExecution, AcceptanceGateLanePlan.JsonOptions);
         var expectedRecord = legacyRecord.Replace("\"guardClasses\":[],", "\"guardClasses\":[],\"obligationClasses\":[],", StringComparison.Ordinal);
+        expectedRecord = expectedRecord[..^1] + ",\"methodFormResolutions\":[]}";
         Assert.Equal(expectedRecord, recordJson);
+        Assert.Empty(JsonSerializer.Deserialize<AcceptanceSelectedExecutionRecord>(legacyRecord,
+            AcceptanceGateLanePlan.JsonOptions)!.MethodFormResolutions);
         Assert.Equal("(FullyQualifiedName=Candidate.A)", Assert.Single(session.Transform(lanes)).Filter);
         const string legacyEnvelopePrefix = """
             {"schemaVersion":"gate-lane-plan.v1","attemptId":"attempt","scheduled":["Balanced"],"skipped":[],"balancedLayout":null,"selectedExecution":
