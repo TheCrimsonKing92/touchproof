@@ -60,13 +60,18 @@ public static class EnvironmentContractDeriver
         }
         foreach (var need in model?.EnvironmentNeeds ?? [])
         {
+            if (need.Name is "lua-test-framework" or "crosswalk-test-framework")
+            {
+                if (StackTool(need.Value.Value) is { } probe)
+                    Add(probe.Command, "environment-need:" + need.Name, probe.Prefix, probe.Name);
+                continue;
+            }
             var command = need.Name switch
             {
                 "dotnet-sdk" => "dotnet",
                 "go-toolchain" or "go-toolchain-pin" => "go",
                 NodeVerificationChecks.PackageManagerFact => need.Value.Value is "npm" or "pnpm" or "yarn" ? need.Value.Value : null,
                 NodeVerificationChecks.FrameworkFact => need.Value.Value is "vitest" or "jest" or "mocha" ? "node" : null,
-                "lua-test-framework" or "crosswalk-test-framework" => StackTool(need.Value.Value),
                 // Needs also describe configuration, evidence and local .NET package IDs. None of
                 // those names establishes a PATH executable; owners can declare additional tools.
                 _ => null
@@ -78,12 +83,30 @@ public static class EnvironmentContractDeriver
         return contract;
     }
 
-    private static string? StackTool(string value) => value.Trim().ToLowerInvariant() switch
+    internal static string? UnprobedFramework(string value)
     {
-        "" or "none" or "unknown" or "undetermined" => null,
-        "pytest" or "unittest" => "python",
-        "vitest" or "jest" or "mocha" => "node",
-        "junit" => "java",
-        _ => value
+        var framework = value.Trim();
+        return framework.ToLowerInvariant() is "" or "none" or "unknown" or "undetermined" || StackTool(framework) is not null
+            ? null : framework;
+    }
+
+    // Caller vocabulary: LuaProjectDiscoveryAdapter.cs:26-27 emits busted or undetermined;
+    // CrosswalkStackReader.cs:48-53 accepts an OPEN set, forwarded by
+    // CrosswalkProjectDiscoveryAdapter.cs:29 (absent => empty). none/unknown are legacy sentinels.
+    // Reviewed standalone executables: busted, gradle. Mapped: nextest => cargo nextest;
+    // maven => mvn (see docs/junit-command-environment.md:14); pytest/unittest => python;
+    // vitest/jest/mocha => node; junit => java. These runtime probes retain the existing
+    // library/package mappings. All names except Lua's two values come from the open
+    // crosswalk input; empty/none/unknown/undetermined have no probe. Other names are unreviewed.
+    private static (string Command, IReadOnlyList<string>? Prefix, string? Name)? StackTool(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "busted" => ("busted", null, null),
+        "gradle" => ("gradle", null, null),
+        "nextest" => ("cargo", ["nextest"], "cargo nextest"),
+        "maven" => ("mvn", null, null),
+        "pytest" or "unittest" => ("python", null, null),
+        "vitest" or "jest" or "mocha" => ("node", null, null),
+        "junit" => ("java", null, null),
+        _ => null
     };
 }
