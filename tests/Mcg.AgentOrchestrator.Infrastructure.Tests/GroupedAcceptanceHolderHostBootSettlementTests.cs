@@ -16,8 +16,12 @@ public sealed class GroupedAcceptanceHolderHostBootSettlementTests : IDisposable
         var events = new List<string>();
         var coordinator = Coordinator(() => Boot, events.Add);
         var legacy = WriteLegacy(coordinator);
+        var marker = Path.Combine(_root, ConductorGroupedGateAttemptCoordinator.OpenAttemptsFolderName,
+            legacy.AttemptId);
+        Assert.True(File.Exists(marker));
 
         Assert.False(coordinator.ReservesCapacity(legacy));
+        Assert.False(File.Exists(marker));
         Assert.Equal(0, ConductorLiveGroupedGateCount.Count(coordinator));
         Assert.True(LegacyAcceptanceHolderSettlement.HasTerminalReceipt(AcceptanceHolderBinding.For(legacy),
             legacy.OwnerProcessId, null, null, legacy.StartedAt,
