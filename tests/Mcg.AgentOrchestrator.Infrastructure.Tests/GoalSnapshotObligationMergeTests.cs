@@ -192,6 +192,149 @@ public sealed class GoalSnapshotObligationMergeTests
             item.Message.Contains($"expected_candidate={VersionThreeCandidateSha}", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("unmapped")]
+    [InlineData("duplicate")]
+    [InlineData("invalid")]
+    [InlineData("unknown")]
+    public async Task IneligibleOwner_AfterRoundTrip_RejectsDeferredAttestation(string ownership)
+    {
+        using var store = new TempStore();
+        var repository = new SqliteOrchestratorStateRepository(store.Path);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVersionThreeGoal(kernel);
+        var mapped = MapVersionThreeOperator(kernel, goal.Id);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var snapshot = kernel.ExportSnapshot();
+        var original = snapshot.Goals.Single();
+        var rows = original.CriterionEvidenceObligations!.Where(item => item.Id != mapped.Id).ToList();
+        switch (ownership)
+        {
+            case "duplicate": rows.AddRange([mapped, mapped]); break;
+            case "invalid": rows.Add(mapped with { RequiredScope = string.Empty }); break;
+            case "unknown": rows.Add(mapped with { Owner = CriterionEvidenceOwner.Unknown }); break;
+        }
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [original with { CriterionEvidenceObligations = rows }]
+        });
+        var expected = kernel.GetGoal(goal.Id).CriterionEvidenceObligations
+            .Where(item => item.CriterionVersion == 3 && item.CriterionIndex == 4).ToArray();
+        Assert.Equal(ownership == "unmapped" ? 0 : ownership == "duplicate" ? 2 : 1, expected.Length);
+        if (ownership != "unmapped")
+            Assert.Contains(expected, item => item.Owner == CriterionEvidenceOwner.Unknown);
+        await repository.SaveAsync(kernel);
+        var tick = await repository.LoadAsync();
+        var baseline = tick.ExportSnapshot();
+        var second = await repository.LoadAsync();
+        second.SetGoalSourceBacklogItemId(goal.Id, "unrelated-store-write");
+        await repository.SaveAsync(second);
+        tick.SetGoalPriority(goal.Id, GoalPriority.Critical, "test", "tick");
+        var current = tick.ExportSnapshot();
+        var result = Assert.Single(await repository.SaveGoalSnapshotsWithMergeAsync([
+            new GoalSnapshotSaveRequest(baseline.Goals.Single(), current.Goals.Single(), current.HumanInputRequests)]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+
+        var restoredKernel = await repository.LoadAsync();
+        var restored = restoredKernel.GetGoal(goal.Id);
+        Assert.Equal(expected, restored.CriterionEvidenceObligations
+            .Where(item => item.CriterionVersion == 3 && item.CriterionIndex == 4));
+        RecordReviewerVerdicts(restoredKernel, restored);
+
+        Assert.Equal(WorkTaskStatus.Failed, Assert.Single(restored.Tasks).Status);
+        Assert.Contains(restored.Timeline, item => item.Message.Contains(
+            "criteria attestation rejected: non-waived criteria are not passing: criterion_index=4", StringComparison.Ordinal));
+        Assert.DoesNotContain(restored.Timeline, item => item.Message.Contains(
+            "Deferred criterion evidence remains pending: obligation=criterion 5 (v3)", StringComparison.Ordinal));
+        Assert.Equal(expected, restored.CriterionEvidenceObligations
+            .Where(item => item.CriterionVersion == 3 && item.CriterionIndex == 4));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoredRemapOrRetirement_StaleTick_CannotRestoreOldBinding(bool retire)
+    {
+        using var store = new TempStore();
+        var repository = new SqliteOrchestratorStateRepository(store.Path);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVersionThreeGoal(kernel);
+        MapVersionThreeOperator(kernel, goal.Id);
+        await repository.SaveAsync(kernel);
+        var tick = await repository.LoadAsync();
+        var baseline = tick.ExportSnapshot();
+        var second = await repository.LoadAsync();
+        if (retire)
+        {
+            var spec = second.GetGoal(goal.Id).RefinedSpec!;
+            second.RecordGoalRefinement(goal.Id, spec with
+            {
+                AcceptanceCriteria = spec.AcceptanceCriteria.Select((criterion, index) =>
+                    index == 4 ? "Observe replacement candidate behavior" : criterion).ToArray()
+            });
+            second.MapCriterionEvidenceOwner(goal.Id, 4, 4, CriterionEvidenceOwner.Operator,
+                "operator", requiredScope: OperatorScope, expectedCandidateSha: OtherCandidateSha);
+        }
+        else
+        {
+            second.MapCriterionEvidenceOwner(goal.Id, 4, 3, CriterionEvidenceOwner.Acceptance,
+                "operator", expectedCandidateSha: OtherCandidateSha);
+        }
+        var expected = second.GetGoal(goal.Id).CriterionEvidenceObligations;
+        var replacement = Assert.Single(expected.Where(item => item.CriterionIndex == 4 &&
+            item.CriterionVersion == (retire ? 4 : 3)));
+        Assert.Equal(retire ? CriterionEvidenceOwner.Operator : CriterionEvidenceOwner.Acceptance, replacement.Owner);
+        Assert.Equal(OtherCandidateSha, replacement.ExpectedCandidateSha);
+        if (retire)
+            Assert.StartsWith("retired:", Assert.Single(expected.Where(item => item.Id == VersionThreeObligationId)).Detail);
+        await repository.SaveAsync(second);
+
+        // Give the stale tick a conflicting owner delta as well as an unrelated goal change.
+        tick.MapCriterionEvidenceOwner(goal.Id, 4, 3, CriterionEvidenceOwner.Operator,
+            "stale tick", requiredScope: "stale observation", expectedCandidateSha: VersionThreeCandidateSha);
+        tick.SetGoalPriority(goal.Id, GoalPriority.Critical, "test", "tick");
+        var current = tick.ExportSnapshot();
+        var result = Assert.Single(await repository.SaveGoalSnapshotsWithMergeAsync([
+            new GoalSnapshotSaveRequest(baseline.Goals.Single(), current.Goals.Single(), current.HumanInputRequests)]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        Assert.Contains($"criterion evidence obligation conflict kept stored: {VersionThreeObligationId}",
+            result.Message, StringComparison.Ordinal);
+        var saved = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        Assert.Equal(second.ExportSnapshot().Goals.Single().CriterionEvidenceObligations, saved.CriterionEvidenceObligations);
+        var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
+        Assert.Equal(expected, restored.CriterionEvidenceObligations);
+        Assert.Equal(retire ? 4 : 3, restored.AuthoritativeRefinedSpecVersion!.Version);
+        Assert.Equal(GoalPriority.Critical, restored.Priority);
+    }
+
+    [Theory]
+    [InlineData("not-verifiable")]
+    [InlineData("not-met")]
+    public async Task SourceReview_AfterRestore_RemainsWorkerOwned(string sourceVerdict)
+    {
+        using var store = new TempStore();
+        var repository = new SqliteOrchestratorStateRepository(store.Path);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVersionThreeGoal(kernel);
+        var mapped = MapVersionThreeOperator(kernel, goal.Id);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repository.SaveAsync(kernel);
+        var restoredKernel = await repository.LoadAsync();
+        var restored = restoredKernel.GetGoal(goal.Id);
+        Assert.DoesNotContain(restored.CriterionEvidenceObligations, item => item.CriterionIndex == 1);
+
+        RecordReviewerVerdicts(restoredKernel, restored, sourceVerdict);
+
+        Assert.Equal(WorkTaskStatus.Failed, Assert.Single(restored.Tasks).Status);
+        Assert.Contains(restored.Timeline, item => item.Message.Contains(
+            $"criteria attestation rejected: non-waived criteria are not passing: criterion_index=1 (criterion 2) verdict={sourceVerdict}",
+            StringComparison.Ordinal));
+        Assert.DoesNotContain(restored.CriterionEvidenceObligations, item => item.CriterionIndex == 1);
+        AssertVersionThreeBinding(mapped, restored.CriterionEvidenceObligations);
+        Assert.Contains(restored.Timeline, item => item.Message.Contains(
+            $"Deferred criterion evidence remains pending: obligation={mapped.DisplayLabel}; owner=Operator;", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task TickEvidenceSurvivesConcurrentStoreWrite()
     {
@@ -335,6 +478,29 @@ public sealed class GoalSnapshotObligationMergeTests
         var deletedInTick = GoalSnapshotObligationMerge.Merge(unchanged, [tickOnly], null);
         Assert.Equal(new[] { tickOnly }, deletedInTick.Obligations);
         Assert.Equal(new[] { before[0].Id }, deletedInTick.ConflictIds);
+    }
+
+    private static void RecordReviewerVerdicts(AgentOrchestratorKernel kernel, Goal goal, string sourceVerdict = "met")
+    {
+        var reviewer = Assert.Single(goal.Tasks);
+        var startedAt = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\fixture", startedAt, BaseCommit: VersionThreeCandidateSha));
+        var verdicts = JsonSerializer.Serialize(Enumerable.Range(0, 5).Select(index => new
+        {
+            criterion_index = index,
+            verdict = index == 4 ? "not-verifiable" : index == 1 ? sourceVerdict : "met",
+            evidence = index == 4 ? "Operator observation remains pending" : "Source inspected"
+        }));
+        var output = string.Join(Environment.NewLine,
+            "WORKER_RESULT:", "files: none", "commands: inspect", "tests: deferred - OperatorObservationTests",
+            "commit: none", "blockers: none", "findings: []", "touched_anchors: []",
+            $"criteria_verdicts: {verdicts}", "verdict: pass",
+            "model_fit: fixture/model - adequate - deterministic review", "skills: none", "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\fixture", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true, ReviewedCommit: VersionThreeCandidateSha, DispatchAttemptAt: startedAt));
     }
 
     private static Goal CreateVersionThreeGoal(AgentOrchestratorKernel kernel)
