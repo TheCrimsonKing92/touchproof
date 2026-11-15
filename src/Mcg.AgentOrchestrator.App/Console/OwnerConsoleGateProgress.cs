@@ -33,7 +33,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     IReadOnlyList<OwnerConsoleGateProgress>? Executions = null,
     bool? EtaAvailable = null, DateTimeOffset? AdmittedAt = null,
     IReadOnlyList<OwnerConsoleGateProgress>? ConcurrentRuns = null,
-    string? FinalOutcome = null, DateTimeOffset? FinishedAt = null, TimeSpan? FinishedAge = null)
+    string? FinalOutcome = null, DateTimeOffset? FinishedAt = null, TimeSpan? FinishedAge = null,
+    OwnerConsoleGateSelection? Selection = null, int? OverrunSeconds = null)
 {
     internal bool ScheduleKnown => LanePlanAvailable != false;
     internal bool HasEta => EtaAvailable ?? ScheduleKnown;

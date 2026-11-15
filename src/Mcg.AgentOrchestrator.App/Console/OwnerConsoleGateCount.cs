@@ -21,10 +21,11 @@ internal sealed record OwnerConsoleGateCount(int Done, int Total, int Failed, in
             .OrderBy(row => row.IsManifestLane ? 0 : 1).ToArray();
         // Failure visibility includes auxiliary checks; scheduled arithmetic does
         // not. Null supports older hand-authored snapshots, not reconstructed plans.
-        if (gate.LanePlanAvailable is not null) items = observed.Where(row => row.IsScheduled == true).ToArray();
+        if (gate.LanePlanAvailable is not null) items = observed.Where(row => row.IsScheduled == true && !IsBaseline(row)).ToArray();
+        var progress = gate.LanePlanAvailable is not null ? observed.Where(CountsProgress).ToArray() : items;
         return new(
-            items.Count(row => row.State is OwnerConsoleGateLaneState.Done or OwnerConsoleGateLaneState.Cached),
-            items.Length, items.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed"),
+            progress.Count(row => row.State is OwnerConsoleGateLaneState.Done or OwnerConsoleGateLaneState.Cached),
+            progress.Length, items.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed"),
             items.Count(row => row.State == OwnerConsoleGateLaneState.Running),
             items.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "passed"),
             items.Count(row => row.State == OwnerConsoleGateLaneState.Cached),
@@ -32,4 +33,10 @@ internal sealed record OwnerConsoleGateCount(int Done, int Total, int Failed, in
             items.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome is not ("passed" or "failed")),
             failed, failed.Any(row => row.Confirmation?.Running == true));
     }
+
+    internal static bool IsBaseline(OwnerConsoleGateLane row) => !row.IsAttribution &&
+        row.State != OwnerConsoleGateLaneState.Skipped &&
+        row.Name.EndsWith(" [trusted main baseline]", StringComparison.Ordinal);
+
+    internal static bool CountsProgress(OwnerConsoleGateLane row) => row.IsScheduled == true || IsBaseline(row);
 }

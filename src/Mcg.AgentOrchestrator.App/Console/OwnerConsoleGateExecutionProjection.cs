@@ -176,6 +176,7 @@ internal static class OwnerConsoleGateExecutionProjection
                     var original = group.FirstOrDefault(gate => gate.ExecutionId == ejection.Execution) ?? current;
                     dispositions.Add(original with { Live = false, Participation = "ejected / awaiting survivor", Lanes = [],
                         LanePlanAvailable = false, EtaAvailable = false, DoneCount = 0, TotalCount = 0, RemainingSeconds = 0,
+                        Selection = null, OverrunSeconds = null,
                         FinalOutcome = "ejected", FinishedAt = ejection.At, FinishedAge = Nonnegative(now - ejection.At) });
                 }
                 else if (current.Participation == "current execution unresolved")

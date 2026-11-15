@@ -64,7 +64,7 @@ internal static class OwnerConsoleGateProgressReader
         var names = LaneNames(plan, laneEvents, remoteEvents);
         var rows = names.Select(name => OwnerConsoleGateLaneRowBuilder.Row(name, manifest, samplesByLane, skipped,
             observationsByLane, remoteByLane, plan, now, quietSeconds)).Concat(AttributionRows(attribution, gate)).ToArray();
-        var (counted, done, remaining, gateElapsed, fraction, etaAvailable) =
+        var (counted, done, remaining, gateElapsed, fraction, etaAvailable, overrunSeconds) =
             OwnerConsoleGateProgressCalculation.Estimate(rows, breakdownConcurrency, executorSlots, plan, now, gate);
         var kind = gate.TrainIdentity is not null || gate.Events.Any(item => item.Get("train").Length > 0 || item.Get("scope") == "merge-train") ? "train" :
             gate.Members.Length > 1 ? "cohort" : "solo";
@@ -74,7 +74,8 @@ internal static class OwnerConsoleGateProgressReader
             LanePlanAvailable: plan is not null, ExecutionId: gate.ExecutionId, OuterAttemptId: gate.OuterAttemptId,
             TrainIdentity: gate.TrainIdentity, Participation: gate.Participation, EtaAvailable: etaAvailable,
             AdmittedAt: gate.AdmittedAt, FinalOutcome: gate.FinalOutcome, FinishedAt: gate.FinishedAt,
-            FinishedAge: gate.FinishedAt is { } finished ? Nonnegative(now - finished) : null);
+            FinishedAge: gate.FinishedAt is { } finished ? Nonnegative(now - finished) : null,
+            Selection: OwnerConsoleGateSelection.From(plan?.SelectedExecution), OverrunSeconds: overrunSeconds);
     }
 
     private static (string currentAttempt, AcceptanceGateLanePlan? plan, Dictionary<string, string>? skipped)
