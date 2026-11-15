@@ -21,8 +21,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 .Where(record => record.CompletionVerdictRule == "deferred-no-change-round")
                 .Select(record => DeferredNoChangeOutcome.TryParse(record.StandardError, out var outcome) ? outcome : null)
                 .OfType<DeferredNoChangeOutcome>()
-                .DistinctBy(outcome => outcome.CandidateSha + ":" + string.Join(',', outcome.TestClasses));
-            foreach (var outcome in outcomes)
+                .ToArray();
+            foreach (var outcome in outcomes.DistinctBy(outcome => outcome.CandidateSha + ":" +
+                         string.Join(',', outcome.TestClasses.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))))
             {
                 var locators = goal.Timeline.Select((evt, index) => (Event: evt, Index: index))
                     .Where(item => item.Event.Kind is ProgressKind.FindingEvidenceRequestRecorded or ProgressKind.FindingEvidenceRunRecorded)
@@ -39,7 +40,15 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     .Select(group => (Entry: group.Last().Entry, Index: string.IsNullOrWhiteSpace(group.Key)
                         ? group.Max(item => item.Index) : group.Min(item => item.Index))).ToArray();
                 if (applicable.Length == 0)
-                    captured.Add((CaptureDeferredReceipt(goal, developer.Id, outcome, null, validatedForTests), int.MaxValue));
+                {
+                    // Only this Developer's latest declaration for the candidate is still pending.
+                    // Superseded unmarked declarations remain visible without masking later attempts.
+                    var latest = outcomes.Last(other => string.Equals(other.CandidateSha, outcome.CandidateSha,
+                        StringComparison.OrdinalIgnoreCase));
+                    var stillPending = latest.TestClasses.ToHashSet(StringComparer.Ordinal).SetEquals(outcome.TestClasses);
+                    captured.Add((CaptureDeferredReceipt(goal, developer.Id, outcome, null, validatedForTests),
+                        stillPending ? int.MaxValue : int.MinValue));
+                }
                 foreach (var item in applicable)
                     captured.Add((CaptureDeferredReceipt(goal, developer.Id, outcome, item.Entry, validatedForTests), item.Index));
             }
