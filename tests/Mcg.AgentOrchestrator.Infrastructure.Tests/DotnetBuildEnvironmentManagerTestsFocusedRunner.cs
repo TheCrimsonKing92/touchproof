@@ -835,6 +835,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
     [Xunit.Fact]
     public void FocusedRunner_ConcurrentInvocations_NeverExceedSharedGrid()
     {
+        using var isolatedGrid = new IsolatedBuildSlotGridScope(StorageRoot);
         var source = ReadIsolatedDotnetScript();
         Assert.Contains("Join-Path $lockDirectory \"build-$slot.lock\"", source, StringComparison.Ordinal);
 

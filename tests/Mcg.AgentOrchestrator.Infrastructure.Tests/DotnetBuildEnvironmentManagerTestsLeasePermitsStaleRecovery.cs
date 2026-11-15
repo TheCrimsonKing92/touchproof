@@ -239,6 +239,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_compiler_lock_recovery_shuts_down_after_releasing_the_permit")]
     public void DotnetBuildEnvironmentManagerCompilerLockRecoveryShutsDownAfterReleasingThePermit()
     {
+        using var isolatedGrid = new IsolatedBuildSlotGridScope(StorageRoot);
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         bool? permitAvailableDuringShutdown = null;
         using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() =>

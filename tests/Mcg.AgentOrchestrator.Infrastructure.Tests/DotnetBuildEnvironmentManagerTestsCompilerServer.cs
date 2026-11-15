@@ -38,6 +38,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_defers_compiler_lock_recovery_until_the_last_lease_is_released")]
     public void DotnetBuildEnvironmentManagerDefersCompilerLockRecoveryUntilTheLastLeaseIsReleased()
     {
+        using var isolatedGrid = new IsolatedBuildSlotGridScope(StorageRoot);
         var shutdownCount = 0;
         Assert.NotNull(DotnetBuildServerRecovery.ShutdownBuildServersForTests);
         using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => shutdownCount++);
@@ -62,6 +63,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_counts_legacy_stream_until_it_releases_its_lock")]
     public void DotnetBuildEnvironmentManagerCountsLegacyStreamUntilItReleasesItsLock()
     {
+        using var isolatedGrid = new IsolatedBuildSlotGridScope(StorageRoot);
         var shutdownCount = 0;
         Assert.NotNull(DotnetBuildServerRecovery.ShutdownBuildServersForTests);
         using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => shutdownCount++);

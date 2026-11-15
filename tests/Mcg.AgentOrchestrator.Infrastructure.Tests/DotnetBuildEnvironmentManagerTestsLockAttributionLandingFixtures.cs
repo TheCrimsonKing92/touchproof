@@ -441,6 +441,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_artifact_prep_lock_returns_build_lock_blocked")]
     public void DotnetBuildEnvironmentManagerFirstAvailableArtifactPrepLockReturnsBuildLockBlocked()
     {
+        using var isolatedGrid = new IsolatedBuildSlotGridScope(StorageRoot);
         var lockedPathByLeaseId = new Dictionary<string, string>(StringComparer.Ordinal);
         var shutdownCount = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;

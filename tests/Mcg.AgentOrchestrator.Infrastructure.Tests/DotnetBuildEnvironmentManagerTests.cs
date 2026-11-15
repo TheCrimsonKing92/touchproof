@@ -268,6 +268,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_artifact_prep_unauthorized_returns_build_lock_blocked_with_holder_identity")]
     public void DotnetBuildEnvironmentManagerArtifactPrepUnauthorizedReturnsBuildLockBlockedWithHolderIdentity()
     {
+        using var isolatedGrid = new IsolatedBuildSlotGridScope(StorageRoot);
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var shutdownCount = 0;
@@ -313,7 +314,6 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
         finally
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
-
 
             LockAttribution.AttributeForTests = null;
         }

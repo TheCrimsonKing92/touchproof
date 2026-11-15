@@ -1140,6 +1140,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     public async Task GoalAcceptanceVerifierStableSlotShutsDownCompilerServerBeforeCs2012Retry()
     {
         var root = CreateRunnerWorkspace();
+        var storage = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
+        using var isolatedGrid = new IsolatedBuildSlotGridScope(storage);
+        TestOverrides.BuildStorageRootForTests = storage;
         var events = new List<string>();
         var buildAttempts = 0;
         using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => events.Add("shutdown"));
@@ -1161,13 +1164,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                     0,
                     "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
             });
-            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
-                TimeSpan.FromSeconds(2));
+            const int stableSlotIndex = 0;
+            var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(
+                stableSlotIndex, storageRoot: storage);
+            using var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    environment, TimeSpan.FromSeconds(2))).Lease;
 
             var result = await verifier.RunAsync(
                 root,
                 new GoalId("abcd1234abcd1234abcd1234abcd1234"),
-                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotIndex: stableSlotIndex,
                 stableSlotLease: lease);
             lease.Dispose();
 
