@@ -12,6 +12,41 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// ignore inline lists and require exactly the stated rows at contiguous zero-based sequences.
 /// This build writes marked documents; only history rows contain the two lists.
 ///
+/// Latest-record reader contract (step 3a): the marker also accepts optional boolean
+/// LatestVerificationInTable and LatestDispatchInTable independently. Absent/false retains inline
+/// authority, even if the newest row differs. True ignores inline and takes the highest sequence;
+/// its kind must have a positive count and usable rows. Omitted and null inline values both work.
+/// The read-side HistoryMarker is separate from serialized HistoryCounts: this build NEVER writes
+/// either new member and continues to save latest records inline, including after a marked load.
+/// Step 3b may be adopted only after a build containing step 3a has been adopted AND one later
+/// build has been adopted after it. Its writer must first prove latest equals the newest row;
+/// TaskSpec can match latest dispatch by timestamp rather than list position.
+///
+/// Latest-record reader inventory, established by searches over src and scripts (excluding bin,
+/// obj, .scratch and prototype state): LastVerification|LastDispatch; Deserialize.*GoalSnapshot;
+/// Deserialize.*TaskSnapshot; snapshot_json; json_extract. Hydrating paths are LoadFromConnectionAsync
+/// (LoadAsync, LoadGoalsAsync, LoadStatusGoalsAsync, LoadBoardSnapshotAsync), LoadGoalAsync,
+/// both prefix lookups, LoadGoalSnapshotAndVersionAsync (snapshot transaction/merge save), and
+/// LoadGoalStateAndVersionAsync (state transactions). Selected/archive loads resolve original markers.
+/// Bypass readers and handling (all source entries under Persistence):
+/// - AttentionReads and ProviderHoldSeedEvidenceReader: ReadAsync supplies marked latest elements,
+///   decoded with each reader's existing sparse shape; cached provider evidence stores resolved values.
+/// - ReadTerminalMetadata: ReadLatestDispatchAsync resolves commit evidence; metadata-only hot stubs
+///   already carry ResultCommit. ListConductLoopGoalMetadataAsync and AcceptanceQueueReads use
+///   LatestFieldSql for ResultCommit and CompletedAt respectively, with an inline-only legacy-table fallback.
+/// - GoalSnapshotArchive: hydrate before computing its metadata stub's ResultCommit; preserve original
+///   archived text and rows. Invalid marked histories remain hot, where loading reports the defect.
+/// - BacklogReads: the inline LastVerification shape probe permits absence because every marked task
+///   is then validated by RequiresReconstructionAsync; suspect domain replay uses HydrateAsync.
+/// - EpicReads.ReadEpicGoalsAsync: consumers use status/timeline only; Goal.FromSnapshot restores
+///   status from the stored status, independently of missing latest records. No latest-value consumer.
+/// - TryReadGoalSnapshot/quarantine listing, similarity projection diagnostic fallback, and the
+///   operator utility diagnostics/status verb consume no latest value; missing values are correct.
+/// - OrchestratorSqliteTools requeue: remove both latest flags alongside the cleared latest fields;
+///   keep counts, unrelated marker members and all historical rows. This is the sole write-side exception.
+/// RetryAdmissionReservationStore, RetryAdmissionReplayBaseline and TaskGraphRepairAdmission receive
+/// already hydrated snapshots/domain goals, rather than reading stored latest fields themselves.
+///
 /// Past-entry reader inventory (all under Persistence): SqliteOrchestratorStateRepository's
 /// LoadFromConnectionAsync (full/selected kernel reconstruction), LoadGoalAsync (single goal),
 /// FindGoalSnapshotsByIdPrefixAsync and FindTaskSnapshotsByIdPrefixAsync (cited historical evidence),
@@ -53,9 +88,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// retaining rows; its task-less hot stub cannot be saved. Recompression preserves that text;
 /// StateDatabaseOfflineConversion copies the whole database, including history rows.
 /// The set-goal-status and requeue-task verbs in scripts/OrchestratorSqliteTools/Program.cs need
-/// no build guarantee: both edit an untyped JSON tree, remove no task, and leave every marker,
-/// history list and history row untouched. Requeue clears latest execution/verification/dispatch/
-/// process and retry fields, changes status and appends a timeline event only.
+/// no build guarantee: both edit an untyped JSON tree, remove no task, and retain history counts,
+/// lists and rows. Requeue removes the latest flags described above and clears latest execution,
+/// verification, dispatch, process and retry fields, changes status and appends a timeline event only.
 /// Out of contract: running the application dll directly, or a launcher in a checkout/worktree
 /// older than step 2a pointed at a marked store. Such a build loads marked tasks with empty
 /// history and removes their table rows on save. No runtime fence is added here.
@@ -156,7 +191,9 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     private sealed record HistoryWriteRow(string TaskId, string Kind, int Sequence, string EntryJson);
 
     internal sealed record HistoryEntries(JsonElement[] Entries, bool FromTable, bool IsNull = false);
-    internal sealed record TaskHistory(HistoryEntries Verification, HistoryEntries Dispatch);
+    // Undefined latest elements mean the caller's inline value remains authoritative.
+    internal sealed record TaskHistory(HistoryEntries Verification, HistoryEntries Dispatch,
+        JsonElement LatestVerification = default, JsonElement LatestDispatch = default);
 
     internal Task<TaskHistory> ReadAsync(SqliteConnection? connection, string goalId, JsonElement task,
         CancellationToken token = default) => ReadAsync(connection, goalId, task.GetProperty("Id").GetString()!,
@@ -181,11 +218,13 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     private sealed record StoredEntry(long Sequence, string Json);
 
     private sealed record HistoryCounts(int? Verification, int? Dispatch);
+    private sealed record HistoryMarker(int? Verification, int? Dispatch,
+        bool LatestVerificationInTable, bool LatestDispatchInTable);
 
     private static InvalidDataException HistoryError(string goalId, string taskId, string kind, string defect,
         Exception? inner = null) => new($"Goal '{goalId}' task '{taskId}' {kind} history: {defect}.", inner);
 
-    private static HistoryCounts? ReadMarker(JsonElement marker, string goalId, string taskId)
+    private static HistoryMarker? ReadMarker(JsonElement marker, string goalId, string taskId)
     {
         if (marker.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null) return null;
         int? Count(string name)
@@ -198,15 +237,70 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
             }
             throw HistoryError(goalId, taskId, name, "invalid HistoryInTable count");
         }
-        return new(Count("Verification"), Count("Dispatch"));
+        bool Flag(string name)
+        {
+            if (!marker.TryGetProperty(name, out var value)) return false;
+            if (value.ValueKind is JsonValueKind.True or JsonValueKind.False) return value.GetBoolean();
+            throw HistoryError(goalId, taskId, name, "invalid HistoryInTable flag");
+        }
+        var verification = Count("Verification");
+        var dispatch = Count("Dispatch");
+        var latestVerification = Flag("LatestVerificationInTable");
+        var latestDispatch = Flag("LatestDispatchInTable");
+        if (latestVerification && verification is null or 0)
+            throw HistoryError(goalId, taskId, "verification", "latest-in-table requires a positive count");
+        if (latestDispatch && dispatch is null or 0)
+            throw HistoryError(goalId, taskId, "dispatch", "latest-in-table requires a positive count");
+        return new(verification, dispatch, latestVerification, latestDispatch);
     }
 
     private TaskHistory StrictHistory(Dictionary<(string TaskId, string Kind), List<StoredEntry>> rows,
-        string goalId, string taskId, HistoryCounts counts) => new(
-            StrictEntries<TaskVerificationSnapshot>(rows.GetValueOrDefault((taskId, "verification")),
-                counts.Verification, goalId, taskId, "verification"),
-            StrictEntries<TaskDispatchSnapshot>(rows.GetValueOrDefault((taskId, "dispatch")),
-                counts.Dispatch, goalId, taskId, "dispatch"));
+        string goalId, string taskId, HistoryMarker counts)
+    {
+        var verification = StrictEntries<TaskVerificationSnapshot>(rows.GetValueOrDefault((taskId, "verification")),
+            counts.Verification, goalId, taskId, "verification");
+        var dispatch = StrictEntries<TaskDispatchSnapshot>(rows.GetValueOrDefault((taskId, "dispatch")),
+            counts.Dispatch, goalId, taskId, "dispatch");
+        return new(verification, dispatch,
+            counts.LatestVerificationInTable ? verification.Entries[^1] : default,
+            counts.LatestDispatchInTable ? dispatch.Entries[^1] : default);
+    }
+
+    // Metadata readers need no history work for legacy/inline-authoritative tasks.
+    internal async Task<JsonElement> ReadLatestDispatchAsync(SqliteConnection connection, string goalId,
+        JsonElement task, CancellationToken token = default)
+    {
+        if (task.TryGetProperty(MarkerProperty, out var marker) &&
+            ReadMarker(marker, goalId, task.GetProperty("Id").GetString()!)?.LatestDispatchInTable == true)
+            return (await ReadAsync(connection, goalId, task, token)).LatestDispatch;
+        return task.TryGetProperty("LastDispatch", out var inline) ? inline : default;
+    }
+
+    internal static async Task<bool> HasTableAsync(SqliteConnection connection, CancellationToken token)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'goal_task_history')";
+        return (long)(await command.ExecuteScalarAsync(token))! != 0;
+    }
+
+    // Both callers use goals and task aliases; only trusted field names from code reach this fragment.
+    internal static string LatestFieldSql(bool hasTable, string kind, string field)
+    {
+        var property = kind switch
+        {
+            "verification" => "Verification",
+            "dispatch" => "Dispatch",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
+        var inline = $"json_extract(task.value, '$.Last{property}.{field}')";
+        return !hasTable ? inline : $"""
+            CASE WHEN json_extract(task.value, '$.HistoryInTable.Latest{property}InTable') = 1
+              THEN (SELECT json_extract(h.entry_json, '$.{field}') FROM goal_task_history h
+                WHERE h.goal_id = goals.id AND h.task_id = json_extract(task.value, '$.Id')
+                  AND h.kind = '{kind}' ORDER BY h.sequence DESC LIMIT 1)
+              ELSE {inline} END
+            """;
+    }
 
     private HistoryEntries StrictEntries<T>(IReadOnlyList<StoredEntry>? rows, int? count,
         string goalId, string taskId, string kind)
@@ -301,7 +395,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                 ?? throw new InvalidDataException($"Missing archive for goal '{snapshot.Id}'.");
             fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
         }
-        var markers = new Dictionary<string, HistoryCounts>();
+        var markers = new Dictionary<string, HistoryMarker>();
         foreach (var task in fields?.Tasks ?? [])
             if (task is not null && ReadMarker(task.HistoryInTable, snapshot.Id, task.Id) is { } counts)
                 markers[task.Id] = counts;
@@ -323,7 +417,11 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                     : task.VerificationHistory,
                 DispatchHistory = history.Dispatch.FromTable
                     ? history.Dispatch.IsNull ? null : history.Dispatch.Entries.Select(entry => entry.Deserialize<TaskDispatchSnapshot>(options)!).ToArray()
-                    : task.DispatchHistory
+                    : task.DispatchHistory,
+                LastVerification = history.LatestVerification.ValueKind != JsonValueKind.Undefined
+                    ? history.LatestVerification.Deserialize<TaskVerificationSnapshot>(options) : task.LastVerification,
+                LastDispatch = history.LatestDispatch.ValueKind != JsonValueKind.Undefined
+                    ? history.LatestDispatch.Deserialize<TaskDispatchSnapshot>(options) : task.LastDispatch
             });
         }
         return snapshot with { Tasks = tasks };

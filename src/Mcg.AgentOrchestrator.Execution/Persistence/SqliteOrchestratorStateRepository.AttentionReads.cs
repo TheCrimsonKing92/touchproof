@@ -103,8 +103,10 @@ public sealed partial class SqliteOrchestratorStateRepository
                     if (needsQuestion) taskIds.Add(taskId);
                     var history = await TaskHistoryStore.ReadAsync(connection, id, task, cancellationToken);
                     var dispatches = history.Dispatch.Entries.Select(ReadAttentionDispatch).ToArray();
-                    var lastDispatch = task.TryGetProperty("LastDispatch", out var last) && last.ValueKind != JsonValueKind.Null
-                        ? ReadAttentionDispatch(last) : null;
+                    var lastDispatch = history.LatestDispatch.ValueKind != JsonValueKind.Undefined
+                        ? ReadAttentionDispatch(history.LatestDispatch)
+                        : task.TryGetProperty("LastDispatch", out var last) && last.ValueKind != JsonValueKind.Null
+                            ? ReadAttentionDispatch(last) : null;
                     // Undispatched tasks matter only as the target of a reserved probe. They carry
                     // no verification graph, execution output, retry state, process or worker brief.
                     var taskStatus = ReadAttentionField<WorkTaskStatus>(task, "Status");
@@ -112,7 +114,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                     if (dispatches.Length == 0 && lastDispatch is null &&
                         (taskStatus != WorkTaskStatus.Assigned || agentId is null)) continue;
                     tasks.Add(new(taskId, ReadAttentionField<AgentRole>(task, "RequiredRole"), taskStatus, agentId, lastDispatch, dispatches,
-                        ReadAttentionVerificationField(task, "LastVerification"),
+                        history.LatestVerification.ValueKind != JsonValueKind.Undefined
+                            ? ReadAttentionVerification(history.LatestVerification) : ReadAttentionVerificationField(task, "LastVerification"),
                         history.Verification.Entries.Select(ReadAttentionVerification).ToArray(),
                         ReadAttentionField<DateTimeOffset?>(task, "LatestProviderBudgetRecoveryAt")));
                 }
