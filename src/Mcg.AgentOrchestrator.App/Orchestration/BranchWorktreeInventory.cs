@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -17,7 +19,10 @@ internal sealed class BranchWorktreeInventory
         IReadOnlyCollection<Goal> goals,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
-        gitRunner ??= (directory, args) => GitCli.RunForRepository(directory, args.ToArray());
+        // Keep history in memory: reporting must not persist Git timing observations.
+        var history = new GitIdleGapHistory();
+        gitRunner ??= (directory, args) => GitCli.RunProgressExecutable("git", directory,
+            args.ToArray(), history, configureStart: ConfigureGitRead);
         string Git(params string[] args)
         {
             var result = gitRunner(repositoryDirectory, args);
@@ -104,6 +109,17 @@ internal sealed class BranchWorktreeInventory
             Branches = branches,
             Worktrees = worktrees.OrderBy(tree => tree.Path, StringComparer.Ordinal).ToArray()
         };
+    }
+
+    internal static void ConfigureGitRead(ProcessStartInfo startInfo)
+    {
+        // Git emits UTF-8; a Windows console's OEM encoding corrupts unquoted paths.
+        startInfo.StandardOutputEncoding = Encoding.UTF8;
+        startInfo.StandardErrorEncoding = Encoding.UTF8;
+        foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES" })
+            startInfo.Environment.Remove(name);
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
     }
 
     private static string? GoalBranch(string? branch)

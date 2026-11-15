@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -13,6 +15,25 @@ public sealed class BranchWorktreeInventoryTests : IDisposable
     private readonly Goal liveGoal = CreateGoal("abc10000111111111111111111111111", GoalStatus.Active);
     private readonly Goal terminalGoal = CreateGoal("def20000222222222222222222222222", GoalStatus.Completed);
     private IReadOnlyCollection<Goal> Goals => [liveGoal, terminalGoal];
+
+    [Fact]
+    public void ConfigureGitRead_ConsoleDefaults_UsesUtf8AndIsolatesRepository()
+    {
+        var startInfo = new ProcessStartInfo { CreateNoWindow = true };
+        var repositoryVariables = new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES" };
+        foreach (var name in repositoryVariables) startInfo.Environment[name] = "another-repository";
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "1";
+        Assert.Null(startInfo.StandardOutputEncoding);
+        Assert.Null(startInfo.StandardErrorEncoding);
+
+        BranchWorktreeInventory.ConfigureGitRead(startInfo);
+
+        Assert.Equal(Encoding.UTF8, startInfo.StandardOutputEncoding);
+        Assert.Equal(Encoding.UTF8, startInfo.StandardErrorEncoding);
+        Assert.All(repositoryVariables, name => Assert.False(startInfo.Environment.ContainsKey(name)));
+        Assert.Equal("0", startInfo.Environment["GIT_TERMINAL_PROMPT"]);
+    }
 
     [Fact]
     public void Read_MixedRepository_ClassifiesBranchesAndWorktrees()
