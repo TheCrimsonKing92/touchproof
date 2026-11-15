@@ -8,12 +8,22 @@ internal static class DeclaredTestSegmentSelector
 
         var selectorSegments = selector.Split("::");
         var identitySegments = identity.Split("::");
+        if (MatchesSegments(selectorSegments, identitySegments, allowDotBoundary: true)) return true;
+
+        return selector.Contains('.') && MatchesSegments(
+            selector.Replace(".", "::", StringComparison.Ordinal).Split("::"),
+            identitySegments, allowDotBoundary: false);
+    }
+
+    private static bool MatchesSegments(
+        string[] selectorSegments, string[] identitySegments, bool allowDotBoundary)
+    {
         for (var start = 0; start <= identitySegments.Length - selectorSegments.Length; start++)
         {
             var offset = 0;
             while (offset < selectorSegments.Length && MatchesSegment(
                 selectorSegments[offset], identitySegments[start + offset],
-                offset == selectorSegments.Length - 1))
+                allowDotBoundary && offset == selectorSegments.Length - 1))
                 offset++;
             if (offset == selectorSegments.Length) return true;
         }

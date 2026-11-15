@@ -32,6 +32,41 @@ public sealed class DeclaredTestSegmentSelectorTests
         Assert.Equal(expected, DeclaredTestSegmentSelector.Matches(selector, identity));
     }
 
+    [Theory]
+    [InlineData("process-inspector::tree_cli.pid_json_lists_spawned_child_under_test_process_with_same_integrity",
+        "process-inspector::tree_cli::pid_json_lists_spawned_child_under_test_process_with_same_integrity", true)]
+    [InlineData("process-inspector.tree::tests::groups_children_sorted_and_marks_gone_parents",
+        "process-inspector::tree::tests::groups_children_sorted_and_marks_gone_parents", true)]
+    [InlineData("process-inspector.tree_cli.pid_json_x", "process-inspector::tree_cli::pid_json_x", true)]
+    [InlineData("tree_cli.pid_json_x", "process-inspector::tree_cli::pid_json_x", true)]
+    [InlineData("tree_cli.pid_json_y", "process-inspector::tree_cli::pid_json_x", false)]
+    [InlineData("tree_gui.pid_json_x", "process-inspector::tree_cli::pid_json_x", false)]
+    [InlineData("Tree_cli.pid_json_x", "process-inspector::tree_cli::pid_json_x", false)]
+    [InlineData("tree_cl.pid_json_x", "process-inspector::tree_cli::pid_json_x", false)]
+    [InlineData("tree_cli.pid_json", "process-inspector::tree_cli::pid_json_x", false)]
+    [InlineData("process-inspector.pid_json_x", "process-inspector::tree_cli::pid_json_x", false)]
+    [InlineData("file.Describe", "file::Describe.It", false)]
+    public void Matches_DottedSelector_RequiresWholeOrdinalSegments(
+        string selector, string identity, bool expected)
+    {
+        Assert.Equal(expected, DeclaredTestSegmentSelector.Matches(selector, identity));
+    }
+
+    [Theory]
+    [InlineData("Passed", 1, 0, true)]
+    [InlineData("Failed", 0, 1, false)]
+    public void Evaluate_DottedSelector_GradesSeparatorSpelledRow(
+        string outcome, int passed, int failed, bool satisfied)
+    {
+        var result = DeclaredTestSelectorResolver.Evaluate("process-inspector::tree_cli.pid_json_x", [
+            new("process-inspector::tree_cli::pid_json_x", "pid_json_x", [], outcome, "report")]);
+
+        Assert.Equal(passed, result.Passed);
+        Assert.Equal(failed, result.Failed);
+        Assert.Equal(0, result.Skipped + result.Superseded);
+        Assert.Equal(satisfied, result.Satisfied);
+    }
+
     [Fact]
     public void Evaluate_RepeatedSegmentRun_CountsRowOnce()
     {
