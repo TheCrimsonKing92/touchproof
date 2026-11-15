@@ -36,10 +36,94 @@ public sealed class SubscriptionCooldownDispatchAttemptTests
         Assert.False(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, EvaluatedAt, out _));
     }
 
-    private static TaskSpec RecordLimit(Scenario scenario, DateTimeOffset attemptAt)
+    [Xunit.Fact]
+    public void FindDispatch_AttemptAndStartMatchDifferentRecords_SelectsAttempt()
     {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var task = RecordLimit(scenario, DispatchedAt);
+        var attemptDispatch = Assert.Single(task.DispatchHistory);
+        var startedDispatch = attemptDispatch with { DispatchedAt = StartedAt };
+        task.RecordDispatch(startedDispatch);
+        Assert.Equal(2, task.DispatchHistory.Count);
+        Assert.Equal(StartedAt, task.LastDispatch!.DispatchedAt);
+
+        Assert.Same(attemptDispatch, SubscriptionLimitEvidence.FindDispatchForVerification(
+            task, Assert.Single(task.VerificationHistory)));
+    }
+
+    [Xunit.Fact]
+    public void TaskCooldown_NoAttemptStartEqualsDispatch_ReturnsCooldown()
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var task = RecordLimit(scenario, null, DispatchedAt);
+
+        Assert.True(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, EvaluatedAt, out var cooldown));
+        Assert.Equal("Anthropic", cooldown.ProviderName);
+        Assert.Equal("fable", cooldown.ModelName);
+        Assert.Equal(ResetAt, cooldown.RetryAfter);
+    }
+
+    [Xunit.Fact]
+    public void TaskCooldown_NoAttemptStartLaterThanDispatch_ReturnsNone()
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var task = RecordLimit(scenario, null);
+
+        Assert.False(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, EvaluatedAt, out _));
+    }
+
+    [Xunit.Fact]
+    public void TaskCooldown_AttemptMismatchStartMatches_ReturnsNone()
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var task = RecordLimit(scenario, DispatchedAt.AddSeconds(1), DispatchedAt);
+
+        Assert.False(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, EvaluatedAt, out _));
+    }
+
+    [Xunit.Fact]
+    public void ApplyBatch_PlannerModelLimit_MovesToNextAvailableSeatOutsideLimit()
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var offline = Scenario.Agent("offline-opus", "Anthropic", "claude-cli", "claude-opus-5-5")
+            with { Status = AgentStatus.Offline };
+        var limited = Scenario.Agent("other-fable", "Anthropic", "claude-cli", "claude-fable-5-2");
+        var eligible = Scenario.Agent("available-opus", "Anthropic", "claude-cli", "claude-opus-5-5");
+        scenario.Agents = [scenario.Primary, offline, limited, eligible, scenario.Alternate];
         scenario.Clock.UtcNow = DispatchedAt;
         var goal = scenario.NewGoal();
+        var task = RecordLimit(scenario, DispatchedAt, goal: goal);
+        Assert.Equal(AgentStatus.Available, limited.Status);
+        Assert.Equal(AgentStatus.Available, eligible.Status);
+        Assert.All(scenario.Agents, agent => Assert.Equal(AgentRole.Planner, agent.Role));
+
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+
+        var snapshot = scenario.Kernel.ExportGoalSnapshot(goal.Id);
+        Assert.Equal(eligible.Id.Value, Assert.Single(snapshot.Tasks).AssignedAgentId);
+        Assert.Null(scenario.Kernel.GetTask(goal.Id, task.Id).SubscriptionRetryAfter);
+        Assert.DoesNotContain(scenario.Preflights, probe => probe.AgentId == offline.Id);
+        Assert.Contains(scenario.Preflights, probe => probe.AgentId == limited.Id && !probe.Allowed);
+        Assert.Contains(scenario.Preflights, probe => probe.AgentId == eligible.Id && probe.Allowed);
+        Assert.DoesNotContain(scenario.Preflights, probe => probe.AgentId == scenario.Alternate.Id);
+        var substitution = Assert.Single(snapshot.Timeline,
+            entry => entry.TaskId == task.Id.Value && entry.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.Contains($"held agent={scenario.Primary.Id.Value}", substitution.Message, StringComparison.Ordinal);
+        Assert.Contains($"substitute={eligible.Id.Value}", substitution.Message, StringComparison.Ordinal);
+        Assert.Contains($"reset={ResetAt:O}", substitution.Message, StringComparison.Ordinal);
+        Assert.Contains(Scenario.FableLimit, substitution.Message, StringComparison.Ordinal);
+        Assert.Contains(snapshot.Timeline, entry => entry.TaskId == task.Id.Value &&
+            entry.Message.Contains("passed over", StringComparison.Ordinal) &&
+            entry.Message.Contains(limited.Id.Value, StringComparison.Ordinal) &&
+            entry.Message.Contains("provider Anthropic is cooling down", StringComparison.Ordinal));
+    }
+
+    private static TaskSpec RecordLimit(Scenario scenario, DateTimeOffset? attemptAt,
+        DateTimeOffset? startedAt = null, Goal? goal = null)
+    {
+        startedAt ??= StartedAt;
+        scenario.Clock.UtcNow = DispatchedAt;
+        goal ??= scenario.NewGoal();
         var task = Assert.Single(goal.Tasks);
         Assert.Equal(AgentRole.Planner, task.RequiredRole);
         Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
@@ -54,7 +138,7 @@ public sealed class SubscriptionCooldownDispatchAttemptTests
         scenario.Kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
             new TaskVerificationRecord(dispatch.Command, dispatch.WorkingDirectory, 1,
                 Scenario.FableLimit, "", CompletedAt,
-                DispatchStartedAt: StartedAt, DispatchAttemptAt: attemptAt));
+                DispatchStartedAt: startedAt, DispatchAttemptAt: attemptAt));
         scenario.Clock.UtcNow = EvaluatedAt;
 
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
@@ -65,7 +149,7 @@ public sealed class SubscriptionCooldownDispatchAttemptTests
         var verification = Assert.Single(task.VerificationHistory);
         Assert.False(verification.Succeeded);
         Assert.Equal(attemptAt, verification.DispatchAttemptAt);
-        Assert.Equal(StartedAt, verification.DispatchStartedAt);
+        Assert.Equal(startedAt, verification.DispatchStartedAt);
         Assert.True(SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(verification));
         return task;
     }

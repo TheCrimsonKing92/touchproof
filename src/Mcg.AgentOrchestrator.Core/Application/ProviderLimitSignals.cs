@@ -105,7 +105,8 @@ public static class ProviderLimitSignals
         var dispatch = FindDispatchForVerification(task, verification);
         if (dispatch?.ProviderName is not { Length: > 0 } providerName ||
             !IsSubscriptionProviderCliDispatch(dispatch) ||
-            (verification.DispatchStartedAt is { } startedAt && dispatch.DispatchedAt != startedAt))
+            ((verification.DispatchAttemptAt ?? verification.DispatchStartedAt) is { } attemptAt &&
+             dispatch.DispatchedAt != attemptAt))
             return false;
         TryGetRecoverableSubscriptionLimitLine(verification, out var limitLine);
         var modelName = ProviderLimitEvidenceParser.GetCliRefusalModelName(limitLine);
