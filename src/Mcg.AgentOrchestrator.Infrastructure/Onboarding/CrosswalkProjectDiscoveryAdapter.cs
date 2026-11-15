@@ -32,6 +32,10 @@ public sealed class CrosswalkProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             Fact("crosswalk-test-command", "crosswalk-test .")
         };
         var questions = new List<ProjectOwnerQuestion>();
+        if (EnvironmentContractDeriver.UnprobedFramework(_report.TestFramework ?? "") is { } framework)
+            Ask(OwnerAnsweredEnvironmentTools.Prefix + framework.ToLowerInvariant().Replace('/', '-'),
+                $"No environment probe was derived for test framework '{framework}'. Answer with its version command line to add a probe, or none to accept no probe.",
+                source, questions);
         var learned = IntegrationBranchReader.Read(root);
         if (learned.Branch is null)
             Ask(LearnedIntegrationBranch.OwnerQuestionKey, $"What is the integration branch? {learned.Reason}",
