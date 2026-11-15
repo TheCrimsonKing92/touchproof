@@ -112,10 +112,13 @@ public sealed class SubscriptionCooldownDispatchAttemptTests
         Assert.Contains($"substitute={eligible.Id.Value}", substitution.Message, StringComparison.Ordinal);
         Assert.Contains($"reset={ResetAt:O}", substitution.Message, StringComparison.Ordinal);
         Assert.Contains(Scenario.FableLimit, substitution.Message, StringComparison.Ordinal);
-        Assert.Contains(snapshot.Timeline, entry => entry.TaskId == task.Id.Value &&
-            entry.Message.Contains("passed over", StringComparison.Ordinal) &&
-            entry.Message.Contains(limited.Id.Value, StringComparison.Ordinal) &&
-            entry.Message.Contains("provider Anthropic is cooling down", StringComparison.Ordinal));
+        var candidateReview = Assert.Single(snapshot.Timeline, entry => entry.TaskId == task.Id.Value &&
+            entry.Kind == ProgressKind.TaskNote &&
+            entry.Message.StartsWith("Provider hold candidate review [", StringComparison.Ordinal) &&
+            entry.Message.Contains("passed over", StringComparison.Ordinal));
+        // A same-model reassignment retains this task's deferral; no sibling task supplies a provider cooldown.
+        Assert.Contains($"seat '{limited.Id.Value}': blocked: subscription retry deferred until {ResetAt:u}; source: stored task field SubscriptionRetryAfter",
+            candidateReview.Message, StringComparison.Ordinal);
     }
 
     private static TaskSpec RecordLimit(Scenario scenario, DateTimeOffset? attemptAt,
