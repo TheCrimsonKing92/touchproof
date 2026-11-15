@@ -264,7 +264,6 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                     acceptanceAttemptStartedAt);
                 throw new InvalidOperationException("acceptance blocked waiting for a stable dotnet build slot.", ex);
             }
-
             using (stableSlotLease)
             {
                 var enteredVerifying = context.Kernel.BeginGoalAcceptanceVerification(
@@ -293,6 +292,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                         stableSlotIndex,
                         CancellationToken.None,
                         executionOptions);
+                    using var qos = HostedVerifierRunQos.Begin(context.Workspace);
                     verification = AcceptanceExecutionOwnerLifetime.Run(
                         executionOwner,
                         () => context.AcceptanceVerifier.RunOwnedAsync(

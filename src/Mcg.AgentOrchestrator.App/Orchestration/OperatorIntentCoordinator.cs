@@ -135,7 +135,7 @@ internal sealed partial class OperatorIntentCoordinator
         {
             IntegrationScopeOwner = kernel => new ConductorConflictIntegration(kernel, workspace.ExecutionDirectory,
                 workspace.IntegrationBranch, (g, t, n, k, c) => throw new InvalidOperationException("Intent application cannot retry integration."),
-                _ => throw new InvalidOperationException("Intent application cannot dispatch integration.")),
+                _ => throw new InvalidOperationException("Intent application cannot dispatch integration."), statePath: workspace.SqliteStatePath),
             GateCancellation = new(solo, grouped, events),
             LandingRepair = new(workspace, OrchestratorProjectRegistry.CreateDefault()),
             ReopenedMemberGateAbandonment = new(grouped, events),

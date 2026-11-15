@@ -46,6 +46,7 @@ internal sealed class MultiRepositoryAcceptanceGate(
         if (IsPassedCurrent(goal, existing, captured.Tuple)) return new(null, Landable: existing);
 
         var attemptId = Guid.NewGuid().ToString("N");
+        using var qos = HostedVerifierRunQos.Begin(workspace);
         var bases = new Dictionary<string, string>(StringComparer.Ordinal);
         var baseErrors = new Dictionary<string, Exception>(StringComparer.Ordinal);
         var resolver = new MultiRepositoryIntegrationBases(workspace, registry);
