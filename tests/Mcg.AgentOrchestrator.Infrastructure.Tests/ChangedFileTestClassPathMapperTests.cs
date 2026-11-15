@@ -201,4 +201,193 @@ public sealed class ChangedFileTestClassPathMapperTests
         if (resolved) Assert.Equal(new[] { "ExistingTests" }, augmented.TestClassNames);
         else Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, augmented.DegradationKind);
     }
+    [Theory]
+    [InlineData("tools/Sample/data/new.json")]
+    [InlineData("tools/Sample/data/new.ps1")]
+    [InlineData("tools/Sample/data/new.cmd")]
+    [InlineData("tools/Sample/data/new.sh")]
+    public void OwnedDataAndScriptsWithoutDeclaredReferencesResolve(string changed)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        var existing = AddSource(fixture, "tests/Existing.Tests/Existing.cs",
+            "public class ExistingTests { [Fact] public void Works() {} }");
+        var owner = AddProject(fixture, "tools/Sample/src/Sample.csproj");
+        var undeclared = AddProject(fixture, "tools/Sample/tests/Sample.Tests.csproj",
+            "<Project><ItemGroup><ProjectReference Include=\"missing.csproj\" /></ItemGroup></Project>");
+        var declared = AddProject(fixture, "tests/Existing.Tests/Existing.Tests.csproj", "<Project />", existing);
+        var sources = new ImpactReplayTestSourceIndex(fixture.Sources.Trees, [owner, undeclared, declared], fixture.Root);
+        var classes = fixture.Classes;
+        string[] directories = ["tests/Existing.Tests"];
+
+        var selection = ChangedFileTestClassPathMapper.Read([changed], sources, classes, directories);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Empty(selection.TestClassNames);
+        Assert.Null(selection.Reason);
+        var augmented = ImpactReplaySelectionAugmentation.Apply(ReverseDependencyTestSelection.Resolved(["ExistingTests"]),
+            [changed], sources, classes, null, directories);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, augmented.Outcome);
+        Assert.Equal(new[] { "ExistingTests" }, augmented.TestClassNames);
+    }
+
+    [Theory]
+    [InlineData("src/Sample.csproj")]
+    [InlineData("tests/Sample.Tests.csproj")]
+    public void OwningProjectsSelectExactReferencingClassesAndOtherFilesLiteralMatches(string reference)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        var first = AddSource(fixture, "tests/Direct.Tests/First.cs", """
+            public partial class DirectTests { [Fact] public void Works() {} }
+            public class Outer { public class NestedTests { [Fact] public void Works() {} } }
+            """);
+        var linked = AddSource(fixture, "shared/Linked.cs", """
+            public partial class DirectTests { private int Value; }
+            public class LinkedTests { [Fact] public void Works() {} }
+            """);
+        AddSource(fixture, "tests/Direct.Tests/Excluded.cs",
+            "public class ExcludedTests { [Fact] public void Works() {} }");
+        var other = AddSource(fixture, "tests/Other.Tests/Other.cs", """
+            public class LiteralTests { [Fact] public void Works() { var path = "scripts/literal.ps1"; } }
+            public class UnrelatedTests { [Fact] public void Works() {} }
+            """);
+        var owner = AddProject(fixture, "tools/Sample/src/Sample.csproj");
+        var secondOwner = AddProject(fixture, "tools/Sample/tests/Sample.Tests.csproj");
+        var direct = AddProject(fixture, "tests/Direct.Tests/Direct.Tests.csproj",
+            $"<Project><ItemGroup><ProjectReference Include=\"../../tools/Sample/{reference}\" /></ItemGroup></Project>", first, linked);
+        var unrelated = AddProject(fixture, "tests/Other.Tests/Other.Tests.csproj", "<Project />", other);
+        var sources = new ImpactReplayTestSourceIndex(fixture.Sources.Trees, [owner, secondOwner, direct, unrelated], fixture.Root);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["tools/Sample/data/new.json", "scripts/literal.ps1"],
+            sources, fixture.Classes, ["tests/Direct.Tests", "tests/Other.Tests"]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(new[] { "DirectTests", "LinkedTests", "LiteralTests", "Outer+NestedTests" }, selection.TestClassNames);
+    }
+
+    [Fact]
+    public void LiteralMatchedFileKeepsOnlyLiteralClassesDespiteOwningProjectReferences()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        var source = AddSource(fixture, "tests/Direct.Tests/Tests.cs", """
+            public class LiteralTests { [Fact] public void Works() { var name = "mapped.json"; } }
+            public class OtherTests { [Fact] public void Works() {} }
+            """);
+        var owner = AddProject(fixture, "src/Sample/Sample.csproj");
+        var direct = AddProject(fixture, "tests/Direct.Tests/Direct.Tests.csproj",
+            "<Project><ItemGroup><ProjectReference Include=\"..\\..\\src\\Sample\\Sample.csproj\" /></ItemGroup></Project>", source);
+        var sources = new ImpactReplayTestSourceIndex(fixture.Sources.Trees, [owner, direct], fixture.Root);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["src/Sample/mapped.json"], sources, fixture.Classes, ["tests/Direct.Tests"]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(new[] { "LiteralTests" }, selection.TestClassNames);
+    }
+
+    [Theory]
+    [InlineData("scripts/no-owner.ps1")]
+    [InlineData("tools/Empty/data/new.json")]
+    [InlineData("root.json")]
+    [InlineData("config/acceptance-manifest.json")]
+    public void UnownedRootAndManifestFilesStillAbandonWithRootAvailable(string changed)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        var source = AddSource(fixture, "tests/Existing.Tests/Tests.cs", """
+            public class ExistingTests { [Fact] public void Works() {} }
+            """);
+        var declared = AddProject(fixture, "tests/Existing.Tests/Existing.Tests.csproj", "<Project />", source);
+        var sibling = AddProject(fixture, "tools/Sibling/src/Sibling.csproj");
+        var rootChild = AddProject(fixture, "src/RootChild.csproj");
+        var rootProject = AddProject(fixture, "Root.csproj");
+        var manifestOwner = AddProject(fixture, "config/Config.csproj");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "tools/Empty/src"));
+        var sources = new ImpactReplayTestSourceIndex(fixture.Sources.Trees,
+            [declared, sibling, rootChild, rootProject, manifestOwner], fixture.Root);
+
+        var selection = ChangedFileTestClassPathMapper.Read([changed], sources, fixture.Classes, ["tests/Existing.Tests"]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
+        Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
+        Assert.Contains(changed, selection.Reason);
+    }
+
+    [Theory]
+    [InlineData("missing-project")]
+    [InlineData("malformed-project")]
+    [InlineData("empty-include")]
+    [InlineData("property")]
+    [InlineData("item")]
+    [InlineData("wildcard")]
+    [InlineData("missing-target")]
+    [InlineData("incomplete-inventory")]
+    [InlineData("no-known-classes")]
+    public void UnsupportedProjectInspectionAbandonsInsteadOfProvingNoReferences(string unsupported)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        var source = AddSource(fixture, "tests/Direct.Tests/Tests.cs",
+            "public class DirectTests { [Fact] public void Works() {} }");
+        var owner = AddProject(fixture, "src/Sample/Sample.csproj");
+        var include = unsupported switch
+        {
+            "property" => "$(Owner)/Sample.csproj",
+            "item" => "@(Projects)",
+            "wildcard" => "../../src/*/Sample.csproj",
+            "missing-target" => "../../missing.csproj",
+            "empty-include" => "",
+            _ => "../../src/Sample/Sample.csproj"
+        };
+        var direct = AddProject(fixture, "tests/Direct.Tests/Direct.Tests.csproj",
+            $"<Project><ItemGroup><ProjectReference Include=\"{include}\" /></ItemGroup></Project>", source);
+        if (unsupported == "missing-project") File.Delete(direct.Path);
+        if (unsupported == "malformed-project") File.WriteAllText(direct.Path, "<Project>");
+        if (unsupported == "no-known-classes") direct = direct with { Sources = [] };
+        var sources = new ImpactReplayTestSourceIndex(fixture.Sources.Trees,
+            unsupported == "incomplete-inventory" ? [owner] : [owner, direct], fixture.Root);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["src/Sample/data.json"], sources, fixture.Classes, ["tests/Direct.Tests"]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
+        Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
+        Assert.Contains("Cannot determine project test coverage", selection.Reason);
+        Assert.Contains("src/Sample/data.json", selection.Reason);
+    }
+
+    [Fact]
+    public void NearestProjectWinsAndOnlyDirectReferencesSelectClasses()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        var source = AddSource(fixture, "tests/Direct.Tests/Tests.cs",
+            "public class DirectTests { [Fact] public void Works() {} }");
+        var outer = AddProject(fixture, "tools/Outer.csproj");
+        var nearest = AddProject(fixture, "tools/Nested/Nested.csproj");
+        var direct = AddProject(fixture, "tests/Direct.Tests/Direct.Tests.csproj",
+            "<Project><ItemGroup><ProjectReference Include=\"../../tools/Outer.csproj\" /></ItemGroup></Project>", source);
+        File.WriteAllText(outer.Path,
+            "<Project><ItemGroup><ProjectReference Include=\"Nested/Nested.csproj\" /></ItemGroup></Project>");
+        var sources = new ImpactReplayTestSourceIndex(fixture.Sources.Trees, [outer, nearest, direct], fixture.Root);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["tools/Nested/deleted.json"], sources, fixture.Classes, ["tests/Direct.Tests"]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Empty(selection.TestClassNames);
+        var outerSelection = ChangedFileTestClassPathMapper.Read(["tools/deleted.json"], sources, fixture.Classes, ["tests/Direct.Tests"]);
+        Assert.Equal(new[] { "DirectTests" }, outerSelection.TestClassNames);
+    }
+
+    private static string AddSource(ImpactReplaySelectionFixture fixture, string path, string text)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(fixture.Root, path))!);
+        fixture.Add(path, text);
+        return Path.Combine(fixture.Root, path);
+    }
+
+    private static ImpactReplayChangedSourceRouting.Project AddProject(ImpactReplaySelectionFixture fixture,
+        string relativePath, string xml = "<Project />", params string[] sources)
+    {
+        var path = Path.Combine(fixture.Root, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, xml);
+        return new(path, false, sources);
+    }
 }
