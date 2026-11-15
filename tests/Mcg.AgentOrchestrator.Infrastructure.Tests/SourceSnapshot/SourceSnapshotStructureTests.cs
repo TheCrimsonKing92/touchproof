@@ -84,6 +84,15 @@ public sealed class SourceSnapshotStructureTests
     [InlineData("File.ReadAllText(file)")]
     [InlineData("File.ReadAllLines(file)")]
     [InlineData("CSharpSyntaxTree.ParseText(text)")]
+    [InlineData("System.IO.Directory.EnumerateFiles(folder)")]
+    [InlineData("global::System.IO.Directory.EnumerateFiles(folder)")]
+    [InlineData("System.IO.Directory.GetFiles(folder)")]
+    [InlineData("global::System.IO.Directory.GetFiles(folder)")]
+    [InlineData("System.IO.File.ReadAllText(file)")]
+    [InlineData("global::System.IO.File.ReadAllText(file)")]
+    [InlineData("System.IO.File.ReadAllLines(file)")]
+    [InlineData("global::System.IO.File.ReadAllLines(file)")]
+    [InlineData("Consume(System.IO.File.ReadAllText(file))")]
     public void MethodScopedDetector_DirectRepositoryIo_IsRejected(string directCall)
     {
         var root = CSharpSyntaxTree.ParseText("class C { void Guard() { " +
@@ -103,6 +112,17 @@ public sealed class SourceSnapshotStructureTests
             "Directory.EnumerateFiles(folder); CSharpSyntaxTree.ParseText(text); } }").GetRoot();
         Assert.Equal(3, ForbiddenIo(root).Count());
         Assert.Single(Calls(root, "CSharpSyntaxTree.ParseText"));
+
+        AssertCachedRepositoryGuard(root, "Guard", "snapshot.GetLines");
+    }
+
+    [Fact]
+    public void MethodScopedDetector_QualifiedFreshIoInAnotherMethod_IsPermitted()
+    {
+        var root = CSharpSyntaxTree.ParseText("class C { void Guard() { " +
+            "var snapshot = RepositorySourceSnapshotCache.Get(folder); snapshot.GetLines(file); } " +
+            "void Fixture() { System.IO.File.ReadAllText(file); System.IO.Directory.EnumerateFiles(folder); } }").GetRoot();
+        Assert.Equal(2, ForbiddenIo(root).Count());
 
         AssertCachedRepositoryGuard(root, "Guard", "snapshot.GetLines");
     }
@@ -162,10 +182,22 @@ public sealed class SourceSnapshotStructureTests
     }
 
     private static IEnumerable<InvocationExpressionSyntax> Calls(SyntaxNode root, string name) =>
-        root.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(call => call.Expression.ToString() == name);
+        root.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(call => NormalizedCallName(call) == name);
 
     private static IEnumerable<string> ForbiddenIo(SyntaxNode root) =>
         root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-            .Select(call => call.Expression.ToString())
+            .Select(NormalizedCallName)
             .Where(name => name is "Directory.EnumerateFiles" or "Directory.GetFiles" or "File.ReadAllText" or "File.ReadAllLines");
+
+    private static string NormalizedCallName(InvocationExpressionSyntax call)
+    {
+        var name = call.Expression.ToString();
+        if (name.StartsWith("global::", StringComparison.Ordinal))
+            name = name["global::".Length..];
+        if (name.StartsWith("System.IO.", StringComparison.Ordinal))
+            return name["System.IO.".Length..];
+        if (name.StartsWith("System.", StringComparison.Ordinal))
+            return name["System.".Length..];
+        return name;
+    }
 }
