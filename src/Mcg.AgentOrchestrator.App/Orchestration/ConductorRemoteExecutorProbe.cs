@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -15,7 +16,9 @@ internal sealed class ConductorRemoteExecutorProbe(
     private const string Script = "$ProgressPreference = 'SilentlyContinue'; $task = schtasks /query /tn mcg-executor-lane /fo csv /nh 2>$null | Select-Object -First 1; " +
         "$power = $null; try { $battery = Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Select-Object -First 1; " +
         "if ($null -ne $battery) { $power = [bool]$battery.PowerOnline } } catch {}; " +
-        "[pscustomobject]@{ task = $task; powerOnline = $power } | ConvertTo-Json -Compress";
+        "$diskFree = $null; try { $diskFree = [long]([System.IO.DriveInfo]::new($env:SystemDrive).TotalFreeSpace) } catch {}; " +
+        "$sshdSessions = $null; try { $sshdSessions = @(Get-Process -ErrorAction Stop | Where-Object { $_.ProcessName -eq 'sshd' }).Count } catch {}; " +
+        "[pscustomobject]@{ task = $task; powerOnline = $power; diskFreeBytes = $diskFree; sshdSessionCount = $sshdSessions } | ConvertTo-Json -Compress";
     private readonly Dictionary<string, DateTimeOffset> _starts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string[]> _reasons = new(StringComparer.Ordinal);
     private bool _seeded;
@@ -58,6 +61,8 @@ internal sealed class ConductorRemoteExecutorProbe(
             var reasons = new List<string>();
             string? state = null;
             bool? power = null;
+            long? diskFreeBytes = null;
+            int? sshdSessionCount = null;
             if (!reachable) reasons.Add("unreachable");
             else if (result.ExitCode != 0) reasons.Add("probe-failed");
             else
@@ -77,15 +82,28 @@ internal sealed class ConductorRemoteExecutorProbe(
                     }
                     var online = root.GetProperty("powerOnline");
                     power = online.ValueKind == JsonValueKind.Null ? null : online.GetBoolean();
+                    if (root.TryGetProperty("diskFreeBytes", out var disk) && disk.ValueKind == JsonValueKind.Number &&
+                        disk.TryGetInt64(out var bytes)) diskFreeBytes = bytes;
+                    if (root.TryGetProperty("sshdSessionCount", out var sessions) && sessions.ValueKind == JsonValueKind.Number &&
+                        sessions.TryGetInt32(out var count)) sshdSessionCount = count;
                     if (state is not ("Ready" or "Running")) reasons.Add("task-not-ready");
                     if (power == false) reasons.Add("on-battery");
                 }
-                catch (Exception) { state = null; power = null; reasons.Clear(); reasons.Add("probe-failed"); }
+                catch (Exception)
+                {
+                    state = null; power = null; diskFreeBytes = null; sshdSessionCount = null;
+                    reasons.Clear(); reasons.Add("probe-failed");
+                }
             }
             var now = clock.GetUtcNow();
+            var outcomes = RemoteExecutorReportReader.ReadOutcomes(
+                Path.Combine(hostStateRoot, ".orchestrator", RemoteExecutorHealthLedger.FileName), out _);
+            var stall = RemoteExecutorAcceptanceStall.Evaluate(outcomes.Where(row => row.ExecutorId == entry.Id), now);
+            if (stall.Stalled) reasons.Add("no-accepted-lane");
             var stderr = PowerShellClixmlStandardError.Readable(result.Stderr ?? "");
             var row = new RemoteExecutorProbeRow(now, entry.Id, reachable, result.ExitCode, result.TimedOut,
-                state, power, reasons.ToArray(), stderr.Length > 2048 ? stderr[^2048..] : stderr);
+                state, power, reasons.ToArray(), stderr.Length > 2048 ? stderr[^2048..] : stderr,
+                diskFreeBytes, sshdSessionCount);
             RemoteExecutorProbeLedger.Append(Path.Combine(hostStateRoot, ".orchestrator", RemoteExecutorProbeLedger.FileName), row);
             var sorted = reasons.Order(StringComparer.Ordinal).ToArray();
             var previous = _reasons.GetValueOrDefault(entry.Id, []);
@@ -95,6 +113,13 @@ internal sealed class ConductorRemoteExecutorProbe(
                 var detail = sorted.Length == 0
                     ? $"REMOTE_EXECUTOR_RECOVERED executor={entry.Id} task_state={state ?? "unknown"} power_online={powerText}"
                     : $"REMOTE_EXECUTOR_WARNING executor={entry.Id} reachable={reachable.ToString().ToLowerInvariant()} task_state={state ?? "unknown"} power_online={powerText} reasons={string.Join(",", reasons)}";
+                detail += $" disk_free_bytes={diskFreeBytes?.ToString(CultureInfo.InvariantCulture) ?? "null"}" +
+                    $" sshd_sessions={sshdSessionCount?.ToString(CultureInfo.InvariantCulture) ?? "null"}";
+                if (stall.Stalled)
+                {
+                    var reason = (stall.LastOfferReason ?? "null").Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+                    detail += $" offers={stall.Offers.ToString(CultureInfo.InvariantCulture)} last_offer_reason={reason[..Math.Min(reason.Length, 160)]}";
+                }
                 writer.AppendRequired("remote-executor-health", null, detail, now, $"remote-executor-health:{Guid.NewGuid():N}");
             }
             _reasons[entry.Id] = sorted;
