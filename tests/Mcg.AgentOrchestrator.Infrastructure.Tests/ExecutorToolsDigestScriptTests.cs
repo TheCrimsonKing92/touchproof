@@ -125,11 +125,13 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
     {
         SeedBareRepository();
         const string prefix = "a1b2c3d4e";
+        // The other commit must not occur in the running job's attempt id either.
+        const string otherPrefix = "f0e9d8c7b";
         var name = prefixInName ? "attempt-A1B2C3D4E-lane" : "goal-gate-20261115-0123456789-lane";
         var keptRun = AgedFolder("runs/" + prefix, 60);
         var keptResult = AgedFolder("results/" + prefix + "/lane", 60);
-        var expiredRun = AgedFolder("runs/123456789", 60);
-        var expiredResult = AgedFolder("results/123456789/lane", 60);
+        var expiredRun = AgedFolder("runs/" + otherPrefix, 60);
+        var expiredResult = AgedFolder("results/" + otherPrefix + "/lane", 60);
         var cancel = AgedFile("queue/taken/" + name + ".cancel", 60);
         var jobPath = Path.Combine(_root, "queue", "taken", name + ".json");
         if (!prefixInName)
