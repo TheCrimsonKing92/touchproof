@@ -80,7 +80,8 @@ public sealed partial class SqliteOrchestratorStateRepository
             }
             // Match selected loading: validate hot serialization first, then hydrate before
             // Core domain validation. A missing archive leaves the hot stub authoritative.
-            if (fields?.Tasks is not null && await TaskHistoryStore.HasRowsAsync(connection, id, cancellationToken))
+            if (fields?.Tasks is not null && (fields.Tasks.HasHistoryMarker ||
+                await TaskHistoryStore.HasRowsAsync(connection, id, cancellationToken)))
             {
                 using var historyStream = reopenStream();
                 var requiresReconstruction = await TaskHistoryStore.RequiresReconstructionAsync(
@@ -88,7 +89,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 fields = fields with { Tasks = fields.Tasks with
                     { RequiresReconstruction = fields.Tasks.RequiresReconstruction || requiresReconstruction } };
             }
-            var status = ValidateSimilarityDomain(fields, reopenStream);
+            var status = await ValidateSimilarityDomainAsync(connection, fields, reopenStream, cancellationToken);
             if (fields is null || status != GoalStatus.Completed) continue;
             var objective = fields.Objective.Trim();
             // Goal.FromSnapshot uses a bounded first-line title and metadata timestamps only
@@ -146,7 +147,8 @@ public sealed partial class SqliteOrchestratorStateRepository
         }
     }
 
-    private static GoalStatus ValidateSimilarityDomain(GoalSimilarityFields? fields, Func<Stream> reopenStream)
+    private async Task<GoalStatus> ValidateSimilarityDomainAsync(SqliteConnection connection,
+        GoalSimilarityFields? fields, Func<Stream> reopenStream, CancellationToken cancellationToken)
     {
         if (fields is not null && !string.IsNullOrWhiteSpace(fields.Objective) &&
             (fields.IsMetadataOnly
@@ -158,7 +160,10 @@ public sealed partial class SqliteOrchestratorStateRepository
         // These are reconstruction failures, not deserialization failures. Replay only
         // suspect documents, outside hot quarantine, so Core owns the exception contract.
         using var stream = reopenStream();
-        var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(stream, SerializerOptions);
+        using var textReader = new StreamReader(stream);
+        var documentText = await textReader.ReadToEndAsync(cancellationToken);
+        var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(documentText, SerializerOptions);
+        snapshot = await TaskHistoryStore.HydrateAsync(connection, snapshot, documentText, cancellationToken);
         // Explicit parks also need Core's effective status: reconstruction can normalize
         // a stored Completed status to Parked or retain a terminal stop.
         return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot!], [])).Goals.Single().Status;
@@ -526,7 +531,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         return true;
     }
 
-    private sealed record SimilarityTaskShape(int Count, bool RequiresReconstruction);
+    private sealed record SimilarityTaskShape(int Count, bool RequiresReconstruction, bool HasHistoryMarker = false);
 
     private sealed class SimilarityTaskShapeConverter : JsonConverter<SimilarityTaskShape>
     {
@@ -539,6 +544,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 throw new InvalidSimilarityShapeException("Tasks");
             var count = 0;
             var requiresReconstruction = false;
+            var hasHistoryMarker = false;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 count++;
@@ -551,6 +557,13 @@ public sealed partial class SqliteOrchestratorStateRepository
                     if (task.TokenType == JsonTokenType.StartObject)
                         while (task.Read() && task.TokenType != JsonTokenType.EndObject)
                         {
+                            if (task.ValueTextEquals(GoalTaskHistoryStore.MarkerProperty))
+                            {
+                                task.Read();
+                                hasHistoryMarker |= task.TokenType != JsonTokenType.Null;
+                                SkipSimilarityValue(ref task);
+                                continue;
+                            }
                             if (GoalTaskHistoryStore.TryReadInlineShape(ref task, HasInvalidSimilarityVerification, out var invalidHistory))
                             {
                                 requiresReconstruction |= invalidHistory;
@@ -578,7 +591,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                     throw new InvalidSimilarityShapeException(SimilarityRejectedMember(ex, $"Tasks[{count - 1}]"), ex);
                 }
             }
-            return new(count, requiresReconstruction);
+            return new(count, requiresReconstruction, hasHistoryMarker);
         }
 
         internal static void ValidateTaskValue(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
