@@ -1866,6 +1866,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         // preserves row order. SQLite evaluates CASE arms on demand, so terminal rows never invoke
         // json_each (covered by the malformed-JSON sentinel fact).
         var nonTerminal = ConductLoopGoalStatus.SqlNonTerminalPredicate("status");
+        var latestCommit = GoalTaskHistoryStore.LatestFieldSql(
+            await GoalTaskHistoryStore.HasTableAsync(conn, cancellationToken), "dispatch", "ResultCommit");
         cmd.CommandText = $"""
             SELECT
                 id,
@@ -1873,9 +1875,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 {GoalMetadataTitleSql()},
                 updated_at,
                 CASE WHEN {nonTerminal} THEN (
-                    SELECT json_extract(task.value, '$.LastDispatch.ResultCommit')
+                    SELECT {latestCommit}
                     FROM json_each(goals.snapshot_json, '$.Tasks') AS task
-                    WHERE COALESCE(json_extract(task.value, '$.LastDispatch.ResultCommit'), '') <> ''
+                    WHERE COALESCE(({latestCommit}), '') <> ''
                     ORDER BY CAST(task.key AS INTEGER) DESC
                     LIMIT 1
                 ) END AS result_commit,
@@ -2009,8 +2011,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             foreach (var task in tasks.EnumerateArray())
             {
-                if (task.TryGetProperty("LastDispatch", out var dispatch) &&
-                    dispatch.ValueKind == JsonValueKind.Object &&
+                var dispatch = TaskHistoryStore.ReadLatestDispatchAsync(conn, key.Id, task).GetAwaiter().GetResult();
+                if (dispatch.ValueKind == JsonValueKind.Object &&
                     dispatch.TryGetProperty("ResultCommit", out var commit) &&
                     !string.IsNullOrEmpty(commit.GetString()))
                 {
