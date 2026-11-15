@@ -15,7 +15,7 @@ internal static class DeclaredGateCheckSource
                 var manifest = GoalAcceptanceVerifier.AcceptanceManifest.Load(
                     dispatch.WorkingDirectory, changedFiles: null, projectHomeDirectory: projectHomeDirectory);
                 return (manifest.Checks ?? []).Select(check => new DeclaredGateCheck(check.Name,
-                    selector => GateCheckSelectorMatcher.Matches(selector, check))).ToArray();
+                    selector => GateCheckSelectorMatcher.Matches(selector, check), check.Type, check.Command)).ToArray();
             }
             catch (Exception ex) when (ex is MissingAcceptanceManifestException or IOException or
                 UnauthorizedAccessException or JsonException)

@@ -89,7 +89,8 @@ internal sealed partial class WorkerArtifactWriter
             Path.Combine(contextDirectory, "current-task.md"),
             BuildCurrentTaskForStack(task, workingDirectory, ProjectStackResolver.GuidanceStack(
                 ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), _targetHome.IsOrchestratorHome), preserveCompleteArtifacts,
-                task.RequiredRole == AgentRole.Tester ? WorkerResultSubmission.PathFor(workingDirectory, goal.Id) : null) +
+                task.RequiredRole == AgentRole.Tester ? WorkerResultSubmission.PathFor(workingDirectory, goal.Id) : null,
+                _targetHome) +
             (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
                 preflightFindings?.Any(line => line.StartsWith("GATE_TEST_SELECTOR_DIAGNOSTIC", StringComparison.Ordinal)) == true
                 ? Environment.NewLine + "Selector naming diagnostic: read subscription-preflight.md in this context. " +
@@ -396,7 +397,8 @@ internal sealed partial class WorkerArtifactWriter
         string workingDirectory,
         ProjectStack? stack,
         bool preserveCompleteArtifacts,
-        string? submissionPath)
+        string? submissionPath,
+        WorkerTargetHome? targetHome = null)
     {
         var lines = new List<string>
         {
@@ -482,7 +484,11 @@ internal sealed partial class WorkerArtifactWriter
         lines.Add(string.Empty);
         lines.Add("## Worker Result Contract");
         lines.Add("End final output with:");
-        lines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(task.RequiredRole));
+        var directiveStack = task.RequiredRole == AgentRole.Planner
+            ? ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome) : stack;
+        lines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(task.RequiredRole, stack: directiveStack,
+            testCheckCommands: task.RequiredRole == AgentRole.Planner
+                ? ProjectStackResolver.TestCheckCommandsFor(workingDirectory, targetHome, directiveStack) : null));
         if (task.RequiredRole == AgentRole.Tester && submissionPath is not null)
             lines.Add($"Write the result fields as one JSON object to a file inside the context folder and submit it with `{WorkerResultSubmission.FormatCommand(WorkerResultSubmission.ResolveScriptPath(), workingDirectory, task.Id, submissionPath)}`; fix every `REJECTED:` line and submit again until it prints `ACCEPTED`; the accepted submission is the result; still end the output with the WORKER_RESULT block.");
 

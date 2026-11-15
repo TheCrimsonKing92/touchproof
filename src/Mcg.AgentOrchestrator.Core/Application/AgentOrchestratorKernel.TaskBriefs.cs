@@ -175,7 +175,7 @@ public sealed partial class AgentOrchestratorKernel
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
-        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null)
+        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -302,7 +302,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory));
+        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory, roleRequirementStack, testCheckCommands));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(instructionLines, task.RequiredRole, includeReference: true);
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
@@ -765,7 +765,7 @@ public sealed partial class AgentOrchestratorKernel
         string? modelFitTarget,
         AgentRole role,
         bool hasDurableResearch,
-        string? contextDirectory)
+        string? contextDirectory, ProjectStack? stack, IReadOnlyList<string?>? testCheckCommands)
     {
         var modelFitInstruction = BuildModelFitInstruction(modelFitTarget);
         if (complexity == TaskComplexity.Simple)
@@ -782,7 +782,7 @@ public sealed partial class AgentOrchestratorKernel
                 role == AgentRole.Planner && hasDurableResearch
                     ? "Use the complete Durable Research Notes supplied in the context package; synthesize from them and do not run another broad repository source survey."
                     : "When surveying files, start with source-survey.md in the context directory when present, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.");
-            simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role, contextDirectory));
+            simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role, contextDirectory, stack, testCheckCommands));
             simpleLines.Add(modelFitInstruction);
             return simpleLines;
         }
@@ -808,7 +808,7 @@ public sealed partial class AgentOrchestratorKernel
                     "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
                     "Prefer source-survey.md in the context directory as the starting repository map before broad recursive file reads."
                 ]);
-        complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role, contextDirectory));
+        complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role, contextDirectory, stack, testCheckCommands));
         complexLines.Add(modelFitInstruction);
         return complexLines;
     }

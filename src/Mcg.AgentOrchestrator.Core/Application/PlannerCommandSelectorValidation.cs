@@ -28,8 +28,7 @@ internal static class PlannerCommandSelectorValidation
             : string.Join(", ", checks.Select(check => $"'{check.Name}'"));
         return $"Planner gate test obligation selectors match no declared gate check: {string.Join(", ", unmatched.Select(selector => $"'{selector}'"))}. " +
             $"Declared check names: {declared}. " +
-            "On declared-command stacks, test identities use <test file>::<test name> or the bare test name; " +
-            "on .NET, use the class or Namespace.Class.Method. " +
+            "Use " + GateTestSelectorForm.ForChecks(checks) + ". " +
             "A whole-suite criterion such as \"existing checks pass\" is proven by the gate verdict and needs no test obligation. " +
             "Name a declared check or omit the gate test obligation for that criterion, then replan.";
     }

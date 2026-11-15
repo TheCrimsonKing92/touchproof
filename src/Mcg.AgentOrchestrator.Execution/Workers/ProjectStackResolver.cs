@@ -69,4 +69,32 @@ public static class ProjectStackResolver
             return ProjectStack.Declared;
         return GuidanceStack(Resolve(workingDirectory, home.ProjectHomeDirectory), home.IsOrchestratorHome);
     }
+
+    internal static IReadOnlyList<string?> TestCheckCommandsFor(string workingDirectory, WorkerTargetHome? targetHome,
+        ProjectStack? stack = null)
+    {
+        stack ??= ReadDeclaredStack(targetHome?.ProjectHomeDirectory);
+        if (stack != ProjectStack.Declared) return [];
+        try
+        {
+            var path = WorkerManifestTestProjectReader.ResolvePath(workingDirectory, targetHome ?? WorkerTargetHome.Home);
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Array)
+                return [];
+
+            return checks.EnumerateArray()
+                .Where(check => check.ValueKind == JsonValueKind.Object &&
+                    check.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String &&
+                    type.GetString() == "junit-command")
+                .Select(check => check.TryGetProperty("command", out var command) && command.ValueKind == JsonValueKind.String
+                    ? command.GetString() : null)
+                .ToArray();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            JsonException or ArgumentException or NotSupportedException)
+        {
+            return [];
+        }
+    }
 }

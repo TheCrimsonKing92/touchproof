@@ -74,7 +74,8 @@ public static class AgentOutputDirectives
         "Report every denied target once. Use the actual attempted paths and diagnostics in this example: " + WorkerWriteDenialExample +
         " The host independently establishes target labels and actual Low execution. Existing single-target Cannot write <path> reports remain supported.";
 
-    public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role, string? contextDirectory = null)
+    public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role, string? contextDirectory = null,
+        ProjectStack? stack = ProjectStack.Dotnet, IReadOnlyList<string?>? testCheckCommands = null)
     {
         var lines = new List<string>();
         if (role == AgentRole.Developer)
@@ -107,7 +108,7 @@ public static class AgentOutputDirectives
                 "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. " +
                 "Prerequisites block now; future obligations: availability=post-implementation plus owner, no store, never claim execution. " +
                 "Evidence only the landed build or live host can show: availability=post-landing, owner=operator, no store or tests; it is a post-landing check and never holds landing. " +
-                "Gate tests: owner=acceptance-gate; non-empty tests array of class, Class.Method or exact theory rows. Selectorless acceptance: authorized explicit answer; Operator checks stay independent. " +
+                GateTestSelectorForm.DirectiveSentence(stack, testCheckCommands) +
                 "Host alone binds goal/task/dispatch brief version. Invalid batch/identity conflicts or out-of-range criteria reject all; fix diagnostics and replan. " +
                 "If evidence contradicts criteria, emit one PLANNER_BRIEF_AMENDMENT: line per criterion that needs amending, at most one per criterion: JSON: criterion_index (1-based), defect, evidence (path:line), proposed_text, optional fallback_text; report the amendment in blockers; re-emit evidence lines after the ruling (only the owner questions). " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
