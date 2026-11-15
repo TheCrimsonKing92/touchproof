@@ -121,6 +121,9 @@ internal sealed class ConductorTickStepLedger
         return withinWalk ? Measure(name, action) : action();
     }
 
+    internal static void MeasureWithinWalk(string name, Action action) =>
+        MeasureWithinWalk(name, () => { action(); return true; });
+
     internal static IDisposable? OpenScope(string name)
     {
         var ledger = Current.Value;

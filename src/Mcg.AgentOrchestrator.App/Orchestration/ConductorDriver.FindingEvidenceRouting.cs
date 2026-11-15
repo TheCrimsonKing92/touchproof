@@ -643,7 +643,7 @@ internal sealed partial class ConductorDriver
     private bool EveryFailingTestIsInsideCandidateChanges(
         Goal goal,
         FindingEvidenceBatch batch,
-        IReadOnlyList<string> failingTestIdentities) => ConductorTickStepLedger.Measure("walk-recovery-failure-source",
+        IReadOnlyList<string> failingTestIdentities) => ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-failure-source",
             () => EveryFailingTestIsInsideCandidateChangesCore(goal, batch, failingTestIdentities));
 
     private bool EveryFailingTestIsInsideCandidateChangesCore(Goal goal, FindingEvidenceBatch batch, IReadOnlyList<string> failingTestIdentities)

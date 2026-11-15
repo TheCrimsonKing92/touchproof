@@ -39,7 +39,7 @@ internal sealed class PreTesterGuardSelections
         Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? reverseDependencySelector = null,
         Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? reverseDependencyCostDecision = null)
     {
-        var (changedFileGuards, provenance) = ConductorTickStepLedger.Measure("walk-pretester-changed-file-guards",
+        var (changedFileGuards, provenance) = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-changed-file-guards",
             () => cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision));
         foreach (var selection in changedFileGuards.Selections)
         {
@@ -48,14 +48,14 @@ internal sealed class PreTesterGuardSelections
                 $"PRE_TESTER_GUARD_SELECTED class={guard.Class} kind={guard.Kind} path={guard.Path}");
         }
         var cli = priorSelections is null
-            ? ConductorTickStepLedger.Measure("walk-pretester-cli-surface",
+            ? ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-cli-surface",
                 () => PreTesterCliSurfaceSelections.Select(worktreePath, changedPaths, settings))
             : (Selections: (IReadOnlyList<FindingEvidenceSelection>)[],
                 Provenance: (IReadOnlyList<PreTesterChangedFileGuardClasses.Provenance>)[]);
         foreach (var reason in cli.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
-        var coupled = ConductorTickStepLedger.Measure("walk-pretester-coupled-class", () =>
+        var coupled = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-coupled-class", () =>
         {
             var structuralPaths = changedPaths.Any(PreTesterLiveTreeStructuralSelections.IsTreePath)
                 ? (structuralPathReader ?? PreTesterCoupledClassSelections.ReadStructuralPaths)(worktreePath, mainRevision)
@@ -65,15 +65,15 @@ internal sealed class PreTesterGuardSelections
         foreach (var reason in coupled.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
-        var reverse = ConductorTickStepLedger.Measure("walk-pretester-reverse-dependency",
+        var reverse = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-reverse-dependency",
             () => PreTesterReverseDependencySelections.Select(worktreePath, changedPaths, progress,
                 reverseDependencySelector, reverseDependencyCostDecision));
         foreach (var reason in reverse.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
-        var alwaysRun = ConductorTickStepLedger.Measure("walk-pretester-always-run",
+        var alwaysRun = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-always-run",
             () => PreTesterAlwaysRunGuardTestClasses.Select(worktreePath).ToArray());
-        var testSource = ConductorTickStepLedger.Measure("walk-pretester-test-source",
+        var testSource = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-test-source",
             () => PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths).ToArray());
         return new(changedFileGuards, alwaysRun.Concat(testSource)
             .Concat(changedFileGuards.Selections).ToArray(), cli.Selections,

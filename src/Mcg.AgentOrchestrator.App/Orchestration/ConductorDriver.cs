@@ -905,7 +905,7 @@ internal sealed partial class ConductorDriver
         RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,
             _parallelAcceptanceAttemptCoordinator, dir, goal => _resolveAcceptanceHeads(goal).BranchHeadSha);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
-            ConductorTickStepLedger.Measure("walk-finding-sibling-classes", () => FocusedEvidenceSiblingExpansionBound.Shared.Resolve(
+            ConductorTickStepLedger.MeasureWithinWalk("walk-finding-sibling-classes", () => FocusedEvidenceSiblingExpansionBound.Shared.Resolve(
                 GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,
                 project, requestedClass,
                 worktree => GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree, workspace.IntegrationBranch)).KeptSiblings);
@@ -1101,7 +1101,7 @@ internal sealed partial class ConductorDriver
         _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-candidate-context", () => contextReader(goal));
         _getFindingEvidenceEngineSettings = getFindingEvidenceEngineSettings ??
             (_ => new AcceptanceGateEngineSettings());
-        _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) => ConductorTickStepLedger.Measure("walk-finding-sibling-classes",
+        _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) => ConductorTickStepLedger.MeasureWithinWalk("walk-finding-sibling-classes",
             () => resolveFindingEvidenceSiblingClasses?.Invoke(goal, project, requestedClass) ?? []);
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
@@ -1262,19 +1262,19 @@ internal sealed partial class ConductorDriver
         Goal goal,
         ConductorAutonomyPolicy policy,
         string? runningHoldReason = null)
-        => ConductorTickStepLedger.Measure("walk-hold-entry-gates", () => AdvanceCore(goal, policy, runningHoldReason));
+        => ConductorTickStepLedger.MeasureWithinWalk("walk-hold-entry-gates", () => AdvanceCore(goal, policy, runningHoldReason));
     private ConductorAdvanceResult AdvanceCore(Goal goal, ConductorAutonomyPolicy policy, string? runningHoldReason)
     {
         var goalId = goal.Id.Value;
         var goalPrefix = goalId[..8];
-        ConductorTickStepLedger.Measure("walk-hold-lifecycle-reconcile", () =>
+        ConductorTickStepLedger.MeasureWithinWalk("walk-hold-lifecycle-reconcile", () =>
         {
             _conflictIntegration?.ReconcileScopeRequirements(goal);
             FindingStagnationDecisionRecorder.ReconcileResets(_findingStagnationKernel ?? _conductorTickKernel, goal);
             _normalizeLifecycleState(goal,
                 $"Conductor reconciled stale goal/task lifecycle state before lifecycle resolution for goal {goalPrefix}.");
         });
-        var state = ConductorTickStepLedger.Measure("walk-hold-lifecycle-facts", () => GoalLifecycle.ResolveState(goal, GetFacts(goal)));
+        var state = ConductorTickStepLedger.MeasureWithinWalk("walk-hold-lifecycle-facts", () => GoalLifecycle.ResolveState(goal, GetFacts(goal)));
         if (goal.Status == GoalStatus.Parked)
             return MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
@@ -1311,7 +1311,7 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(
                     state,
-                    ConductorTickStepLedger.Measure("walk-running-hold-reason", () => SandboxPreparationStartStatus.HoldReason(goal, runningHoldReason)))),
+                    ConductorTickStepLedger.MeasureWithinWalk("walk-running-hold-reason", () => SandboxPreparationStartStatus.HoldReason(goal, runningHoldReason)))),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, AwaitingVerificationHoldReasonBuilder.Build(goal))),
             GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),

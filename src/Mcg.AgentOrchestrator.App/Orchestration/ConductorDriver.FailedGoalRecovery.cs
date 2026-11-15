@@ -10,7 +10,7 @@ internal sealed partial class ConductorDriver
     internal ProviderSignInFailover? SignInFailover { get; set; }
     internal Func<Goal, string?>? RecoveryCandidateRevision { get; set; }
     internal Func<string, AcceptanceTestSourceResolver.Request> FindingFailureSources { get; set; } = root => new(root);
-    internal string? ReadRecoveryCandidateRevision(Goal goal) => ConductorTickStepLedger.Measure("walk-candidate-revision",
+    internal string? ReadRecoveryCandidateRevision(Goal goal) => ConductorTickStepLedger.MeasureWithinWalk("walk-candidate-revision",
         () => RecoveryCandidateRevision is { } read ? read(goal) : _getPreReviewEvidenceContext(goal).CandidateSha);
     internal Func<Goal, FailedGoalRecoveryDecision, string?, AttributedFailureRouteDecision>? InconclusiveRedRoute { get; set; }
 
@@ -20,8 +20,8 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         GoalLifecycleState state)
     {
-        var facts = ConductorTickStepLedger.Measure("walk-recovery-facts", () => BuildFailedGoalRecoveryFacts(goal, policy, state));
-        var decision = ConductorTickStepLedger.Measure("walk-recovery-facts", () => FailedGoalRecoveryPolicy.Evaluate(facts));
+        var facts = ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-facts", () => BuildFailedGoalRecoveryFacts(goal, policy, state));
+        var decision = ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-facts", () => FailedGoalRecoveryPolicy.Evaluate(facts));
         IReadOnlyList<FailedGoalPendingNote> pendingNotes = [];
         FailedGoalFindingObservation? reviewContractObservation = null;
         FailedGoalFindingObservation? verifyingFindingObservation = null;
@@ -44,13 +44,13 @@ internal sealed partial class ConductorDriver
             {
                 if (verifyingFindingObservationCompleted)
                     throw new InvalidOperationException("Verifying-finding observation repeated after it was fulfilled.");
-                observation = ConductorTickStepLedger.Measure("walk-recovery-evidence-attempt", () => FindingBaselineAttemptObservation.Read(this, goal, policy))!;
+                observation = ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-evidence-attempt", () => FindingBaselineAttemptObservation.Read(this, goal, policy))!;
                 hasObservation = observation is not null;
                 if (!hasObservation)
                 {
                     var landingFileScopes = _getLandingFileScopes(goal);
                     FailedGoalFindingObservation observed = FailedGoalFindingObservation.None;
-                    hasObservation = ConductorTickStepLedger.Measure("walk-recovery-observe-finding", () =>
+                    hasObservation = ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-observe-finding", () =>
                         FindingEvidenceContinuationCoordinator.TryObserveFindingEvidenceContinuation(this, goal, policy, out observed) ||
                         TryObserveVerifyingFindingRecovery(goal, policy, landingFileScopes, out observed));
                     observation = observed;
@@ -70,7 +70,7 @@ internal sealed partial class ConductorDriver
                     new ConductorAdvanceOutcome.Held(state, observationHeldReason)
                     { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, observationHeldReason) });
             }
-            facts = ConductorTickStepLedger.Measure("walk-recovery-facts", () => BuildFailedGoalRecoveryFacts(goal, policy, state));
+            facts = ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-facts", () => BuildFailedGoalRecoveryFacts(goal, policy, state));
             if (reviewContractObservationCompleted)
                 facts = facts.WithReviewContractObservation(reviewContractObservation);
             if (verifyingFindingObservationCompleted)
