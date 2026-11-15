@@ -94,7 +94,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
             _plan?.HasPlan == true ? kept.Length : null, _plan?.HasPlan == true ? skipped : null,
             _milliseconds, Applied, Applied,
             mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null ? "suspended-by-backstop-miss" : null,
-            mode == AcceptanceSelectedExecutionMode.Enforce ? suspension?.MissId : null);
+            mode == AcceptanceSelectedExecutionMode.Enforce ? suspension?.MissId : null)
+        { MethodFormResolutions = _plan?.MethodFormResolutions ?? [] };
         return observation with { SelectedExecution = record };
     }
 
