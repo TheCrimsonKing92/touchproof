@@ -32,6 +32,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal WorkerBuildRequestChannel? Channel;
     internal OwnedProcessGroup.SuspendedProcessStart? Worker;
     internal bool PreserveArtifacts;
+    internal Func<int, IReadOnlyList<int>> LiveDescendantReader = WorkerProcessJobs.ListLiveDescendantProcessIds;
     internal const string Project = "src/Feature/Feature.csproj";
     internal const string Source = "src/Feature/Feature.cs";
     internal const string OtherProject = "src/Other/Other.csproj";
@@ -346,6 +347,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         }
 
         Attempt("cancellation", Lifetime.Cancel);
+        var workerProcessId = Worker?.Process.Id;
         var exited = Worker is null;
         if (Worker is not null)
         {
@@ -374,7 +376,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         if (!PreserveArtifacts && exited && failures.Count == 0)
             Attempt("directory cleanup", () => SharedTestSupport.RemoveTempDirectory(Root));
         if (failures.Count != 0)
-            throw new AggregateException($"Worker build fixture cleanup failed. {SharedTestSupport.DescribeResidual(Root)}", failures);
+            throw new AggregateException($"Worker build fixture cleanup failed. {SharedTestSupport.DescribeResidual(Root)}" +
+                WorkerBuildFixtureHolderReport.Describe(workerProcessId, Root, LiveDescendantReader), failures);
     }
 
     internal sealed class FixtureTime : TimeProvider

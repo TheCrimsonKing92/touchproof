@@ -14,6 +14,7 @@ internal sealed class ConductorStartupHeartbeat
 
     internal static class Phases
     {
+        internal const string StateLoad = "state-load";
         internal const string SweepKernelLoad = "sweep-kernel-load";
         internal const string TerminalSweep = "terminal-sweep";
         internal const string MetadataExclusionCount = "metadata-exclusion-count";
@@ -24,7 +25,7 @@ internal sealed class ConductorStartupHeartbeat
         internal const string LoopSetup = "loop-setup";
         internal static IReadOnlyList<string> All { get; } = Array.AsReadOnly(new[]
         {
-            SweepKernelLoad, TerminalSweep, MetadataExclusionCount, SweepSurfacing,
+            StateLoad, SweepKernelLoad, TerminalSweep, MetadataExclusionCount, SweepSurfacing,
             SweepPersistence, OrphanWorktreeSweep, RemoteMirrorStart, LoopSetup
         });
     }

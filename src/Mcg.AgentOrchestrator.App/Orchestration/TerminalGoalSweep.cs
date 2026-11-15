@@ -71,7 +71,7 @@ internal sealed record TerminalGoalSweepResult(
     public int GitSpawnCount { get; init; }
     public int GoalsSweptCount { get; init; }
     public int TerminalGoalsSweptCount { get; init; }
-    public IReadOnlyList<(GoalId GoalId, long ElapsedMs)> GoalDurations { get; init; } = [];
+    public IReadOnlyList<(GoalId GoalId, long ElapsedMs, int GitSpawns)> GoalDurations { get; init; } = [];
     public TerminalGoalSweepOwnedRootResult? OwnedRoots { get; init; }
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
@@ -468,7 +468,7 @@ internal static partial class TerminalGoalSweep
             cleanupHooks);
         var results = new List<TerminalGoalSweepGoalResult>();
         var sweptGoalIds = new List<GoalId>();
-        var goalDurations = new List<(GoalId GoalId, long ElapsedMs)>();
+        var goalDurations = new List<(GoalId GoalId, long ElapsedMs, int GitSpawns)>();
         var terminalGoalsSweptCount = 0;
         var terminalizedGoalIds = new List<GoalId>();
         var terminalizationDecisions = new List<ProgressEvent>();
@@ -520,7 +520,7 @@ internal static partial class TerminalGoalSweep
             }
 
             sweptGoalIds.Add(originalGoal.Id);
-            using var goalTiming = new GoalDurationScope(goalDurations, originalGoal.Id);
+            using var goalTiming = new GoalDurationScope(goalDurations, originalGoal.Id, gitSpawnCounter);
             if (IsTerminalSweepStatus(originalGoal.Status))
                 terminalGoalsSweptCount++;
             var repairs = new List<TerminalGoalSweepRepair>();
@@ -1041,12 +1041,15 @@ internal static partial class TerminalGoalSweep
         };
     }
 
-    private sealed class GoalDurationScope(List<(GoalId GoalId, long ElapsedMs)> durations, GoalId goalId) : IDisposable
+    private sealed class GoalDurationScope(
+        List<(GoalId GoalId, long ElapsedMs, int GitSpawns)> durations, GoalId goalId, GitSpawnCounter gitSpawnCounter) : IDisposable
     {
         private readonly long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        private readonly int initialGitSpawns = Volatile.Read(ref gitSpawnCounter.Value);
 
         public void Dispose() => durations.Add((goalId,
-            (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds));
+            (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+            Volatile.Read(ref gitSpawnCounter.Value) - initialGitSpawns));
     }
 
     private static Dictionary<GoalId, GoalIntegrationEvidence> ResolveMergeEvidenceCandidates(
