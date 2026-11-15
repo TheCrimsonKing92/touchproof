@@ -142,6 +142,7 @@ internal static partial class GoalRefinementWorkCoordinator
         string? rawOutputStamp = null)
     {
         var attached = false;
+        var staleBrief = false;
         IReadOnlyList<ProgressEventSnapshot> committedRefinementEvents = [];
         GoalLifecycleEventWriter? committedEventWriter = null;
         var claimed = await repository.TryProcessOutboxMessageAsync(
@@ -182,6 +183,7 @@ internal static partial class GoalRefinementWorkCoordinator
                         workspace.GoalLifecycleEventsDirectory,
                         kernel: refinementKernel, integrationBranch: workspace.IntegrationBranch);
                     var baselineSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
+                    var producedForBriefVersion = AuthoritativeBriefVersion(baselineSnapshot);
                     var synchronizingAnswers = goal.RefinedSpec is not null;
 
                     if (!synchronizingAnswers)
@@ -241,6 +243,8 @@ internal static partial class GoalRefinementWorkCoordinator
                         goalId,
                         (current, _) =>
                         {
+                            // The transaction can retry with a newer stored snapshot.
+                            staleBrief = false;
                             if (current is null)
                             {
                                 throw new InvalidOperationException(
@@ -248,6 +252,10 @@ internal static partial class GoalRefinementWorkCoordinator
                             }
 
                             if (!synchronizingAnswers && current.RefinedSpec is not null)
+                                return Task.FromResult((false, current, false));
+
+                            staleBrief = AuthoritativeBriefVersion(current) != producedForBriefVersion;
+                            if (staleBrief)
                                 return Task.FromResult((false, current, false));
 
                             var refinementEvents = refinedSnapshot.Timeline
@@ -288,6 +296,10 @@ internal static partial class GoalRefinementWorkCoordinator
                 }
             },
             cancellationToken).ConfigureAwait(false);
+
+        // Completion deletes the claimed row; restore revised work only after finalization.
+        if (claimed && staleBrief)
+            EnsurePendingOutboxOn(repository, goalId);
 
         if (attached)
             GoalEventsTimelineMirror.AppendMissing(committedEventWriter!, goalId, committedRefinementEvents, "spec-refinement");
@@ -516,6 +528,9 @@ internal static partial class GoalRefinementWorkCoordinator
 
     private static string SingleLine(string value) =>
         string.Concat(value.Select(character => char.IsWhiteSpace(character) ? ' ' : character)).Trim();
+
+    private static int AuthoritativeBriefVersion(GoalSnapshot snapshot) =>
+        snapshot.BriefVersions?.Max(brief => (int?)brief.Version) ?? 1;
 
     private static string BuildEscalationDetail(
         GoalId goalId,
