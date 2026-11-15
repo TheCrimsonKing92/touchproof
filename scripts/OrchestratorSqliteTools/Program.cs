@@ -520,6 +520,11 @@ internal static class OrchestratorSqliteTools
         task["LastExecution"] = null;
         task["LastVerification"] = null;
         task["LastDispatch"] = null;
+        if (task["HistoryInTable"] is JsonObject historyMarker)
+        {
+            historyMarker.Remove("LatestVerificationInTable");
+            historyMarker.Remove("LatestDispatchInTable");
+        }
         task["LastProcess"] = null;
         task["SubscriptionRetryAfter"] = null;
         snapshot["Status"] = "Active";

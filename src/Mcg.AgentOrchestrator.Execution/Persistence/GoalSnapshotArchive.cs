@@ -58,8 +58,10 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             try
             {
                 snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
+                snapshot = await new GoalTaskHistoryStore(serializerOptions)
+                    .HydrateAsync(connection, snapshot, json, cancellationToken);
             }
-            catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
+            catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException or InvalidDataException)
             {
                 continue;
             }

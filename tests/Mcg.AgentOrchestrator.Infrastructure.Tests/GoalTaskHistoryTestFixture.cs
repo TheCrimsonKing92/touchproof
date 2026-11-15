@@ -158,5 +158,68 @@ internal sealed class GoalTaskHistoryTestFixture : IDisposable
         Assert.Equal(1, command.ExecuteNonQuery());
     }
 
+    internal void MarkStoredLatest(string goalId, bool? verification = true, bool? dispatch = true,
+        bool keepInline = false)
+    {
+        var document = System.Text.Json.Nodes.JsonNode.Parse(RawGoal(goalId))!;
+        var index = 0;
+        foreach (var task in document["Tasks"]!.AsArray())
+        {
+            var marker = task!["HistoryInTable"]!.AsObject();
+            if (verification is { } v) marker["LatestVerificationInTable"] = v;
+            if (dispatch is { } d) marker["LatestDispatchInTable"] = d;
+            foreach (var (property, marked) in new[] { ("LastVerification", verification), ("LastDispatch", dispatch) })
+            {
+                if (marked != true || keepInline) continue;
+                if (index % 2 == 0) task.AsObject().Remove(property);
+                else task[property] = null;
+            }
+            index++;
+        }
+        ReplaceDocument(goalId, document.ToJsonString(Options));
+    }
+
+    internal static GoalSnapshot LatestSnapshot()
+    {
+        var seed = Snapshot(entries: 3);
+        // Different per-task payloads detect accidental cross-task selection.
+        seed = seed with { Tasks = seed.Tasks.Select(task =>
+        {
+            var verification = task.VerificationHistory!.Select(entry => entry with
+                { StandardOutput = task.Id + entry.StandardOutput }).ToArray();
+            var dispatch = task.DispatchHistory!.Select(entry => entry with
+                { Command = task.Id + entry.Command, ResultCommit = task.Id + entry.DispatchedAt.Minute }).ToArray();
+            return task with { VerificationHistory = verification, LastVerification = verification[^1],
+                DispatchHistory = dispatch, LastDispatch = dispatch[^1] };
+        }).ToArray() };
+        return AgentOrchestratorKernel.FromSnapshot(new([seed], [])).ExportGoalSnapshot(new(seed.Id));
+    }
+
+    internal async Task<IReadOnlyList<GoalSnapshot>> ReadLatestPathsAsync(GoalSnapshot goal, bool archived = false)
+    {
+        var id = new GoalId(goal.Id);
+        var loaded = new List<GoalSnapshot>
+        {
+            (await Repository.LoadGoalsAsync([id])).ExportGoalSnapshot(id),
+            (await Repository.LoadStatusGoalsAsync([id])).ExportGoalSnapshot(id),
+            (await Repository.LoadGoalAsync(id))!,
+            Assert.Single(await Repository.FindGoalSnapshotsByIdPrefixAsync(goal.Id[..8], 1)),
+            (await Repository.TransactGoalAsync(id, (snapshot, _) => Task.FromResult((false, snapshot, snapshot))))!,
+            (await Repository.TransactGoalStateAsync(id, (state, _) => Task.FromResult((false, state, state!.Goal))))!
+        };
+        if (!archived)
+        {
+            loaded.Add((await Repository.LoadAsync()).ExportGoalSnapshot(id));
+            loaded.Add((await Repository.LoadBoardSnapshotAsync()).ExportGoalSnapshot(id));
+            foreach (var task in goal.Tasks)
+            {
+                var match = Assert.Single(await Repository.FindTaskSnapshotsByIdPrefixAsync(task.Id, 1));
+                loaded.Add(match.Goal with { Tasks = [match.Task] });
+            }
+        }
+        Assert.Single(await Repository.ListCompletedGoalSimilarityDocumentsAsync());
+        return loaded;
+    }
+
     public void Dispose() => Directory.Delete(_root, recursive: true);
 }
