@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Disposable discovery inputs, never build artifacts or coverage verdicts.
 internal sealed class MainBaselineDiscoveryCache
 {
-    internal const int SchemaVersion = 1;
+    internal const int SchemaVersion = 2;
     private readonly string _rootPath;
     private readonly int _maxEntries;
     private readonly TimeSpan _maxAge;
@@ -31,11 +31,47 @@ internal sealed class MainBaselineDiscoveryCache
     {
         try
         {
-            return WorktreeTreeDigest.TryCompute(mainWorktreePath, out var digest, out _)
-                ? CreateKey(digest, mainWorktreePath, project, configuration, discoveryArguments, artifactsPath)
-                : null;
+            var digest = TryComputeInputIdentity(mainWorktreePath, project);
+            return digest is null ? null :
+                CreateKey(digest, mainWorktreePath, project, configuration, discoveryArguments, artifactsPath);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    internal static string? TryComputeInputIdentity(string mainWorktreePath, string project)
+    {
+        var closure = TryComputeClosureDigest(mainWorktreePath, project);
+        if (closure is not null) return "closure:" + closure;
+        return WorktreeTreeDigest.TryCompute(mainWorktreePath, out var tree, out _) ? "tree:" + tree : null;
+    }
+
+    private static string? TryComputeClosureDigest(string mainWorktreePath, string project)
+    {
+        try
+        {
+            var members = AcceptanceLaneClosureHasher.TryComputeMembers(mainWorktreePath,
+                new GoalAcceptanceVerifier.AcceptanceManifestCheck { Project = project });
+            var root = Path.GetFullPath(mainWorktreePath);
+            if (members is null || members.Count == 0) return null;
+
+            // Preserve the lane hasher's identity while keeping reads on shared main
+            // lock-free and subject to GitCli's launch and pipe-drain protections.
+            var status = GitCli.Run(root, GitCli.DefaultTimeoutMilliseconds, ["status", "--porcelain", "--", .. members]);
+            if (!status.Succeeded || status.DrainTimedOut || status.Output.Trim().Length != 0) return null;
+
+            var identities = new List<string>(members.Count);
+            foreach (var member in members)
+            {
+                var identity = GitCli.Run(root, GitCli.DefaultTimeoutMilliseconds, ["rev-parse", $"HEAD:{member}"]);
+                if (!identity.Succeeded || identity.DrainTimedOut || string.IsNullOrWhiteSpace(identity.Output)) return null;
+                identities.Add($"{member}:{identity.Output.Trim().ToLowerInvariant()}");
+            }
+            return Hash(string.Join('\n', identities));
+        }
+        catch (Exception error) when (error is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
         {
             return null;
         }
@@ -136,6 +172,7 @@ internal sealed class MainBaselineDiscoveryCache
     private sealed record Entry(Payload Payload, string ContentHash);
 }
 
+// TreeDigest carries a mode-prefixed input identity: project closure or whole-tree fallback.
 internal sealed record MainBaselineDiscoveryCacheKey(string TreeDigest, string MainWorktreePath,
     string Project, string Configuration, string ArgumentsFingerprint)
 {
@@ -147,8 +184,9 @@ internal sealed record MainBaselineDiscoveryCacheWrite(MainBaselineDiscoveryCach
 {
     internal void Publish(GoalAcceptanceVerifier.CommandResult result, IReadOnlyList<string> discoveryArguments)
     {
-        // Do not publish under the old identity if main changed during build/discovery.
-        if (WorktreeTreeDigest.TryCompute(Key.MainWorktreePath, out var digest, out _) && digest == Key.TreeDigest)
+        // Recompute membership, contents and mode before publishing under the captured identity.
+        var digest = MainBaselineDiscoveryCache.TryComputeInputIdentity(Key.MainWorktreePath, Key.Project);
+        if (digest is not null && (Key with { TreeDigest = digest }) == Key)
             Cache.TryWrite(Key, result,
                 XunitStringTheoryIdentity.CaptureAssemblyIdentities(discoveryArguments, Key.MainWorktreePath));
     }

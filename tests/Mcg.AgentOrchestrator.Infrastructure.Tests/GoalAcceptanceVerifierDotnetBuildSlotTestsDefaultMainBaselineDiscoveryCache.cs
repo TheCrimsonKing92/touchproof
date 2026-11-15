@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -8,6 +10,47 @@ using static GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery;
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselineDiscoveryCache : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
+    private const string SampleProject = "tests/Sample.Tests/Sample.Tests.csproj";
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ClosureIdentity_UsesHardenedGitForCreationAndPublication(bool publish)
+    {
+        using var fixture = new Fixture(referenceLibrary: true);
+        var closure = Assert.IsType<string>(fixture.ClosureDigest());
+        var members = AcceptanceLaneClosureHasher.TryComputeMembers(fixture.MainRoot,
+            new GoalAcceptanceVerifier.AcceptanceManifestCheck { Project = SampleProject });
+        Assert.NotNull(members);
+        var key = fixture.InputKey();
+        var cache = new MainBaselineDiscoveryCache(fixture.CacheRoot);
+        var discovery = new GoalAcceptanceVerifier.CommandResult(0, "Sample.Tests.Passes");
+        var launches = new List<(string[] Arguments, string? OptionalLocks)>();
+        var previous = GitCli.StartInfoObserver;
+        GitCli.StartInfoObserver = info => launches.Add((info.ArgumentList.ToArray(),
+            info.Environment.TryGetValue("GIT_OPTIONAL_LOCKS", out var locks) ? locks : null));
+        try
+        {
+            if (publish) new MainBaselineDiscoveryCacheWrite(cache, key).Publish(discovery, []);
+            else key = fixture.InputKey();
+        }
+        finally { GitCli.StartInfoObserver = previous; }
+
+        Assert.Equal("closure:" + closure, key.TreeDigest);
+        if (publish) Assert.Equal(discovery, cache.TryRead(key));
+        Assert.Equal(1 + members.Count, launches.Count);
+        Assert.All(launches, launch =>
+        {
+            Assert.Equal("0", launch.OptionalLocks);
+            Assert.Equal(GitCli.HardeningArguments, launch.Arguments.Take(GitCli.HardeningArguments.Count));
+        });
+        Assert.Equal(new[] { "status", "--porcelain", "--" }.Concat(members),
+            launches[0].Arguments.Skip(GitCli.HardeningArguments.Count));
+        for (var index = 0; index < members.Count; index++)
+            Assert.Equal(new[] { "rev-parse", $"HEAD:{members[index]}" },
+                launches[index + 1].Arguments.Skip(GitCli.HardeningArguments.Count));
+    }
+
     [Xunit.Fact]
     public void ConductorConstructorPersistsDiscoveryUnderExplicitStorageRoot()
     {
@@ -46,6 +89,193 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         Assert.Equal(first.Gate.Passed, second.Gate.Passed);
         Assert.Equal(first.Check.Passed, second.Check.Passed);
         Assert.Equal(first.Check.ResultSummary, second.Check.ResultSummary);
+    }
+
+    [Xunit.Fact]
+    public async Task MainChangeOutsideClosure_HitsAndSkipsBuildAndDiscovery()
+    {
+        using var fixture = new Fixture();
+        var closure = Assert.IsType<string>(fixture.ClosureDigest());
+        Assert.True(WorktreeTreeDigest.TryCompute(fixture.MainRoot, out var treeBefore, out _));
+        var first = await fixture.Run();
+        Assert.True(first.Check.Passed);
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", first.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+
+        fixture.WriteMainFile("unrelated/input.txt", "outside the project closure");
+        fixture.CommitMain();
+        fixture.IntegrateMainIntoCandidate();
+        Assert.Equal(closure, fixture.ClosureDigest());
+        Assert.True(WorktreeTreeDigest.TryCompute(fixture.MainRoot, out var treeAfter, out _));
+        Assert.NotEqual(treeBefore, treeAfter);
+        fixture.Calls.Clear();
+
+        var second = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=hit project=" + SampleProject, second.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(0, 0);
+        Assert.Equal(first.Gate.Passed, second.Gate.Passed);
+        Assert.Equal(first.Check.Passed, second.Check.Passed);
+        Assert.Equal(first.Check.ResultSummary, second.Check.ResultSummary);
+    }
+
+    [Xunit.Fact]
+    public async Task ReferencedProjectChange_MissesAndRediscovers()
+    {
+        using var fixture = new Fixture(referenceLibrary: true);
+        var closure = Assert.IsType<string>(fixture.ClosureDigest());
+        Assert.Equal("closure:" + closure, fixture.InputKey().TreeDigest);
+        var first = await fixture.Run();
+        Assert.True(first.Check.Passed);
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", first.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+        Assert.Single(Directory.GetFiles(fixture.CacheRoot, "*.json"));
+
+        fixture.WriteMainFile("src/Library/AdditionalTests.cs", "Sample.Tests.Added\nSample.Tests.AlsoAdded\n");
+        fixture.CommitMain();
+        fixture.IntegrateMainIntoCandidate();
+        Assert.NotEqual(closure, Assert.IsType<string>(fixture.ClosureDigest()));
+        fixture.Calls.Clear();
+
+        var second = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss project=" + SampleProject, second.Log);
+        Assert.Equal(2, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+        Assert.False(second.Gate.Passed);
+        Assert.False(second.Check.Passed);
+        Assert.Equal(AcceptanceFailureClassifications.StructuralCoverageFailed, second.Check.FailureClassification);
+        Assert.Contains("cross-generation-count:candidate=1,minimum=3,main=3,deleted=0", second.Check.ResultSummary);
+        Assert.Contains("disposition=coverage-shortfall", second.Check.ResultSummary);
+    }
+
+    [Xunit.Fact]
+    public async Task UndeterminableClosure_FallsBackToWholeTreeAndMisses()
+    {
+        using var fixture = new Fixture(undeterminableClosure: true);
+        Assert.Null(fixture.ClosureDigest());
+        Assert.True(WorktreeTreeDigest.TryCompute(fixture.MainRoot, out var tree, out _));
+        Assert.Equal("tree:" + tree, fixture.InputKey().TreeDigest);
+        var first = await fixture.Run();
+        Assert.True(first.Check.Passed);
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", first.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+        fixture.Calls.Clear();
+
+        var unchanged = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=hit", unchanged.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(0, 0);
+        fixture.WriteMainFile("unrelated/input.txt", "outside the project directory");
+        fixture.CommitMain();
+        fixture.IntegrateMainIntoCandidate();
+        Assert.Null(fixture.ClosureDigest());
+        Assert.True(WorktreeTreeDigest.TryCompute(fixture.MainRoot, out var changedTree, out _));
+        Assert.NotEqual(tree, changedTree);
+        fixture.Calls.Clear();
+
+        var changed = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", changed.Log);
+        Assert.Equal(2, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+        Assert.Equal(first.Check.ResultSummary, changed.Check.ResultSummary);
+    }
+
+    [Xunit.Fact]
+    public async Task PreviousSchemaEntry_IsNotReadAsHit()
+    {
+        using var fixture = new Fixture();
+        var first = await fixture.Run();
+        Assert.True(first.Check.Passed);
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", first.Log);
+        var path = Assert.Single(Directory.GetFiles(fixture.CacheRoot, "*.json"));
+        var entry = JsonNode.Parse(File.ReadAllText(path))!;
+        var key = JsonSerializer.Deserialize<MainBaselineDiscoveryCacheKey>(entry["Payload"]!["Key"]!.ToJsonString())!;
+        var cache = new MainBaselineDiscoveryCache(fixture.CacheRoot);
+
+        // A valid rewrite stays readable: schema rejection must not be a bad-hash miss.
+        RewriteEntry();
+        Assert.NotNull(cache.TryRead(key));
+        fixture.Calls.Clear();
+        var control = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=hit", control.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(0, 0);
+
+        Assert.True(MainBaselineDiscoveryCache.SchemaVersion > 1);
+        entry["Payload"]!["Schema"] = 1;
+        RewriteEntry();
+        var previousName = MainBaselineDiscoveryCache.Hash(JsonSerializer.Serialize(new { Schema = 1, Key = key }));
+        File.WriteAllText(Path.Combine(fixture.CacheRoot, previousName + ".json"), entry.ToJsonString());
+        Assert.Null(cache.TryRead(key));
+        fixture.Calls.Clear();
+
+        var second = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", second.Log);
+        Assert.Equal(2, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+        Assert.Equal(first.Check.ResultSummary, second.Check.ResultSummary);
+
+        void RewriteEntry()
+        {
+            entry["ContentHash"] = MainBaselineDiscoveryCache.Hash(entry["Payload"]!.ToJsonString(
+                new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+            File.WriteAllText(path, entry.ToJsonString());
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task ClosureChangeDuringBuild_IsNotPublished(bool commitChange)
+    {
+        using var fixture = new Fixture();
+        Assert.StartsWith("closure:", fixture.InputKey().TreeDigest);
+        fixture.BeforeMainBuild = () =>
+        {
+            fixture.AddMainTests("AdditionalTests.cs", "Sample.Tests.Added");
+            if (commitChange) fixture.CommitMain();
+        };
+
+        var run = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", run.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+        Assert.Empty(Directory.Exists(fixture.CacheRoot) ? Directory.GetFiles(fixture.CacheRoot, "*.json") : []);
+        // A dirty closure switches modes; a committed change stays in closure mode.
+        Assert.StartsWith(commitChange ? "closure:" : "tree:", fixture.InputKey().TreeDigest);
+    }
+
+    [Xunit.Fact]
+    public async Task OutsideClosureChangeDuringBuild_IsPublished()
+    {
+        using var fixture = new Fixture();
+        var closure = Assert.IsType<string>(fixture.ClosureDigest());
+        Assert.True(WorktreeTreeDigest.TryCompute(fixture.MainRoot, out var treeBefore, out _));
+        fixture.BeforeMainBuild = () =>
+        {
+            fixture.WriteMainFile("unrelated/input.txt", "changed during build");
+            fixture.CommitMain();
+        };
+
+        var first = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", first.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(1, 1);
+        Assert.Equal(closure, fixture.ClosureDigest());
+        Assert.True(WorktreeTreeDigest.TryCompute(fixture.MainRoot, out var treeAfter, out _));
+        Assert.NotEqual(treeBefore, treeAfter);
+        Assert.Single(Directory.GetFiles(fixture.CacheRoot, "*.json"));
+        fixture.BeforeMainBuild = null;
+        fixture.IntegrateMainIntoCandidate();
+        fixture.Calls.Clear();
+
+        var second = await fixture.Run();
+        Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=hit", second.Log);
+        Assert.Equal(1, fixture.BuildStarts);
+        fixture.AssertBaselineCommands(0, 0);
     }
 
     [Xunit.Fact]
@@ -130,6 +360,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
     private sealed class Fixture : IDisposable
     {
         private readonly List<GoalId> _goals = [];
+        private readonly bool _referenceLibrary;
         internal readonly ConcurrentQueue<(string[] Args, string Worktree)> Calls = new();
         internal string CandidateRoot { get; }
         internal string MainRoot { get; }
@@ -137,10 +368,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
             Path.GetTempPath(), "mcg-default-main-discovery", Guid.NewGuid().ToString("N")));
         internal string CacheRoot => MainBaselineDiscoveryCache.DefaultRootPath(Storage.RootPath);
         internal int BuildStarts;
+        internal Action? BeforeMainBuild;
 
-        internal Fixture()
+        internal Fixture(bool referenceLibrary = false, bool undeterminableClosure = false)
         {
+            _referenceLibrary = referenceLibrary;
             (CandidateRoot, MainRoot) = CreateTrustedBaselineWorkspace();
+            if (referenceLibrary || undeterminableClosure)
+            {
+                var items = (referenceLibrary ? "<ProjectReference Include=\"../../src/Library/Library.csproj\" />" : "") +
+                    (undeterminableClosure ? "<None Include=\"$(ExternalFile)\" />" : "");
+                WriteMainFile(SampleProject, "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup>" +
+                    "<ItemGroup>" + items + "</ItemGroup></Project>");
+            }
+            if (referenceLibrary) WriteMainFile("src/Library/Library.csproj", "<Project />");
             var mainConfig = Path.Combine(MainRoot, "config");
             Directory.CreateDirectory(mainConfig);
             File.Copy(Path.Combine(CandidateRoot, "config", "acceptance-manifest.json"),
@@ -165,7 +406,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
             var overrides = new GoalAcceptanceVerifierTestOverrides
             {
                 BuildStorageRootForTests = Storage,
-                OnTrustedMainBaselineBuildStartingForTests = _ => Interlocked.Increment(ref BuildStarts)
+                OnTrustedMainBaselineBuildStartingForTests = _ =>
+                {
+                    Interlocked.Increment(ref BuildStarts);
+                    BeforeMainBuild?.Invoke();
+                }
             };
             var goal = GoalId.New();
             _goals.Add(goal);
@@ -182,6 +427,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
                 {
                     var tests = worktree == MainRoot
                         ? Directory.GetFiles(Path.Combine(MainRoot, "tests", "Sample.Tests"), "*Tests.cs")
+                            .Concat(_referenceLibrary ? Directory.GetFiles(Path.Combine(MainRoot, "src", "Library"), "*Tests.cs") : [])
                             .Order(StringComparer.Ordinal).SelectMany(File.ReadAllLines).ToArray()
                         : ["Sample.Tests.Passes"];
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0,
@@ -207,6 +453,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
 
         internal void AddMainTests(string file, params string[] tests) =>
             File.WriteAllLines(Path.Combine(MainRoot, "tests", "Sample.Tests", file), tests);
+
+        internal void WriteMainFile(string relativePath, string content)
+        {
+            var path = Path.Combine(MainRoot, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
+
+        internal string? ClosureDigest() => AcceptanceLaneClosureHasher.TryCompute(MainRoot,
+            new GoalAcceptanceVerifier.AcceptanceManifestCheck { Project = SampleProject });
+
+        internal MainBaselineDiscoveryCacheKey InputKey() => Assert.IsType<MainBaselineDiscoveryCacheKey>(
+            MainBaselineDiscoveryCache.TryCreateKey(MainRoot, SampleProject, "Debug", ["--list-tests"], Storage.RootPath));
 
         internal void CommitMain()
         {
