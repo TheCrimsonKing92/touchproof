@@ -96,16 +96,15 @@ internal sealed class ActivationAdmissionHealthTracker
         _failureStreak = failure;
         _count++;
         var elapsed = now - _startedAt;
-        var elapsedCap = elapsed >= ActivationAdmissionHealthPolicy.StreakElapsedCap;
-        var limit = failure ? ActivationAdmissionHealthPolicy.CensusFailureTicks :
-            ActivationAdmissionHealthPolicy.OccupiedWithoutLiveGateTicks;
-        if (_count < limit && !elapsedCap)
+        var allowance = failure ? ActivationAdmissionHealthPolicy.CensusFailureAllowance :
+            ActivationAdmissionHealthPolicy.OccupiedWithoutLiveGateAllowance;
+        if (_count < ActivationAdmissionHealthPolicy.MinimumStreakObservations || elapsed < allowance)
             return Verdict = new(ActivationAdmissionHealthState.StreakOpen);
 
         var detail = failure
             ? FormattableString.Invariant($"censusFailedTicks={_count} firstTick={_firstTick} lastTick={sample.Tick}")
             : FormattableString.Invariant($"occupiedNoLiveGateTicks={_count} waiting={sample.WaitingVerified} occupied={sample.Occupied} live={sample.LiveGates}");
-        if (elapsedCap) detail += FormattableString.Invariant($" elapsedSeconds={elapsed.TotalSeconds:0.###}");
+        detail += FormattableString.Invariant($" elapsedSeconds={elapsed.TotalSeconds:0.###}");
         return Verdict = new(ActivationAdmissionHealthState.Tripped,
             failure ? ConductorActivationRevertReason.AdmissionCensusFailing :
                 ConductorActivationRevertReason.AdmissionStalled, detail);
