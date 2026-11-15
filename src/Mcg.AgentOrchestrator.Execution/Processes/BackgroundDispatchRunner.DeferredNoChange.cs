@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed partial class BackgroundDispatchRunner
 {
     public Func<string, RetryCorrectionConditionVerdict>? RetryCorrectionConditionOracle { get; init; }
+    internal Func<string, string[], GitCli.GitResult> DocumentationNoChangeGit { get; init; } =
+        (root, arguments) => GitCli.RunForRepository(root, arguments);
 
     internal bool AllowsNoChangeCompletion(
         Goal goal, TaskSpec task, GoalWorktreeDispatchEvidence worktreeEvidence,
@@ -48,11 +50,26 @@ public sealed partial class BackgroundDispatchRunner
             return true;
         }
 
+        if (DocumentationNoChangeCompletion.TryAccept(goal, task, worktreePath, worktreeEvidence.Head,
+                worktreeEvidence.IsClean, worktreeEvidence.HasRelevantCommitAfterDispatch, standardOutput,
+                DocumentationNoChangeGit, out var documentationMarker, out var documentationDecline))
+        {
+            standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, documentationMarker);
+            return true;
+        }
+
         if (!DeveloperDeferredNoChangeQualifier.TryQualify(
                 goal, task, worktreeEvidence.Head, worktreeEvidence.IsClean,
                 worktreeEvidence.HasRelevantCommitAfterDispatch,
                 standardOutput, standardError, _completionClassifier, out var outcome, out var declineCode))
         {
+            if (task.RequiredRole == AgentRole.Developer &&
+                (_completionClassifier.HasExplicitNoChangeRationale(standardOutput, string.Empty) ||
+                 (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) &&
+                  result.Fields.TryGetValue("files", out var files) && files.Equals("none", StringComparison.OrdinalIgnoreCase) &&
+                  result.Fields.TryGetValue("commit", out var commit) && commit.Equals("none", StringComparison.OrdinalIgnoreCase))))
+                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty,
+                    "DOCUMENTATION_NO_CHANGE_DECLINED reason=" + documentationDecline);
             standardErrorDiagnostic = AppendDeferredNoChangeDecline(task, standardOutput,
                 standardErrorDiagnostic, declineCode);
             return false;
