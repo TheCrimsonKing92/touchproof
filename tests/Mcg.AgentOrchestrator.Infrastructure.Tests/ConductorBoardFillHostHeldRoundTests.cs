@@ -38,13 +38,14 @@ public sealed class ConductorBoardFillHostHeldRoundTests
 
     [Theory]
     [InlineData("held", true)]
-    [InlineData("failed", false)]
-    public async Task Daily_cap_excludes_held_rounds_but_counts_failed_rounds(string outcome, bool fourthStarts)
+    [InlineData("draft", false)]
+    public async Task Daily_cap_excludes_held_rounds_but_counts_drafts(string outcome, bool fourthStarts)
     {
         using var h = new BoardFillTestHarness();
         h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = 3 };
-        h.Items = [BoardFillReadyItemSelectorTests.Item('a'), BoardFillReadyItemSelectorTests.Item('b')];
-        h.Reply = () => new(outcome, 1, null, null, null, [], "fixture");
+        h.Items = [BoardFillReadyItemSelectorTests.Item('a'), BoardFillReadyItemSelectorTests.Item('b'),
+            BoardFillReadyItemSelectorTests.Item('c'), BoardFillReadyItemSelectorTests.Item('d')];
+        h.Reply = () => h.Draft() with { Kind = outcome };
 
         h.Host.ServiceTick(h.Kernel);
         for (var finished = 0; finished < 3; finished++)
@@ -74,7 +75,7 @@ public sealed class ConductorBoardFillHostHeldRoundTests
             Assert.Equal(4, h.Calls);
             Assert.Equal(4, h.Store.ReadAll().Count);
             Assert.Single(h.Store.ReadAll().Where(round => round.Outcome is null));
-            Assert.Equal(1, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
+            Assert.Equal(0, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
         }
         else
         {

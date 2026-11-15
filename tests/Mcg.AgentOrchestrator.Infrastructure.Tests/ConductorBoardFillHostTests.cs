@@ -132,14 +132,14 @@ public sealed class ConductorBoardFillHostTests
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
-    public void Daily_cap_counts_starts_including_failed_rounds(int cap)
+    public void Daily_cap_stops_at_zero_or_after_a_draft(int cap)
     {
         using var h = new BoardFillTestHarness();
         h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = cap };
         if (cap == 1)
         {
             var round = h.Store.Begin(h.Items[0], h.Clock.UtcNow);
-            h.Store.Finish(round, new("failed", 1, null, null, null, [], "fixture"), h.Clock.UtcNow);
+            h.Store.Finish(round, h.Draft(), h.Clock.UtcNow);
         }
         h.Host.ServiceTick(h.Kernel);
         Assert.Null(h.Host.CurrentRound);
@@ -204,6 +204,7 @@ public sealed class ConductorBoardFillHostTests
         h.Reply = () => throw new InvalidOperationException("injected seam failure");
         h.Host.ServiceTick(h.Kernel);
         await Assert.ThrowsAsync<InvalidOperationException>(() => PanelTestHarness.Signal(h.Host.CurrentRound!, "failed round finished"));
+        h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = 0 };
         h.Host.ServiceTick(h.Kernel);
         var round = Assert.Single(h.Store.ReadAll());
         Assert.Equal("failed", round.Outcome);
@@ -227,6 +228,7 @@ public sealed class ConductorBoardFillHostTests
         Assert.Null(h.Host.CurrentRound);
         h.Host.ServiceTick(h.Kernel);
         await PanelTestHarness.Signal(h.Host.CurrentRound!, "today's draft finished");
+        h.Host.ServiceTick(h.Kernel);
         Assert.Equal(1, h.Calls);
         Assert.Equal(1, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
     }
@@ -235,7 +237,7 @@ public sealed class ConductorBoardFillHostTests
     public void Restart_recovers_unfinished_round_and_deduplicates_its_event()
     {
         using var h = new BoardFillTestHarness();
-        h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = 1 };
+        h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = 0 };
         h.Store.Begin(h.Items[0], h.Clock.UtcNow);
         h.Host.ServiceTick(h.Kernel);
         var round = Assert.Single(h.Store.ReadAll());

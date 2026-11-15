@@ -31,6 +31,8 @@ internal sealed partial class ConductorBoardFillHost
     // In memory only; a process restart clears the hold.
     private string? _heldMainHead;
     private string? _lastPlanReadFailure;
+    private readonly HashSet<string> _reportedStoppedItems = new(StringComparer.Ordinal);
+    private DateTime _stoppedReportDay;
     internal Task? CurrentRound => _round;
 
     // Drafting is read-only; optional filing delegates all goal mutations to the CLI intake seam.
@@ -111,8 +113,13 @@ internal sealed partial class ConductorBoardFillHost
         catch { observedMain = null; }
         items = ReleaseContradictionHolds(items, observedMain);
         var preferredOrder = ReadPreferredOrder(now);
-        var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items, observedMain),
-            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll(), preferredOrder,
+        var rounds = _store.ReadAll(newestFirst: true).Reverse().ToArray();
+        var stopped = BoardFillConsecutiveNonDraftRounds.StoppedItems(rounds, now);
+        ReportStoppedItems(items, stopped, now);
+        var excluded = _store.AlreadyDrafted(items, observedMain).ToHashSet(StringComparer.Ordinal);
+        excluded.UnionWith(stopped.Keys);
+        var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), excluded,
+            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), rounds, preferredOrder,
             // Evidence releases must first advance the durable item stamp; otherwise Begin
             // would capture the marker time and the new round would fail backlog-changed.
             observedMain, epicMembers: epicMembers, epicMissing: missing => _epicMembership.Ask(missing, now));
@@ -120,6 +127,25 @@ internal sealed partial class ConductorBoardFillHost
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
         _round = Task.Run(() => RunRoundAsync(item.Id));
+    }
+
+    private void ReportStoppedItems(IReadOnlyList<BacklogItem> items,
+        IReadOnlyDictionary<string, int> stopped, DateTimeOffset now)
+    {
+        var day = now.UtcDateTime.Date;
+        if (_stoppedReportDay != day)
+        {
+            _reportedStoppedItems.Clear();
+            _stoppedReportDay = day;
+        }
+        foreach (var item in items.Where(item => item.Status == BacklogItemStatus.Open))
+        {
+            if (!stopped.TryGetValue(item.Id, out var count) || _reportedStoppedItems.Contains(item.Id)) continue;
+            var detail = $"BOARD_FILL_ITEM_STOPPED backlog={item.Id[..Math.Min(8, item.Id.Length)]} " +
+                $"item={item.Id} consecutive={count} reason=consecutive-non-draft-rounds";
+            if (_events.AppendRequired("board-fill-draft", null, detail, now))
+                _reportedStoppedItems.Add(item.Id);
+        }
     }
 
     private IReadOnlyList<BacklogItem> ReleaseContradictionHolds(IReadOnlyList<BacklogItem> items, string? head)

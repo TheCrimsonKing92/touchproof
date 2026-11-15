@@ -19,7 +19,7 @@ public sealed class BoardFillStaleItemRuleTests
         Assert.Same(edited, Select(edited, h.Store, head));
         var noted = item with { Notes = [new(h.Clock.UtcNow.AddMinutes(1), "item changed")] };
         Assert.Same(noted, Select(noted, h.Store, head));
-        Assert.Equal(1, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
+        Assert.Equal(0, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
     }
 
     [Fact]

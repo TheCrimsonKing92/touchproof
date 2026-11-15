@@ -17,7 +17,7 @@ public sealed class BoardFillFailureKindSelectionTests
             var round = h.Store.Begin(item, h.Clock.UtcNow.AddMinutes(index));
             h.Store.Finish(round, new("failed", 1, null, null, null, [], "fault", FailureKind: kind), h.Clock.UtcNow);
         }
-        Assert.Equal(2, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
+        Assert.Equal(0, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
         Assert.Equal(selected ? 0 : 2, h.Store.ReadAll().Count(BoardFillFailureKind.CountsTowardItem));
         Assert.Equal(selected, Select(item, h.Store) is not null);
         var edited = item with { UpdatedAt = h.Clock.UtcNow.AddMinutes(3) };

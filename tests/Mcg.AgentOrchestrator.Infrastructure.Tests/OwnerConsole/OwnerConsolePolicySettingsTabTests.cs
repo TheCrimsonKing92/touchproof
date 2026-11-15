@@ -67,7 +67,7 @@ public sealed class OwnerConsolePolicySettingsTabTests
     [InlineData("acceptanceWidth", "1.5", "integer")]
     [InlineData("acceptanceWidth", "abc", "acceptanceWidth")]
     [InlineData("acceptanceWidth", "5", "acceptanceWidth must be between 1 and 4")]
-    [InlineData("boardFillMaxDraftsPerDay", "21", "boardFillMaxDraftsPerDay must be between 0 and 20")]
+    [InlineData("boardFillMaxDraftsPerDay", "31", "boardFillMaxDraftsPerDay must be between 0 and 30")]
     [InlineData("buildGcConserveMemoryLevel", "10", "buildGcConserveMemoryLevel must be between 0 and 9")]
     [InlineData("buildGcHeapCount", "65", "buildGcHeapCount must be between 0 and 64")]
     [InlineData("buildRootRetentionDays", "366", "buildRootRetentionDays must be between 0 and 365")]

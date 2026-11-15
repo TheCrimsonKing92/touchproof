@@ -55,8 +55,11 @@ public sealed class ConductorBatchLoopTestsBoardFillOffTick(ITestOutputHelper ou
             {
                 ticks++;
                 if (ticks == 1)
+                {
                     Assert.Throws<InvalidOperationException>(() =>
                         PanelTestHarness.Signal(h.Host.CurrentRound!, "failed off-tick round finished").GetAwaiter().GetResult());
+                    h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = 0 };
+                }
                 else
                 {
                     Assert.Equal("failed", Assert.Single(h.Store.ReadAll()).Outcome);
