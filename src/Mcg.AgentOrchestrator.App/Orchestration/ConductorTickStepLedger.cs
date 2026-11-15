@@ -108,6 +108,19 @@ internal sealed class ConductorTickStepLedger
         return result;
     }
 
+    // Shared driver delegates also run during admission and reconciliation. Only
+    // split their CPU out when the owner is already executing a walk frame.
+    internal static T MeasureWithinWalk<T>(string name, Func<T> action)
+    {
+        var ledger = Current.Value;
+        if (ledger is null) return action();
+        bool withinWalk;
+        lock (ledger._gate)
+            withinWalk = ledger._active && Environment.CurrentManagedThreadId == ledger._ownerThread &&
+                ledger._frames.Any(frame => WalkNames.Contains(frame.Name));
+        return withinWalk ? Measure(name, action) : action();
+    }
+
     internal static IDisposable? OpenScope(string name)
     {
         var ledger = Current.Value;
@@ -124,7 +137,7 @@ internal sealed class ConductorTickStepLedger
                 // Other threads still count calls; their process CPU overlaps the owner's
                 // scopes and must not be added to this partition of the phase.
                 frame = Environment.CurrentManagedThreadId == ledger._ownerThread
-                    ? new Frame(ledger._cpu()) : null;
+                    ? new Frame(name, ledger._cpu()) : null;
                 if (frame is not null) ledger._frames.Push(frame);
             }
         }
@@ -328,8 +341,9 @@ internal sealed class ConductorTickStepLedger
         ("readiness_evaluations", Interlocked.Read(ref _readinessEvaluations))
     }.Select(pair => pair.Item1 + "=" + pair.Item2.ToString(CultureInfo.InvariantCulture)));
 
-    private sealed class Frame(TimeSpan start)
+    private sealed class Frame(string name, TimeSpan start)
     {
+        internal string Name { get; } = name;
         internal TimeSpan Start { get; } = start;
         internal ConductorBatchLoop.DiagnosticTimer Wall { get; } = ConductorBatchLoop.StartDiagnosticTimer();
         internal long ChildTicks { get; set; }

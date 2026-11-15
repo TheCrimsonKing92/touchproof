@@ -865,7 +865,7 @@ internal sealed partial class ConductorDriver
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
         _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
-        _getLandingFileScopes = goal => ConductorTickStepLedger.Measure("walk-changed-files", () =>
+        _getLandingFileScopes = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-changed-files", () =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             var changedFiles = worktreePath is null
@@ -890,7 +890,7 @@ internal sealed partial class ConductorDriver
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir, workspace.IntegrationBranch);
-        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.Measure("walk-candidate-context", () => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace), workspace.OrchestratorDirectory));
+        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-candidate-context", () => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace), workspace.OrchestratorDirectory));
         RecoveryCandidateRevision = goal => GoalWorktrees.TryResolve(dir, goal.Id) is { } worktree ? TryResolveGitHead(worktree) : null;
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
@@ -1098,7 +1098,7 @@ internal sealed partial class ConductorDriver
                 MappingReason: "test constructor supplied no changed-file mapping",
                 NoApplicableTests: true,
                 MappingNeedsInput: false));
-        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.Measure("walk-candidate-context", () => contextReader(goal));
+        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-candidate-context", () => contextReader(goal));
         _getFindingEvidenceEngineSettings = getFindingEvidenceEngineSettings ??
             (_ => new AcceptanceGateEngineSettings());
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) => ConductorTickStepLedger.Measure("walk-finding-sibling-classes",
@@ -1154,7 +1154,7 @@ internal sealed partial class ConductorDriver
         _plannerEvidenceReadiness = PlannerEvidenceReadiness.ForTick(getAmendmentRevisionPending, () => _conductorTickKernel);
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
-        _getLandingFileScopes = goal => ConductorTickStepLedger.Measure("walk-changed-files", () => (getLandingFileScopes ?? InferRecordedFileScopes)(goal));
+        _getLandingFileScopes = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-changed-files", () => (getLandingFileScopes ?? InferRecordedFileScopes)(goal));
         _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
         _gateReadyCandidateProjector = gateReadyCandidateProjector;
         _runAcceptanceCohortOverride = runAcceptanceCohort;
