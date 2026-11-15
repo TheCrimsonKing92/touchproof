@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -7,6 +8,189 @@ public sealed class GoalSnapshotObligationMergeTests
     private const string CandidateSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string OtherCandidateSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private const string ObligationId = "criterion-v1-0";
+    private const string VersionThreeCandidateSha = "cccccccccccccccccccccccccccccccccccccccc";
+    private const string VersionThreeObligationId = "criterion-v3-4";
+    private const string OperatorCriterion = "Observe the acknowledged candidate behavior";
+    private const string OperatorScope = "operator observation of acknowledged candidate";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task V3Index4OperatorMap_StaleTick_PreservesSavedBinding(bool conflictingTick)
+    {
+        using var store = new TempStore();
+        var repository = new SqliteOrchestratorStateRepository(store.Path);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVersionThreeGoal(kernel);
+        await repository.SaveAsync(kernel);
+        var tick = await repository.LoadAsync();
+        var baseline = tick.ExportSnapshot();
+        Assert.DoesNotContain(baseline.Goals.Single().CriterionEvidenceObligations!,
+            item => item.CriterionVersion == 3 && item.CriterionIndex == 4);
+
+        var second = await repository.LoadAsync();
+        var mapped = MapVersionThreeOperator(second, goal.Id);
+        await repository.SaveAsync(second);
+        var afterSave = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        AssertVersionThreeBinding(mapped, afterSave.CriterionEvidenceObligations!);
+
+        if (conflictingTick)
+            tick.MapCriterionEvidenceOwner(goal.Id, 4, 3, CriterionEvidenceOwner.Acceptance,
+                "stale tick", expectedCandidateSha: OtherCandidateSha);
+        else
+            Assert.DoesNotContain(tick.GetGoal(goal.Id).CriterionEvidenceObligations,
+                item => item.Id == VersionThreeObligationId);
+        tick.SetGoalPriority(goal.Id, GoalPriority.Critical, "test", "tick");
+        var current = tick.ExportSnapshot();
+
+        var result = Assert.Single(await repository.SaveGoalSnapshotsWithMergeAsync([
+            new GoalSnapshotSaveRequest(baseline.Goals.Single(), current.Goals.Single(), current.HumanInputRequests)]));
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        if (conflictingTick)
+            Assert.Contains($"criterion evidence obligation conflict kept stored: {VersionThreeObligationId}",
+                result.Message, StringComparison.Ordinal);
+        var afterMerge = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        AssertVersionThreeBinding(mapped, afterMerge.CriterionEvidenceObligations!);
+        var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
+        AssertVersionThreeBinding(mapped, restored.CriterionEvidenceObligations);
+        Assert.Equal(GoalPriority.Critical, restored.Priority);
+    }
+
+    [Fact]
+    public async Task V3Index4OperatorMap_Restore_RetainsBindingAndRetiredRows()
+    {
+        using var store = new TempStore();
+        var repository = new SqliteOrchestratorStateRepository(store.Path);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVersionThreeGoal(kernel);
+        var mapped = MapVersionThreeOperator(kernel, goal.Id);
+        var retired = goal.CriterionEvidenceObligations.Where(item => item.CriterionVersion < 3).ToArray();
+        Assert.Equal(new[] { 1, 2 }, retired.Select(item => item.CriterionVersion));
+        Assert.All(retired, item => Assert.StartsWith("retired:", item.Detail));
+        var rawRetired = kernel.ExportSnapshot().Goals.Single().CriterionEvidenceObligations!
+            .Where(item => item.CriterionVersion < 3).ToArray();
+        Assert.All(rawRetired, item => Assert.Null(item.Detail));
+        await repository.SaveAsync(kernel);
+        var afterSave = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        AssertVersionThreeBinding(mapped, afterSave.CriterionEvidenceObligations!);
+        Assert.Equal(rawRetired, afterSave.CriterionEvidenceObligations!.Where(item => item.CriterionVersion < 3));
+
+        var tick = await repository.LoadAsync();
+        var baseline = tick.ExportSnapshot();
+        var second = await repository.LoadAsync();
+        second.SetGoalSourceBacklogItemId(goal.Id, "store-write-after-owner-map");
+        await repository.SaveAsync(second);
+        tick.SetGoalPriority(goal.Id, GoalPriority.Critical, "test", "tick");
+        var current = tick.ExportSnapshot();
+        var result = Assert.Single(await repository.SaveGoalSnapshotsWithMergeAsync([
+            new GoalSnapshotSaveRequest(baseline.Goals.Single(), current.Goals.Single(), current.HumanInputRequests)]));
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var afterMerge = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        AssertVersionThreeBinding(mapped, afterMerge.CriterionEvidenceObligations!);
+        Assert.Equal(rawRetired, afterMerge.CriterionEvidenceObligations!.Where(item => item.CriterionVersion < 3));
+        var restoredKernel = await repository.LoadAsync();
+        var restored = restoredKernel.GetGoal(goal.Id);
+        Assert.Equal(3, restored.AuthoritativeRefinedSpecVersion!.Version);
+        AssertVersionThreeBinding(mapped, restored.CriterionEvidenceObligations);
+        Assert.Equal(retired, restored.CriterionEvidenceObligations.Where(item => item.CriterionVersion < 3));
+        Assert.Equal(rawRetired, restoredKernel.ExportSnapshot().Goals.Single().CriterionEvidenceObligations!
+            .Where(item => item.CriterionVersion < 3));
+        Assert.DoesNotContain(restored.OutstandingCriterionEvidenceObligations, item => item.CriterionVersion < 3);
+    }
+
+    [Fact]
+    public async Task TickAppliedV3Index4OperatorMap_MergedCheckpoint_PreservesBinding()
+    {
+        using var store = new TempStore();
+        var repository = new SqliteOrchestratorStateRepository(store.Path);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVersionThreeGoal(kernel);
+        await repository.SaveAsync(kernel);
+        var tick = await repository.LoadAsync();
+        var baseline = tick.ExportSnapshot();
+        var mapped = MapVersionThreeOperator(tick, goal.Id);
+        AssertVersionThreeBinding(mapped, tick.GetGoal(goal.Id).CriterionEvidenceObligations);
+
+        var second = await repository.LoadAsync();
+        second.SetGoalSourceBacklogItemId(goal.Id, "store-write-before-mapped-checkpoint");
+        await repository.SaveAsync(second);
+        var beforeMerge = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        Assert.DoesNotContain(beforeMerge.CriterionEvidenceObligations!, item => item.Id == VersionThreeObligationId);
+        var current = tick.ExportSnapshot();
+        AssertVersionThreeBinding(mapped, current.Goals.Single().CriterionEvidenceObligations!);
+
+        // Historical writer: before 7e8895d16, SqliteOrchestratorStateRepository.TryMergeGoalSnapshots
+        // copied the stored obligation list and lost tick-added mappings at this boundary.
+        // This guards that mechanism; the original incident's failing boundary was not observed.
+        var result = Assert.Single(await repository.SaveGoalSnapshotsWithMergeAsync([
+            new GoalSnapshotSaveRequest(baseline.Goals.Single(), current.Goals.Single(), current.HumanInputRequests)]));
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var afterMerge = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        AssertVersionThreeBinding(mapped, afterMerge.CriterionEvidenceObligations!);
+        var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
+        AssertVersionThreeBinding(mapped, restored.CriterionEvidenceObligations);
+        Assert.Equal("store-write-before-mapped-checkpoint", restored.SourceBacklogItemId);
+    }
+
+    [Fact]
+    public async Task V3Index4OperatorMap_AfterRoundTrip_ReviewerDefersWithOwnerNote()
+    {
+        using var store = new TempStore();
+        var repository = new SqliteOrchestratorStateRepository(store.Path);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVersionThreeGoal(kernel);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repository.SaveAsync(kernel);
+        var tick = await repository.LoadAsync();
+        var baseline = tick.ExportSnapshot();
+        var second = await repository.LoadAsync();
+        var mapped = MapVersionThreeOperator(second, goal.Id);
+        await repository.SaveAsync(second);
+        var afterSave = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        AssertVersionThreeBinding(mapped, afterSave.CriterionEvidenceObligations!);
+        tick.SetGoalPriority(goal.Id, GoalPriority.Critical, "test", "tick");
+        var current = tick.ExportSnapshot();
+        var result = Assert.Single(await repository.SaveGoalSnapshotsWithMergeAsync([
+            new GoalSnapshotSaveRequest(baseline.Goals.Single(), current.Goals.Single(), current.HumanInputRequests)]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var afterMerge = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        AssertVersionThreeBinding(mapped, afterMerge.CriterionEvidenceObligations!);
+
+        var restoredKernel = await repository.LoadAsync();
+        var restored = restoredKernel.GetGoal(goal.Id);
+        AssertVersionThreeBinding(mapped, restored.CriterionEvidenceObligations);
+        var reviewer = Assert.Single(restored.Tasks);
+        var startedAt = DateTimeOffset.UtcNow;
+        restoredKernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\fixture", startedAt, BaseCommit: VersionThreeCandidateSha));
+        var verdicts = JsonSerializer.Serialize(Enumerable.Range(0, 5).Select(index => new
+        {
+            criterion_index = index,
+            verdict = index == 4 ? "not-verifiable" : "met",
+            evidence = index == 4 ? "Operator observation remains pending" : "Source inspected"
+        }));
+        var output = string.Join(Environment.NewLine,
+            "WORKER_RESULT:", "files: none", "commands: inspect", "tests: deferred - OperatorObservationTests",
+            "commit: none", "blockers: none", "findings: []", "touched_anchors: []",
+            $"criteria_verdicts: {verdicts}", "verdict: pass",
+            "model_fit: fixture/model - adequate - deterministic review", "skills: none", "confidence: high",
+            "END_WORKER_RESULT");
+        restoredKernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\fixture", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true, ReviewedCommit: VersionThreeCandidateSha, DispatchAttemptAt: startedAt));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Equal(VersionThreeCandidateSha, reviewer.LastVerification!.ReviewedCommit);
+        AssertVersionThreeBinding(mapped, restored.CriterionEvidenceObligations);
+        Assert.Contains(restored.Timeline, item => item.Kind == ProgressKind.TaskNote && item.TaskId == reviewer.Id &&
+            item.Message.Contains($"Deferred criterion evidence remains pending: obligation={mapped.DisplayLabel}; owner=Operator; state=Pending;",
+                StringComparison.Ordinal) &&
+            item.Message.Contains("reviewer_verdict=not-verifiable", StringComparison.Ordinal) &&
+            item.Message.Contains($"expected_candidate={VersionThreeCandidateSha}", StringComparison.Ordinal));
+    }
 
     [Fact]
     public async Task TickEvidenceSurvivesConcurrentStoreWrite()
@@ -151,6 +335,47 @@ public sealed class GoalSnapshotObligationMergeTests
         var deletedInTick = GoalSnapshotObligationMerge.Merge(unchanged, [tickOnly], null);
         Assert.Equal(new[] { tickOnly }, deletedInTick.Obligations);
         Assert.Equal(new[] { before[0].Id }, deletedInTick.ConflictIds);
+    }
+
+    private static Goal CreateVersionThreeGoal(AgentOrchestratorKernel kernel)
+    {
+        var reviewer = new TaskSpec(TaskId.New(), "Review persisted owner binding", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Preserve the Applied Operator binding for v3 criterion 5", [reviewer]);
+        for (var version = 1; version <= 3; version++)
+        {
+            var gateCriterion = $"Acceptance verifies version {version}";
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+                [gateCriterion, "Inspect source behavior", "Inspect error handling", "Inspect persistence", OperatorCriterion],
+                VerificationClass.TestVerifiable, [], [])
+            {
+                AcceptanceGateOwnedAcceptanceCriteria = [gateCriterion]
+            });
+            if (version < 3)
+                kernel.MapCriterionEvidenceOwner(goal.Id, 0, version, CriterionEvidenceOwner.Acceptance,
+                    "operator", expectedCandidateSha: VersionThreeCandidateSha);
+        }
+        Assert.Equal(3, goal.AuthoritativeRefinedSpecVersion!.Version);
+        Assert.DoesNotContain(OperatorCriterion, goal.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Assert.DoesNotContain(OperatorCriterion, goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        Assert.DoesNotContain(goal.CriterionEvidenceObligations, item => item.CriterionIndex == 4);
+        return goal;
+    }
+
+    private static CriterionEvidenceObligation MapVersionThreeOperator(AgentOrchestratorKernel kernel, GoalId goalId) =>
+        kernel.MapCriterionEvidenceOwner(goalId, 4, 3, CriterionEvidenceOwner.Operator,
+            "operator", requiredScope: OperatorScope, expectedCandidateSha: VersionThreeCandidateSha);
+
+    private static void AssertVersionThreeBinding(CriterionEvidenceObligation expected,
+        IReadOnlyList<CriterionEvidenceObligation> obligations)
+    {
+        var actual = Assert.Single(obligations.Where(item => item.CriterionVersion == 3 && item.CriterionIndex == 4));
+        Assert.Equal(VersionThreeObligationId, actual.Id);
+        Assert.Equal(CriterionEvidenceOwner.Operator, actual.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, actual.State);
+        Assert.Equal(VersionThreeCandidateSha, actual.ExpectedCandidateSha);
+        Assert.Equal(OperatorScope, actual.RequiredScope);
+        Assert.Equal("operator mapping by operator", actual.Provenance);
+        Assert.Equal(expected, actual);
     }
 
     private static Goal CreateBoundGoal(AgentOrchestratorKernel kernel, bool includeSecondCriterion = false)
