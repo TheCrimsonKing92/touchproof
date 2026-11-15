@@ -241,12 +241,14 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         JsonSerializer.Deserialize<ConductorGroupedGateAttempt>(File.ReadAllText(path))
         ?? throw new InvalidDataException($"Grouped gate attempt metadata is empty: {path}");
 
-    internal static void Save(ConductorGroupedGateAttempt attempt)
+    internal static void Save(ConductorGroupedGateAttempt attempt) => Save(attempt, capacityReleased: false);
+
+    private static void Save(ConductorGroupedGateAttempt attempt, bool capacityReleased)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(attempt.MetadataPath)!);
-        var finished = attempt.ReconciledAt is not null && HasFinishedResult(attempt);
-        // Save cannot classify a holder without the coordinator's identity/lease probes. Keep a
-        // conservative marker until ReadOpen can prove the stricter terminal predicate.
+        var finished = attempt.ReconciledAt is not null && (capacityReleased || HasFinishedResult(attempt));
+        // A coordinator settlement can prove release without a finished child result. Other
+        // callers retain the marker until the identity/lease probes prove release in ReadOpen.
         if (!finished) EnsureOpenAttemptMarker(attempt);
         var temp = attempt.MetadataPath + $".{Guid.NewGuid():N}.tmp";
         try
@@ -477,8 +479,9 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
                 if (current.Outcome == "Running")
                 {
                     if (File.Exists(current.ResultPath)) return true;
+                    // LegacyHolderSettlementReason proved the holder no longer reserves capacity.
                     Save(current with { ReconciledAt = _utcNow(), Outcome = "Reconciled",
-                        Detail = "legacy-holder-settled" });
+                        Detail = "legacy-holder-settled" }, capacityReleased: true);
                 }
                 var binding = AcceptanceHolderBinding.For(current);
                 if (LegacyAcceptanceHolderSettlement.RecordTerminal(binding, current.OwnerProcessId,
