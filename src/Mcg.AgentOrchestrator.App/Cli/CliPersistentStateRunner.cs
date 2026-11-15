@@ -897,11 +897,11 @@ internal static partial class CliPersistentStateRunner
         var currentGoalAtStartup = currentGoal;
         var kernel = RunConductPreLoopStartup(
             () => conductLoopLease.IsHeld,
-            () => LoadInitialConductLoopKernelWithTransientHold(
+            () => ConductorStartupHeartbeat.Shipped.Run(ConductorStartupHeartbeat.Phases.StateLoad, () => LoadInitialConductLoopKernelWithTransientHold(
                 LoadLoopKernel,
                 workspace,
                 stopRequested: () => File.Exists(startupStopPath),
-                onHoldExhausted: hold => initialConductLoopLoadHold = hold),
+                onHoldExhausted: hold => initialConductLoopLoadHold = hold)),
             loaded => $"{ConductorContinuitySupervisor.LoopReadyLinePrefix}lock=acquired state=loaded goals={loaded.Goals.Count}",
             line => EmitPreLoopReadiness(workspace, line),
             RunStartupSweep);

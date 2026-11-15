@@ -9,11 +9,11 @@ internal static class StartupSweepStepsLine
     public static string Format(TerminalGoalSweepResult result, long totalMs)
     {
         var slowest = result.GoalDurations
-            .Select(item => (Prefix: item.GoalId.Value[..Math.Min(8, item.GoalId.Value.Length)], item.ElapsedMs))
+            .Select(item => (Prefix: item.GoalId.Value[..Math.Min(8, item.GoalId.Value.Length)], item.ElapsedMs, item.GitSpawns))
             .OrderByDescending(item => item.ElapsedMs)
             .ThenBy(item => item.Prefix, StringComparer.Ordinal)
             .Take(5)
-            .Select(item => string.Create(CultureInfo.InvariantCulture, $"{item.Prefix}:{item.ElapsedMs}"));
+            .Select(item => string.Create(CultureInfo.InvariantCulture, $"{item.Prefix}:{item.ElapsedMs}:{item.GitSpawns}"));
         var slowestText = string.Join(",", slowest);
         var retired = result.Goals.Sum(goal => goal.Repairs.Count(repair =>
             repair.Kind == LandedGoalBranchRetirement.RepairKind));
