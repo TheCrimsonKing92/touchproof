@@ -5,6 +5,9 @@ using System.Text.Json;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper output)
 {
+    internal static string OuterShell => TestPowerShell.Executable;
+    private const string UnsupportedRuntimeMarker = "EnvironmentStateUnsupportedRuntime: ";
+
     [Fact]
     public void Scrub_DisallowedStates_RemovesKeysAndPreservesInputs()
     {
@@ -182,6 +185,10 @@ public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper o
         File.WriteAllText(script, $$"""
             $ErrorActionPreference = 'Stop'
             try {
+                if ($PSVersionTable.PSVersion.Major -lt 7 -or [Environment]::Version.Major -lt 10) {
+                    [Console]::Out.WriteLine('{{UnsupportedRuntimeMarker}}pwsh=' + $PSVersionTable.PSVersion + '; .NET=' + [Environment]::Version)
+                    exit 3
+                }
                 Import-Module '{{Quote(module)}}' -Force -WarningAction SilentlyContinue
                 & (Get-Module MtpTestRunner) {
                     $root = '{{Quote(sandbox.Root)}}'
@@ -190,9 +197,6 @@ public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper o
                     $names = {{nameArguments}}
                     {{ObservationFunction}}
                     {{OwnedChildFunctions}}
-                    if ($PSVersionTable.PSVersion.Major -lt 7 -or [Environment]::Version.Major -lt 10) {
-                        throw 'Environment-state regression requires modern pwsh on .NET 10 or newer.'
-                    }
                     & { {{body}} } | ConvertTo-Json -Depth 8 -Compress
                 }
                 exit 0
@@ -203,7 +207,7 @@ public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper o
             """);
         var start = new ProcessStartInfo
         {
-            FileName = ResolvePwsh(),
+            FileName = OuterShell,
             WorkingDirectory = sandbox.Root,
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -223,7 +227,10 @@ public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper o
         foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
             start.ArgumentList.Add(argument);
         var result = MtpTestRunnerScriptTests.Run(start, timeout: TimeSpan.FromMinutes(5));
+        if (result.ExitCode == 3 && result.Stdout.StartsWith(UnsupportedRuntimeMarker, StringComparison.Ordinal))
+            Assert.Skip($"Environment-state regression requires PowerShell 7 on .NET 10 or newer; shell={OuterShell}; {Bounded(result.Stdout.Trim())}");
         Assert.True(result.ExitCode == 0, $"Environment case exited {result.ExitCode}: {Bounded(result.Stdout + result.Stderr)}");
+        output.WriteLine($"Environment-state shell: {OuterShell}");
         var receipt = JsonDocument.Parse(result.Stdout);
         foreach (var observation in Observations(receipt))
         {
@@ -248,19 +255,6 @@ public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper o
         Assert.True(state.GetProperty("present").GetBoolean() == (expected is not null),
             $"Public sentinel {name}: expected {(expected is null ? "absent" : "present")} membership.");
         Assert.Equal(expected, state.GetProperty("value").GetString());
-    }
-
-    private static string ResolvePwsh()
-    {
-        // Resolve once before scrubbing; never fall back to Windows PowerShell.
-        var leaf = OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh";
-        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
-        {
-            var candidate = Path.Combine(directory.Trim('"'), leaf);
-            if (Path.IsPathFullyQualified(candidate) && File.Exists(candidate))
-                return candidate;
-        }
-        throw new InvalidOperationException("Environment-state regression requires pwsh on PATH; no Windows PowerShell fallback is permitted.");
     }
 
     private static string Quote(string value) => value.Replace("'", "''", StringComparison.Ordinal);

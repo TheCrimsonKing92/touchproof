@@ -364,23 +364,27 @@ internal sealed partial class ConductorBatchLoop
 
     private void AdmitMergeTrain(
         ParallelAcceptanceBatchState state,
-        ConductorDriver driver,
-        ConductorAutonomyPolicy policy,
-        int tick,
-        List<string> changedGoalLines)
+        ConductorDriver driver, AgentOrchestratorKernel kernel,
+        ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines)
     {
+        var bound = MergeTrainOldestWaiterPassBound.For(this);
         if (state.GroupedAdmissionOpen &&
             state.CohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
-            ConductorMergeTrainSelector.Select(
+            bound.Select(
                 state.ProductionCandidates,
                 driver.ReadSuppressedGroupedPairs(),
                 TrainIneligibleCriterionEvidenceGoalIds(state.CohortEligible), driver.ReadCohortAttributedMemberKeys(),
-                driver.ReadTrainImplicatedMemberKeys()) is { } trainSelection && GoalSchedulingOrder.GroupKeepsHead(trainSelection.Members.Select(member => member.GoalId.Value), state.CohortEligible, state.LiveAttemptGoalIds))
+                driver.ReadTrainImplicatedMemberKeys(), tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)) is { } trainSelection &&
+            GoalSchedulingOrder.GroupKeepsHead(trainSelection.Members.Select(member => member.GoalId.Value), state.CohortEligible, state.LiveAttemptGoalIds) &&
+            bound.AllowsTrain(state.OldestWaiterObservation.Waiter, trainSelection.Members.Select(member => member.GoalId).ToArray(),
+                state.OldestWaiterObservation.Waiter is { } waiter && state.Results.ContainsKey(waiter.Id.Value),
+                state.CohortEligible.Any(goal => goal.Id == state.OldestWaiterObservation.Waiter?.Id), state.AcceptanceCensus,
+                (goal, census) => EvaluateSoloAcceptanceAdmissibility(kernel, driver, goal, policy, census, state.ConfiguredAcceptanceWidth,
+                    state.ActiveAttemptSlotIndexes, state.ActiveCandidates, state.LiveAttemptGoalIds, state.OldestWaiterObservation, false, tick),
+                tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)))
         {
             var trainRun = driver.RunMergeTrain(
-                trainSelection,
-                state.CohortEligible,
-                policy,
+                trainSelection, state.CohortEligible, policy,
                 onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection),
                 runGateInBackground: true);
             state.GroupedAdmissionOpen = trainRun.MemberResults.Count > 0;
@@ -392,11 +396,7 @@ internal sealed partial class ConductorBatchLoop
                 changedGoalLines);
             state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
             state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
-                state.LiveAttempts,
-                state.ActiveAttemptIds,
-                state.ActiveCohortCapacity,
-                tick,
-                changedGoalLines,
+                state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick, changedGoalLines,
                 blockAdmissionOnFailure: true, _selectedExecutionBackstop?.ActiveRequestId);
             state.CohortEligible = state.CohortEligible
                 .Where(goal => !state.Results.ContainsKey(goal.Id.Value))
@@ -420,7 +420,7 @@ internal sealed partial class ConductorBatchLoop
         state.ForcedCohortPriority = null;
         var cohortAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
         if (PairTrainAdmission.CanAdmitTrain(state.GroupedAdmissionOpen, suppressNewAcceptanceAdmission(), cohortAdmission.IsAdmitted))
-            AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);
+            AdmitMergeTrain(state, driver, kernel, policy, tick, changedGoalLines);
     }
 
     private void HoldCohortMembers(ParallelAcceptanceBatchState state, ConductorDriver driver,
