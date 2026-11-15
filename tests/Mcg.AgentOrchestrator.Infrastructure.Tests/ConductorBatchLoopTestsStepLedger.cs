@@ -72,7 +72,8 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
             Assert.EndsWith(" cpu_ms=43", admissionLine);
             // Emission order differs from call order; instrumentation cannot reorder calls.
             // Supersession follows fresh grouped preparation and precedes priority handling and admission.
-            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility", "admission-pre-batch", "admission-pre-batch", "admission-pre-batch", "begin-tick", "attempt-census", "activation-probe-record", "attempt-reconcile", "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt", "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold", "prep-train-receipts", "prep-oldest-waiter", "prep-interaction-keys", "prep-probe-backoff", "grouped-admission-prep", "candidate-supersession", "priority-order", "merge-train", "pair-cohort", "hold-cohort-members", "hold-lone-ready", "solo-admission", "priority-guard", "deferral-summary", "begin-tick", "walk-projection-invalidate", "walk-advance", "walk-outcome-capacity", "walk-disposition", "walk-policy-decision", "walk-projection-invalidate" }, observed);
+            // Measure probes run after their actions, so nested driver steps precede their parents.
+            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility", "admission-pre-batch", "admission-pre-batch", "admission-pre-batch", "begin-tick", "attempt-census", "activation-probe-record", "attempt-reconcile", "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt", "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold", "prep-train-receipts", "prep-oldest-waiter", "prep-interaction-keys", "prep-probe-backoff", "grouped-admission-prep", "candidate-supersession", "priority-order", "merge-train", "pair-cohort", "hold-cohort-members", "hold-lone-ready", "solo-admission", "priority-guard", "deferral-summary", "begin-tick", "walk-running-refresh", "walk-projection-invalidate", "walk-hold-lifecycle-reconcile", "walk-hold-lifecycle-facts", "walk-hold-entry-gates", "walk-advance", "walk-held-goal", "walk-outcome-capacity", "walk-disposition", "walk-policy-decision", "walk-projection-invalidate" }, observed);
             AssertBound(line, "prewalk_steps");
         }
         finally { TryDeleteDirectory(root); }
@@ -120,11 +121,11 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
         Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("phase=operator-intent ", StringComparison.Ordinal));
         Assert.Contains("sweep_steps=kernel-reload:0:0,refresh-dispatches:0:0,parked-reloads:0:0,terminal-sweep-run:0:0,owned-root-reap:0:0,reconcile-remediation:0:0,host-health:0:0,maintenance:0:0,state-log-check:0:0,failure-clusters:0:0,remote-git-mirror:0:0,goal-refinement:0:0", Phase(tick, "sweep"));
         Assert.Matches(@"candidate-supersession:\d+:0:1(?:,| )", Phase(tick, "acceptance-admission"));
-        Assert.Equal(45, probeCalls);
+        Assert.Equal(50, probeCalls);
         var outsideCalls = 0;
         ConductorTickStepLedger.Measure("candidate-supersession", () => outsideCalls++);
         Assert.Equal(1, outsideCalls);
-        Assert.Equal(45, probeCalls);
+        Assert.Equal(50, probeCalls);
     }
 
     [Xunit.Fact(DisplayName = "Repeated fractional CPU samples truncate after accumulation and reset each tick")]
