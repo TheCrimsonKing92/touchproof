@@ -12,7 +12,9 @@ public enum WorkerBuildPhase
 public enum WorkerBuildOutcome
 {
     Success, CompilerFailure, CapacityBeforeStart, TimeoutAfterStart, Cancelled,
-    StaleCandidate, Interrupted, ApparatusFailure
+    StaleCandidate, Interrupted, ApparatusFailure,
+    // Append to preserve numeric values in existing durable observations.
+    PackageRestoreRefused
 }
 
 public sealed record WorkerBuildProcess(int Pid, DateTimeOffset StartedAt, string ImagePath);
@@ -66,7 +68,8 @@ public sealed record WorkerBuildInvocation(
             StructuralCheck is not null && (!IsTerminal || !StructuralCheck.IsBoundTo(this) ||
                 StructuralCheck.ProjectHomeDirectory != StructuralPolicy?.ProjectHomeDirectory) ||
             Outcome == WorkerBuildOutcome.Success && (children != Projects.Count || started != children || CompilerExitCode != 0) ||
-            Outcome == WorkerBuildOutcome.CompilerFailure && (started == 0 || CompilerExitCode is null or 0) ||
+            Outcome is (WorkerBuildOutcome.CompilerFailure or WorkerBuildOutcome.PackageRestoreRefused) &&
+                (started == 0 || CompilerExitCode is null or 0) ||
             Outcome == WorkerBuildOutcome.TimeoutAfterStart && started == 0 ||
             Outcome == WorkerBuildOutcome.CapacityBeforeStart && (children != 0 || started != 0 ||
                 Observations.Any(o => o.Phase == WorkerBuildPhase.BuildSlotAcquired) ||
