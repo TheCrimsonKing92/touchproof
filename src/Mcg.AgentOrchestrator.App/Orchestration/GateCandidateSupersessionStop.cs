@@ -22,7 +22,7 @@ internal sealed class GateCandidateSupersessionStop(
                 a.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running && a.ReconciledAt is null &&
                 !File.Exists(a.ResultPath) && !File.Exists(a.ExitCodePath))
             .Select(a => (a.AttemptId, Solo: (ConductorParallelAcceptanceAttempt?)a, Grouped: (ConductorGroupedGateAttempt?)null))
-            .Concat(grouped.ReadAll().Where(a => a.Kind is "cohort" or "train" &&
+            .Concat(grouped.ReadOpen().Where(a => a.Kind is "cohort" or "train" &&
                     a.Outcome == "Running" && a.ReconciledAt is null && grouped.ReservesCapacity(a))
                 .Select(a => (a.AttemptId, Solo: (ConductorParallelAcceptanceAttempt?)null, Grouped: (ConductorGroupedGateAttempt?)a)))
             .OrderBy(a => a.AttemptId, StringComparer.Ordinal).ToArray();
