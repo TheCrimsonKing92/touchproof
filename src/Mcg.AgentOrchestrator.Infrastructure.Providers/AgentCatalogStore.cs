@@ -12,6 +12,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
     public const string OpenAiLunaSubscriptionModelAlias = "gpt-5.6-luna";
     public const string OpenAiGpt6SolSubscriptionModelAlias = "gpt-6-sol";
     public const string OpenAiGpt61SolSubscriptionModelAlias = "gpt-6.1-sol";
+    public const string OpenAiGpt61TerraSubscriptionModelAlias = "gpt-6.1-terra";
     public const string OpenAiGpt6LunaSubscriptionModelAlias = "gpt-6-luna";
     public const string OpenAiGpt6AstraSubscriptionModelAlias = "gpt-6-astra";
     public const string AnthropicComplexModelName = "claude-sonnet-5-5";
@@ -35,6 +36,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
              modelAlias.Equals(OpenAiLunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiGpt6SolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiGpt61SolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
+             modelAlias.Equals(OpenAiGpt61TerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiGpt6LunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiGpt6AstraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
             ? "medium"

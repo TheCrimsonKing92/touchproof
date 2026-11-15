@@ -90,6 +90,7 @@ public sealed class AgentCatalogTests
     [Xunit.InlineData(AgentCatalog.OpenAiLunaSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt61TerraSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "medium")]
     public void AgentCatalogSubscriptionReasoningDefaultsArePinnedByModel(string modelAlias, string expected)

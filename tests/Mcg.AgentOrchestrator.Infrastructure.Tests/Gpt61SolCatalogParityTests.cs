@@ -29,6 +29,21 @@ public sealed class Gpt61SolCatalogParityTests
     }
 
     [Theory]
+    [InlineData(AgentRole.Researcher, "OpenAI", true)]
+    [InlineData(AgentRole.Planner, "OpenAI", true)]
+    [InlineData(AgentRole.Developer, "OpenAI", true)]
+    [InlineData(AgentRole.Tester, "OpenAI", true)]
+    [InlineData(AgentRole.Reviewer, "OpenAI", true)]
+    [InlineData(AgentRole.Tester, "Anthropic", false)]
+    public void Gpt61TerraMatchesGpt61SolTypedContextRules(AgentRole role, string provider, bool expected)
+    {
+        Assert.Equal(expected, WorkerContextHelpers.UsesTypedContextPackage(role, provider, "gpt-6.1-terra"));
+        Assert.Equal(
+            WorkerContextHelpers.UsesTypedContextPackage(role, provider, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias),
+            WorkerContextHelpers.UsesTypedContextPackage(role, provider, "gpt-6.1-terra"));
+    }
+
+    [Theory]
     [InlineData(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
     [InlineData(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
     [InlineData("GpT-6-SoL", AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
