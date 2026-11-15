@@ -232,7 +232,8 @@ internal static class OutsideDiffFindingRerun
             baseline is { Accepted: true, Passed: true, Disposition: FindingEvidenceArmDisposition.Green } &&
             baseline.ExecutedTestCount is > 0 && baseline.NotRunSelections.Count == 0 &&
             AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(baseline.TestResultPaths,
-                baseline.ReceiptArtifacts, baseline.ExecutedTestCount.Value, identities.Select(ClassOf).Distinct().ToArray()) &&
+                baseline.ReceiptArtifacts, baseline.ExecutedTestCount.Value, identities.Select(ClassOf).Distinct().ToArray(),
+                allowShortNamePrefixCoverage: true) &&
             candidate.NotRunSelections.Count == 0 && FindingEvidenceTrxCoverage.HasPassedIdentities(candidate, identities);
     }
 

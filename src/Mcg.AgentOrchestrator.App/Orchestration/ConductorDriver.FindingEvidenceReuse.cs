@@ -505,10 +505,10 @@ internal sealed partial class ConductorDriver
             string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
         return candidateArm is not null &&
             AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(
-                candidateArm.TestResultPaths,
-                candidateArm.ReceiptArtifacts,
+                candidateArm.TestResultPaths, candidateArm.ReceiptArtifacts,
                 candidateArm.ExecutedTestCount!.Value,
-                ResolveFindingEvidenceRequiredTestClasses(executedRequest));
+                ResolveFindingEvidenceRequiredTestClasses(executedRequest),
+                allowShortNamePrefixCoverage: true);
     }
 
     private static IReadOnlyList<string> ResolveFindingEvidenceRequiredTestClasses(FindingEvidenceRequest request)

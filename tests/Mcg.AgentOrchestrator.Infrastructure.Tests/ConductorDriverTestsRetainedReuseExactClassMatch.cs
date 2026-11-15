@@ -8,9 +8,12 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsRetainedReuseExactClassMatch
 {
     [Xunit.Theory]
-    [Xunit.InlineData("DeferredAlphaTestsFirst", 2)]
-    [Xunit.InlineData("DeferredAlphaTests", 1)]
-    public void RetainedReceiptRequiresExactExecutedClass(string executedClass, int expectedRuns)
+    [Xunit.InlineData(nameof(ConductorBatchLoopTestsReapFault), 1)]
+    [Xunit.InlineData(nameof(ConductorBatchLoopTests), 1)]
+    [Xunit.InlineData("OtherBatchLoopTests", 2)]
+    [Xunit.InlineData("PrefixConductorBatchLoopTests", 2)]
+    [Xunit.InlineData("conductorBatchLoopTestsReapFault", 2)]
+    public void RetainedReceiptRequiresExecutedClassCoverage(string executedClass, int expectedRuns)
     {
         const string candidateSha = "abc1234";
         var artifactRoot = InfrastructureTestSupport.CreateTempDirectory();
@@ -23,7 +26,7 @@ public sealed class ConductorDriverTestsRetainedReuseExactClassMatch
 
             var finding = EvidenceFindingWithRequest(
                 "The first finding round needs focused evidence.",
-                id: "exact-class-reuse", classes: ["DeferredAlphaTests"]);
+                id: "exact-class-reuse", classes: [nameof(ConductorBatchLoopTests)]);
             FailReviewerNeedsWork(kernel, goal, reviewer, "first finding round", findings: [finding]);
             var focusedRuns = 0;
             var requests = new List<string>();
@@ -55,7 +58,7 @@ public sealed class ConductorDriverTestsRetainedReuseExactClassMatch
 
             Xunit.Assert.Equal(expectedRuns, focusedRuns);
             Xunit.Assert.All(requests, request =>
-                Xunit.Assert.Equal("Infrastructure.Tests:DeferredAlphaTests", request));
+                Xunit.Assert.Equal("Infrastructure.Tests:ConductorBatchLoopTests", request));
             if (expectedRuns == 1)
                 Xunit.Assert.Contains(goal.Timeline, evt =>
                     evt.Message.Contains("finding-evidence disposition=reused-covered-green", StringComparison.Ordinal));

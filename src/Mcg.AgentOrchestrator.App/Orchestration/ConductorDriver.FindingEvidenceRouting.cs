@@ -326,10 +326,10 @@ internal sealed partial class ConductorDriver
             ExecutedTestCount: > 0
         } && string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
             AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(
-                candidate.TestResultPaths,
-                candidate.ReceiptArtifacts,
+                candidate.TestResultPaths, candidate.ReceiptArtifacts,
                 candidate.ExecutedTestCount!.Value,
-                ResolveFindingEvidenceRequiredTestClasses(batch.TypedRequest));
+                ResolveFindingEvidenceRequiredTestClasses(batch.TypedRequest),
+                allowShortNamePrefixCoverage: true);
         var confirmedRed = rerun.Accepted && candidate is
         {
             Accepted: true,

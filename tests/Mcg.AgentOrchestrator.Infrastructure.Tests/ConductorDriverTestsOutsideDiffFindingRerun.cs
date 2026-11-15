@@ -287,6 +287,34 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
         Assert.Empty(fixture.Retried);
     }
 
+    [Theory]
+    [InlineData("Fixture.OutsideDiffTestsDerived.Case", true)]
+    [InlineData("Fixture.UnrelatedTests.Case", false)]
+    [InlineData("Fixture.DerivedOutsideDiffTests.Case", false)]
+    public void BaselineRequiresExecutedBaseClassCoverage(string baselineIdentity, bool expectedResolved)
+    {
+        using var fixture = new Fixture(baselineIdentities: [baselineIdentity], testSource:
+            "namespace Fixture; public abstract class OutsideDiffTests { public void Case() {} } " +
+            "public sealed class OutsideDiffTestsDerived : OutsideDiffTests {}");
+        fixture.ReportAndSeed();
+        fixture.AdvanceToDecision();
+        Assert.Equal("Infrastructure.Tests:Fixture.OutsideDiffTests", Assert.Single(fixture.Requests));
+        if (expectedResolved)
+        {
+            Assert.Equal(ReviewFindingState.Resolved, fixture.Finding.State);
+            Assert.Equal(Reason, fixture.Finding.EvidenceOutcome!.DecisionReason);
+            Assert.Single(fixture.Notices);
+            Assert.Empty(fixture.Retried);
+        }
+        else
+        {
+            Assert.Equal(ReviewFindingState.Open, fixture.Finding.State);
+            Assert.NotEqual(Reason, fixture.Finding.EvidenceOutcome!.DecisionReason);
+            Assert.Empty(fixture.Notices);
+            Assert.Equal(fixture.Tester.Id, Assert.Single(fixture.Retried));
+        }
+    }
+
     [Fact]
     public void BaselineMissingOneClassCannotResolveFinding()
     {
@@ -357,7 +385,8 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
 
         public Fixture(string candidateOutcome = "Passed", string baselineOutcome = "Passed",
             IReadOnlyList<string>? changed = null, string[]? namedIdentities = null,
-            string[]? executedIdentities = null, bool seedReceipt = true, string[]? baselineIdentities = null)
+            string[]? executedIdentities = null, bool seedReceipt = true, string[]? baselineIdentities = null,
+            string? testSource = null)
         {
             _candidateOutcome = candidateOutcome;
             _baselineOutcome = baselineOutcome;
@@ -368,7 +397,7 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
             _seedReceipt = seedReceipt;
             Directory.CreateDirectory(Path.Combine(_root, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests"));
             Directory.CreateDirectory(Path.Combine(_root, ".orchestrator"));
-            File.WriteAllText(Path.Combine(_root, TestPath), "namespace Fixture; public class OutsideDiffTests { public void Case() {} }");
+            File.WriteAllText(Path.Combine(_root, TestPath), testSource ?? "namespace Fixture; public class OutsideDiffTests { public void Case() {} }");
             File.WriteAllText(Path.Combine(_root, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OtherTests.cs"),
                 "namespace Fixture; public class OtherTests { public void Runs() {} }");
             (Kernel, Goal) = SoftwareGoal();
