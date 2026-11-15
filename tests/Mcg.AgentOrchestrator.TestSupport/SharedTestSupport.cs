@@ -45,6 +45,18 @@ public static class SharedTestSupport
         TimeSpan? budget = null,
         TimeSpan? initialBackoff = null,
         TimeSpan? maximumBackoff = null)
+        => RemoveTempDirectory(path, elapsed, delay,
+            static file => LockAttribution.Attribute(file, phase: "test-cleanup", operation: "remove-temp-directory"),
+            budget, initialBackoff, maximumBackoff);
+
+    internal static void RemoveTempDirectory(
+        string path,
+        Func<TimeSpan> elapsed,
+        Action<TimeSpan> delay,
+        Func<string, BuildLockAttribution> holderProbe,
+        TimeSpan? budget = null,
+        TimeSpan? initialBackoff = null,
+        TimeSpan? maximumBackoff = null)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -108,7 +120,10 @@ public static class SharedTestSupport
                         + $"{spent.TotalMilliseconds:F0} ms. Last error: {lastError.Message}"
                         + Environment.NewLine + "Removal calls: " + string.Join("; ", removals)
                         + Environment.NewLine + attributePass
-                        + Environment.NewLine + DescribeResidual(path),
+                        + Environment.NewLine + DescribeResidual(path)
+                        + (OperatingSystem.IsWindows()
+                            ? Environment.NewLine + TempDirectoryHolderAttribution.Describe(path, holderProbe)
+                            : ""),
                     lastError);
             }
 
