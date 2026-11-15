@@ -180,8 +180,11 @@ public sealed class GoalSnapshotObligationMergeTests
             "END_WORKER_RESULT");
         restoredKernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review", "C:\\fixture", 0, output, string.Empty, DateTimeOffset.UtcNow,
-            WorkerResultPresent: true, ReviewedCommit: VersionThreeCandidateSha, DispatchAttemptAt: startedAt));
+            WorkerResultPresent: true, ReviewedCommit: VersionThreeCandidateSha,
+            DispatchStartedAt: startedAt, DispatchAttemptAt: startedAt));
 
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(reviewer, reviewer.LastVerification!).Status);
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal(VersionThreeCandidateSha, reviewer.LastVerification!.ReviewedCommit);
         AssertVersionThreeBinding(mapped, restored.CriterionEvidenceObligations);
@@ -500,7 +503,12 @@ public sealed class GoalSnapshotObligationMergeTests
             "END_WORKER_RESULT");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review", "C:\\fixture", 0, output, string.Empty, DateTimeOffset.UtcNow,
-            WorkerResultPresent: true, ReviewedCommit: VersionThreeCandidateSha, DispatchAttemptAt: startedAt));
+            WorkerResultPresent: true, ReviewedCommit: VersionThreeCandidateSha,
+            DispatchStartedAt: startedAt, DispatchAttemptAt: startedAt));
+
+        // Prove these controls reach attestation rather than an incomplete-contract retry.
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(reviewer, reviewer.LastVerification!).Status);
     }
 
     private static Goal CreateVersionThreeGoal(AgentOrchestratorKernel kernel)
