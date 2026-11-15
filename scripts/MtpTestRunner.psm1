@@ -2538,7 +2538,8 @@ function New-MtpProcessStartInfo {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [string]$StartupHookPath,
         [string]$BuildOutputRoot,
-        [string]$AcceptanceAttributionReplayRequest
+        [string]$AcceptanceAttributionReplayRequest,
+        [string]$SlotTimingFile
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -2593,6 +2594,9 @@ function New-MtpProcessStartInfo {
     }
     if (-not [string]::IsNullOrWhiteSpace($BuildOutputRoot)) {
         $startInfo.EnvironmentVariables['MCG_TEST_BUILD_OUTPUT_ROOT'] = $BuildOutputRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SlotTimingFile)) {
+        $startInfo.EnvironmentVariables['MCG_TEST_SLOT_TIMING_FILE'] = $SlotTimingFile
     }
     # A fixed, typed replay context belongs only to the selected test host. Never alter the
     # caller environment or the hermetic allowlist (build/discovery must not inherit it).
@@ -2718,6 +2722,7 @@ function Invoke-MtpAppHost {
         [string]$StartupHookPath,
         [string]$BuildOutputRoot,
         [string]$AcceptanceAttributionReplayRequest,
+        [string]$SlotTimingFile,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [pscustomobject]$TimeoutPolicy
@@ -2744,7 +2749,7 @@ function Invoke-MtpAppHost {
             $ownedJob = [McgMtpOwnedJob]::new($AllowBreakaway.IsPresent)
         }
         $process = [System.Diagnostics.Process]::new()
-        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath -BuildOutputRoot $BuildOutputRoot -AcceptanceAttributionReplayRequest $AcceptanceAttributionReplayRequest
+        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath -BuildOutputRoot $BuildOutputRoot -AcceptanceAttributionReplayRequest $AcceptanceAttributionReplayRequest -SlotTimingFile $SlotTimingFile
         $capture.Attach($process)
         if (-not [McgMtpSuppressedProcessStart]::Start($process)) {
             throw "Process.Start returned false for '$Executable'."
@@ -3087,6 +3092,7 @@ function Invoke-MtpTestRun {
         [string]$AcceptanceAttributionReplayInput,
         [string[]]$TestInput = @(),
         [string]$TestSettingsFile,
+        [string]$SlotTimingFile,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [scriptblock]$RetainedEvidenceOwnershipWriter
@@ -3268,7 +3274,7 @@ function Invoke-MtpTestRun {
                         return New-MtpTerminalResult -TestInputNames $appliedTestInputNames -Outcome failed -ExitCode $script:ExitCodes.Runner -ResultsDirectory $runDirectory -ArtifactsRetained $true
                     }
                 }
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -BuildOutputRoot $buildOutputRoots[[string]$project.project] -AcceptanceAttributionReplayRequest $replayRequest -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -BuildOutputRoot $buildOutputRoots[[string]$project.project] -AcceptanceAttributionReplayRequest $replayRequest -SlotTimingFile $SlotTimingFile -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
                 $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed

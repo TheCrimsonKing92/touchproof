@@ -114,6 +114,18 @@ try {
         }
     }
     finally { $buildMutex.ReleaseMutex(); $buildMutex.Dispose() }
+    # Keep timing outside the runner's per-invocation directory, which successful runs delete.
+    $slotTimingSuffix = '.slot-timing.jsonl'
+    New-Item -ItemType Directory -Force -Path $results | Out-Null
+    $slotTimingPending = Join-Path $results ("slot-timing-$([Guid]::NewGuid().ToString('N')).pending")
+    Get-ChildItem -LiteralPath $out -Filter "*$slotTimingSuffix" -File | Remove-Item -Force
+    $slotTimingArgs = @{}
+    try {
+        $runner = Get-Command -Name (Join-Path $work 'scripts\Invoke-TestSummary.ps1') -ErrorAction Stop
+        if ($runner.Parameters.ContainsKey('SlotTimingFile')) {
+            $slotTimingArgs['SlotTimingFile'] = $slotTimingPending
+        }
+    } catch { }
     Write-Status 'running' @{ resultsRoot = $results }
     # Test-host CPU, peak working set and laptop available memory for this lane (goal 0fca7ad9).
     $resources = Join-Path $out 'resources.json'
@@ -134,7 +146,7 @@ try {
             Write-FileRetrying $settingsFile ($TestSettings | ConvertTo-Json -Compress)
             $settingsArgs['TestSettingsFile'] = $settingsFile
         }
-        & pwsh -NoProfile -File (Join-Path $work 'scripts\Invoke-TestSummary.ps1') -Target $Project -FilterFile $filterFile -NoBuild -ResultsRoot $results @timeoutArgs @settingsArgs *>&1 |
+        & pwsh -NoProfile -File (Join-Path $work 'scripts\Invoke-TestSummary.ps1') -Target $Project -FilterFile $filterFile -NoBuild -ResultsRoot $results @timeoutArgs @settingsArgs @slotTimingArgs *>&1 |
             Tee-Object -FilePath (Join-Path $out 'runner.log') | Out-Null
         $exit = $LASTEXITCODE
         $phases.testSeconds = Get-PhaseSeconds $phaseStart
@@ -145,6 +157,16 @@ try {
     if ($sampler -and -not $sampler.HasExited) { Stop-Process -Id $sampler.Id -Force -ErrorAction SilentlyContinue }
     $completed = @{ exitCode = $exit; seconds = [math]::Round(([DateTime]::UtcNow - $started).TotalSeconds, 1)
         trx = @(Get-ChildItem -Path $out -Filter *.trx | ForEach-Object Name); phases = $phases }
+    if ($slotTimingArgs.Count -gt 0 -and $completed.trx.Count -eq 1 -and
+        (Test-Path -LiteralPath $slotTimingPending -PathType Leaf)) {
+        $slotTimingName = [IO.Path]::ChangeExtension($completed.trx[0], $slotTimingSuffix)
+        $slotTimingDestination = Join-Path $out $slotTimingName
+        try {
+            Move-Item -LiteralPath $slotTimingPending -Destination $slotTimingDestination -Force -ErrorAction Stop
+            $completed['slotTiming'] = @($slotTimingName)
+        }
+        catch { Remove-Item -LiteralPath $slotTimingDestination -Force -ErrorAction SilentlyContinue }
+    }
     try {
         $usage = Get-Content -Raw -LiteralPath $resources | ConvertFrom-Json
         foreach ($name in 'testHostCpuSeconds', 'testHostPeakWorkingSetBytes', 'availableMemoryMbMin', 'resourceSamples') {
@@ -180,6 +202,7 @@ catch {
     throw
 }
 finally {
+    if ($slotTimingPending) { Remove-Item -LiteralPath $slotTimingPending -Force -ErrorAction SilentlyContinue }
     if ($sampler -and -not $sampler.HasExited) { Stop-Process -Id $sampler.Id -Force -ErrorAction SilentlyContinue }
     if ($beater -and -not $beater.HasExited) { Stop-Process -Id $beater.Id -Force -ErrorAction SilentlyContinue }
     Write-FileRetrying $heartbeat ([DateTime]::UtcNow.ToString('o'))

@@ -35,6 +35,7 @@ param(
     [string]$AcceptanceAttributionReplayInput,
     [string[]]$TestInput = @(),
     [string]$TestSettingsFile,
+    [string]$SlotTimingFile,
     [switch]$AllowBreakaway,
     [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
 )
@@ -122,6 +123,7 @@ $run = Invoke-MtpTestRun `
     -AcceptanceAttributionReplayInput $AcceptanceAttributionReplayInput `
     -TestInput $TestInput `
     -TestSettingsFile $TestSettingsFile `
+    -SlotTimingFile $SlotTimingFile `
     -AllowBreakaway:$AllowBreakaway `
     -TestHostTimeoutSeconds $TestHostTimeoutSeconds
 Complete-MtpInvocation $run

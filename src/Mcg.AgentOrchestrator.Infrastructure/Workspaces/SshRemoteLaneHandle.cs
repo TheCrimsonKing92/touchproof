@@ -127,6 +127,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                         if (status.String("state") == "cancelled") throw new RemoteLaneTransportException(string.IsNullOrEmpty(status.String("error")) ? "remote job cancelled" : $"remote job cancelled: {status.String("error")}");
                         if (status.String("state") != "completed") continue;
                         var (code, names) = request.Kind == "build-check" ? status.BuildCheckCompletion() : status.Completion();
+                        var slotTimingNames = request.Kind == "build-check" ? [] : status.SlotTimingNames();
                         _stop.Token.ThrowIfCancellationRequested();
                         var paths = names.Select(name => Path.Combine(staging, name)).ToArray();
                         var temporaryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -150,6 +151,49 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                                 try { File.Move(temporaryPath, paths[resultIndex], overwrite: true); }
                                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                                 { throw FetchFailure(fetch); }
+                            }
+                            for (var timingIndex = 0; timingIndex < slotTimingNames.Length; timingIndex++)
+                            {
+                                _stop.Token.ThrowIfCancellationRequested();
+                                var destination = Path.Combine(staging, slotTimingNames[timingIndex]);
+                                var stepName = $"fetch-slot-timing-{timingIndex + 1}";
+                                startedAt = clock.GetUtcNow();
+                                GoalAcceptanceVerifier.CommandResult? fetch = null;
+                                try
+                                {
+                                    // Completed executors stop heartbeating. Optional transfers must leave
+                                    // time to publish the TRX result before the coordinator's lease expires.
+                                    var remaining = NewestHeartbeat is { } heartbeat
+                                        ? TimeSpan.FromSeconds(entry.LeaseSeconds) - (startedAt - heartbeat) - TimeSpan.FromSeconds(5)
+                                        : TimeSpan.Zero;
+                                    var fetchBound = remaining < TimeSpan.FromMinutes(2) ? remaining : TimeSpan.FromMinutes(2);
+                                    if (fetchBound <= TimeSpan.Zero)
+                                        throw new RemoteLaneTransportException("slot-timing-fetch-skipped: insufficient-lease-budget");
+                                    var (localName, temporaryPath) = ReserveFetchName(staging, temporaryPaths);
+                                    fetch = await transport([SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes",
+                                        remote + slotTimingNames[timingIndex], localName], staging,
+                                        fetchBound, _stop.Token).ConfigureAwait(false);
+                                    _stop.Token.ThrowIfCancellationRequested();
+                                    if (fetch.ExitCode != 0 || fetch.TimedOut || !File.Exists(temporaryPath))
+                                        throw FetchFailure(fetch);
+                                    File.Move(temporaryPath, destination, overwrite: true);
+                                    var step = RemoteLaneDiagnosticFiles.Step(staging, stepName,
+                                        fetch.ExitCode, fetch.TimedOut, startedAt, clock.GetUtcNow(), fetch.Output, fetch.Stderr);
+                                    lock (_sync) _fetches.Add(step);
+                                }
+                                catch (OperationCanceledException) when (_stop.IsCancellationRequested) { throw; }
+                                catch (Exception ex)
+                                {
+                                    var step = RemoteLaneDiagnosticFiles.Step(staging, stepName, fetch?.ExitCode,
+                                        fetch?.TimedOut == true || ex is OperationCanceledException,
+                                        startedAt, clock.GetUtcNow(), fetch?.Output ?? "",
+                                        string.IsNullOrEmpty(fetch?.Stderr) ? ex.Message : fetch.Stderr, failed: true);
+                                    lock (_sync) _fetches.Add(step);
+                                    // Optional timing must not fail a completed lane or leave partial timing behind.
+                                    try { File.Delete(destination); }
+                                    catch (Exception cleanupError) when (cleanupError is IOException or UnauthorizedAccessException) { }
+                                }
+                                _stop.Token.ThrowIfCancellationRequested();
                             }
                         }
                         finally

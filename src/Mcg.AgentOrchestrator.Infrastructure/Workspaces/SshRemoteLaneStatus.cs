@@ -45,6 +45,25 @@ internal sealed record SshRemoteLaneStatus(JsonElement Fields)
         }
         return (code, names);
     }
+    internal string[] SlotTimingNames()
+    {
+        if (!Fields.TryGetProperty("slotTiming", out var timing)) return [];
+        if (timing.ValueKind != JsonValueKind.Array)
+            throw new RemoteLaneTransportException("invalid-slot-timing-name: non-array");
+        var suffix = Path.GetFileName(LaneSlotTimingReader.PathFor("lane.trx"))["lane".Length..];
+        var pattern = "^[A-Za-z0-9._-]+" + Regex.Escape(suffix) + "\\z";
+        var names = new List<string>();
+        foreach (var entry in timing.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.String)
+                throw new RemoteLaneTransportException("invalid-slot-timing-name: non-string");
+            var name = entry.GetString()!;
+            if (!Regex.IsMatch(name, pattern, RegexOptions.CultureInvariant))
+                throw new RemoteLaneTransportException($"invalid-slot-timing-name: {RemoteLaneStatusValueText.Sanitize(name)}");
+            names.Add(name);
+        }
+        return names.ToArray();
+    }
     internal (int ExitCode, string[] Names) BuildCheckCompletion()
     {
         if (!Fields.TryGetProperty("exitCode", out var exit) || exit.ValueKind != JsonValueKind.Number || !exit.TryGetInt32(out var code))
