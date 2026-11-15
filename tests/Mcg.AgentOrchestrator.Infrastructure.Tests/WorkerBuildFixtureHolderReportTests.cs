@@ -71,7 +71,9 @@ public sealed class WorkerBuildFixtureHolderReportTests
         Assert.StartsWith($"Worker build fixture cleanup failed. Residual root '{result.Root}' attributes=", result.Error.Message);
         Assert.Contains("live-descendant enumeration failed: IOException: reader unavailable", result.Error.Message);
         Assert.DoesNotContain("No live descendant was found.", result.Error.Message);
-        Assert.Contains(result.Error.Flatten().InnerExceptions, error => error.Message == "controlled cleanup failure");
+        var failure = Assert.IsType<InvalidOperationException>(Assert.Single(result.Error.InnerExceptions));
+        Assert.Equal($"Fixture cancellation failed at '{result.Root}'.", failure.Message);
+        Assert.Equal("controlled cleanup failure", Assert.IsType<IOException>(failure.GetBaseException()).Message);
     }
 
     [Fact]

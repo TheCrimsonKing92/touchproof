@@ -18,6 +18,8 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
         var childScript = Path.Combine(fixture.Root, "descendant.ps1");
         Process? worker = null;
         Process? descendant = null;
+        SpawnProcessIdentity? workerIdentity = null;
+        SpawnProcessIdentity? descendantIdentity = null;
         SafeFileHandle? retainedJob = null;
         var disposeAttempted = false;
         try
@@ -41,12 +43,14 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
                 Path.Combine(fixture.Root, "worker.out.log"), Path.Combine(fixture.Root, "worker.err.log"));
             worker = Process.GetProcessById(fixture.Worker.Process.Id);
             _ = worker.SafeHandle; // Hold this process identity through the finally-block stop.
+            workerIdentity = SpawnProcessIdentityReader.ReadForRegistration(worker).Identity;
             fixture.Worker.Resume();
             Assert.True(await Task.Run(() => ready.WaitOne(TestHangGuard.HangSafetyBound)),
                 "Worker descendant did not signal its named readiness event.");
             var descendantId = int.Parse(File.ReadAllText(childPidPath), System.Globalization.CultureInfo.InvariantCulture);
             descendant = Process.GetProcessById(descendantId);
             _ = descendant.SafeHandle;
+            descendantIdentity = SpawnProcessIdentityReader.ReadForRegistration(descendant).Identity;
             var descendantName = descendant.ProcessName;
             Assert.False(worker.HasExited);
             Assert.False(descendant.HasExited);
@@ -58,8 +62,10 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
             disposeAttempted = true;
             var error = await Task.Run(() => Assert.Throws<AggregateException>(fixture.Dispose));
 
-            Assert.Contains(error.Flatten().InnerExceptions, failure => failure.Message ==
-                "Owned worker/descendant termination is unconfirmed; retain fixture artifacts.");
+            var failure = Assert.IsType<InvalidOperationException>(Assert.Single(error.InnerExceptions));
+            Assert.Equal($"Fixture owned exit confirmation failed at '{fixture.Root}'.", failure.Message);
+            Assert.Equal("Owned worker/descendant termination is unconfirmed; retain fixture artifacts.",
+                Assert.IsType<InvalidOperationException>(failure.InnerException).Message);
             Assert.StartsWith($"Worker build fixture cleanup failed. Residual root '{fixture.Root}' attributes=", error.Message);
             Assert.Contains($"pid={descendantId} name={descendantName}", error.Message);
             Assert.False(worker.HasExited);
@@ -67,10 +73,10 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
         }
         finally
         {
-            try { await StopExactProcess(descendant, "worker descendant exit after exact-pid termination"); }
+            try { StopExactProcess(descendant, descendantIdentity); }
             finally
             {
-                try { await StopExactProcess(worker, "worker exit after exact-pid termination"); }
+                try { StopExactProcess(worker, workerIdentity); }
                 finally
                 {
                     retainedJob?.Dispose();
@@ -80,13 +86,13 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
             }
         }
 
-        static async Task StopExactProcess(Process? process, string exitEvent)
+        static void StopExactProcess(Process? process, SpawnProcessIdentity? identity)
         {
             if (process is null) return;
             try
             {
-                if (!process.HasExited) process.Kill();
-                await TestHangGuard.WaitAsync(process.WaitForExitAsync(), exitEvent);
+                Assert.NotNull(identity);
+                TestOwnedProcessStop.StopRootIfSame(process, identity, TestHangGuard.HangSafetyBound);
             }
             finally { process.Dispose(); }
         }
