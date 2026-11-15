@@ -48,7 +48,8 @@ public sealed class ProjectDiscoverCliTests
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal($"Project model: {modelPath}", lines[0]);
         Assert.Equal("Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1)", lines[1]);
-        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(2));
+        Assert.Equal($"Kept 0 unit measurements; {model.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration", lines[2]);
+        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(3));
         foreach (var (path, snapshot) in snapshots)
         {
             Assert.Equal(snapshot.Bytes, File.ReadAllBytes(path));
@@ -106,7 +107,8 @@ public sealed class ProjectDiscoverCliTests
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal($"Project model: {modelPath}", lines[0]);
         Assert.Equal(expectedBranchLine, lines[1]);
-        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(2));
+        Assert.Equal($"Kept 0 unit measurements; {model.Commands.Count(command => command.TestCommand is not null)} test units have no measured test duration", lines[2]);
+        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(3));
         if (learned)
         {
             Assert.Equal(FactConfidence.High, model.IntegrationBranch!.Confidence);
