@@ -61,8 +61,12 @@ internal static class ProviderHoldSeedEvidenceReader
                 task.DispatchEntries, task.HistoryInTable, cancellationToken);
             tasks.Add(new ProviderUsageTaskEvidence(
                 task.Id, task.RequiredRole, task.Status, task.AssignedAgentId,
-                task.LastDispatch?.Snapshot(), history.Dispatch.Entries.Select(dispatch => dispatch.Deserialize<DispatchFields>(options)!.Snapshot()).ToArray(),
-                task.LastVerification, history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray(),
+                history.LatestDispatch.ValueKind != JsonValueKind.Undefined
+                    ? history.LatestDispatch.Deserialize<DispatchFields>(options)!.Snapshot() : task.LastDispatch?.Snapshot(),
+                history.Dispatch.Entries.Select(dispatch => dispatch.Deserialize<DispatchFields>(options)!.Snapshot()).ToArray(),
+                history.LatestVerification.ValueKind != JsonValueKind.Undefined
+                    ? history.LatestVerification.Deserialize<TaskVerificationSnapshot>(options) : task.LastVerification,
+                history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray(),
                 task.LatestProviderBudgetRecoveryAt));
         }
         return new(id, row.Status, tasks,
