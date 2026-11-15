@@ -50,7 +50,11 @@ internal static class OwnerConsoleGoalDetailFormatter
         if (detail.Gate is null && (goal.Status != GoalStatus.Verifying || detail.GateObserved) &&
             OwnerConsoleLandingBlockerText.Detail(goal, zone) is { } blocker)
             output.WriteLine("Landing blocker: " + blocker);
-        if (detail.Gate is { } liveGate) output.WriteLine("Gate: " + OwnerGoalDetailGateLine.Text(liveGate));
+        if (detail.Gate is { } liveGate)
+        {
+            output.WriteLine("Gate: " + OwnerGoalDetailGateLine.Text(liveGate));
+            if (liveGate.Selection is { Full: true, Reason: { } reason }) output.WriteLine("Full-gate reason: " + reason);
+        }
         if (detail.Evidence is { } evidence) RenderEvidence(evidence, output);
         if (detail.Changes is { } changes)
             foreach (var line in changes.DetailLines()) output.WriteLine(line);

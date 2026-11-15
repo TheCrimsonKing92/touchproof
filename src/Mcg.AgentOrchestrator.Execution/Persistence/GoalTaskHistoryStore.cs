@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -9,7 +10,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// A task's HistoryInTable marker is {"Verification":count,"Dispatch":count}: each count is a
 /// non-negative integer, or null for a null list. Absent/null markers mean unmarked. Marked tasks
 /// ignore inline lists and require exactly the stated rows at contiguous zero-based sequences.
-/// This build writes full inline lists and never emits the marker, including after a marked load.
+/// This build writes marked documents; only history rows contain the two lists.
 ///
 /// Past-entry reader inventory (all under Persistence): SqliteOrchestratorStateRepository's
 /// LoadFromConnectionAsync (full/selected kernel reconstruction), LoadGoalAsync (single goal),
@@ -22,18 +23,77 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// latest dispatch/timeline only, and deserialization checks consume no past entries. Any future
 /// history consumer at those seams must use this accessor.
 ///
-/// Step 2b (writing marked documents) may be adopted only after a build containing this step has
+/// Step 2b (writing marked documents) may be adopted only after a build containing step 2a has
 /// been adopted AND at least one later build has been adopted after it. Activation revert must
 /// already fall back to a build containing this reader: App/Orchestration/ConductorContinuitySupervisor
 /// RunAsync retains currentBuild on the reverted branch, relaunches it at the launch boundary,
 /// and advances currentBuild only after adoption or deliberate stop. Step 1 cannot safely read
 /// stripped histories and would remove their table rows on save.
+/// Thus a build older than step 2a cannot be the revert target.
+///
+/// Writer inventory: UpsertGoalRowAsync is called by SaveGoalSnapshotsAsync, WriteSnapshotAsync,
+/// TryCasWriteGoalRowAsync, and WriteGoalCreationChangesAsync (GoalCreation). All hold one write transaction
+/// spanning the document and rows. Conductor ticks are covered by the adoption rule above.
+/// Offline intent apply (the merge path) and every other goal-saving command line verb use
+/// mcg-orchestrator.cmd: the adopted build or a HEAD-freshness-checked checkout build.
+/// mcg-orchestrator.sh has only its file-time staleness check.
+/// Detached __dispatch-run hosts also save goals: App/Program.cs:23 constructs WorkerBuildRequestHost;
+/// its Store calls (:91, :289) reach WorkerBuildInvocationOperations.cs:50-65, TransactGoalStateAsync,
+/// TryCasWriteGoalRowAsync and this repository's goal row upsert. They run the launching process's
+/// build: Processes/BackgroundDispatchRunner.DispatchHelpers.cs:9-10 resolves AppContext.BaseDirectory's
+/// App dll, BackgroundDispatchRunner.cs:368-369 passes it to DispatchHostStartInfoFactory.cs:16-17
+/// as dotnet exec's explicit assembly, with no independent older-build selection.
+/// Hosts outlive their launcher. DispatchProcessHost.cs:37, :45, :2082-2105 bounds worker runtime
+/// by a 60-minute default cap, checked every 15 seconds (MCG_DISPATCH_MAX_RUNTIME_MIN can override it);
+/// preparation and final channel/output cleanup are outside that worker runtime bound.
+/// Before the first marked save, the operator must verify no dispatch host older than step 2a
+/// adoption remains alive; let those hosts finish or stop them first. Such an old host loads marked
+/// tasks with empty history and removes their table rows on save. No runtime fence is added here.
+/// GoalSnapshotArchive copies the marked text,
+/// retaining rows; its task-less hot stub cannot be saved. Recompression preserves that text;
+/// StateDatabaseOfflineConversion copies the whole database, including history rows.
+/// The set-goal-status and requeue-task verbs in scripts/OrchestratorSqliteTools/Program.cs need
+/// no build guarantee: both edit an untyped JSON tree, remove no task, and leave every marker,
+/// history list and history row untouched. Requeue clears latest execution/verification/dispatch/
+/// process and retry fields, changes status and appends a timeline event only.
+/// Out of contract: running the application dll directly, or a launcher in a checkout/worktree
+/// older than step 2a pointed at a marked store. Such a build loads marked tasks with empty
+/// history and removes their table rows on save. No runtime fence is added here.
+/// Read-only consoles opened before step 2a show empty history for marked goals until restarted.
+/// Interactive CLI writers inherit the launcher's build guarantee, checked only at launch.
+/// Those started before step 2a must restart before marked writes begin: their old build loads
+/// marked tasks with empty history and removes their table rows on save.
+/// Writer search (src and scripts, excluding generated trees): UpsertGoalRowAsync, INSERT INTO goals,
+/// UPDATE goals, INSERT INTO goal_snapshot_archive, UPDATE goal_snapshot_archive, VACUUM INTO.
 /// </summary>
 internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 {
     internal const string VerificationProperty = "VerificationHistory";
     internal const string DispatchProperty = "DispatchHistory";
     internal const string MarkerProperty = "HistoryInTable";
+
+    private readonly Lazy<JsonSerializerOptions> documentOptions = new(() => CreateDocumentOptions(options));
+
+    // Customize only the persisted task shape; callers and row writes keep the original lists.
+    private static JsonSerializerOptions CreateDocumentOptions(JsonSerializerOptions source)
+    {
+        var resolver = new DefaultJsonTypeInfoResolver();
+        resolver.Modifiers.Add(type =>
+        {
+            if (type.Type != typeof(TaskSnapshot)) return;
+            foreach (var property in type.Properties.Where(property =>
+                property.AttributeProvider is System.Reflection.PropertyInfo
+                    { Name: VerificationProperty or DispatchProperty }).ToArray())
+                type.Properties.Remove(property);
+            var marker = type.CreateJsonPropertyInfo(typeof(HistoryCounts), MarkerProperty);
+            marker.Get = value => new HistoryCounts(((TaskSnapshot)value).VerificationHistory?.Count,
+                ((TaskSnapshot)value).DispatchHistory?.Count);
+            type.Properties.Add(marker);
+        });
+        return new(source) { TypeInfoResolver = resolver };
+    }
+
+    internal string SerializeDocument(GoalSnapshot goal) => JsonSerializer.Serialize(goal, documentOptions.Value);
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTaskHistoryStore.cs")]
     internal static void CreateSchema(SqliteConnection connection)
@@ -53,7 +113,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     }
 
     // All callers already hold the goal write transaction. Never begin or commit a separate transaction here.
-    internal async Task WriteAsync(SqliteConnection connection, GoalSnapshot goal, CancellationToken token)
+    internal async Task<bool> WriteAsync(SqliteConnection connection, GoalSnapshot goal, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         CreateSchema(connection); // Existing stores do not rerun migration 1.
@@ -80,7 +140,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
             ON CONFLICT(goal_id, task_id, kind, sequence) DO UPDATE SET entry_json = excluded.entry_json
             WHERE entry_json != excluded.entry_json
             """;
-        await command.ExecuteNonQueryAsync(token);
+        var changed = await command.ExecuteNonQueryAsync(token);
         // Cap trims, list replacements and removed tasks all remove keys from the same goal-wide set.
         command.CommandText = """
             DELETE FROM goal_task_history WHERE goal_id = $goal
@@ -89,13 +149,11 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                         json_extract(value, '$.Sequence') FROM json_each($rows)
                 )
             """;
-        await command.ExecuteNonQueryAsync(token);
+        changed += await command.ExecuteNonQueryAsync(token);
+        return changed > 0;
     }
 
     private sealed record HistoryWriteRow(string TaskId, string Kind, int Sequence, string EntryJson);
-
-    private static readonly (string Property, string Kind)[] Kinds =
-        [(VerificationProperty, "verification"), (DispatchProperty, "dispatch")];
 
     internal sealed record HistoryEntries(JsonElement[] Entries, bool FromTable, bool IsNull = false);
     internal sealed record TaskHistory(HistoryEntries Verification, HistoryEntries Dispatch);
@@ -226,9 +284,6 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     private static JsonElement[] Elements(JsonElement value) =>
         value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? [] : value.EnumerateArray().ToArray();
 
-    private static JsonElement[] Inline(JsonElement task, string property) =>
-        task.TryGetProperty(property, out var value) ? Elements(value) : [];
-
     internal async Task<GoalSnapshot?> HydrateAsync(SqliteConnection connection, GoalSnapshot? snapshot, string documentText,
         CancellationToken token = default)
     {
@@ -284,9 +339,13 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         using var document = JsonDocument.Parse(goalJson);
         var expected = new List<(string Task, string Kind, int Sequence, string Json)>();
         foreach (var task in document.RootElement.GetProperty("Tasks").EnumerateArray())
-            foreach (var (property, kind) in Kinds)
-                expected.AddRange(Inline(task, property).Select((entry, index) =>
+        {
+            var history = await ReadAsync(connection, goalId, task, token);
+            foreach (var (kind, entries) in new[]
+                { ("verification", history.Verification.Entries), ("dispatch", history.Dispatch.Entries) })
+                expected.AddRange(entries.Select((entry, index) =>
                     (task.GetProperty("Id").GetString()!, kind, index, entry.GetRawText())));
+        }
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT task_id, kind, sequence, entry_json FROM goal_task_history WHERE goal_id = $goal ORDER BY task_id, kind, sequence";
         command.Parameters.AddWithValue("$goal", goalId);

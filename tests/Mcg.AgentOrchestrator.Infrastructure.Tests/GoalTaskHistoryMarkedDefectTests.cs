@@ -17,7 +17,6 @@ public sealed class GoalTaskHistoryMarkedDefectTests
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskHistoryTestFixture.Snapshot();
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
-        fixture.MarkStoredHistory(goal.Id);
         var target = $"goal_id = '{goal.Id}' AND task_id = '{goal.Tasks[0].Id}' AND kind = 'verification'";
         fixture.Execute(defect switch
         {
@@ -55,7 +54,6 @@ public sealed class GoalTaskHistoryMarkedDefectTests
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskHistoryTestFixture.Snapshot();
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
-        fixture.MarkStoredHistory(goal.Id);
         using var document = JsonDocument.Parse(fixture.RawGoal(goal.Id));
         var error = await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Store.ReadAsync(null, goal.Id,
             document.RootElement.GetProperty("Tasks")[0]));

@@ -2978,8 +2978,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT snapshot_json FROM goals WHERE id = $id";
             cmd.Parameters.AddWithValue("$id", goalId.Value);
-            var json = (string?)await cmd.ExecuteScalarAsync(cancellationToken);
-            if (json is null) return (GoalSnapshot?)null;
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken)) return (GoalSnapshot?)null;
+            var json = reader.GetString(0);
             var snapshot = await SnapshotArchive.HydrateAsync(
                 conn, JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions), cancellationToken);
             return await TaskHistoryStore.HydrateAsync(conn, snapshot, json, cancellationToken);
@@ -3292,9 +3293,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 goalJson = reader.GetString(0);
                 goalSnapshot = JsonSerializer.Deserialize<GoalSnapshot>(goalJson, SerializerOptions);
                 version = reader.GetInt32(1);
+                goalSnapshot = await SnapshotArchive.HydrateAsync(conn, goalSnapshot, cancellationToken);
+                goalSnapshot = await TaskHistoryStore.HydrateAsync(conn, goalSnapshot, goalJson, cancellationToken);
             }
-            goalSnapshot = await SnapshotArchive.HydrateAsync(conn, goalSnapshot, cancellationToken);
-            goalSnapshot = await TaskHistoryStore.HydrateAsync(conn, goalSnapshot, goalJson, cancellationToken);
 
             var humanInputRequests = new List<HumanInputRequestSnapshot>();
             await using (var inputCommand = conn.CreateCommand())
@@ -3407,7 +3408,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             throw new InvalidOperationException($"Refusing to persist metadata-only goal snapshot '{ShortGoalId(goal.Id)}'. Hydrate the full aggregate before saving.");
         }
 
-        var json = JsonSerializer.Serialize(goal, SerializerOptions);
+        var json = TaskHistoryStore.SerializeDocument(goal);
+        var historyChanged = await TaskHistoryStore.WriteAsync(conn, goal, cancellationToken);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $$"""
             INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
@@ -3418,10 +3420,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 source_backlog_item_id = excluded.source_backlog_item_id,
                 snapshot_json = excluded.snapshot_json,
                 version       = {{versionSql}},
-                updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
+                updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json OR $history_changed = 1
                                      THEN excluded.updated_at
                                      ELSE goals.updated_at END
-            WHERE $skip_unchanged = 0 OR excluded.snapshot_json != goals.snapshot_json
+            WHERE $skip_unchanged = 0 OR excluded.snapshot_json != goals.snapshot_json OR $history_changed = 1
             """;
         cmd.Parameters.AddWithValue("$id", goal.Id);
         cmd.Parameters.AddWithValue("$status", goal.Status.ToString());
@@ -3431,8 +3433,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         cmd.Parameters.AddWithValue("$json", json);
         cmd.Parameters.AddWithValue("$version", version is null ? DBNull.Value : version.Value);
         cmd.Parameters.AddWithValue("$skip_unchanged", skipUnchanged ? 1 : 0);
+        cmd.Parameters.AddWithValue("$history_changed", historyChanged ? 1 : 0);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-        await TaskHistoryStore.WriteAsync(conn, goal, cancellationToken);
         return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
     }
 

@@ -31,8 +31,20 @@ public sealed class VerificationOutputCompactionPersistenceTests
         {
             await repository.SaveGoalSnapshotsAsync([goal]);
             var json = await ReadSnapshotJson(databasePath, goal.Id);
-            Assert.Equal(1, CountOccurrences(json, firstMarker));
-            Assert.Equal(2, CountOccurrences(json, latestMarker));
+            Assert.Equal(0, CountOccurrences(json, firstMarker));
+            Assert.Equal(1, CountOccurrences(json, latestMarker));
+            using (var connection = StateDbConnectionFactory.Open(databasePath, StateDbConnectionProfile.QueryOnlyRead))
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT entry_json FROM goal_task_history WHERE goal_id = $goal AND kind = 'verification' ORDER BY sequence";
+                command.Parameters.AddWithValue("$goal", goal.Id);
+                using var reader = command.ExecuteReader();
+                Assert.True(reader.Read());
+                Assert.Equal(1, CountOccurrences(reader.GetString(0), firstMarker));
+                Assert.True(reader.Read());
+                Assert.Equal(1, CountOccurrences(reader.GetString(0), latestMarker));
+                Assert.False(reader.Read());
+            }
 
             var loaded = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(new GoalId(goal.Id)));
             var task = Assert.Single(loaded.Tasks);
@@ -108,7 +120,9 @@ public sealed class VerificationOutputCompactionPersistenceTests
             var loaded = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(new GoalId(goal.Id)));
             var kernel = AgentOrchestratorKernel.FromSnapshot(new([loaded], []));
             var baseline = Assert.Single(kernel.ExportSnapshot().Goals);
-            Assert.Equal(rawJson, JsonSerializer.Serialize(baseline, JsonOptions));
+            Assert.Equal(JsonSerializer.Serialize(loaded, JsonOptions), JsonSerializer.Serialize(baseline, JsonOptions));
+            using (var document = JsonDocument.Parse(rawJson))
+                Assert.False(document.RootElement.GetProperty("Tasks")[0].TryGetProperty("VerificationHistory", out _));
 
             kernel.RecordTaskVerification(new GoalId(goal.Id), new TaskId(task.Id),
                 Verification("new-output", "new-error", CompletedAt.AddMinutes(1)));

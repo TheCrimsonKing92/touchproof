@@ -34,7 +34,8 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
             """);
         var before = fixture.GoalRows();
         var otherTables = fixture.OtherTableRows();
-        Assert.All(old, goal => Assert.Equal(Json(goal), before[goal.Id].Snapshot));
+        foreach (var goal in old)
+            Assert.Equal(Json(goal), Json(await fixture.Repository.LoadGoalAsync(new(goal.Id))));
 
         Assert.Equal(3, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff));
 
@@ -49,11 +50,11 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
             Assert.Equal(before[original.Id], after[original.Id] with { Snapshot = expected });
             Assert.True(Deserialize(after[original.Id].Snapshot).IsMetadataOnly);
             var id = new GoalId(original.Id);
-            Assert.Equal(expected, Json(await fixture.Repository.LoadGoalAsync(id)));
-            Assert.Equal(expected, Json(Assert.Single(
+            Assert.Equal(Json(original), Json(await fixture.Repository.LoadGoalAsync(id)));
+            Assert.Equal(Json(original), Json(Assert.Single(
                 await fixture.Repository.FindGoalSnapshotsByIdPrefixAsync(original.Id[..8], 2))));
             var filtered = await fixture.Repository.LoadGoalsAsync([id]);
-            Assert.Equal(expected, Json(filtered.ExportGoalSnapshot(id)));
+            Assert.Equal(Json(original), Json(filtered.ExportGoalSnapshot(id)));
         }
         Assert.Equal(otherTables, fixture.OtherTableRows());
     }
@@ -220,7 +221,7 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
         foreach (var goal in recent)
         {
             Assert.False(kernel.GetGoal(new GoalId(goal.Id)).IsMetadataOnly);
-            Assert.Equal(before[goal.Id].Snapshot, Json(Assert.Single(exported.Goals, g => g.Id == goal.Id)));
+            Assert.Equal(Json(goal), Json(Assert.Single(exported.Goals, g => g.Id == goal.Id)));
         }
     }
 

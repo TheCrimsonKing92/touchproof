@@ -126,7 +126,7 @@ public sealed class OwnerConsoleGateProgressTests
         Assert.Equal(TimeSpan.FromSeconds(0.5), Assert.Single(gate.Lanes).Elapsed);
         Assert.Equal(0, gate.RemainingSeconds); // The raw model has 0.75s left.
         Assert.Equal(4d / 7, gate.Fraction, 10);
-        Assert.Equal("[#####-----] estimate 57%  ~0m left", OwnerConsoleGateFormatter.ProgressLine(gate));
+        Assert.Equal("[#####-----] estimate 57%  over estimate by <1m", OwnerConsoleGateFormatter.ProgressLine(gate));
         Assert.Equal(0, gate.DoneCount);
     }
 

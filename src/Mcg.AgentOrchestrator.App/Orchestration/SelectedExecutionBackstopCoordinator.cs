@@ -15,6 +15,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
 {
     private readonly SemaphoreSlim _transitions = new(1, 1);
     private Task? _running;
+    private RunningCancellation? _runningCancellation;
+    private volatile bool _restartHeld;
     private string? _activeRequestId;
     private bool _initialTickServiced;
     private IReadOnlyDictionary<string, (DateTimeOffset ReadyAt, GoalPriority Level)> _admissionOrder =
@@ -98,7 +100,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             state = await ReconcileMissAsync(state).ConfigureAwait(false);
             _admissionOrder = waiting.ToDictionary(goal => goal.Id.Value,
                 goal => (GoalSchedulingOrder.AcceptanceWaitingAt(goal), GoalEffectivePriorityIndex.EffectiveLevel(goal)), StringComparer.Ordinal);
-            if (state.OpenMiss is not null || RunningCount != 0) return;
+            if (state.OpenMiss is not null || RunningCount != 0 || _restartHeld) return;
             if (state.Request is null && state.Uncovered.Count > 0)
             {
                 var request = new SelectedExecutionBackstopRequest(Guid.NewGuid().ToString("N"),
@@ -126,15 +128,22 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             Report(pending.Attempts > 0 ? "resumed" : "started", started, rule: rule,
                 covered: state.Uncovered.Count(landing => landing.Ordinal <= started.ThroughOrdinal));
             _activeRequestId = started.Id;
+            var cancellation = new RunningCancellation(started.Id);
+            Volatile.Write(ref _runningCancellation, cancellation);
             _running = Task.Run(async () =>
             {
-                try { await ExecuteAsync(started).ConfigureAwait(false); }
+                try { await ExecuteAsync(started, cancellation.Token).ConfigureAwait(false); }
                 catch (Exception ex)
                 {
                     // State or notification I/O is retried from the durable request/miss on
                     // the next service tick. It must remain distinct from a gate verdict.
                     try { Report("state-error", started, detail: $"{ex.GetType().Name}: {ex.Message}"); }
                     catch (Exception) { /* A progress sink cannot strand a lifecycle drain. */ }
+                }
+                finally
+                {
+                    Interlocked.CompareExchange(ref _runningCancellation, null, cancellation);
+                    cancellation.Complete();
                 }
             });
         }
@@ -158,6 +167,82 @@ internal sealed class SelectedExecutionBackstopCoordinator(
 
     internal Task DrainAsync() => _running ?? Task.CompletedTask;
 
+    internal string? CancelRunning(bool holdRestart = false)
+    {
+        var cancellation = Volatile.Read(ref _runningCancellation);
+        if (cancellation is null) return null;
+        if (holdRestart) _restartHeld = true;
+        return cancellation.Cancel();
+    }
+
+    internal void ReleaseRestartHold() => _restartHeld = false;
+
+    internal async Task CancelAndDrainAsync()
+    {
+        CancelRunning();
+        try { await DrainAsync().ConfigureAwait(false); }
+        finally { ReleaseRestartHold(); }
+    }
+
+    internal (int Live, int Backstop) ResumeRelaunchDrain(Func<int> countOtherGates)
+    {
+        ReleaseRestartHold();
+        var otherGates = countOtherGates();
+        var backstopGates = RunningCount;
+        return (otherGates + backstopGates, backstopGates);
+    }
+
+    internal void CancelForRelaunchDrainTimeout(int liveGates, int backstopGates, int tick)
+    {
+        if (backstopGates == 0 || liveGates != backstopGates) return;
+        var requestId = CancelRunning(holdRestart: true);
+        if (requestId is not null)
+            progress($"SELECTED_EXECUTION_BACKSTOP result=cancel-requested request={requestId} reason=relaunch-drain-timeout tick={tick}");
+        // A request is not completion; the task remains counted until it settles.
+        DrainAsync().Wait(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds));
+    }
+
+    // Completion and cancellation share source ownership. Callbacks run outside the
+    // lock, and disposal waits for both users, including a racing completion.
+    private sealed class RunningCancellation(string requestId)
+    {
+        private readonly object _gate = new();
+        private readonly CancellationTokenSource _source = new();
+        private bool _completed;
+        private bool _requested;
+        private bool _cancelling;
+        internal CancellationToken Token => _source.Token;
+
+        internal string? Cancel()
+        {
+            lock (_gate)
+            {
+                if (_completed || _requested) return null;
+                _requested = _cancelling = true;
+            }
+            try { _source.Cancel(); }
+            catch (Exception) { /* Callback failures cannot strand loop cleanup; the signal is set. */ }
+            finally
+            {
+                lock (_gate)
+                {
+                    _cancelling = false;
+                    if (_completed) _source.Dispose();
+                }
+            }
+            return requestId;
+        }
+
+        internal void Complete()
+        {
+            lock (_gate)
+            {
+                _completed = true;
+                if (!_cancelling) _source.Dispose();
+            }
+        }
+    }
+
     internal void ServiceIdle(OrchestratorWorkspace workspace, ConductorDriver driver, AgentOrchestratorKernel kernel,
         IReadOnlyCollection<Goal> waitingForAcceptance, int width, bool suppressed, int tick)
     {
@@ -179,10 +264,10 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         ActiveRequestId is not { } id || census.Occupants.Contains("backstop:" + id) ? census :
             census with { Occupants = census.Occupants.Append("backstop:" + id).ToArray() };
 
-    private async Task ExecuteAsync(SelectedExecutionBackstopRequest request)
+    private async Task ExecuteAsync(SelectedExecutionBackstopRequest request, CancellationToken cancellationToken)
     {
         SelectedExecutionBackstopOutcome outcome;
-        try { outcome = await runner.RunAsync(request, CancellationToken.None).ConfigureAwait(false); }
+        try { outcome = await runner.RunAsync(request, cancellationToken).ConfigureAwait(false); }
         catch (Exception ex) { outcome = SelectedExecutionBackstopOutcome.Infrastructure($"runner-{ex.GetType().Name}: {ex.Message}"); }
         await _transitions.WaitAsync().ConfigureAwait(false);
         try

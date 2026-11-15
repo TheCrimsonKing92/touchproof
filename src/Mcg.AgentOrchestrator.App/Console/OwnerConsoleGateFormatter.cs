@@ -3,13 +3,28 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal static class OwnerConsoleGateFormatter
 {
     internal static string Remaining(int seconds) => seconds is > 0 and < 60 ? "~<1m" : $"~{(int)Math.Ceiling(seconds / 60d)}m";
+    private static string Overrun(int seconds) => seconds < 60 ? "<1m" : $"{seconds / 60}m";
+
+    internal static string TimeText(OwnerConsoleGateProgress gate) => !gate.HasEta ? "ETA unknown" :
+        gate.Live && gate.OverrunSeconds is { } seconds ? "over estimate by " + Overrun(seconds) :
+        Remaining(gate.RemainingSeconds) + " left";
+
+    internal static string SelectionCountText(OwnerConsoleGateProgress gate) => gate.Selection switch
+    {
+        { Full: true } => "full gate " + CountText(gate),
+        { Full: false } => CountText(gate) + " selected",
+        _ => CountText(gate)
+    };
+
+    internal static string ReasonSuffix(OwnerConsoleGateProgress gate) =>
+        gate.Selection?.ShortReason is { Length: > 0 } reason ? " (" + reason + ")" : "";
     internal static string ProgressLine(OwnerConsoleGateProgress gate)
     {
         if (!gate.ScheduleKnown) return "scheduled total unknown; ETA unknown (lane plan unavailable)";
         if (!gate.HasEta) return "ETA unknown";
         var fraction = Math.Clamp(gate.Fraction, 0, 1);
         var cells = (int)Math.Floor(fraction * 10);
-        return $"[{new string('#', cells)}{new string('-', 10 - cells)}] estimate {(int)Math.Floor(fraction * 100)}%  {Remaining(gate.RemainingSeconds)} left";
+        return $"[{new string('#', cells)}{new string('-', 10 - cells)}] estimate {(int)Math.Floor(fraction * 100)}%  {TimeText(gate)}";
     }
 
     internal static string StatusSegment(OwnerConsoleGateProgress gate, bool compact = false)
@@ -35,15 +50,16 @@ internal static class OwnerConsoleGateFormatter
         var members = string.Join("+", gate.Members.Take(limit).Select(member => member.Id[..Math.Min(4, member.Id.Length)]));
         if (gate.Members.Count > limit) members += "+" + (gate.Members.Count - limit);
         var progress = gate.ScheduleKnown ? " " + CountText(gate) : "";
-        var state = gate.Failing ? "FAILING" : gate.HasEta ? Remaining(gate.RemainingSeconds) :
+        var state = gate.Failing ? "FAILING" : gate.HasEta ?
+            gate.OverrunSeconds is { } seconds ? "over " + Overrun(seconds) : Remaining(gate.RemainingSeconds) :
             (compact ? "" : "running ") + $"{(int)gate.Elapsed.TotalMinutes}m";
         return $"{gate.Kind} {members}{progress} {state}";
     }
 
     internal static string RunLine(OwnerConsoleGateProgress gate, bool shortIdentity = false) =>
         $"{gate.Kind} {string.Join('+', gate.Members.Select(member => member.Id[..Math.Min(8, member.Id.Length)]))} " +
-        $"{(gate.Failing ? "failing" : "running")} {CountText(gate)} " +
-        (gate.HasEta ? Remaining(gate.RemainingSeconds) + " left" : "ETA unknown") +
+        $"{(gate.Failing ? "failing" : "running")} {SelectionCountText(gate)} " +
+        TimeText(gate) + ReasonSuffix(gate) +
         (shortIdentity ? ShortIdentity(gate) : Identity(gate));
 
     internal static string CountText(OwnerConsoleGateProgress gate)
