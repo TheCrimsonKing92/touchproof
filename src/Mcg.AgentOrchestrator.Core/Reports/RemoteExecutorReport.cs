@@ -8,7 +8,7 @@ public sealed record RemoteExecutorOutcomeRow(DateTimeOffset ObservedAt, string 
     [property: JsonIgnore] DateTimeOffset? StartedAt = null);
 public sealed record RemoteExecutorProbeRow(DateTimeOffset ObservedAt, string ExecutorId,
     bool Reachable, int ExitCode, bool TimedOut, string? TaskState, bool? PowerOnline,
-    IReadOnlyList<string> Reasons, string StderrTail);
+    IReadOnlyList<string> Reasons, string StderrTail, long? DiskFreeBytes = null, int? SshdSessionCount = null);
 public sealed record RemoteExecutorReportRow(string ExecutorId, int Attempts,
     IReadOnlyDictionary<string, int> OutcomeCounts, double? AcceptedShare, DateTimeOffset? LastSuccessAt,
     IReadOnlyList<RemoteExecutorOutcomeRow> RecentAttempts, RemoteExecutorProbeRow? LastProbe,
@@ -22,6 +22,9 @@ public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow>
     [property: JsonIgnore] int NoExecutorFreeCount = 0,
     [property: JsonIgnore] DateTimeOffset? NoExecutorFreeLastAt = null)
 {
+    public static bool IsNonAttemptOutcome(string outcome) => outcome is
+        "not-eligible-exclusive-resource" or "late-after-fallback" or "executor-busy" or "preempted-by-gate" or "executor-tools-mismatch";
+
     public static RemoteExecutorReport Build(IEnumerable<string> configuredIds,
         IEnumerable<RemoteExecutorOutcomeRow> outcomes, IEnumerable<RemoteExecutorProbeRow> probes,
         DateTimeOffset? since = null, int last = 10, int unreadableOutcomeLines = 0, int unreadableProbeLines = 0,
@@ -40,7 +43,7 @@ public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow>
         var rows = ids.Select(id =>
         {
             var attempts = all.Where(row => row.ExecutorId == id &&
-                row.Outcome is not ("not-eligible-exclusive-resource" or "late-after-fallback" or "executor-busy" or "preempted-by-gate" or "executor-tools-mismatch")).ToArray();
+                !IsNonAttemptOutcome(row.Outcome)).ToArray();
             var window = attempts.Where(row => since is null || row.ObservedAt >= since).ToArray();
             var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
             foreach (var group in window.GroupBy(row => row.Outcome)) counts.Add(group.Key, group.Count());
