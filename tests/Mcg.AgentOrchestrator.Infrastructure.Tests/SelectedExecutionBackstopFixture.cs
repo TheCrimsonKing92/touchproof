@@ -14,6 +14,8 @@ internal sealed class SelectedExecutionBackstopFixture : ISelectedExecutionBacks
     internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal Func<SelectedExecutionBackstopRequest, Task<SelectedExecutionBackstopOutcome>> Run { get; set; } =
         _ => Task.FromResult(SelectedExecutionBackstopOutcome.Green);
+    internal Func<SelectedExecutionBackstopRequest, CancellationToken, Task<SelectedExecutionBackstopOutcome>>? RunWithCancellation { get; set; }
+    internal ConcurrentQueue<CancellationToken> Tokens { get; } = new();
     internal DateTimeOffset Now { get; set; } = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
     internal string Head { get; set; } = "main-2";
     internal SelectedExecutionBackstopCoordinator Coordinator { get; }
@@ -48,8 +50,9 @@ internal sealed class SelectedExecutionBackstopFixture : ISelectedExecutionBacks
     public Task<SelectedExecutionBackstopOutcome> RunAsync(SelectedExecutionBackstopRequest request, CancellationToken cancellationToken)
     {
         Calls.Enqueue(request);
+        Tokens.Enqueue(cancellationToken);
         Entered.TrySetResult();
-        return Run(request);
+        return RunWithCancellation?.Invoke(request, cancellationToken) ?? Run(request);
     }
     public void Dispose() => Directory.Delete(Home, recursive: true);
 }

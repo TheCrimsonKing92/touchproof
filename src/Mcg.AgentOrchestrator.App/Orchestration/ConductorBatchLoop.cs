@@ -87,6 +87,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly InvalidatedAcceptanceAttemptStopPolicy _invalidatedAttemptStopPolicy;
     internal Func<ConductorParallelAcceptanceAttempt, InvalidatedAcceptanceAttemptStopResult>? InvalidatedAttemptStop { get; init; }
+    internal SelectedExecutionBackstopCoordinator? SelectedExecutionBackstop { init => _selectedExecutionBackstop = value; }
     private readonly Func<string?> _readRelaunchDrainCap;
     private readonly Func<int> _countLiveGroupedGates;
     private readonly Func<double> _writeJitter;
@@ -449,9 +450,8 @@ internal sealed partial class ConductorBatchLoop
             {
                 return new(SelfRelaunchDrainDisposition.ContinueTick);
             }
-
-            var liveGates = RunJanitorialPhase<int?>(
-                "count-live-grouped-gates", tick, () => _countLiveGroupedGates() + (_selectedExecutionBackstop?.RunningCount ?? 0)) ?? 0;
+            var gateCounts = RunJanitorialPhase<(int Live, int Backstop)?>(
+                "count-live-grouped-gates", tick, () => _selectedExecutionBackstop?.ResumeRelaunchDrain(_countLiveGroupedGates) ?? (_countLiveGroupedGates(), 0)) ?? (Live: 0, Backstop: 0);
             var drainElapsed = _utcNow() - (selfRelaunchDrainStartedAt ?? _utcNow());
             var capDecision = new SelfRelaunchCapDecision(false, false, string.Empty);
             if (activeDispatches.Value > 0)
@@ -473,18 +473,18 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var drainHold = new ConductorSelfRelaunchDrainHold(
-                activeDispatches.Value > 0 && !capDecision.Detach && !capDecision.AlreadyDetached, liveGates, drainElapsed);
+                activeDispatches.Value > 0 && !capDecision.Detach && !capDecision.AlreadyDetached, gateCounts.Live, drainElapsed);
             if (drainHold.ShouldWait)
             {
                 if (drainHold.TimedOut)
                 {
+                    _selectedExecutionBackstop?.CancelForRelaunchDrainTimeout(gateCounts.Live, gateCounts.Backstop, totalTicks);
                     EmitSelfRelaunchRollback(totalTicks, pendingSelfRelaunch!.GoalId, "drain", drainHold.TimeoutReason);
                     deferredSelfRelaunch = pendingSelfRelaunch;
                     selfRelaunchRetryAfterTick = totalTicks + 1;
                     pendingSelfRelaunch = null;
                     selfRelaunchDrainStartedAt = null;
                 }
-
                 if (pendingSelfRelaunch is not null)
                 {
                     EmitProgress(drainHold.DescribeProgress(totalTicks, pendingSelfRelaunch.GoalId, activeDispatches.Value, capDecision.DrainSuffix));
@@ -1740,7 +1740,7 @@ internal sealed partial class ConductorBatchLoop
         }
 
         AwaitCanaryTasks(canaryTasks, canaryTasksGate);
-        _selectedExecutionBackstop?.DrainAsync().GetAwaiter().GetResult();
+        _selectedExecutionBackstop?.CancelAndDrainAsync().GetAwaiter().GetResult();
         ConductorLoopHandoffResult? handoff = selfRelaunchHandoff;
         if (selfRelaunchHandoff is not null && stopReason is null)
         {
@@ -1791,7 +1791,7 @@ internal sealed partial class ConductorBatchLoop
             StopStewardAndAuthor();
             driver.AdmissionFacts.Stop();
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
-            _selectedExecutionBackstop?.DrainAsync().GetAwaiter().GetResult();
+            _selectedExecutionBackstop?.CancelAndDrainAsync().GetAwaiter().GetResult();
             driver.BackstopReservationId = null;
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
