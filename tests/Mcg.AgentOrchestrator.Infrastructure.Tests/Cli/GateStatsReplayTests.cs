@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
@@ -35,11 +37,46 @@ public sealed class GateStatsReplayTests : CliTaskQueryTestSupport
         Assert.Equal(output.ToString() + output.ToString(), multiple.ToString());
     }
 
+    [Fact]
+    public void Replay_DurationDriftWithinTolerance_MatchesUndriftedResult()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "wall-replay-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            foreach (var path in Directory.GetFiles(FixtureDirectory)) File.Copy(path, Path.Combine(root, Path.GetFileName(path)));
+            var manifest = Path.Combine(root, "gate.json");
+            var baseline = new AcceptanceBalancedLaneReplay().Read(manifest);
+            using var baselineOutput = new StringWriter();
+            CliGateStatsReplayCommand.Execute(["gate-stats", "replay", "--gate", manifest], baselineOutput);
+
+            var trx = Path.Combine(root, "lane1.trx");
+            var document = XDocument.Load(trx);
+            var row = document.Descendants().First(node => node.Name.LocalName == "UnitTestResult");
+            var start = DateTimeOffset.Parse((string)row.Attribute("startTime")!, CultureInfo.InvariantCulture);
+            var end = DateTimeOffset.Parse((string)row.Attribute("endTime")!, CultureInfo.InvariantCulture);
+            row.SetAttributeValue("duration", (end - start + TimeSpan.FromMilliseconds(15)).ToString("c", CultureInfo.InvariantCulture));
+            document.Save(trx);
+            Assert.Equal(TimeSpan.FromMilliseconds(15),
+                TimeSpan.Parse((string)row.Attribute("duration")!, CultureInfo.InvariantCulture) - (end - start));
+
+            var result = new AcceptanceBalancedLaneReplay().Read(manifest);
+            Assert.Equal(baseline.GateId, result.GateId);
+            Assert.Equal(baseline.Lanes.ToArray(), result.Lanes.ToArray());
+            Assert.Equal(baseline.NewMaxPredictedWallSeconds, result.NewMaxPredictedWallSeconds);
+            using var output = new StringWriter();
+            CliGateStatsReplayCommand.Execute(["gate-stats", "replay", "--gate", manifest], output);
+            Assert.Equal(baselineOutput.ToString(), output.ToString());
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Theory]
     [InlineData("missing-trx", "lane1.trx")]
     [InlineData("missing-sidecar", "slot timing")]
     [InlineData("missing-receipt", "gate-lane-receipts.jsonl")]
     [InlineData("missing-time", "start/end/duration")]
+    [InlineData("duration-mismatch", "start/end/duration")]
     [InlineData("duplicate-class", "two lanes")]
     [InlineData("missing-lane", "Receipt lanes")]
     [InlineData("unattributed-row", "unattributed slot row")]
@@ -56,6 +93,15 @@ public sealed class GateStatsReplayTests : CliTaskQueryTestSupport
             else if (mutation == "missing-sidecar") File.Delete(LaneSlotTimingReader.PathFor(trx));
             else if (mutation == "missing-receipt") File.Delete(receipts);
             else if (mutation == "missing-time") File.WriteAllText(trx, File.ReadAllText(trx).Replace("startTime=", "missingTime="));
+            else if (mutation == "duration-mismatch")
+            {
+                var document = XDocument.Load(trx);
+                var row = document.Descendants().First(node => node.Name.LocalName == "UnitTestResult");
+                var start = DateTimeOffset.Parse((string)row.Attribute("startTime")!, CultureInfo.InvariantCulture);
+                var end = DateTimeOffset.Parse((string)row.Attribute("endTime")!, CultureInfo.InvariantCulture);
+                row.SetAttributeValue("duration", (end - start + TimeSpan.FromSeconds(1)).ToString("c", CultureInfo.InvariantCulture));
+                document.Save(trx);
+            }
             else if (mutation == "duplicate-class")
             {
                 var second = Path.Combine(root, "lane2.trx");

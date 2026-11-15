@@ -10,7 +10,8 @@ internal static class WorkerBuildTerminalDecision
 
     internal static (WorkerBuildOutcome Outcome, int? CompilerExitCode, string Diagnostic) Decide(
         IReadOnlyList<WorkerBuildObservation> observations, IReadOnlyList<string> projects,
-        IReadOnlyList<int?> exits, StopCause cause, TimeSpan budget, DateTimeOffset now, int? workerPid = null)
+        IReadOnlyList<int?> exits, StopCause cause, TimeSpan budget, DateTimeOffset now, int? workerPid = null,
+        WorkerBuildRestoreFailureReader.RestoreFailure? restoreFailure = null)
     {
         var slot = observations.FirstOrDefault(o => o.Phase == WorkerBuildPhase.BuildSlotAcquired);
         if (cause == StopCause.QueueDeadline && slot is not null)
@@ -18,7 +19,12 @@ internal static class WorkerBuildTerminalDecision
 
         var failure = exits.FirstOrDefault(exit => exit is not null and not 0);
         if (failure is not null)
+        {
+            if (restoreFailure is not null)
+                return (WorkerBuildOutcome.PackageRestoreRefused, failure,
+                    $"Host observed package restore failure: package={restoreFailure.PackageId ?? "<unknown>"}; version={restoreFailure.PackageVersion ?? "<unknown>"}; code={restoreFailure.ErrorCode}.");
             return (WorkerBuildOutcome.CompilerFailure, failure, "Host observed compiler/build exit failure.");
+        }
         if (exits.Count == projects.Count && exits.All(exit => exit == 0))
             return (WorkerBuildOutcome.Success, 0, "Host observed all scoped compiler/build exits successfully.");
 

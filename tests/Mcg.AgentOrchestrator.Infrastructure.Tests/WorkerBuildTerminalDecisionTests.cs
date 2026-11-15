@@ -176,4 +176,18 @@ public sealed class WorkerBuildTerminalDecisionTests
         Assert.Throws<InvalidOperationException>(() =>
             Decide(Building, Projects, [0, null], StopCause.QueueDeadline, Budget, Now));
     }
+
+    [Theory]
+    [InlineData("LibGit2Sharp", "0.32.0")]
+    [InlineData("LibGit2Sharp", null)]
+    [InlineData(null, null)]
+    public void ObservedRestoreFailure_PreservesExitAndLabelsMissingMetadata(string? id, string? version)
+    {
+        var result = Decide(Building, Projects, [0, 3], StopCause.CompileDeadline, Budget, Now,
+            restoreFailure: new("NU1102", id, version));
+        Assert.Equal(WorkerBuildOutcome.PackageRestoreRefused, result.Outcome);
+        Assert.Equal(3, result.CompilerExitCode);
+        Assert.Equal($"Host observed package restore failure: package={id ?? "<unknown>"}; version={version ?? "<unknown>"}; code=NU1102.",
+            result.Diagnostic);
+    }
 }

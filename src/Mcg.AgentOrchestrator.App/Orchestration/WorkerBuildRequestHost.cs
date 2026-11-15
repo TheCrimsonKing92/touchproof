@@ -101,6 +101,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         var stop = queueStop;
         var stopCause = StopCause.LifetimeEnded;
         var exits = new List<int?>();
+        WorkerBuildRestoreFailureReader.RestoreFailure? restoreFailure = null;
         var buildReceipt = _buildLedger is null ? null : new WorkerBuildReceiptObservation(_buildLedger);
         var terminalSafe = true;
         var policyDigest = "unavailable";
@@ -177,9 +178,9 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     var info = BuildStartInfo(root, project, request.Configuration, slot.Environment.Arguments, tempRoot, gcEnvironment);
                     if (_launchOverride is { } launchOverride) info = launchOverride(project, info);
                     terminalSafe = false;
-                    child = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(info,
-                        Path.Combine(logRoot, $"{invocation.Children?.Count ?? 0}.out.log"),
-                        Path.Combine(logRoot, $"{invocation.Children?.Count ?? 0}.err.log"));
+                    var stdoutPath = Path.Combine(logRoot, $"{invocation.Children?.Count ?? 0}.out.log");
+                    var stderrPath = Path.Combine(logRoot, $"{invocation.Children?.Count ?? 0}.err.log");
+                    child = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(info, stdoutPath, stderrPath);
                     var read = child.ReadLifecycleIdentity(child.Process.Id);
                     if (read.Status != ProcessInspectionStatus.Available || read.StartedAt is not { } at ||
                         string.IsNullOrWhiteSpace(read.ExecutablePath))
@@ -213,6 +214,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     qos = null;
                     child.Dispose();
                     child = null;
+                    if (exit != 0) restoreFailure = WorkerBuildRestoreFailureReader.Read(stdoutPath, stderrPath);
                     CheckCurrent();
                     if (exit != 0) { CompleteDecision(StopCause.None); break; }
                 }
@@ -293,7 +295,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         { Observations = invocation.Observations.Append(new(phase, _time.GetUtcNow())).ToArray() });
         void CompleteDecision(StopCause cause)
         {
-            var result = Decide(invocation.Observations, scope.Projects, exits, cause, _budget, _time.GetUtcNow(), worker.Pid);
+            var result = Decide(invocation.Observations, scope.Projects, exits, cause, _budget, _time.GetUtcNow(), worker.Pid, restoreFailure);
             Complete(result.Outcome, result.CompilerExitCode, result.Diagnostic);
         }
         void Complete(WorkerBuildOutcome outcome, int? exit, string diagnostic)
