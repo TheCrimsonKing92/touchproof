@@ -58,7 +58,7 @@ internal static class ProviderHoldSeedEvidenceReader
         foreach (var task in row.IsMetadataOnly ? [] : row.Tasks ?? [])
         {
             var history = await store.ReadAsync(connection, id, task.Id, task.VerificationEntries,
-                task.DispatchEntries, cancellationToken);
+                task.DispatchEntries, task.HistoryInTable, cancellationToken);
             tasks.Add(new ProviderUsageTaskEvidence(
                 task.Id, task.RequiredRole, task.Status, task.AssignedAgentId,
                 task.LastDispatch?.Snapshot(), history.Dispatch.Entries.Select(dispatch => dispatch.Deserialize<DispatchFields>(options)!.Snapshot()).ToArray(),
@@ -90,6 +90,7 @@ internal static class ProviderHoldSeedEvidenceReader
         [property: JsonPropertyName(GoalTaskHistoryStore.DispatchProperty)] JsonElement DispatchEntries,
         TaskVerificationSnapshot? LastVerification,
         [property: JsonPropertyName(GoalTaskHistoryStore.VerificationProperty)] JsonElement VerificationEntries,
+        JsonElement HistoryInTable,
         DateTimeOffset? LatestProviderBudgetRecoveryAt);
 
     private sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,

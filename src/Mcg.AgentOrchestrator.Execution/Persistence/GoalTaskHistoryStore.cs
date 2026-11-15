@@ -4,11 +4,36 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>A transactional mirror. Inline history remains authoritative, including after an older writer saves.</summary>
+/// <summary>
+/// Transactional history storage. Unmarked tasks retain inline authority and mirror equality checks.
+/// A task's HistoryInTable marker is {"Verification":count,"Dispatch":count}: each count is a
+/// non-negative integer, or null for a null list. Absent/null markers mean unmarked. Marked tasks
+/// ignore inline lists and require exactly the stated rows at contiguous zero-based sequences.
+/// This build writes full inline lists and never emits the marker, including after a marked load.
+///
+/// Past-entry reader inventory (all under Persistence): SqliteOrchestratorStateRepository's
+/// LoadFromConnectionAsync (full/selected kernel reconstruction), LoadGoalAsync (single goal),
+/// FindGoalSnapshotsByIdPrefixAsync and FindTaskSnapshotsByIdPrefixAsync (cited historical evidence),
+/// LoadGoalSnapshotAndVersionAsync and LoadGoalStateAndVersionAsync (CAS baselines and tick merge)
+/// use HydrateAsync. AttentionReads uses ReadAsync for provider usage evidence;
+/// ProviderHoldSeedEvidenceReader uses its sparse form for provider hold seeds. BacklogReads uses
+/// RequiresReconstructionAsync for similarity validation and HydrateAsync before suspect replay.
+/// EpicReads consumers use only timelines; archive stubs and repository workspace/commit reads use
+/// latest dispatch/timeline only, and deserialization checks consume no past entries. Any future
+/// history consumer at those seams must use this accessor.
+///
+/// Step 2b (writing marked documents) may be adopted only after a build containing this step has
+/// been adopted AND at least one later build has been adopted after it. Activation revert must
+/// already fall back to a build containing this reader: App/Orchestration/ConductorContinuitySupervisor
+/// RunAsync retains currentBuild on the reverted branch, relaunches it at the launch boundary,
+/// and advances currentBuild only after adoption or deliberate stop. Step 1 cannot safely read
+/// stripped histories and would remove their table rows on save.
+/// </summary>
 internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 {
     internal const string VerificationProperty = "VerificationHistory";
     internal const string DispatchProperty = "DispatchHistory";
+    internal const string MarkerProperty = "HistoryInTable";
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTaskHistoryStore.cs")]
     internal static void CreateSchema(SqliteConnection connection)
@@ -28,26 +53,24 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     }
 
     // All callers already hold the goal write transaction. Never begin or commit a separate transaction here.
-    internal async Task WriteAsync(SqliteConnection connection, string goalId, string goalJson, CancellationToken token)
+    internal async Task WriteAsync(SqliteConnection connection, GoalSnapshot goal, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         CreateSchema(connection); // Existing stores do not rerun migration 1.
-        using var document = JsonDocument.Parse(goalJson);
         var rows = new List<HistoryWriteRow>();
-        foreach (var task in document.RootElement.GetProperty("Tasks").EnumerateArray())
+        foreach (var task in goal.Tasks)
         {
-            var taskId = task.GetProperty("Id").GetString()!;
-            foreach (var (property, kind) in Kinds)
-            {
-                var entries = Inline(task, property);
-                for (var index = 0; index < entries.Length; index++)
-                    rows.Add(new(taskId, kind, index, entries[index].GetRawText()));
-            }
+            if (task.VerificationHistory is { } verification)
+                for (var index = 0; index < verification.Count; index++)
+                    rows.Add(new(task.Id, "verification", index, JsonSerializer.Serialize(verification[index], options)));
+            if (task.DispatchHistory is { } dispatch)
+                for (var index = 0; index < dispatch.Count; index++)
+                    rows.Add(new(task.Id, "dispatch", index, JsonSerializer.Serialize(dispatch[index], options)));
         }
 
         // Keep entry JSON as a string in the batch so SQLite preserves its exact serialized bytes.
         using var command = connection.CreateCommand();
-        command.Parameters.AddWithValue("$goal", goalId);
+        command.Parameters.AddWithValue("$goal", goal.Id);
         command.Parameters.AddWithValue("$rows", JsonSerializer.Serialize(rows, options));
         command.CommandText = """
             INSERT INTO goal_task_history (goal_id, task_id, kind, sequence, entry_json)
@@ -74,18 +97,24 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     private static readonly (string Property, string Kind)[] Kinds =
         [(VerificationProperty, "verification"), (DispatchProperty, "dispatch")];
 
-    internal sealed record HistoryEntries(JsonElement[] Entries, bool FromTable);
+    internal sealed record HistoryEntries(JsonElement[] Entries, bool FromTable, bool IsNull = false);
     internal sealed record TaskHistory(HistoryEntries Verification, HistoryEntries Dispatch);
 
     internal Task<TaskHistory> ReadAsync(SqliteConnection? connection, string goalId, JsonElement task,
         CancellationToken token = default) => ReadAsync(connection, goalId, task.GetProperty("Id").GetString()!,
             task.TryGetProperty(VerificationProperty, out var verification) ? verification : default,
-            task.TryGetProperty(DispatchProperty, out var dispatch) ? dispatch : default, token);
+            task.TryGetProperty(DispatchProperty, out var dispatch) ? dispatch : default,
+            task.TryGetProperty(MarkerProperty, out var marker) ? marker : default, token);
 
     internal async Task<TaskHistory> ReadAsync(SqliteConnection? connection, string goalId, string taskId,
-        JsonElement verification, JsonElement dispatch, CancellationToken token = default)
+        JsonElement verification, JsonElement dispatch, JsonElement marker, CancellationToken token = default)
     {
-        var rows = connection is null ? null : await ReadRowsAsync(connection, goalId, taskId, token);
+        var counts = ReadMarker(marker, goalId, taskId);
+        if (counts is not null && connection is null)
+            throw HistoryError(goalId, taskId, "both", "no history connection");
+        var rows = connection is null ? null : await ReadRowsAsync(connection, goalId, taskId, token,
+            counts is null ? null : taskId);
+        if (counts is not null) return StrictHistory(rows!, goalId, taskId, counts);
         return new(
             SelectHistory(rows?.GetValueOrDefault((taskId, "verification")), Elements(verification)),
             SelectHistory(rows?.GetValueOrDefault((taskId, "dispatch")), Elements(dispatch)));
@@ -93,8 +122,63 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 
     private sealed record StoredEntry(long Sequence, string Json);
 
+    private sealed record HistoryCounts(int? Verification, int? Dispatch);
+
+    private static InvalidDataException HistoryError(string goalId, string taskId, string kind, string defect,
+        Exception? inner = null) => new($"Goal '{goalId}' task '{taskId}' {kind} history: {defect}.", inner);
+
+    private static HistoryCounts? ReadMarker(JsonElement marker, string goalId, string taskId)
+    {
+        if (marker.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null) return null;
+        int? Count(string name)
+        {
+            if (marker.ValueKind == JsonValueKind.Object && marker.TryGetProperty(name, out var value))
+            {
+                if (value.ValueKind == JsonValueKind.Null) return null;
+                if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var count) && count >= 0)
+                    return count;
+            }
+            throw HistoryError(goalId, taskId, name, "invalid HistoryInTable count");
+        }
+        return new(Count("Verification"), Count("Dispatch"));
+    }
+
+    private TaskHistory StrictHistory(Dictionary<(string TaskId, string Kind), List<StoredEntry>> rows,
+        string goalId, string taskId, HistoryCounts counts) => new(
+            StrictEntries<TaskVerificationSnapshot>(rows.GetValueOrDefault((taskId, "verification")),
+                counts.Verification, goalId, taskId, "verification"),
+            StrictEntries<TaskDispatchSnapshot>(rows.GetValueOrDefault((taskId, "dispatch")),
+                counts.Dispatch, goalId, taskId, "dispatch"));
+
+    private HistoryEntries StrictEntries<T>(IReadOnlyList<StoredEntry>? rows, int? count,
+        string goalId, string taskId, string kind)
+    {
+        if ((rows?.Count ?? 0) != (count ?? 0))
+            throw HistoryError(goalId, taskId, kind, $"expected {count ?? 0} rows, found {rows?.Count ?? 0}");
+        var entries = new JsonElement[count ?? 0];
+        for (var index = 0; index < entries.Length; index++)
+        {
+            if (rows![index].Sequence != index)
+                throw HistoryError(goalId, taskId, kind, $"sequence gap at {index}");
+            try
+            {
+                using var document = JsonDocument.Parse(rows[index].Json);
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    document.RootElement.Deserialize<T>(options) is null)
+                    throw new JsonException("History entry must be an object.");
+                entries[index] = document.RootElement.Clone();
+            }
+            catch (JsonException ex)
+            {
+                throw HistoryError(goalId, taskId, kind, $"unparseable entry at {index}", ex);
+            }
+        }
+        return new(entries, true, count is null);
+    }
+
     private static async Task<Dictionary<(string TaskId, string Kind), List<StoredEntry>>> ReadRowsAsync(
-        SqliteConnection connection, string goalId, string? taskId, CancellationToken token)
+        SqliteConnection connection, string goalId, string? taskId, CancellationToken token,
+        string? requiredTaskId = null)
     {
         var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry>>();
         using var command = connection.CreateCommand();
@@ -117,6 +201,8 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
             ex.Message.Contains("no such table: goal_task_history", StringComparison.OrdinalIgnoreCase))
         {
+            if (requiredTaskId is not null)
+                throw HistoryError(goalId, requiredTaskId, "both", "missing goal_task_history table", ex);
             // Stores written before the mirror was introduced have only inline history.
         }
         return rows;
@@ -143,16 +229,34 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     private static JsonElement[] Inline(JsonElement task, string property) =>
         task.TryGetProperty(property, out var value) ? Elements(value) : [];
 
-    internal async Task<GoalSnapshot?> HydrateAsync(SqliteConnection connection, GoalSnapshot? snapshot,
+    internal async Task<GoalSnapshot?> HydrateAsync(SqliteConnection connection, GoalSnapshot? snapshot, string documentText,
         CancellationToken token = default)
     {
         // Leave malformed task collections to the existing domain validation.
         if (snapshot is null || snapshot.IsMetadataOnly || snapshot.Tasks is null) return snapshot;
-        var rows = await ReadRowsAsync(connection, snapshot.Id, null, token);
+        // Inspect only the marker fields, skipping the already-decoded task graphs. A hydrated
+        // archive arrives with the hot stub text, so obtain its original marker-bearing payload.
+        var fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
+        if (fields?.IsMetadataOnly == true)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
+            command.Parameters.AddWithValue("$id", snapshot.Id);
+            documentText = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token))
+                ?? throw new InvalidDataException($"Missing archive for goal '{snapshot.Id}'.");
+            fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
+        }
+        var markers = new Dictionary<string, HistoryCounts>();
+        foreach (var task in fields?.Tasks ?? [])
+            if (task is not null && ReadMarker(task.HistoryInTable, snapshot.Id, task.Id) is { } counts)
+                markers[task.Id] = counts;
+        var rows = await ReadRowsAsync(connection, snapshot.Id, null, token, markers.Keys.FirstOrDefault());
         var tasks = new List<TaskSnapshot>();
         foreach (var task in snapshot.Tasks)
         {
-            var history = new TaskHistory(
+            var history = markers.TryGetValue(task.Id, out var counts)
+                ? StrictHistory(rows, snapshot.Id, task.Id, counts)
+                : new TaskHistory(
                 SelectHistory(rows.GetValueOrDefault((task.Id, "verification")),
                     Elements(JsonSerializer.SerializeToElement(task.VerificationHistory, options))),
                 SelectHistory(rows.GetValueOrDefault((task.Id, "dispatch")),
@@ -160,15 +264,18 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
             tasks.Add(task with
             {
                 VerificationHistory = history.Verification.FromTable
-                    ? history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray()
+                    ? history.Verification.IsNull ? null : history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray()
                     : task.VerificationHistory,
                 DispatchHistory = history.Dispatch.FromTable
-                    ? history.Dispatch.Entries.Select(entry => entry.Deserialize<TaskDispatchSnapshot>(options)!).ToArray()
+                    ? history.Dispatch.IsNull ? null : history.Dispatch.Entries.Select(entry => entry.Deserialize<TaskDispatchSnapshot>(options)!).ToArray()
                     : task.DispatchHistory
             });
         }
         return snapshot with { Tasks = tasks };
     }
+
+    private sealed record HistoryDocument(bool IsMetadataOnly, IReadOnlyList<HistoryTask?>? Tasks);
+    private sealed record HistoryTask(string Id, JsonElement HistoryInTable);
 
     // A test diagnostic compares physical rows as well as accessor results, including surplus/removed-task rows.
     internal async Task<bool> IsConsistentAsync(SqliteConnection connection, string goalId, string goalJson,
