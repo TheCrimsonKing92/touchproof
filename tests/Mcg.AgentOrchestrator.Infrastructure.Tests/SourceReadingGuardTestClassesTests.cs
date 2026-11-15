@@ -6,6 +6,215 @@ using Mcg.AgentOrchestrator.Core;
 // Parallel-safe: each fixture owns small temporary source files; no subprocesses.
 public sealed class SourceReadingGuardTestClassesTests
 {
+    private const string WholeTreeSources = """
+        public static class VerifiedRepositoryRoot { public static string Find() => "root"; }
+        public static class TrackedFiles {
+            public static void Read() => Forward();
+            private static void Forward() {
+                var start = new System.Diagnostics.ProcessStartInfo(System.OperatingSystem.IsWindows() ? "git.exe" : "git");
+                foreach (var argument in new[] { "-c", "core.fsmonitor=false", "ls-files", "-z" })
+                    start.ArgumentList.Add(argument);
+                using var process = new System.Diagnostics.Process { StartInfo = start };
+                process.Start();
+            }
+        }
+        namespace Sample {
+            public class WholeTreeTests {
+                [Fact] public void Works() { VerifiedRepositoryRoot.Find(); TrackedFiles.Read(); }
+            }
+        }
+        """;
+
+    [Fact]
+    public void WholeTreeReaderThroughHelperIsAGuardWithoutSnapshotCache()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.Equal(new[] { "Sample.WholeTreeTests" }, guards.Classes);
+    }
+
+    [Fact]
+    public void SingleNamedFileReaderIsNotAGuardWhileWholeTreeReaderIs()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+        fixture.Add("SingleFile.cs", """
+            namespace Sample;
+            public class SingleFileTests {
+                [Fact] public void Works() {
+                    System.IO.File.ReadAllLines(System.IO.Path.Combine(VerifiedRepositoryRoot.Find(), "AGENTS.md"));
+                }
+            }
+            """);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.Contains("Sample.WholeTreeTests", guards.Classes);
+        Assert.DoesNotContain("Sample.SingleFileTests", guards.Classes);
+    }
+
+    [Fact]
+    public void UnrelatedClassIsAbsentAndSnapshotReaderRemains()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+        fixture.Add("Snapshot.cs", """
+            public static class RepositorySourceSnapshotCache { public static object Get(string root) => null; }
+            namespace Sample {
+                public class SnapshotTests { [Fact] public void Works() { RepositorySourceSnapshotCache.Get("root"); } }
+                public class UnrelatedTests { [Fact] public void Works() { var value = 1; } }
+            }
+            """);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.Contains("Sample.SnapshotTests", guards.Classes);
+        Assert.DoesNotContain("Sample.UnrelatedTests", guards.Classes);
+        Assert.Equal(new[] { "Sample.SnapshotTests", "Sample.WholeTreeTests" }, guards.Classes);
+    }
+
+    [Theory]
+    [InlineData("System.IO.Directory.EnumerateFiles(root, \"*.cs\", System.IO.SearchOption.AllDirectories)")]
+    [InlineData("System.IO.Directory.GetFiles(root, \"*.cs\", new System.IO.EnumerationOptions { RecurseSubdirectories = true })")]
+    [InlineData("System.IO.Directory.EnumerateFileSystemEntries(root, \"*\", System.IO.SearchOption.AllDirectories)")]
+    [InlineData("System.IO.Directory.GetFileSystemEntries(root, \"*\", System.IO.SearchOption.AllDirectories)")]
+    public void RecursiveDirectoryEnumerationIsAGuard(string enumeration)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+        fixture.Add("DirectoryTests.cs", $$"""
+            namespace Sample;
+            public class DirectoryTests {
+                [Fact] public void Works() { var root = VerifiedRepositoryRoot.Find(); var files = {{enumeration}}; }
+            }
+            """);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.Contains("Sample.DirectoryTests", guards.Classes);
+    }
+
+    [Theory]
+    [InlineData("System.IO.Directory.EnumerateFiles(root)")]
+    [InlineData("System.IO.Directory.GetFiles(root, \"*.cs\", System.IO.SearchOption.TopDirectoryOnly)")]
+    [InlineData("System.IO.Directory.GetFiles(root, \"*.cs\", new System.IO.EnumerationOptions { RecurseSubdirectories = false })")]
+    [InlineData("System.IO.Directory.GetFiles(System.IO.Path.Combine(root, \"src\"), \"*\", System.IO.SearchOption.AllDirectories)")]
+    [InlineData("System.IO.Directory.GetFiles(subtree, \"*\", System.IO.SearchOption.AllDirectories)")]
+    public void TopLevelAndConfinedDirectoryEnumerationAreNotGuards(string enumeration)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+        fixture.Add("DirectoryTests.cs", $$"""
+            namespace Sample;
+            public class DirectoryTests {
+                [Fact] public void Works() {
+                    var root = VerifiedRepositoryRoot.Find();
+                    var subtree = System.IO.Path.Combine(root, "src");
+                    var files = {{enumeration}};
+                }
+            }
+            """);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.DoesNotContain("Sample.DirectoryTests", guards.Classes);
+        Assert.Contains("Sample.WholeTreeTests", guards.Classes);
+    }
+
+    [Fact]
+    public void RecursiveHelpersAndInheritedTestsReachBothOperations()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+        fixture.Add("Recursive.cs", """
+            namespace Sample;
+            public abstract class BaseTest {
+                [Fact] public void Works() { Walk(VerifiedRepositoryRoot.Find()); }
+                private static void Walk(string root) {
+                    System.IO.Directory.EnumerateFiles(root);
+                    foreach (var child in System.IO.Directory.EnumerateDirectories(root)) Forward(child);
+                }
+                private static void Forward(string root) { Walk(root); }
+            }
+            public class InheritedTests : BaseTest { }
+            public class RootOnlyTests { [Fact] public void Works() { VerifiedRepositoryRoot.Find(); } }
+            public class EnumerationOnlyTests {
+                [Fact] public void Works() { System.IO.Directory.GetFiles("root", "*", System.IO.SearchOption.AllDirectories); }
+            }
+            """);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.Contains("Sample.InheritedTests", guards.Classes);
+        Assert.DoesNotContain("Sample.RootOnlyTests", guards.Classes);
+        Assert.DoesNotContain("Sample.EnumerationOnlyTests", guards.Classes);
+    }
+
+    [Theory]
+    [InlineData("System.Diagnostics.Process.Start(\"git\", \"ls-files -z\");", true)]
+    [InlineData("System.Diagnostics.Process.Start(\"git\", \"ls-files -- *.cs\");", true)]
+    [InlineData("var command = \"ls-files -z\"; System.Diagnostics.Process.Start(\"git.exe\", command);", true)]
+    [InlineData("var start = new System.Diagnostics.ProcessStartInfo(\"git\", \"ls-files --eol -z\"); System.Diagnostics.Process.Start(start);", true)]
+    [InlineData("var start = new System.Diagnostics.ProcessStartInfo { FileName = \"git\", ArgumentList = { \"ls-files\", \"-z\" } }; System.Diagnostics.Process.Start(start);", true)]
+    [InlineData("var text = \"git ls-files\";", false)]
+    [InlineData("System.Console.WriteLine(\"git ls-files\");", false)]
+    [InlineData("var start = new System.Diagnostics.ProcessStartInfo(\"git\", \"ls-files\");", false)]
+    [InlineData("System.Diagnostics.Process.Start(\"echo\", \"git ls-files\");", false)]
+    [InlineData("System.Diagnostics.Process.Start(\"git\", \"show ls-files\");", false)]
+    [InlineData("System.Diagnostics.Process.Start(\"git\", \"ls-files -- src/one.cs\");", false)]
+    [InlineData("System.Diagnostics.Process.Start(\"git\", \"ls-files src\");", false)]
+    public void GitTraversalRequiresAnInvocationAndNoPathRestriction(string body, bool expected)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+        fixture.Add("GitTests.cs", $$"""
+            namespace Sample;
+            public class GitTests { [Fact] public void Works() { VerifiedRepositoryRoot.Find(); {{body}} } }
+            """);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.Equal(expected, guards.Classes.Contains("Sample.GitTests"));
+        Assert.Contains("Sample.WholeTreeTests", guards.Classes);
+    }
+
+    [Fact]
+    public void GitCommandArgumentsFlowThroughResolvableHelpersWithoutMarkingOtherCommands()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Helpers.cs", WholeTreeSources);
+        fixture.Add("CommandHelpers.cs", """
+            namespace Sample;
+            public static class Commands {
+                public static void Forward(string command) { Run(command); }
+                private static void Run(string command) { System.Diagnostics.Process.Start("git", command); }
+                public static void RunList(string[] arguments) {
+                    var start = new System.Diagnostics.ProcessStartInfo("git");
+                    foreach (var argument in arguments) start.ArgumentList.Add(argument);
+                    System.Diagnostics.Process.Start(start);
+                }
+            }
+            public class StringCommandTests {
+                [Fact] public void Works() { VerifiedRepositoryRoot.Find(); Commands.Forward("ls-files -z"); }
+            }
+            public class ArgumentListTests {
+                [Fact] public void Works() { VerifiedRepositoryRoot.Find(); Commands.RunList(["ls-files", "-z"]); }
+            }
+            public class OtherCommandTests {
+                [Fact] public void Works() { VerifiedRepositoryRoot.Find(); Commands.Forward("status"); }
+            }
+            """);
+
+        var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
+
+        Assert.Contains("Sample.StringCommandTests", guards.Classes);
+        Assert.Contains("Sample.ArgumentListTests", guards.Classes);
+        Assert.DoesNotContain("Sample.OtherCommandTests", guards.Classes);
+    }
+
     [Fact]
     public void UnrelatedChangeAlwaysSelectsDirectTransitiveAndInheritedSnapshotReaders()
     {

@@ -10,8 +10,8 @@ internal static class SourceReadingGuardTestClasses
     internal static ImpactReplaySourceGuardReport? Read(ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes)
     {
-        if (!sources.Trees.Any(tree => tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>()
-                .Any(type => type.Identifier.ValueText == "RepositorySourceSnapshotCache"))) return null;
+        var hasSnapshotCache = sources.Trees.Any(tree => tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>()
+            .Any(type => type.Identifier.ValueText == "RepositorySourceSnapshotCache"));
 
         // Bind checkout declarations against core runtime types, without loading or building test assemblies.
         // Candidate symbols are included conservatively when external dependencies prevent overload resolution.
@@ -21,6 +21,7 @@ internal static class SourceReadingGuardTestClasses
         var edges = new Dictionary<ISymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
         var owners = new Dictionary<string, HashSet<ISymbol>>(StringComparer.Ordinal);
         var readers = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var declarations = new Dictionary<ISymbol, List<SyntaxNode>>(SymbolEqualityComparer.Default);
         foreach (var tree in sources.Trees)
         {
             var model = compilation.GetSemanticModel(tree);
@@ -31,6 +32,8 @@ internal static class SourceReadingGuardTestClasses
                 var owner = declaration.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
                 var symbol = model.GetDeclaredSymbol(declaration)?.OriginalDefinition;
                 if (owner is null || symbol is null) continue;
+                if (!declarations.TryGetValue(symbol, out var nodes)) declarations[symbol] = nodes = [];
+                nodes.Add(declaration);
                 var name = ImpactReplayTestSourceIndex.ClassName(owner);
                 if (!owners.TryGetValue(name, out var members)) owners[name] = members = new(SymbolEqualityComparer.Default);
                 members.Add(symbol);
@@ -43,7 +46,7 @@ internal static class SourceReadingGuardTestClasses
                     {
                         var canonical = target.OriginalDefinition;
                         calls.Add(canonical);
-                        if (IsSnapshotRead(canonical)) readers.Add(symbol);
+                        if (hasSnapshotCache && IsSnapshotRead(canonical)) readers.Add(symbol);
                     }
                 }
             }
@@ -55,6 +58,7 @@ internal static class SourceReadingGuardTestClasses
             foreach (var (caller, targets) in edges)
                 if (!readers.Contains(caller) && targets.Any(readers.Contains)) changed |= readers.Add(caller);
         } while (changed);
+        readers.UnionWith(WholeTreeSourceReaderDetector.Read(edges, declarations, compilation));
         // A concrete test can inherit its runnable method and initialization without declaring a member itself.
         foreach (var tree in sources.Trees)
         {
@@ -77,8 +81,9 @@ internal static class SourceReadingGuardTestClasses
                 }
             }
         }
-        return new(classes.Where(item => owners.TryGetValue(item.FullName, out var members) && members.Any(readers.Contains))
-            .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+        var names = classes.Where(item => owners.TryGetValue(item.FullName, out var members) && members.Any(readers.Contains))
+            .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        return !hasSnapshotCache && names.Length == 0 ? null : new(names);
     }
 
     private static bool IsSnapshotRead(ISymbol symbol) =>
