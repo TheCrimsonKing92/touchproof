@@ -66,7 +66,8 @@ internal static class CandidateAddedClassEvidence
         args.AddRange([revision, "--", "*.cs"]);
         var result = runGit(directory, args.ToArray());
         if (result.DrainTimedOut) throw new InvalidOperationException("Git evidence drain timed out.");
-        if (result.ExitCode == 1 && result.Output.Length == 0) return new(StringComparer.Ordinal);
+        if (result.ExitCode == 1 && result.Output.Length == 0 && result.ProcessStarted && result.Error.Length == 0)
+            return new(StringComparer.Ordinal);
         if (!result.Succeeded) throw new InvalidOperationException("Git class evidence unavailable.");
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in result.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries))

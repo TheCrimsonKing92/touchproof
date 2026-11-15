@@ -82,6 +82,8 @@ public sealed class CandidateAddedClassEvidenceTests
                 Assert.Equal(1, result.ExitCode);
                 Assert.Equal("", result.Output);
                 Assert.False(result.DrainTimedOut);
+                Assert.True(result.ProcessStarted);
+                Assert.Equal("", result.Error);
             }
             return result;
         });
@@ -162,6 +164,9 @@ public sealed class CandidateAddedClassEvidenceTests
     [InlineData("grep", "failure")]
     [InlineData("grep", "drain")]
     [InlineData("grep", "throw")]
+    [InlineData("grep", "not-started")]
+    [InlineData("grep", "not-started-empty-error")]
+    [InlineData("grep", "exit-one-error")]
     public void UnavailableGit_ReturnsNoAddedEvidence(string command, string fault)
     {
         using var repo = new Repository(oldOnMain: true);
@@ -178,6 +183,9 @@ public sealed class CandidateAddedClassEvidenceTests
                 "throw" => throw new IOException("Fixture git unavailable"),
                 "drain" => new GitCli.GitResult(0, "", "", DrainTimedOut: true),
                 "unexpected-status" => new GitCli.GitResult(0, "T\0type.cs\0", ""),
+                "not-started" => new GitCli.GitResult(1, "", "failed to start git process", ProcessStarted: false),
+                "not-started-empty-error" => new GitCli.GitResult(1, "", "", ProcessStarted: false),
+                "exit-one-error" => new GitCli.GitResult(1, "", "Fixture git exception"),
                 _ => new GitCli.GitResult(2, "", "Fixture git failure")
             };
         });
@@ -187,16 +195,19 @@ public sealed class CandidateAddedClassEvidenceTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void UnavailableGrep_CannotProveAbsence(bool drain)
+    [InlineData(2, false, true, "unavailable")]
+    [InlineData(1, true, true, "unavailable")]
+    [InlineData(1, false, false, "failed to start git process")]
+    [InlineData(1, false, false, "")]
+    [InlineData(1, false, true, "Fixture git exception")]
+    public void UnavailableGrep_CannotProveAbsence(int exitCode, bool drain, bool started, string error)
     {
         var reached = false;
         var absent = CandidateAddedClassEvidence.ProvesClassAbsent("unused", "HEAD", "PlannedTests", (_, args) =>
         {
             Assert.Equal("grep", args[0]);
             reached = true;
-            return new GitCli.GitResult(drain ? 1 : 2, "", "unavailable", DrainTimedOut: drain);
+            return new GitCli.GitResult(exitCode, "", error, ProcessStarted: started, DrainTimedOut: drain);
         });
 
         Assert.True(reached);
