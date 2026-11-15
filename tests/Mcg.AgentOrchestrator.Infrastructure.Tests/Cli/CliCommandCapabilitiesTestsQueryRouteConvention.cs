@@ -59,6 +59,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["owner-digest"] = "Served at startup before the persistent runner.",
+            ["branch-report"] = "Served at startup before the persistent runner.",
             ["context-usage"] = "Served at startup before the persistent runner.",
             ["impact-replay"] = "Served at startup before the persistent runner."
         };
@@ -113,9 +114,9 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
     }
 
     [Fact]
-    public void Exemptions_BareForms_PinFiveReasonedQueryOnlyExceptions()
+    public void Exemptions_BareForms_PinFourReasonedQueryOnlyExceptions()
     {
-        string[] expected = ["owner-digest", "context-usage", "impact-replay"];
+        string[] expected = ["owner-digest", "context-usage", "impact-replay", "branch-report"];
         var failures = new List<string>();
         foreach (var verb in expected)
         {

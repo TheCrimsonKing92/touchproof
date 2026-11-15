@@ -351,6 +351,11 @@ if (CliContextUsageCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliContextUsageCommand.Run(startupArgs, workspace));
 }
 
+if (CliBranchReportCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliBranchReportCommand.Run(startupArgs, workspace));
+}
+
 if (CliClaudeUsageBackfillCommand.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliClaudeUsageBackfillCommand.Run(startupArgs, workspace));
