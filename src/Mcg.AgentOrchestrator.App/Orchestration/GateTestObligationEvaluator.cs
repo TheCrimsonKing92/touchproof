@@ -67,6 +67,8 @@ internal static class GateTestObligationEvaluator
 
         var renames = new Lazy<IReadOnlyList<TestClassRenameEvidence.ClassRename>>(() =>
             TestClassRenameEvidence.Read(renameScope!.RepositoryDirectory, renameScope.IntegrationBranch, candidateSha!));
+        var addedClasses = new Lazy<IReadOnlyList<CandidateAddedClassEvidence.AddedClass>>(() =>
+            CandidateAddedClassEvidence.Read(renameScope!.RepositoryDirectory, renameScope.IntegrationBranch, candidateSha!));
         var packageResolution = renameScope is not null && !string.IsNullOrWhiteSpace(candidateSha)
             ? new GoTestPackageResolution(renameScope.RepositoryDirectory, renameScope.IntegrationBranch, candidateSha) : null;
         return obligations.Select(obligation =>
@@ -84,6 +86,9 @@ internal static class GateTestObligationEvaluator
             var result = original.Outcome == Outcome.SelectorNotFound && renameScope is not null &&
                 !string.IsNullOrWhiteSpace(candidateSha)
                 ? FollowRenames(original, sources, orchestratorDirectory, renames.Value) : original;
+            if (result.Outcome == Outcome.SelectorNotFound && renameScope is not null && !string.IsNullOrWhiteSpace(candidateSha))
+                result = GateTestObligationPrefixedNameFollow.Follow(result, sources, orchestratorDirectory, candidateSha,
+                    () => addedClasses.Value, name => CandidateAddedClassEvidence.ProvesClassAbsent(renameScope.RepositoryDirectory, candidateSha, name));
             if (result.Outcome is Outcome.SelectorNotFound or Outcome.Failed && packageResolution is not null)
                 result = packageResolution.Resolve(result, sources, orchestratorDirectory);
             result = result.Outcome == Outcome.SelectorNotFound && answeredRequests is not null
