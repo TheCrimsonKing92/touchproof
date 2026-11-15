@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -13,7 +14,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
     private readonly TimeSpan _pollInterval;
     private readonly IConductLockPidProbe? _pidProbe;
     private readonly string? _homeRoot;
-    private readonly Action<string, string, string>? _onFinalized;
+    private readonly Action<string, string, string, string>? _onFinalized;
     private readonly object _gate = new();
     private readonly HashSet<string> _finalized = new(StringComparer.OrdinalIgnoreCase);
     private Observation? _pending;
@@ -24,7 +25,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
         OrchestratorProjectRegistry registry, Action<string> append, TimeProvider time,
         TimeSpan? deadline = null, IConductLockPidProbe? pidProbe = null,
         string? homeRoot = null, TimeSpan? pollInterval = null,
-        Action<string, string, string>? onFinalized = null)
+        Action<string, string, string, string>? onFinalized = null)
     {
         _registry = registry;
         _append = append;
@@ -42,7 +43,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
     internal void OnHomeAdopted(string commit, DateTimeOffset? adoptedAt = null)
     {
         if (!HomeBuildAdoptionDetector.IsCommit(commit)) return;
-        var completed = new List<(string Commit, string Pending, string Failed)>();
+        var completed = new List<(string Commit, string Pending, string Failed, string Stopped)>();
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -59,7 +60,8 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
                 .Select(project => (Project: project, Workspace: project.ResolveWorkspace()))
                 .Where(entry => IsRunning(entry.Workspace))
                 .OrderBy(entry => entry.Project.Name, StringComparer.Ordinal)
-                .Select(entry => new ExpectedProject(entry.Project.Name, entry.Workspace.ConductEventsLogPath))
+                .Select(entry => new ExpectedProject(entry.Project.Name, entry.Workspace.ConductEventsLogPath,
+                    entry.Workspace.OrchestratorDirectory))
                 .ToArray();
             _pending = new Observation(commit, adoptedAt ?? now, expected);
             Evaluate(now, completed);
@@ -80,7 +82,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
 
     private void TickCore()
     {
-        var completed = new List<(string Commit, string Pending, string Failed)>();
+        var completed = new List<(string Commit, string Pending, string Failed, string Stopped)>();
         lock (_gate)
         {
             if (!_disposed && _pending is not null) Evaluate(_time.GetUtcNow(), completed);
@@ -88,11 +90,11 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
         NotifyFinalized(completed);
     }
 
-    private void NotifyFinalized(List<(string Commit, string Pending, string Failed)> completed)
+    private void NotifyFinalized(List<(string Commit, string Pending, string Failed, string Stopped)> completed)
     {
         foreach (var item in completed)
             AdoptedBuildPublicationReporting.Try(
-                () => _onFinalized?.Invoke(item.Commit, item.Pending, item.Failed), "fleet-finalized-callback");
+                () => _onFinalized?.Invoke(item.Commit, item.Pending, item.Failed, item.Stopped), "fleet-finalized-callback");
     }
 
     private bool IsRunning(OrchestratorWorkspace workspace)
@@ -101,15 +103,15 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
         catch (InvalidOperationException) { return false; } // Malformed lock, not a live owner.
     }
 
-    private void Evaluate(DateTimeOffset now, List<(string Commit, string Pending, string Failed)> completed)
+    private void Evaluate(DateTimeOffset now, List<(string Commit, string Pending, string Failed, string Stopped)> completed)
     {
         var states = Observe(_pending!, now);
-        if (states.All(state => state == ProjectState.Adopted) || now - _pending!.StartedAt >= _deadline)
+        if (states.All(state => state is ProjectState.Adopted or ProjectState.Stopped) || now - _pending!.StartedAt >= _deadline)
             FinalizePending(now, completed, states);
     }
 
     private void FinalizePending(DateTimeOffset now,
-        List<(string Commit, string Pending, string Failed)> completed, ProjectState[]? states = null)
+        List<(string Commit, string Pending, string Failed, string Stopped)> completed, ProjectState[]? states = null)
     {
         var observation = _pending!;
         states ??= Observe(observation, now);
@@ -124,12 +126,20 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
             .ToString(CultureInfo.InvariantCulture);
         if (AdoptedBuildPublicationReporting.Try(
             () => _append($"FLEET_BUILD_ADOPTED commit={observation.Commit} adopted={Names(ProjectState.Adopted)} " +
-                $"pending={Names(ProjectState.Pending)} failed={Names(ProjectState.Failed)} elapsedSeconds={elapsed}"), "fleet-summary-event"))
-            completed.Add((observation.Commit, Names(ProjectState.Pending), Names(ProjectState.Failed)));
+                $"pending={Names(ProjectState.Pending)} failed={Names(ProjectState.Failed)} " +
+                $"stopped={Names(ProjectState.Stopped)} elapsedSeconds={elapsed}"), "fleet-summary-event"))
+            completed.Add((observation.Commit, Names(ProjectState.Pending), Names(ProjectState.Failed), Names(ProjectState.Stopped)));
     }
 
-    private static ProjectState[] Observe(Observation observation, DateTimeOffset now) =>
-        observation.Projects.Select(project => ReadState(project.LogPath, observation, now)).ToArray();
+    private ProjectState[] Observe(Observation observation, DateTimeOffset now) =>
+        observation.Projects.Select(project =>
+        {
+            var state = ReadState(project.LogPath, observation, now);
+            // Only positive inactivity evidence resolves a project with no commit-specific outcome.
+            return state == ProjectState.Pending &&
+                ConductorLoopLease.ProbeLiveness(project.OrchestratorDirectory, _pidProbe) == ConductorLiveness.NotRunning
+                ? ProjectState.Stopped : state;
+        }).ToArray();
 
     private static ProjectState ReadState(string logPath, Observation observation, DateTimeOffset now)
     {
@@ -222,7 +232,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
         }
     }
 
-    private enum ProjectState { Pending, Adopted, Failed }
-    private sealed record ExpectedProject(string Name, string LogPath);
+    private enum ProjectState { Pending, Adopted, Failed, Stopped }
+    private sealed record ExpectedProject(string Name, string LogPath, string OrchestratorDirectory);
     private sealed record Observation(string Commit, DateTimeOffset StartedAt, ExpectedProject[] Projects);
 }

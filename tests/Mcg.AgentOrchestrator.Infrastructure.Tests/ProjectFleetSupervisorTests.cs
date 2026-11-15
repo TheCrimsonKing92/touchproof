@@ -36,7 +36,7 @@ public sealed class ProjectFleetSupervisorTests
         var pass = await Reported(fixture.Supervisor().StartAsync([ready, disabled, live, blocked], default));
 
         var request = Assert.Single(fixture.Host.Requests);
-        Assert.Equal(new[] { "conduct", "--loop", "--project=A" }, request.Arguments);
+        Assert.Equal(new[] { "conduct", "--loop", "--watch", "--project=A" }, request.Arguments);
         Assert.Equal(ready.RootDirectory, request.WorkingDirectory);
         Assert.Equal("user-jdk", request.AdditionalEnvironment!["JAVA_HOME"]);
         Assert.Equal("machine-bin" + Path.PathSeparator + "user-bin", request.AdditionalEnvironment["Path"]);

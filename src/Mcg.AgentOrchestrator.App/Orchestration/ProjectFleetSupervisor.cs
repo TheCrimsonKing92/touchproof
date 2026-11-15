@@ -54,7 +54,7 @@ internal sealed class ProjectFleetSupervisor(
             var commit = readBuildCommit();
             Directory.CreateDirectory(workspace.LogDirectory);
             var request = new ConductorSupervisorProcessRequest(
-                ["conduct", "--loop", "--project=" + project.Name], project.RootDirectory,
+                ["conduct", "--loop", "--watch", "--project=" + project.Name], project.RootDirectory,
                 Path.Combine(workspace.OrchestratorDirectory, "fleet", id + ".exit.json"),
                 Path.Combine(workspace.LogDirectory, "fleet-" + id + ".out.log"),
                 Path.Combine(workspace.LogDirectory, "fleet-" + id + ".err.log"),

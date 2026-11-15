@@ -5,13 +5,15 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 public sealed class AdoptedBuildPushTriggerRepositoryPublicationTests
 {
     [Theory]
-    [InlineData(false, "", "", 0)]
-    [InlineData(true, "pending", "", 0)]
-    [InlineData(true, "", "failed", 0)]
-    [InlineData(true, "pending", "failed", 0)]
-    [InlineData(true, "", "", 1)]
+    [InlineData(false, "", "", "", 0)]
+    [InlineData(false, "", "failed", "", 0)]
+    [InlineData(true, "pending", "", "", 1)]
+    [InlineData(true, "", "", "stopped", 1)]
+    [InlineData(true, "", "failed", "", 0)]
+    [InlineData(true, "pending", "failed", "stopped", 0)]
+    [InlineData(true, "", "", "", 1)]
     public void AdoptionGuards_ApplyToHomeAndRepositoryPublication(
-        bool enabled, string pending, string failed, int expected)
+        bool enabled, string pending, string failed, string stopped, int expected)
     {
         var calls = new List<string>();
         var events = new List<string>();
@@ -21,11 +23,19 @@ public sealed class AdoptedBuildPushTriggerRepositoryPublicationTests
             commit => calls.Add("home:" + commit), events.Add,
             attention.Add, commit => calls.Add("repositories:" + commit));
 
-        trigger.OnFinalized("adopted", pending, failed);
+        trigger.OnFinalized("adopted", pending, failed, stopped);
 
         Assert.Equal(expected == 0 ? Array.Empty<string>() : new[] { "home:adopted", "repositories:adopted" }, calls);
-        Assert.Empty(events);
-        Assert.Empty(attention);
+        if (enabled && failed.Length != 0)
+        {
+            Assert.Equal("ADOPTED_BUILD_PUSH_HELD commit=adopted reason=fleet-adoption-failed", Assert.Single(events));
+            Assert.Single(attention);
+        }
+        else
+        {
+            Assert.Empty(events);
+            Assert.Empty(attention);
+        }
     }
 
     [Fact]
