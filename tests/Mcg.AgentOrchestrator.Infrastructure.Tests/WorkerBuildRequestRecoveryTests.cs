@@ -2,10 +2,108 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Security;
+using Microsoft.Win32.SafeHandles;
 
 // Parallel-safe: fixture-owned native groups and canonical stores, with event/phase-gated stimuli.
 public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
 {
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task CleanupFailure_UnconfirmedTermination_NamesLiveWorkerDescendant()
+    {
+        var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
+        var suffix = Guid.NewGuid().ToString("N");
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\mcg-holder-ready-" + suffix);
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\mcg-holder-release-" + suffix);
+        var childPidPath = Path.Combine(fixture.Root, "descendant.pid");
+        var childScript = Path.Combine(fixture.Root, "descendant.ps1");
+        Process? worker = null;
+        Process? descendant = null;
+        SpawnProcessIdentity? workerIdentity = null;
+        SpawnProcessIdentity? descendantIdentity = null;
+        SafeFileHandle? retainedJob = null;
+        var disposeAttempted = false;
+        try
+        {
+            File.WriteAllText(childScript, $$"""
+                [IO.File]::WriteAllText('{{childPidPath.Replace("'", "''")}}', $PID.ToString())
+                $ready = [Threading.EventWaitHandle]::OpenExisting('Local\mcg-holder-ready-{{suffix}}')
+                $null = $ready.Set()
+                $release = [Threading.EventWaitHandle]::OpenExisting('Local\mcg-holder-release-{{suffix}}')
+                if (-not $release.WaitOne(240000)) { throw 'worker descendant release event did not arrive' }
+                """);
+            var start = new ProcessStartInfo(WorkerShell.Executable)
+            {
+                UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = fixture.Root
+            };
+            // The worker synchronously invokes the child, so both remain live at cleanup.
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command",
+                "& '" + WorkerShell.Executable.Replace("'", "''") + "' -NoProfile -NonInteractive -File '" +
+                childScript.Replace("'", "''") + "'" }) start.ArgumentList.Add(argument);
+            fixture.Worker = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(start,
+                Path.Combine(fixture.Root, "worker.out.log"), Path.Combine(fixture.Root, "worker.err.log"));
+            worker = Process.GetProcessById(fixture.Worker.Process.Id);
+            _ = worker.SafeHandle; // Hold this process identity through the finally-block stop.
+            fixture.Worker.Resume();
+            Assert.True(await Task.Run(() => ready.WaitOne(TestHangGuard.HangSafetyBound)),
+                "Worker descendant did not signal its named readiness event.");
+            // MainModule is unavailable before the suspended worker initializes. The child's
+            // readiness event proves the worker has started and is waiting for that child.
+            var workerRead = SpawnProcessIdentityReader.ReadForRegistration(worker);
+            workerIdentity = workerRead.Identity;
+            Assert.True(workerRead.Succeeded, workerRead.Evidence);
+            var descendantId = int.Parse(File.ReadAllText(childPidPath), System.Globalization.CultureInfo.InvariantCulture);
+            descendant = Process.GetProcessById(descendantId);
+            _ = descendant.SafeHandle;
+            var descendantRead = SpawnProcessIdentityReader.ReadForRegistration(descendant);
+            descendantIdentity = descendantRead.Identity;
+            Assert.True(descendantRead.Succeeded, descendantRead.Evidence);
+            var descendantName = descendant.ProcessName;
+            Assert.False(worker.HasExited);
+            Assert.False(descendant.HasExited);
+
+            // Closing only the fixture's handle makes termination unconfirmed. The duplicate
+            // retains kill-on-close custody if this test host dies before its finally block.
+            Assert.True(fixture.Worker.Group.TryDuplicateAccountingHandle(out retainedJob));
+            fixture.Worker.Group.Dispose();
+            disposeAttempted = true;
+            var error = await Task.Run(() => Assert.Throws<AggregateException>(fixture.Dispose));
+
+            var failure = Assert.IsType<InvalidOperationException>(Assert.Single(error.InnerExceptions));
+            Assert.Equal($"Fixture owned exit confirmation failed at '{fixture.Root}'.", failure.Message);
+            Assert.Equal("Owned worker/descendant termination is unconfirmed; retain fixture artifacts.",
+                Assert.IsType<InvalidOperationException>(failure.InnerException).Message);
+            Assert.StartsWith($"Worker build fixture cleanup failed. Residual root '{fixture.Root}' attributes=", error.Message);
+            Assert.Contains($"pid={descendantId} name={descendantName}", error.Message);
+            Assert.False(worker.HasExited);
+            Assert.False(descendant.HasExited);
+        }
+        finally
+        {
+            try { StopExactProcess(descendant, descendantIdentity); }
+            finally
+            {
+                try { StopExactProcess(worker, workerIdentity); }
+                finally
+                {
+                    retainedJob?.Dispose();
+                    try { if (!disposeAttempted) fixture.Dispose(); }
+                    finally { SharedTestSupport.RemoveTempDirectory(fixture.Root); }
+                }
+            }
+        }
+
+        static void StopExactProcess(Process? process, SpawnProcessIdentity? identity)
+        {
+            if (process is null) return;
+            try
+            {
+                Assert.NotNull(identity);
+                TestOwnedProcessStop.StopRootIfSame(process, identity, TestHangGuard.HangSafetyBound);
+            }
+            finally { process.Dispose(); }
+        }
+    }
+
     [Fact]
     public async Task ManagedHostDeathAfterCompilerStart_ReloadRetainsTerminalObligationWithoutRelaunch()
     {
