@@ -14,7 +14,22 @@ internal sealed class ConductorTickStepLedger
         "walk-policy-decision", "walk-reap", "walk-set-aside", "walk-projection-invalidate",
         "walk-pretester-declared-resolve", "walk-pretester-changed-file-guards", "walk-pretester-cli-surface",
         "walk-pretester-coupled-class", "walk-pretester-reverse-dependency", "walk-pretester-always-run",
-        "walk-pretester-test-source"
+        "walk-pretester-test-source",
+        "walk-held-goal",
+        "walk-running-refresh",
+        "walk-running-glance",
+        "walk-hold-entry-gates",
+        "walk-hold-lifecycle-reconcile",
+        "walk-hold-lifecycle-facts",
+        "walk-running-hold-reason",
+        "walk-changed-files",
+        "walk-candidate-context",
+        "walk-finding-sibling-classes",
+        "walk-recovery-facts",
+        "walk-recovery-observe-finding",
+        "walk-recovery-failure-source",
+        "walk-recovery-evidence-attempt",
+        "walk-candidate-revision", "walk-goal-overhead"
     });
     internal const string WalkRemainderName = "walk-remainder";
     internal static readonly IReadOnlyList<string> OperatorIntentNames = Array.AsReadOnly(new[]
@@ -87,7 +102,32 @@ internal sealed class ConductorTickStepLedger
     internal static T Measure<T>(string name, Func<T> action)
     {
         var ledger = Current.Value;
+        using var scope = OpenScope(name);
+        var result = action();
+        if (scope is not null) ledger?._probe?.Invoke(name);
+        return result;
+    }
+
+    // Shared driver delegates also run during admission and reconciliation. Only
+    // split their CPU out when the owner is already executing a walk frame.
+    internal static T MeasureWithinWalk<T>(string name, Func<T> action)
+    {
+        var ledger = Current.Value;
         if (ledger is null) return action();
+        bool withinWalk;
+        lock (ledger._gate)
+            withinWalk = ledger._active && Environment.CurrentManagedThreadId == ledger._ownerThread &&
+                ledger._frames.Any(frame => WalkNames.Contains(frame.Name));
+        return withinWalk ? Measure(name, action) : action();
+    }
+
+    internal static void MeasureWithinWalk(string name, Action action) =>
+        MeasureWithinWalk(name, () => { action(); return true; });
+
+    internal static IDisposable? OpenScope(string name)
+    {
+        var ledger = Current.Value;
+        if (ledger is null) return null;
         Frame? frame = null;
         bool active;
         lock (ledger._gate)
@@ -100,18 +140,12 @@ internal sealed class ConductorTickStepLedger
                 // Other threads still count calls; their process CPU overlaps the owner's
                 // scopes and must not be added to this partition of the phase.
                 frame = Environment.CurrentManagedThreadId == ledger._ownerThread
-                    ? new Frame(ledger._cpu()) : null;
+                    ? new Frame(name, ledger._cpu()) : null;
                 if (frame is not null) ledger._frames.Push(frame);
             }
         }
-        if (!active) return action();
-        try
-        {
-            var result = action();
-            ledger._probe?.Invoke(name);
-            return result;
-        }
-        finally
+        if (!active) return null;
+        return new ConductorTickStepScope(() =>
         {
             if (frame is not null)
             {
@@ -131,7 +165,7 @@ internal sealed class ConductorTickStepLedger
                         old.InclusiveTicks + elapsed, old.InclusiveWallTicks + wallElapsed);
                 }
             }
-        }
+        });
     }
 
     internal static void Measure(string name, Action action) => Measure(name, () => { action(); return true; });
@@ -310,8 +344,9 @@ internal sealed class ConductorTickStepLedger
         ("readiness_evaluations", Interlocked.Read(ref _readinessEvaluations))
     }.Select(pair => pair.Item1 + "=" + pair.Item2.ToString(CultureInfo.InvariantCulture)));
 
-    private sealed class Frame(TimeSpan start)
+    private sealed class Frame(string name, TimeSpan start)
     {
+        internal string Name { get; } = name;
         internal TimeSpan Start { get; } = start;
         internal ConductorBatchLoop.DiagnosticTimer Wall { get; } = ConductorBatchLoop.StartDiagnosticTimer();
         internal long ChildTicks { get; set; }

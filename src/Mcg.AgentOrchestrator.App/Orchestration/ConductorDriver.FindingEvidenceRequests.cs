@@ -338,7 +338,7 @@ internal sealed partial class ConductorDriver
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
             initialRequestDispositions, NegativeControl: runnable.TypedRequest.NegativeControl, RevertPaths: runnable.TypedRequest.RevertPaths,
-            Mutation: runnable.TypedRequest.Mutation, RepositoryTarget: repositoryTarget);
+            Mutation: runnable.TypedRequest.Mutation, RepositoryTarget: repositoryTarget, ExecutionBasisIdentity: executionBasisIdentity);
         if (TryResumeUnconfirmedCandidateRed(
                 goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint,
                 requestContext, out decision))

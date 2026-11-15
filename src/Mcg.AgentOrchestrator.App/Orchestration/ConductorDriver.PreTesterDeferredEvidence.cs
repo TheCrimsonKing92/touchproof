@@ -79,7 +79,7 @@ internal sealed partial class ConductorDriver
             result = MakeResult(goal.Id.Value, goalPrefix, policy, FocusedEvidencePendingHeld(fromState, observation.Decision, observation.Kind));
             return true;
         }
-        var declaration = ConductorTickStepLedger.Measure("walk-pretester-declared-resolve",
+        var declaration = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-declared-resolve",
             () => DeveloperDeferredTestSelections.Resolve(worktreePath, testsField, _cohortWorkspace?.ProjectHomeDirectoryOrNull));
         if (declaration.Selections.Count == 0)
         {

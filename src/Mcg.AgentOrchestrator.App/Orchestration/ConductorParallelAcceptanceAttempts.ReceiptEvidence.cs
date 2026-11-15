@@ -340,6 +340,25 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         return null;
     }
 
+    internal ConductorParallelAcceptanceAttempt? ReadLiveFindingBaselineAttempt(
+        GoalId goalId, string candidateSha, string findingRound, string policyName)
+    {
+        // Use the same canonical live read as focused receipts; never observe/consume a result here.
+        try
+        {
+            if (TryReadLatest(goalId.Value) is not { } latest) return null;
+            var attempt = ReadCanonicalAttempt(latest.MetadataPath, goalId.Value);
+            return attempt is { Kind: PreReviewEvidenceDispatchKind, FocusedEvidenceRunsBaselineArm: true } &&
+                attempt.PolicyName == policyName && attempt.FindingRoundFingerprint == findingRound &&
+                string.Equals(attempt.BranchHeadSha, candidateSha, StringComparison.OrdinalIgnoreCase) && IsLiveAttempt(attempt)
+                ? attempt : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        {
+            return null;
+        }
+    }
+
     // Include reconciled attempts: reconciliation does not revoke a receipt's evidence.
     internal FocusedEvidenceRunResult? ReadFocusedReceiptEvidence(GoalId goalId, string receiptId, string candidateSha)
     {

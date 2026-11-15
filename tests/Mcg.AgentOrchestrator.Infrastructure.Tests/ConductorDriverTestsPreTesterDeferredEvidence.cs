@@ -341,7 +341,9 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         });
         using var active = ledger.Activate();
         ConductorAdvanceResult result = null!;
-        var console = AsyncLocalConsoleRouter.Capture(() => result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
+        var console = AsyncLocalConsoleRouter.Capture(() =>
+            ConductorTickStepLedger.Measure("walk-advance", () =>
+                result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative)));
         return (result, console, parts);
     }
 
