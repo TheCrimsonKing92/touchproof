@@ -140,7 +140,8 @@ try {
         $phases.testSeconds = Get-PhaseSeconds $phaseStart
     }
     finally { Pop-Location }
-    Get-ChildItem -Path $results -Recurse -Filter *.trx -ErrorAction SilentlyContinue | Copy-Item -Destination $out -Force
+    $trxFiles = @(Get-ChildItem -Path $results -Recurse -Filter *.trx -ErrorAction SilentlyContinue)
+    $trxFiles | Copy-Item -Destination $out -Force
     if ($sampler -and -not $sampler.HasExited) { Stop-Process -Id $sampler.Id -Force -ErrorAction SilentlyContinue }
     $completed = @{ exitCode = $exit; seconds = [math]::Round(([DateTime]::UtcNow - $started).TotalSeconds, 1)
         trx = @(Get-ChildItem -Path $out -Filter *.trx | ForEach-Object Name); phases = $phases }
@@ -150,6 +151,28 @@ try {
             if ($null -ne $usage.$name) { $completed[$name] = $usage.$name }
         }
     } catch { }
+    if ($exit -ne 0 -or $completed.trx.Count -eq 0) {
+        try {
+            $diagnosis = [System.Collections.Generic.List[string]]::new()
+            $hasRetainedDirectory = $false
+            $retainedDirectory = ''
+            foreach ($line in [IO.File]::ReadLines((Join-Path $out 'runner.log'))) {
+                $retained = [regex]::Match($line, '^\s*Retained diagnostic directory:(.*)$')
+                if ($retained.Success) {
+                    $hasRetainedDirectory = $true
+                    $retainedDirectory = $retained.Groups[1].Value.Trim()
+                }
+                if ($diagnosis.Count -lt 8 -and ($retained.Success -or
+                    $line -cmatch 'RUNNER/TOOLING FAILURE|COMPLETED WITH MISSING TRX|CLEANUP FAILURE|TEST HOST TIMED OUT')) {
+                    $diagnosis.Add($line.Substring(0, [math]::Min(300, $line.Length)))
+                }
+            }
+            # Publish only after the complete scan succeeds; diagnostics must never change the lane outcome.
+            $additions = @{ runnerDiagnosis = @($diagnosis.ToArray()); trxFoundCount = [int]$trxFiles.Count }
+            if ($hasRetainedDirectory) { $additions.retainedDirectory = $retainedDirectory }
+            foreach ($name in $additions.Keys) { $completed[$name] = $additions[$name] }
+        } catch { }
+    }
     Write-Status 'completed' $completed
 }
 catch {
