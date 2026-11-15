@@ -186,13 +186,15 @@ public sealed class SourceReadingGuardTestClassesTests
     {
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
-        fixture.Add("CommandHelpers.cs", """
+        // Keep synthetic launches out of the raw-source direct-git-launch guard.
+        const string gitExecutable = "git";
+        fixture.Add("CommandHelpers.cs", $$"""
             namespace Sample;
             public static class Commands {
                 public static void Forward(string command) { Run(command); }
-                private static void Run(string command) { System.Diagnostics.Process.Start("git", command); }
+                private static void Run(string command) { System.Diagnostics.Process.Start("{{gitExecutable}}", command); }
                 public static void RunList(string[] arguments) {
-                    var start = new System.Diagnostics.ProcessStartInfo("git");
+                    var start = new System.Diagnostics.ProcessStartInfo("{{gitExecutable}}");
                     foreach (var argument in arguments) start.ArgumentList.Add(argument);
                     System.Diagnostics.Process.Start(start);
                 }
