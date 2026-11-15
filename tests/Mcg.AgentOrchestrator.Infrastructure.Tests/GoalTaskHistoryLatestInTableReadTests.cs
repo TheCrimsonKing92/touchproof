@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 
 // Parallel-safe: every case owns its database.
@@ -13,7 +15,12 @@ public sealed class GoalTaskHistoryLatestInTableReadTests
         var goal = GoalTaskHistoryTestFixture.LatestSnapshot();
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
         if (staleInline)
-            fixture.Execute("UPDATE goals SET snapshot_json = json_set(snapshot_json, '$.Tasks[0].LastVerification', json_extract(snapshot_json, '$.Tasks[1].LastVerification'), '$.Tasks[0].LastDispatch', json_extract(snapshot_json, '$.Tasks[1].LastDispatch'))");
+        {
+            var document = JsonNode.Parse(fixture.RawGoal(goal.Id))!;
+            document["Tasks"]![0]!["LastVerification"] = JsonSerializer.SerializeToNode(goal.Tasks[1].LastVerification, GoalTaskHistoryTestFixture.Options);
+            document["Tasks"]![0]!["LastDispatch"] = JsonSerializer.SerializeToNode(goal.Tasks[1].LastDispatch, GoalTaskHistoryTestFixture.Options);
+            fixture.ReplaceDocument(goal.Id, document.ToJsonString(GoalTaskHistoryTestFixture.Options));
+        }
         fixture.MarkStoredLatest(goal.Id, keepInline: staleInline);
         if (archived)
             Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(GoalTaskHistoryTestFixture.At.AddDays(1)));

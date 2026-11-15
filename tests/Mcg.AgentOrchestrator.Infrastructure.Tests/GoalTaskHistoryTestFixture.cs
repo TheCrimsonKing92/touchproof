@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
@@ -45,6 +46,57 @@ internal sealed class GoalTaskHistoryTestFixture : IDisposable
     }
 
     internal static string Json<T>(T value) => JsonSerializer.Serialize(value, Options);
+    internal long ReportedBytes()
+    {
+        using var receipt = JsonDocument.Parse(File.ReadAllLines(DiagnosticsPath)
+            .Last(line => line.Contains("sqlite-state-write-hold", StringComparison.Ordinal)));
+        return receipt.RootElement.GetProperty("serializedBytes").GetInt64();
+    }
+
+    internal void AssertLatestRepresentation(GoalSnapshot goal, bool verification = true, bool dispatch = true)
+    {
+        using var document = JsonDocument.Parse(RawGoal(goal.Id));
+        foreach (var task in document.RootElement.GetProperty("Tasks").EnumerateArray())
+        {
+            var source = goal.Tasks.Single(t => t.Id == task.GetProperty("Id").GetString());
+            var marker = task.GetProperty("HistoryInTable");
+            foreach (var (property, flag, marked, expected) in new[]
+            {
+                ("LastVerification", "LatestVerificationInTable", verification, Json(source.LastVerification)),
+                ("LastDispatch", "LatestDispatchInTable", dispatch, Json(source.LastDispatch))
+            })
+            {
+                if (marked)
+                {
+                    Assert.False(task.TryGetProperty(property, out _));
+                    Assert.Equal(JsonValueKind.True, marker.GetProperty(flag).ValueKind);
+                }
+                else
+                {
+                    // JsonNode writes may escape strings differently while preserving every value.
+                    Assert.True(JsonNode.DeepEquals(JsonNode.Parse(expected),
+                        JsonNode.Parse(task.GetProperty(property).GetRawText())),
+                        $"Inline {property} must preserve the complete latest record.");
+                    Assert.False(marker.TryGetProperty(flag, out _));
+                }
+            }
+        }
+    }
+
+    // Recreate the step 3a document without changing the goal or history rows.
+    internal void InlineStoredLatest(GoalSnapshot goal)
+    {
+        var document = System.Text.Json.Nodes.JsonNode.Parse(RawGoal(goal.Id))!;
+        foreach (var task in document["Tasks"]!.AsArray())
+        {
+            var source = goal.Tasks.Single(t => t.Id == task!["Id"]!.GetValue<string>());
+            task!["HistoryInTable"]!.AsObject().Remove("LatestVerificationInTable");
+            task["HistoryInTable"]!.AsObject().Remove("LatestDispatchInTable");
+            task["LastVerification"] = JsonSerializer.SerializeToNode(source.LastVerification, Options);
+            task["LastDispatch"] = JsonSerializer.SerializeToNode(source.LastDispatch, Options);
+        }
+        ReplaceDocument(goal.Id, document.ToJsonString(Options));
+    }
     internal SqliteConnection Open() => StateDbConnectionFactory.Open(DatabasePath, StateDbConnectionProfile.ReadWrite);
 
     internal string RawGoal(string id)

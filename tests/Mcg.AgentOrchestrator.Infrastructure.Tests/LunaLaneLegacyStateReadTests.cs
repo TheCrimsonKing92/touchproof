@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
@@ -31,6 +33,13 @@ public sealed class LunaLaneLegacyStateReadTests : IDisposable
             command.Parameters.AddWithValue("$id", goal.Id.Value);
             command.CommandText = "SELECT snapshot_json FROM goals WHERE id = $id";
             var currentJson = Assert.IsType<string>(command.ExecuteScalar());
+            // Explicitly arrange the old inline latest shape even when the current writer strips it.
+            var document = JsonNode.Parse(currentJson)!;
+            var storedTask = document["Tasks"]![0]!;
+            storedTask["HistoryInTable"]!.AsObject().Remove("LatestDispatchInTable");
+            storedTask["LastDispatch"] = JsonSerializer.SerializeToNode(kernel.ExportGoalSnapshot(goal.Id).Tasks[0].LastDispatch,
+                SqliteOrchestratorStateRepository.HistorySerializerOptions);
+            currentJson = document.ToJsonString(SqliteOrchestratorStateRepository.HistorySerializerOptions);
             Assert.Contains("\"WorkerProviderKind\":\"OpenAICodexLuna\"", currentJson, StringComparison.Ordinal);
             Assert.Contains("\"WorkerName\":\"codex-luna\"", currentJson, StringComparison.Ordinal);
             legacyJson = currentJson

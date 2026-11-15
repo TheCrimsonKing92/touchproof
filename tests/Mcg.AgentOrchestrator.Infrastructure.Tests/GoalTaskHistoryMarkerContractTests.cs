@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 public sealed class GoalTaskHistoryMarkerContractTests
 {
     [Fact]
-    public async Task NewWriterIsReadableByMarkerContractAndStep2aHydration()
+    public async Task NewWriterIsReadableByLatestAwareMarkerContractAndStep3aHydration()
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskHistoryTestFixture.Snapshot(taskCount: 3);
@@ -26,14 +26,20 @@ public sealed class GoalTaskHistoryMarkerContractTests
             var id = task.GetProperty("Id").GetString()!;
             var marker = task.GetProperty("HistoryInTable");
             var source = snapshot.Tasks.Single(value => value.Id == id);
+            var verification = ReadEntries<TaskVerificationSnapshot>(connection, goal.Id, id, "verification", marker.GetProperty("Verification"));
+            var dispatch = ReadEntries<TaskDispatchSnapshot>(connection, goal.Id, id, "dispatch", marker.GetProperty("Dispatch"));
             tasks.Add(source with
             {
-                VerificationHistory = ReadEntries<TaskVerificationSnapshot>(connection, goal.Id, id, "verification", marker.GetProperty("Verification")),
-                DispatchHistory = ReadEntries<TaskDispatchSnapshot>(connection, goal.Id, id, "dispatch", marker.GetProperty("Dispatch"))
+                VerificationHistory = verification,
+                DispatchHistory = dispatch,
+                LastVerification = marker.TryGetProperty("LatestVerificationInTable", out var v) && v.GetBoolean()
+                    ? verification![^1] : source.LastVerification,
+                LastDispatch = marker.TryGetProperty("LatestDispatchInTable", out var d) && d.GetBoolean()
+                    ? dispatch![^1] : source.LastDispatch
             });
         }
         Assert.Equal(GoalTaskHistoryTestFixture.Json(goal), GoalTaskHistoryTestFixture.Json(snapshot with { Tasks = tasks }));
-        // HydrateAsync is the existing step 2a reader, without writer-specific options or decoding.
+        // HydrateAsync includes the step 3a latest reader, without writer-specific options or decoding.
         Assert.Equal(GoalTaskHistoryTestFixture.Json(goal), GoalTaskHistoryTestFixture.Json(
             await fixture.Store.HydrateAsync(connection, snapshot, raw)));
     }

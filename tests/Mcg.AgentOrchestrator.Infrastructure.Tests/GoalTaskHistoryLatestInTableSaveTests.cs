@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 // Parallel-safe: each save path owns its database.
@@ -10,14 +9,15 @@ public sealed class GoalTaskHistoryLatestInTableSaveTests
     [InlineData("cas")]
     [InlineData("state-cas")]
     [InlineData("merge")]
-    public async Task LoadMarkedThenSave_WritesInlineLatestAndOnlyCountMarkers(string path)
+    public async Task LoadFlaggedThenSave_PreservesDocumentRowsAndFlags(string path)
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskHistoryTestFixture.LatestSnapshot();
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
-        AssertInline(fixture, goal);
+        fixture.AssertLatestRepresentation(goal);
+        var document = fixture.RawGoal(goal.Id);
+        var version = fixture.Rows("SELECT version || '|' || updated_at FROM goals");
         var rows = fixture.HistoryRows();
-        fixture.MarkStoredLatest(goal.Id);
         var id = new GoalId(goal.Id);
         if (path == "snapshots")
             await fixture.Repository.SaveGoalSnapshotsAsync([(await fixture.Repository.LoadGoalAsync(id))!]);
@@ -30,25 +30,77 @@ public sealed class GoalTaskHistoryLatestInTableSaveTests
         else
         {
             var loaded = (await fixture.Repository.LoadGoalAsync(id))!;
-            await fixture.Repository.SaveGoalSnapshotsWithMergeAsync([new(loaded, loaded with { Objective = "merge latest" })]);
+            await fixture.Repository.SaveGoalSnapshotsWithMergeAsync([new(loaded, loaded)]);
         }
-        AssertInline(fixture, goal);
+        fixture.AssertLatestRepresentation(goal);
+        Assert.Equal(document, fixture.RawGoal(goal.Id));
         Assert.Equal(rows, fixture.HistoryRows());
+        Assert.Equal(GoalTaskHistoryTestFixture.Json(goal),
+            GoalTaskHistoryTestFixture.Json(await fixture.Repository.LoadGoalAsync(id)));
+        if (path == "snapshots")
+        {
+            Assert.Equal(version, fixture.Rows("SELECT version || '|' || updated_at FROM goals"));
+            Assert.Equal(0, fixture.ReportedBytes());
+        }
     }
 
-    private static void AssertInline(GoalTaskHistoryTestFixture fixture, GoalSnapshot expected)
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReplaceAppendThenClear_RecomputesFlagsAndKeepsRows(bool verification)
     {
-        var raw = fixture.RawGoal(expected.Id);
-        Assert.DoesNotContain("LatestVerificationInTable", raw);
-        Assert.DoesNotContain("LatestDispatchInTable", raw);
-        using var document = JsonDocument.Parse(raw);
-        foreach (var task in document.RootElement.GetProperty("Tasks").EnumerateArray())
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var goal = GoalTaskHistoryTestFixture.Snapshot(taskCount: 1);
+        await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+        fixture.AssertLatestRepresentation(goal);
+        var count = fixture.HistoryRows().Length;
+        var task = goal.Tasks[0];
+        var nextVerification = task.LastVerification! with { Command = "replacement verification" };
+        var nextDispatch = task.LastDispatch! with { Command = "replacement dispatch" };
+        task = verification ? task with
         {
-            var source = expected.Tasks.Single(t => t.Id == task.GetProperty("Id").GetString());
-            Assert.Equal(GoalTaskHistoryTestFixture.Json(source.VerificationHistory![^1]), task.GetProperty("LastVerification").GetRawText());
-            Assert.Equal(GoalTaskHistoryTestFixture.Json(source.DispatchHistory![^1]), task.GetProperty("LastDispatch").GetRawText());
-            Assert.Equal(new[] { "Dispatch", "Verification" }, task.GetProperty("HistoryInTable").EnumerateObject()
-                .Select(p => p.Name).OrderBy(name => name, StringComparer.Ordinal));
-        }
+            LastVerification = nextVerification, VerificationHistory = [.. task.VerificationHistory!, nextVerification]
+        } : task with
+        {
+            LastDispatch = nextDispatch, DispatchHistory = [.. task.DispatchHistory!, nextDispatch]
+        };
+        goal = goal with { Tasks = [task] };
+        await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+        fixture.AssertLatestRepresentation(goal);
+        Assert.Equal(count + 1, fixture.HistoryRows().Length);
+        var kind = verification ? "verification" : "dispatch";
+        var expected = verification ? GoalTaskHistoryTestFixture.Json(nextVerification) : GoalTaskHistoryTestFixture.Json(nextDispatch);
+        Assert.Equal(expected, Assert.Single(fixture.Rows(
+            $"SELECT entry_json FROM goal_task_history WHERE kind = '{kind}' ORDER BY sequence DESC LIMIT 1")));
+        Assert.Equal(GoalTaskHistoryTestFixture.Json(goal),
+            GoalTaskHistoryTestFixture.Json(await fixture.Repository.LoadGoalAsync(new(goal.Id))));
+        var rows = fixture.HistoryRows();
+        goal = goal with { Tasks = [verification ? task with { LastVerification = null } : task with { LastDispatch = null }] };
+        await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+        fixture.AssertLatestRepresentation(goal, !verification, verification);
+        Assert.Equal(rows, fixture.HistoryRows());
+        Assert.Equal(GoalTaskHistoryTestFixture.Json(goal),
+            GoalTaskHistoryTestFixture.Json(await fixture.Repository.LoadGoalAsync(new(goal.Id))));
+    }
+
+    [Fact]
+    public async Task SameCountReplacement_AdvancesVersionEvenWhenDocumentIsIdentical()
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var goal = GoalTaskHistoryTestFixture.Snapshot(taskCount: 1);
+        await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+        fixture.AssertLatestRepresentation(goal);
+        var document = fixture.RawGoal(goal.Id);
+        var version = int.Parse(Assert.Single(fixture.Rows("SELECT CAST(version AS TEXT) FROM goals")));
+        var task = goal.Tasks[0];
+        var entries = task.VerificationHistory!.ToArray();
+        entries[^1] = entries[^1] with { StandardOutput = "revised newest entry" };
+        goal = goal with { Tasks = [task with { VerificationHistory = entries, LastVerification = entries[^1] }] };
+        await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+        fixture.AssertLatestRepresentation(goal);
+        Assert.Equal(document, fixture.RawGoal(goal.Id));
+        Assert.Equal(version + 1, int.Parse(Assert.Single(fixture.Rows("SELECT CAST(version AS TEXT) FROM goals"))));
+        Assert.Equal(GoalTaskHistoryTestFixture.Json(goal),
+            GoalTaskHistoryTestFixture.Json(await fixture.Repository.LoadGoalAsync(new(goal.Id))));
     }
 }

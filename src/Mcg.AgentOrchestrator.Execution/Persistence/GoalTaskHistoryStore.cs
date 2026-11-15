@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -16,11 +17,16 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// LatestVerificationInTable and LatestDispatchInTable independently. Absent/false retains inline
 /// authority, even if the newest row differs. True ignores inline and takes the highest sequence;
 /// its kind must have a positive count and usable rows. Omitted and null inline values both work.
-/// The read-side HistoryMarker is separate from serialized HistoryCounts: this build NEVER writes
-/// either new member and continues to save latest records inline, including after a marked load.
+/// The read-side HistoryMarker is separate from serialized HistoryCounts. This build (step 3b)
+/// writes each flag only when the non-null latest, serialized with the history options, equals
+/// the highest-sequence row's exact entry_json prepared for this save (ordinal string equality).
+/// Otherwise latest stays inline and its flag is absent. Caller snapshots are never modified.
 /// Step 3b may be adopted only after a build containing step 3a has been adopted AND one later
 /// build has been adopted after it. Its writer must first prove latest equals the newest row;
 /// TaskSpec can match latest dispatch by timestamp rather than list position.
+/// Under that adoption rule, ConductorContinuitySupervisor.RunAsync's retained currentBuild
+/// revert target must contain step 3a. A build older than step 3a loads flagged latest records
+/// as null and saves those nulls inline, so it cannot be the revert target.
 ///
 /// Latest-record reader inventory, established by searches over src and scripts (excluding bin,
 /// obj, .scratch and prototype state): LastVerification|LastDispatch; Deserialize.*GoalSnapshot;
@@ -68,7 +74,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 ///
 /// Writer inventory: UpsertGoalRowAsync is called by SaveGoalSnapshotsAsync, WriteSnapshotAsync,
 /// TryCasWriteGoalRowAsync, and WriteGoalCreationChangesAsync (GoalCreation). All hold one write transaction
-/// spanning the document and rows. Conductor ticks are covered by the adoption rule above.
+/// spanning the document and rows; all four use this same upsert's prepared document/row write.
+/// SaveGoalSnapshotsWithMergeAsync reaches it through TryCasWriteGoalRowAsync. Conductor ticks
+/// are covered by the adoption rule above.
 /// Offline intent apply (the merge path) and every other goal-saving command line verb use
 /// mcg-orchestrator.cmd: the adopted build or a HEAD-freshness-checked checkout build.
 /// mcg-orchestrator.sh has only its file-time staleness check.
@@ -81,9 +89,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// Hosts outlive their launcher. DispatchProcessHost.cs:37, :45, :2082-2105 bounds worker runtime
 /// by a 60-minute default cap, checked every 15 seconds (MCG_DISPATCH_MAX_RUNTIME_MIN can override it);
 /// preparation and final channel/output cleanup are outside that worker runtime bound.
-/// Before the first marked save, the operator must verify no dispatch host older than step 2a
+/// Before the first latest-flagged save, the operator must verify no dispatch host older than step 3a
 /// adoption remains alive; let those hosts finish or stop them first. Such an old host loads marked
-/// tasks with empty history and removes their table rows on save. No runtime fence is added here.
+/// latest records as null and saves them inline as null (pre-2a also loses history rows).
+/// No runtime fence is added here.
 /// GoalSnapshotArchive copies the marked text,
 /// retaining rows; its task-less hot stub cannot be saved. Recompression preserves that text;
 /// StateDatabaseOfflineConversion copies the whole database, including history rows.
@@ -92,12 +101,12 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// lists and rows. Requeue removes the latest flags described above and clears latest execution,
 /// verification, dispatch, process and retry fields, changes status and appends a timeline event only.
 /// Out of contract: running the application dll directly, or a launcher in a checkout/worktree
-/// older than step 2a pointed at a marked store. Such a build loads marked tasks with empty
-/// history and removes their table rows on save. No runtime fence is added here.
-/// Read-only consoles opened before step 2a show empty history for marked goals until restarted.
+/// older than step 3a pointed at a latest-flagged store. Such a build loses flagged latest records
+/// on save (pre-2a also loses history rows). No runtime fence is added here.
+/// Read-only consoles opened before step 3a show null latest records until restarted.
 /// Interactive CLI writers inherit the launcher's build guarantee, checked only at launch.
-/// Those started before step 2a must restart before marked writes begin: their old build loads
-/// marked tasks with empty history and removes their table rows on save.
+/// Those started before step 3a must restart before latest-flagged writes begin: their old build
+/// loads flagged latest records as null and saves them inline as null.
 /// Writer search (src and scripts, excluding generated trees): UpsertGoalRowAsync, INSERT INTO goals,
 /// UPDATE goals, INSERT INTO goal_snapshot_archive, UPDATE goal_snapshot_archive, VACUUM INTO.
 /// </summary>
@@ -107,10 +116,9 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     internal const string DispatchProperty = "DispatchHistory";
     internal const string MarkerProperty = "HistoryInTable";
 
-    private readonly Lazy<JsonSerializerOptions> documentOptions = new(() => CreateDocumentOptions(options));
-
     // Customize only the persisted task shape; callers and row writes keep the original lists.
-    private static JsonSerializerOptions CreateDocumentOptions(JsonSerializerOptions source)
+    private static JsonSerializerOptions CreateDocumentOptions(JsonSerializerOptions source,
+        IReadOnlyDictionary<TaskSnapshot, HistoryCounts> counts)
     {
         var resolver = new DefaultJsonTypeInfoResolver();
         resolver.Modifiers.Add(type =>
@@ -120,15 +128,56 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                 property.AttributeProvider is System.Reflection.PropertyInfo
                     { Name: VerificationProperty or DispatchProperty }).ToArray())
                 type.Properties.Remove(property);
+            foreach (var property in type.Properties)
+            {
+                if (property.AttributeProvider is not System.Reflection.PropertyInfo member) continue;
+                if (member.Name == nameof(TaskSnapshot.LastVerification))
+                    property.ShouldSerialize = (value, _) => !counts[(TaskSnapshot)value].LatestVerificationInTable;
+                else if (member.Name == nameof(TaskSnapshot.LastDispatch))
+                    property.ShouldSerialize = (value, _) => !counts[(TaskSnapshot)value].LatestDispatchInTable;
+            }
             var marker = type.CreateJsonPropertyInfo(typeof(HistoryCounts), MarkerProperty);
-            marker.Get = value => new HistoryCounts(((TaskSnapshot)value).VerificationHistory?.Count,
-                ((TaskSnapshot)value).DispatchHistory?.Count);
+            marker.Get = value => counts[(TaskSnapshot)value];
             type.Properties.Add(marker);
         });
         return new(source) { TypeInfoResolver = resolver };
     }
 
-    internal string SerializeDocument(GoalSnapshot goal) => JsonSerializer.Serialize(goal, documentOptions.Value);
+    internal string SerializeDocument(GoalSnapshot goal) => PrepareWrite(goal).Document;
+
+    // One per-save preparation supplies both the document decisions and the exact row payloads.
+    // Reference keys keep equal-valued task instances independent; nothing is cached across saves.
+    internal PreparedWrite PrepareWrite(GoalSnapshot goal)
+    {
+        var rows = new List<HistoryWriteRow>();
+        var counts = new Dictionary<TaskSnapshot, HistoryCounts>(ReferenceEqualityComparer.Instance);
+        foreach (var task in goal.Tasks)
+        {
+            string? AddRows<T>(IReadOnlyList<T>? entries, string kind)
+            {
+                string? newest = null;
+                if (entries is not null)
+                    for (var index = 0; index < entries.Count; index++)
+                    {
+                        newest = JsonSerializer.Serialize(entries[index], options);
+                        rows.Add(new(task.Id, kind, index, newest));
+                    }
+                return newest;
+            }
+            bool Matches<T>(T? latest, string? newest) where T : class =>
+                latest is not null && newest is not null &&
+                string.Equals(JsonSerializer.Serialize(latest, options), newest, StringComparison.Ordinal);
+
+            var verification = AddRows(task.VerificationHistory, "verification");
+            var dispatch = AddRows(task.DispatchHistory, "dispatch");
+            counts[task] = new(task.VerificationHistory?.Count, task.DispatchHistory?.Count,
+                Matches(task.LastVerification, verification), Matches(task.LastDispatch, dispatch));
+        }
+        return new(goal.Id, JsonSerializer.Serialize(goal, CreateDocumentOptions(options, counts)),
+            JsonSerializer.Serialize(rows, options));
+    }
+
+    internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson);
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTaskHistoryStore.cs")]
     internal static void CreateSchema(SqliteConnection connection)
@@ -148,25 +197,14 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     }
 
     // All callers already hold the goal write transaction. Never begin or commit a separate transaction here.
-    internal async Task<bool> WriteAsync(SqliteConnection connection, GoalSnapshot goal, CancellationToken token)
+    internal async Task<bool> WriteAsync(SqliteConnection connection, PreparedWrite prepared, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         CreateSchema(connection); // Existing stores do not rerun migration 1.
-        var rows = new List<HistoryWriteRow>();
-        foreach (var task in goal.Tasks)
-        {
-            if (task.VerificationHistory is { } verification)
-                for (var index = 0; index < verification.Count; index++)
-                    rows.Add(new(task.Id, "verification", index, JsonSerializer.Serialize(verification[index], options)));
-            if (task.DispatchHistory is { } dispatch)
-                for (var index = 0; index < dispatch.Count; index++)
-                    rows.Add(new(task.Id, "dispatch", index, JsonSerializer.Serialize(dispatch[index], options)));
-        }
-
         // Keep entry JSON as a string in the batch so SQLite preserves its exact serialized bytes.
         using var command = connection.CreateCommand();
-        command.Parameters.AddWithValue("$goal", goal.Id);
-        command.Parameters.AddWithValue("$rows", JsonSerializer.Serialize(rows, options));
+        command.Parameters.AddWithValue("$goal", prepared.GoalId);
+        command.Parameters.AddWithValue("$rows", prepared.RowsJson);
         command.CommandText = """
             INSERT INTO goal_task_history (goal_id, task_id, kind, sequence, entry_json)
             SELECT $goal, json_extract(value, '$.TaskId'), json_extract(value, '$.Kind'),
@@ -217,7 +255,9 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 
     private sealed record StoredEntry(long Sequence, string Json);
 
-    private sealed record HistoryCounts(int? Verification, int? Dispatch);
+    private sealed record HistoryCounts(int? Verification, int? Dispatch,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool LatestVerificationInTable,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool LatestDispatchInTable);
     private sealed record HistoryMarker(int? Verification, int? Dispatch,
         bool LatestVerificationInTable, bool LatestDispatchInTable);
 

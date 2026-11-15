@@ -32,7 +32,7 @@ public sealed class VerificationOutputCompactionPersistenceTests
             await repository.SaveGoalSnapshotsAsync([goal]);
             var json = await ReadSnapshotJson(databasePath, goal.Id);
             Assert.Equal(0, CountOccurrences(json, firstMarker));
-            Assert.Equal(1, CountOccurrences(json, latestMarker));
+            Assert.Equal(0, CountOccurrences(json, latestMarker));
             using (var connection = StateDbConnectionFactory.Open(databasePath, StateDbConnectionProfile.QueryOnlyRead))
             using (var command = connection.CreateCommand())
             {
@@ -81,7 +81,14 @@ public sealed class VerificationOutputCompactionPersistenceTests
         {
             await repository.SaveGoalSnapshotsAsync([goal]);
             var json = await ReadSnapshotJson(databasePath, goal.Id);
-            Assert.Contains(middleMarker, json);
+            Assert.DoesNotContain(middleMarker, json);
+            using (var connection = StateDbConnectionFactory.Open(databasePath, StateDbConnectionProfile.QueryOnlyRead))
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT entry_json FROM goal_task_history WHERE goal_id = $goal AND kind = 'verification' ORDER BY sequence DESC LIMIT 1";
+                command.Parameters.AddWithValue("$goal", goal.Id);
+                Assert.Contains(middleMarker, Assert.IsType<string>(await command.ExecuteScalarAsync()));
+            }
 
             var loaded = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(new GoalId(goal.Id)));
             var task = Assert.Single(loaded.Tasks);

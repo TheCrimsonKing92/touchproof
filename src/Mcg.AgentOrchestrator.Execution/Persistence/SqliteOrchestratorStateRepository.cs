@@ -3410,8 +3410,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             throw new InvalidOperationException($"Refusing to persist metadata-only goal snapshot '{ShortGoalId(goal.Id)}'. Hydrate the full aggregate before saving.");
         }
 
-        var json = TaskHistoryStore.SerializeDocument(goal);
-        var historyChanged = await TaskHistoryStore.WriteAsync(conn, goal, cancellationToken);
+        var prepared = TaskHistoryStore.PrepareWrite(goal);
+        var json = prepared.Document;
+        var historyChanged = await TaskHistoryStore.WriteAsync(conn, prepared, cancellationToken);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $$"""
             INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
