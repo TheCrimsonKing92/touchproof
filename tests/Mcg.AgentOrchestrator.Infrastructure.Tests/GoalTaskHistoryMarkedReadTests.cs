@@ -37,6 +37,9 @@ public sealed class GoalTaskHistoryMarkedReadTests
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskHistoryTestFixture.Snapshot();
+        // Canonicalize empty invocation lists: JSON null is treated as open build custody
+        // by the archive eligibility query, which would skip this terminal goal.
+        goal = AgentOrchestratorKernel.FromSnapshot(new([goal], [])).ExportGoalSnapshot(new(goal.Id));
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
         var expected = GoalTaskHistoryTestFixture.Json(await fixture.Repository.LoadGoalAsync(new(goal.Id)));
         fixture.MarkStoredHistory(goal.Id);
