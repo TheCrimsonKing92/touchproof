@@ -58,6 +58,15 @@ public static class SubscriptionLimitEvidence
         TaskSpec task,
         TaskVerificationRecord verification)
     {
+        if (verification.DispatchAttemptAt is { } dispatchAttemptAt)
+        {
+            var exact = task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt == dispatchAttemptAt);
+            if (exact is not null)
+            {
+                return exact;
+            }
+        }
+
         if (verification.DispatchStartedAt is { } dispatchStartedAt)
         {
             var exact = task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt == dispatchStartedAt);
