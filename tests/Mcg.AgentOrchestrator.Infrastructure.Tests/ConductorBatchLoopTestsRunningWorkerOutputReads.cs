@@ -39,9 +39,17 @@ public sealed class ConductorBatchLoopTestsRunningWorkerOutputReads(ITestOutputH
         File.WriteAllText(fixture.Process.ExitCodePath, "7");
         var tick = ConductorBatchLoopTestsStepLedger.OneTick(loop, fixture.Kernel, fixture.Driver);
         Assert.Equal(7, fixture.Task.LastProcess!.ExitCode);
-        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
         Assert.False(fixture.Task.LastProcess.IsRunning);
-        Assert.Equal(1, tick.Escalated);
+        // This output has no Reviewer terminal contract, so completion requests a same-role repair.
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Task.Status);
+        Assert.Null(fixture.Task.LastVerification);
+        var verification = Assert.Single(fixture.Task.VerificationHistory);
+        Assert.Equal(7, verification.ExitCode);
+        Assert.Equal(DispatchOutcomeKind.VerificationIncomplete, DispatchFailureClassifier.Classify(fixture.Task, verification).Kind);
+        Assert.Equal(RetryCause.ProviderInterruption, fixture.Task.PendingRetryCause);
+        Assert.Single(fixture.Goal.Timeline.Where(entry => entry.TaskId == fixture.Task.Id && entry.Kind == ProgressKind.TaskRetried));
+        Assert.Equal(1, tick.Advanced);
+        Assert.Equal(0, tick.Escalated);
     }
 
     [Fact]

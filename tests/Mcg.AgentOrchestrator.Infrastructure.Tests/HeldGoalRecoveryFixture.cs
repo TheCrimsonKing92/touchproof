@@ -15,6 +15,7 @@ internal sealed class HeldGoalRecoveryFixture : IDisposable
     internal AcceptanceGateEngineSettings Settings { get; set; } = new();
     internal ConductorParallelAcceptanceAttempt Baseline { get; private set; } = null!;
     internal int ChangedFiles, Contexts, Siblings, SourceRequests, Outcomes, Retries;
+    private readonly HashSet<int> _completedProcesses = [];
 
     internal HeldGoalRecoveryFixture()
     {
@@ -28,7 +29,8 @@ internal sealed class HeldGoalRecoveryFixture : IDisposable
             findings: [EvidenceFindingWithRequest("Find the failing test", id: "held-baseline", classes: ["ConductorDriverTests"])]);
         var launches = 0;
         Coordinator = new(Root, TrunkBranchName.Default,
-            isProcessAlive: _ => true,
+            isProcessAlive: pid => !_completedProcesses.Contains(pid),
+            isHolderProcessAbsent: pid => _completedProcesses.Contains(pid),
             launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7100 + ++launches),
             acquireStableSlotLease: (_, _) => null);
         Driver = MakeDriver(
@@ -74,6 +76,7 @@ internal sealed class HeldGoalRecoveryFixture : IDisposable
                 if (!includeBaseline) red = red with { Arms = red.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray() };
                 return ConductorParallelAcceptanceRunResult.Focused(attemptCandidate, red);
             });
+        _completedProcesses.Add(attempt.OwnerProcessId);
     }
 
     public void Dispose() => Directory.Delete(Root, recursive: true);

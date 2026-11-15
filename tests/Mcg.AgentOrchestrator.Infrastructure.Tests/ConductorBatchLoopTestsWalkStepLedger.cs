@@ -67,9 +67,9 @@ public sealed class ConductorBatchLoopTestsWalkStepLedger(ITestOutputHelper outp
         Assert.Equal(3, advances);
         Assert.Equal(3, refreshes);
         Assert.Equal(3, tick.Advanced);
-        Assert.Equal("walk-advance:21:42:3,walk-retry-advance:0:0:0,walk-outcome-capacity:9:15:3," +
+        Assert.Equal("walk-advance:15:33:3,walk-retry-advance:0:0:0,walk-outcome-capacity:9:15:3," +
             "walk-disposition:12:21:3,walk-policy-decision:18:39:3,walk-reap:0:0:3," +
-            "walk-set-aside:0:0:0,walk-projection-invalidate:6:12:6," + ZeroSelectionSteps + HoldSteps(3, 24, 51) + "walk-remainder:0:0:1",
+            "walk-set-aside:0:0:0,walk-projection-invalidate:6:12:6," + ZeroSelectionSteps + HoldSteps(3, 24, 51, 6, 9) + "walk-remainder:0:0:1",
             Field(line, "walk_steps"));
         Assert.Equal("90", Field(line, "walk_cpu_owner_ms"));
         Assert.Equal("180", Field(line, "elapsed_ms"));
@@ -192,9 +192,9 @@ public sealed class ConductorBatchLoopTestsWalkStepLedger(ITestOutputHelper outp
         "walk-pretester-cli-surface:0:0:0,walk-pretester-coupled-class:0:0:0," +
         "walk-pretester-reverse-dependency:0:0:0,walk-pretester-always-run:0:0:0,walk-pretester-test-source:0:0:0,";
 
-    private static string HoldSteps(int calls, int refreshCpu = 0, int refreshWall = 0) =>
+    private static string HoldSteps(int calls, int refreshCpu = 0, int refreshWall = 0, int entryCpu = 0, int entryWall = 0) =>
         $"walk-held-goal:0:0:{calls},walk-running-refresh:{refreshCpu}:{refreshWall}:{calls},walk-running-glance:0:0:0," +
-        $"walk-hold-entry-gates:0:0:{calls},walk-hold-lifecycle-reconcile:0:0:{calls},walk-hold-lifecycle-facts:0:0:{calls}," +
+        $"walk-hold-entry-gates:{entryCpu}:{entryWall}:{calls},walk-hold-lifecycle-reconcile:0:0:{calls},walk-hold-lifecycle-facts:0:0:{calls}," +
         "walk-running-hold-reason:0:0:0,walk-changed-files:0:0:0,walk-candidate-context:0:0:0," +
         "walk-finding-sibling-classes:0:0:0,walk-recovery-facts:0:0:0,walk-recovery-observe-finding:0:0:0," +
         $"walk-recovery-failure-source:0:0:0,walk-recovery-evidence-attempt:0:0:0,walk-candidate-revision:0:0:0,walk-goal-overhead:0:0:{calls},";
