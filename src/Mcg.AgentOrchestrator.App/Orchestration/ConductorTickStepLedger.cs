@@ -11,7 +11,10 @@ internal sealed class ConductorTickStepLedger
     internal static readonly IReadOnlyList<string> WalkNames = Array.AsReadOnly(new[]
     {
         "walk-advance", "walk-retry-advance", "walk-outcome-capacity", "walk-disposition",
-        "walk-policy-decision", "walk-reap", "walk-set-aside", "walk-projection-invalidate"
+        "walk-policy-decision", "walk-reap", "walk-set-aside", "walk-projection-invalidate",
+        "walk-pretester-declared-resolve", "walk-pretester-changed-file-guards", "walk-pretester-cli-surface",
+        "walk-pretester-coupled-class", "walk-pretester-reverse-dependency", "walk-pretester-always-run",
+        "walk-pretester-test-source"
     });
     internal const string WalkRemainderName = "walk-remainder";
     internal static readonly IReadOnlyList<string> OperatorIntentNames = Array.AsReadOnly(new[]
