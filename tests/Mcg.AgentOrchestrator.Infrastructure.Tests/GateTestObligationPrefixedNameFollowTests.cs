@@ -74,9 +74,19 @@ public sealed class GateTestObligationPrefixedNameFollowTests
         var outcome = scenario is "failed" or "planned-failed" ? "Failed" :
             scenario is "skipped" or "planned-skipped" ? "NotExecuted" : "Passed";
         var rowClass = scenario.StartsWith("planned-", StringComparison.Ordinal) ? Planned : Committed;
-        fixture.WriteAttempt(scenario == "planned-ambiguous"
-                ? [("A.PlannedTests.Check", "Passed"), ("B.PlannedTests.Check", "Passed"), ($"{Committed}.Check", "Passed")]
-                : [($"{rowClass}.Check", outcome)], candidateSha: candidate);
+        var (_, trx, _) = fixture.WriteAttempt([($"{rowClass}.Check", outcome)], candidateSha: candidate);
+        if (scenario == "planned-ambiguous")
+        {
+            // Short class selectors require TRX definitions to identify namespace ambiguity.
+            GroupedGateTrxSamples.Write(Path.GetDirectoryName(trx)!, Path.GetFileName(trx),
+                new("a", "A.PlannedTests", "Check", "A.PlannedTests.Check", "Passed"),
+                new("b", "B.PlannedTests", "Check", "B.PlannedTests.Check", "Passed"),
+                new("prefixed", Committed, "Check", $"{Committed}.Check", "Passed"));
+            var evidence = Assert.Single(GroupedGateReceiptTrxEvidence.Evaluate([Planned], [trx], fixture.OrchestratorDirectory));
+            Assert.Equal(new[] { "A.PlannedTests", "B.PlannedTests" }, evidence.AmbiguousClassNames);
+            Assert.False(evidence.Satisfied);
+            Assert.True(Assert.Single(GroupedGateReceiptTrxEvidence.Evaluate([Committed], [trx], fixture.OrchestratorDirectory)).Satisfied);
+        }
         var baseline = Assert.Single(Evaluate(goal, fixture.OrchestratorDirectory, candidate));
 
         var result = Assert.Single(Evaluate(goal, fixture.OrchestratorDirectory, candidate, new(repo.Root, "main")));

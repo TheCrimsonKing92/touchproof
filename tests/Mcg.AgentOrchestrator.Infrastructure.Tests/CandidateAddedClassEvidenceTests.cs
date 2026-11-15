@@ -28,7 +28,7 @@ public sealed class CandidateAddedClassEvidenceTests
         Git(repo.Root, "mv", OldPath, NewPath);
         const string partialPath = "tests/Fixture/Partial.cs";
         Write(repo.Root, partialPath, "partial class OldNameTests { } class AddedTests { }");
-        Commit(repo.Root, "Move and extend", OldPath, NewPath, partialPath);
+        Commit(repo.Root, "Move and extend", NewPath, partialPath);
 
         var added = Assert.Single(CandidateAddedClassEvidence.Read(repo.Root, "main", Git(repo.Root, "rev-parse", "HEAD")));
 
