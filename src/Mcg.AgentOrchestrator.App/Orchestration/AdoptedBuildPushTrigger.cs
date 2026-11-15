@@ -4,12 +4,16 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class AdoptedBuildPushTrigger(
-    Func<ConductorAutonomyPolicy> readPolicy, Action<string> push,
+    Func<ConductorAutonomyPolicy> readPolicy, Action<string, Action<string>> push,
     Action<string> append, Action<string> attention, Action<string>? publishRepositories = null)
 {
-    internal void OnFinalized(string commit, string pending, string failed)
+    internal AdoptedBuildPushTrigger(
+        Func<ConductorAutonomyPolicy> readPolicy, Action<string> push,
+        Action<string> append, Action<string> attention, Action<string>? publishRepositories = null)
+        : this(readPolicy, (commit, _) => push(commit), append, attention, publishRepositories) { }
+
+    internal void OnFinalized(string commit, string pending, string failed, string stopped = "")
     {
-        if (pending.Length != 0 || failed.Length != 0) return;
         ConductorAutonomyPolicy policy;
         void Hold(string reason)
         {
@@ -21,9 +25,11 @@ internal sealed class AdoptedBuildPushTrigger(
         try { policy = readPolicy(); }
         catch (Exception) { Hold("policy-unreadable"); return; }
         if (!policy.AdoptedBuildPushEnabled) return;
+        if (failed.Length != 0) { Hold("fleet-adoption-failed"); return; }
         try
         {
-            push(commit);
+            push(commit, line => append(line.StartsWith("ADOPTED_BUILD_PUSHED ", StringComparison.Ordinal)
+                ? line + $" stopped={stopped} pending={pending}" : line));
         }
         catch (Exception)
         {
@@ -53,7 +59,7 @@ internal sealed class AdoptedBuildPushTrigger(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase));
         var workspace = project?.ResolveWorkspace() ?? OrchestratorWorkspace.ForDirectory(
             root, root, OrchestratorWorkspace.DefaultTenantName, registry);
-        var service = AdoptedBuildPushService.CreateDefault(root, append);
+        var pushGate = new object();
         var landings = new MultiRepositoryLandingRecordStore(workspace.OrchestratorDirectory);
         var publisher = new MultiRepositoryAdoptedBuildPublisher(new(workspace, registry),
             Path.Combine(root, AdoptedBuildLeakScanner.GenericPatternPath),
@@ -62,7 +68,11 @@ internal sealed class AdoptedBuildPushTrigger(
                 .RaiseAsync(Mcg.AgentOrchestrator.Core.CollaborationItemType.Decision, null,
                     "Adopted build push held", body, "adopted-build-push-held:" + body.Split('\n')[0]).GetAwaiter().GetResult());
         return new(() => ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)),
-            commit => service.Push(commit, branch: workspace.IntegrationBranch), append,
+            (commit, sink) =>
+            {
+                lock (pushGate)
+                    AdoptedBuildPushService.CreateDefault(root, sink).Push(commit, branch: workspace.IntegrationBranch);
+            }, append,
             body => Mcg.AgentOrchestrator.Infrastructure.CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
                 .RaiseAsync(Mcg.AgentOrchestrator.Core.CollaborationItemType.Decision, null,
                     "Adopted build push held", body, "adopted-build-push-policy").GetAwaiter().GetResult(),

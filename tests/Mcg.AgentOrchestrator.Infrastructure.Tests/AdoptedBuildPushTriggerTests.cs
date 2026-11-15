@@ -5,12 +5,16 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 public sealed class AdoptedBuildPushTriggerTests
 {
     [Theory]
-    [InlineData(true, "", "", 1)]
-    [InlineData(false, "", "", 0)]
-    [InlineData(true, "pending-project", "", 0)]
-    [InlineData(true, "", "failed-project", 0)]
-    public void FinalizedFleet_PushesOnlyWhenEnabledAndAllAdopted(
-        bool enabled, string pending, string failed, int count)
+    [InlineData(true, "", "", "", 1)]
+    [InlineData(false, "", "", "", 0)]
+    [InlineData(false, "", "failed-project", "", 0)]
+    [InlineData(true, "pending-project", "", "", 1)]
+    [InlineData(true, "", "", "stopped-project", 1)]
+    [InlineData(true, "pending-project", "", "stopped-project", 1)]
+    [InlineData(true, "", "failed-project", "", 0)]
+    [InlineData(true, "pending-project", "failed-project", "stopped-project", 0)]
+    public void FinalizedFleet_PushesWhenEnabledWithoutReportedFailure(
+        bool enabled, string pending, string failed, string stopped, int count)
     {
         var pushed = new List<string>();
         var events = new List<string>();
@@ -18,12 +22,24 @@ public sealed class AdoptedBuildPushTriggerTests
         var commit = new string('c', 40);
         var trigger = new AdoptedBuildPushTrigger(
             () => ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = enabled },
-            value => { pushed.Add(value); events.Add("ADOPTED_BUILD_PUSHED"); }, events.Add, attention.Add);
-        trigger.OnFinalized(commit, pending, failed);
+            (value, sink) => { pushed.Add(value); sink($"ADOPTED_BUILD_PUSHED commit={value}"); }, events.Add, attention.Add);
+        trigger.OnFinalized(commit, pending, failed, stopped);
         Assert.Equal(count, pushed.Count);
-        Assert.Equal(count, events.Count);
-        if (count != 0) Assert.Equal(commit, Assert.Single(pushed));
-        Assert.Empty(attention);
+        if (enabled && failed.Length != 0)
+        {
+            Assert.Equal($"ADOPTED_BUILD_PUSH_HELD commit={commit} reason=fleet-adoption-failed", Assert.Single(events));
+            Assert.Contains("fleet-adoption-failed", Assert.Single(attention));
+        }
+        else
+        {
+            Assert.Empty(attention);
+            if (count == 0) Assert.Empty(events);
+            else
+            {
+                Assert.Equal(commit, Assert.Single(pushed));
+                Assert.Equal($"ADOPTED_BUILD_PUSHED commit={commit} stopped={stopped} pending={pending}", Assert.Single(events));
+            }
+        }
     }
 
     [Fact]

@@ -149,7 +149,7 @@ internal static class SourceSizeRatchet
             // and dispatch in the shared route body; ledger and gate behavior remain separately owned.
             // Goal 35c35d6d: three delegation lines wire the shared attributed-failure diagnosis coordinator.
             // Goal 7ca0990d: one scoped backstop reservation callback at the existing admission owner.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1641),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1640),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -166,7 +166,7 @@ internal static class SourceSizeRatchet
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 660),
             // Goal bc361051: attach producer-owned failure facts at the existing escalation outcome seam.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 323), // Provider hold redispatch hook and injected recovery seam.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 319), // Provider hold redispatch hook and injected recovery seam.
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
             // holds new acceptance/landing work where candidate and terminal evidence meet.
@@ -223,7 +223,7 @@ internal static class SourceSizeRatchet
             // Goal 5ca3f5c0: five PR-tracking phase lines alongside shared gate-attention reconciliation.
             // Goal bc361051: retain typed progress facts in tick-local state and forward them at emission.
             // Goal 7ca0990d: ten lines wire backstop landing intake, admission, idle resumption and lifecycle drains.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2522),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2521),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -582,7 +582,7 @@ internal static class SourceSizeRatchet
             // Goal 9eb2f8ba: eight measured wiring lines connect the separate recurrence handler; no new partial.
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
-            new SourceClassCeiling("ConductorDriver", 13473, 67),
+            new SourceClassCeiling("ConductorDriver", 13471, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -731,7 +731,7 @@ internal static class SourceSizeRatchet
             // Follower removal integrated with main: measured 8792 lines in 53 partial files.
             // Goal 98758ac2: injected tick census scope and completion emission; measured 7765 lines in the same 50 partials.
             // Goal 7ca0990d: sixteen lines reserve backstop capacity and wire its lifecycle; no new partial or headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 7769, 50),
+            new SourceClassCeiling("ConductorBatchLoop", 7768, 50),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

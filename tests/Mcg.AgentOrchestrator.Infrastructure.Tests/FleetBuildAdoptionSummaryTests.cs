@@ -16,7 +16,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         var callbacks = new List<string>();
         var attempts = 0;
         using var summary = fixture.CreateSummary(
-            onFinalized: (commit, _, _) => callbacks.Add(commit),
+            onFinalized: (commit, _, _, _) => callbacks.Add(commit),
             append: _ => { attempts++; throw new IOException("fixture write failure"); });
         Assert.Null(Record.Exception(() => summary.OnHomeAdopted(C)));
         summary.OnHomeAdopted(C);
@@ -39,7 +39,7 @@ public sealed class FleetBuildAdoptionSummaryTests
                 events.Add(line);
                 if (appendFails && line.Contains(C)) throw new IOException("fixture write failure");
             },
-            onFinalized: (commit, _, _) =>
+            onFinalized: (commit, _, _, _) =>
             {
                 callbacks.Add(commit);
                 if (commit == C) throw new Microsoft.Data.Sqlite.SqliteException("fixture attention failure", 1);
@@ -76,7 +76,7 @@ public sealed class FleetBuildAdoptionSummaryTests
                 events.Add(line);
                 if (appendFails && line.Contains(C)) throw new IOException("fixture write failure");
             },
-            onFinalized: (commit, _, _) =>
+            onFinalized: (commit, _, _, _) =>
             {
                 callbacks.Add(commit);
                 if (commit == C) throw new Microsoft.Data.Sqlite.SqliteException("fixture attention failure", 1);
@@ -92,34 +92,147 @@ public sealed class FleetBuildAdoptionSummaryTests
         Assert.Equal(2, events.Count);
     }
 
-    [Theory]
-    [InlineData(true, "adopted", 1)]
-    [InlineData(false, "adopted", 0)]
-    [InlineData(true, "pending", 0)]
-    [InlineData(true, "failed", 0)]
-    public void FinalizedCallback_RecordsSummaryBeforeGatedPush(bool enabled, string state, int expected)
+    [Fact]
+    public void StoppedProject_FinalizesAndPushesOnceWithStoppedName()
     {
         using var fixture = new Fixture();
         fixture.AddProject("a");
         var pushes = new List<string>();
+        var events = new List<string>();
         var trigger = new AdoptedBuildPushTrigger(
-            () => ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = enabled },
-            commit =>
+            () => ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = true },
+            (commit, sink) =>
             {
                 Assert.StartsWith("FLEET_BUILD_ADOPTED", Assert.Single(fixture.Lines()));
                 pushes.Add(commit);
-            }, _ => Assert.Fail("No held event expected for gating."), _ => Assert.Fail("No attention expected."));
+                sink($"ADOPTED_BUILD_PUSHED commit={commit} remote=origin added_lines=0");
+            }, events.Add, _ => Assert.Fail("No attention expected."));
         using var summary = fixture.CreateSummary(onFinalized: trigger.OnFinalized);
         summary.OnHomeAdopted(C);
-        if (state != "pending") fixture.Event("a", state == "adopted"
-            ? $"ACTIVATION_ADOPTED adoptedCommit={C}" : $"ACTIVATION_REVERTED failedCommit={C}");
+        fixture.Stop("a");
+        fixture.Clock.Advance(TimeSpan.FromSeconds(5));
+        summary.Tick();
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed= stopped=a elapsedSeconds=5",
+            Assert.Single(fixture.Lines()));
+        // Later adoption and activity cannot reopen a finalized observation.
+        fixture.Start("a");
+        fixture.Event("a", $"ACTIVATION_ADOPTED adoptedCommit={C}");
+        summary.Tick();
+        summary.OnHomeAdopted(C);
+        Assert.Single(fixture.Lines());
+        Assert.Equal(new[] { C }, pushes);
+        Assert.Equal($"ADOPTED_BUILD_PUSHED commit={C} remote=origin added_lines=0 stopped=a pending=", Assert.Single(events));
+    }
+
+    [Theory]
+    [InlineData("ACTIVATION_REVERTED failedCommit=")]
+    [InlineData("LOOP_HANDOFF_FAILED commit=")]
+    public void ReportedFailureThenStopped_HoldsPushWithExistingHeldEvent(string failure)
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        var pushes = new List<string>();
+        var events = new List<string>();
+        var attention = new List<string>();
+        var trigger = new AdoptedBuildPushTrigger(
+            () => ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = true },
+            pushes.Add, events.Add, attention.Add);
+        using var summary = fixture.CreateSummary(onFinalized: trigger.OnFinalized);
+        summary.OnHomeAdopted(C);
+        fixture.Event("a", failure + C);
+        fixture.Stop("a");
+        fixture.Clock.Advance(TimeSpan.FromSeconds(5));
+        summary.Tick();
+        Assert.Empty(fixture.Lines());
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         summary.Tick();
         summary.Tick();
         summary.OnHomeAdopted(C);
-        Assert.Single(fixture.Lines());
-        Assert.Equal(expected, pushes.Count);
-        if (expected != 0) Assert.Equal(C, pushes[0]);
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed=a stopped= elapsedSeconds=905",
+            Assert.Single(fixture.Lines()));
+        Assert.Empty(pushes);
+        Assert.Equal($"ADOPTED_BUILD_PUSH_HELD commit={C} reason=fleet-adoption-failed", Assert.Single(events));
+        Assert.Contains("push-adopted", Assert.Single(attention));
+    }
+
+    [Fact]
+    public void PendingAtDeadline_PushesOnceWithPendingName()
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        var pushes = new List<string>();
+        var events = new List<string>();
+        var trigger = new AdoptedBuildPushTrigger(
+            () => ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = true },
+            (commit, sink) =>
+            {
+                Assert.Single(fixture.Lines());
+                pushes.Add(commit);
+                sink($"ADOPTED_BUILD_PUSHED commit={commit} remote=origin added_lines=0");
+            }, events.Add, _ => Assert.Fail("No attention expected."));
+        using var summary = fixture.CreateSummary(onFinalized: trigger.OnFinalized);
+        summary.OnHomeAdopted(C);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(15) - TimeSpan.FromSeconds(1));
+        summary.Tick();
+        Assert.Empty(pushes);
+        fixture.Clock.Advance(TimeSpan.FromSeconds(1));
+        summary.Tick();
+        summary.Tick();
+        summary.OnHomeAdopted(C);
+        Assert.Equal(new[] { C }, pushes);
+        Assert.Equal($"ADOPTED_BUILD_PUSHED commit={C} remote=origin added_lines=0 stopped= pending=a", Assert.Single(events));
+    }
+
+    [Fact]
+    public void InactiveLease_ResolvesStoppedButPreservesLoggedAdoption()
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        fixture.AddProject("b");
+        using var summary = fixture.CreateSummary(pollInterval: TimeSpan.FromSeconds(5));
+        summary.OnHomeAdopted(C);
+        fixture.Event("b", $"ACTIVATION_ADOPTED adoptedCommit={C}");
+        fixture.Stop("a");
+        fixture.Stop("b");
+        fixture.Clock.Advance(TimeSpan.FromSeconds(5));
+        Assert.IsType<ManualTimer>(fixture.Clock.Timer).Fire();
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=b pending= failed= stopped=a elapsedSeconds=5",
+            Assert.Single(fixture.Lines()));
+    }
+
+    [Fact]
+    public void IndeterminateLease_RemainsPendingUntilDeadline()
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        using var summary = fixture.CreateSummary();
+        summary.OnHomeAdopted(C);
+        File.WriteAllText(fixture.LockPath("a"), "not-a-pid");
+        fixture.Clock.Advance(TimeSpan.FromSeconds(5));
+        summary.Tick();
+        Assert.Empty(fixture.Lines());
+        fixture.Clock.Advance(TimeSpan.FromMinutes(15) - TimeSpan.FromSeconds(5));
+        summary.Tick();
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending=a failed= stopped= elapsedSeconds=900",
+            Assert.Single(fixture.Lines()));
+    }
+
+    [Fact]
+    public void StoppedProject_DoesNotResolveAnotherRunningPendingProject()
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        fixture.AddProject("b");
+        using var summary = fixture.CreateSummary();
+        summary.OnHomeAdopted(C);
+        fixture.Stop("a");
+        fixture.Clock.Advance(TimeSpan.FromSeconds(5));
+        summary.Tick();
+        Assert.Empty(fixture.Lines());
+        fixture.Event("b", $"ACTIVATION_ADOPTED adoptedCommit={C}");
+        summary.Tick();
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=b pending= failed= stopped=a elapsedSeconds=5",
+            Assert.Single(fixture.Lines()));
     }
 
     [Xunit.Fact]
@@ -135,7 +248,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         fixture.Clock.Advance(TimeSpan.FromSeconds(12));
         foreach (var name in new[] { "a", "b", "c" }) fixture.Event(name, $"ACTIVATION_ADOPTED adoptedCommit={C}");
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a,b,c pending= failed= elapsedSeconds=12",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a,b,c pending= failed= stopped= elapsedSeconds=12",
             Assert.Single(fixture.Lines()));
     }
 
@@ -153,7 +266,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         Assert.Empty(fixture.Lines());
         fixture.Clock.Advance(TimeSpan.FromSeconds(1));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending=b failed= elapsedSeconds=900",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending=b failed= stopped= elapsedSeconds=900",
             Assert.Single(fixture.Lines()));
     }
 
@@ -169,7 +282,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         Assert.Empty(fixture.Lines()); // Failure does not satisfy the all-adopted trigger.
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed=a elapsedSeconds=900",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed=a stopped= elapsedSeconds=900",
             Assert.Single(fixture.Lines()));
     }
 
@@ -187,7 +300,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         summary.OnHomeAdopted(C);
         fixture.Event("a", $"ACTIVATION_ADOPTED adoptedCommit={C}");
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= elapsedSeconds=0",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= stopped= elapsedSeconds=0",
             Assert.Single(fixture.Lines()));
     }
 
@@ -202,7 +315,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         fixture.Event("a", $"ACTIVATION_ADOPTED adoptedCommit={C}");
         fixture.Clock.Advance(TimeSpan.FromSeconds(10));
         summary.OnHomeAdopted(D);
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending=b failed= elapsedSeconds=10",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending=b failed= stopped= elapsedSeconds=10",
             Assert.Single(fixture.Lines()));
         summary.Tick();
         Assert.Single(fixture.Lines());
@@ -211,8 +324,8 @@ public sealed class FleetBuildAdoptionSummaryTests
         summary.Tick();
         Assert.Equal(new[]
         {
-            $"FLEET_BUILD_ADOPTED commit={C} adopted=a pending=b failed= elapsedSeconds=10",
-            $"FLEET_BUILD_ADOPTED commit={D} adopted=a,b pending= failed= elapsedSeconds=0"
+            $"FLEET_BUILD_ADOPTED commit={C} adopted=a pending=b failed= stopped= elapsedSeconds=10",
+            $"FLEET_BUILD_ADOPTED commit={D} adopted=a,b pending= failed= stopped= elapsedSeconds=0"
         }, fixture.Lines());
     }
 
@@ -230,7 +343,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         summary.Tick();
         summary.OnHomeAdopted(C.ToUpperInvariant());
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= elapsedSeconds=4",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= stopped= elapsedSeconds=4",
             Assert.Single(fixture.Lines()));
     }
 
@@ -247,7 +360,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         // Append older failure last: classification must follow timestamps, not append order.
         fixture.Event("a", $"ACTIVATION_REVERTED failedCommit={C}", fixture.Clock.Now.AddSeconds(-1));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= elapsedSeconds=2",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= stopped= elapsedSeconds=2",
             Assert.Single(fixture.Lines()));
     }
 
@@ -263,7 +376,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         fixture.Event("a", $"ACTIVATION_REVERTED failedCommit={C}");
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed=a elapsedSeconds=902",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed=a stopped= elapsedSeconds=902",
             Assert.Single(fixture.Lines()));
     }
 
@@ -279,7 +392,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         fixture.Event("a", $"LOOP_HANDOFF_FAILED {field}={C}");
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed=a elapsedSeconds=900",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed=a stopped= elapsedSeconds=900",
             Assert.Single(fixture.Lines()));
     }
 
@@ -298,7 +411,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         summary.Tick();
         var fields = lastEvent == "ACTIVATION_ADOPTED" ? "adopted=a pending= failed=" : "adopted= pending= failed=a";
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} {fields} elapsedSeconds=900", Assert.Single(fixture.Lines()));
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} {fields} stopped= elapsedSeconds=900", Assert.Single(fixture.Lines()));
     }
 
     [Xunit.Fact]
@@ -316,7 +429,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         File.AppendAllText(fixture.LogPath("a"), "{\n[]\n{\"timestamp\":false,\"detail\":3}\n");
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending=a failed= elapsedSeconds=900",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending=a failed= stopped= elapsedSeconds=900",
             Assert.Single(fixture.Lines()));
     }
 
@@ -331,7 +444,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         File.Move(fixture.LogPath("a"), Path.Combine(Path.GetDirectoryName(fixture.LogPath("a"))!,
             "conduct-events-20261102090000.log"));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= elapsedSeconds=0",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= stopped= elapsedSeconds=0",
             Assert.Single(fixture.Lines()));
     }
 
@@ -348,7 +461,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         fixture.AddProject("later");
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending=a failed= elapsedSeconds=900",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed= stopped=a elapsedSeconds=900",
             Assert.Single(fixture.Lines()));
     }
 
@@ -368,7 +481,7 @@ public sealed class FleetBuildAdoptionSummaryTests
             Assert.Empty(fixture.Lines());
         }
         summary.Tick();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= elapsedSeconds=0",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted=a pending= failed= stopped= elapsedSeconds=0",
             Assert.Single(fixture.Lines()));
     }
 
@@ -383,7 +496,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         Assert.Equal(TimeSpan.FromSeconds(5), timer.DueTime);
         fixture.Clock.Advance(TimeSpan.FromMinutes(15));
         timer.Fire();
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending=a failed= elapsedSeconds=900",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending=a failed= stopped= elapsedSeconds=900",
             Assert.Single(fixture.Lines()));
         Assert.True(timer.Disposed);
         timer.Fire(); // A queued callback after disposal is harmless.
@@ -396,7 +509,7 @@ public sealed class FleetBuildAdoptionSummaryTests
         using var fixture = new Fixture();
         using var summary = fixture.CreateSummary();
         summary.OnHomeAdopted(C);
-        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed= elapsedSeconds=0",
+        Assert.Equal($"FLEET_BUILD_ADOPTED commit={C} adopted= pending= failed= stopped= elapsedSeconds=0",
             Assert.Single(fixture.Lines()));
         Assert.Null(fixture.Clock.Timer);
     }
@@ -449,12 +562,17 @@ public sealed class FleetBuildAdoptionSummaryTests
         }
 
         internal string LockPath(string name) => Path.Combine(_projects[name].ResolveWorkspace().OrchestratorDirectory, "conduct-loop.lock");
+        internal void Stop(string name)
+        {
+            var pid = int.Parse(File.ReadAllLines(LockPath(name))[0], CultureInfo.InvariantCulture);
+            _probe.Identities.Remove(pid);
+        }
         internal string LogPath(string name) => _projects[name].ResolveWorkspace().ConductEventsLogPath;
         internal void Event(string name, string detail, DateTimeOffset? at = null) =>
             new ConductEventLogWriter(LogPath(name)).Append("loop-handoff", null, detail, at ?? Clock.Now);
 
         internal FleetBuildAdoptionSummary CreateSummary(TimeSpan? pollInterval = null,
-            Action<string, string, string>? onFinalized = null, Action<string>? append = null) => new(
+            Action<string, string, string, string>? onFinalized = null, Action<string>? append = null) => new(
             _registry, append ?? (line => _homeLog.Append("loop-handoff", null, line, Clock.Now)), Clock,
             pidProbe: _probe, homeRoot: HomeRoot, pollInterval: pollInterval ?? Timeout.InfiniteTimeSpan,
             onFinalized: onFinalized);
