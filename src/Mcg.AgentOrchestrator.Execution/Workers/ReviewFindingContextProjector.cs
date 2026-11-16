@@ -76,14 +76,21 @@ internal static class ReviewFindingContextProjector
 
         var receiptBodies = new Dictionary<string, ReviewFindingProjectedBody>(StringComparer.Ordinal);
         var receiptReferenceById = new Dictionary<string, ReviewFindingContentReference>(StringComparer.Ordinal);
+        var receiptReferenceByRawHash = new Dictionary<string, ReviewFindingContentReference>(StringComparer.Ordinal);
         var totalReceiptCount = 0;
         foreach (var receipt in rounds.SelectMany(round => round.Verification.FindingEvidenceReceipts ?? []))
         {
             totalReceiptCount++;
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(receipt);
-            var hash = WorkerContextArtifact.Hash(bytes);
-            var reference = new ReviewFindingContentReference(hash, $"goal/review-finding-receipts/{hash}.json");
-            receiptBodies.TryAdd(hash, new ReviewFindingProjectedBody(reference.LogicalIdentity, hash, bytes));
+            var rawHash = WorkerContextArtifact.Hash(JsonSerializer.SerializeToUtf8Bytes(receipt));
+            if (!receiptReferenceByRawHash.TryGetValue(rawHash, out var reference))
+            {
+                // Read diagnostics once for identical receipts within this projection pass.
+                var bytes = ReviewFindingReceiptFailureDetailBuilder.Build(receipt);
+                var hash = WorkerContextArtifact.Hash(bytes);
+                reference = new ReviewFindingContentReference(hash, $"goal/review-finding-receipts/{hash}.json");
+                receiptBodies.TryAdd(hash, new ReviewFindingProjectedBody(reference.LogicalIdentity, hash, bytes));
+                receiptReferenceByRawHash.Add(rawHash, reference);
+            }
             if (receiptReferenceById.TryGetValue(receipt.ReceiptId, out var prior) && prior != reference)
             {
                 throw new WorkerContextPreparationException(
@@ -140,7 +147,7 @@ internal static class ReviewFindingContextProjector
                 new FindingSource(source.Task, source.Verification, finding, roundReferenceBySource[source], source.HistoryIndex))).ToArray();
         var entryProjections = findingSources
             .GroupBy(source => source.Finding.StableId, StringComparer.Ordinal)
-            .Select(group => BuildCanonicalEntry(group, currentCandidateSha))
+            .Select(group => BuildCanonicalEntry(group, currentCandidateSha, receiptReferenceById))
             .ToArray();
         var canonicalEntries = entryProjections
             .Select(projection => projection.Entry)
@@ -263,7 +270,8 @@ internal static class ReviewFindingContextProjector
 
     private static CanonicalEntryProjection BuildCanonicalEntry(
         IGrouping<string, FindingSource> group,
-        string? currentCandidateSha)
+        string? currentCandidateSha,
+        IReadOnlyDictionary<string, ReviewFindingContentReference> receiptReferenceById)
     {
         var latestAt = group.Max(source => source.Verification.CompletedAt);
         var latest = group.Where(source => source.Verification.CompletedAt == latestAt).ToArray();
@@ -309,12 +317,7 @@ internal static class ReviewFindingContextProjector
         var receiptReferences = selectedReceipts
             .Where(receipt => referencedReceiptIds.Count == 0 ||
                 referencedReceiptIds.Contains(receipt.ReceiptId, StringComparer.Ordinal))
-            .Select(receipt =>
-            {
-                var bytes = JsonSerializer.SerializeToUtf8Bytes(receipt);
-                var hash = WorkerContextArtifact.Hash(bytes);
-                return new ReviewFindingContentReference(hash, $"goal/review-finding-receipts/{hash}.json");
-            })
+            .Select(receipt => receiptReferenceById[receipt.ReceiptId])
             .Distinct()
             .OrderBy(reference => reference.Sha256, StringComparer.Ordinal)
             .ToArray();
@@ -337,12 +340,10 @@ internal static class ReviewFindingContextProjector
             {
                 if (evidenceReceipt is not null)
                 {
-                    var bytes = JsonSerializer.SerializeToUtf8Bytes(evidenceReceipt);
-                    var hash = WorkerContextArtifact.Hash(bytes);
                     resolutionProof = new ReviewFindingResolutionProof(
                         "candidate-bound-evidence-receipt",
                         selected.Verification.ReviewedCommit,
-                        new ReviewFindingContentReference(hash, $"goal/review-finding-receipts/{hash}.json"));
+                        receiptReferenceById[evidenceReceipt.ReceiptId]);
                 }
                 else if (finding.Severity == FindingSeverity.Advisory &&
                          !string.IsNullOrWhiteSpace(selected.Verification.ReviewedCommit))

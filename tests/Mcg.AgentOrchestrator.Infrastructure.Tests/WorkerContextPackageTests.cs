@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -1087,6 +1089,209 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             Directory.Delete(root, recursive: true);
         }
     }
+
+    // These receipt tests are parallel-safe: each owns its temporary files and in-memory goal.
+    [Xunit.Fact]
+    public void ReviewReceiptPackagesCappedFailureDetailsWithOneEnrichedHash()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteEmptyRegistry(root);
+            var path = Path.Combine(root, "failure.trx");
+            var stackLines = Enumerable.Range(1, 15).Select(index => $"frame {index}").ToArray();
+            WriteFailureTrx(path, "Tests.Failure", new string('m', 2500), string.Join("\r\n", stackLines));
+            var receipt = RedFailureReceipt([path], ["Tests.Failure", "Tests.Missing", "Tests.Failure"]);
+            var (goal, task) = GoalWithFailureReceipts(receipt, receipt);
+
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, root, BriefFor(goal, task, "inspect failing test diagnostics"));
+
+            var artifact = Assert.Single(package.Artifacts, item =>
+                item.Identity.Value.StartsWith("goal/review-finding-receipts/", StringComparison.Ordinal));
+            var bytes = Recover(root, artifact);
+            using var body = JsonDocument.Parse(bytes);
+            Assert.Equal(receipt.ReceiptId, body.RootElement.GetProperty("ReceiptId").GetString());
+            var arm = Assert.Single(body.RootElement.GetProperty("FailureDetail").EnumerateArray());
+            Assert.Equal(0, arm.GetProperty("ArmIndex").GetInt32());
+            var failures = arm.GetProperty("Failures").EnumerateArray().ToArray();
+            Assert.Equal(2, failures.Length);
+            var failure = failures[0];
+            Assert.Equal("Tests.Failure", failure.GetProperty("TestIdentity").GetString());
+            Assert.Equal(new string('m', 2000), failure.GetProperty("Message").GetString());
+            Assert.True(failure.GetProperty("MessageTruncated").GetBoolean());
+            Assert.Equal(stackLines.Take(10), failure.GetProperty("StackLines").EnumerateArray().Select(line => line.GetString()));
+            Assert.Equal(5, failure.GetProperty("OmittedStackLineCount").GetInt32());
+            Assert.Equal(JsonValueKind.Null, failure.GetProperty("DetailUnavailable").ValueKind);
+            Assert.Equal("Tests.Missing", failures[1].GetProperty("TestIdentity").GetString());
+            Assert.Contains("detail unavailable: Tests.Missing:", failures[1].GetProperty("DetailUnavailable").GetString()!, StringComparison.Ordinal);
+
+            var raw = JsonSerializer.Serialize(receipt);
+            Assert.StartsWith(raw[..^1] + ",\"FailureDetail\":", Encoding.UTF8.GetString(bytes), StringComparison.Ordinal);
+            var hash = WorkerContextArtifact.Hash(bytes);
+            Assert.Equal(hash, artifact.ContentHash);
+            Assert.Equal($"goal/review-finding-receipts/{hash}.json", artifact.Identity.Value);
+            var ledgerArtifact = Assert.Single(package.Artifacts, item => item.Identity.Value == "goal/review-finding-history.json");
+            using var ledger = JsonDocument.Parse(Recover(root, ledgerArtifact));
+            var reference = Assert.Single(ledger.RootElement.GetProperty("receipt_bodies").EnumerateArray());
+            Assert.Equal(hash, reference.GetProperty("sha256").GetString());
+            var finding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
+            Assert.Equal(hash, Assert.Single(finding.GetProperty("receipt_bodies").EnumerateArray()).GetProperty("sha256").GetString());
+            var rounds = package.Artifacts.Where(item =>
+                item.Identity.Value.StartsWith("goal/review-finding-rounds/", StringComparison.Ordinal)).ToArray();
+            Assert.NotEmpty(rounds);
+            Assert.All(rounds, round =>
+            {
+                using var roundBody = JsonDocument.Parse(Recover(root, round));
+                Assert.Equal(hash, Assert.Single(roundBody.RootElement.GetProperty("ReceiptBodies").EnumerateArray())
+                    .GetProperty("sha256").GetString());
+            });
+            Assert.Equal(1, WorkerContextPackageBuilder.CreateReceipt(package).DuplicateFindingEvidenceReceiptCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing", "missing at")]
+    [Xunit.InlineData("absent", "no matching entry")]
+    [Xunit.InlineData("unparseable", "unparseable at")]
+    [Xunit.InlineData("no-paths", "no result paths recorded")]
+    [Xunit.InlineData("relative", "path not fully qualified")]
+    public void ReviewReceiptPackagesExplicitUnavailableDetails(string scenario, string expectedCause)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteEmptyRegistry(root);
+            var path = Path.Combine(root, "failure.trx");
+            if (scenario == "absent") WriteFailureTrx(path, "Tests.Other", "other failure", "other frame");
+            if (scenario == "unparseable") File.WriteAllText(path, "not XML");
+            if (scenario == "missing") Assert.False(File.Exists(path));
+            if (scenario is "absent" or "unparseable") Assert.True(File.Exists(path));
+            var paths = scenario == "no-paths" ? Array.Empty<string>() : new[] { scenario == "relative" ? "relative.trx" : path };
+            var receipt = RedFailureReceipt(paths);
+            var (goal, task) = GoalWithFailureReceipts(receipt);
+
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, root, BriefFor(goal, task, "inspect unavailable test diagnostics"));
+
+            var artifact = Assert.Single(package.Artifacts, item =>
+                item.Identity.Value.StartsWith("goal/review-finding-receipts/", StringComparison.Ordinal));
+            var bytes = Recover(root, artifact);
+            Assert.NotEmpty(bytes);
+            using var body = JsonDocument.Parse(bytes);
+            Assert.Equal(receipt.ReceiptId, body.RootElement.GetProperty("ReceiptId").GetString());
+            var arm = Assert.Single(body.RootElement.GetProperty("FailureDetail").EnumerateArray());
+            var failure = Assert.Single(arm.GetProperty("Failures").EnumerateArray());
+            Assert.Equal("Tests.Failure", failure.GetProperty("TestIdentity").GetString());
+            var detail = failure.GetProperty("DetailUnavailable").GetString()!;
+            Assert.Contains("detail unavailable: Tests.Failure:", detail, StringComparison.Ordinal);
+            Assert.Contains(expectedCause, detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReviewReceiptDetailsSearchPastReaderFailuresAndPreserveArmAssociation()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var unreadable = Path.Combine(root, "unreadable.trx");
+            var absent = Path.Combine(root, "absent.trx");
+            var first = Path.Combine(root, "first.trx");
+            var second = Path.Combine(root, "second.trx");
+            WriteFailureTrx(absent, "Tests.Other", "other message", "other frame");
+            WriteFailureTrx(first, "Tests.Failure", "first message", "first frame");
+            WriteFailureTrx(second, "Tests.Failure", "", "");
+            var receipt = RedFailureReceipt([unreadable, absent, first, second]);
+            receipt = receipt with { Arms = [receipt.Arms![0], receipt.Arms[0] with
+                { Arm = FindingEvidenceArm.Baseline, TestResultPaths = [second] }] };
+            var reads = new List<string>();
+            TestResultReadResult Read(string path)
+            {
+                reads.Add(path);
+                if (path == unreadable) throw new IOException("controlled reader failure");
+                return new TrxTestResultSource().Read(path);
+            }
+
+            using var body = JsonDocument.Parse(ReviewFindingReceiptFailureDetailBuilder.Build(receipt, Read));
+
+            var arms = body.RootElement.GetProperty("FailureDetail").EnumerateArray().ToArray();
+            Assert.Equal(2, arms.Length);
+            Assert.Equal("Baseline", arms[1].GetProperty("Arm").GetString());
+            Assert.Equal("first message", Assert.Single(arms[0].GetProperty("Failures").EnumerateArray()).GetProperty("Message").GetString());
+            var partial = Assert.Single(arms[1].GetProperty("Failures").EnumerateArray());
+            Assert.Equal("not recorded", partial.GetProperty("Message").GetString());
+            Assert.Equal("not recorded", Assert.Single(partial.GetProperty("StackLines").EnumerateArray()).GetString());
+            Assert.Equal(JsonValueKind.Null, partial.GetProperty("DetailUnavailable").ValueKind);
+            Assert.Equal(new[] { unreadable, absent, first, second }, reads);
+
+            using var unavailable = JsonDocument.Parse(ReviewFindingReceiptFailureDetailBuilder.Build(
+                RedFailureReceipt([unreadable]), Read));
+            var failure = Assert.Single(Assert.Single(unavailable.RootElement.GetProperty("FailureDetail").EnumerateArray())
+                .GetProperty("Failures").EnumerateArray());
+            Assert.Contains("reader error at", failure.GetProperty("DetailUnavailable").GetString()!, StringComparison.Ordinal);
+            Assert.Contains("System.IO.IOException", failure.GetProperty("DetailUnavailable").GetString()!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReviewReceiptEnrichmentPreservesUnchangedBodiesAndIdentityConflicts()
+    {
+        var receipt = RedFailureReceipt([]);
+        var green = receipt with { Arms = [receipt.Arms![0] with { Disposition = FindingEvidenceArmDisposition.Green }] };
+        var noIdentities = receipt with { Arms = [receipt.Arms![0] with { FailingTestIdentities = [] }] };
+        Assert.Equal(JsonSerializer.SerializeToUtf8Bytes(green), ReviewFindingReceiptFailureDetailBuilder.Build(green));
+        Assert.Equal(JsonSerializer.SerializeToUtf8Bytes(noIdentities), ReviewFindingReceiptFailureDetailBuilder.Build(noIdentities));
+        var (goal, task) = GoalWithFailureReceipts(receipt, receipt with { Summary = "conflicting content" });
+
+        var error = Assert.Throws<WorkerContextPreparationException>(() =>
+            ReviewFindingContextProjector.Project(goal, task, receipt.CandidateSha));
+
+        Assert.Equal("evidence-identity-conflict", error.Reason);
+    }
+
+    private static FindingEvidenceReceipt RedFailureReceipt(IReadOnlyList<string> paths, IReadOnlyList<string>? identities = null) => new(
+        "failure-receipt", "candidate-sha",
+        new FindingEvidenceRequest([new FindingEvidenceSelection("tests/Tests.csproj", "Tests.Failure")]),
+        true, false, "candidate failed",
+        Arms: [new FindingEvidenceArmReceipt(FindingEvidenceArm.Candidate, "candidate-sha",
+            FindingEvidenceArmDisposition.Red, true, false, "test failed",
+            FailingTestIdentities: identities ?? ["Tests.Failure"], TestResultPaths: paths)]);
+
+    private static (Goal Goal, TaskSpec Task) GoalWithFailureReceipts(params FindingEvidenceReceipt[] receipts)
+    {
+        var task = new TaskSpec(TaskId.New(), "Inspect failure diagnostics", AgentRole.Developer);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Package failing test diagnostics", [task]);
+        for (var index = 0; index < receipts.Length; index++)
+        {
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "review", ".", 0, "review complete", string.Empty,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z").AddMinutes(index),
+                MergedReviewFindings: [new ReviewFinding("failure-finding", ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/One.cs", "One.Run"), "diagnostic evidence needed")],
+                FindingEvidenceReceipts: [receipts[index]]));
+        }
+        return (goal, task);
+    }
+
+    private static void WriteFailureTrx(string path, string identity, string message, string stack) =>
+        new XDocument(new XElement("TestRun", new XElement("Results",
+            new XElement("UnitTestResult", new XAttribute("testName", identity), new XAttribute("outcome", "Failed"),
+                new XElement("Output", new XElement("ErrorInfo", new XElement("Message", message),
+                    new XElement("StackTrace", stack))))))).Save(path);
 
     [Xunit.Fact]
     public async Task ExhaustiveSemanticSourceInventoryRecoversEveryAuthoritativeSourceAndHash()
