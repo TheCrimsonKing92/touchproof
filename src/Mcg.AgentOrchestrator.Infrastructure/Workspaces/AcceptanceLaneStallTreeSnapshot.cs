@@ -1,15 +1,23 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // A bounded diagnostic of one owned tree; inspection failures never prevent its stop.
 internal sealed record AcceptanceLaneStallTreeSnapshot(
-    int RootPid, DateTimeOffset CapturedAt, double IntervalSeconds,
+    [property: JsonPropertyOrder(-3)] int RootPid, DateTimeOffset CapturedAt, double IntervalSeconds,
     IReadOnlyList<AcceptanceLaneStallTreeSnapshot.Entry> Processes,
     int OmittedProcesses = 0, string? Truncated = null, string? Unavailable = null)
 {
+    internal const string TrackedUnavailable = "unavailable";
+    [JsonPropertyOrder(-2)] public object TrackedPid { get; init; } = TrackedUnavailable;
+    [JsonPropertyOrder(-1)] public object TrackedStartTime { get; init; } = TrackedUnavailable;
+
+    internal AcceptanceLaneStallTreeSnapshot WithTracked(SpawnProcessIdentity? tracked) =>
+        tracked is null ? this : this with { TrackedPid = tracked.ProcessId, TrackedStartTime = tracked.StartedAt };
+
     internal const int ProcessCap = 64;
     internal const int SizeCapBytes = 32768;
     private const int ThreadCap = 64;
