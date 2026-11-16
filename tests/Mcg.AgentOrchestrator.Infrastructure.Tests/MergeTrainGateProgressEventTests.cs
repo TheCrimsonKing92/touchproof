@@ -6,6 +6,72 @@ using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 public sealed class MergeTrainGateProgressEventTests : AcceptanceCohortWorkflowTests
 {
+    [Fact(DisplayName = "Ejections report the choosing rule and failing identities")]
+    public void EjectionFormatter_ReportsPositionAndAttributionSource()
+    {
+        var identity = CreateEjectionIdentity();
+        var goal = identity.Members[^1].GoalId;
+
+        var position = ConductorDriver.FormatTrainEjectionObservation("outer", identity, goal,
+            MergeTrainEjectionReason.RedNewestMember, "position", ["Beta.Second", "Alpha.First"]);
+        var attributed = ConductorDriver.FormatTrainEjectionObservation("outer", identity, goal,
+            MergeTrainEjectionReason.RedAttributedMember, "stack-frame", ["Beta.Second", "Alpha.First"]);
+
+        Assert.Equal($"PHASE_PROGRESS phase=member-ejected outer_attempt=outer train_identity={identity.Value} " +
+            $"goal={goal.Value} reason=RedNewestMember scope=merge-train rule=position failing_tests=Beta.Second,Alpha.First", position);
+        Assert.Equal($"PHASE_PROGRESS phase=member-ejected outer_attempt=outer train_identity={identity.Value} " +
+            $"goal={goal.Value} reason=RedAttributedMember scope=merge-train rule=stack-frame failing_tests=Beta.Second,Alpha.First", attributed);
+    }
+
+    [Theory(DisplayName = "Failing identities retain their sequence and show overflow after eight")]
+    [InlineData(8, "T08,T03,T03,T01,T07,T02,T06,T04")]
+    [InlineData(11, "T08,T03,T03,T01,T07,T02,T06,T04,...(+3)")]
+    public void EjectionFormatter_BoundsFailingIdentities(int count, string expected)
+    {
+        var identity = CreateEjectionIdentity();
+        var goal = identity.Members[^1].GoalId;
+        string[] failingTests = ["T08", "T03", "T03", "T01", "T07", "T02", "T06", "T04", "T09", "T10", "T11"];
+
+        var line = ConductorDriver.FormatTrainEjectionObservation("outer", identity, goal,
+            MergeTrainEjectionReason.RedNewestMember, "position", failingTests.Take(count).ToArray());
+
+        Assert.Equal($"PHASE_PROGRESS phase=member-ejected outer_attempt=outer train_identity={identity.Value} " +
+            $"goal={goal.Value} reason=RedNewestMember scope=merge-train rule=position failing_tests={expected}", line);
+    }
+
+    [Fact(DisplayName = "Unreadable or empty failures retain the rule without a failing_tests field")]
+    public void EjectionFormatter_OmitsUnreadableAndEmptyIdentities()
+    {
+        var identity = CreateEjectionIdentity();
+        var goal = identity.Members[^1].GoalId;
+        var expected = $"PHASE_PROGRESS phase=member-ejected outer_attempt=outer train_identity={identity.Value} " +
+            $"goal={goal.Value} reason=RedNewestMember scope=merge-train rule=position";
+
+        Assert.Equal(expected, ConductorDriver.FormatTrainEjectionObservation("outer", identity, goal,
+            MergeTrainEjectionReason.RedNewestMember, "position", null));
+        Assert.Equal(expected, ConductorDriver.FormatTrainEjectionObservation("outer", identity, goal,
+            MergeTrainEjectionReason.RedNewestMember, "position", []));
+    }
+
+    [Fact(DisplayName = "Optional ejection diagnostics preserve the legacy line when absent")]
+    public void EjectionFormatter_PreservesLegacyLine()
+    {
+        var identity = CreateEjectionIdentity();
+        var goal = identity.Members[^1].GoalId;
+
+        Assert.Equal($"PHASE_PROGRESS phase=member-ejected outer_attempt=outer train_identity={identity.Value} " +
+            $"goal={goal.Value} reason=RedNewestMember scope=merge-train",
+            ConductorDriver.FormatTrainEjectionObservation("outer", identity, goal, MergeTrainEjectionReason.RedNewestMember));
+    }
+
+    private static MergeTrainIdentity CreateEjectionIdentity()
+    {
+        var revision = new string('a', 40);
+        var first = new MergeTrainMemberBinding(GoalId.New(), revision, revision, ["src/Changed.cs"], ["resource"],
+            ChangeRiskTier.DocsOnly, ConductorTransitionDecision.Auto, "ready", "fixture", RebasedTrainHeadRevision: revision);
+        return MergeTrainIdentity.Create([first, first with { GoalId = GoalId.New() }], revision, revision, "manifest-v1");
+    }
+
     [Fact]
     public void MergeTrainGate_ReportsProgressForEveryMemberWhileAttemptRuns()
     {

@@ -78,20 +78,20 @@ internal sealed partial class ConductorDriver
     }
 
     private void AppendTrainEjectionObservation(string outerAttemptId, MergeTrainIdentity identity,
-        GoalId goalId, MergeTrainEjectionReason reason)
+        GoalId goalId, MergeTrainEjectionReason reason, string rule, MergeTrainReceipt? redReceipt = null)
     {
         try
         {
             TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace!.ConductEventsLogPath), goalId.Value[..8],
-                FormatTrainEjectionObservation(outerAttemptId, identity, goalId, reason));
+                FormatTrainEjectionObservation(outerAttemptId, identity, goalId, reason, rule, redReceipt is not null && MergeTrainFocusedRecheckDecision.TryReadFailingIdentities(redReceipt, out var failingTests) ? failingTests : null));
         }
         catch (Exception) { /* Participation evidence cannot change a gate outcome. */ }
     }
 
-    internal static string FormatTrainEjectionObservation(string outerAttemptId, MergeTrainIdentity identity,
-        GoalId goalId, MergeTrainEjectionReason reason) =>
+    internal static string FormatTrainEjectionObservation(string outerAttemptId, MergeTrainIdentity identity, GoalId goalId, MergeTrainEjectionReason reason, string? rule = null, IReadOnlyList<string>? failingTests = null) =>
         $"PHASE_PROGRESS phase=member-ejected outer_attempt={outerAttemptId} train_identity={identity.Value} " +
-        $"goal={goalId.Value} reason={reason} scope=merge-train";
+        $"goal={goalId.Value} reason={reason} scope=merge-train" + (rule is null ? "" : $" rule={rule}") +
+        (failingTests is { Count: > 0 } ? $" failing_tests={string.Join(',', failingTests.Take(8))}" + (failingTests.Count > 8 ? $",...(+{failingTests.Count - 8})" : "") : "");
 
     private static void TryAppendGateProgressEvent(
         ConductEventLogWriter writer,

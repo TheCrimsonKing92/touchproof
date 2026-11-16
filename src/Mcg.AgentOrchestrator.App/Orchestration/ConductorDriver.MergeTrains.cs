@@ -324,7 +324,7 @@ internal sealed partial class ConductorDriver
                                 continue;
                             _mergeTrainAcceptanceStore.RecordEjections(evidenceAttemptId, [evidenceEjection]);
                             AppendTrainEjectionObservation(outerAttemptId ?? evidenceAttemptId,
-                                receipt.Identity, gap.Key, evidenceEjection.Reason);
+                                receipt.Identity, gap.Key, evidenceEjection.Reason, "landing-evidence-gap");
                         }
                         composition = originalBindings.Where(member => survivors.Contains(member.GoalId)).ToArray();
                         redDropped = null;
@@ -361,7 +361,7 @@ internal sealed partial class ConductorDriver
                 var bisectionEjection = MergeTrainPrefixBisection.CreateEjection(receipt, bisection);
                 allEjections.Add(bisectionEjection);
                 _mergeTrainAcceptanceStore.RecordEjections(attemptId, [bisectionEjection]);
-                AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, culprit.GoalId, bisectionEjection.Reason);
+                AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, culprit.GoalId, bisectionEjection.Reason, "bisection");
                 composition = members.Where(member => member.GoalId != culprit.GoalId).ToArray();
                 redDropped = null;
                 if (composition.Count < 2 || attempt == 1)
@@ -399,7 +399,7 @@ internal sealed partial class ConductorDriver
                 {
                     allEjections.Add(memberEjection);
                     _mergeTrainAcceptanceStore.RecordEjections(attemptId, [memberEjection]);
-                    AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, memberEjection.GoalId, memberEjection.Reason);
+                    AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, memberEjection.GoalId, memberEjection.Reason, "member-recheck");
                 },
                 (kind, detail) => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath),
                     members[0].GoalId.Value, detail, eventKind: kind), cancellationToken);
@@ -431,7 +431,7 @@ internal sealed partial class ConductorDriver
                 $"Dropped after RED receipt {receipt.ReceiptId}.");
             allEjections.Add(ejection);
             _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]);
-            AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, dropped.GoalId, ejection.Reason);
+            AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, dropped.GoalId, ejection.Reason, attributed is null ? "position" : attributionSource, receipt);
             var remainingIds = members.Where(member => member.GoalId != dropped.GoalId)
                 .Select(member => member.GoalId).ToHashSet();
             composition = originalBindings.Where(member => remainingIds.Contains(member.GoalId)).ToArray();
