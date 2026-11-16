@@ -10,7 +10,7 @@ public sealed class IcaclsIntegrityLabelerTestsCommand
     [InlineData("file", false, 1)]
     [InlineData("file", true, 1)]
     [InlineData("directory", false, 1)]
-    [InlineData("tree", true, 4)]
+    [InlineData("tree", true, 2)]
     public void Set_WithTripwire_LabelsEntriesWithoutStartingAChild(
         string shape, bool recursive, int expectedEntries)
     {
@@ -34,7 +34,8 @@ public sealed class IcaclsIntegrityLabelerTestsCommand
                 File.WriteAllText(Path.Combine(nested, "leaf.txt"), "fixture");
             }
 
-            var result = labeler.SetIntegrityWithDiagnostics(target, "(OI)(CI)L", recursive);
+            var level = shape == "file" ? "L" : "(OI)(CI)L";
+            var result = labeler.SetIntegrityWithDiagnostics(target, level, recursive);
 
             Assert.True(result.Succeeded, result.Diagnostic);
             Assert.Equal(0, calls);
@@ -51,6 +52,34 @@ public sealed class IcaclsIntegrityLabelerTestsCommand
                 Assert.Equal(Directory.Exists(entry), state.Inheritable);
                 Assert.Null(state.NativeQueryError);
             }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("M", "(OI)(CI)L")]
+    [InlineData("L", "(OI)(CI)M")]
+    public void Set_InheritableFile_PreservesExplicitLabel(string initial, string level)
+    {
+        AcceptanceGateIntegrityTestSupport.RequireWindows();
+        var root = Directory.CreateTempSubdirectory("file-il-").FullName;
+        var path = Path.Combine(root, "file.txt");
+        File.WriteAllText(path, "fixture");
+        try
+        {
+            var labeler = new IcaclsIntegrityLabeler(_ =>
+                throw new InvalidOperationException("The set path must not start a child."));
+            Assert.True(labeler.SetIntegrity(path, initial, false));
+            var before = labeler.Query(path);
+            Assert.Equal(initial == "L", before.Low);
+            Assert.Equal(initial == "M", before.Medium);
+
+            var result = labeler.SetIntegrityWithDiagnostics(path, level, false);
+
+            Assert.True(result.Succeeded, result.Diagnostic);
+            Assert.Equal(before, labeler.Query(path));
+            using var json = JsonDocument.Parse(result.Diagnostic);
+            Assert.Equal(0, json.RootElement.GetProperty("entriesLabeled").GetInt32());
         }
         finally { Directory.Delete(root, recursive: true); }
     }

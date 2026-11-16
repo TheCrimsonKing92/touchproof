@@ -58,9 +58,11 @@ internal static class NativeIntegrityLabelWriter
                     continue;
                 }
 
-                // icacls applies inheritance options only to directories. Files receive
-                // the same level and no-write-up policy without OI/CI flags.
-                var acl = inheritable && IsDirectory(attributes) ? inheritableAcl : plainAcl;
+                // icacls ignores inheritable level requests on files, preserving their
+                // explicit labels. Directory writes propagate to inherited file labels.
+                if (inheritable && !IsDirectory(attributes))
+                    continue;
+                var acl = inheritable ? inheritableAcl : plainAcl;
                 var error = SetNamedSecurityInfoW(IcaclsIntegrityLabeler.NativeFilePath(currentPath),
                     1, 0x00000010, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, acl);
                 if (error != 0)

@@ -36,8 +36,10 @@ public sealed class IcaclsIntegrityLabelerTestsInProcessEquivalence
             Assert.Equal(entries, RelativeEntries(oracle, shape));
             var labeler = new IcaclsIntegrityLabeler(_ =>
                 throw new InvalidOperationException("Only the oracle may launch icacls."));
+            var before = entries.ToDictionary(relative => relative,
+                relative => labeler.Query(At(oracle, relative)));
             foreach (var relative in entries)
-                Assert.Equal(labeler.Query(At(oracle, relative)), labeler.Query(At(native, relative)));
+                Assert.Equal(before[relative], labeler.Query(At(native, relative)));
 
             var result = labeler.SetIntegrityWithDiagnostics(native, level, shape == "tree");
             Assert.True(result.Succeeded, result.Diagnostic);
@@ -48,8 +50,28 @@ public sealed class IcaclsIntegrityLabelerTestsInProcessEquivalence
                 var expected = labeler.Query(At(oracle, relative));
                 var actual = labeler.Query(At(native, relative));
                 Assert.True(expected.Exists, relative);
-                Assert.True(expected.Low || expected.Medium, relative);
                 Assert.Null(expected.NativeQueryError);
+                var inheritable = level.StartsWith("(OI)(CI)", StringComparison.Ordinal);
+                if (inheritable && (shape == "file"
+                    || relative == Path.Combine("nested", "explicit.txt")))
+                {
+                    // Inheritable requests do not overwrite explicit file labels.
+                    Assert.True(before[relative].Medium, relative);
+                    Assert.Equal(before[relative], expected);
+                }
+                else if (shape == "directory" && relative != "." && !inheritable)
+                {
+                    // Removing the parent's inheritance leaves these entries unlabeled.
+                    Assert.True(expected.Unlabeled, relative);
+                }
+                else
+                {
+                    Assert.Equal(level.EndsWith('L'), expected.Low);
+                    Assert.Equal(level.EndsWith('M'), expected.Medium);
+                    Assert.Equal(inheritable && Directory.Exists(At(oracle, relative)),
+                        expected.Inheritable);
+                    Assert.False(expected.Unlabeled);
+                }
                 // Record equality covers Exists, Low, Medium, Inheritable,
                 // Unlabeled and NativeQueryError, including the root entry.
                 Assert.Equal(expected, actual);
