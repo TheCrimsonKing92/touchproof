@@ -164,5 +164,69 @@ public sealed class OwnerAcceptanceNarrationTests
         static string Title(string? id) => Name(OwnerEventFields.Prefix(id));
     }
 
+    [Fact]
+    public void Narrate_OrdinaryPreLandingPass_StatesOnlyChecksPassed()
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        var passed = new OwnerConductEvent(time, "acceptance", "11111111",
+            "ACCEPTANCE goal=11111111 result=passed");
+        var landing = new OwnerConductEvent(time.AddSeconds(1), "loop-relaunch", "11111111-goal",
+            "LOOP_RELAUNCH_SCHEDULED tick=1 goal=11111111-goal");
+
+        var items = OwnerActivityNarrator.Narrate([passed, landing], Name);
+
+        Assert.Equal(2, items.Count);
+        Assert.Equal("Landed: Search (11111111)", items[0].Phrase);
+        Assert.Equal(landing.Timestamp, items[0].Timestamp);
+        var pass = items[1];
+        Assert.Equal(time, pass.Timestamp);
+        Assert.Equal("Search: passed its tests", pass.Phrase);
+        Assert.Equal("The required checks passed.", pass.Why);
+        Assert.Equal("The required checks passed.", pass.Next);
+        Assert.Equal("The required checks passed.", pass.Act);
+        Assert.Same(passed, Assert.Single(pass.Evidence!));
+        foreach (var text in new[] { pass.Phrase, pass.Why, pass.Next, pass.Act })
+            Assert.DoesNotContain("land", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Narrate_PassWithOperatorEvidencePending_StatesOnlyChecksPassed()
+    {
+        // No landing event stands in for pending Operator evidence; it does not prove that production state.
+        var passed = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "acceptance", "11111111",
+            "ACCEPTANCE goal=11111111 result=passed");
+
+        var pass = Assert.Single(OwnerActivityNarrator.Narrate([passed], Name));
+
+        Assert.Equal(passed.Timestamp, pass.Timestamp);
+        Assert.Equal("Search: passed its tests", pass.Phrase);
+        Assert.Equal("The required checks passed.", pass.Why);
+        Assert.Equal("The required checks passed.", pass.Next);
+        Assert.Equal("The required checks passed.", pass.Act);
+        Assert.Same(passed, Assert.Single(pass.Evidence!));
+        foreach (var text in new[] { pass.Phrase, pass.Why, pass.Next, pass.Act })
+            Assert.DoesNotContain("land", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Narrate_FailedAcceptance_KeepsPreChangeNarration()
+    {
+        var failed = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "acceptance", "11111111",
+            "ACCEPTANCE goal=11111111 result=failed checks=Build_main");
+
+        var failure = Assert.Single(OwnerActivityNarrator.Narrate([failed], Name));
+
+        Assert.Equal("Search: failed its tests (the check Build main failed); awaiting the conductor's next step",
+            failure.Phrase);
+        Assert.Equal("the check Build main failed.", failure.Why);
+        Assert.Equal("awaiting the conductor's next step.", failure.Next);
+        Assert.Equal("No. The conductor is handling the next step.", failure.Act);
+        Assert.Equal(failed.Timestamp, failure.Timestamp);
+        Assert.Same(failed, Assert.Single(failure.Evidence!));
+        Assert.Equal(8, failure.Spans!.OutcomeStart);
+        Assert.Equal(6, failure.Spans.OutcomeLength);
+        Assert.Null(failure.GoalPrefixes);
+    }
+
     private static string Name(string? id) => id == "22222222" ? "Export" : "Search";
 }
