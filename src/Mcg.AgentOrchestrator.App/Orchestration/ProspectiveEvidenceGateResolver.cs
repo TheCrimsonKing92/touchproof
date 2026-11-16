@@ -65,6 +65,7 @@ internal static class ProspectiveEvidenceGateResolver
             foreach (var attempt in attempts)
             {
                 var followed = new HashSet<string>(StringComparer.Ordinal);
+                var superseded = 0;
                 var unsatisfied = names.Select(name =>
                 {
                     var matches = ProspectiveEvidenceTrxRows.Match(name, attempt.Results);
@@ -75,7 +76,10 @@ internal static class ProspectiveEvidenceGateResolver
                             $"new={rewrite.NewClass} kind={rewrite.Kind} candidate={candidateBranchHeadSha}");
                     }
                     var ambiguous = ProspectiveEvidenceTrxRows.AmbiguousClassNames(matches);
-                    return matches.Length == 0 || matches.Any(result => !result.Passed) || ambiguous is not null
+                    var passed = matches.Count(result => result.Passed);
+                    var rerun = TrxRowRerunSupersession.Count(matches, attempt.Results);
+                    superseded += rerun;
+                    return passed == 0 || matches.Length - passed - rerun > 0 || ambiguous is not null
                         ? ProspectiveEvidenceTrxRows.FormatEntry(name, ambiguous) : null;
                 }).OfType<string>().ToArray();
                 if (attempt == attempts[0]) missing = unsatisfied;
@@ -84,7 +88,8 @@ internal static class ProspectiveEvidenceGateResolver
                 try
                 {
                     kernel.SubmitHumanInput(wait.Id,
-                        $"Satisfied by gate attempt {attempt.Id}; TRX {string.Join(", ", attempt.Paths)}; {wait.TestNames.Count} named tests passed." +
+                        $"Satisfied by gate attempt {attempt.Id}; TRX {string.Join(", ", attempt.Paths)}; {wait.TestNames.Count} named tests passed" +
+                        (superseded == 0 ? "." : $"; {superseded} superseded by rerun.") +
                         (followed.Count == 0 ? "" : " " + string.Join("; ", followed.Order(StringComparer.Ordinal))),
                         origin: HumanInputAnswerOrigin.Worker, supersedeSiblings: false);
                     resolved.Add(wait.Id);

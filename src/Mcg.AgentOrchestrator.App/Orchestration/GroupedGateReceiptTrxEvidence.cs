@@ -75,9 +75,7 @@ internal static class GroupedGateReceiptTrxEvidence
             var matches = ProspectiveEvidenceTrxRows.Match(selector, rows);
             var ambiguous = ProspectiveEvidenceTrxRows.AmbiguousClassNames(matches);
             var passed = matches.Count(row => row.Passed);
-            var superseded = matches.Count(row => !row.Passed && rows.Any(rerun => rerun.Passed &&
-                string.Equals(rerun.FullIdentity, row.FullIdentity, StringComparison.Ordinal) &&
-                !string.Equals(rerun.Path, row.Path, StringComparison.OrdinalIgnoreCase)));
+            var superseded = TrxRowRerunSupersession.Count(matches, rows);
             var skipped = passed > 0 && matches.All(row => row.Passed || row.Outcome == "NotExecuted")
                 ? matches.Length - passed - superseded : 0;
             var failed = matches.Length - passed - superseded - skipped;
