@@ -7,7 +7,7 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
     Func<OwnerFleetViewModel>? fleet, Func<string, OwnerLandingsPage>? landings, OwnerConsoleSoundCommand? sound,
     OwnerGoalDetailQuery goalDetail, OwnerFleetViewKeys fleetKeys, object notificationGate, OwnerConsoleBellCommand bell,
     Func<bool> settingsRequested, Action requestSettings, Func<string?> requestedEpicId, Func<string?> requestedGateGoalId,
-    Func<string, OwnerConsoleScreenOperation?, CancellationToken, Task> showGoalDetail)
+    Func<string, OwnerConsoleScreenOperation?, CancellationToken, Task> showGoalDetail, Func<Action<string>?> commandNotice)
 {
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail;
     private readonly OwnerFleetViewKeys _fleetKeys = fleetKeys;
@@ -33,6 +33,12 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
         if (goalId is not null) { await showGoalDetail(goalId, operation, cancellationToken); return; }
         if (fleetModel is not null) { await dialogs.ShowFleetAsync(_fleetKeys, fleetModel, OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth)); return; }
         if (landingsPage is not null) { await ShowLandingsAsync(landingsPage, operation, cancellationToken); return; }
+        if (output.Acknowledged && output.Structured is null && control.Fields is null &&
+            output.TryAcknowledgementLine(out var acknowledgement) && commandNotice() is { } notice)
+        {
+            notice(acknowledgement);
+            return;
+        }
         if ((output.Structured ?? control.Fields) is { } commandFields)
             await dialogs.ShowStructuredAsync("Command result", output.Text, commandFields);
         else await dialogs.ShowTextAsync("Command result", output.Text);

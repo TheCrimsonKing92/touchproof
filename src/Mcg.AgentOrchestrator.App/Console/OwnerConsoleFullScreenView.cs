@@ -108,10 +108,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         (_keys, _bindingRunner, _keyboard) = OwnerConsoleFullScreenComposer.Attach(this, app, controller, refresh, _token,
             diagnostics, boardSource, clipboard, _layout, _previewPane, _trace, _selection, _paneRenderer, _operation,
             _activityPane, _board, _notice, _status, _hints, _epicHint, _state, _collapse, () => _completionHint, value => _completionHint = value);
+        controller.CommandNotice = text => ShowNotice(text, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
     }
 
     internal void Render(OwnerConsoleViewModel model) => Render(model, refreshPreview: true);
-
     internal void Render(OwnerConsoleViewModel model, bool refreshPreview)
     {
         _paneRenderer.Render(model, refreshPreview);

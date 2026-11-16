@@ -130,9 +130,24 @@ public sealed class OwnerConsoleKeyCommandScenarioTests
             var optional = usage.IndexOf('[');
             if (optional >= 0) usage = usage[..optional].TrimEnd();
             var dialogs = scene.Dialogs.Texts.Count;
+            var notices = scene.View.NoticeStrip.Visible.ToArray();
             await scene.Type(usage);
-            var shown = Assert.Single(scene.Dialogs.Texts.Skip(dialogs));
-            Assert.DoesNotContain("unknown command", shown.Text);
+            var newDialogs = scene.Dialogs.Texts.Skip(dialogs).ToArray();
+            var newNotices = scene.View.NoticeStrip.Visible
+                .Where(notice => !notices.Any(previous => ReferenceEquals(previous, notice))).ToArray();
+            Assert.Equal(1, newDialogs.Length + newNotices.Length);
+            Assert.All(newDialogs, shown => Assert.DoesNotContain("unknown command", shown.Text));
+            Assert.All(newNotices, shown =>
+            {
+                Assert.DoesNotContain("unknown command", shown.Text);
+                Assert.Equal(OwnerConsoleNoticeSeverity.Success, shown.Severity);
+            });
+            if (usage is "bell on" or "bell off")
+            {
+                Assert.Empty(newDialogs);
+                Assert.Equal(usage, Assert.Single(newNotices).Text);
+                Assert.Contains(usage, scene.View.NoticeText);
+            }
         }
         Assert.Equal(new[] { "" }, scene.Landings);
         Assert.Equal(2, scene.Harness.Conductor.Calls.Count);

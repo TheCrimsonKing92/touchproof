@@ -33,5 +33,6 @@ internal sealed class OwnerConsoleBellCommand(OwnerConsoleSoundCommand? sound)
         if (sound is null) _sessionTiers = tiers;
         else if (!sound.SetBellTiers(tiers, output)) return;
         output.WriteLine("bell " + string.Join(' ', parts));
+        output.MarkAcknowledged();
     }
 }

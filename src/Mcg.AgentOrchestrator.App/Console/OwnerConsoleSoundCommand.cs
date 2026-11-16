@@ -16,7 +16,6 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
     private readonly object _setLock = new();
     private OwnerConsoleAlertSettingsCommand? _alertSettings;
     private OwnerConsoleAlertSettingsCommand AlertSettings => _alertSettings ??= new(settings, TryWrite);
-
     internal OwnerConsoleNotificationSettingsProvider Settings => settings;
 
     internal string[] Clips(OwnerConsoleNotificationTier tier, OwnerConsoleCapturedOutput output)
@@ -172,6 +171,7 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
             _ => snapshot with { AlarmSoundFile = clip }
         });
         output.WriteLine($"sound set {TierName(tier)}: {(clip is null ? "system sound" : Path.GetFileName(clip))}");
+        output.MarkAcknowledged();
     }
 
     // All mutations share the prerequisite's fresh-read and atomic-replace path.

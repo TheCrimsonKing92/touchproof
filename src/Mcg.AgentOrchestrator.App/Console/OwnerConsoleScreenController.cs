@@ -31,6 +31,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerDecisionWorkflow Decisions => _decisionWorkflow ??= new(questions, answers, dialogs, _answerTracking, resolutions, clock);
     public void Dispose() => _answerTracking.Dispose();
     internal event Action? ModelApplied;
+    internal Action<string>? CommandNotice { get; set; }
     internal Task<OwnerConsoleEpicViewModel?> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
         string? detailId, CancellationToken cancellationToken) =>
         _epicDetail.LoadAsync(window, detailId, cancellationToken);
@@ -158,5 +159,6 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 
     private OwnerConsoleCommandDispatch NewCommandDispatch() => new(dialogs, conductor, digest, summary, clock,
         fleet, landings, sound, _goalDetail, _fleetKeys, _notificationGate, _bell, () => _settingsRequested,
-        () => _settingsRequested = true, () => _requestedEpicId, () => _requestedGateGoalId, ShowGoalDetailAsync);
+        () => _settingsRequested = true, () => _requestedEpicId, () => _requestedGateGoalId, ShowGoalDetailAsync,
+        () => CommandNotice);
 }

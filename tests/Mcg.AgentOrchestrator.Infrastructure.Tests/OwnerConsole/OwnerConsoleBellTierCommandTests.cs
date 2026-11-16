@@ -1,8 +1,144 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 
-// Parallel-safe: fake dialogs, notifier, model and manual clock are owned by each test.
+// Parallel-safe: each test owns its dialogs, notifier, model, clock and settings directory.
 public sealed class OwnerConsoleBellTierCommandTests
 {
+    [Theory]
+    [InlineData("bell off", "bell off")]
+    [InlineData("bell on", "bell on")]
+    [InlineData("bell calm off", "bell calm off")]
+    [InlineData(" :BeLl CaLm ON ", "bell calm on")]
+    public async Task SuccessfulBellDispatchShowsOneNoticeAndNoDialog(string command, string expected)
+    {
+        var dialogs = new Dialogs();
+        using var controller = Controller(new OwnerConsoleHarness(), dialogs, new ManualClock());
+        var notices = new List<string>();
+        controller.CommandNotice = notices.Add;
+
+        await controller.RunCommandAsync(command);
+
+        Assert.Equal(expected, Assert.Single(notices));
+        Assert.Empty(dialogs.Texts);
+        Assert.Empty(dialogs.Titles);
+    }
+
+    [Theory]
+    [InlineData("1", "first.wav")]
+    [InlineData("system", "system sound")]
+    public async Task SuccessfulSoundSetDispatchShowsOneNoticeAndNoDialog(string selector, string expected)
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        var notices = new List<string>();
+        context.Controller.CommandNotice = notices.Add;
+
+        await context.Controller.RunCommandAsync("sound set decision " + selector);
+
+        Assert.Equal("sound set decision: " + expected, Assert.Single(notices));
+        Assert.Empty(context.Output.Texts);
+    }
+
+    [Theory]
+    [InlineData("bell", false, "usage: bell")]
+    [InlineData("bell loud on", false, "usage: bell")]
+    [InlineData("bell alarm off", true, "bell save failed:")]
+    [InlineData("sound set decision missing.wav", false, "clip not found")]
+    [InlineData("sound set decision 1", true, "sound set failed:")]
+    [InlineData("sound list", false, "calm")]
+    [InlineData("nonsense", false, "unknown command")]
+    [InlineData("digest", false, "Owner digest: landed=2 pending=1")]
+    public async Task NonAcknowledgementDispatchKeepsResultDialog(string command, bool failSave, string expected)
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        var dialogs = new Dialogs();
+        using var controller = Controller(new OwnerConsoleHarness(), dialogs, context.Clock,
+            sound: context.Sound, summary: new StructuredDigest());
+        var notices = new List<string>();
+        controller.CommandNotice = notices.Add;
+        await controller.RunCommandAsync("bell off");
+        Assert.Equal("bell off", Assert.Single(notices));
+        Assert.Empty(dialogs.Texts);
+        Assert.Empty(dialogs.Titles);
+        notices.Clear();
+
+        if (failSave)
+        {
+            File.Delete(context.Path);
+            Directory.CreateDirectory(context.Path);
+            Assert.True(Directory.Exists(context.Path));
+        }
+        await controller.RunCommandAsync(command);
+
+        Assert.Empty(notices);
+        Assert.Equal("Command result", Assert.Single(dialogs.Titles));
+        Assert.Contains(expected, Assert.Single(dialogs.Texts));
+        Assert.Equal(command == "digest" ? 1 : 0, dialogs.StructuredCount);
+    }
+
+    [Fact]
+    public async Task AcknowledgementDoesNotCarryIntoTheNextCommand()
+    {
+        var dialogs = new Dialogs();
+        using var controller = Controller(new OwnerConsoleHarness(), dialogs, new ManualClock());
+        var notices = new List<string>();
+        controller.CommandNotice = notices.Add;
+
+        await controller.RunCommandAsync("bell off");
+        await controller.RunCommandAsync("bell");
+
+        Assert.Equal("bell off", Assert.Single(notices));
+        Assert.Equal("Command result", Assert.Single(dialogs.Titles));
+        Assert.StartsWith("usage: bell", Assert.Single(dialogs.Texts));
+    }
+
+    [Fact]
+    public async Task NoticeSinkCanBeAttachedAfterDispatchWasCreated()
+    {
+        var dialogs = new Dialogs();
+        using var controller = Controller(new OwnerConsoleHarness(), dialogs, new ManualClock());
+        await controller.RunCommandAsync("bell off");
+        Assert.Equal("bell off", Assert.Single(dialogs.Texts).Trim());
+        var notices = new List<string>();
+        controller.CommandNotice = notices.Add;
+
+        await controller.RunCommandAsync("bell on");
+
+        Assert.Equal("bell on", Assert.Single(notices));
+        Assert.Single(dialogs.Texts);
+        Assert.Single(dialogs.Titles);
+    }
+
+    [Theory]
+    [InlineData(" acknowledgement ", " acknowledgement ")]
+    [InlineData("acknowledgement\n", "acknowledgement")]
+    [InlineData("acknowledgement\r", "acknowledgement")]
+    [InlineData("acknowledgement\r\n", "acknowledgement")]
+    [InlineData(" acknowledgement \r\n", " acknowledgement ")]
+    public void SingleLineAcknowledgementRemovesOnlyOneTerminator(string text, string expected)
+    {
+        var output = new OwnerConsoleCapturedOutput();
+        output.Write(text);
+
+        Assert.True(output.TryAcknowledgementLine(out var line));
+        Assert.Equal(expected, line);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\n")]
+    [InlineData("\r")]
+    [InlineData("\r\n")]
+    [InlineData("acknowledgement\n\n")]
+    [InlineData("acknowledgement\r\n\r\n")]
+    [InlineData("first\nsecond")]
+    [InlineData("first\rsecond")]
+    public void EmptyOrMultilineOutputIsNotAnAcknowledgementLine(string text)
+    {
+        var output = new OwnerConsoleCapturedOutput();
+        output.Write(text);
+
+        Assert.False(output.TryAcknowledgementLine(out _));
+    }
+
     [Fact]
     public async Task AllAndPerTierCommandsControlPlaybackAndCanonicalOutput()
     {
@@ -89,8 +225,11 @@ public sealed class OwnerConsoleBellTierCommandTests
     }
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs,
-        TimeProvider clock, IOwnerConsoleNotifier? notifier = null) => OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers,
-        dialogs, harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, clock, notifier: notifier);
+        TimeProvider clock, IOwnerConsoleNotifier? notifier = null, OwnerConsoleSoundCommand? sound = null,
+        IOwnerDigestSummary? summary = null) =>
+        OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers,
+        dialogs, harness.State, harness.Tail, harness.Conductor, harness.DigestReport, summary ?? harness.Digest, clock,
+        notifier: notifier, sound: sound);
     private static OwnerConsoleViewModel Model(int landed) => new(new(ConductorLiveness.NotRunning, 0, 0, 0, null, landed), [], [], []);
 
     private sealed class ManualClock : TimeProvider
@@ -108,11 +247,26 @@ public sealed class OwnerConsoleBellTierCommandTests
             if (Throw) throw new IOException("sound failed");
         }
     }
+    private sealed class StructuredDigest : IOwnerDigestSummary
+    {
+        public IReadOnlyList<string> ReadSummaryLines() => ["Owner digest: landed=2 pending=1"];
+        public (IReadOnlyList<string> Lines, OwnerConsoleStructuredText? Fields) ReadStructuredSummary() =>
+            (ReadSummaryLines(), new(OwnerConsoleFieldSnapshot.Create("digest", new OwnerConsoleField("landed", "Landed", "2"))));
+    }
     private sealed class Dialogs : IOwnerConsoleDialogs
     {
         internal readonly List<string> Texts = [];
+        internal readonly List<string> Titles = [];
+        internal int StructuredCount;
         public Task<bool> ConfirmAsync(string title, string text) => Task.FromResult(false);
         public Task<string?> PromptTextAsync(string title, string text) => Task.FromResult<string?>(null);
-        public Task ShowTextAsync(string title, string text) { Texts.Add(text); return Task.CompletedTask; }
+        public Task ShowTextAsync(string title, string text) { Titles.Add(title); Texts.Add(text); return Task.CompletedTask; }
+        public async Task<int?> ShowStructuredAsync(string title, string text, OwnerConsoleStructuredText fields,
+            IReadOnlyList<int>? choiceLines = null)
+        {
+            StructuredCount++;
+            await ShowTextAsync(title, text);
+            return null;
+        }
     }
 }
