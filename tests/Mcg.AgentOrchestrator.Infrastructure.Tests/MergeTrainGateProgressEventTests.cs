@@ -64,6 +64,39 @@ public sealed class MergeTrainGateProgressEventTests : AcceptanceCohortWorkflowT
             ConductorDriver.FormatTrainEjectionObservation("outer", identity, goal, MergeTrainEjectionReason.RedNewestMember));
     }
 
+    [Theory]
+    [InlineData("position")]
+    [InlineData("stack-frame")]
+    public void ExecutionReplay_NewEjectionKeys_PreserveMemberAndTrain(string rule)
+    {
+        // Parallel-safe: the shared fixture owns a private directory and fixed replay clock.
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        var ejection = Assert.Single(fixture.Events,
+            item => item.Detail.Contains("phase=member-ejected", StringComparison.Ordinal));
+        Assert.DoesNotContain("rule=", ejection.Detail);
+        Assert.DoesNotContain("failing_tests=", ejection.Detail);
+        var withDiagnostics = fixture.Events.Select(item => item == ejection
+            ? item with { Detail = item.Detail + $" scope=merge-train rule={rule} failing_tests=Alpha.First,Beta.Second,...(+3)" }
+            : item).ToArray();
+
+        var baseline = fixture.Build();
+        var replay = fixture.Build(withDiagnostics);
+
+        foreach (var projection in new[] { baseline, replay })
+        {
+            var member = Assert.IsType<OwnerConsoleGateProgress>(
+                projection.ForMember(OwnerConsoleGateExecutionReplayFixture.Ejected));
+            Assert.False(member.Live);
+            Assert.Equal("ejected / awaiting survivor", member.Participation);
+            Assert.Equal(OwnerConsoleGateExecutionReplayFixture.OriginalTrain, member.TrainIdentity);
+            Assert.Equal(OwnerConsoleGateExecutionReplayFixture.Outer, member.OuterAttemptId);
+            Assert.Equal(OwnerConsoleGateExecutionReplayFixture.Original, member.ExecutionId);
+            Assert.Equal(OwnerConsoleGateExecutionReplayFixture.Now.AddSeconds(-560), member.FinishedAt);
+            Assert.True(Assert.IsType<OwnerConsoleGateProgress>(
+                projection.ForMember(OwnerConsoleGateExecutionReplayFixture.Survivor)).Live);
+        }
+    }
+
     private static MergeTrainIdentity CreateEjectionIdentity()
     {
         var revision = new string('a', 40);

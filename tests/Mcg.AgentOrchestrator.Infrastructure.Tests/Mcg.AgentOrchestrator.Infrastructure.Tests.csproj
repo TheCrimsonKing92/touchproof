@@ -42,6 +42,7 @@
     <Compile Include="Fixtures\ConsoleIoProbe\ConsoleHostCensus.cs" />
     <Compile Include="Fixtures\SupervisorLaunchProbe\ProcessImagePathResolver.cs" />
     <Compile Include="Fixtures\SupervisorLaunchProbe\ConductorStartCallerProbe.cs" />
+    <Compile Include="OwnerConsole\OwnerConsoleGateExecutionReplayFixture.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="TestData\Fixtures\impact-replay-retained-3d6a5860.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="TestData\Fixtures\impact-replay-retained-94-regression.json" CopyToOutputDirectory="PreserveNewest" />
