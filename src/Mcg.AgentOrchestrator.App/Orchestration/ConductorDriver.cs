@@ -268,6 +268,11 @@ internal sealed partial class ConductorDriver
             Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
         var dispatchLifecycleGate = new CriticalDispatchLifecycleEventGate(eventWriter);
         kernel.SetEventWriter(dispatchLifecycleGate);
+        void RecordDurableGoalBaseline(GoalSnapshot snapshot)
+        {
+            kernel.ReleaseDispatchStartRecovery(new GoalId(snapshot.Id));
+            recordDurableGoalBaseline?.Invoke(snapshot);
+        }
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
                 ? reason
@@ -348,7 +353,8 @@ internal sealed partial class ConductorDriver
                     $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}.");
             }
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
-            var goalSnapshotBeforeDispatch = kernel.ExportGoalSnapshot(goal.Id);
+            using var dispatchStart = kernel.BeginDispatchStart(goal.Id);
+            var goalSnapshotBeforeDispatch = kernel.GetSnapshotBeforeDispatchStart(goal.Id)!;
             SubscriptionStartResult result;
             using var dispatchCheckpoint = CriticalDispatchLifecycleCheckpoint.Begin(
                 dispatchLifecycleGate, kernel, goal.Id, persistCriticalDispatchStart,
@@ -366,7 +372,7 @@ internal sealed partial class ConductorDriver
                     checkpointBeforeWorkerStart: FindingEvidenceContinuationCoordinator.FindingEvidenceDispatchCheckpoint(this, dispatchCheckpoint),
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
-                    recordDurableGoalBaseline: recordDurableGoalBaseline,
+                    recordDurableGoalBaseline: RecordDurableGoalBaseline,
                     excludedTaskIds: GetUnchangedCandidateExclusions(goal), admitProviderBudgetProbe: true, utcNow: _utcNow);
             }
             catch (DispatchRecordWriteException ex)
@@ -401,12 +407,10 @@ internal sealed partial class ConductorDriver
                 return outcome;
             }
             if (outcome.Category == DispatchStartOutcomeCategory.Started)
-            {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch",
                     $"Dispatched {result.Dispatches.Count} tasks, started {result.Processes.Tasks.Count} processes.");
-                return outcome;
-            }
-            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", outcome.Reason!);
+            else
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", outcome.Reason!);
             return outcome;
         }
         _dispatchAndStart = (goal, policy) => DispatchAndStart(goal, policy, null);
@@ -421,6 +425,7 @@ internal sealed partial class ConductorDriver
                     $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}.");
             }
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
+            using var dispatchStart = kernel.BeginDispatchStart(goal.Id);
             ProcessBatchExecutionResult result;
             using var dispatchCheckpoint = CriticalDispatchLifecycleCheckpoint.Begin(
                 dispatchLifecycleGate, kernel, goal.Id, persistCriticalDispatchStart,
@@ -434,7 +439,7 @@ internal sealed partial class ConductorDriver
                     checkpointBeforeWorkerStart: FindingEvidenceContinuationCoordinator.FindingEvidenceDispatchCheckpoint(this, dispatchCheckpoint),
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
-                    recordDurableGoalBaseline: recordDurableGoalBaseline);
+                    recordDurableGoalBaseline: RecordDurableGoalBaseline);
             }
             catch (DispatchRecordWriteException ex) when (ex.PreservesAuthoritativeState)
             {
@@ -1216,26 +1221,8 @@ internal sealed partial class ConductorDriver
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {
-        if (result.Processes.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
-        {
-            return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
-        }
-
-        if (result.Processes.Tasks.Count > 0)
-        {
-            return DispatchStartOutcome.Started(result.Processes.Tasks);
-        }
-
-        if (result.Processes.StartFailures?.FirstOrDefault() is { } startFailure)
-        {
-            return DispatchStartOutcome.SpawnFailed(startFailure.Reason);
-        }
-
-        if (result.Processes.RequeueSkippedCount > 0)
-        {
-            return DispatchStartOutcome.EmptyBatch(
-                $"Skipped {result.Processes.RequeueSkippedCount} automatic interrupted-dispatch requeue(s) after terminal-state preflight");
-        }
+        if (DispatchStartClassifier.ClassifyProcessStart(result.Processes) is { } outcome)
+            return outcome;
 
         var reason = result.Dispatches.Count == 0
             ? DescribeEmptyBatch(result.ParallelPlan, result.BlockedDiagnostics)
@@ -1246,7 +1233,7 @@ internal sealed partial class ConductorDriver
     }
 
     internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result) =>
-        RecordedDispatchStartClassifier.Classify(result);
+        DispatchStartClassifier.ClassifyRecordedStart(result);
 
     internal Func<Goal, SoloAcceptanceConsumptionContext?>? SoloAcceptanceContextReader { get; set; }
     private SoloAcceptanceFailureHandler SoloAcceptanceFailure => new(
