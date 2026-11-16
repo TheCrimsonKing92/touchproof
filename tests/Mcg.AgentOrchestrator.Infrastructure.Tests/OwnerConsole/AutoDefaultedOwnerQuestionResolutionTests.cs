@@ -13,7 +13,7 @@ public sealed class AutoDefaultedOwnerQuestionResolutionTests
     {
         using var scene = new OwnerQuestionResolutionDialogTests.Scene();
         var request = scene.Harness.Kernel.RequestHumanInput(scene.Goal.Id, null, "Use proposed scope?",
-            suggestedDefaultAnswer: "Use proposed scope.");
+            isAutoDefaultable: true, suggestedDefaultAnswer: "Use proposed scope.");
         Assert.Single(scene.Harness.Kernel.SweepStaleHumanWaits(TimeSpan.Zero));
         if (matchingIntent)
         {

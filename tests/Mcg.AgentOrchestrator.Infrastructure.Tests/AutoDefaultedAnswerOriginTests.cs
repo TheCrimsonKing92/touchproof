@@ -17,7 +17,7 @@ public sealed class AutoDefaultedAnswerOriginTests
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Default stale clarification");
         var request = kernel.RequestHumanInput(goal.Id, null, "Use proposed scope?",
-            suggestedDefaultAnswer: DefaultAnswer);
+            isAutoDefaultable: true, suggestedDefaultAnswer: DefaultAnswer);
         var snapshot = kernel.ExportSnapshot();
         var siblingId = HumanInputRequestId.New();
         // Reproduce a stored duplicate; normal request creation deduplicates it. The younger
@@ -77,7 +77,7 @@ public sealed class AutoDefaultedAnswerOriginTests
             var kernel = new AgentOrchestratorKernel(new Clock());
             var goal = kernel.CreateGoal("Persist automatic answer");
             var request = kernel.RequestHumanInput(goal.Id, null, "Use proposed scope?",
-                suggestedDefaultAnswer: DefaultAnswer);
+                isAutoDefaultable: true, suggestedDefaultAnswer: DefaultAnswer);
             Assert.Single(kernel.SweepStaleHumanWaits(TimeSpan.Zero));
             Assert.True(request.AuthoritativeAnswer!.IsAutoDefaulted);
             var db = Path.Combine(root, "state.db");
@@ -104,7 +104,7 @@ public sealed class AutoDefaultedAnswerOriginTests
         var kernel = new AgentOrchestratorKernel(new Clock());
         var goal = kernel.CreateGoal("Previous build compatibility");
         var request = kernel.RequestHumanInput(goal.Id, null, "Use proposed scope?",
-            suggestedDefaultAnswer: DefaultAnswer);
+            isAutoDefaultable: true, suggestedDefaultAnswer: DefaultAnswer);
         Assert.Single(kernel.SweepStaleHumanWaits(TimeSpan.Zero));
         var answer = Assert.IsType<HumanInputAnswerRecord>(request.AuthoritativeAnswer);
         var json = JsonSerializer.Serialize(answer, options);
@@ -135,7 +135,7 @@ public sealed class AutoDefaultedAnswerOriginTests
         kernel = GateTestObligationIntakeTests.Seed(kernel, goal, ["OldNameTests"]);
         goal = kernel.GetGoal(goal.Id);
         var obligation = Assert.Single(goal.GateTestObligations);
-        var automatic = kernel.RequestHumanInput(goal.Id, null, "Suggested rename?", suggestedDefaultAnswer: rename);
+        var automatic = kernel.RequestHumanInput(goal.Id, null, "Suggested rename?", isAutoDefaultable: true, suggestedDefaultAnswer: rename);
         Assert.Single(kernel.SweepStaleHumanWaits(TimeSpan.Zero));
         Assert.Equal(HumanInputAnswerOrigin.Operator, automatic.AuthoritativeAnswer!.Origin);
         Assert.Equal(obligation.BriefVersion, automatic.AuthoritativeAnswer.BriefVersion);
@@ -162,7 +162,7 @@ public sealed class AutoDefaultedAnswerOriginTests
         var goal = kernel.CreateGoal("Finding reset provenance");
         var prefix = FindingStagnationDecision.FingerprintPrefix(goal.Id, stableId);
         var automatic = kernel.RequestHumanInputDeduplicated(goal.Id, null, "Suggested ruling?",
-            suggestedDefaultAnswer: DefaultAnswer, questionFingerprint: prefix + "automatic").Request;
+            isAutoDefaultable: true, suggestedDefaultAnswer: DefaultAnswer, questionFingerprint: prefix + "automatic").Request;
         Assert.Single(kernel.SweepStaleHumanWaits(TimeSpan.Zero));
         Assert.True(automatic.AuthoritativeAnswer!.IsAutoDefaulted);
 
@@ -182,7 +182,7 @@ public sealed class AutoDefaultedAnswerOriginTests
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("List automatic answer");
         var request = kernel.RequestHumanInput(goal.Id, null, "Use proposed scope?",
-            suggestedDefaultAnswer: DefaultAnswer);
+            isAutoDefaultable: true, suggestedDefaultAnswer: DefaultAnswer);
         Assert.Single(kernel.SweepStaleHumanWaits(TimeSpan.Zero));
 
         var text = AsyncLocalConsoleRouter.Capture(() => HumanWaitsTextView.Print([request], clock.UtcNow, includeHistory: true));

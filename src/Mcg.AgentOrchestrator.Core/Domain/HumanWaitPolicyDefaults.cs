@@ -11,8 +11,11 @@ public static class HumanWaitPolicyDefaults
     public static bool IsSpecClarificationClass(HumanWaitKind kind) =>
         kind is HumanWaitKind.SpecClarification or HumanWaitKind.PlannerPrerequisiteEvidence or HumanWaitKind.PlannerBriefAmendment;
 
-    public static bool IsAutoDefaultable(HumanWaitKind kind) =>
-        IsSpecClarificationClass(kind);
+    /// <summary>
+    /// No kind is auto-defaultable by default. A stale-wait default may apply only when the creator
+    /// explicitly opts in for a question classified as reversible and not criterion-weakening.
+    /// </summary>
+    public static bool IsAutoDefaultable(HumanWaitKind kind) => false;
 
     public static bool IsDismissible(HumanWaitKind kind) =>
         IsSpecClarificationClass(kind) || kind is HumanWaitKind.RecoveryChoice or HumanWaitKind.Other;

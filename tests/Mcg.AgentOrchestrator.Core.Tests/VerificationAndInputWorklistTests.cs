@@ -515,7 +515,7 @@ public sealed class VerificationAndInputWorklistTests
     var dismissGoal = kernel.CreateGoal("Dismiss stale clarification");
     var approvalGoal = kernel.CreateGoal("Keep approval");
     var riskGoal = kernel.CreateGoal("Keep risk review");
-    var defaultWait = kernel.RequestHumanInput(defaultGoal.Id, null, "Use proposed scope?", suggestedDefaultAnswer: "Use proposed scope.");
+    var defaultWait = kernel.RequestHumanInput(defaultGoal.Id, null, "Use proposed scope?", isAutoDefaultable: true, suggestedDefaultAnswer: "Use proposed scope.");
     var dismissWait = kernel.RequestHumanInput(dismissGoal.Id, null, "Still relevant?", isAnswerRequired: false);
     var approvalWait = kernel.RequestHumanInput(approvalGoal.Id, null, "Approve paid run?", HumanWaitKind.OperatorApproval);
     var riskWait = kernel.RequestHumanInput(riskGoal.Id, null, "Accept risk?", HumanWaitKind.RiskReview);
@@ -526,6 +526,8 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(2, resolved.Count);
     Assert.Contains(resolved, item => item.RequestId == defaultWait.Id && item.Resolution == HumanWaitPolicyResolution.Defaulted);
     Assert.Contains(resolved, item => item.RequestId == dismissWait.Id && item.Resolution == HumanWaitPolicyResolution.Dismissed);
+    Assert.True(defaultWait.IsAutoDefaultable);
+    Assert.False(dismissWait.IsAutoDefaultable);
     Assert.True(kernel.GetHumanInputRequest(defaultWait.Id).IsCompleted);
     Assert.Equal("Use proposed scope.", kernel.GetHumanInputRequest(defaultWait.Id).Answer);
     Assert.True(kernel.GetHumanInputRequest(dismissWait.Id).IsCompleted);
@@ -543,6 +545,10 @@ public sealed class VerificationAndInputWorklistTests
     var riskGoal = kernel.CreateGoal("Keep risk forever");
     var approvalWait = kernel.RequestHumanInput(approvalGoal.Id, null, "Approve?", HumanWaitKind.OperatorApproval, suggestedDefaultAnswer: "yes");
     var riskWait = kernel.RequestHumanInput(riskGoal.Id, null, "Accept?", HumanWaitKind.RiskReview, suggestedDefaultAnswer: "yes");
+    var flaggedApproval = kernel.RequestHumanInput(approvalGoal.Id, null, "Approve flagged request?",
+        HumanWaitKind.OperatorApproval, isAutoDefaultable: true, suggestedDefaultAnswer: "yes");
+    var flaggedRisk = kernel.RequestHumanInput(riskGoal.Id, null, "Accept flagged risk?",
+        HumanWaitKind.RiskReview, isAutoDefaultable: true, suggestedDefaultAnswer: "yes");
     clock.Advance(TimeSpan.FromDays(30));
 
     var resolved = kernel.SweepStaleHumanWaits(TimeSpan.FromHours(24));
@@ -554,6 +560,10 @@ public sealed class VerificationAndInputWorklistTests
     Assert.False(approvalWait.IsDismissible);
     Assert.False(riskWait.IsAutoDefaultable);
     Assert.False(riskWait.IsDismissible);
+    Assert.True(flaggedApproval.IsAutoDefaultable);
+    Assert.True(flaggedRisk.IsAutoDefaultable);
+    Assert.False(kernel.GetHumanInputRequest(flaggedApproval.Id).IsCompleted);
+    Assert.False(kernel.GetHumanInputRequest(flaggedRisk.Id).IsCompleted);
 }
 
     [Xunit.Fact(DisplayName = "Parking_goal_resolves_open_human_waits_with_park_reason")]
@@ -992,4 +1002,3 @@ public sealed class VerificationAndInputWorklistTests
         Assert.Equal(4, kernel.HumanInputRequests.Single().SuppressionCount);
     }
 }
-

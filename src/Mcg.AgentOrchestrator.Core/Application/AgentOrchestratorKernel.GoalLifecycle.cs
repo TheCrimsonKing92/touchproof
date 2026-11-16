@@ -2308,8 +2308,8 @@ public sealed partial class AgentOrchestratorKernel
             {
                 continue;
             }
-
-            if (request.IsAutoDefaultable && !string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer))
+            // Brief amendments change acceptance criteria and must never be auto-defaulted.
+            if (request.IsAutoDefaultable && request.Kind != HumanWaitKind.PlannerBriefAmendment && !string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer))
             {
                 SubmitHumanInputCore(request.Id, request.SuggestedDefaultAnswer, null,
                     HumanInputAnswerOrigin.Operator, supersedeSiblings: true, isAutoDefaulted: true);
