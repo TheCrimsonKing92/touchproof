@@ -20,7 +20,7 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
             var run = scenario.Driver.RunMergeTrain(scenario.Selection, scenario.Goals,
                 ConductorAutonomyPolicy.Permissive, gateOnly: true);
 
-            Assert.Equal(3, scenario.Acquisitions);
+            Assert.True(scenario.Acquisitions == 3, $"expected acquisitions=3; acquisitions={scenario.Acquisitions}; delays={scenario.Delays}; busyRounds={scenario.BusyRounds}; detail={run.Detail}");
             Assert.Equal(2, scenario.Delays);
             Assert.Empty(run.Ejections);
             if (busyRounds == 3)
@@ -58,7 +58,7 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
             for (var tick = 0; tick < 2; tick++)
             {
                 var inflight = scenario.StartBackground();
-                Assert.Contains("outcome=inflight", inflight.Detail);
+                Assert.True(inflight.Detail.Contains("outcome=inflight", StringComparison.Ordinal), $"expected substring outcome=inflight; detail={inflight.Detail}");
                 Assert.Equal(tick + 1, scenario.Launches.Count);
                 var attempt = scenario.Launches[tick];
                 ConductorGroupedGateOutcome? outcome = null;
@@ -83,7 +83,7 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
             // The next tick also revisits the already-reconciled first deferral.
             scenario.BusyRounds = 0;
             var retry = scenario.StartBackground();
-            Assert.Contains("outcome=inflight", retry.Detail);
+            Assert.True(retry.Detail.Contains("outcome=inflight", StringComparison.Ordinal), $"expected substring outcome=inflight; detail={retry.Detail}");
             Assert.Equal(3, scenario.Launches.Count);
             AssertNoRecordedOutcome(scenario);
             var freeAttempt = scenario.Launches[2];

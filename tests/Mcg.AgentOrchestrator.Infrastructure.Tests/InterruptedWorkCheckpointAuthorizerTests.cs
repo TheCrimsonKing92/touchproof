@@ -101,7 +101,7 @@ public sealed class InterruptedWorkCheckpointAuthorizerTests
 
         var result = fixture.Authorize();
 
-        Xunit.Assert.Equal(InterruptedWorkCheckpointDispositionKind.Skipped, result.Kind);
+        Xunit.Assert.True(result.Kind == InterruptedWorkCheckpointDispositionKind.Skipped, $"expected kind=Skipped; kind={result.Kind}; token={result.Token}; message={result.Message}");
         Xunit.Assert.Equal("checkpoint-skip-no-source-evidence", result.Token);
         Xunit.Assert.Equal(0, fixture.CommitCountAfterBase());
     }
