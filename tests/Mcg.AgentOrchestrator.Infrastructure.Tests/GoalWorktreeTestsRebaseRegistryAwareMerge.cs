@@ -25,11 +25,11 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
 
-        AssertMerged(fixture, result, events);
-        AssertLoweredHead(fixture);
+        var merged = AssertMerged(fixture, result, events);
+        AssertLoweredHead(fixture, merged);
         var expected = Registry(Row(A, 11, "main A") + Row(B, 12, "main B") + Row(C, 13, "goal C"));
-        Assert.Equal(expected, ReadMergedAuthority(fixture));
-        var bytes = ReadMergedAuthorityBytes(fixture);
+        var bytes = ReadMergedAuthorityBytes(fixture, merged);
+        Assert.Equal(expected, DecodeAuthority(bytes));
         Assert.Equal(bom, bytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf }));
         var encoded = new UTF8Encoding(bom).GetBytes(expected.ReplaceLineEndings(lineEnding));
         Assert.Equal(encoded, bytes[(bom ? 3 : 0)..]);
@@ -62,15 +62,17 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
     [Fact]
     public void BelowMeasuredRow_RefusesAndRestoresOriginalCleanBranch()
     {
-        using var fixture = new AdditiveConflictGitFixture([
-            new(SourceSizeRatchet.SourcePath, Registry(Row(WidgetPath, 3, "base") + Row(B, 10, "base B")),
-                Registry(Row(WidgetPath, 4, "main growth") + Row(B, 10, "base B")),
-                Registry(Row(WidgetPath, 3, "base") + Row(B, 11, "goal B"))),
-            new(WidgetPath, BaseText, MainText, GoalText), Guard(B)
-        ]);
+        using var fixture = BelowMeasuredRowFixture();
 
         AssertRefused(fixture, "registry-ceiling-below-measured");
     }
+
+    internal static AdditiveConflictGitFixture BelowMeasuredRowFixture() => new([
+        new(SourceSizeRatchet.SourcePath, Registry(Row(WidgetPath, 3, "base") + Row(B, 10, "base B")),
+            Registry(Row(WidgetPath, 4, "main growth") + Row(B, 10, "base B")),
+            Registry(Row(WidgetPath, 3, "base") + Row(B, 11, "goal B"))),
+        new(WidgetPath, BaseText, MainText, GoalText), Guard(B)
+    ]);
 
     [Fact]
     public void DivergentClassEntry_MergesWithMeasuredClassTotals()
@@ -83,12 +85,12 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
 
         var events = new List<string>();
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
-        AssertMerged(fixture, result, events);
+        var merged = AssertMerged(fixture, result, events);
         var measured = SourceSizeRatchet.MeasureClasses(fixture.Worktree, ["Widget"], out var unreadable)["Widget"];
         Assert.Empty(unreadable);
         Assert.Equal((3, 1), measured);
         Assert.Equal(Registry(Row(A, 10), $"        new SourceClassCeiling(\"Widget\", {measured.TotalLines}, {measured.PartialFiles}),\n"),
-            ReadMergedAuthority(fixture));
+            ReadMergedAuthority(fixture, merged));
     }
 
     [Fact]
@@ -146,22 +148,33 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
     [Fact]
     public void AdditionsAndRemoval_PreservesSurvivingOrderAndMainFirstAnchors()
     {
+        using var fixture = AdditionsAndRemovalFixture();
+        var (result, events) = Rebase(fixture);
+
+        AssertAdditionsAndRemoval(fixture, result, events);
+    }
+
+    internal static AdditiveConflictGitFixture AdditionsAndRemovalFixture()
+    {
         const string d = "src/D.cs";
         const string e = "src/E.cs";
-        using var fixture = new AdditiveConflictGitFixture([
+        return new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10) + Row(B, 10) + Row(C, 10)),
                 Registry(Row(A, 11, "main A") + Row(d, 10, "main addition") + Row(B, 10) + Row(C, 10)),
                 Registry(Row(A, 10) + Row(e, 10, "goal addition") + Row(C, 12, "goal C"))),
             Guard(A), Guard(B), Guard(C), Guard(d), Guard(e)
         ]);
-        var events = new List<string>();
+    }
 
-        var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
-
-        AssertMerged(fixture, result, events);
-        AssertLoweredHead(fixture);
+    internal static void AssertAdditionsAndRemoval(
+        AdditiveConflictGitFixture fixture, GoalWorktreeRebaseResult result, List<string> events)
+    {
+        const string d = "src/D.cs";
+        const string e = "src/E.cs";
+        var merged = AssertMerged(fixture, result, events);
+        AssertLoweredHead(fixture, merged);
         Assert.Equal(Registry(Row(A, 11, "main A") + Row(d, 10, "main addition") +
-            Row(e, 10, "goal addition") + Row(C, 12, "goal C")), ReadMergedAuthority(fixture));
+            Row(e, 10, "goal addition") + Row(C, 12, "goal C")), ReadMergedAuthority(fixture, merged));
     }
 
     [Fact]
@@ -176,9 +189,9 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
 
-        AssertMerged(fixture, result, events);
-        AssertLoweredHead(fixture);
-        Assert.Equal(Registry(Row(A, 11) + Row(B, 12), ClassRow(10)), ReadMergedAuthority(fixture));
+        var merged = AssertMerged(fixture, result, events);
+        AssertLoweredHead(fixture, merged);
+        Assert.Equal(Registry(Row(A, 11) + Row(B, 12), ClassRow(10)), ReadMergedAuthority(fixture, merged));
     }
 
     [Fact]
@@ -262,10 +275,10 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
 
-        AssertMerged(fixture, result, events);
-        AssertLoweredHead(fixture);
+        var merged = AssertMerged(fixture, result, events);
+        AssertLoweredHead(fixture, merged);
         Assert.Equal(ChangeLayout(Registry(Row(A, 11, "main A") + Row(B, 12, "goal B"))),
-            ReadMergedAuthority(fixture));
+            ReadMergedAuthority(fixture, merged));
     }
 
     [Fact]
@@ -294,11 +307,14 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         "    internal static SourceSizeCeiling[] SeededCeilings = new[]\n    {\n" + rows + "    };\n\n" +
         "    internal static SourceClassCeiling[] SeededClassCeilings = new[]\n    {\n" + classes + "    };\n}\n";
 
-    private static void AssertMerged(AdditiveConflictGitFixture fixture, GoalWorktreeRebaseResult result, List<string> events)
+    private sealed record MergedHead(string Subject, string Revision);
+
+    private static MergedHead AssertMerged(AdditiveConflictGitFixture fixture, GoalWorktreeRebaseResult result, List<string> events)
     {
         Assert.Equal(GoalWorktreeRebaseStatus.Rebased, result.Status);
         Assert.Equal("additive-conflict-auto-merge", result.Detail);
-        var parents = Git(fixture.Worktree, "rev-list", "--parents", "-n", "1", MergeRevision(fixture)).Trim().Split(' ');
+        var merged = ReadMergedHead(fixture);
+        var parents = Git(fixture.Worktree, "rev-list", "--parents", "-n", "1", merged.Revision).Trim().Split(' ');
         Assert.Equal(3, parents.Length);
         Assert.Equal(fixture.OriginalHead, parents[1]);
         Assert.Equal(fixture.MainHead, parents[2]);
@@ -306,30 +322,36 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         Assert.Contains("reason=none", events[0]);
         Assert.Contains("merge=" + parents[0], events[0]);
         Assert.Equal("", Git(fixture.Worktree, "status", "--porcelain=v1", "--untracked-files=all"));
+        return merged;
     }
 
-    private static string MergeRevision(AdditiveConflictGitFixture fixture) =>
-        Git(fixture.Worktree, "log", "-1", "--format=%s").Trim() == SourceSizeRatchetRetightener.CommitSubject
-            ? "HEAD^" : "HEAD";
+    private static MergedHead ReadMergedHead(AdditiveConflictGitFixture fixture)
+    {
+        var subject = Git(fixture.Worktree, "log", "-1", "--format=%s").Trim();
+        return new(subject, subject == SourceSizeRatchetRetightener.CommitSubject ? "HEAD^" : "HEAD");
+    }
 
-    private static string ReadMergedAuthority(AdditiveConflictGitFixture fixture) =>
-        Encoding.UTF8.GetString(ReadMergedAuthorityBytes(fixture)).TrimStart('\uFEFF').ReplaceLineEndings("\n");
+    private static string ReadMergedAuthority(AdditiveConflictGitFixture fixture, MergedHead merged) =>
+        DecodeAuthority(ReadMergedAuthorityBytes(fixture, merged));
 
-    private static byte[] ReadMergedAuthorityBytes(AdditiveConflictGitFixture fixture)
+    private static string DecodeAuthority(byte[] bytes) =>
+        Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF').ReplaceLineEndings("\n");
+
+    private static byte[] ReadMergedAuthorityBytes(AdditiveConflictGitFixture fixture, MergedHead merged)
     {
         var temporary = Directory.CreateTempSubdirectory("ratchet-merge-bytes-");
         try
         {
             Git(fixture.Worktree, "--work-tree=" + temporary.FullName, "restore",
-                "--source=" + MergeRevision(fixture), "--worktree", "--", SourceSizeRatchet.SourcePath);
+                "--source=" + merged.Revision, "--worktree", "--", SourceSizeRatchet.SourcePath);
             return File.ReadAllBytes(Path.Combine(temporary.FullName, SourceSizeRatchet.SourcePath));
         }
         finally { temporary.Delete(true); }
     }
 
-    private static void AssertLoweredHead(AdditiveConflictGitFixture fixture)
+    private static void AssertLoweredHead(AdditiveConflictGitFixture fixture, MergedHead merged)
     {
-        Assert.Equal(SourceSizeRatchetRetightener.CommitSubject, Git(fixture.Worktree, "log", "-1", "--format=%s").Trim());
+        Assert.Equal(SourceSizeRatchetRetightener.CommitSubject, merged.Subject);
         var rows = SourceSizeRatchetPreflight.TryReadAuthority(fixture.Worktree);
         Assert.NotNull(rows);
         Assert.NotEmpty(rows);
@@ -338,8 +360,20 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
 
     private static void AssertRefused(AdditiveConflictGitFixture fixture, string reason)
     {
+        var (result, events) = Rebase(fixture);
+        AssertRefusal(fixture, result, events, reason);
+    }
+
+    internal static (GoalWorktreeRebaseResult Result, List<string> Events) Rebase(AdditiveConflictGitFixture fixture)
+    {
         var events = new List<string>();
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
+        return (result, events);
+    }
+
+    internal static void AssertRefusal(
+        AdditiveConflictGitFixture fixture, GoalWorktreeRebaseResult result, List<string> events, string reason)
+    {
         Assert.Equal(GoalWorktreeRebaseStatus.Conflict, result.Status);
         fixture.AssertRestored();
         Assert.Contains("result=refused", Assert.Single(events));

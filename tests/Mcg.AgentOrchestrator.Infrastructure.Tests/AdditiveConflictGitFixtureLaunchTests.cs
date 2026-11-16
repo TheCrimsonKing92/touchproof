@@ -1,5 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 using static AdditiveConflictGitFixture;
+using static GoalWorktreeTestsRebaseRegistryAwareMerge;
+using GitLaunches = GoalRepositoryWorktreeProvisionerFixtureSeedTests.GitLaunches;
 
 // Parallel-safe: each fact owns isolated repositories/worktrees and an AsyncLocal launch counter.
 public sealed class AdditiveConflictGitFixtureLaunchTests
@@ -68,5 +70,88 @@ public sealed class AdditiveConflictGitFixtureLaunchTests
         Assert.Contains(ignoredPath,
             Git(fixture.Worktree, "ls-tree", "-r", "--name-only", "HEAD")
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Xunit.Fact]
+    public void MergedAdditionsAndRemoval_AssertionHelpersCutLaunches()
+    {
+        // Source-derived baseline helpers at 7703ca63b: 6 (log x3, rev-list, status, restore).
+        // Optimized ceiling: 4 (log, rev-list, status, restore). Acceptance executes
+        // the before/after measurements. Product rebase launches are unchanged;
+        // the combined baseline is the observed rebase count + 6, excluding construction.
+        const int maximumHelperLaunches = 4;
+        using var warm = new AdditiveConflictGitFixture();
+        var construction = new GitLaunches();
+        AdditiveConflictGitFixture fixture;
+        using (construction)
+            fixture = AdditionsAndRemovalFixture();
+        using (fixture)
+        {
+            var rebase = new GitLaunches();
+            GoalWorktreeRebaseResult result;
+            List<string> events;
+            using (rebase)
+                (result, events) = Rebase(fixture);
+            var helpers = new GitLaunches();
+            using (helpers)
+                AssertAdditionsAndRemoval(fixture, result, events);
+
+            AssertLaunchBudget(construction.Commands, rebase.Commands, helpers.Commands, maximumHelperLaunches);
+            var commands = helpers.Commands;
+            Assert.Equal(1, commands.Count(command => command == "log"));
+            Assert.Equal(1, commands.Count(command => command == "rev-list"));
+            Assert.Equal(1, commands.Count(command => command == "status"));
+            Assert.Equal(1, commands.Count(command => command.StartsWith("--work-tree=", StringComparison.Ordinal)));
+            Assert.Equal(0, commands.Count(command => command == "rev-parse"));
+            Assert.Equal(0, commands.Count(command => command == "symbolic-ref"));
+        }
+    }
+
+    [Xunit.Fact]
+    public void RefusedBelowMeasuredRow_RestorationChecksCutLaunches()
+    {
+        // Source-derived baseline helpers at 7703ca63b: 5 (rev-parse x3, status, symbolic-ref).
+        // Optimized ceiling: 1 (status). Acceptance executes the before/after
+        // measurements. Product rebase launches are unchanged; the combined baseline
+        // is the observed rebase count + 5, excluding construction.
+        const int maximumHelperLaunches = 1;
+        using var warm = new AdditiveConflictGitFixture();
+        var construction = new GitLaunches();
+        AdditiveConflictGitFixture fixture;
+        using (construction)
+            fixture = BelowMeasuredRowFixture();
+        using (fixture)
+        {
+            var rebase = new GitLaunches();
+            GoalWorktreeRebaseResult result;
+            List<string> events;
+            using (rebase)
+                (result, events) = Rebase(fixture);
+            var helpers = new GitLaunches();
+            using (helpers)
+                AssertRefusal(fixture, result, events, "registry-ceiling-below-measured");
+
+            AssertLaunchBudget(construction.Commands, rebase.Commands, helpers.Commands, maximumHelperLaunches);
+            var commands = helpers.Commands;
+            Assert.Equal(1, commands.Count(command => command == "status"));
+            Assert.Equal(0, commands.Count(command => command == "rev-parse"));
+            Assert.Equal(0, commands.Count(command => command == "symbolic-ref"));
+            Assert.Equal(0, commands.Count(command => command == "branch"));
+        }
+    }
+
+    private static void AssertLaunchBudget(
+        string[] construction, string[] rebase, string[] helpers, int maximumHelperLaunches)
+    {
+        var combined = rebase.Length + helpers.Length;
+        var maximumCombined = rebase.Length + maximumHelperLaunches;
+        var phases = $"construction ({construction.Length}): {string.Join(", ", construction)}; " +
+            $"rebase ({rebase.Length}): {string.Join(", ", rebase)}; " +
+            $"helpers ({helpers.Length}): {string.Join(", ", helpers)}";
+        Xunit.TestContext.Current.TestOutputHelper!.WriteLine(phases);
+        Assert.True(combined <= maximumCombined,
+            $"Expected at most {maximumCombined} rebase + assertion git launches; got {combined}; {phases}");
+        Assert.Equal(3, construction.Count(command => command == "commit"));
+        Assert.Contains("rebase", rebase);
     }
 }
