@@ -134,6 +134,42 @@ public sealed class SelectedExecutionGateMissDetectorTests
         Assert.Equal(2, fixture.Lines.Count(line => line.Contains("result=miss-raised ", StringComparison.Ordinal)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueuedRequest_AllMissesResolved_ClearsOnlyCollectionMarker(bool multipleMisses)
+    {
+        using var fixture = new SelectedExecutionBackstopFixture();
+        await fixture.Land();
+        if (multipleMisses) await fixture.Land("goal-2", "main-2");
+        await fixture.Service(capacity: false);
+        var queued = Assert.IsType<SelectedExecutionBackstopRequest>((await fixture.Store.ReadAsync())!.Request);
+        Assert.Empty(fixture.Calls);
+        var detector = new SelectedExecutionGateMissDetector(fixture.Coordinator);
+
+        var result = await detector.ObserveAsync("gate", Arm(FindingEvidenceArm.Candidate), Arm(FindingEvidenceArm.Baseline));
+
+        Assert.Equal(multipleMisses ? 2 : 1, result.Misses.Count);
+        Assert.Equal(result.Misses.Count, (await fixture.Items.ListAsync()).Count);
+        var markerPath = AcceptanceSelectedExecutionSessionSuspension.MarkerPath(fixture.Home);
+        var marker = JsonSerializer.Deserialize<AcceptanceSelectedExecutionSessionSuspension>(await File.ReadAllTextAsync(markerPath));
+        Assert.Equal(multipleMisses ? "multiple-open-misses" : result.Misses[0].Id, marker!.MissId);
+        Assert.NotNull(await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home));
+
+        // Resolve every item before reconciliation, leaving the collection marker
+        // in place while the unrelated full-suite request is still queued.
+        foreach (var miss in result.Misses)
+            Assert.True(await fixture.Items.TryResolveAsync(miss.CorrelationKey, "landing verified"));
+        await fixture.Service(capacity: false);
+
+        var state = (await fixture.Store.ReadAsync())!;
+        Assert.Null(state.OpenMiss);
+        Assert.Equal(JsonSerializer.Serialize(queued), JsonSerializer.Serialize(state.Request));
+        Assert.Empty(fixture.Calls);
+        Assert.Null(await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home));
+        Assert.Equal(!multipleMisses, File.Exists(markerPath));
+    }
+
     private static FindingEvidenceArmReceipt Arm(FindingEvidenceArm arm, string[]? failures = null) =>
         new(arm, arm == FindingEvidenceArm.Candidate ? "candidate-sha" : "baseline-sha", FindingEvidenceArmDisposition.Red,
             Accepted: true, Passed: false, Summary: "synthetic evidence",

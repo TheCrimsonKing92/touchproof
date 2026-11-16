@@ -398,8 +398,16 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             AcceptanceSelectedExecutionSessionSuspension.Write(home, new("multiple-open-misses", stateHome), stateHome);
         else if (open.Length == 1)
             AcceptanceSelectedExecutionSessionSuspension.Write(home, new(open[0].Id, stateHome), stateHome);
-        else if (state.Request is null)
-            AcceptanceSelectedExecutionSessionSuspension.Write(home, null, stateHome);
+        else
+        {
+            var markerPath = AcceptanceSelectedExecutionSessionSuspension.MarkerPath(home, stateHome);
+            // A queued request can retain an individual marker, whose terminal item
+            // the reader checks. A collection marker has no item to dismiss it.
+            if (state.Request is null || File.Exists(markerPath) &&
+                JsonSerializer.Deserialize<AcceptanceSelectedExecutionSessionSuspension>(
+                    await File.ReadAllTextAsync(markerPath).ConfigureAwait(false))?.MissId == "multiple-open-misses")
+                AcceptanceSelectedExecutionSessionSuspension.Write(home, null, stateHome);
+        }
         return state;
     }
 
