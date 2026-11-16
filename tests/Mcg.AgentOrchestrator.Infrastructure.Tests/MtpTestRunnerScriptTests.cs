@@ -1900,6 +1900,15 @@ public sealed class MtpTestRunnerScriptTests
     internal static IReadOnlyList<ManagedTestDescriptor> DiscoverManagedTestCatalog(
         bool allowEmpty,
         params string[] filterArguments)
+        => ValidateManagedDiscovery(LaunchManagedDiscovery(filterArguments), allowEmpty);
+
+    internal static IReadOnlyList<ManagedTestDescriptor> DiscoverManagedTestCatalog(
+        ManagedDiscoveryLaunchLedger ledger,
+        bool allowEmpty,
+        params string[] filterArguments)
+        => ValidateManagedDiscovery(ledger.Request(filterArguments), allowEmpty);
+
+    internal static ProcessResult LaunchManagedDiscovery(string[] filterArguments)
     {
         InvocationCounterScope.CountDiscovery();
         var resultsDirectory = Path.GetFullPath(SharedTestSupport.CreateTempDirectory());
@@ -1923,40 +1932,45 @@ public sealed class MtpTestRunnerScriptTests
             // Owned pipes keep cmd's UTF-8 preflight isolated from the parent's console and handles.
             var result = Run(startInfo, TimeSpan.FromMinutes(2),
                 capturePipes: stdoutPipe is null ? null : (stdoutPipe, stderrPipe!));
-            Assert.True(
-                result.ExitCode == 0 || (allowEmpty && result.ExitCode is 1 or 8),
-                $"exit={result.ExitCode}{Environment.NewLine}{result.Stdout}{result.Stderr}");
-            using var document = JsonDocument.Parse(TestCoverageInvariantDiscoveryJson.EscapeRawControlCharacters(result.Stdout.Trim()));
-            var tests = document.RootElement.GetProperty("tests")
-                .EnumerateArray()
-                .Select(test =>
-                {
-                    var type = test.GetProperty("type");
-                    var traits = test.TryGetProperty("traits", out var traitElements)
-                        ? traitElements.EnumerateArray()
-                            .Select(trait => new KeyValuePair<string, string>(
-                                trait.GetProperty("key").GetString()!,
-                                trait.GetProperty("value").GetString()!))
-                            .ToArray()
-                        : [];
-                    return new ManagedTestDescriptor(
-                        test.GetProperty("uid").GetString()!,
-                        test.GetProperty("displayName").GetString()!,
-                        type.GetProperty("typeName").GetString()!,
-                        type.GetProperty("methodName").GetString()!,
-                        traits);
-                })
-                .ToArray();
-            if (!allowEmpty)
-            {
-                Assert.NotEmpty(tests);
-            }
-            return tests;
+            return result;
         }
         finally
         {
             SharedTestSupport.RemoveTempDirectory(resultsDirectory);
         }
+    }
+
+    internal static IReadOnlyList<ManagedTestDescriptor> ValidateManagedDiscovery(ProcessResult result, bool allowEmpty)
+    {
+        Assert.True(
+            result.ExitCode == 0 || (allowEmpty && result.ExitCode is 1 or 8),
+            $"exit={result.ExitCode}{Environment.NewLine}{result.Stdout}{result.Stderr}");
+        using var document = JsonDocument.Parse(TestCoverageInvariantDiscoveryJson.EscapeRawControlCharacters(result.Stdout.Trim()));
+        var tests = document.RootElement.GetProperty("tests")
+            .EnumerateArray()
+            .Select(test =>
+            {
+                var type = test.GetProperty("type");
+                var traits = test.TryGetProperty("traits", out var traitElements)
+                    ? traitElements.EnumerateArray()
+                        .Select(trait => new KeyValuePair<string, string>(
+                            trait.GetProperty("key").GetString()!,
+                            trait.GetProperty("value").GetString()!))
+                        .ToArray()
+                    : [];
+                return new ManagedTestDescriptor(
+                    test.GetProperty("uid").GetString()!,
+                    test.GetProperty("displayName").GetString()!,
+                    type.GetProperty("typeName").GetString()!,
+                    type.GetProperty("methodName").GetString()!,
+                    traits);
+            })
+            .ToArray();
+        if (!allowEmpty)
+        {
+            Assert.NotEmpty(tests);
+        }
+        return tests;
     }
 
     internal sealed record ManagedTestDescriptor(

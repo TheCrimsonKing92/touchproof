@@ -1,10 +1,11 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 // Parallel-safe: immutable source snapshot and manifest reads; no test hosts or shared mutations.
-public sealed class AcceptanceTestClassSourceScannerRepositoryBaselineTests
+public sealed class AcceptanceTestClassSourceScannerRepositoryBaselineTests(ITestOutputHelper output)
 {
     [Fact]
     public void RepositoryScan_DerivedSshFact_PreservesBaselineMetadataAndOwners()
@@ -13,8 +14,13 @@ public sealed class AcceptanceTestClassSourceScannerRepositoryBaselineTests
         var snapshot = RepositorySourceSnapshotCache.Get(root);
         var files = LaneTestSourceRootResolver.SourceFiles(root, LaneTestSourceRootResolver.Resolve(root));
         Assert.NotEmpty(files);
-        var baseline = LegacyScan(files.Select(path => snapshot.GetSyntaxTree(path).GetRoot()).ToArray());
-        var actual = AcceptanceTestClassSourceScanner.ScanSourceTexts(files.Select(snapshot.GetText));
+        using var scannerParses = AcceptanceTestClassSourceScanner.CountParsesForTests();
+        var requests = new Dictionary<string, int>(OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        var trees = Measure("tree_materialisation", () => files.Select(GetTree).ToArray());
+        var baseline = Measure("legacy_scan", () => LegacyScan(trees.Select(tree => tree.GetRoot()).ToArray()));
+        var actual = Measure("scanner_scan", () => AcceptanceTestClassSourceScanner.ScanSyntaxTreesForTests(trees));
+        var phase = Stopwatch.StartNew();
         Assert.NotEmpty(baseline);
         var byName = actual.ToDictionary(item => item.FullName, StringComparer.Ordinal);
         foreach (var previous in baseline)
@@ -27,20 +33,28 @@ public sealed class AcceptanceTestClassSourceScannerRepositoryBaselineTests
         // A later addition marked only by a derived attribute must deliberately extend this expectation.
         var added = actual.ExceptBy(baseline.Select(item => item.FullName), item => item.FullName).ToArray();
         Assert.Equal(new AcceptanceTestClassDescriptor(sshClass, null), Assert.Single(added));
+        WritePhase("name_comparison", phase);
 
+        phase.Restart();
         var settings = AcceptanceGateEngineSettings.Load(root);
         var rawBefore = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, baseline);
         var rawAfter = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, actual);
         Assert.Empty(TestCollectionGuardRules.FindLaneViolations(settings.InfrastructureTestLanes, actual));
         Assert.Equal("Remainder", Assert.Single(AcceptanceLaneMembership.LanesIncluding(rawAfter, sshClass)).Name);
+        WritePhase("lane_resolution_and_guard", phase);
+        phase.Restart();
         foreach (var previous in baseline)
             Assert.Equal(Owner(rawBefore, previous.FullName), Owner(rawAfter, previous.FullName));
+        WritePhase("raw_owner_comparison", phase);
 
+        phase.Restart();
         var poolSettings = Assert.IsType<AcceptanceBalancedLanePoolSettings>(settings.BalancedLanePool);
         var before = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, baseline,
             new Dictionary<string, double>(), poolSettings);
         var after = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, actual,
             new Dictionary<string, double>(), poolSettings);
+        WritePhase("pool_expansion", phase);
+        phase.Restart();
         Assert.StartsWith(poolSettings.LaneNamePrefix + " ", Owner(after.Lanes, sshClass), StringComparison.Ordinal);
         var beforePool = before.Layout!.Lanes.SelectMany(lane => lane.Members).ToHashSet(StringComparer.Ordinal);
         var afterPool = after.Layout!.Lanes.SelectMany(lane => lane.Members).ToHashSet(StringComparer.Ordinal);
@@ -55,7 +69,35 @@ public sealed class AcceptanceTestClassSourceScannerRepositoryBaselineTests
             else
                 Assert.Equal(Owner(before.Lanes, previous.FullName), afterOwner);
         }
+        WritePhase("expanded_owner_comparison", phase);
+
+        Assert.Equal(files.Length, trees.Length);
+        Assert.Equal(files.Length, requests.Count);
+        Assert.Equal(files.Length, trees.Distinct(ReferenceEqualityComparer.Instance).Count());
+        for (var index = 0; index < files.Length; index++)
+        {
+            Assert.Equal(1, requests[files[index]]);
+            Assert.Same(trees[index], snapshot.GetSyntaxTree(files[index]));
+        }
+        Assert.Equal(0, scannerParses.Count);
+        output.WriteLine($"SCAN_BASELINE_COUNTS files={files.Length} trees={trees.Length} scanner_parses={scannerParses.Count} baseline_classes={baseline.Length} actual_classes={actual.Count}");
+
+        SyntaxTree GetTree(string path)
+        {
+            requests[path] = requests.GetValueOrDefault(path) + 1;
+            return snapshot.GetSyntaxTree(path);
+        }
     }
+
+    private T Measure<T>(string name, Func<T> action)
+    {
+        var watch = Stopwatch.StartNew();
+        try { return action(); }
+        finally { WritePhase(name, watch); }
+    }
+
+    private void WritePhase(string name, Stopwatch watch) =>
+        output.WriteLine(FormattableString.Invariant($"SCAN_BASELINE_PHASE phase={name} elapsed_seconds={watch.Elapsed.TotalSeconds:F6}"));
 
     private static string Owner(IReadOnlyList<AcceptanceTestLane> lanes, string name) =>
         Assert.Single(AcceptanceLaneMembership.LanesIncluding(lanes, name)).Name;

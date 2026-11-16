@@ -3,8 +3,38 @@ using static FocusedEvidenceUnionPlanningSupport;
 using static MtpTestRunnerScriptTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class FocusedEvidenceUnionManagedTests
+[Xunit.TestCaseOrderer(typeof(FocusedEvidenceUnionManagedTests.LedgerLastOrderer))]
+public sealed class FocusedEvidenceUnionManagedTests(
+    FocusedEvidenceUnionManagedTests.DiscoveryFixture fixture) :
+    Xunit.IClassFixture<FocusedEvidenceUnionManagedTests.DiscoveryFixture>
 {
+    public sealed class DiscoveryFixture
+    {
+        internal ManagedDiscoveryLaunchLedger Ledger { get; } = new(LaunchManagedDiscovery, reuse: true);
+        internal HashSet<string> RequestingMethods { get; } = new(StringComparer.Ordinal);
+    }
+
+    public sealed class LedgerLastOrderer : Xunit.v3.ITestCaseOrderer
+    {
+        public IReadOnlyCollection<TTestCase> OrderTestCases<TTestCase>(IReadOnlyCollection<TTestCase> testCases)
+            where TTestCase : notnull, Xunit.Sdk.ITestCase => testCases
+                .OrderBy(test => test.TestMethod.MethodName == nameof(ClassRun_LaunchesEachArgumentListOnceAndReusesRepeats))
+                .ToArray();
+    }
+
+    private IReadOnlyDictionary<string, string> DiscoverManagedTests(params string[] filterArguments) =>
+        DiscoverManagedTests(allowEmpty: false, filterArguments);
+
+    private IReadOnlyDictionary<string, string> DiscoverManagedTests(bool allowEmpty, params string[] filterArguments) =>
+        DiscoverManagedTestCatalog(allowEmpty, filterArguments)
+            .ToDictionary(test => test.Uid, test => test.DisplayName, StringComparer.Ordinal);
+
+    private IReadOnlyList<ManagedTestDescriptor> DiscoverManagedTestCatalog(bool allowEmpty, params string[] filterArguments)
+    {
+        fixture.RequestingMethods.Add(Xunit.TestContext.Current.TestMethod!.MethodName);
+        return MtpTestRunnerScriptTests.DiscoverManagedTestCatalog(fixture.Ledger, allowEmpty, filterArguments);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("|")]
     [Xunit.InlineData(";")]
@@ -102,5 +132,44 @@ public sealed class FocusedEvidenceUnionManagedTests
             Assert.All(values, value => Assert.Contains(all, identity => identity.Contains(value, StringComparison.Ordinal)));
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public void ClassRun_LaunchesEachArgumentListOnceAndReusesRepeats()
+    {
+        var counts = fixture.Ledger.Snapshot();
+        Assert.True(counts.Count > 0,
+            "This test reads its class run's discovery counter; select the complete class.");
+        Assert.Equal(new[]
+        {
+            nameof(DisjointMixedUnion_SelectsEveryIndependentlyDiscoveredIdentity),
+            nameof(OverlapNegativeControl_IsNonemptyAndOmitsRequestedIdentities),
+            nameof(LocalExclusion_DoesNotRemoveOtherAlternative),
+            nameof(EquivalentRecordedShape_ExecutesAllNamedClassesAndMethods)
+        }.Order(StringComparer.Ordinal), fixture.RequestingMethods.Order(StringComparer.Ordinal));
+        Assert.All(counts, count =>
+        {
+            Assert.True(count.Requests > 0);
+            Assert.Equal(1, count.Launches);
+        });
+        Assert.Equal(counts.Count, counts.Sum(count => count.Launches));
+        Assert.True(counts.Sum(count => count.Requests) > counts.Sum(count => count.Launches),
+            "The class must exercise repeated identical requests, then reuse their launch.");
+        foreach (var key in new[]
+        {
+            new[] { "--filter-class", $"*{ClassA}*" },
+            new[] { "--filter-method", $"*{MethodA}*" }
+        })
+        {
+            var repeated = Assert.Single(counts, count => count.Arguments.SequenceEqual(key, StringComparer.Ordinal));
+            Assert.True(repeated.Requests > 1);
+            Assert.Equal(1, repeated.Launches);
+        }
+        Xunit.TestContext.Current.TestOutputHelper!.WriteLine(
+            $"Managed discovery: before={counts.Sum(count => count.Requests)} launches (one per request), " +
+            $"distinct={counts.Count}, after={counts.Sum(count => count.Launches)} launches.");
+        foreach (var count in counts)
+            Xunit.TestContext.Current.TestOutputHelper.WriteLine(
+                $"requests={count.Requests}, launches={count.Launches}, argv={System.Text.Json.JsonSerializer.Serialize(count.Arguments)}");
     }
 }
