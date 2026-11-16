@@ -40,7 +40,23 @@ internal static class CliReadOnlyCommandRunner
         CliBacklogQueryCommand.IsBacklogQueryCommand(args) ||
         CliMonitorGoalQueryCommand.IsMonitorGoalQueryCommand(args) ||
         CliProvenanceQueryCommand.IsProvenanceQueryCommand(args) ||
-        CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args);
+        CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args) ||
+        IsBoardSnapshotReportCommand(args);
+
+    private static bool IsBoardSnapshotReportCommand(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0 || CliCommandHelp.IsCommandSpecificHelp(args))
+            return false;
+
+        return args[0].ToLowerInvariant() switch
+        {
+            "backlog-premise-check" => true,
+            "cross-goal-start-plan" => args.Count == 1 ||
+                (args.Count == 2 && args[1].Equals(
+                    SubscriptionPromptCostGuard.CliConfirmationFlag, StringComparison.OrdinalIgnoreCase)),
+            _ => false
+        };
+    }
 
     internal static bool TryExecute(
         IReadOnlyList<string> args,
@@ -263,7 +279,7 @@ internal static class CliReadOnlyCommandRunner
             return true;
         }
 
-        if (CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args))
+        if (CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args) || IsBoardSnapshotReportCommand(args))
         {
             CliBoardSnapshotQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);

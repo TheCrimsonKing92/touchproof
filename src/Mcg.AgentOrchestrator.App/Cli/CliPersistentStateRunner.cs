@@ -546,7 +546,7 @@ internal static partial class CliPersistentStateRunner
         {
             _ when CliExperimentCommands.IsCommand(args[0]) || CliCommandHelp.IsCommandSpecificHelp(args) => true,
             "help" or "model-functions" or "model-function-add" => true,
-            "goal-intake-status" => true,
+            "goal-intake-status" or "flake-census" or "worker-profiles" or "operator-commands" => true,
             // Portfolio views and writes use their own stores; goals read only metadata.
             "epic-add" or "epic-assign" or "epic-assign-many" or "epic-list" or "epic-show" or "epic-outcome-proposals" => true, _ when EpicProgressReadModel.IsEpicGoalsListing(args) => true,
             // These backlog commands operate solely on the independent BacklogStore, never the
