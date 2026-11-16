@@ -130,13 +130,10 @@ public sealed class AcceptanceSourceMutationTests
         var original = Encoding.UTF8.GetBytes("old text");
         var target = outside.Write("Example.cs", original);
         var link = Path.Combine(fixture.Root, "linked");
-        try
+        var capability = new DirectoryLinkCapability().Create(link, outside.Root);
+        if (!capability.IsAvailable)
         {
-            Directory.CreateSymbolicLink(link, outside.Root);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
-        {
-            Assert.Skip($"Directory symbolic links are unavailable on this host: {exception.Message}");
+            Assert.Skip(capability.UnavailableReason!);
         }
         fixture.TrackLink(link);
         Assert.True((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0);

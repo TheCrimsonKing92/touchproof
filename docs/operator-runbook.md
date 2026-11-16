@@ -1394,3 +1394,21 @@ Configuration capture is the linearization boundary. Atomic application affects 
 Capture points: gate lanes load in `GoalAcceptanceVerifier.LoadRemoteLanes`; focused remote-first loads at `RemoteFirstFocusedEvidence.RunAsync`; shadow at `RemoteFocusedEvidenceShadow.Start`; worker-build captures placement configuration in `CompletionBuildEvidenceCoordinator` before `RemoteWorkerBuildCheck.RunAsync`; screening loads once per `executor-screen` invocation (including its candidate loop); self-test captures its selected entry at command start. Background health probes capture when selected by `ConductorRemoteExecutorProbe.Evaluate`; tools reconciliation captures at `ConductorExecutorToolsDeploy.Run`. Newly selected work skips disabled hosts before occupancy, tools-digest or screening probes. Existing handle receipt/settlement paths retain their bindings. When all applicable entries are disabled, new admission records `no-enabled-executor` and follows the existing local fallback or screening idle policy.
 
 The effect is limited to the activated updated runtime and its updated consumers. Older binaries ignore `enabled`; activate the updated runtime using the existing restart/publish handoff procedure before relying on the setting. This is not fleet-wide immediate revocation. `remote-executors` and Fleet show disabled configured hosts separately from historical health, without scheduling a probe. No live fleet change or deployment is part of verifying this command.
+
+## Running the directory-link mutation case
+
+On a host that already supports directory symbolic links, run this from a clean checkout of the intended candidate. The test class is in the global namespace: its full method identity is `AcceptanceSourceMutationTests.Apply_DirectoryLink_ThrowsInvalidDataWithoutChangingBytes`. The runner accepts an exact class filter combined with the full method symbol using `Name~`; use this copyable selection:
+
+```powershell
+git status --short
+git rev-parse HEAD
+.\scripts\Invoke-TestSummary.ps1 -Target tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj -Filter 'FullyQualifiedName=AcceptanceSourceMutationTests&Name~Apply_DirectoryLink_ThrowsInvalidDataWithoutChangingBytes'
+```
+
+Verify all three checks before reporting a successful execution:
+
+1. **Discovered:** the per-TRX summary shows `total=1`, and the result names the method above. `ZERO TESTS` (exit code 27) means the selection failed. Do not add a namespace or substitute display-name text.
+2. **Executed:** the named case is reported passed, with `passed=1 failed=0 skipped=0`. A successful command exit alone does not prove the case passed.
+3. **Candidate identity:** record the full 40-character SHA from `git rev-parse HEAD` and the clean status with the command and result evidence. Keep the checkout at that SHA through the build and execution; the command builds from that checkout, so do not add `-NoBuild`. The runner does not record the commit for you.
+
+An unavailable capability produces a skip reason beginning `capability-unavailable:directory-link`, followed by the original exception message. Report it as a capability skip, never a pass. When both the mutation code and the directory-link test are unchanged against the candidate's comparison baseline, report this unrelated pre-existing skip as a retained limitation, never as a pass or as missing candidate evidence. This procedure requires no privilege or host-security changes and does not establish that any configured executor has the capability.
