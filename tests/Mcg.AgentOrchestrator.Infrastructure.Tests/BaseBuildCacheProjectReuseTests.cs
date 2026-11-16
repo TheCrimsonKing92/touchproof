@@ -16,6 +16,8 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
     private const string External = "scripts/External/External.csproj";
     private static readonly string[] RestoreProjects = [Shared, LeafA, LeafB];
     private readonly string _root = Path.Combine(Path.GetTempPath(), "project-reuse", Guid.NewGuid().ToString("N"));
+    private readonly Dictionary<string, int> _buildCounts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _identityCommandCounts = new(StringComparer.Ordinal);
 
     [Fact]
     public async Task EnsureAsync_LeafEditAcrossRoots_CompilesOnlyLeafAndConsumer()
@@ -86,20 +88,29 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
     public async Task EnsureAsync_NonPlanReferenceMiss_BuildsReferenceBeforeDependent()
     {
         var tree = Path.Combine(_root, "tree");
-        Seed(tree);
+        Seed(tree, includeLeaves: false);
         var cache = new DotnetBaseBuildCache(Path.Combine(_root, "cache"));
-        await Gate(tree, "cold", cache);
+        var cold = await Gate(tree, "cold", cache, restoreProjects: [Shared], cacheableProjects: [Shared, Consumer]);
+        Assert.Equal(2, cold.CompilerCalls);
         WriteProject(tree, External, []);
         File.WriteAllText(Source(tree, External), "public static class ExternalValue { public static int Read() => 7; }");
-        WriteProject(tree, Consumer, [LeafA, LeafB, External]);
+        WriteProject(tree, Consumer, [Shared, External]);
         File.AppendAllText(Source(tree, Consumer), "\npublic class UsesExternal { public int Read() => ExternalValue.Read(); }");
-        var warm = await Gate(tree, "external", cache);
+        var warm = await Gate(tree, "external", cache, restoreProjects: [Shared], cacheableProjects: [Shared, Consumer]);
         Assert.Equal(new[] { External, Consumer }, BuiltProjects(warm));
         Assert.Equal(new[] { External, Consumer }, warm.Commands.Select(args => args[2]).ToArray());
         Assert.All(warm.Commands, args => Assert.Contains("-p:BuildProjectReferences=false", args));
         Assert.Equal(2, warm.CompilerCalls);
         Assert.True(File.Exists(Assembly(warm.Environment, External)));
         Assert.True(File.Exists(Assembly(warm.Environment, Consumer)));
+        Assert.Contains($"{Shared}=hit", warm.Summary);
+        // All setup builds pass through Gate; there are no shared fixture setup builds.
+        Assert.Equal(3, _buildCounts.Values.Sum());
+        Assert.Equal(1, _buildCounts["cold"]);
+        Assert.Equal(2, _buildCounts["external"]);
+        Assert.Equal(30, _identityCommandCounts.Values.Sum());
+        Assert.Equal(12, _identityCommandCounts["cold"]);
+        Assert.Equal(18, _identityCommandCounts["external"]);
     }
 
     [Fact]
@@ -135,11 +146,12 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
 
     private sealed record GateResult(DotnetBuildEnvironment Environment, string Summary, int CompilerCalls, List<string[]> Commands);
 
-    private async Task<GateResult> Gate(string tree, string slot, DotnetBaseBuildCache cache, string? mainSha = null)
+    private async Task<GateResult> Gate(string tree, string slot, DotnetBaseBuildCache cache, string? mainSha = null,
+        string[]? restoreProjects = null, string[]? cacheableProjects = null)
     {
         var environment = EnvironmentFor(slot);
-        var plan = new DotnetBaseBuildCachePlan(mainSha ?? new string('a', 40), RestoreProjects,
-            [Consumer], [Shared, LeafA, LeafB, Consumer]);
+        var plan = new DotnetBaseBuildCachePlan(mainSha ?? new string('a', 40), restoreProjects ?? RestoreProjects,
+            [Consumer], cacheableProjects ?? [Shared, LeafA, LeafB, Consumer]);
         var phase = new DotnetTestBuildPhase(["dotnet", "build", Consumer, "-v:minimal"], plan);
         var compilerCalls = 0;
         var commands = new List<string[]>();
@@ -151,7 +163,10 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
             // This proves missing non-plan outputs exist before compiling their consumer.
             if (args[2] == Consumer && args.Contains("-p:BuildProjectReferences=false") && File.Exists(Path.GetFullPath(External, tree)))
                 Assert.True(File.Exists(Assembly(environment, External)));
+            _buildCounts[slot] = _buildCounts.GetValueOrDefault(slot) + 1;
+            var buildWatch = Stopwatch.StartNew();
             var result = Run(tree, environment, [.. args, .. environment.Arguments, "-clp:PerformanceSummary"]);
+            output.WriteLine(FormattableString.Invariant($"BUILD_COST slot={slot} project={args[2]} elapsed_seconds={buildWatch.Elapsed.TotalSeconds:F6}"));
             output.WriteLine($"BUILD {slot} {args[2]} exit={result.ExitCode}\n{result.Stdout}\n{result.Stderr}");
             Assert.Equal(0, result.ExitCode);
             Assert.Contains("Task Performance Summary:", result.Stdout);
@@ -163,7 +178,10 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
             await DotnetBaseBuildCacheIdentityResolver.ResolveAsync(tree, candidate.CachePlan!.RestoreProjects,
                 candidate.BuildArguments, owned, args =>
                 {
+                    _identityCommandCounts[slot] = _identityCommandCounts.GetValueOrDefault(slot) + 1;
+                    var identityWatch = Stopwatch.StartNew();
                     var result = Run(tree, owned, args);
+                    output.WriteLine(FormattableString.Invariant($"REUSE_IDENTITY_COMMAND slot={slot} index={_identityCommandCounts[slot]} project={args[2]} elapsed_seconds={identityWatch.Elapsed.TotalSeconds:F6}"));
                     Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(result.ExitCode, result.Stdout));
                 }, ProcessEnvironment(tree, owned), candidate.CachePlan.BuildProjects, candidate.IdentityDiagnostics));
@@ -299,16 +317,22 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
             ["--artifacts-path", artifacts, "-maxcpucount:1", "-p:BuildInParallel=false", "-p:UseSharedCompilation=false"], "fixture");
     }
 
-    private static void Seed(string tree)
+    private static void Seed(string tree, bool includeLeaves = true)
     {
         Directory.CreateDirectory(tree);
         File.WriteAllText(Path.Combine(tree, "Directory.Build.props"),
             "<Project><PropertyGroup><UseSharedCompilation>false</UseSharedCompilation><Deterministic>true</Deterministic></PropertyGroup></Project>");
         WriteProject(tree, Shared, []);
+        File.WriteAllText(Source(tree, Shared), "public static class SharedValue { public static int Read() => 21; }");
+        if (!includeLeaves)
+        {
+            WriteProject(tree, Consumer, [Shared]);
+            File.WriteAllText(Source(tree, Consumer), "public class ConsumerValue { public int Read() => SharedValue.Read(); }");
+            return;
+        }
         WriteProject(tree, LeafA, [Shared]);
         WriteProject(tree, LeafB, [Shared]);
         WriteProject(tree, Consumer, [LeafA, LeafB]);
-        File.WriteAllText(Source(tree, Shared), "public static class SharedValue { public static int Read() => 21; }");
         File.WriteAllText(Source(tree, LeafA), "public class LeafAValue { public int Read() => SharedValue.Read(); }");
         File.WriteAllText(Source(tree, LeafB), "public class LeafBValue { public int Read() => SharedValue.Read(); }");
         File.WriteAllText(Source(tree, Consumer), "public class ConsumerValue { public int Read() => new LeafAValue().Read() + new LeafBValue().Read(); }");

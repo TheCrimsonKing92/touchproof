@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using ConductorLiveness = Mcg.AgentOrchestrator.App.OwnerConsole.ConductorLiveness;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -55,9 +56,9 @@ internal static class OperatorIntentSubmissionOutput
             output: output);
 
     internal static void PrintCriterionEvidence(OperatorIntentRecord persisted, string orchestratorDirectory,
-        string goalId, string? targetLine, bool emitAgentReadEnvelope) =>
+        string goalId, string? targetLine, bool emitAgentReadEnvelope, IConductLockPidProbe? pidProbe = null) =>
         Print(persisted, orchestratorDirectory, emitAgentReadEnvelope,
-            CriterionEvidenceQueuedLine(persisted, goalId), targetLine);
+            CriterionEvidenceQueuedLine(persisted, goalId), targetLine, pidProbe: pidProbe);
 
     internal static void PrintCriterionEvidenceBatch(IReadOnlyList<OperatorIntentRecord> persisted,
         string orchestratorDirectory, string goalId, IReadOnlyList<string> targetLines, bool emitAgentReadEnvelope) =>
@@ -70,14 +71,15 @@ internal static class OperatorIntentSubmissionOutput
         $"status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).";
 
     private static void Print(OperatorIntentRecord persisted, string orchestratorDirectory,
-        bool emitAgentReadEnvelope, string queuedLine, string? followUpLine = null, TextWriter? output = null) =>
+        bool emitAgentReadEnvelope, string queuedLine, string? followUpLine = null, TextWriter? output = null,
+        IConductLockPidProbe? pidProbe = null) =>
         Print(orchestratorDirectory, emitAgentReadEnvelope,
             emitAgentReadEnvelope ? OperatorIntentAgentReadView.Render(persisted) : null,
-            [queuedLine], followUpLine is null ? [] : [followUpLine], output);
+            [queuedLine], followUpLine is null ? [] : [followUpLine], output, pidProbe);
 
     private static void Print(string orchestratorDirectory, bool emitAgentReadEnvelope,
         string? renderedDocument, IReadOnlyList<string> queuedLines, IReadOnlyList<string> followUpLines,
-        TextWriter? output = null)
+        TextWriter? output = null, IConductLockPidProbe? pidProbe = null)
     {
         var writer = output ?? Console.Out;
         if (emitAgentReadEnvelope)
@@ -87,7 +89,20 @@ internal static class OperatorIntentSubmissionOutput
                 writer.WriteLine(queuedLine);
         foreach (var followUpLine in followUpLines)
             (emitAgentReadEnvelope ? Console.Error : writer).WriteLine(followUpLine);
-        if (!ConductorLoopLease.IsActive(orchestratorDirectory))
-            (emitAgentReadEnvelope ? Console.Error : writer).WriteLine(ConductorLoopLease.InactiveWarning);
+        PrintLivenessWarning(orchestratorDirectory, emitAgentReadEnvelope ? Console.Error : writer, pidProbe);
+    }
+
+    internal static void PrintLivenessWarning(string orchestratorDirectory, TextWriter writer,
+        IConductLockPidProbe? pidProbe = null)
+    {
+        switch (ConductorLoopLease.ProbeLiveness(orchestratorDirectory, pidProbe))
+        {
+            case ConductorLiveness.NotRunning:
+                writer.WriteLine(ConductorLoopLease.InactiveWarning);
+                break;
+            case ConductorLiveness.Unknown:
+                writer.WriteLine(ConductorLoopLease.UnknownWarning);
+                break;
+        }
     }
 }

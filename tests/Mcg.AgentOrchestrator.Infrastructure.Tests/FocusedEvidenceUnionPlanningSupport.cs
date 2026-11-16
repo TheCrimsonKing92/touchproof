@@ -54,3 +54,72 @@ internal static class FocusedEvidenceUnionPlanningSupport
         return argv[index..];
     }
 }
+
+// One instance belongs to one class run and its built test assembly. Identity is the
+// requested argv, before the launch helper appends its invocation-owned scratch path.
+internal sealed class ManagedDiscoveryLaunchLedger(
+    Func<string[], MtpTestRunnerScriptTests.ProcessResult> launch,
+    bool reuse)
+{
+    private readonly object sync = new();
+    private readonly Dictionary<string[], Entry> entries = new(new ArgumentListComparer());
+
+    internal MtpTestRunnerScriptTests.ProcessResult Request(params string[] arguments)
+    {
+        Entry entry;
+        lock (sync)
+        {
+            // The caller may reuse or mutate its array after this request.
+            var key = arguments.ToArray();
+            if (!entries.TryGetValue(key, out entry!))
+            {
+                entry = new Entry(key);
+                entry.Outcome = new Lazy<MtpTestRunnerScriptTests.ProcessResult>(
+                    () => Launch(entry), LazyThreadSafetyMode.ExecutionAndPublication);
+                entries.Add(key, entry);
+            }
+            entry.Requests++;
+        }
+        return reuse ? entry.Outcome.Value : Launch(entry);
+    }
+
+    internal IReadOnlyList<LaunchCount> Snapshot()
+    {
+        lock (sync)
+            return entries.Values.Select(entry => new LaunchCount(
+                entry.Arguments.ToArray(), entry.Requests, entry.Launches)).ToArray();
+    }
+
+    private MtpTestRunnerScriptTests.ProcessResult Launch(Entry entry)
+    {
+        lock (sync)
+            entry.Launches++;
+        // Do not let the launch delegate mutate the dictionary's key.
+        return launch(entry.Arguments.ToArray());
+    }
+
+    internal sealed record LaunchCount(string[] Arguments, int Requests, int Launches);
+
+    private sealed class Entry(string[] arguments)
+    {
+        internal string[] Arguments { get; } = arguments;
+        internal int Requests { get; set; }
+        internal int Launches { get; set; }
+        internal Lazy<MtpTestRunnerScriptTests.ProcessResult> Outcome { get; set; } = null!;
+    }
+
+    private sealed class ArgumentListComparer : IEqualityComparer<string[]>
+    {
+        public bool Equals(string[]? left, string[]? right) =>
+            ReferenceEquals(left, right) || (left is not null && right is not null &&
+                left.SequenceEqual(right, StringComparer.Ordinal));
+
+        public int GetHashCode(string[] arguments)
+        {
+            var hash = new HashCode();
+            foreach (var argument in arguments)
+                hash.Add(argument, StringComparer.Ordinal);
+            return hash.ToHashCode();
+        }
+    }
+}

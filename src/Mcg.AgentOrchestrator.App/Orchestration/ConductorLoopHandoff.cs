@@ -16,16 +16,37 @@ internal interface IConductLockPidProbe
     bool IsRunning(int processId);
 
     bool IsSameProcess(int processId, DateTimeOffset processStartedAt);
+
+    ConductLockProbeOutcome Probe(int processId, DateTimeOffset? processStartedAt = null) =>
+        (processStartedAt is null ? IsRunning(processId) : IsSameProcess(processId, processStartedAt.Value))
+            ? ConductLockProbeOutcome.Alive : ConductLockProbeOutcome.Gone;
 }
 
 internal sealed class ConductLockPidProbe : IConductLockPidProbe
 {
+    private readonly Func<int, bool, (bool HasExited, DateTimeOffset StartedAt)> _readProcess;
+
+    internal ConductLockPidProbe(
+        Func<int, bool, (bool HasExited, DateTimeOffset StartedAt)>? readProcess = null)
+    {
+        _readProcess = readProcess ?? ReadProcess;
+    }
+
+    private static (bool HasExited, DateTimeOffset StartedAt) ReadProcess(int processId, bool readStartTime)
+    {
+        using var process = Process.GetProcessById(processId);
+        var hasExited = process.HasExited;
+        var startedAt = readStartTime && !hasExited
+            ? new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero)
+            : default;
+        return (hasExited, startedAt);
+    }
+
     public bool IsRunning(int processId)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
+            return !_readProcess(processId, false).HasExited;
         }
         catch (Exception ex) when (
             ex is ArgumentException or InvalidOperationException or Win32Exception)
@@ -38,16 +59,32 @@ internal sealed class ConductLockPidProbe : IConductLockPidProbe
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            var liveProcessStartedAt = new DateTimeOffset(
-                process.StartTime.ToUniversalTime(),
-                TimeSpan.Zero);
-            return !process.HasExited && liveProcessStartedAt == processStartedAt.ToUniversalTime();
+            var process = _readProcess(processId, true);
+            return !process.HasExited && process.StartedAt == processStartedAt.ToUniversalTime();
         }
         catch (Exception ex) when (
             ex is ArgumentException or InvalidOperationException or Win32Exception)
         {
             return false;
+        }
+    }
+
+    public ConductLockProbeOutcome Probe(int processId, DateTimeOffset? processStartedAt = null)
+    {
+        try
+        {
+            var process = _readProcess(processId, processStartedAt is not null);
+            return process.HasExited ||
+                (processStartedAt is not null && process.StartedAt != processStartedAt.Value.ToUniversalTime())
+                ? ConductLockProbeOutcome.Gone : ConductLockProbeOutcome.Alive;
+        }
+        catch (ArgumentException)
+        {
+            return ConductLockProbeOutcome.Gone;
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            return ConductLockProbeOutcome.Unavailable;
         }
     }
 }
@@ -56,6 +93,8 @@ internal sealed class ConductorLoopLease : IDisposable
 {
     internal const string InactiveWarning =
         "WARNING: intent queued but NO conduct loop is running - it will not apply until a loop starts.";
+    internal const string UnknownWarning =
+        "Warning: conduct loop state could not be read. Run 'status' to check.";
 
     private readonly FileStream _stream;
     private readonly string _path;
@@ -176,10 +215,12 @@ internal sealed class ConductorLoopLease : IDisposable
             try { owner = ReadOwner(path); }
             catch (InvalidOperationException) { return ConductorLiveness.Unknown; }
             var probe = pidProbe ?? new ConductLockPidProbe();
-            var running = owner.ProcessStartedAt is null
-                ? probe.IsRunning(owner.ProcessId)
-                : probe.IsSameProcess(owner.ProcessId, owner.ProcessStartedAt.Value);
-            return running ? ConductorLiveness.Running : ConductorLiveness.NotRunning;
+            return probe.Probe(owner.ProcessId, owner.ProcessStartedAt) switch
+            {
+                ConductLockProbeOutcome.Alive => ConductorLiveness.Running,
+                ConductLockProbeOutcome.Gone => ConductorLiveness.NotRunning,
+                _ => ConductorLiveness.Unknown
+            };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -46,8 +46,7 @@ internal static class CliGoalPriorityCommand
                 JsonSerializer.Deserialize<GoalPriorityOperatorIntentPayload>(persisted.PayloadJson, OperatorIntentJson.Options),
                 OperatorIntentJson.Options);
             Console.WriteLine(document.ToJsonString());
-            if (!ConductorLoopLease.IsActive(context.Workspace.OrchestratorDirectory))
-                Console.Error.WriteLine(ConductorLoopLease.InactiveWarning);
+            OperatorIntentSubmissionOutput.PrintLivenessWarning(context.Workspace.OrchestratorDirectory, Console.Error);
         }
         else
             OperatorIntentSubmissionOutput.PrintAnswer(persisted, context.Workspace.OrchestratorDirectory, goal.Id.Value, false);

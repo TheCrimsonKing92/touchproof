@@ -141,6 +141,54 @@ public sealed class CliOperatorIntentRouteTestsCriterionBatch : CliTaskQueryTest
         Assert.Empty(await fixture.Store.ListForGoalAsync(fixture.Goal.Id.Value));
     }
 
+    [Theory]
+    [InlineData("gone", false)]
+    [InlineData("gone", true)]
+    [InlineData("unavailable", false)]
+    [InlineData("unavailable", true)]
+    [InlineData("alive", false)]
+    [InlineData("alive", true)]
+    public async Task IntentOutput_SelectsLivenessWarningOnExistingChannel(string state, bool json)
+    {
+        using var fixture = new Fixture();
+        CaptureConsole(() => Assert.Equal(0, CliOperatorIntentRoute.Run(fixture.Arguments("1"), fixture.Workspace)));
+        var intent = Assert.Single(await fixture.Store.ListForGoalAsync(fixture.Goal.Id.Value));
+        File.WriteAllLines(Path.Combine(fixture.Workspace.OrchestratorDirectory, "conduct-loop.lock"),
+            ["424242", "2026-01-01T12:00:00.0000000+00:00", "2026-01-01T11:00:00.0000000+00:00"]);
+        var reads = 0;
+        IConductLockPidProbe probe = new ConductLockPidProbe((pid, readStartTime) =>
+        {
+            Assert.Equal(424242, pid);
+            Assert.True(readStartTime);
+            reads++;
+            if (state == "unavailable") throw new System.ComponentModel.Win32Exception(5);
+            return (state == "gone", new DateTimeOffset(2026, 1, 1, 11, 0, 0, TimeSpan.Zero));
+        });
+        string output = "";
+        var error = AsyncLocalConsoleRouter.Error.CaptureLocal(() =>
+            output = CaptureConsole(() => OperatorIntentSubmissionOutput.PrintCriterionEvidence(
+                intent, fixture.Workspace.OrchestratorDirectory, fixture.Goal.Id.Value, null, json, probe)));
+        Assert.Equal(1, reads);
+        var warning = state switch
+        {
+            "gone" => ConductorLoopLease.InactiveWarning,
+            "unavailable" => ConductorLoopLease.UnknownWarning,
+            _ => null
+        };
+        var warningOutput = json ? error : output;
+        if (warning is not null) Assert.Contains(warning + Environment.NewLine, warningOutput, StringComparison.Ordinal);
+        Assert.Equal(state == "gone", warningOutput.Contains(ConductorLoopLease.InactiveWarning, StringComparison.Ordinal));
+        Assert.Equal(state == "unavailable", warningOutput.Contains(ConductorLoopLease.UnknownWarning, StringComparison.Ordinal));
+        Assert.DoesNotContain("NO conduct loop is running", ConductorLoopLease.UnknownWarning, StringComparison.Ordinal);
+        if (state != "gone") Assert.DoesNotContain("NO conduct loop is running", output + error, StringComparison.Ordinal);
+        if (json)
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+        }
+        else Assert.Empty(error);
+    }
+
     private static CriterionEvidenceMappingOperatorIntentPayload Payload(OperatorIntentRecord intent) =>
         JsonSerializer.Deserialize<CriterionEvidenceMappingOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)!;
 
