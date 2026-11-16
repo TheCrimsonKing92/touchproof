@@ -14,15 +14,26 @@ internal static class PlannerCommandSelectorValidation
     }
 
     internal static string? Refusal(IEnumerable<string> selectors, Goal goal, TaskSpec task,
-        Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? source)
+        Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? source,
+        IReadOnlyList<RunnerTestIdentity>? listing = null)
     {
-        // Declared-check matches are accepted either way; identities need no check-source lookup.
-        var commands = selectors.Where(StartsWithRunner).ToArray();
-        if (commands.Length == 0) return null;
+        var all = selectors.ToArray();
+        var commands = all.Where(StartsWithRunner).ToArray();
+        var unmatchedIdentities = listing is { Count: > 0 }
+            ? all.Where(selector => !StartsWithRunner(selector) && !listing.Any(entry =>
+                    string.Equals(selector, entry.Identity, StringComparison.Ordinal) ||
+                    string.Equals(selector, entry.Name, StringComparison.Ordinal)))
+                .Distinct(StringComparer.Ordinal).ToArray()
+            : [];
+        // Unavailable listings preserve identity-only rounds without resolving declared checks.
+        if (commands.Length == 0 && unmatchedIdentities.Length == 0) return null;
 
         var checks = (source ?? Volatile.Read(ref defaultSource))?.Invoke(goal, task) ?? [];
         var unmatched = commands.Where(selector => !checks.Any(check => check.Matches(selector))).ToArray();
-        if (unmatched.Length == 0) return null;
+        var identityDiagnostic = unmatchedIdentities.Length == 0 ? null :
+            $"Planner gate test obligation selectors match no runner-listed test identity: {string.Join(", ", unmatchedIdentities.Select(selector => $"'{selector}'"))}. " +
+            "Use " + GateTestSelectorForm.ForChecks(checks) + ". Use an exact listed identity or test name, then replan.";
+        if (unmatched.Length == 0) return identityDiagnostic;
 
         var declared = checks.Count == 0 ? "no declared checks are available"
             : string.Join(", ", checks.Select(check => $"'{check.Name}'"));
@@ -30,8 +41,11 @@ internal static class PlannerCommandSelectorValidation
             $"Declared check names: {declared}. " +
             "Use " + GateTestSelectorForm.ForChecks(checks) + ". " +
             "A whole-suite criterion such as \"existing checks pass\" is proven by the gate verdict and needs no test obligation. " +
-            "Name a declared check or omit the gate test obligation for that criterion, then replan.";
+            "Name a declared check or omit the gate test obligation for that criterion, then replan." +
+            (identityDiagnostic is null ? "" : " " + identityDiagnostic);
     }
+
+    internal static bool NeedsListing(IEnumerable<string> selectors) => selectors.Any(selector => !StartsWithRunner(selector));
 
     private static bool StartsWithRunner(string selector)
     {
