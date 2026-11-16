@@ -1369,6 +1369,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         Assert.Equal(FindingEvidenceArmDisposition.Green, valid.Arms![0].Disposition);
         Assert.Equal(FindingEvidenceArmDisposition.Red, valid.Arms[1].Disposition);
         Assert.NotEmpty(valid.Arms[1].Checks.SelectMany(check => check.FailingTestIdentities ?? []));
+        var buildCounts = RealDualArmBuildCounts.GetValue(valid, _ => throw new InvalidOperationException());
+        Assert.Equal(1, buildCounts.Candidate);
+        Assert.Equal(1, buildCounts.Baseline);
     }
 
     [Xunit.Fact]
@@ -1381,7 +1384,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         Assert.Equal(FindingEvidenceArmDisposition.Green, inconclusive.Arms![0].Disposition);
         Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, inconclusive.Arms[1].Disposition);
         Assert.Empty(inconclusive.Arms[1].Checks.SelectMany(check => check.FailingTestIdentities ?? []));
+        var buildCounts = RealDualArmBuildCounts.GetValue(inconclusive, _ => throw new InvalidOperationException());
+        Assert.Equal(1, buildCounts.Candidate);
+        Assert.Equal(1, buildCounts.Baseline);
     }
+
+    private sealed record DualArmBuildCounts(int Candidate, int Baseline);
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FocusedEvidenceRunResult, DualArmBuildCounts>
+        RealDualArmBuildCounts = new();
 
     private static async Task<FocusedEvidenceRunResult> RunRealDualArmProbeAsync(
         string baselineFeature,
@@ -1414,15 +1425,23 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
               "forbiddenChangedPathGlobs": []
             }
             """);
+        var buildCountDirectory = Path.Combine(Path.GetTempPath(), "mcg-dual-arm-build-counts", Guid.NewGuid().ToString("N"));
+        var buildCountPath = Path.Combine(buildCountDirectory, "builds.log");
         File.WriteAllText(
             Path.Combine(root, "Directory.Build.props"),
-            """
+            $"""
             <Project>
               <PropertyGroup>
                 <UseSharedCompilation>false</UseSharedCompilation>
                 <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
                 <NuGetAudit>false</NuGetAudit>
               </PropertyGroup>
+              <!-- Count build-phase entries, including compile failures and retries, but not restore.
+                   Processes that exit before MSBuild evaluation cannot reach this target. -->
+              <Target Name="RecordDualArmProbeBuild" BeforeTargets="BeforeBuild" Condition="'$(MSBuildIsRestoring)' != 'true'">
+                <WriteLinesToFile File="{System.Security.SecurityElement.Escape(buildCountPath)}"
+                                  Lines="$(MSBuildProjectDirectory)" Overwrite="false" />
+              </Target>
             </Project>
             """.ReplaceLineEndings("\n"));
         File.WriteAllText(
@@ -1485,11 +1504,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         FocusedEvidenceRunResult? result = null;
         try
         {
+            Directory.CreateDirectory(buildCountDirectory);
             result = await new GoalAcceptanceVerifier(new CrosswalkExecutableResolver()).RunFocusedEvidenceAsync(
                 root,
                 goalId,
                 "Core.Tests: DualArmProbeTests",
                 runBaselineArm: true);
+            var buildProjects = File.Exists(buildCountPath) ? File.ReadAllLines(buildCountPath) : [];
+            var candidatePrefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
+            var candidateBuilds = buildProjects.Count(project =>
+                Path.GetFullPath(project).StartsWith(candidatePrefix, StringComparison.OrdinalIgnoreCase));
+            RealDualArmBuildCounts.Add(result, new DualArmBuildCounts(candidateBuilds, buildProjects.Length - candidateBuilds));
             var baseline = Assert.Single(result.Arms!, arm => arm.Arm == FindingEvidenceArm.Baseline);
             Assert.All(
                 baseline.Checks.Where(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath)),
@@ -1500,6 +1525,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         }
         finally
         {
+            TryDeleteDirectoryWithRetry(buildCountDirectory);
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             foreach (var artifactPath in result?.Arms?
                          .SelectMany(arm => arm.Checks)
