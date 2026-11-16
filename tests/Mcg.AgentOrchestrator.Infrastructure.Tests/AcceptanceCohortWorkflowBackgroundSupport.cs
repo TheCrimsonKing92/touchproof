@@ -37,9 +37,21 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
         return new DrainedTeardown(drained, conditionName, stateDescription);
     }
 
-    private protected void AssertLongTrainGateLandsBothGoals(int iteration = 1, Action? whileGateHeld = null)
+    internal const string LongTrainCandidateRecipeKey = "long-train-candidates";
+
+    internal static CohortCandidateTemplate.PreparedRepository CopyLongTrainCandidates(CohortCandidateTemplate template) =>
+        template.Copy(LongTrainCandidateRecipeKey, 2, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            CreateWorktreeCandidate(preparedRepo, ids[0], "src/Mcg.AgentOrchestrator.Infrastructure/First.cs", "first");
+            CreateWorktreeCandidate(preparedRepo, ids[1], "tests/Second.cs", "second");
+        });
+
+    private protected void AssertLongTrainGateLandsBothGoals(
+        int iteration = 1, Action? whileGateHeld = null, CohortCandidateTemplate? template = null)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        var copy = template is null ? null : CopyLongTrainCandidates(template);
+        var repo = copy?.Repo ?? CreateReducedAcceptanceCohortRepository();
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
         using var gateStarted = new ManualResetEventSlim();
         using var gateRelease = new ManualResetEventSlim();
@@ -48,17 +60,20 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
         DrainedTeardown teardown;
         try
         {
-            AddAcceptanceManifest(repo);
+            if (copy is null) AddAcceptanceManifest(repo);
             File.WriteAllText(trx, ValidPassingTrx());
             var kernel = new AgentOrchestratorKernel();
-            var firstGoal = CreateCompletedGoal(kernel, "First production train member", repo);
-            var secondGoal = CreateCompletedGoal(kernel, "Second production train member", repo);
-            var firstRevision = CreateWorktreeCandidate(
+            var firstGoal = copy?.CreateCompletedGoal(kernel, 0, "First production train member")
+                ?? CreateCompletedGoal(kernel, "First production train member", repo);
+            var secondGoal = copy?.CreateCompletedGoal(kernel, 1, "Second production train member")
+                ?? CreateCompletedGoal(kernel, "Second production train member", repo);
+            var firstRevision = copy?.Revisions[0] ?? CreateWorktreeCandidate(
                 repo,
                 firstGoal.Id,
                 "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
                 "first");
-            var secondRevision = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var secondRevision = copy?.Revisions[1]
+                ?? CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
             foreach (var (goal, revision) in new[] { (firstGoal, firstRevision), (secondGoal, secondRevision) })
             {
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,

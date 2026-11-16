@@ -8,7 +8,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 // Parallel-safe: every scenario owns its repository, storage roots and coordinator.
-public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns : AcceptanceCohortWorkflowBackgroundSupport
+public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowBackgroundSupport, IClassFixture<CohortCandidateTemplate>
 {
     [Fact]
     public async Task ProductionBatch_LongCohortGateLandsBothGoalsAcrossRepeatedRuns()
@@ -99,7 +100,7 @@ public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns : Accept
             {
                 try
                 {
-                    AssertLongTrainGateLandsBothGoals(iteration, iteration == 1 ? ObserveSiblingOverlap : null);
+                    AssertLongTrainGateLandsBothGoals(iteration, iteration == 1 ? ObserveSiblingOverlap : null, template);
                 }
                 catch (Exception ex)
                 {
