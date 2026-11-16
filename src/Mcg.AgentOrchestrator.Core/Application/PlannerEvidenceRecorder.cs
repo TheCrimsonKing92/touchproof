@@ -6,7 +6,8 @@ internal sealed class PlannerEvidenceRecorder(
     object requestLock,
     IClock clock,
     Action<Goal, TaskId?, ProgressKind, string> append,
-    Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? declaredGateCheckSource)
+    Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? declaredGateCheckSource,
+    Func<Goal, TaskSpec, IReadOnlyList<RunnerTestIdentity>?>? testIdentityListingSource)
 {
     internal static bool HasCurrentBlockingHumanInput(Goal goal, TaskSpec task, IEnumerable<HumanInputRequest> requests)
     {
@@ -32,6 +33,10 @@ internal sealed class PlannerEvidenceRecorder(
             return "Planner evidence requires a Planner task.";
         if (batch.EvidenceLineCount > 1 && dispatchBriefVersion is null)
             return "Plural Planner evidence requires authoritative dispatch brief provenance; replan with a new dispatch.";
+        var listing = PlannerTestIdentityListing.Snapshot(batch.Directives
+            .Where(directive => directive.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
+                GateTestObligation.IsAcceptanceGateOwner(directive.EvidenceOwner))
+            .SelectMany(directive => directive.TestNames ?? []), goal, task, testIdentityListingSource);
         lock (requestLock)
         {
             if (dispatchBriefVersion is not null && dispatchBriefVersion != goal.AuthoritativeBrief.Version)
@@ -67,7 +72,7 @@ internal sealed class PlannerEvidenceRecorder(
                 items.Select(item => item.Directive)
                     .Where(directive => directive.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
                         GateTestObligation.IsAcceptanceGateOwner(directive.EvidenceOwner))
-                    .SelectMany(directive => directive.TestNames ?? []), goal, task, declaredGateCheckSource);
+                    .SelectMany(directive => directive.TestNames ?? []), goal, task, declaredGateCheckSource, listing);
             if (selectorDiagnostic is not null) return selectorDiagnostic;
 
             // Requests are not authority. Validate the entire ownership delta now,

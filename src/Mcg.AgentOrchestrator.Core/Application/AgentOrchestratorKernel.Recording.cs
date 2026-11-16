@@ -2,18 +2,18 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
-    private Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? _declaredGateCheckSource;
+    private readonly PlannerEvidenceSources _plannerEvidenceSources = new();
 
-    public void SetDeclaredGateCheckSource(Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>> source)
-    {
-        ArgumentNullException.ThrowIfNull(source);
-        _declaredGateCheckSource = source;
-    }
+    public void SetTestIdentityListingSource(Func<Goal, TaskSpec, IReadOnlyList<RunnerTestIdentity>?> source) =>
+        _plannerEvidenceSources.SetTestIdentities(source);
+
+    public void SetDeclaredGateCheckSource(Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>> source) =>
+        _plannerEvidenceSources.SetDeclaredChecks(source);
 
     internal string? RecordPlannerEvidenceBatch(Goal goal, TaskSpec task,
         HumanInputDirectiveParseResult batch, int? dispatchBriefVersion, out bool blocksActiveWork) =>
         new PlannerEvidenceRecorder(this, _humanInputRequestLock, _clock,
-            (g, t, k, message) => Append(g, t, k, message), _declaredGateCheckSource)
+            (g, t, k, message) => Append(g, t, k, message), _plannerEvidenceSources.DeclaredChecks, _plannerEvidenceSources.TestIdentities)
             .Record(goal, task, batch, dispatchBriefVersion, out blocksActiveWork);
 
     private const int ProviderConnectivityRetryLimit = 3;
@@ -269,7 +269,7 @@ public sealed partial class AgentOrchestratorKernel
                 ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion);
             if (kind == HumanWaitKind.ProspectiveAcceptanceEvidence && GateTestObligation.IsAcceptanceGateOwner(owner) && testNames is { Count: > 0 })
             {
-                var diagnostic = PlannerCommandSelectorValidation.Refusal(testNames, goal, task, _declaredGateCheckSource);
+                var diagnostic = _plannerEvidenceSources.Refusal(testNames, goal, task);
                 if (diagnostic is not null)
                 {
                     PlannerEvidenceCompletion.Reject(this, goal, task, verification, diagnostic);
