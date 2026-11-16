@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -2230,24 +2232,6 @@ public sealed class DispatchProcessHostTests
         Assert.NotEqual(0, process.ExitCode);
     }
 
-    [Xunit.Fact(DisplayName = "IcaclsIntegrityLabeler_set_integrity_returns_false_when_helper_exits_nonzero")]
-    public void IcaclsIntegrityLabelerSetIntegrityReturnsFalseWhenHelperExitsNonZero()
-    {
-        var labeler = new IcaclsIntegrityLabeler(_ => StartNonZeroHelper());
-        var root = Path.Combine(Path.GetTempPath(), "mcg-icacls-nonzero-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            var applied = labeler.SetIntegrity(root, "(OI)(CI)L", recursive: false);
-
-            Assert.False(applied);
-        }
-        finally
-        {
-            try { Directory.Delete(root, recursive: true); } catch { }
-        }
-    }
-
     [Xunit.Fact]
     public void ApplySandbox_FailedRecursivePrep_HoldsLaunchUntilSanctionedRepair()
     {
@@ -2255,6 +2239,16 @@ public sealed class DispatchProcessHostTests
         if (GetCurrentProcessIntegrityRid() < MediumIntegrityRid)
             Assert.Skip("Requires a Medium integrity host for native preparation and Low-token control.");
         var root = Directory.CreateTempSubdirectory("failed-recursive-prep-").FullName;
+        DirectoryInfo? deniedProject = null;
+        byte[]? originalAccess = null;
+        void RestoreAccess()
+        {
+            if (deniedProject is null || originalAccess is null) return;
+            var restored = deniedProject.GetAccessControl(AccessControlSections.Access);
+            restored.SetSecurityDescriptorBinaryForm(originalAccess, AccessControlSections.Access);
+            deniedProject.SetAccessControl(restored);
+            originalAccess = null;
+        }
         try
         {
             var repo = Path.Combine(root, "repo");
@@ -2283,37 +2277,26 @@ public sealed class DispatchProcessHostTests
             Assert.True(labels.Query(existing).Medium);
             Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
             var phases = new List<string>();
-            var failedCalls = 0;
-            // A deterministic failing child leaves real MIC state intact and supplies exit diagnostics.
-            var failedLabels = new IcaclsIntegrityLabeler(info =>
-            {
-                failedCalls++;
-                Assert.Equal("icacls", info.FileName);
-                Assert.Equal(new[] { "/setintegritylevel", "(OI)(CI)L", "/T" }, info.ArgumentList.Skip(1));
-                info.FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe");
-                info.ArgumentList.Clear();
-                info.ArgumentList.Add("/d");
-                info.ArgumentList.Add("/c");
-                info.ArgumentList.Add("echo injected-label-failure 1>&2 & exit /b 5");
-                info.Environment.Clear();
-                info.Environment["SystemRoot"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-                return Process.Start(info);
-            });
+            deniedProject = new DirectoryInfo(project);
+            var access = deniedProject.GetAccessControl(AccessControlSections.Access);
+            originalAccess = access.GetSecurityDescriptorBinaryForm();
+            access.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!,
+                FileSystemRights.TakeOwnership, AccessControlType.Deny));
+            deniedProject.SetAccessControl(access);
             var start = CreateSandboxStartInfo(worktree);
             start.Environment.Clear();
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
 
             var error = Assert.Throws<InvalidOperationException>(() =>
                 DispatchProcessHost.ApplyWorkerSandbox(start, parameters,
-                    new WorkerSandboxPreparer(failedLabels), (phase, _, _) => phases.Add(phase),
+                    preparer, (phase, _, _) => phases.Add(phase),
                     protectWorkspaceBoundary: _ => Assert.Fail("Protection reached after failed preparation."),
                     protectGitMetadata: _ => Assert.Fail("Protection reached after failed preparation."),
                     providerEnvironmentReader: _ => null));
 
-            Assert.Equal(1, failedCalls);
             Assert.Contains("Descendant integrity: MediumDescendant;", error.Message);
-            Assert.Contains("\"exitCode\":5", error.Message);
-            Assert.Contains("injected-label-failure", error.Message);
+            Assert.Contains("\"win32Error\":5", error.Message);
+            Assert.Contains(JsonSerializer.Serialize(project), error.Message);
             Assert.Equal(new[] { "prepare-roots" }, phases);
             Assert.Equal("Write-Output ok", start.ArgumentList.Last());
             Assert.False(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
@@ -2321,6 +2304,7 @@ public sealed class DispatchProcessHostTests
             Assert.False(File.Exists(created));
             Assert.Equal("fixture", File.ReadAllText(existing));
 
+            RestoreAccess();
             var command = "$ErrorActionPreference='Stop'; " +
                 $"& '{EscapePowerShellSingleQuoted(Path.Combine(Environment.SystemDirectory, "whoami.exe"))}' /groups /fo csv /nh; " +
                 $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(existing)}' -Value modified; " +
@@ -2352,6 +2336,7 @@ public sealed class DispatchProcessHostTests
         }
         finally
         {
+            RestoreAccess();
             SharedTestSupport.RemoveTempDirectory(root);
         }
     }

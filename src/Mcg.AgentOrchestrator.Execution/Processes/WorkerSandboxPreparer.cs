@@ -725,7 +725,6 @@ internal sealed class WorkerSandboxPreparer(
 
 internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 {
-    private readonly Func<ProcessStartInfo, Process?>? startProcess;
     private const uint LabelSecurityInformation = 0x00000010;
     private const int SeFileObject = 1;
     private const int ErrorSuccess = 0;
@@ -750,7 +749,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
     internal IcaclsIntegrityLabeler(Func<ProcessStartInfo, Process?>? startProcess)
     {
-        this.startProcess = startProcess;
+        _ = startProcess;
     }
 
     public IntegrityLabelState Query(string path)
@@ -981,43 +980,19 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
     internal IntegrityLabelCommandResult SetIntegrityWithDiagnostics(string path, string level, bool recursive)
     {
-        try
+        var result = NativeIntegrityLabelWriter.Write(path, level, recursive);
+        return new IntegrityLabelCommandResult(result.Succeeded, System.Text.Json.JsonSerializer.Serialize(new
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "icacls",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            psi.ArgumentList.Add(NativeFilePath(path, recursive));
-            psi.ArgumentList.Add("/setintegritylevel");
-            psi.ArgumentList.Add(level);
-            if (recursive)
-            {
-                psi.ArgumentList.Add("/T");
-            }
-
-            using var process = startProcess is null ? HandleListProcessLauncher.Start(psi)
-                : startProcess(psi) is { } injected ? new HandleListLaunchedProcess(injected) : null;
-            if (process is null)
-            {
-                return IntegrityLabelCommandResult.Failed(null);
-            }
-
-            var output = new IntegrityLabelCommandResult.OutputCapture(keepTail: true);
-            var error = new IntegrityLabelCommandResult.OutputCapture(keepTail: false);
-            var copyOut = output.DrainAsync(process.StandardOutput);
-            var copyErr = error.DrainAsync(process.StandardError);
-            var completed = DispatchProcessHost.WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
-            try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return IntegrityLabelCommandResult.Completed(completed, process.HasExited ? process.ExitCode : null,
-                copyOut.IsCompletedSuccessfully && copyErr.IsCompletedSuccessfully, output, error);
-        }
-        catch (Exception exception)
-        {
-            return IntegrityLabelCommandResult.Failed(exception);
-        }
+            operation = "native-set-integrity",
+            succeeded = result.Succeeded,
+            path,
+            level,
+            recursive,
+            entriesLabeled = result.EntriesLabeled,
+            reparsePointsSkipped = result.ReparsePointsSkipped,
+            failingPath = result.FailingPath,
+            win32Error = result.Win32Error,
+            reason = result.Reason
+        }));
     }
 }
