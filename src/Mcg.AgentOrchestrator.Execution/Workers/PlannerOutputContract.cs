@@ -846,6 +846,11 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
+            if (PlannerSearchPatternMention.IsSearchPatternMention(plan, targetHeading.Index + match.Index))
+            {
+                continue;
+            }
+
             if (PathExistsWithExactCasing(candidate, candidateCasingRoot))
             {
                 continue;
