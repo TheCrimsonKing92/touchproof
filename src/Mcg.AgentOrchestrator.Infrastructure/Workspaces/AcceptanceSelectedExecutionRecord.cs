@@ -21,6 +21,9 @@ internal sealed record AcceptanceSelectedExecutionRecord(
 {
     public IReadOnlyList<AcceptanceSelectedExecutionMethodFormResolution> MethodFormResolutions { get; init; } = [];
 
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AcceptanceSelectedExecutionCheckCoverage>? WholeProjectCoverage { get; init; }
+
     internal static AcceptanceSelectedExecutionRecord Disabled { get; } =
         new("Off", "disabled", null, "Selected execution is disabled.", [], [], [], [], null, null, null, null, 0, false);
 }

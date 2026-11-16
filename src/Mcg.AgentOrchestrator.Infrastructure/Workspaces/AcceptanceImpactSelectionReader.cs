@@ -20,7 +20,10 @@ internal static class AcceptanceImpactSelectionReader
             ? ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.ChangedFileUnmapped, reason)
             : impact.Selection;
         return new(selection, classes, (guards?.Classes ?? []).Concat(impact.DeclaredGuards.Selections
-            .Select(item => item.ClassName)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+            .Select(item => item.ClassName)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            ProjectClasses: project => routing.TestProjects.FirstOrDefault(item => item.Path.Equals(
+                Path.GetFullPath(project, checkout), StringComparison.OrdinalIgnoreCase)) is { } match
+                ? AcceptanceTestClassSourceScanner.Scan(match.Path, match.Sources.ToArray()) : []);
     }
 
     internal static (ReverseDependencyTestSelection Selection, ImpactReplayDeclaredGuardReport DeclaredGuards,

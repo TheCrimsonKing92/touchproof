@@ -572,7 +572,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var selectedExecution = await AcceptanceSelectedExecutionSession.CreateAsync(engineSettings, worktreePath, changedFiles,
             executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory, executionOwner.GateTestObligationSelectors).ConfigureAwait(false);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
-            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.LaneTransform);
+            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
             var message = StructuralCoverageFailureMessage.Build(worktreePath, executionOwner.ProjectHomeDirectory,
@@ -1792,7 +1792,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceGateEngineSettings engineSettings,
         string? projectHomeDirectory = null,
         AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null,
-        Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null,
+        Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceWholeProjectCheck>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null,
         SelectionSourceTexts? sourceTexts = null)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
@@ -1821,10 +1821,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             candidateLanes,
             changedFiles,
             policyShardPlan);
-        infrastructureTestLanes = laneTransform?.Invoke(infrastructureTestLanes) ?? infrastructureTestLanes;
         // This owns environment and scope expansion for both execution and identity.
         // Identity supplies a flattened pool; execution retains its measured lane layout.
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks, sourceTexts));
+        infrastructureTestLanes = laneTransform?.Invoke(infrastructureTestLanes, AcceptanceWholeProjectCheck.Scheduled(manifest.Checks, policyRequiredChecks, policyShardPlan, dotnetShardDisposition, changedFiles)) ?? infrastructureTestLanes;
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
             manifest.Checks,

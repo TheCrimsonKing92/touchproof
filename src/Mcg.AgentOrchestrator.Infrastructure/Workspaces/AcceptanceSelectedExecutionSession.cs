@@ -34,8 +34,13 @@ internal sealed class AcceptanceSelectedExecutionSession(
     internal bool Applied => _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && _plan?.HasPlan == true;
     internal Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceTestLane>>? LaneTransform =>
         mode == AcceptanceSelectedExecutionMode.Off ? null : Transform;
+    internal Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceWholeProjectCheck>, IReadOnlyList<AcceptanceTestLane>>? GateTransform =>
+        mode == AcceptanceSelectedExecutionMode.Off ? null : Transform;
 
-    internal IReadOnlyList<AcceptanceTestLane> Transform(IReadOnlyList<AcceptanceTestLane> lanes)
+    internal IReadOnlyList<AcceptanceTestLane> Transform(IReadOnlyList<AcceptanceTestLane> lanes) => Transform(lanes, []);
+
+    internal IReadOnlyList<AcceptanceTestLane> Transform(IReadOnlyList<AcceptanceTestLane> lanes,
+        IReadOnlyList<AcceptanceWholeProjectCheck> wholeProjectChecks)
     {
         if (mode == AcceptanceSelectedExecutionMode.Off) return lanes;
         _actual = lanes;
@@ -53,7 +58,13 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 _plan = AcceptanceSelectedExecutionPlan.Create(changedFiles, input.Selection, lanes, input.Classes,
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
                         .Select(lane => lane.Name).ToArray(), input.GuardClasses,
-                    obligationSelectors ?? input.ObligationSelectors);
+                    obligationSelectors ?? input.ObligationSelectors, () => wholeProjectChecks.Select(check =>
+                        new AcceptanceWholeProjectCheckInventory(check.Name, check.Project, ReadProject(check.Project))).ToArray());
+                IReadOnlyList<AcceptanceTestClassDescriptor> ReadProject(string project)
+                {
+                    try { return input.ProjectClasses?.Invoke(project) ?? []; }
+                    catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { return []; }
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -95,7 +106,10 @@ internal sealed class AcceptanceSelectedExecutionSession(
             _milliseconds, Applied, Applied,
             mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null ? "suspended-by-backstop-miss" : null,
             mode == AcceptanceSelectedExecutionMode.Enforce ? suspension?.MissId : null)
-        { MethodFormResolutions = _plan?.MethodFormResolutions ?? [] };
+        {
+            MethodFormResolutions = _plan?.MethodFormResolutions ?? [],
+            WholeProjectCoverage = _plan?.WholeProjectCoverage is { Count: > 0 } covered ? covered : null
+        };
         return observation with { SelectedExecution = record };
     }
 

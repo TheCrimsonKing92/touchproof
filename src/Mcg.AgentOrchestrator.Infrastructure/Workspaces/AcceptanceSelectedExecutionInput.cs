@@ -4,4 +4,5 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record AcceptanceSelectedExecutionInput(ReverseDependencyTestSelection Selection,
     IReadOnlyList<AcceptanceTestClassDescriptor> Classes, IReadOnlyList<string> GuardClasses,
-    IReadOnlyList<string>? ObligationSelectors = null);
+    IReadOnlyList<string>? ObligationSelectors = null,
+    Func<string, IReadOnlyList<AcceptanceTestClassDescriptor>>? ProjectClasses = null);

@@ -11,20 +11,24 @@ internal sealed record AcceptanceSelectedExecutionPlan(
     IReadOnlyList<string> FloorLanes, IReadOnlyList<string> GuardClasses, IReadOnlyList<string> ObligationClasses)
 {
     public IReadOnlyList<AcceptanceSelectedExecutionMethodFormResolution> MethodFormResolutions { get; init; } = [];
+    public IReadOnlyList<AcceptanceSelectedExecutionCheckCoverage> WholeProjectCoverage { get; init; } = [];
 
     internal bool HasPlan => Outcome == ReverseDependencySelectionOutcome.Resolved;
 
     internal static AcceptanceSelectedExecutionPlan Create(IReadOnlyList<string>? changedFiles,
         ReverseDependencyTestSelection selection, IReadOnlyList<AcceptanceTestLane> lanes,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, IReadOnlyList<string> floorLanes,
-        IReadOnlyList<string> guardClasses, IReadOnlyList<string>? obligationSelectors = null)
+        IReadOnlyList<string> guardClasses, IReadOnlyList<string>? obligationSelectors = null,
+        Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? wholeProjectChecks = null)
     {
         var obligations = new HashSet<string>(StringComparer.Ordinal);
         var methodFormResolutions = new List<AcceptanceSelectedExecutionMethodFormResolution>();
+        var coverage = new List<AcceptanceSelectedExecutionCheckCoverage>();
+        IReadOnlyList<AcceptanceWholeProjectCheckInventory>? projectInventories = null;
         AcceptanceSelectedExecutionPlan Full(ReverseDependencySelectionOutcome outcome, string? reason) =>
             new(outcome, reason ?? outcome.ToString(), lanes, [], floorLanes, guardClasses,
                 obligations.Order(StringComparer.Ordinal).ToArray())
-            { MethodFormResolutions = methodFormResolutions.ToArray() };
+            { MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray() };
         if (changedFiles is null || !changedFiles.Any())
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate changes are unavailable.");
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved)
@@ -33,8 +37,12 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate test-class inventory is unavailable.");
 
         var membership = lanes.ToDictionary(lane => lane.Name, AcceptanceLaneMembership.CreateClassMatcher, StringComparer.Ordinal);
-        AcceptanceTestClassDescriptor[] Resolve(string selector) => classes.Where(item => selector.Contains('.') || selector.Contains('+')
+        AcceptanceTestClassDescriptor[] Resolve(string selector, IEnumerable<AcceptanceTestClassDescriptor>? inventory = null) =>
+            (inventory ?? classes).Where(item => selector.Contains('.') || selector.Contains('+')
             ? item.FullName == selector : item.FullName.Split('.', '+').Last() == selector).ToArray();
+        var laneClasses = classes.Select(item => item.FullName).ToHashSet(StringComparer.Ordinal);
+        bool InLane(AcceptanceTestClassDescriptor item) => laneClasses.Contains(item.FullName) &&
+            membership.Values.Any(includes => includes(item.FullName));
         string? unresolved = null;
         foreach (var selector in obligationSelectors ?? [])
         {
@@ -51,11 +59,32 @@ internal sealed record AcceptanceSelectedExecutionPlan(
                 matches = Resolve(selector[..separator]);
                 methodForm = true;
             }
-            if (matches.Length == 0 || matches.Any(item => !membership.Values.Any(includes => includes(item.FullName))))
+            if (wellFormed && wholeProjectChecks is not null && (matches.Length == 0 || matches.Any(item => !InLane(item))))
+            {
+                projectInventories ??= wholeProjectChecks();
+                var inventory = classes.Concat(projectInventories.SelectMany(check => check.Classes)).ToArray();
+                matches = Resolve(selector, inventory);
+                methodForm = false;
+                if (matches.Length == 0 && separator > selector.LastIndexOf('+'))
+                {
+                    matches = Resolve(selector[..separator], inventory);
+                    methodForm = true;
+                }
+            }
+            if (matches.Length == 0 || matches.Any(item => !InLane(item) &&
+                !(projectInventories ?? []).Any(check => check.Classes.Any(candidate => candidate.FullName == item.FullName))))
                 unresolved ??= selector;
             else
             {
                 obligations.UnionWith(matches.Select(item => item.FullName));
+                foreach (var check in projectInventories ?? [])
+                    foreach (var name in matches.Where(item => !InLane(item) &&
+                        check.Classes.Any(candidate => candidate.FullName == item.FullName))
+                        .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+                    {
+                        var covered = new AcceptanceSelectedExecutionCheckCoverage(selector, name, check.CheckName);
+                        if (!coverage.Contains(covered)) coverage.Add(covered);
+                    }
                 if (methodForm)
                     foreach (var name in matches.Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
                     {
@@ -107,7 +136,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         }
         return new(ReverseDependencySelectionOutcome.Resolved, null, execution, records, floorLanes,
             guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray())
-        { MethodFormResolutions = methodFormResolutions.ToArray() };
+        { MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray() };
     }
 
     internal static bool IsDefaultFloor(string name) =>
