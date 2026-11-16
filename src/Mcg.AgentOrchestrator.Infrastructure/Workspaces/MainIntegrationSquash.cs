@@ -10,10 +10,14 @@ internal static class MainIntegrationSquash
     {
         if (!GoalWorktrees.HasMergeCommitsOutsideBase(root, mergeBase, candidateRevision)) return null;
 
-        var resolvedTree = GitCli.Run(root, "rev-parse", "--verify", $"{candidateRevision}^{{tree}}");
-        if (!resolvedTree.Succeeded || resolvedTree.DrainTimedOut ||
-            string.IsNullOrWhiteSpace(resolvedTree.Output)) return null;
-        var tree = resolvedTree.Output.Trim();
+        if (!GitRevisionReader.Shared.TryResolve(root, $"{candidateRevision}^{{tree}}", out var tree) ||
+            !GoalWorktrees.IsFullObjectId(tree))
+        {
+            var resolvedTree = GitCli.Run(root, "rev-parse", "--verify", $"{candidateRevision}^{{tree}}");
+            if (!resolvedTree.Succeeded || resolvedTree.DrainTimedOut ||
+                string.IsNullOrWhiteSpace(resolvedTree.Output)) return null;
+            tree = resolvedTree.Output.Trim();
+        }
         var message = GoalWorktrees.ComposeSquashCommitMessage(
             root, baseRevision, mergeBase, candidateRevision, tree, goalId);
         var commit = runGit([
