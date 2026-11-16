@@ -22,6 +22,7 @@ internal static class StateStoreFormatFence
                 $"State store recorded format level {recorded} exceeds this build's format level {entry.CurrentVersion}. " +
                 "Use a build that understands the recorded format.");
 
+        GoalTimelineStore.CreateSchema(connection);
         StoreSchemaVersions.UpgradeToCurrent(connection, entry);
     }
 }

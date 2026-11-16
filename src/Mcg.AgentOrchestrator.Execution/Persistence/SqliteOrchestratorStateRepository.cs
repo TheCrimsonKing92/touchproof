@@ -352,6 +352,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     {
         RunNonQuery(conn, GoalSnapshotArchiveSchemaSql);
         GoalTaskHistoryStore.CreateSchema(conn);
+        GoalTimelineStore.CreateSchema(conn);
         if (CoreSchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
@@ -1775,19 +1776,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             ? "LEFT JOIN goal_promotion_facts AS promotion ON promotion.goal_id = goals.id" : string.Empty;
 
         await using var cmd = conn.CreateCommand();
+        var hasTimelineTable = await GoalTimelineStore.HasTableAsync(conn, cancellationToken);
         cmd.CommandText = $"""
             SELECT
                 id,
                 status,
                 objective,
                 updated_at,
-                CASE WHEN {MetadataNonTerminalPredicate()} THEN (
-                    SELECT json_extract(evt.value, '$.OccurredAt')
-                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
-                    ORDER BY CAST(evt.key AS INTEGER) ASC
-                    LIMIT 1
-                ) WHEN $include_terminal_created_at = 1
-                    THEN COALESCE(json_extract(goals.snapshot_json, '$.Timeline[0].OccurredAt'),
+                CASE WHEN {MetadataNonTerminalPredicate()} THEN {GoalTimelineStore.OrderedInstantSql(hasTimelineTable)} WHEN $include_terminal_created_at = 1
+                    THEN COALESCE({GoalTimelineStore.FirstSql(hasTimelineTable)},
                         json_extract(goals.snapshot_json, '$.CreatedAt'))
                 END AS created_at,
                 {ActiveWithFailedTaskConditionSql()},
@@ -1866,6 +1863,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         // keeping those tables beneath lazy CASE expressions avoids a second status-index scan and
         // preserves row order. SQLite evaluates CASE arms on demand, so terminal rows never invoke
         // json_each (covered by the malformed-JSON sentinel fact).
+        var hasTimelineTable = await GoalTimelineStore.HasTableAsync(conn, cancellationToken);
         var nonTerminal = ConductLoopGoalStatus.SqlNonTerminalPredicate("status");
         var latestCommit = GoalTaskHistoryStore.LatestFieldSql(
             await GoalTaskHistoryStore.HasTableAsync(conn, cancellationToken), "dispatch", "ResultCommit");
@@ -1882,18 +1880,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     ORDER BY CAST(task.key AS INTEGER) DESC
                     LIMIT 1
                 ) END AS result_commit,
-                CASE WHEN {nonTerminal} THEN (
-                    SELECT json_extract(evt.value, '$.OccurredAt')
-                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
-                    ORDER BY CAST(evt.key AS INTEGER) ASC
-                    LIMIT 1
-                ) END AS created_at,
-                CASE WHEN {nonTerminal} THEN (
-                    SELECT json_extract(evt.value, '$.OccurredAt')
-                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
-                    ORDER BY CAST(evt.key AS INTEGER) DESC
-                    LIMIT 1
-                ) END AS terminated_at,
+                CASE WHEN {nonTerminal} THEN {GoalTimelineStore.OrderedInstantSql(hasTimelineTable)} END AS created_at,
+                CASE WHEN {nonTerminal} THEN {GoalTimelineStore.OrderedInstantSql(hasTimelineTable, descending: true)} END AS terminated_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
@@ -2024,12 +2012,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         DateTimeOffset? createdAt = null;
         DateTimeOffset? terminatedAt = null;
-        if (root.TryGetProperty("Timeline", out var timeline) &&
-            timeline.ValueKind == JsonValueKind.Array &&
-            timeline.GetArrayLength() > 0)
+        var timeline = new GoalTimelineStore(SerializerOptions).ReadAsync(conn, key.Id, root).GetAwaiter().GetResult();
+        if (timeline.Length > 0)
         {
             createdAt = ReadOccurredAt(timeline[0]);
-            terminatedAt = ReadOccurredAt(timeline[timeline.GetArrayLength() - 1]);
+            terminatedAt = ReadOccurredAt(timeline[^1]);
         }
 
         return new TerminalGoalMetadataValues(resultCommit, createdAt, terminatedAt);

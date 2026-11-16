@@ -86,10 +86,10 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry RunEvents { get; } =
         new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", 1);
 
-    // Format level 1 permits history-in-table markers in goal documents. This is separate
+    // Format level 2 adds goal_timeline and permits TimelineInTable; level 1 permits task histories. Separate
     // from the core meta schema_version and from the inventory's setup ownership.
     public static StoreSchemaEntry StateStoreFormat { get; } =
-        new("orchestrator-state", Persistence + "StateStoreFormatFence.cs", "state.db", "review", 1);
+        new("orchestrator-state", Persistence + "StateStoreFormatFence.cs", "state.db", "review", 2);
 
     // Source fragments of one database are separate inventory entries, not separate databases.
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(

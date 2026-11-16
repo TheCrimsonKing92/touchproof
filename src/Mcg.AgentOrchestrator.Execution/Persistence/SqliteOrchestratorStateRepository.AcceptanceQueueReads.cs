@@ -11,20 +11,20 @@ public sealed partial class SqliteOrchestratorStateRepository
         using var command = connection.CreateCommand();
         var latestCompletedAt = GoalTaskHistoryStore.LatestFieldSql(
             await GoalTaskHistoryStore.HasTableAsync(connection, cancellationToken), "verification", "CompletedAt");
+        var hasTimelineTable = await GoalTimelineStore.HasTableAsync(connection, cancellationToken);
         // Same facts as GoalSchedulingOrder, projected in SQLite rather than hydrating peer Goals.
         command.CommandText = $"""
             SELECT id,
               CASE WHEN COALESCE(json_extract(snapshot_json, '$.PriorityScheduling.GateOvertakes'), 0) >= 3
                 THEN 'Critical' ELSE COALESCE(json_extract(snapshot_json, '$.PriorityScheduling.EffectiveLevel'),
                   json_extract(snapshot_json, '$.Priority'), 'Normal') END,
-              COALESCE((SELECT MIN(json_extract(evt.value, '$.OccurredAt'))
-                FROM json_each(goals.snapshot_json, '$.Timeline') evt
-                WHERE json_extract(evt.value, '$.Kind') = 'GoalPolicyDecision'
-                  AND instr(lower(json_extract(evt.value, '$.Message')), 'verified') > 0),
+              COALESCE({GoalTimelineStore.ScalarSql(hasTimelineTable,
+                "(SELECT MIN(json_extract(evt.value, '$.OccurredAt')) FROM json_each(goals.snapshot_json, '$.Timeline') evt WHERE json_extract(evt.value, '$.Kind') = 'GoalPolicyDecision' AND instr(lower(json_extract(evt.value, '$.Message')), 'verified') > 0)",
+                "MIN(json_extract(evt.value, '$.OccurredAt'))", predicate: "json_extract(evt.value, '$.Kind') = 'GoalPolicyDecision' AND instr(lower(json_extract(evt.value, '$.Message')), 'verified') > 0")},
                 (SELECT MAX({latestCompletedAt})
                   FROM json_each(goals.snapshot_json, '$.Tasks') task),
-                json_extract(snapshot_json, '$.Timeline[0].OccurredAt')),
-              json_extract(snapshot_json, '$.Timeline[0].OccurredAt')
+                {GoalTimelineStore.FirstSql(hasTimelineTable)}),
+              {GoalTimelineStore.FirstSql(hasTimelineTable)}
             FROM goals WHERE status = 'Verified' AND json_extract(snapshot_json, '$.CurrentHold') IS NULL
             """;
         var facts = new List<AcceptanceQueueFact>();

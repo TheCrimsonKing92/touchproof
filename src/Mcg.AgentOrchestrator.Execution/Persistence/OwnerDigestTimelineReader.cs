@@ -31,7 +31,10 @@ internal sealed class OwnerDigestTimelineReader
                 CASE WHEN json_valid(snapshot_json) THEN
                     CASE WHEN json_type(snapshot_json, '$.Timeline') = 'array'
                         AND COALESCE(json_extract(snapshot_json, '$.IsMetadataOnly'), 0) = 0
-                        THEN json_extract(snapshot_json, '$.Timeline') END END
+                        THEN json_extract(snapshot_json, '$.Timeline') END END,
+                CASE WHEN json_valid(snapshot_json) THEN
+                    CASE WHEN COALESCE(json_extract(snapshot_json, '$.IsMetadataOnly'), 0) = 0
+                        THEN snapshot_json -> '$.TimelineInTable' END END
             FROM goals
             ORDER BY goals.rowid
             """;
@@ -42,14 +45,17 @@ internal sealed class OwnerDigestTimelineReader
             RowsRead++;
             var goalId = reader.GetString(1);
             var events = new List<ProgressEvent>();
-            if (!reader.IsDBNull(2))
+            if (!reader.IsDBNull(2) || !reader.IsDBNull(3))
             {
-                var timeline = reader.GetString(2);
+                var timeline = reader.IsDBNull(2) ? "[]" : reader.GetString(2);
                 TimelineCharsRead += timeline.Length;
                 try
                 {
                     using var document = JsonDocument.Parse(timeline);
-                    foreach (var element in document.RootElement.EnumerateArray())
+                    using var marker = JsonDocument.Parse(reader.IsDBNull(3) ? "null" : reader.GetString(3));
+                    var entries = new GoalTimelineStore(SerializerOptions).ReadAsync(connection, goalId,
+                        document.RootElement, marker.RootElement).GetAwaiter().GetResult();
+                    foreach (var element in entries)
                     {
                         if (element.ValueKind != JsonValueKind.Object)
                             throw new JsonException("Timeline entry must be an object.");

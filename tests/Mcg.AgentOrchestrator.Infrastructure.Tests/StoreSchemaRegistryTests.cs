@@ -101,7 +101,7 @@ public sealed class StoreSchemaRegistryTests
         Assert.Null(state.CurrentVersion);
         Assert.Equal(state.StoreName, StoreSchemaRegistry.StateStoreFormat.StoreName);
         Assert.Equal(state.Database, StoreSchemaRegistry.StateStoreFormat.Database);
-        Assert.Equal(1, StoreSchemaRegistry.StateStoreFormat.CurrentVersion);
+        Assert.Equal(2, StoreSchemaRegistry.StateStoreFormat.CurrentVersion);
         Assert.DoesNotContain(StoreSchemaRegistry.StateStoreFormat, entries);
         Assert.DoesNotContain(state.StoreName, StoreSetupRunner.RegisteredStoreNames);
     }

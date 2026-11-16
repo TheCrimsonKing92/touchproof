@@ -14,15 +14,15 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
         CancellationToken cancellationToken = default, bool compress = false)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxSnapshotBytes, 1L);
+        var hasTimelineTable = await GoalTimelineStore.HasTableAsync(connection, cancellationToken);
         var candidates = new List<(string Id, long Bytes)>();
         await using (var select = connection.CreateCommand())
         {
             select.CommandText = $"""
                 WITH candidates AS MATERIALIZED (
-                SELECT id, CASE WHEN json_valid(snapshot_json) THEN (
-                    SELECT MAX(julianday(json_extract(e.value, '$.OccurredAt')))
-                    FROM json_each(goals.snapshot_json, '$.Timeline') AS e
-                ) END AS terminal, length(snapshot_json) AS bytes FROM goals
+                SELECT id, CASE WHEN json_valid(snapshot_json) THEN {GoalTimelineStore.ScalarSql(hasTimelineTable,
+                    "(SELECT MAX(julianday(json_extract(e.value, '$.OccurredAt'))) FROM json_each(goals.snapshot_json, '$.Timeline') AS e)",
+                    "MAX(julianday(json_extract(e.value, '$.OccurredAt')))", alias: "e")} END AS terminal, length(snapshot_json) AS bytes FROM goals
                 WHERE status IN ('{GoalStatus.Completed}', '{GoalStatus.Cancelled}', '{GoalStatus.Superseded}')
                   AND CASE WHEN json_valid(snapshot_json)
                       THEN COALESCE(json_extract(snapshot_json, '$.IsMetadataOnly'), 0) = 0
@@ -122,7 +122,7 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             var hydrated = JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
             if (hydrated is not null)
                 readObserver?.Invoke(new("archive-deserialized", snapshot.Id, json.Length));
-            return hydrated;
+            return await new GoalTimelineStore(serializerOptions).HydrateAsync(connection, hydrated, json, cancellationToken);
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
             ex.Message.Contains("no such table: goal_snapshot_archive", StringComparison.OrdinalIgnoreCase))

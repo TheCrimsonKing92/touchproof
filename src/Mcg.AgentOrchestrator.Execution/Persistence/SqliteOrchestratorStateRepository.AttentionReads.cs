@@ -120,7 +120,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                         ReadAttentionField<DateTimeOffset?>(task, "LatestProviderBudgetRecoveryAt")));
                 }
                 if (needsQuestion) questions.Add(new(id, hold!, taskIds));
-                var timeline = AttentionElements(root, "Timeline").Select(evt => new ProgressEvent(
+                var timeline = (await new GoalTimelineStore(SerializerOptions).ReadAsync(connection, id, root, cancellationToken)).Select(evt => new ProgressEvent(
                         new GoalId(id), ReadAttentionField<string>(evt, "TaskId") is { } taskId ? new TaskId(taskId) : null,
                         ReadAttentionField<ProgressKind>(evt, "Kind"), ReadAttentionField<string>(evt, "Message")!,
                         ReadAttentionField<DateTimeOffset>(evt, "OccurredAt"),

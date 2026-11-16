@@ -78,6 +78,16 @@ public sealed partial class SqliteOrchestratorStateRepository
                     fields = ReadGoalSimilarityFields(id, stream, reopenStream);
                 }
             }
+            if (fields is { IsMetadataOnly: false })
+            {
+                if (fields.TimelineInTable.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+                {
+                    var entries = await new GoalTimelineStore(SerializerOptions).ReadAsync(connection, id,
+                        default, fields.TimelineInTable, cancellationToken);
+                    fields = fields with { Timeline = new(entries.Length == 0 ? null :
+                        entries.Max(entry => entry.GetProperty("OccurredAt").GetDateTimeOffset()), false) };
+                }
+            }
             // Match selected loading: validate hot serialization first, then hydrate before
             // Core domain validation. A missing archive leaves the hot stub authoritative.
             if (fields?.Tasks is not null && (fields.Tasks.HasHistoryMarker ||
@@ -140,10 +150,12 @@ public sealed partial class SqliteOrchestratorStateRepository
             }
             // Full deserialization is authoritative for shape; Core still owns reconstruction
             // and effective status, including version-chain and explicit-disposition rules.
+            using var markerStream = reopenStream();
+            var marker = JsonSerializer.Deserialize<GoalTimelineStore.TimelineDocument>(markerStream, SerializerOptions);
             return new(snapshot.Id, snapshot.Objective, snapshot.Status, snapshot.IsMetadataOnly,
                 snapshot.CreatedAt, snapshot.TerminatedAt,
                 snapshot.Tasks is null ? null : new(snapshot.Tasks.Count, true),
-                new(latest, hasNullEntry));
+                new(latest, hasNullEntry), marker?.TimelineInTable ?? default);
         }
     }
 
@@ -278,7 +290,8 @@ public sealed partial class SqliteOrchestratorStateRepository
     private sealed record GoalSimilarityFields(string Id, string Objective, GoalStatus Status,
         bool IsMetadataOnly, DateTimeOffset? CreatedAt, DateTimeOffset? TerminatedAt,
         [property: JsonConverter(typeof(SimilarityTaskShapeConverter))] SimilarityTaskShape? Tasks,
-        [property: JsonConverter(typeof(TimelineLatestConverter))] TimelineLatest? Timeline)
+        [property: JsonConverter(typeof(TimelineLatestConverter))] TimelineLatest? Timeline,
+        JsonElement TimelineInTable = default)
     {
         [JsonIgnore] public SimilarityDomainFields Domain { get; } = new();
     }

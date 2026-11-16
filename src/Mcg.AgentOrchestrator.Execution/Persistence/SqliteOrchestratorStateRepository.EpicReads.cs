@@ -16,6 +16,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         using (var reader = probe.ExecuteReader())
             while (reader.Read()) columns.Add(reader.GetString(1));
         if (columns.Count == 0) return results;
+        var hasTimelineTable = await GoalTimelineStore.HasTableAsync(connection, cancellationToken);
         var hasPromotionFacts = HasPromotionFactsTable(connection);
         var promotionColumns = hasPromotionFacts
             ? "promotion.goal_id, promotion.candidate_revision, promotion.prior_main_revision, promotion.promoted_main_revision, promotion.promoted_at, promotion.provenance"
@@ -28,12 +29,8 @@ public sealed partial class SqliteOrchestratorStateRepository
             using var command = connection.CreateCommand();
             var scope = SqliteReadSession.BindIds(command, batch);
             var created = columns.Contains("snapshot_json") ? $"""
-                CASE WHEN {MetadataNonTerminalPredicate()} THEN (
-                    SELECT json_extract(evt.value, '$.OccurredAt')
-                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
-                    ORDER BY CAST(evt.key AS INTEGER) ASC LIMIT 1
-                ) WHEN $include_terminal_created_at = 1
-                    THEN COALESCE(json_extract(goals.snapshot_json, '$.Timeline[0].OccurredAt'),
+                CASE WHEN {MetadataNonTerminalPredicate()} THEN {GoalTimelineStore.OrderedInstantSql(hasTimelineTable)} WHEN $include_terminal_created_at = 1
+                    THEN COALESCE({GoalTimelineStore.FirstSql(hasTimelineTable)},
                         json_extract(goals.snapshot_json, '$.CreatedAt')) END
                 """ : "NULL";
             var objective = columns.Contains("objective") ? "objective" : "''";
@@ -66,7 +63,11 @@ public sealed partial class SqliteOrchestratorStateRepository
             using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
                 if (TryReadGoalSnapshot(reader.GetString(0), reader.GetString(1), null, logQuarantine: true, out var snapshot))
-                    snapshots.Add((await SnapshotArchive.HydrateAsync(connection, snapshot, cancellationToken))!);
+                {
+                    snapshot = await SnapshotArchive.HydrateAsync(connection, snapshot, cancellationToken);
+                    snapshots.Add((await new GoalTimelineStore(SerializerOptions).HydrateAsync(
+                        connection, snapshot, reader.GetString(1), cancellationToken))!);
+                }
         }
         return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(snapshots, [])).Goals.ToArray();
     }

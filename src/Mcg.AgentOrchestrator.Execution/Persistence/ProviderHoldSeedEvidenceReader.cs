@@ -69,8 +69,12 @@ internal static class ProviderHoldSeedEvidenceReader
                 history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray(),
                 task.LatestProviderBudgetRecoveryAt));
         }
+        var timeline = row.IsMetadataOnly ? [] : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+            ? row.Timeline ?? [] : (await new GoalTimelineStore(options).ReadAsync(
+                connection, id, default, row.TimelineInTable, cancellationToken))
+                .Select(entry => entry.Deserialize<EventFields>(options)!).ToArray();
         return new(id, row.Status, tasks,
-            row.IsMetadataOnly ? [] : (row.Timeline ?? []).Select(evt => new ProgressEvent(new GoalId(id),
+            timeline.Select(evt => new ProgressEvent(new GoalId(id),
                 evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
                 OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray());
     }
@@ -82,7 +86,7 @@ internal static class ProviderHoldSeedEvidenceReader
         ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out _);
 
     private sealed record GoalFields(string Id, GoalStatus Status, bool IsMetadataOnly,
-        IReadOnlyList<TaskFields>? Tasks, IReadOnlyList<EventFields>? Timeline);
+        IReadOnlyList<TaskFields>? Tasks, IReadOnlyList<EventFields>? Timeline, JsonElement TimelineInTable);
 
     private sealed record EventFields(string? TaskId, ProgressKind Kind, string Message,
         DateTimeOffset OccurredAt, DateTimeOffset? OperatorIntentCreatedAt);

@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>
 /// Transactional history storage. Unmarked tasks retain inline authority and mirror equality checks.
+/// GoalTimelineStore owns the goal-level Timeline reader contract and bypass-reader inventory.
 /// A task's HistoryInTable marker is {"Verification":count,"Dispatch":count}: each count is a
 /// non-negative integer, or null for a null list. Absent/null markers mean unmarked. Marked tasks
 /// ignore inline lists and require exactly the stated rows at contiguous zero-based sequences.
@@ -424,7 +425,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         CancellationToken token = default)
     {
         // Leave malformed task collections to the existing domain validation.
-        if (snapshot is null || snapshot.IsMetadataOnly || snapshot.Tasks is null) return snapshot;
+        if (snapshot is null || snapshot.IsMetadataOnly) return snapshot;
         // Inspect only the marker fields, skipping the already-decoded task graphs. A hydrated
         // archive arrives with the hot stub text, so obtain its original marker-bearing payload.
         var fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
@@ -437,6 +438,9 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                 ?? throw new InvalidDataException($"Missing archive for goal '{snapshot.Id}'.");
             fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
         }
+        snapshot = await new GoalTimelineStore(options).ApplyAsync(connection, snapshot,
+            fields?.TimelineInTable ?? default, token);
+        if (snapshot.Tasks is null) return snapshot;
         var markers = new Dictionary<string, HistoryMarker>();
         foreach (var task in fields?.Tasks ?? [])
             if (task is not null && ReadMarker(task.HistoryInTable, snapshot.Id, task.Id) is { } counts)
@@ -469,7 +473,8 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         return snapshot with { Tasks = tasks };
     }
 
-    private sealed record HistoryDocument(bool IsMetadataOnly, IReadOnlyList<HistoryTask?>? Tasks);
+    private sealed record HistoryDocument(bool IsMetadataOnly, IReadOnlyList<HistoryTask?>? Tasks,
+        JsonElement TimelineInTable);
     private sealed record HistoryTask(string Id, JsonElement HistoryInTable);
 
     // A test diagnostic compares physical rows as well as accessor results, including surplus/removed-task rows.
