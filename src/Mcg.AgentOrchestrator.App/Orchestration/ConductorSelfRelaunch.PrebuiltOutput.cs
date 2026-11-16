@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -50,18 +51,22 @@ internal static partial class ConductorSelfRelaunch
         string repositoryRoot, TimeSpan timeout, CancellationToken cancellationToken,
         string? qosStatePath = null, Func<int, uint, uint, bool>? qosSetter = null)
     {
+        var elapsed = Stopwatch.StartNew();
         var cacheRoot = AppBuildArtifactsRoot(appProjectPath);
         var cachedOutput = Path.Combine(cacheRoot, "output");
         var command = CreateAppBuildCommand(appProjectPath, cachedOutput);
         Directory.CreateDirectory(cacheRoot);
-        var elapsed = Stopwatch.StartNew();
         // Direct and store builds share intermediates: hold the cross-process lock through copying.
         FileStream cacheLock;
+        var attemptedLock = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (timeout != Timeout.InfiniteTimeSpan && elapsed.Elapsed >= timeout)
-                return new(-1, "", "Timed out waiting for isolated App build cache.", TimedOut: true);
+            // A free lock with an exhausted budget belongs to the pre-launch check.
+            if (attemptedLock && timeout != Timeout.InfiniteTimeSpan && elapsed.Elapsed >= timeout)
+                return WithBuildDiagnostics(new(-1, "", "Timed out waiting for isolated App build cache.", TimedOut: true),
+                    dotnetPath, command, elapsed, timeout, "cache-lock-wait", planned: true);
+            attemptedLock = true;
             try
             {
                 cacheLock = File.Open(Path.Combine(cacheRoot, RelaunchBuildCacheIdentity.LockFileName),
@@ -86,14 +91,53 @@ internal static partial class ConductorSelfRelaunch
             if (Directory.Exists(cachedOutput)) Directory.Delete(cachedOutput, recursive: true);
             var remaining = timeout == Timeout.InfiniteTimeSpan ? timeout : timeout - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero && timeout != Timeout.InfiniteTimeSpan)
-                return new(-1, "", "Timed out waiting for isolated App build cache.", TimedOut: true);
-            var result = RunProcess(dotnetPath, command.Arguments, repositoryRoot, remaining, cancellationToken,
-                onStarted: qosStatePath is null ? null : pid => BuildLaunchQosSweep.Begin(
-                    "relaunch-build", qosStatePath, string.Empty, pid, BuildLaunchQosSweep.RootAndDescendants, qosSetter));
+                return WithBuildDiagnostics(new(-1, "", "Timed out waiting for isolated App build cache.", TimedOut: true),
+                    dotnetPath, command, elapsed, timeout, "pre-launch-deadline", planned: true);
+            CapturedProcessResult result;
+            try
+            {
+                result = RunProcess(dotnetPath, command.Arguments, repositoryRoot, remaining, cancellationToken,
+                    onStarted: qosStatePath is null ? null : pid => BuildLaunchQosSweep.Begin(
+                        "relaunch-build", qosStatePath, string.Empty, pid, BuildLaunchQosSweep.RootAndDescendants, qosSetter));
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)
+            {
+                var message = WithBuildDiagnostics(new(-1, "", ex.Message),
+                    dotnetPath, command, elapsed, timeout, phase: null, planned: true).Stderr;
+                // Launch faults must retain their infrastructure classification at the canary boundary.
+                if (ex is System.ComponentModel.Win32Exception native)
+                    throw new System.ComponentModel.Win32Exception(native.NativeErrorCode, message);
+                var missing = (FileNotFoundException)ex;
+                throw new FileNotFoundException(message, missing.FileName, missing);
+            }
             if (result.ExitCode == 0 && !result.TimedOut)
+            {
                 CopyAppBuildOutput(cachedOutput, outputDirectory, cancellationToken, overwrite: true);
-            return result;
+                return result;
+            }
+            return WithBuildDiagnostics(result, dotnetPath, command, elapsed, timeout,
+                result.TimedOut && result.ExitCode == -1 ? "build-process" : null, planned: false);
         }
+    }
+
+    private static CapturedProcessResult WithBuildDiagnostics(
+        CapturedProcessResult result, string dotnetPath, AppBuildCommand command,
+        Stopwatch elapsed, TimeSpan timeout, string? phase, bool planned)
+    {
+        // Reuse the launcher's argv escaping so quotes and trailing slashes retain their boundaries.
+        var invocation = new ProcessStartInfo(dotnetPath);
+        foreach (var argument in command.Arguments) invocation.ArgumentList.Add(argument);
+        var deadline = timeout == Timeout.InfiniteTimeSpan
+            ? "infinite"
+            : timeout.TotalMilliseconds.ToString("0.################", CultureInfo.InvariantCulture);
+        var diagnostics = $"{(planned ? "plannedCommand" : "command")}={HandleListProcessLauncher.CommandLine(invocation)} " +
+            $"artifactsRoot={command.IsolatedArtifactsRoot} " +
+            (phase is null ? "" : $"phase={phase} ") +
+            $"elapsedMs={elapsed.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)} deadlineMs={deadline}";
+        // EnsureSucceeded reads stderr when present, otherwise stdout; keep compiler output visible.
+        return !string.IsNullOrWhiteSpace(result.Stderr) || string.IsNullOrWhiteSpace(result.Stdout)
+            ? result with { Stderr = string.IsNullOrEmpty(result.Stderr) ? diagnostics : result.Stderr + Environment.NewLine + diagnostics }
+            : result with { Stdout = result.Stdout + Environment.NewLine + diagnostics };
     }
 
     private static void CopyAppBuildOutput(string source, string destinationRoot, CancellationToken cancellationToken,
