@@ -111,8 +111,8 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         Assert.True(File.Exists(queued));
         Assert.False(File.Exists(Path.Combine(_root, "runner-state.json")));
         Assert.Contains(custom
-            ? "retention summary: runs removed=1 window=10d; taken removed=4 window=2d; results removed=1 window=30d; failed=0"
-            : "retention summary: runs removed=2 window=3d; taken removed=2 window=14d; results removed=2 window=14d; failed=0",
+            ? "retention summary: runs removed=1 window=10d; taken removed=4 window=2d; results removed=1 window=30d; failed=0; floorGB=60 freeBeforeGB=100 freeAfterGB=100 floorRemoved=0"
+            : "retention summary: runs removed=2 window=1d; taken removed=2 window=14d; results removed=2 window=14d; failed=0; floorGB=60 freeBeforeGB=100 freeAfterGB=100 floorRemoved=0",
             OutputLines(result.Stdout));
         foreach (var path in new[] { oldRun, oldResult, oldJob, oldCancel })
             Assert.Contains(OutputLines(result.Stdout), line => line.StartsWith("retention removed ") && line.EndsWith(path));
@@ -176,7 +176,7 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         var lines = OutputLines(result.Stdout);
         Assert.Contains(lines, line => line.StartsWith("retention failed ") && line.Contains(locked));
         Assert.Contains(lines, line => line.StartsWith("retention failed prune:"));
-        Assert.Contains("retention summary: runs removed=2 window=3d; taken removed=1 window=14d; results removed=1 window=14d; failed=2", lines);
+        Assert.Contains("retention summary: runs removed=2 window=1d; taken removed=1 window=14d; results removed=1 window=14d; failed=2; floorGB=60 freeBeforeGB=100 freeAfterGB=100 floorRemoved=0", lines);
     }
 
     [Xunit.Fact]
@@ -195,7 +195,7 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         Assert.False(File.Exists(job));
         Assert.False(File.Exists(cancel));
         Assert.False(Directory.Exists(resultFolder));
-        Assert.Equal("retention summary: runs removed=1 window=3d; taken removed=2 window=14d; results removed=1 window=14d; failed=0",
+        Assert.Equal("retention summary: runs removed=1 window=1d; taken removed=2 window=14d; results removed=1 window=14d; failed=0; floorGB=60 freeBeforeGB=100 freeAfterGB=100 floorRemoved=0",
             Assert.Single(OutputLines(result.Stdout).Where(line => line.StartsWith("retention summary:"))));
     }
 
@@ -215,7 +215,7 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         Assert.True(File.Exists(job));
         Assert.True(Directory.Exists(resultFolder));
         Assert.Contains("retention skipped: runner state unreadable:", result.Stdout);
-        Assert.Contains("retention summary: runs removed=0 window=3d; taken removed=0 window=14d; results removed=0 window=14d; failed=1",
+        Assert.Contains("retention summary: runs removed=0 window=1d; taken removed=0 window=14d; results removed=0 window=14d; failed=1; floorGB=60 freeBeforeGB=100 freeAfterGB=100 floorRemoved=0",
             OutputLines(result.Stdout));
     }
 
@@ -270,6 +270,213 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         Assert.Equal("fixture payload", File.ReadAllText(log));
     }
 
+    [Xunit.Fact]
+    public async Task Retention_BelowFloor_RemovesOldestUnprotectedUntilFloorMet()
+    {
+        SeedBareRepository();
+        var protectedRun = AgedFolder("runs/ccccccccc", 0.9);
+        var oldest = AgedFolder("runs/fffffffff", 0.7);
+        var next = AgedFolder("runs/aaaaaaaaa", 0.5);
+        var newer = AgedFolder("runs/000000000", 0.3);
+        var newest = AgedFolder("runs/bbbbbbbbb", 0.1);
+        File.WriteAllText(Path.Combine(_root, "runner-state.json"), "{\"running\":[\"attempt-CCCCCCCCC-lane\"]}");
+
+        var result = await RunRetentionReadings([40L << 30, 40L << 30, 50L << 30, 60L << 30]);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.False(Directory.Exists(oldest));
+        Assert.False(Directory.Exists(next));
+        foreach (var path in new[] { protectedRun, newer, newest }) Assert.True(Directory.Exists(path));
+        Assert.Equal(new[] { "retention removed run " + oldest, "retention removed run " + next },
+            OutputLines(result.Stdout).Where(line => line.StartsWith("retention removed run ")));
+        Assert.Contains("runs removed=2 window=1d", result.Stdout);
+        Assert.Contains("failed=0; floorGB=60 freeBeforeGB=40 freeAfterGB=60 floorRemoved=2", result.Stdout);
+        Assert.DoesNotContain("retention below floor:", result.Stdout);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(60)]
+    [Xunit.InlineData(70)]
+    public async Task Retention_AtOrAboveFloor_KeepsYoungFoldersAndRemovesExpired(int freeGB)
+    {
+        SeedBareRepository();
+        var expired = AgedFolder("runs/111111111", 2);
+        var young = AgedFolder("runs/222222222", 0.5);
+        var otherYoung = AgedFolder("runs/333333333", 0.25);
+
+        var result = await RunRetentionReadings([(long)freeGB << 30]);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.False(Directory.Exists(expired));
+        Assert.True(Directory.Exists(young));
+        Assert.True(Directory.Exists(otherYoung));
+        Assert.Contains("runs removed=1 window=1d", result.Stdout);
+        Assert.Contains($"failed=0; floorGB=60 freeBeforeGB={freeGB} freeAfterGB={freeGB} floorRemoved=0", result.Stdout);
+    }
+
+    [Xunit.Fact]
+    public async Task Retention_BelowFloorOnlyProtectedLeft_PrintsBelowFloorLineWithoutFailure()
+    {
+        SeedBareRepository();
+        var first = AgedFolder("runs/aaaaaaaaa", 0.5);
+        var second = AgedFolder("runs/bbbbbbbbb", 0.25);
+        File.WriteAllText(Path.Combine(_root, "runner-state.json"), "{\"running\":[\"aaaaaaaaa-lane\",\"bbbbbbbbb-lane\"]}");
+
+        var result = await RunRetentionReadings([40L << 30]);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.True(Directory.Exists(first));
+        Assert.True(Directory.Exists(second));
+        Assert.DoesNotContain("retention removed ", result.Stdout);
+        var line = Assert.Single(OutputLines(result.Stdout).Where(value => value.StartsWith("retention below floor:")));
+        Assert.Contains("freeGB=40 floorGB=60", line);
+        Assert.Contains("runs removed=0 window=1d", result.Stdout);
+        Assert.Contains("failed=0; floorGB=60 freeBeforeGB=40 freeAfterGB=40 floorRemoved=0", result.Stdout);
+    }
+
+    [Xunit.Fact]
+    public async Task Retention_RunFolderWithOverLongPath_IsRemovedAndCounted()
+    {
+        SeedBareRepository();
+        var run = AgedFolder("runs/111111111", 60);
+        var nested = Path.Combine(run, new string('a', 90), new string('b', 90), new string('c', 90));
+        Directory.CreateDirectory(nested);
+        var payload = Path.Combine(nested, "payload.txt");
+        File.WriteAllText(payload, "long path payload");
+        Assert.True(payload.Length > 260);
+        Assert.True(File.Exists(payload));
+        Directory.SetLastWriteTimeUtc(run, DateTime.UtcNow.AddDays(-60));
+
+        // Force the ordinary-removal failure even when PowerShell 7 already supports long paths.
+        // The fallback still uses the real robocopy and must actually clear the nested payload.
+        var setup = "function Remove-Item { [CmdletBinding()] param([string]$LiteralPath, [switch]$Recurse, [switch]$Force) " +
+            "if ($LiteralPath -eq " + PsQuote(run) + ") { throw 'Injected ordinary removal failure' }; " +
+            "Microsoft.PowerShell.Management\\Remove-Item @PSBoundParameters }; ";
+        var result = await RunRetentionReader("{ 100GB }", [], setup);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.False(Directory.Exists(run));
+        Assert.False(File.Exists(payload));
+        Assert.Contains("runs removed=1 window=1d", result.Stdout);
+        Assert.Contains("failed=0;", result.Stdout);
+        Assert.Contains("retention fallback mirror " + run, OutputLines(result.Stdout));
+        Assert.Empty(Directory.GetDirectories(_root, "retention-empty-*"));
+    }
+
+    [Xunit.Fact]
+    public async Task Retention_EqualAgeBelowFloor_UsesOrdinalNamesAndUnroundedReadings()
+    {
+        SeedBareRepository();
+        var lowerOrdinal = AgedFolder("runs/ZZZZZZZZZ", 0.5);
+        var higherOrdinal = AgedFolder("runs/aaaaaaaaa", 0.5);
+        Directory.SetLastWriteTimeUtc(higherOrdinal, Directory.GetLastWriteTimeUtc(lowerOrdinal));
+
+        // This displays as 60 GB, but remains one byte below the floor until the first deletion.
+        var result = await RunRetentionReadings([(60L << 30) - 1, (60L << 30) - 1, 60L << 30]);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.False(Directory.Exists(lowerOrdinal));
+        Assert.True(Directory.Exists(higherOrdinal));
+        Assert.Contains("failed=0; floorGB=60 freeBeforeGB=60 freeAfterGB=60 floorRemoved=1", result.Stdout);
+    }
+
+    [Xunit.Fact]
+    public async Task Retention_Defaults_AreOneDayWindowAndSixtyGigabyteFloor()
+    {
+        SeedBareRepository();
+        var expired = AgedFolder("runs/111111111", 2);
+        var young = AgedFolder("runs/222222222", 0.5);
+
+        var result = await RunRetentionReadings([60L << 30]);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.False(Directory.Exists(expired));
+        Assert.True(Directory.Exists(young));
+        Assert.Contains("runs removed=1 window=1d", result.Stdout);
+        Assert.Contains("failed=0; floorGB=60 freeBeforeGB=60 freeAfterGB=60 floorRemoved=0", result.Stdout);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task Retention_HeldFolderAfterFallback_LeavesNoTemporaryFolderUnderRunRoot(bool resultLane)
+    {
+        SeedBareRepository();
+        var folder = AgedFolder(resultLane ? "results/111111111/lane" : "runs/111111111", 60);
+        using var held = new FileStream(Path.Combine(folder, "payload.txt"), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var result = await RunRetention();
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(Directory.Exists(folder));
+        Assert.Equal("retention fallback mirror " + folder,
+            Assert.Single(OutputLines(result.Stdout).Where(line => line.StartsWith("retention fallback mirror "))));
+        Assert.Contains("runs removed=0", result.Stdout);
+        Assert.Contains("results removed=0", result.Stdout);
+        Assert.Contains("failed=1;", result.Stdout);
+        Assert.Empty(Directory.GetDirectories(_root, "retention-empty-*"));
+        Assert.DoesNotContain("temporary folder not removed", result.Stdout);
+    }
+
+    [Xunit.Fact]
+    public async Task Retention_ZeroFloorWithoutSuppliedReader_ReportsMeasuredFreeSpace()
+    {
+        SeedBareRepository();
+        var young = AgedFolder("runs/111111111", 0.5);
+
+        var result = await RunScript("Invoke-QueuedLanes.ps1",
+            ["-RunRoot", _root, "-RetentionOnly", "-RunFolderFreeSpaceFloorGB", "0"]);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.True(Directory.Exists(young));
+        Assert.Matches(@"floorGB=0 freeBeforeGB=\d+(\.\d{1,2})? freeAfterGB=\d+(\.\d{1,2})? floorRemoved=0", result.Stdout);
+        Assert.DoesNotContain("free space unavailable", result.Stdout);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("{ throw 'reader unavailable' }")]
+    [Xunit.InlineData("{ -1 }")]
+    [Xunit.InlineData("{ [double]::NaN }")]
+    [Xunit.InlineData("{ [double]::PositiveInfinity }")]
+    [Xunit.InlineData("{ 'unknown' }")]
+    [Xunit.InlineData("{ 1; 2 }")]
+    [Xunit.InlineData("{ $null }")]
+    public async Task Retention_InvalidReading_KeepsAgeCleanupWithoutFloorDeletion(string reader)
+    {
+        SeedBareRepository();
+        var expired = AgedFolder("runs/111111111", 2);
+        var young = AgedFolder("runs/222222222", 0.5);
+
+        var result = await RunRetentionReader(reader, []);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.False(Directory.Exists(expired));
+        Assert.True(Directory.Exists(young));
+        Assert.Single(OutputLines(result.Stdout).Where(line => line.StartsWith("retention warning: free space unavailable")));
+        Assert.Contains("failed=0; floorGB=60 freeBeforeGB=unavailable freeAfterGB=unavailable floorRemoved=0", result.Stdout);
+        Assert.DoesNotContain("retention below floor:", result.Stdout);
+    }
+
+    [Xunit.Fact]
+    public async Task Retention_FloorRemovalFails_ContinuesWithoutRetryingFailedFolder()
+    {
+        SeedBareRepository();
+        var locked = AgedFolder("runs/111111111", 0.9);
+        var removable = AgedFolder("runs/222222222", 0.5);
+        var kept = AgedFolder("runs/333333333", 0.1);
+        using var held = new FileStream(Path.Combine(locked, "payload.txt"), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var result = await RunRetentionReadings([40L << 30, 40L << 30, 40L << 30, 60L << 30]);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(Directory.Exists(locked));
+        Assert.False(Directory.Exists(removable));
+        Assert.True(Directory.Exists(kept));
+        Assert.Single(OutputLines(result.Stdout).Where(line => line.StartsWith("retention fallback mirror ")));
+        Assert.Contains("runs removed=1", result.Stdout);
+        Assert.Contains("failed=1; floorGB=60 freeBeforeGB=40 freeAfterGB=60 floorRemoved=1", result.Stdout);
+    }
+
     private string AgedFolder(string relativePath, double days)
     {
         var path = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -301,7 +508,27 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
 
     private Task<(int ExitCode, string Stdout, string Stderr)> RunRetention(params string[] windows) =>
-        RunScript("Invoke-QueuedLanes.ps1", ["-RunRoot", _root, "-RetentionOnly", .. windows]);
+        RunRetentionReader("{ 100GB }", windows);
+
+    private Task<(int ExitCode, string Stdout, string Stderr)> RunRetentionReadings(long[] readings, params string[] windows)
+    {
+        var path = Path.Combine(_root, "free-bytes.txt");
+        File.WriteAllLines(path, readings.Select(value => value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        var setup = "$readings = @(Get-Content -LiteralPath " + PsQuote(path) + "); $cursor = @{ Index = 0 }; ";
+        return RunRetentionReader("{ param($root) $i = [Math]::Min($cursor.Index, $readings.Count - 1); $cursor.Index++; [double]$readings[$i] }",
+            windows, setup);
+    }
+
+    private Task<(int ExitCode, string Stdout, string Stderr)> RunRetentionReader(string reader, string[] windows, string setup = "")
+    {
+        var script = Path.Combine(VerifiedRepositoryRoot.Find(), "scripts", "executor", "tools", "Invoke-QueuedLanes.ps1");
+        Assert.True(File.Exists(script));
+        var command = setup + "& " + PsQuote(script) + " -RunRoot " + PsQuote(_root) + " -RetentionOnly " +
+            string.Join(" ", windows) + " -FreeSpaceReader " + reader;
+        return RunPowerShell("Invoke-QueuedLanes.ps1", ["-Command", command]);
+    }
+
+    private static string PsQuote(string value) => "'" + value.Replace("'", "''") + "'";
 
     private async Task<(int ExitCode, string Stderr)> Run(string tools, string output)
     {
@@ -309,10 +536,15 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         return (result.ExitCode, result.Stderr);
     }
 
-    private async Task<(int ExitCode, string Stdout, string Stderr)> RunScript(string scriptName, string[] arguments)
+    private Task<(int ExitCode, string Stdout, string Stderr)> RunScript(string scriptName, string[] arguments)
     {
         var script = Path.Combine(VerifiedRepositoryRoot.Find(), "scripts", "executor", "tools", scriptName);
         Assert.True(File.Exists(script), "Tracked executor script is required for the process contract.");
+        return RunPowerShell(scriptName, ["-File", script, .. arguments]);
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunPowerShell(string scriptName, string[] arguments)
+    {
         var start = new ProcessStartInfo(TestPowerShell.Executable)
         {
             WorkingDirectory = _root, UseShellExecute = false, CreateNoWindow = true,
@@ -324,7 +556,7 @@ public sealed class ExecutorToolsDigestScriptTests : IDisposable
         start.Environment.Clear();
         foreach (var item in required) start.Environment[item.Key] = item.Value;
         start.Environment["USERPROFILE"] = _root;
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", script }.Concat(arguments))
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive" }.Concat(arguments))
             start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("PowerShell did not start.");
         var stdout = process.StandardOutput.ReadToEndAsync();
