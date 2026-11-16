@@ -2,10 +2,14 @@ using Mcg.AgentOrchestrator.App.Application;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-/// <summary>Maps recorded-dispatch process results to conductor start outcomes.</summary>
-internal static class RecordedDispatchStartClassifier
+/// <summary>Maps process results shared by subscription and recorded-dispatch starts.</summary>
+internal static class DispatchStartClassifier
 {
-    internal static DispatchStartOutcome Classify(ProcessBatchExecutionResult result)
+    internal static DispatchStartOutcome ClassifyRecordedStart(ProcessBatchExecutionResult result) =>
+        ClassifyProcessStart(result) ?? DispatchStartOutcome.EmptyBatch(DispatchStartRefusalReasonBuilder.Build(result));
+
+    // A result with no process outcome needs the caller's dispatch-preparation diagnostics.
+    internal static DispatchStartOutcome? ClassifyProcessStart(ProcessBatchExecutionResult result)
     {
         if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
             return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
@@ -20,6 +24,6 @@ internal static class RecordedDispatchStartClassifier
                 $"Skipped {result.RequeueSkippedCount} automatic interrupted-dispatch requeue(s) after terminal-state preflight");
         }
 
-        return DispatchStartOutcome.EmptyBatch(DispatchStartRefusalReasonBuilder.Build(result));
+        return null;
     }
 }
