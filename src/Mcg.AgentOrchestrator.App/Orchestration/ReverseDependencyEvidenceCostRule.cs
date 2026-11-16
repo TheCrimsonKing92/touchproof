@@ -15,7 +15,7 @@ internal static class ReverseDependencyEvidenceCostRule
             failureRate is { } invalid && (!double.IsFinite(invalid) || invalid < 0 || invalid > 1))
             return new(false, $"REVERSE_DEPENDENCY_EVIDENCE_COST {inputs} decision=skip reason=invalid input");
         if (failureRate is null)
-            return new(false, $"REVERSE_DEPENDENCY_EVIDENCE_COST {inputs} decision=skip reason=rate could not be computed");
+            return new(true, $"REVERSE_DEPENDENCY_EVIDENCE_COST {inputs} decision=run reason=rate could not be computed; selection runs");
         var run = selectionSeconds <= failureRate.Value * fullGateSeconds;
         return new(run, $"REVERSE_DEPENDENCY_EVIDENCE_COST {inputs} decision={(run ? "run" : "skip")}");
     }

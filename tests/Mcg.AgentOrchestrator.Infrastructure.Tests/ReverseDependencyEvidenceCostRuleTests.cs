@@ -22,10 +22,11 @@ public sealed class ReverseDependencyEvidenceCostRuleTests
     }
 
     [Fact]
-    public void Evaluate_NoCompletedAttempts_SkipsWithUnavailableRate()
+    public void Evaluate_NoCompletedAttempts_RunsWithUnavailableRate()
     {
         var result = ReverseDependencyEvidenceCostRule.Evaluate(10, 100, null);
-        Assert.False(result.Run);
+        Assert.True(result.Run);
+        Assert.Contains("decision=run", result.Line);
         Assert.Contains("rate could not be computed", result.Line);
         Assert.Contains("candidate_failure_rate=unavailable", result.Line);
     }
@@ -39,11 +40,12 @@ public sealed class ReverseDependencyEvidenceCostRuleTests
 
     [Theory]
     [InlineData(double.NaN, 100, 0.5)]
+    [InlineData(double.NaN, 100, null)]
     [InlineData(1, double.PositiveInfinity, 0.5)]
     [InlineData(-1, 100, 0.5)]
     [InlineData(1, 100, -0.1)]
     [InlineData(1, 100, 1.1)]
-    public void Evaluate_InvalidInput_Skips(double selection, double gate, double rate)
+    public void Evaluate_InvalidInput_Skips(double selection, double gate, double? rate)
     {
         var result = ReverseDependencyEvidenceCostRule.Evaluate(selection, gate, rate);
         Assert.False(result.Run);

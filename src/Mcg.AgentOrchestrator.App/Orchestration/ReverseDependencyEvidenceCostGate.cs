@@ -17,11 +17,17 @@ internal static class ReverseDependencyEvidenceCostGate
             ? ReverseDependencyEvidenceCostInputs.Unavailable("selection classes unavailable") : readInputs(selections);
         var decision = ReverseDependencyEvidenceCostRule.Evaluate(
             inputs.SelectionSeconds, inputs.FullGateSeconds, inputs.FailureRate);
-        (log ?? Console.WriteLine)(inputs.UnavailableReason is { } reason
-            ? $"{decision.Line} input_unavailable={reason.Replace('\r', ' ').Replace('\n', ' ')}" : decision.Line);
-        return decision.Run && inputs.UnavailableReason is null ? plan : plan with
+        var line = inputs.UnavailableReason is { } reason
+            ? $"{decision.Line} input_unavailable={reason.Replace('\r', ' ').Replace('\n', ' ')}" : decision.Line;
+        (log ?? Console.WriteLine)(line);
+        if (decision.Run && inputs.UnavailableReason is null) return plan;
+        var classes = inputs.UnavailableReason is not null || selections.Length == 0
+            ? "selection classes unavailable" : string.Join(", ", selections);
+        var skipped = $"reach-skipped-cost: {classes} not run before review; {line}";
+        return plan with
         {
-            Checks = plan.Checks.Where(check => check.Name != CheckName).ToArray()
+            Checks = plan.Checks.Where(check => check.Name != CheckName).ToArray(),
+            Summary = string.IsNullOrEmpty(plan.Summary) ? skipped : $"{plan.Summary} {skipped}"
         };
     }
 }
