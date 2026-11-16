@@ -74,7 +74,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
     }
 
     [Theory]
-    [InlineData("acceptance", "ACCEPTANCE result=passed", "passed its tests, landing next")]
+    [InlineData("acceptance", "ACCEPTANCE result=passed", "passed its tests")]
     [InlineData("goal-lifecycle", "TaskFailed role=Reviewer outcome=finding", "a problem needs correction")]
     [InlineData("goal-stalled", "GOAL_STALLED repeatedForSeconds=300 blocker=waiting_for_approval", "waiting for your approval")]
     [InlineData("acceptance-cohort", "ACCEPTANCE_COHORT members=11111111,22222222 outcome=failed attribution=FirstMemberFailed", ": failed (its own checks failed)")]

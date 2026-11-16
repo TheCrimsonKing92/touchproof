@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.App.OwnerConsole;
 public sealed class OwnerAcceptanceNarrationTests
 {
     [Fact]
-    public void TryNarrate_SinglePassed_ReportsLandingNext()
+    public void TryNarrate_SinglePassed_StatesOnlyChecksPassed()
     {
         OwnerConductEvent[] events =
             [new(DateTimeOffset.UnixEpoch, "acceptance", "11111111", "ACCEPTANCE result=passed")];
@@ -12,10 +12,12 @@ public sealed class OwnerAcceptanceNarrationTests
         Assert.True(OwnerAcceptanceNarration.TryNarrate(events, 0, Name,
             _ => throw new InvalidOperationException("Passed acceptance must not request failure evidence."), null, out var result));
 
-        Assert.Equal("Search: passed its tests, landing next", result.Sentence);
+        Assert.Equal("Search: passed its tests", result.Sentence);
         Assert.Equal("The required checks passed.", result.Why);
-        Assert.Equal("The conductor will land this work.", result.Next);
-        Assert.Equal("No. You can let the conductor continue.", result.Act);
+        Assert.Equal("The required checks passed.", result.Next);
+        Assert.Equal("The required checks passed.", result.Act);
+        foreach (var text in new[] { result.Sentence, result.Why, result.Next, result.Act })
+            Assert.DoesNotContain("land", text, StringComparison.OrdinalIgnoreCase);
         Assert.Null(result.GoalPrefixes);
         Assert.Equal(new OwnerConsoleTitleSpan(0, 6, 0), Assert.Single(result.Spans.Titles));
         Assert.Equal(8, result.Spans.OutcomeStart);
@@ -57,7 +59,7 @@ public sealed class OwnerAcceptanceNarrationTests
 
         Assert.Equal("Joint test run for Search, Export: passed", result.Sentence);
         Assert.Equal("The joint checks passed.", result.Why);
-        Assert.Equal("The conductor will land the work.", result.Next);
+        Assert.Equal("The required checks passed.", result.Next);
         Assert.Equal("No. You can let the conductor continue.", result.Act);
         Assert.Equal(new[] { "11111111", "22222222" }, result.GoalPrefixes);
         Assert.Equal(new[] { new OwnerConsoleTitleSpan(19, 6, 0), new OwnerConsoleTitleSpan(27, 6, 0) }, result.Spans.Titles);
@@ -97,7 +99,7 @@ public sealed class OwnerAcceptanceNarrationTests
 
         Assert.Equal("Joint test run for Export, Search: passed", result.Sentence);
         Assert.Equal("The joint checks passed.", result.Why);
-        Assert.Equal("The conductor will land the work.", result.Next);
+        Assert.Equal("The required checks passed.", result.Next);
         Assert.Equal("No. You can let the conductor continue.", result.Act);
         Assert.Equal(new[] { "22222222", "11111111" }, result.GoalPrefixes);
     }
@@ -117,6 +119,49 @@ public sealed class OwnerAcceptanceNarrationTests
         Assert.Equal("needs you.", result.Next);
         Assert.Equal("Yes. Review the failed check and answer the question in DECISIONS.", result.Act);
         Assert.Equal(new[] { "11111111", "22222222" }, result.GoalPrefixes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Narrate_LandingThenDelayedPass_KeepsSeparateNeutralPassItem(bool jointLanding)
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        List<OwnerConductEvent> landings = [new(time, "loop-relaunch", "11111111-goal",
+            "LOOP_RELAUNCH_SCHEDULED tick=1 goal=11111111-goal")];
+        if (jointLanding)
+            landings.Add(new(time.AddSeconds(1), "loop-relaunch", "22222222-goal",
+                "LOOP_RELAUNCH_SCHEDULED tick=1 goal=22222222-goal"));
+        var baseline = Assert.Single(OwnerActivityNarrator.Narrate(landings, Title));
+        Assert.Equal(jointLanding ? "Landed together: Search (11111111), Export (22222222)" :
+            "Landed: Search (11111111)", baseline.Phrase);
+        var passed = new OwnerConductEvent(time.AddSeconds(2), "acceptance", "11111111",
+            "ACCEPTANCE goal=11111111 result=passed");
+
+        var items = OwnerActivityNarrator.Narrate([.. landings, passed], Title);
+
+        Assert.Equal(2, items.Count);
+        var pass = items[0];
+        Assert.Equal(passed.Timestamp, pass.Timestamp);
+        Assert.Equal("Search: passed its tests", pass.Phrase);
+        Assert.Equal("The required checks passed.", pass.Why);
+        Assert.Equal("The required checks passed.", pass.Next);
+        Assert.Equal("The required checks passed.", pass.Act);
+        Assert.Same(passed, Assert.Single(pass.Evidence!));
+        Assert.Null(pass.GoalPrefixes);
+        foreach (var text in new[] { pass.Phrase, pass.Why, pass.Next, pass.Act })
+            Assert.DoesNotContain("land", text, StringComparison.OrdinalIgnoreCase);
+        var landed = items[1];
+        Assert.Equal(baseline.Phrase, landed.Phrase);
+        Assert.Equal(time, landed.Timestamp);
+        Assert.Equal(baseline.Why, landed.Why);
+        Assert.Equal(baseline.Next, landed.Next);
+        Assert.Equal(baseline.Act, landed.Act);
+        Assert.Equal(baseline.GoalPrefixes, landed.GoalPrefixes);
+        Assert.Equal(baseline.Evidence, landed.Evidence);
+        Assert.Equal(baseline.Spans!.Titles, landed.Spans!.Titles);
+
+        static string Title(string? id) => Name(OwnerEventFields.Prefix(id));
     }
 
     private static string Name(string? id) => id == "22222222" ? "Export" : "Search";

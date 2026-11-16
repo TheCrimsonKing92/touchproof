@@ -29,8 +29,8 @@ internal static class OwnerAcceptanceNarration
             if (Field(source, "result") == "passed")
             {
                 var title = name(source.GoalId);
-                narrated = new(title + ": passed its tests, landing next", "The required checks passed.",
-                    "The conductor will land this work.", "No. You can let the conductor continue.",
+                narrated = new(title + ": passed its tests", "The required checks passed.",
+                    "The required checks passed.", "The required checks passed.",
                     SingleTitle(title, 0) with { OutcomeStart = title.Length + 2, OutcomeLength = "passed".Length });
                 return true;
             }
@@ -63,7 +63,7 @@ internal static class OwnerAcceptanceNarration
         var label = named.Text;
         var spans = named.Spans with { OutcomeStart = label.Length + 2, OutcomeLength = (passed ? "passed" : "failed").Length };
         var goalPrefixes = joint && ids.Length > 1 ? ids.Select(Prefix).ToArray() : null;
-        if (passed) return new(label + ": passed", "The joint checks passed.", "The conductor will land the work.",
+        if (passed) return new(label + ": passed", "The joint checks passed.", "The required checks passed.",
             "No. You can let the conductor continue.", spans, goalPrefixes);
         var follow = ordered.Skip(index + 1).TakeWhile(value =>
             !(joint ? value.EventKind == source.EventKind && Members(value).Length > 1 &&
