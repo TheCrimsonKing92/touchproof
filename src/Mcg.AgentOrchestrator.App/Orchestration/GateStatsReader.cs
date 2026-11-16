@@ -114,7 +114,8 @@ internal static class GateStatsReader
         return attempts;
     }
 
-    internal static IReadOnlyList<GateRunAttempt> ReadGateRuns(string directory, int last, out int skipped)
+    internal static IReadOnlyList<GateRunAttempt> ReadGateRuns(string directory, int last, out int skipped,
+        IReadOnlySet<string>? tests = null)
     {
         var groups = DiscoverAttempts(directory, null, last, out skipped);
         var attempts = new List<GateRunAttempt>();
@@ -127,7 +128,7 @@ internal static class GateStatsReader
                 var run = 0;
                 if (suffix.Success && !int.TryParse(suffix.Groups["run"].Value, NumberStyles.None,
                     CultureInfo.InvariantCulture, out run)) { skipped++; continue; }
-                var results = ReadTrx(file.Path);
+                var results = ReadTrx(file.Path, tests);
                 if (results is null) { skipped++; continue; }
                 runs.Add(new(suffix.Success ? suffix.Groups["lane"].Value : file.Lane, run, results));
             }
@@ -166,7 +167,9 @@ internal static class GateStatsReader
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { skipped++; return []; }
     }
 
-    internal static IReadOnlyList<TestResult>? ReadTrx(string path)
+    internal static IReadOnlyList<TestResult>? ReadTrx(string path) => ReadTrx(path, null);
+
+    internal static IReadOnlyList<TestResult>? ReadTrx(string path, IReadOnlySet<string>? tests)
     {
         try
         {
@@ -194,7 +197,9 @@ internal static class GateStatsReader
                     if (separator <= 0) return null;
                     name = selector[..separator];
                 }
-                results.Add(new(name, identity, (string?)result.Attribute("outcome"), duration.TotalSeconds));
+                // Validate every row before filtering so excluded tests cannot hide a malformed file.
+                if (tests is null || (identity is not null && tests.Contains(identity)))
+                    results.Add(new(name, identity, (string?)result.Attribute("outcome"), duration.TotalSeconds));
             }
             return results;
         }

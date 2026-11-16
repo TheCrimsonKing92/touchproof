@@ -14,9 +14,11 @@ internal static class GateStatsReport
     // Ordered by precedence when the same test appears in multiple lanes of an attempt.
     private enum TestAttemptOutcome { Nonterminal, CleanPass, Flake, HardFailure }
 
-    internal static FlakeReport Flakes(string directory, int last, int top)
+    internal static FlakeReport Flakes(string directory, int last, int top) => Flakes(directory, last, top, null);
+
+    internal static FlakeReport Flakes(string directory, int last, int top, IReadOnlySet<string>? tests)
     {
-        var attempts = GateStatsReader.ReadGateRuns(directory, last, out var skipped);
+        var attempts = GateStatsReader.ReadGateRuns(directory, last, out var skipped, tests);
         return Flakes(attempts, skipped, top);
     }
 

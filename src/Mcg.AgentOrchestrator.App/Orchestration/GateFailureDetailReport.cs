@@ -34,7 +34,8 @@ internal sealed record GateFailureDetailReport(string AttemptId, string Cause, s
         }
 
         var classified = GateFailureClassificationReport.Classify(attempt);
-        var history = GateStatsReport.Flakes(directory, 20, int.MaxValue).Tests
+        var failingTests = classified.Tests.Select(test => test.Test).ToHashSet(StringComparer.Ordinal);
+        var history = GateStatsReport.Flakes(directory, 20, int.MaxValue, failingTests).Tests
             .ToDictionary(row => row.Test, StringComparer.Ordinal);
         var sources = attempt.Runs.ToDictionary(run => (run.Lane, run.Run), run => prefix + "." + run.Lane +
             (run.Run == 0 ? "" : $"-run-{run.Run.ToString(CultureInfo.InvariantCulture)}") + ".trx");

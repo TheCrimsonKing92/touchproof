@@ -286,6 +286,82 @@ public sealed class GateFailureDetailReportTests : CliTaskQueryTestSupport
         Assert.Equal(CliCommandHelp.GateStatsUsage, duplicate.Message);
     }
 
+    [Fact]
+    public void FilteredFlakeRead_MatchesUnfilteredRowsForRequestedTestsOnly()
+    {
+        using var fixture = new Fixture();
+        const string other = "Namespace.Other.Test";
+        var requested = new HashSet<string>(StringComparer.Ordinal) { Name, other };
+        fixture.Trx(1, Lane, 0, Name, "Failed"); // Outside the last-three window.
+        fixture.Trx(2, Lane, 0, Name, "Failed");
+        fixture.Trx(2, Lane, 1, Name, "Passed");
+        fixture.Trx(2, "other", 0, other, "Passed");
+        fixture.Trx(3, Lane, 0, Name, "Failed");
+        fixture.Trx(3, "parallel", 0, Name, "Passed");
+        fixture.Trx(3, "other", 0, other, "Failed");
+        fixture.Trx(4, Lane, 0, Name.ToLowerInvariant(), "Failed");
+        fixture.Trx(4, "other", 0, "Namespace.Unrequested.Test", "Passed");
+
+        var directory = fixture.Workspace.OrchestratorDirectory;
+        var unfiltered = GateStatsReport.Flakes(directory, 3, int.MaxValue);
+        var filtered = GateStatsReport.Flakes(directory, 3, int.MaxValue, requested);
+        Assert.Equal(3, filtered.Gates);
+        Assert.Equal(unfiltered.Gates, filtered.Gates);
+        Assert.Equal(unfiltered.Skipped, filtered.Skipped);
+        Assert.Equal(4, unfiltered.Tests.Count);
+        Assert.Equal(requested.Order(StringComparer.Ordinal), filtered.Tests.Select(row => row.Test).Order(StringComparer.Ordinal));
+        Assert.Equal(unfiltered.Tests.Where(row => requested.Contains(row.Test)), filtered.Tests);
+        var history = Assert.Single(filtered.Tests, row => row.Test == Name);
+        Assert.Equal(2, history.Attempts);
+        Assert.Equal(1, history.Flake);
+        Assert.Equal(1, history.Hard);
+        var otherHistory = Assert.Single(filtered.Tests, row => row.Test == other);
+        Assert.Equal(2, otherHistory.Attempts);
+        Assert.Equal(1, otherHistory.Pass);
+        Assert.Equal(1, otherHistory.Hard);
+    }
+
+    [Theory]
+    [InlineData("<WrongRoot><Results /></WrongRoot>")]
+    [InlineData("<TestRun />")]
+    [InlineData("<TestRun><Results><UnitTestResult testName='Namespace.Other.Test' duration='bogus' /></Results></TestRun>")]
+    [InlineData("<TestRun><Results><UnitTestResult testName='Namespace.Other.Test' duration='-00:00:01' /></Results></TestRun>")]
+    [InlineData("<TestRun><Results><UnitTestResult testName='Unqualified' duration='00:00:01' /></Results></TestRun>")]
+    public void FilteredGateRunRead_DropsOtherTestsAndPreservesInvalidFiles(string invalidTrx)
+    {
+        using var fixture = new Fixture();
+        var requested = new HashSet<string>(StringComparer.Ordinal) { Name };
+        var valid = new XElement("TestRun", new XElement("Results",
+            new XElement("UnitTestResult", new XAttribute("testName", Name),
+                new XAttribute("duration", "00:00:01"), new XAttribute("outcome", "Failed")),
+            new XElement("UnitTestResult", new XAttribute("testName", "Namespace.Other.Test"),
+                new XAttribute("duration", "00:00:01"), new XAttribute("outcome", "Passed"))));
+        fixture.Artifact(1, $".{Lane}.trx", valid.ToString());
+        fixture.Artifact(2, $".{Lane}.trx", invalidTrx);
+        fixture.Trx(3, Lane, 0, "Namespace.Other.Test", "Passed");
+        var directory = fixture.Workspace.OrchestratorDirectory;
+
+        var unfiltered = GateStatsReader.ReadGateRuns(directory, 20, out var skipped);
+        var filtered = GateStatsReader.ReadGateRuns(directory, 20, out var filteredSkipped, requested);
+        var empty = GateStatsReader.ReadGateRuns(directory, 20, out var emptySkipped,
+            new HashSet<string>(StringComparer.Ordinal));
+        Assert.Equal(1, skipped);
+        Assert.Equal(skipped, filteredSkipped);
+        Assert.Equal(skipped, emptySkipped);
+        Assert.Equal(3, unfiltered.Count);
+        Assert.Equal(3, unfiltered.SelectMany(attempt => attempt.Runs).SelectMany(run => run.Results).Count());
+        Assert.Equal(unfiltered.Select(attempt => (attempt.Id, attempt.RecordedAt)),
+            filtered.Select(attempt => (attempt.Id, attempt.RecordedAt)));
+        Assert.Equal(unfiltered.Select(attempt => attempt.Id), empty.Select(attempt => attempt.Id));
+        Assert.Equal(unfiltered.Select(attempt => attempt.Runs.Count), filtered.Select(attempt => attempt.Runs.Count));
+        Assert.Equal(unfiltered.SelectMany(attempt => attempt.Runs).Select(run => (run.Lane, run.Run)),
+            empty.SelectMany(attempt => attempt.Runs).Select(run => (run.Lane, run.Run)));
+        var retained = Assert.Single(filtered.SelectMany(attempt => attempt.Runs).SelectMany(run => run.Results));
+        Assert.Equal(Name, retained.Test);
+        Assert.Equal("Failed", retained.Outcome);
+        Assert.Empty(empty.SelectMany(attempt => attempt.Runs).SelectMany(run => run.Results));
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly string _root = CreateTempDirectory();
