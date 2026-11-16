@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private readonly HashSet<string> _resolvedMissingBaselineRequests = new(StringComparer.Ordinal);
-
+    internal SelectedExecutionGateMissDetector? GateMissDetector { get; set; }
     internal bool TryResumeUnconfirmedCandidateRed(
         Goal goal,
         TaskSpec requestingTask,
@@ -577,7 +577,7 @@ internal sealed partial class ConductorDriver
         }
 
         var attribution = TryAttributeActionableCandidateRed(
-            goal, candidateSha, arms, batch);
+            goal, candidateSha, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, routedReceiptId, arms, _recordTaskNote), batch);
         if (attribution is not null)
         {
             decision = BuildActionableCandidateRedDecision(

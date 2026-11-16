@@ -3,7 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Gate observations classify the retained range without advancing backstop coverage.
-internal sealed class SelectedExecutionGateMissDetector(SelectedExecutionBackstopCoordinator coordinator)
+internal sealed class SelectedExecutionGateMissDetector(
+    SelectedExecutionBackstopCoordinator coordinator, Action<string>? progress = null)
 {
     internal sealed record Detection(CandidateRedBaselineVerdict? Verdict,
         IReadOnlyList<SelectedExecutionBackstopMissRecord> Misses,
@@ -12,7 +13,50 @@ internal sealed class SelectedExecutionGateMissDetector(SelectedExecutionBacksto
 
     internal Task<Detection> ObserveAsync(string gateGoalId,
         FindingEvidenceArmReceipt candidate, FindingEvidenceArmReceipt baseline) =>
-        coordinator.RecordGateMissesAsync(range => Detect(gateGoalId, candidate, baseline, range));
+        ObserveAsync(gateGoalId, candidate, baseline, null);
+
+    private Task<Detection> ObserveAsync(string gateGoalId, FindingEvidenceArmReceipt candidate,
+        FindingEvidenceArmReceipt baseline, Action<string>? step) =>
+        coordinator.RecordGateMissesAsync(range =>
+        {
+            step?.Invoke("classify");
+            var detection = Detect(gateGoalId, candidate, baseline, range);
+            step?.Invoke("record");
+            return detection;
+        });
+
+    // Finding-evidence routing is synchronous; finish the observation before returning its unchanged arms.
+    internal static IReadOnlyList<FindingEvidenceArmReceipt> Observe(
+        SelectedExecutionGateMissDetector? detector, GoalId goalId, TaskId taskId, string attempt,
+        IReadOnlyList<FindingEvidenceArmReceipt> arms, Action<GoalId, TaskId, string> recordGoalEvent)
+    {
+        if (detector is null) return arms;
+        var candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
+        var baseline = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
+        if (candidate?.Disposition != FindingEvidenceArmDisposition.Red ||
+            baseline?.Disposition != FindingEvidenceArmDisposition.Red) return arms;
+
+        detector.ObserveBeforeDecision(goalId, taskId, attempt, candidate, baseline, recordGoalEvent);
+        return arms;
+    }
+
+    private void ObserveBeforeDecision(GoalId goalId, TaskId taskId, string attempt,
+        FindingEvidenceArmReceipt candidate, FindingEvidenceArmReceipt baseline,
+        Action<GoalId, TaskId, string> recordGoalEvent)
+    {
+        var step = "read-retained-landings";
+        try
+        {
+            ObserveAsync(goalId.Value, candidate, baseline, next => step = next).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+        {
+            var line = $"SELECTED_EXECUTION_GATE_MISS result=detector-failed goal={goalId} " +
+                $"attempt={attempt} step={step} detail={ex.GetType().Name}: {ex.Message}";
+            progress?.Invoke(line);
+            recordGoalEvent(goalId, taskId, line);
+        }
+    }
 
     internal static Detection Detect(string gateGoalId, FindingEvidenceArmReceipt candidate,
         FindingEvidenceArmReceipt baseline, IReadOnlyList<SelectedExecutionBackstopLanding> range)

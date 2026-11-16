@@ -263,7 +263,7 @@ internal sealed partial class ConductorDriver
             telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline);
         foreach (var (batch, covering) in plan.RedCovered)
         {
-            var attribution = TryAttributeActionableCandidateRed(goal, telemetryCandidateSha, covering.Arms!, batch);
+            var attribution = TryAttributeActionableCandidateRed(goal, telemetryCandidateSha, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, covering.ReceiptId, covering.Arms!, _recordTaskNote), batch);
             if (attribution is not null)
             {
                 FindingRoundBatchSchedule.RecordSuperseded(goal, requestingTask, plan.Executable, telemetryCandidateSha,
@@ -410,7 +410,7 @@ internal sealed partial class ConductorDriver
         var receiptId = CreateFindingEvidenceReceiptId(
             candidateSha!, findingRoundFingerprint, receiptIdentity);
         var actionableCandidateRed = TryAttributeActionableCandidateRed(
-            goal, candidateSha!, armReceipts, runnable);
+            goal, candidateSha!, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, receiptId, armReceipts, _recordTaskNote), runnable);
         var receipt = new FindingEvidenceReceipt(
             receiptId, candidateSha!, runnable.TypedRequest, evidence.Accepted, evidence.IsValidEvidence,
             evidence.Summary, armReceipts, FindingRoundFingerprint: findingRoundFingerprint,
