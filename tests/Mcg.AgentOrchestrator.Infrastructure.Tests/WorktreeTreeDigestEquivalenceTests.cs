@@ -62,7 +62,13 @@ public sealed class WorktreeTreeDigestEquivalenceTests
         Assert.Equal(indexBefore, File.ReadAllBytes(IndexPath(fixture)));
         if (clean) Assert.Equal("wbc1:git-tree:" + headTree, actual);
         else if (shape != "executable-bit") Assert.NotEqual("wbc1:git-tree:" + headTree, actual);
-        Assert.Equal(clean ? 1 : 4, fixture.Launches.Count);
+        Assert.Equal("status", fixture.Launches[0].Arguments[0]);
+        if (clean) Assert.Single(fixture.Launches);
+        else
+        {
+            Assert.InRange(fixture.Launches.Count, 1, 2);
+            Assert.All(fixture.Launches.Skip(1), launch => Assert.Equal("ls-tree", launch.Arguments[0]));
+        }
     }
 
     private static string IndexPath(WorktreeTreeDigestFixture fixture)

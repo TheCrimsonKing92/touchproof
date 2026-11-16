@@ -28,7 +28,7 @@ public sealed class WorktreeTreeDigestLaunchCountTests
         var expected = shape switch
         {
             "clean" => new[] { "status" },
-            "dirty" => new[] { "status", "read-tree", "add", "write-tree" },
+            "dirty" => fixture.Launches.Count == 1 ? new[] { "status" } : new[] { "status", "ls-tree" },
             _ => new[] { "rev-parse", "read-tree", "add", "write-tree" }
         };
         Assert.Equal(expected, fixture.Launches.Select(launch => launch.Arguments[0]));

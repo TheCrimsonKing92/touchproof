@@ -12,7 +12,7 @@ internal sealed class WorktreeTreeDigestFixture : IDisposable
     private IReadOnlyDictionary<string, string>? commandEnvironment;
     private bool computingDigest;
 
-    internal WorktreeTreeDigestFixture()
+    internal WorktreeTreeDigestFixture(string? globalConfig = null, string objectFormat = "sha1")
     {
         Repo = Directory.CreateDirectory(Path.Combine(Root, "repo")).FullName;
         foreach (var name in new[] { "PATH", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP" })
@@ -21,13 +21,19 @@ internal sealed class WorktreeTreeDigestFixture : IDisposable
         childEnvironment["USERPROFILE"] = Root;
         childEnvironment["XDG_CONFIG_HOME"] = Root;
         childEnvironment["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+        if (globalConfig is not null)
+        {
+            var configPath = Path.Combine(Root, "global-config");
+            File.WriteAllText(configPath, globalConfig);
+            childEnvironment["GIT_CONFIG_GLOBAL"] = configPath;
+        }
         childEnvironment["GIT_CONFIG_NOSYSTEM"] = "1";
         childEnvironment["GIT_AUTHOR_NAME"] = childEnvironment["GIT_COMMITTER_NAME"] = "Digest Fixture";
         childEnvironment["GIT_AUTHOR_EMAIL"] = childEnvironment["GIT_COMMITTER_EMAIL"] = "digest@example.test";
         GitCli.StartInfoObserver = Observe;
         try
         {
-            Git("init", "--initial-branch=fixture-main", "--object-format=sha1", "--template=");
+            Git("init", "--initial-branch=fixture-main", "--object-format=" + objectFormat, "--template=");
             File.AppendAllText(Path.Combine(Repo, ".git", "config"), "\n[core]\nfilemode = false\n");
             File.WriteAllText(Path.Combine(Repo, "tracked.txt"), "one\ntwo\n");
             File.WriteAllText(Path.Combine(Repo, ".gitignore"), "ignored/\n");
@@ -41,6 +47,15 @@ internal sealed class WorktreeTreeDigestFixture : IDisposable
     internal string? ReadEnvironment(string name) => childEnvironment.GetValueOrDefault(name);
 
     internal string Git(params string[] arguments) => GitWithEnvironment(null, arguments);
+
+    internal void GitFails(params string[] arguments)
+    {
+        var result = GitCli.RunWithEnvironment(Repo, childEnvironment,
+            ["-c", "commit.gpgSign=false", "-c", "core.hooksPath=" + Path.Combine(Root, "no-hooks"), .. arguments]);
+        Assert.True(result.ProcessStarted);
+        Assert.False(result.DrainTimedOut);
+        Assert.False(result.Succeeded);
+    }
 
     private string GitWithEnvironment(IReadOnlyDictionary<string, string>? environment, params string[] arguments)
     {
@@ -57,21 +72,24 @@ internal sealed class WorktreeTreeDigestFixture : IDisposable
         finally { commandEnvironment = null; }
     }
 
-    internal string Compute(Func<string, string?>? environment = null, bool defaultOverload = false)
+    internal string Compute(Func<string, string?>? environment = null, bool defaultOverload = false,
+        Action<string>? temporaryRootObserver = null, Action<ProcessStartInfo>? launchObserver = null)
     {
         Launches.Clear();
         computingDigest = true;
+        digestLaunchObserver = launchObserver;
         try
         {
             string digest, reason;
             var succeeded = defaultOverload
                 ? WorktreeTreeDigest.TryCompute(Repo, out digest, out reason)
-                : WorktreeTreeDigest.TryCompute(Repo, out digest, out reason, out _, environment: environment ?? ReadEnvironment);
+                : WorktreeTreeDigest.TryCompute(Repo, out digest, out reason, out _,
+                    temporaryRootObserver: temporaryRootObserver, environment: environment ?? ReadEnvironment);
             Assert.True(succeeded, reason);
             Assert.Equal("matched", reason);
             return digest;
         }
-        finally { computingDigest = false; }
+        finally { computingDigest = false; digestLaunchObserver = null; }
     }
 
     // Independent copy of the original four-step algorithm, using real git and a separate index.
@@ -91,7 +109,7 @@ internal sealed class WorktreeTreeDigestFixture : IDisposable
             GitWithEnvironment(environment, "read-tree", "HEAD");
             GitWithEnvironment(environment, "add", "-A");
             var tree = GitWithEnvironment(environment, "write-tree").Trim();
-            Assert.Equal(40, tree.Length);
+            Assert.True(tree.Length is 40 or 64);
             Assert.All(tree, character => Assert.True(Uri.IsHexDigit(character)));
             return "wbc1:git-tree:" + tree.ToLowerInvariant();
         }
@@ -107,15 +125,20 @@ internal sealed class WorktreeTreeDigestFixture : IDisposable
             // Preserve only the explicit per-step environment supplied by the digest under test.
             var names = arguments[0] is "read-tree" or "add" or "write-tree"
                 ? new[] { "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_OPTIONAL_LOCKS" }
-                : arguments[0] == "status" ? new[] { "GIT_OPTIONAL_LOCKS" } : [];
+                : arguments[0] is "status" or "ls-tree" ? new[] { "GIT_OPTIONAL_LOCKS" } : [];
             foreach (var name in names) overrides[name] = start.Environment[name]!;
         }
         start.Environment.Clear();
         foreach (var (name, value) in childEnvironment) start.Environment[name] = value;
         foreach (var (name, value) in commandEnvironment ?? overrides) start.Environment[name] = value;
         if (computingDigest)
+        {
             Launches.Add((arguments, start.Environment.TryGetValue("GIT_OPTIONAL_LOCKS", out var locks) ? locks : null));
+            digestLaunchObserver?.Invoke(start);
+        }
     }
+
+    private Action<ProcessStartInfo>? digestLaunchObserver;
 
     public void Dispose()
     {

@@ -35,10 +35,19 @@ internal static class WorktreeTreeDigest
             var readEnvironment = environment ?? Environment.GetEnvironmentVariable;
             var objectsDirectory = gitRunner is null
                 ? WorktreeCleanTreeFastPath.TryLocateObjects(worktreeRoot, readEnvironment) : null;
+            string? dirtyStatus = null;
+            var resolveHeadTree = Volatile.Read(ref WorktreeCleanTreeFastPath.HeadTreeResolver);
             if (objectsDirectory is not null && WorktreeCleanTreeFastPath.TryMatchClean(
-                worktreeRoot, readEnvironment, run, Volatile.Read(ref WorktreeCleanTreeFastPath.HeadTreeResolver), out var treeId))
+                worktreeRoot, readEnvironment, run, resolveHeadTree, out var treeId, out dirtyStatus))
             {
                 digest = $"{Algorithm}:{treeId.ToLowerInvariant()}";
+                reason = "matched";
+                return true;
+            }
+            if (dirtyStatus is not null && WorktreeDirtyTreeHasher.TryCompute(
+                worktreeRoot, dirtyStatus, readEnvironment, run, resolveHeadTree, out var dirtyTreeId))
+            {
+                digest = $"{Algorithm}:{dirtyTreeId}";
                 reason = "matched";
                 return true;
             }
@@ -98,7 +107,9 @@ internal static class WorktreeTreeDigest
         {
             WorkingDirectory = root,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            // Git's NUL-delimited path listings are UTF-8, independent of the Windows console code page.
+            StandardOutputEncoding = System.Text.Encoding.UTF8
         };
         foreach (var arg in args)
             start.ArgumentList.Add(arg);
