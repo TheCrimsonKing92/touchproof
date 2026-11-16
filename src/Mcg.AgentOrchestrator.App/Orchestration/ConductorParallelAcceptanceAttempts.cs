@@ -795,6 +795,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 return reused;
             }
 
+            if (RetainedFailedFocusedEvidenceReader.TryRead(current, candidate, dispatchKind, focusedEvidenceRequest, requestContext) is { } retained) return retained;
+
             relaunchProvenance = BuildRelaunchProvenance(current, candidate, dispatchKind, focusedEvidenceRequest,
                 requestContext, IsTerminalWithoutRunOutcome(current.Outcome)
                     ? PreReviewEvidenceRelaunchTrigger.DidNotRunRetry

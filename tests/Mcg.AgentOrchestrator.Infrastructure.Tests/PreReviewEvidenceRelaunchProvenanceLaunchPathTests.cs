@@ -1,4 +1,7 @@
+using static ConductorDriverTests;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -8,6 +11,516 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 public sealed class PreReviewEvidenceRelaunchProvenanceLaunchPathTests
 {
+    [Theory]
+    [InlineData("pre-review-stage")]
+    [InlineData("finding-round-1")]
+    [InlineData("pre-tester-deferred")]
+    public void FocusedCompletion_CapturesOriginalReceiptOnlyForOwningStage(string fingerprint)
+    {
+        using var harness = new RetainedHarness();
+        harness.Context = harness.Context with
+        {
+            FindingRoundFingerprint = fingerprint,
+            ReceiptId = "focused-receipt-1"
+        };
+        if (fingerprint == "pre-tester-deferred")
+        {
+            harness.Evidence = harness.Evidence with
+            {
+                Arms = [new FocusedEvidenceArmRunResult(FindingEvidenceArm.Candidate, "branch-1",
+                    FindingEvidenceArmDisposition.Red, true, false, harness.Evidence.Summary, harness.Evidence.Checks)]
+            };
+        }
+        var completed = harness.CompleteFirst();
+
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, completed.Outcome);
+        if (fingerprint == "finding-round-1")
+        {
+            Assert.Null(completed.OriginalFocusedReceipt);
+            return;
+        }
+
+        var receipt = Assert.IsType<FindingEvidenceReceipt>(completed.OriginalFocusedReceipt);
+        Assert.Equal("focused-receipt-1", receipt.ReceiptId);
+        Assert.Equal(fingerprint, receipt.FindingRoundFingerprint);
+        Assert.False(receipt.Passed);
+        var arm = Assert.Single(receipt.Arms!);
+        Assert.Equal(FindingEvidenceArmDisposition.Red, arm.Disposition);
+        Assert.Contains(arm.ReceiptArtifacts!, artifact => artifact.Kind == "trx" &&
+            artifact.Path == harness.TrxPath && artifact.Length > 0 && !string.IsNullOrWhiteSpace(artifact.Sha256));
+        if (fingerprint == "pre-tester-deferred")
+        {
+            var disposition = Assert.Single(receipt.RequestDispositions!);
+            Assert.Equal(["focused-receipt-1"], disposition.SourceReceiptIds);
+        }
+        else
+        {
+            Assert.Empty(receipt.RequestDispositions!);
+        }
+    }
+
+    [Fact]
+    public void ReconciledFailure_Reload_ReusesFailedResultWithoutExecution()
+    {
+        using var harness = new RetainedHarness();
+        var original = harness.CompleteFirst();
+        var metadata = File.ReadAllText(original.MetadataPath);
+        var artifact = File.ReadAllText(original.ResultPath);
+        var decision = harness.Reload().EvaluateFocusedEvidence(harness.Candidate,
+            ConductorAutonomyPolicy.Permissive, RetainedHarness.Request, harness.Run, harness.Context);
+
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+        Assert.Equal(original.AttemptId, decision.Attempt.AttemptId);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, decision.Attempt.Outcome);
+        var arm = Assert.Single(decision.Attempt.OriginalFocusedReceipt!.Arms!);
+        Assert.Equal(FindingEvidenceArmDisposition.Red, arm.Disposition);
+        Assert.False(arm.Passed);
+        Assert.Equal(["ExampleTests.Fails"], arm.FailingTestIdentities);
+        var evidence = Assert.IsType<FocusedEvidenceRunResult>(decision.Run!.FocusedEvidence);
+        Assert.True(evidence.Accepted);
+        Assert.False(evidence.Passed);
+        Assert.Equal(harness.Evidence.Summary, evidence.Summary);
+        var check = Assert.Single(evidence.Checks);
+        Assert.False(check.Passed);
+        Assert.Equal(["ExampleTests.Fails"], check.FailingTestIdentities);
+        Assert.Equal([harness.TrxPath], check.TestResultPaths);
+        Assert.Equal(1, harness.Executions);
+        Assert.Single(Directory.GetFiles(Path.GetDirectoryName(original.MetadataPath)!, "*.attempt.json"));
+        Assert.Equal(metadata, File.ReadAllText(original.MetadataPath));
+        Assert.Equal(artifact, File.ReadAllText(original.ResultPath));
+    }
+
+    [Theory]
+    [InlineData("candidate")]
+    [InlineData("request")]
+    [InlineData("negative-control")]
+    [InlineData("revert-paths")]
+    [InlineData("mutation")]
+    [InlineData("repository")]
+    [InlineData("round")]
+    [InlineData("basis")]
+    [InlineData("current-basis-missing")]
+    [InlineData("recorded-basis-missing")]
+    [InlineData("batch")]
+    [InlineData("baseline-arm")]
+    public void ReconciledFailure_OneChangedBinding_ExecutesAgain(string difference)
+    {
+        using var harness = new RetainedHarness();
+        if (difference == "recorded-basis-missing")
+            harness.Context = harness.Context with { ExecutionBasisIdentity = null };
+        var first = harness.CompleteFirst();
+        var context = harness.Context;
+        var candidate = harness.Candidate;
+        var request = RetainedHarness.Request;
+        switch (difference)
+        {
+            case "candidate": candidate = ConductorParallelAcceptanceCandidate.Create(
+                harness.Goal, 0, [], "branch-2", "main-1"); break;
+            case "request": request = "Infrastructure.Tests: FullyQualifiedName~OtherTests"; break;
+            case "negative-control": context = context with { NegativeControl = FindingEvidenceNegativeControl.RevertSrc }; break;
+            case "revert-paths": context = context with { RevertPaths = ["src/one.cs"] }; break;
+            case "mutation": context = context with { Mutation = new("src/one.cs", "before", "after") }; break;
+            case "repository": context = context with { RepositoryTarget = new("other", harness.Root,
+                harness.Root, "main", new AcceptanceGateEngineSettings(), "branch-1") }; break;
+            case "round": context = context with { FindingRoundFingerprint = "round-2" }; break;
+            case "basis": context = context with { ExecutionBasisIdentity = "basis-2" }; break;
+            case "current-basis-missing": context = context with { ExecutionBasisIdentity = null }; break;
+            case "recorded-basis-missing": context = context with { ExecutionBasisIdentity = "basis-1" }; break;
+            case "batch": context = context with { BatchId = "batch-2" }; break;
+            case "baseline-arm": context = context with { RunBaselineArm = true }; break;
+            default: throw new ArgumentOutOfRangeException(nameof(difference));
+        }
+        harness.AssertExecutesAgain(first, candidate, request, context);
+    }
+
+    [Theory]
+    [InlineData("apparatus")]
+    [InlineData("zero-executed")]
+    [InlineData("no-identities")]
+    [InlineData("timeout")]
+    [InlineData("cancelled")]
+    [InlineData("passed")]
+    [InlineData("result-missing")]
+    [InlineData("result-malformed")]
+    [InlineData("result-fingerprint")]
+    [InlineData("trx-missing")]
+    [InlineData("trx-truncated")]
+    [InlineData("trx-altered-same-length")]
+    [InlineData("recorded-hash-missing")]
+    [InlineData("retained-path-set")]
+    [InlineData("executed-count-mismatch")]
+    [InlineData("class-mismatch")]
+    [InlineData("identity-mismatch")]
+    [InlineData("no-trx-failures")]
+    public void ReconciledFailure_OneIneligibleEvidenceCondition_ExecutesAgain(string difference)
+    {
+        using var harness = new RetainedHarness();
+        var evidence = harness.Evidence;
+        var check = Assert.Single(evidence.Checks);
+        switch (difference)
+        {
+            case "apparatus": evidence = evidence with { OutcomeReason = FindingEvidenceOutcomeReason.ApparatusFailure }; break;
+            case "zero-executed": evidence = evidence with { Checks = [check with { ExecutedTestCount = 0 }] }; break;
+            case "no-identities": evidence = evidence with { Checks = [check with { FailingTestIdentities = [] }] }; break;
+            case "timeout": evidence = evidence with { Checks = [check with { Name = "acceptance-check-timeout:focused" }] }; break;
+            case "passed": evidence = evidence with { Passed = true, Checks = [check with { Passed = true }] }; break;
+            case "executed-count-mismatch": evidence = evidence with { Checks = [check with { ExecutedTestCount = 2 }] }; break;
+            case "identity-mismatch": evidence = evidence with { Checks = [check with { FailingTestIdentities = ["ExampleTests.Other"] }] }; break;
+            case "class-mismatch":
+                evidence = FailedTrxEvidence(RetainedHarness.Request, harness.TrxPath, "OtherTests"); break;
+            case "no-trx-failures":
+                var document = XDocument.Load(harness.TrxPath);
+                var ns = document.Root!.Name.Namespace;
+                document.Root.Element(ns + "Results")!.Element(ns + "UnitTestResult")!.SetAttributeValue("outcome", "Passed");
+                var summary = document.Root.Element(ns + "ResultSummary")!;
+                summary.SetAttributeValue("outcome", "Passed");
+                summary.Element(ns + "Counters")!.SetAttributeValue("passed", 1);
+                summary.Element(ns + "Counters")!.SetAttributeValue("failed", 0);
+                document.Save(harness.TrxPath); break;
+        }
+        harness.Evidence = evidence;
+        var first = harness.CompleteFirst(cancelled: difference == "cancelled");
+        switch (difference)
+        {
+            case "result-missing": File.Delete(first.ResultPath); break;
+            case "result-malformed": File.WriteAllText(first.ResultPath, "{"); break;
+            case "result-fingerprint":
+                var result = JsonNode.Parse(File.ReadAllText(first.ResultPath))!;
+                result["focusedEvidence"]!["summary"] = "altered retained result";
+                File.WriteAllText(first.ResultPath, result.ToJsonString()); break;
+            case "trx-missing": File.Delete(harness.TrxPath); break;
+            case "trx-truncated": File.WriteAllText(harness.TrxPath, "<TestRun"); break;
+            case "trx-altered-same-length":
+                var before = File.ReadAllText(harness.TrxPath);
+                var after = before.Replace("Fails", "Other", StringComparison.Ordinal);
+                Assert.NotEqual(before, after);
+                Assert.Equal(before.Length, after.Length);
+                File.WriteAllText(harness.TrxPath, after); break;
+            case "recorded-hash-missing":
+                var metadata = JsonNode.Parse(File.ReadAllText(first.MetadataPath))!;
+                metadata["originalFocusedReceipt"]!["arms"]![0]!["receiptArtifacts"]![0]!["sha256"] = "";
+                File.WriteAllText(first.MetadataPath, metadata.ToJsonString()); break;
+            case "retained-path-set":
+                var paths = JsonNode.Parse(File.ReadAllText(first.MetadataPath))!;
+                paths["testResultPaths"] = new JsonArray(Path.Combine(harness.Root, "different.trx"));
+                File.WriteAllText(first.MetadataPath, paths.ToJsonString()); break;
+        }
+        harness.AssertExecutesAgain(first, harness.Candidate, RetainedHarness.Request, harness.Context);
+    }
+
+    [Fact]
+    public void ReconciledFailure_WriterLeaseBusy_ThrowsWithoutChangingAttempt()
+    {
+        using var harness = new RetainedHarness();
+        var first = harness.CompleteFirst();
+        var before = File.ReadAllText(first.MetadataPath);
+        var coordinator = harness.Reload(writerBusy: true);
+        Assert.Throws<AcceptanceArtifactWriterLeaseBusyException>(() => coordinator.EvaluateFocusedEvidence(
+            harness.Candidate, ConductorAutonomyPolicy.Permissive,
+            RetainedHarness.Request, harness.Run, harness.Context));
+        Assert.Equal(1, harness.Executions);
+        Assert.Equal(before, File.ReadAllText(first.MetadataPath));
+        Assert.Single(Directory.GetFiles(Path.GetDirectoryName(first.MetadataPath)!, "*.attempt.json"));
+    }
+
+    internal static class DriverRestartScenarios
+    {
+        private static string CreateTempDirectory() => ConductorDriverTests.CreateTempDirectory();
+
+        internal static void AssertRejectedCheckpointRecovery(bool receiptPersisted)
+        {
+            var root = CreateTempDirectory();
+            try
+            {
+                var (kernel, goal) = SoftwareGoal();
+                var reviewerId = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer).Id;
+                var developerId = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer).Id;
+                foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewerId))
+                    PassVerification(kernel, goal, task);
+                var authoritative = kernel.ExportGoalSnapshot(goal.Id);
+                var context = FocusedPreReviewContext("retained-red-sha");
+                var trx = Path.Combine(root, "failed.trx");
+                var failed = PreReviewEvidenceRelaunchProvenanceLaunchPathTests.FailedTrxEvidence(
+                    context.FocusedRequest!, trx, "ConductorDriverTests");
+                var settings = new AcceptanceGateEngineSettings();
+                var executions = 0;
+                var checkpointRejections = 0;
+                var dispatches = 0;
+                var completion = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+                var attemptRoot = Path.Combine(root, "attempts");
+                var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot,
+                    TrunkBranchName.Default, isProcessAlive: _ => false,
+                    attemptCompletionGateForTests: completion, acquireStableSlotLease: (_, _) => null);
+                FocusedEvidenceRunResult Run(Goal _, string request)
+                {
+                    executions++;
+                    return failed with { Request = request };
+                }
+                var startingDriver = MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    getPreReviewEvidenceContext: _ => context,
+                    getFindingEvidenceEngineSettings: _ => settings,
+                    runFocusedEvidence: Run,
+                    focusedEvidenceAttemptCoordinator: coordinator,
+                    recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                    {
+                        kernel.RecordPreReviewEvidence(goalId, taskId, receipt);
+                        // Model both recovery windows: neither effect persisted, or only Red persisted.
+                        if (receiptPersisted) authoritative = kernel.ExportGoalSnapshot(goalId);
+                    },
+                    retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                        kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+                    dispatchAndStart: _ =>
+                    {
+                        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, developerId).Status);
+                        Assert.NotNull(coordinator.TryReadLatest(goal.Id.Value)!.ReconciledAt);
+                        checkpointRejections++;
+                        kernel.ReplaceGoalWithSnapshot(authoritative);
+                        return DispatchStartOutcome.Deferred(
+                            "Critical dispatch checkpoint rejected stale state; worker start was aborted.");
+                    });
+                startingDriver._conductorTickKernel = kernel;
+
+                Assert.IsType<ConductorAdvanceOutcome.Held>(startingDriver.AdvanceOnce(
+                    goal, ConductorAutonomyPolicy.Permissive).Outcome);
+                completion.RequiredHandleForTests(goal.Id.Value).CompleteForTests();
+                Assert.Equal(1, executions);
+                var first = coordinator.TryReadLatest(goal.Id.Value)!;
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, first.Outcome);
+                Assert.Null(first.ReconciledAt);
+                var rejected = startingDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+                Assert.Contains("Critical dispatch checkpoint rejected", Assert.IsType<ConductorAdvanceOutcome.Held>(rejected.Outcome).Reason,
+                    StringComparison.Ordinal);
+                Assert.Equal(1, checkpointRejections);
+                Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, developerId).Status);
+                Assert.Equal(receiptPersisted ? 1 : 0, kernel.GetTask(goal.Id, reviewerId).PreReviewEvidenceHistory.Count);
+                Assert.DoesNotContain(kernel.Goals.Single().Timeline,
+                    item => item.Kind == ProgressKind.TaskRetried && item.TaskId == developerId);
+                var reconciled = coordinator.TryReadLatest(goal.Id.Value)!;
+                Assert.NotNull(reconciled.ReconciledAt);
+
+                // Inline completion makes the negative control execute twice instead of merely queuing a rerun.
+                var restarted = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot,
+                    TrunkBranchName.Default, isProcessAlive: _ => false, runInline: true,
+                    acquireStableSlotLease: (_, _) => null);
+                var replayRecordCalls = 0;
+                var replayDriver = MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    getPreReviewEvidenceContext: _ => context,
+                    getFindingEvidenceEngineSettings: _ => settings,
+                    runFocusedEvidence: Run,
+                    focusedEvidenceAttemptCoordinator: restarted,
+                    recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                    {
+                        replayRecordCalls++;
+                        kernel.RecordPreReviewEvidence(goalId, taskId, receipt);
+                    },
+                    retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                        kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+                    dispatchAndStart: _ =>
+                    {
+                        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, developerId).Status);
+                        dispatches++;
+                        return DispatchStartOutcome.Started();
+                    });
+                replayDriver._conductorTickKernel = kernel;
+                var recovered = replayDriver.AdvanceOnce(kernel.Goals.Single(), ConductorAutonomyPolicy.Permissive);
+
+                Assert.IsType<ConductorAdvanceOutcome.Executed>(recovered.Outcome);
+                Assert.Equal(1, executions);
+                Assert.Equal(1, dispatches);
+                Assert.Equal(receiptPersisted ? 0 : 1, replayRecordCalls);
+                var current = kernel.Goals.Single();
+                var receipt = Assert.Single(current.Tasks.Single(task => task.Id == reviewerId).PreReviewEvidenceHistory);
+                Assert.Equal(PreReviewEvidenceDisposition.Red, receipt.Disposition);
+                Assert.Equal(["ConductorDriverTests.Fails"], receipt.FailingTestIdentities);
+                Assert.Equal(0, receipt.PassedCheckCount);
+                Assert.Equal(1, receipt.FailedCheckCount);
+                Assert.Contains(trx, receipt.EvidencePointer!, StringComparison.Ordinal);
+                Assert.Equal([trx], Assert.Single(receipt.Checks).TestResultPaths);
+                Assert.Single(current.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried && item.TaskId == developerId));
+                Assert.Single(current.Timeline.Where(item => item.Kind == ProgressKind.PreReviewEvidenceRecorded && item.TaskId == reviewerId));
+                var retained = restarted.TryReadLatest(goal.Id.Value)!;
+                Assert.Equal(first.AttemptId, retained.AttemptId);
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, retained.Outcome);
+                Assert.Single(Directory.GetFiles(Path.GetDirectoryName(first.MetadataPath)!, "*.attempt.json"));
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        internal static void AssertInFlightCompletionAfterRestart()
+        {
+            var root = CreateTempDirectory();
+            try
+            {
+                var (kernel, goal) = SoftwareGoal();
+                var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+                foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+                {
+                    PassVerification(kernel, goal, task);
+                }
+
+                var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+                var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");
+                var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
+                    isProcessAlive: _ => true,
+                    attemptCompletionGateForTests: completionGate,
+                    acquireStableSlotLease: (_, _) => null);
+                var focusedRuns = 0;
+                var dispatches = 0;
+                FocusedEvidenceRunResult RunEvidence(Goal _, string request)
+                {
+                    focusedRuns++;
+                    return PassingPreReviewEvidence(request);
+                }
+
+                var startingDriver = MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    getPreReviewEvidenceContext: _ => FocusedPreReviewContext("async-sha"),
+                    runFocusedEvidence: RunEvidence,
+                    recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                        kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+                    dispatchAndStart: _ =>
+                    {
+                        dispatches++;
+                        return DispatchStartOutcome.Started();
+                    },
+                    focusedEvidenceAttemptCoordinator: startingCoordinator);
+
+                var scheduled = startingDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+                var held = Assert.IsType<ConductorAdvanceOutcome.Held>(scheduled.Outcome);
+                var heldAttempt = completionGate.RequiredHandleForTests(goal.Id.Value);
+                Assert.Equal($"pre-review-evidence:{heldAttempt.Attempt.AttemptId}", held.StableIdentity);
+                Assert.Equal(0, focusedRuns);
+                Assert.Equal(0, dispatches);
+                Assert.Equal(1, completionGate.HeldCount);
+
+                heldAttempt.CompleteForTests();
+                Assert.Equal(1, focusedRuns);
+
+                var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
+                    isProcessAlive: _ => false,
+                    launchOwnedProcess: _ => throw new InvalidOperationException("completed attempt must be reconciled"),
+                    acquireStableSlotLease: (_, _) => null);
+                var restartedDriver = MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    getPreReviewEvidenceContext: _ => FocusedPreReviewContext("async-sha"),
+                    runFocusedEvidence: RunEvidence,
+                    recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                        kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+                    dispatchAndStart: _ =>
+                    {
+                        dispatches++;
+                        return DispatchStartOutcome.Started();
+                    },
+                    focusedEvidenceAttemptCoordinator: restartedCoordinator);
+
+                var reconciled = restartedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+                Assert.IsType<ConductorAdvanceOutcome.Executed>(reconciled.Outcome);
+                Assert.Equal(1, focusedRuns);
+                Assert.Equal(1, dispatches);
+                Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+        }
+    }
+
+    internal static FocusedEvidenceRunResult FailedTrxEvidence(
+        string request, string path, string testClass = "ExampleTests")
+    {
+        XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+        new XDocument(new XElement(ns + "TestRun",
+            new XElement(ns + "TestDefinitions", new XElement(ns + "UnitTest", new XAttribute("id", "test-1"),
+                new XAttribute("name", $"{testClass}.Fails"), new XElement(ns + "TestMethod",
+                    new XAttribute("className", testClass), new XAttribute("name", "Fails")))),
+            new XElement(ns + "Results", new XElement(ns + "UnitTestResult", new XAttribute("testId", "test-1"),
+                new XAttribute("testName", $"{testClass}.Fails"), new XAttribute("outcome", "Failed"))),
+            new XElement(ns + "ResultSummary", new XAttribute("outcome", "Failed"),
+                new XElement(ns + "Counters", new XAttribute("total", 1), new XAttribute("executed", 1),
+                    new XAttribute("passed", 0), new XAttribute("failed", 1))))).Save(path);
+        return new(request, true, false, "retained executed test failure",
+            [new("focused-tests", false, 1, "typed failure", TestResultPaths: [path],
+                FailingTestIdentities: [$"{testClass}.Fails"], ExecutedTestCount: 1)]);
+    }
+
+    // All files and coordination state are per-instance; process completion is explicitly driven.
+    private sealed class RetainedHarness : IDisposable
+    {
+        internal const string Request = "Infrastructure.Tests: FullyQualifiedName~ExampleTests";
+        internal string Root { get; } = Path.Combine(Path.GetTempPath(), "retained-red-" + Guid.NewGuid().ToString("N"));
+        internal string TrxPath => Path.Combine(Root, "result.trx");
+        internal Goal Goal { get; } = new AgentOrchestratorKernel().CreateGoal("Reuse retained Red evidence");
+        internal ConductorParallelAcceptanceCandidate Candidate { get; }
+        internal ConductorFocusedEvidenceRequestContext Context { get; set; } = new("pre-review-stage", "batch-1", [], ExecutionBasisIdentity: "basis-1");
+        internal FocusedEvidenceRunResult Evidence { get; set; }
+        internal int Executions { get; private set; }
+        private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests _completion = new();
+
+        internal RetainedHarness()
+        {
+            Directory.CreateDirectory(Root);
+            Candidate = ConductorParallelAcceptanceCandidate.Create(Goal, 0, [], "branch-1", "main-1");
+            Evidence = FailedTrxEvidence(Request, TrxPath);
+        }
+
+        internal FocusedEvidenceRunResult Run(Goal _, string request, DotnetBuildEnvironmentLease? lease, CancellationToken token)
+        {
+            Executions++;
+            return Evidence with { Request = request };
+        }
+
+        internal ConductorParallelAcceptanceAttemptCoordinator Reload(bool writerBusy = false) => new(
+            Path.Combine(Root, "attempts"), TrunkBranchName.Default, isProcessAlive: _ => false,
+            attemptCompletionGateForTests: _completion, acquireStableSlotLease: (_, _) => null,
+            tryAcquireAttemptWriterLease: writerBusy ? (_, _) => null : null);
+
+        internal ConductorParallelAcceptanceAttempt CompleteFirst(bool cancelled = false)
+        {
+            var coordinator = Reload();
+            FocusedEvidenceRunResult RunFirst(Goal goal, string request, DotnetBuildEnvironmentLease? lease, CancellationToken token)
+            {
+                if (!cancelled) return Run(goal, request, lease, token);
+                Executions++;
+                throw new OperationCanceledException("cancelled attempt");
+            }
+            var started = coordinator.EvaluateFocusedEvidence(Candidate, ConductorAutonomyPolicy.Permissive, Request, RunFirst, Context);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+            _completion.RequiredHandleForTests(Goal.Id.Value).CompleteForTests();
+            coordinator.MarkReconciled(coordinator.TryReadLatest(Goal.Id.Value)!);
+            var completed = coordinator.TryReadLatest(Goal.Id.Value)!;
+            Assert.NotNull(completed.ReconciledAt);
+            Assert.Equal(1, Executions);
+            return completed;
+        }
+
+        internal void AssertExecutesAgain(ConductorParallelAcceptanceAttempt first,
+            ConductorParallelAcceptanceCandidate candidate, string request, ConductorFocusedEvidenceRequestContext context)
+        {
+            var coordinator = Reload();
+            var next = coordinator.EvaluateFocusedEvidence(candidate, ConductorAutonomyPolicy.Permissive, request, Run, context);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, next.Kind);
+            Assert.NotEqual(first.AttemptId, next.Attempt.AttemptId);
+            Assert.Equal(2, Directory.GetFiles(Path.GetDirectoryName(first.MetadataPath)!, "*.attempt.json").Length);
+            _completion.RequiredHandleForTests(Goal.Id.Value).CompleteForTests();
+            Assert.Equal(2, Executions);
+        }
+
+        public void Dispose() => Directory.Delete(Root, recursive: true);
+    }
+
     [Theory]
     [InlineData("reconciled-fallthrough", false, false, "Failed", "test-failure")]
     [InlineData("reconciled-fallthrough", true, false, "Failed", "test-failure")]

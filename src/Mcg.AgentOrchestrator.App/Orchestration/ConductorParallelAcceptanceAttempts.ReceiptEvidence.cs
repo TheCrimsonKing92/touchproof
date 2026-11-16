@@ -238,11 +238,27 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private static FindingEvidenceReceipt? CaptureOriginalFocusedReceipt(
         ConductorParallelAcceptanceAttempt attempt, ConductorParallelAcceptanceRunResult run)
     {
-        if (attempt.FindingRoundFingerprint != "pre-tester-deferred" ||
+        if (attempt.Kind != PreReviewEvidenceDispatchKind ||
             string.IsNullOrWhiteSpace(attempt.FocusedExecutionBasisIdentity) ||
-            string.IsNullOrWhiteSpace(attempt.FocusedEvidenceReceiptId) ||
             run.FocusedEvidence is not { } evidence ||
             !string.Equals(attempt.BranchHeadSha, run.Candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase)) return null;
+        if (attempt.FindingRoundFingerprint == "pre-review-stage")
+        {
+            var focusedSelections = (attempt.FocusedEvidenceMemberRequests ?? []).SelectMany(
+                ConductorDriver.ParseDispositionSelections).ToArray();
+            if (focusedSelections.Length == 0) return null;
+            var arms = evidence.Arms is { Count: > 0 } retainedArms
+                ? retainedArms
+                : [new FocusedEvidenceArmRunResult(FindingEvidenceArm.Candidate, attempt.BranchHeadSha!,
+                    evidence.Passed ? FindingEvidenceArmDisposition.Green : FindingEvidenceArmDisposition.Red,
+                    evidence.Accepted, evidence.Passed, evidence.Summary, evidence.Checks)];
+            return new(attempt.FocusedEvidenceReceiptId ?? attempt.AttemptId, attempt.BranchHeadSha!,
+                new FindingEvidenceRequest(focusedSelections), evidence.Accepted, evidence.IsValidEvidence,
+                evidence.Summary, arms.Select(ConductorDriver.CreateFindingEvidenceArmReceipt).ToArray(), [],
+                attempt.FindingRoundFingerprint, attempt.FocusedExecutionBasisIdentity);
+        }
+        if (attempt.FindingRoundFingerprint != "pre-tester-deferred" ||
+            string.IsNullOrWhiteSpace(attempt.FocusedEvidenceReceiptId)) return null;
         var selections = (attempt.FocusedEvidenceMemberRequests ?? []).SelectMany(member =>
             ConductorDriver.ParseDispositionSelections(member)).ToArray();
         if (selections.Length == 0) return null;

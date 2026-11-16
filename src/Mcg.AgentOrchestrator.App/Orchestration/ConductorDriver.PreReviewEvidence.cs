@@ -174,20 +174,13 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var candidate = ConductorParallelAcceptanceCandidate.Create(
-            goal,
-            slotIndex: 0,
-            fileScopes: [],
-            branchHeadSha: context.CandidateSha,
-            mainHeadSha: null);
+        var (candidate, requestContext) = RetainedFailedFocusedEvidenceReader.CreatePreReviewRequest(
+            goal, context, policy, _getFindingEvidenceEngineSettings);
         ConductorParallelAcceptanceAttemptDecision attemptDecision;
         try
         {
             attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-                candidate,
-                policy,
-                context.FocusedRequest,
-                _runFocusedEvidence);
+                candidate, policy, context.FocusedRequest, _runFocusedEvidence, requestContext);
         }
         catch (Exception ex) when (ex is AcceptanceArtifactWriterLeaseBusyException or PreReviewEvidenceBuildSlotsBusyException)
         {
@@ -412,21 +405,27 @@ internal sealed partial class ConductorDriver
         var failingTests = ExtractFailingTestIdentities(evidence.Checks);
         if (TryHoldPreReviewEvidenceTimeout(goal, reviewerTask, goalPrefix, policy, fromState, context, round, evidence, failingTests, currentReceipt, evidencePointer, out result))
             return true;
-        PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
-            goal, reviewerTask, context, round, PreReviewEvidenceDisposition.Red,
-            evidence.Checks, failingTests, evidencePointer);
+        var retainedRedAlreadyRecorded = RetainedFailedFocusedEvidenceReader.HasRecordedRedReceipt(
+            attemptDecision.Attempt, currentReceipt, goal.Id.Value, context);
+        if (!retainedRedAlreadyRecorded)
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
+                goal, reviewerTask, context, round, PreReviewEvidenceDisposition.Red,
+                evidence.Checks, failingTests, evidencePointer);
         var buildDiagnostic = failingTests.Count == 0 ? AcceptanceRetryOutputEvidence.FormatPreReviewBuildDiagnostic(evidence.Checks) : null;
-        if (buildDiagnostic is not null &&
+        if (retainedRedAlreadyRecorded && currentReceipt!.ReviewerRound != round ||
+            (buildDiagnostic is not null &&
             currentReceipt is { Disposition: PreReviewEvidenceDisposition.Red, EvidenceTimeoutChecks: null or [] } previousRed &&
             previousRed.FailingTestIdentities.Count == 0 &&
-            previousRed.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests))
+            previousRed.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests)))
         {
             result = Escalate(
                 goal,
                 goalPrefix,
                 policy,
                 fromState,
-                $"PRE_REVIEW_RED_UNCHANGED_CANDIDATE: candidate {context.CandidateSha} failed again without typed test identities; " +
+                retainedRedAlreadyRecorded
+                    ? $"PRE_REVIEW_RED_UNCHANGED_CANDIDATE: candidate {context.CandidateSha}; retained failing tests: {string.Join(", ", failingTests)}; pointer: {evidencePointer ?? "none"}."
+                    : $"PRE_REVIEW_RED_UNCHANGED_CANDIDATE: candidate {context.CandidateSha} failed again without typed test identities; " +
                 $"diagnostic: {buildDiagnostic}.");
             return true;
         }
