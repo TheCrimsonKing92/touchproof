@@ -124,7 +124,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling
             Assert.Equal("Active", row.Status);
             Assert.Equal(row.Status, row.Snapshot["Status"]?.GetValue<string>());
             Assert.Equal(initialVersion + 2, row.Version);
-            AssertRequeueSemantics(row.Snapshot, "Concurrent unrelated task description", "controlled retry");
+            AssertRequeueSemantics(workspace.SqliteStatePath, row.Snapshot, "Concurrent unrelated task description", "controlled retry");
         }
         finally
         {
@@ -168,7 +168,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling
             Assert.Equal("Serialized objective", row.Objective);
             Assert.Equal(row.Objective, row.Snapshot["Objective"]?.GetValue<string>());
             Assert.Equal(initialVersion + 2, row.Version);
-            AssertRequeueSemantics(row.Snapshot, "Serialized unrelated task description", "serialized retry");
+            AssertRequeueSemantics(workspace.SqliteStatePath, row.Snapshot, "Serialized unrelated task description", "serialized retry");
         }
         finally
         {
@@ -559,7 +559,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling
         return (kernel, goal);
     }
 
-    private static void AssertRequeueSemantics(JsonObject snapshot, string unrelatedDescription, string retryNote)
+    private static void AssertRequeueSemantics(string databasePath, JsonObject snapshot, string unrelatedDescription, string retryNote)
     {
         var tasks = Assert.IsType<JsonArray>(snapshot["Tasks"]);
         var target = Assert.IsType<JsonObject>(tasks[0]);
@@ -572,8 +572,15 @@ public sealed partial class GoalWorktreeTestsSqliteTooling
         Assert.Null(target["SubscriptionRetryAfter"]);
         Assert.Equal(unrelatedDescription, Assert.IsType<JsonObject>(tasks[1])["Description"]?.GetValue<string>());
 
-        var timeline = Assert.IsType<JsonArray>(snapshot["Timeline"]);
-        var retry = Assert.IsType<JsonObject>(timeline[^1]);
+        Assert.False(snapshot.ContainsKey("Timeline"));
+        var count = snapshot["TimelineInTable"]!.GetValue<int>();
+        using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False;");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT entry_json FROM goal_timeline WHERE goal_id = $id AND sequence = $sequence";
+        command.Parameters.AddWithValue("$id", snapshot["Id"]!.GetValue<string>());
+        command.Parameters.AddWithValue("$sequence", count - 1);
+        var retry = JsonNode.Parse(Assert.IsType<string>(command.ExecuteScalar()))!.AsObject();
         Assert.Equal("TaskRetried", retry["Kind"]?.GetValue<string>());
         Assert.Equal(retryNote, retry["Message"]?.GetValue<string>());
     }

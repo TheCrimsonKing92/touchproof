@@ -2845,6 +2845,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             }
         }
 
+        GoalTimelineTestSupport.InlineStoredTimelines(db);
         var expected = ReadLegacyConductLoopGoalMetadata(db);
         var actual = await repo.ListConductLoopGoalMetadataAsync();
 

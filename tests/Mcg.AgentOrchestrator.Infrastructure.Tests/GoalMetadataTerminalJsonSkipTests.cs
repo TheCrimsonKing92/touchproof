@@ -211,6 +211,7 @@ public sealed class GoalMetadataTerminalJsonSkipTests
                 ]
             }).ToArray();
             await Repository.SaveGoalSnapshotsAsync(snapshots);
+            GoalTimelineTestSupport.InlineStoredTimelines(Path);
 
             await using var connection = new SqliteConnection(ConnectionString);
             await connection.OpenAsync();

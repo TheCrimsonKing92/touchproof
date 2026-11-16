@@ -76,13 +76,10 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
         foreach (var snapshot in new[] { boundary, empty, unordered, offset })
             fixture.SetUpdatedAt(snapshot.Id, Cutoff.AddDays(-30));
         var before = fixture.GoalRows();
-        Assert.Equal(0L, fixture.Scalar("SELECT json_array_length(snapshot_json, '$.Timeline') FROM goals WHERE id = $id", empty.Id));
-        using (var stored = JsonDocument.Parse(before[offset.Id].Snapshot))
-        {
-            var timeline = stored.RootElement.GetProperty("Timeline");
-            Assert.EndsWith("+05:00", timeline[timeline.GetArrayLength() - 1].GetProperty("OccurredAt").GetString());
-        }
-        var events = Deserialize(before[unordered.Id].Snapshot).Timeline;
+        Assert.Equal(0L, fixture.Scalar("SELECT json_extract(snapshot_json, '$.TimelineInTable') FROM goals WHERE id = $id", empty.Id));
+        var storedOffset = (await fixture.Repository.LoadGoalAsync(new(offset.Id)))!.Timeline;
+        Assert.Equal(TimeSpan.FromHours(5), storedOffset[^1].OccurredAt.Offset);
+        var events = (await fixture.Repository.LoadGoalAsync(new(unordered.Id)))!.Timeline;
         Assert.True(events[^1].OccurredAt < events.Max(e => e.OccurredAt));
 
         Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff));
@@ -177,7 +174,8 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
             fixture.SetUpdatedAt(goal.Id, Cutoff.AddDays(2));
         var before = fixture.GoalRows();
         var beforeLengths = fixture.SnapshotLengths();
-        Assert.All(old, goal => Assert.Equal(200, Deserialize(before[goal.Id].Snapshot).Timeline.Count));
+        foreach (var goal in old)
+            Assert.Equal(200, (await fixture.Repository.LoadGoalAsync(new(goal.Id)))!.Timeline.Count);
         var budget = beforeLengths[old[0].Id];
         var total = 0;
         var exhausted = false;

@@ -11,6 +11,20 @@ internal sealed class GoalTimelineTestSupport : IDisposable
     internal static DateTimeOffset At => GoalTaskHistoryTestFixture.At;
     internal static string Json<T>(T value) => GoalTaskHistoryTestFixture.Json(value);
 
+    // Legacy-format controls deliberately exercise inline JSON corruption and reference SQL.
+    internal static void InlineStoredTimelines(string databasePath)
+    {
+        using var connection = StateDbConnectionFactory.Open(databasePath, StateDbConnectionProfile.ReadWrite);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE goals SET snapshot_json = json_remove(json_set(snapshot_json, '$.Timeline',
+                json(COALESCE((SELECT json_group_array(json(entry_json)) FROM
+                    (SELECT entry_json FROM goal_timeline WHERE goal_id = goals.id ORDER BY sequence)), '[]'))),
+                '$.TimelineInTable') WHERE json_type(snapshot_json, '$.TimelineInTable') = 'integer'
+            """;
+        command.ExecuteNonQuery();
+    }
+
     internal static GoalSnapshot Snapshot()
     {
         var goal = GoalTaskHistoryTestFixture.LatestSnapshot();
@@ -36,9 +50,9 @@ internal sealed class GoalTimelineTestSupport : IDisposable
         return roundTrip;
     }
 
-    internal async Task SeedAsync(GoalSnapshot goal, bool marked = true)
+    internal Task SeedAsync(GoalSnapshot goal, bool marked = true)
     {
-        await Repository.SaveGoalSnapshotsAsync([goal]);
+        Fixture.InsertLegacy(goal);
         using var connection = Fixture.Open();
         GoalTimelineStore.CreateSchema(connection);
         for (var sequence = 0; sequence < goal.Timeline.Count; sequence++)
@@ -57,6 +71,16 @@ internal sealed class GoalTimelineTestSupport : IDisposable
             document.Remove("Timeline");
             Fixture.ReplaceDocument(goal.Id, document.ToJsonString(Options));
         }
+        return Task.CompletedTask;
+    }
+
+    internal async Task AssertMarkedAsync(GoalSnapshot goal)
+    {
+        var document = JsonNode.Parse(Fixture.RawGoal(goal.Id))!.AsObject();
+        Assert.False(document.ContainsKey("Timeline"));
+        Assert.Equal(goal.Timeline.Count, document["TimelineInTable"]!.GetValue<int>());
+        Assert.Equal(goal.Timeline.Select((entry, sequence) => $"{goal.Id}|{sequence}|{Json(entry)}"), Rows());
+        Assert.Equal(Json(goal), Json(await Repository.LoadGoalAsync(new(goal.Id))));
     }
 
     internal static IEnumerable<string> Paths(bool archived = false)

@@ -69,7 +69,8 @@ public sealed class GoalSnapshotArchiveTests
             Assert.Equal(row, after[id] with { Snapshot = row.Snapshot });
             Assert.NotEqual(row.Snapshot, after[id].Snapshot);
             var stub = Deserialize(after[id].Snapshot);
-            var original = Deserialize(row.Snapshot);
+            // Raw documents can omit Timeline under TimelineInTable; use the seeded full snapshot.
+            var original = old.Single(goal => goal.Id == id);
             Assert.True(stub.IsMetadataOnly);
             Assert.Empty(stub.Tasks);
             Assert.Empty(stub.Timeline);

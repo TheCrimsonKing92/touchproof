@@ -1009,8 +1009,13 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
     {
         using var fixture = await Fixture.Create(0, 256);
         if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
-        var original = JsonSerializer.Deserialize<GoalSnapshot>(fixture.ReadSnapshotJson(CompletedId, archive),
-            SnapshotJsonOptions())!;
+        var stored = JsonNode.Parse(fixture.ReadSnapshotJson(CompletedId, archive))!;
+        Assert.Null(stored["Timeline"]);
+        // Storage documents omit table-backed events; hydrate before constructing inline variants.
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
+        var original = (await repository.LoadGoalsAsync([new GoalId(CompletedId)])).ExportSnapshot().Goals.Single();
+        Assert.NotEmpty(original.Timeline);
+        Assert.Equal(original.Timeline.Count, stored["TimelineInTable"]!.GetValue<int>());
         var node = BuildSimilaritySnapshot(original, shape);
         var json = node.ToJsonString();
         fixture.ReplaceSnapshotJson(CompletedId, json, archive);
@@ -1020,6 +1025,7 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         Assert.NotNull(accepted);
         Assert.Equal(CompletedId, accepted.Id);
         Assert.Equal(GoalStatus.Completed, accepted.Status);
+        Assert.NotNull(accepted.Timeline);
         if (shape.StartsWith("large", StringComparison.Ordinal))
         {
             foreach (var member in new[] { "Timeline", "BriefVersions", "RefinedSpecVersions", "GateTestObligations" })
@@ -1345,6 +1351,7 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
             Assert.Equal("Completed", node["Status"]!.GetValue<string>());
             if (member == "Tasks") Assert.IsType<JsonArray>(node[member]);
             node[member] = JsonNode.Parse(value);
+            if (member == "Timeline") node.AsObject().Remove("TimelineInTable");
             ReplaceSnapshotJson(id, node.ToJsonString(), archive);
         }
 

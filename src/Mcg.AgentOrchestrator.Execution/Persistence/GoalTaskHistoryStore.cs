@@ -125,6 +125,9 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     [ThreadStatic]
     private static IReadOnlyDictionary<TaskSnapshot, HistoryCounts>? _activeCounts;
 
+    [ThreadStatic]
+    private static int? _activeTimelineCount;
+
     private static HistoryCounts ActiveCounts(TaskSnapshot task) =>
         (_activeCounts ?? throw new InvalidOperationException("No active goal document serialization."))[task];
 
@@ -144,6 +147,17 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
             var resolver = new DefaultJsonTypeInfoResolver();
             resolver.Modifiers.Add(type =>
             {
+                if (type.Type == typeof(GoalSnapshot))
+                {
+                    var timeline = type.Properties.Single(property => property.AttributeProvider is
+                        System.Reflection.PropertyInfo { Name: nameof(GoalSnapshot.Timeline) });
+                    timeline.ShouldSerialize = (_, _) => _activeTimelineCount is null;
+                    var timelineMarker = type.CreateJsonPropertyInfo(typeof(int?), GoalTimelineStore.MarkerProperty);
+                    timelineMarker.Get = _ => _activeTimelineCount;
+                    timelineMarker.ShouldSerialize = (_, _) => _activeTimelineCount is not null;
+                    type.Properties.Add(timelineMarker);
+                    return;
+                }
                 if (type.Type != typeof(TaskSnapshot)) return;
                 Interlocked.Increment(ref _taskShapeModifierRunCount);
                 foreach (var property in type.Properties.Where(property =>
@@ -171,7 +185,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     // One per-save preparation supplies both the document decisions and the exact row payloads.
     // Options, resolver and task metadata are shared lazily per source options object. Reference-keyed
     // counts belong to this save, scoped to its synchronous document write on this thread. No output is kept.
-    internal PreparedWrite PrepareWrite(GoalSnapshot goal)
+    internal PreparedWrite PrepareWrite(GoalSnapshot goal, int? timelineInTable = null)
     {
         var rows = new List<HistoryWriteRow>();
         var counts = new Dictionary<TaskSnapshot, HistoryCounts>(ReferenceEqualityComparer.Instance);
@@ -199,8 +213,10 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         }
         var documentOptions = SharedDocumentOptions.GetValue(options, static source => new(source)).Options;
         var previousCounts = _activeCounts;
+        var previousTimelineCount = _activeTimelineCount;
         string document;
         _activeCounts = counts;
+        _activeTimelineCount = timelineInTable;
         try
         {
             document = JsonSerializer.Serialize(goal, documentOptions);
@@ -208,6 +224,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         finally
         {
             _activeCounts = previousCounts;
+            _activeTimelineCount = previousTimelineCount;
         }
         return new(goal.Id, document, JsonSerializer.Serialize(rows, options));
     }

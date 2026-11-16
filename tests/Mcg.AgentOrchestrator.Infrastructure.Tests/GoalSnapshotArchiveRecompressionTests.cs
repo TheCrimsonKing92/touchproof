@@ -177,7 +177,9 @@ public sealed class GoalSnapshotArchiveRecompressionTests
                 var at = Now.AddDays(-4);
                 var task = new TaskSnapshot(TaskId.New().Value, "Archive work", AgentRole.Developer,
                     WorkTaskStatus.Completed, null, null, null, null, null, null, WorkerBuildInvocations: []);
-                var snapshot = new GoalSnapshot(id, "Archive recompression é 中 \U0001F600", GoalStatus.Completed, [task],
+                // Keep the compression payload inline now that Timeline is stored in separate rows.
+                var objective = string.Concat(Enumerable.Repeat("Archive recompression é 中 \U0001F600 ", 200));
+                var snapshot = new GoalSnapshot(id, objective, GoalStatus.Completed, [task],
                     Enumerable.Range(0, 200).Select(entry => new ProgressEventSnapshot(id, null,
                         ProgressKind.GoalPolicyDecision, "Repeated terminal goal evidence", at.AddSeconds(entry))).ToArray());
                 return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []))

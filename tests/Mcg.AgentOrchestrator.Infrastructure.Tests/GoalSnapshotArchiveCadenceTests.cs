@@ -270,8 +270,10 @@ public sealed class GoalSnapshotArchiveCadenceTests
         foreach (var snapshot in new[] { recent, active, unfinished })
             Assert.Equal(before[snapshot.Id], after[snapshot.Id]);
         var hydrated = await fixture.Repository.LoadGoalAsync(new GoalId(old.Id), Xunit.TestContext.Current.CancellationToken);
+        Assert.NotNull(hydrated);
         Assert.Equal(Json(old), Json(hydrated));
-        Assert.Equal(before[old.Id].Snapshot, new GoalTaskHistoryStore(JsonOptions).SerializeDocument(hydrated!));
+        Assert.Equal(before[old.Id].Snapshot,
+            new GoalTaskHistoryStore(JsonOptions).PrepareWrite(hydrated, hydrated.Timeline.Count).Document);
     }
 
     private static GoalSnapshot MakeSnapshot(GoalStatus status)

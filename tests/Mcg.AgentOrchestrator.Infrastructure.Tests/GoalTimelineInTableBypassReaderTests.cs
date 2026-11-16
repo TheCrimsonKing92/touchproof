@@ -81,17 +81,4 @@ public sealed class GoalTimelineInTableBypassReaderTests
         Assert.Equal(text, support.Fixture.RawGoal(goal.Id));
     }
 
-    [Fact]
-    public async Task OperatorRequeue_RejectsMarkedDocumentWithoutMutation()
-    {
-        using var support = new GoalTimelineTestSupport();
-        var goal = GoalTimelineTestSupport.Snapshot();
-        await support.SeedAsync(goal);
-        var text = support.Fixture.RawGoal(goal.Id);
-        var rows = support.Rows();
-        Assert.NotEqual(0, await OrchestratorSqliteTools.RunAsync(["requeue-task", "--db", support.Fixture.DatabasePath,
-            "--task-number", "1", "--note", "retry fixture", goal.Id]));
-        Assert.Equal(text, support.Fixture.RawGoal(goal.Id));
-        Assert.Equal(rows, support.Rows());
-    }
 }

@@ -19,6 +19,7 @@ public sealed class OwnerDigestTimelineReaderTests
     public async Task Read_MixedGoals_MatchesFullLoadJson(bool defaultWindow)
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         var start = OwnerDigestTestFixture.Start;
         var end = OwnerDigestTestFixture.End;
         var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
@@ -54,6 +55,7 @@ public sealed class OwnerDigestTimelineReaderTests
         kernel.RecordOperatorIntentApplied(new GoalId(OwnerDigestTestFixture.GoalC), "at-end", "retry", null,
             "operator", "cli", null, "applied", OperatorActorKind.Human);
         await repository.SaveAsync(kernel);
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
 
         var writer = new GoalLifecycleEventWriter(fixture.Workspace.GoalLifecycleEventsDirectory, fixture.Clock);
         fixture.Clock.UtcNow = end.AddHours(2);
@@ -113,6 +115,7 @@ public sealed class OwnerDigestTimelineReaderTests
     public async Task Read_UnreadableTasks_PreservesTimelineWithoutHydratingGoal()
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         var expected = new OwnerDigestTimelineReader().Read(fixture.Workspace.SqliteStatePath,
             new Dictionary<string, DateTimeOffset>(), OwnerDigestTestFixture.Start, OwnerDigestTestFixture.End)
             .Single(input => input.GoalId == OwnerDigestTestFixture.GoalC).Timeline;
@@ -142,6 +145,7 @@ public sealed class OwnerDigestTimelineReaderTests
     public async Task Read_UnreadableTimeline_ReturnsEmptyInputAndOtherGoals(string expression)
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         MutateSnapshot(fixture, expression);
         var inputs = new OwnerDigestTimelineReader().Read(fixture.Workspace.SqliteStatePath,
             new Dictionary<string, DateTimeOffset>(), OwnerDigestTestFixture.Start, OwnerDigestTestFixture.End);

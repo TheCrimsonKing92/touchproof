@@ -1985,7 +1985,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             """;
         cmd.Parameters.AddWithValue("$id", key.Id);
         cmd.Parameters.AddWithValue("$updated_at", key.UpdatedAt);
-        var snapshotJson = cmd.ExecuteScalar() as string ?? throw new InvalidOperationException(
+        using var reader = cmd.ExecuteReader();
+        var snapshotJson = reader.Read() ? reader.GetString(0) : throw new InvalidOperationException(
             $"Terminal goal metadata changed before detail access for goal '{key.Id}'.");
 
         using var document = JsonDocument.Parse(snapshotJson);
@@ -3398,7 +3399,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             throw new InvalidOperationException($"Refusing to persist metadata-only goal snapshot '{ShortGoalId(goal.Id)}'. Hydrate the full aggregate before saving.");
         }
 
-        var prepared = TaskHistoryStore.PrepareWrite(goal);
+        var timeline = await new GoalTimelineStore(SerializerOptions).WriteAsync(conn, goal, cancellationToken);
+        var prepared = TaskHistoryStore.PrepareWrite(goal, timeline.MarkerCount);
         var json = prepared.Document;
         var historyChanged = await TaskHistoryStore.WriteAsync(conn, prepared, cancellationToken);
         await using var cmd = conn.CreateCommand();
@@ -3424,7 +3426,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         cmd.Parameters.AddWithValue("$json", json);
         cmd.Parameters.AddWithValue("$version", version is null ? DBNull.Value : version.Value);
         cmd.Parameters.AddWithValue("$skip_unchanged", skipUnchanged ? 1 : 0);
-        cmd.Parameters.AddWithValue("$history_changed", historyChanged ? 1 : 0);
+        cmd.Parameters.AddWithValue("$history_changed", historyChanged || timeline.Changed ? 1 : 0);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
         return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
     }

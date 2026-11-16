@@ -38,7 +38,8 @@ public sealed class GoalTaskHistoryMarkerContractTests
                     ? dispatch![^1] : source.LastDispatch
             });
         }
-        Assert.Equal(GoalTaskHistoryTestFixture.Json(goal), GoalTaskHistoryTestFixture.Json(snapshot with { Tasks = tasks }));
+        // This decoder covers task-history markers; the full hydration below also restores TimelineInTable.
+        Assert.Equal(GoalTaskHistoryTestFixture.Json(goal.Tasks), GoalTaskHistoryTestFixture.Json(tasks));
         // HydrateAsync includes the step 3a latest reader, without writer-specific options or decoding.
         Assert.Equal(GoalTaskHistoryTestFixture.Json(goal), GoalTaskHistoryTestFixture.Json(
             await fixture.Store.HydrateAsync(connection, snapshot, raw)));

@@ -7,13 +7,17 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>
 /// Storage-only TimelineInTable is a non-negative count; absent/null keeps inline authority.
 /// Marked documents require exactly that many rows, at contiguous zero-based sequences.
-/// This build never writes the member or timeline rows. The writer step may be adopted only
+/// This build writes the member and timeline rows. The writer step may be adopted only
 /// after a build containing this reader has been adopted AND one later build has been adopted.
 /// Level 2 fences older writers; a manual downgrade is safe only while no document is marked.
+/// A build older than step 4a reads a marked Timeline as empty and cannot be a revert target.
+/// UpsertGoalRowAsync writes rows and proves exact serialized-text equality in the caller's
+/// existing write transaction before emitting the count. Failed proof keeps Timeline inline
+/// and removes leftover rows. Matching prefixes are preserved; all other layouts are replaced.
 ///
 /// Reader inventory: search over src and scripts, excluding bin, obj, .scratch and prototype
-/// state: Timeline; Deserialize.*GoalSnapshot; snapshot_json; json_extract; json_each;
-/// goal_snapshot_archive (including quoted Timeline, $.Timeline and Timeline[ spellings).
+/// state: Timeline; TimelineInTable; Deserialize.*GoalSnapshot; snapshot_json; json_extract;
+/// json_each; goal_snapshot_archive; goal_timeline (including $.Timeline and Timeline[ spellings).
 /// Hydrating paths: GoalTaskHistoryStore.HydrateAsync covers LoadFromConnectionAsync
 /// (full/selected/status/board, model-fit backfill, goal creation), LoadGoalAsync, both prefix
 /// lookups, LoadGoalSnapshotAndVersionAsync (transaction/merge baseline),
@@ -31,20 +35,92 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 ///   retains rows, and restore validates the archived marker. Defective goals remain hot.
 ///   Recompression preserves text; StateDatabaseOfflineConversion copies text and rows.
 ///   Never prune rows belonging to an archive. Leftover rows after an inline save are not
-///   authoritative: the later writer must replace them rather than append onto them.
+///   authoritative: the writer compares their exact text and layout before preserving a prefix.
 /// - TryReadGoalSnapshot/quarantine listing consume no Timeline (shape/identity only).
 ///   Metadata-only hot stubs carry their own timestamps. GoalCreation dependency reads,
 ///   App/ReadModels/EpicPlanGoalClaimSnapshot (coverage), scripts/Invoke-IsolatedDotnet.ps1
 ///   (task role), and the operator utility status/diagnostics/set-goal-status consume no Timeline.
-/// - scripts/OrchestratorSqliteTools/Program.cs requeue requires an inline Timeline array,
-///   rejects marked documents before UPDATE and rolls back; it must learn row append/count
-///   updates before the writer step. No utility write changes are needed in this reader step.
-/// Document and rows must share a read snapshot when writers begin. ReadTerminalMetadata's
-/// separate statements are safe in this reader-only step; the writer must close that seam.
+///   SqliteWorkerOccupancyReader and TerminalOpenWorkIndex inspect only task/status fields.
+/// - scripts/OrchestratorSqliteTools/Program.cs requeue validates marked rows, appends its
+///   event and increments the count within its existing write transaction; inline remains supported.
+/// Document and rows share a read snapshot: ReadTerminalMetadata retains its document reader
+/// through the row reads, as do the sparse and hydrating readers; SQL projections use one statement.
 /// </summary>
 internal sealed class GoalTimelineStore(JsonSerializerOptions options)
 {
     internal const string MarkerProperty = "TimelineInTable";
+
+    // The caller owns the write transaction. Never create the table here: absence means inline.
+    internal async Task<(int? MarkerCount, bool Changed)> WriteAsync(SqliteConnection connection,
+        GoalSnapshot goal, CancellationToken token)
+    {
+        if (!await HasTableAsync(connection, token)) return (null, false);
+        var entries = goal.Timeline?.Select(entry => JsonSerializer.Serialize(entry, options)).ToArray();
+        var rowsJson = JsonSerializer.Serialize(entries ?? [], options);
+        var prefix = 0;
+        var matches = entries is not null;
+        using (var read = connection.CreateCommand())
+        {
+            read.CommandText = """
+                SELECT COUNT(*), COALESCE(MAX(sequence), -1),
+                    (SELECT COUNT(*) FROM json_each($entries) e CROSS JOIN goal_timeline t
+                     WHERE t.goal_id = $id AND t.sequence = CAST(e.key AS INTEGER)
+                       AND t.entry_json = e.value COLLATE BINARY)
+                FROM goal_timeline WHERE goal_id = $id
+                """;
+            read.Parameters.AddWithValue("$id", goal.Id);
+            read.Parameters.AddWithValue("$entries", rowsJson);
+            using var reader = await read.ExecuteReaderAsync(token);
+            await reader.ReadAsync(token);
+            prefix = reader.GetInt32(0);
+            matches &= reader.GetInt64(1) == prefix - 1L && reader.GetInt64(2) == prefix;
+        }
+        async Task<int> DeleteAsync()
+        {
+            using var delete = connection.CreateCommand();
+            delete.CommandText = "DELETE FROM goal_timeline WHERE goal_id = $id";
+            delete.Parameters.AddWithValue("$id", goal.Id);
+            var removed = await delete.ExecuteNonQueryAsync(token);
+            delete.CommandText = "SELECT EXISTS (SELECT 1 FROM goal_timeline WHERE goal_id = $id)";
+            if ((long)(await delete.ExecuteScalarAsync(token))! != 0)
+                throw Error(goal.Id, "could not remove leftover rows");
+            return removed;
+        }
+        var changed = false;
+        if (!matches)
+        {
+            changed = await DeleteAsync() > 0;
+            prefix = 0;
+        }
+        if (entries is null) return (null, changed);
+        if (prefix < entries.Length)
+        {
+            using var insert = connection.CreateCommand();
+            insert.CommandText = """
+                INSERT INTO goal_timeline(goal_id, sequence, entry_json)
+                SELECT $id, CAST(key AS INTEGER), value FROM json_each($entries)
+                WHERE CAST(key AS INTEGER) >= $prefix
+                """;
+            insert.Parameters.AddWithValue("$id", goal.Id);
+            insert.Parameters.AddWithValue("$prefix", prefix);
+            insert.Parameters.AddWithValue("$entries", rowsJson);
+            changed |= await insert.ExecuteNonQueryAsync(token) > 0;
+        }
+        // Re-read actual rows after writes (including trigger effects), inside this transaction.
+        using var proof = connection.CreateCommand();
+        proof.CommandText = """
+            SELECT (SELECT COUNT(*) FROM goal_timeline WHERE goal_id = $id) = $count
+              AND (SELECT COUNT(*) FROM json_each($entries) e CROSS JOIN goal_timeline t
+                   WHERE t.goal_id = $id AND t.sequence = CAST(e.key AS INTEGER)
+                     AND t.entry_json = e.value COLLATE BINARY) = $count
+            """;
+        proof.Parameters.AddWithValue("$id", goal.Id);
+        proof.Parameters.AddWithValue("$count", entries.Length);
+        proof.Parameters.AddWithValue("$entries", rowsJson);
+        if ((long)(await proof.ExecuteScalarAsync(token))! == 1) return (entries.Length, changed);
+        changed |= await DeleteAsync() > 0;
+        return (null, changed);
+    }
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTimelineStore.cs")]
     internal static void CreateSchema(SqliteConnection connection)

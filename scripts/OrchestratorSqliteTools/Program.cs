@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -430,6 +431,7 @@ internal static class OrchestratorSqliteTools
         {
             var rows = await ResolveGoalsAsync(conn, [goalPrefix]);
             var previewRow = rows[0];
+            await ValidateRequeueTimelineAsync(conn, previewRow);
             if (!TryBuildRequeuePlan(previewRow, taskNumber.Value, note, DateTimeOffset.UtcNow.ToString("O"), applyMutation: false, out var previewPlan, out var rejection))
                 return Fail(rejection!);
 
@@ -444,6 +446,7 @@ internal static class OrchestratorSqliteTools
         {
             var rows = await ResolveGoalsAsync(conn, [goalPrefix]);
             row = rows[0];
+            await ValidateRequeueTimelineAsync(conn, row);
             var occurredAt = DateTimeOffset.UtcNow.ToString("O");
             if (!TryBuildRequeuePlan(row, taskNumber.Value, note, occurredAt, applyMutation: true, out var candidatePlan, out var rejection))
             {
@@ -451,6 +454,17 @@ internal static class OrchestratorSqliteTools
                 return Fail(rejection!);
             }
             plan = candidatePlan!;
+
+            if (plan.TimelineSequence is { } sequence)
+            {
+                await using var append = conn.CreateCommand();
+                append.CommandText = "INSERT INTO goal_timeline(goal_id, sequence, entry_json) VALUES ($id, $sequence, $entry)";
+                append.Parameters.AddWithValue("$id", row.Id);
+                append.Parameters.AddWithValue("$sequence", sequence);
+                append.Parameters.AddWithValue("$entry", plan.TimelineEntry!);
+                if (await append.ExecuteNonQueryAsync() != 1)
+                    throw new InvalidOperationException($"Goal {row.Id} timeline append failed.");
+            }
 
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
@@ -529,20 +543,59 @@ internal static class OrchestratorSqliteTools
         task["SubscriptionRetryAfter"] = null;
         snapshot["Status"] = "Active";
 
-        var timeline = snapshot["Timeline"] as JsonArray
-            ?? throw new InvalidOperationException($"Goal {row.Id} snapshot has no Timeline array.");
-        timeline.Add(new JsonObject
+        var timelineEvent = new JsonObject
         {
             ["GoalId"] = row.Id,
             ["TaskId"] = taskId,
             ["Kind"] = "TaskRetried",
             ["Message"] = note.Trim(),
             ["OccurredAt"] = occurredAt
-        });
+        };
 
-        plan = new RequeuePlan(snapshot.ToJsonString(), previousStatus, nextStatus, occurredAt);
+        int? sequence = null;
+        if (snapshot["TimelineInTable"] is { } marker)
+        {
+            sequence = marker.GetValue<int>(); // Validated against stored rows before mutation.
+            snapshot["TimelineInTable"] = checked(sequence.Value + 1);
+            snapshot.Remove("Timeline");
+        }
+        else
+        {
+            var timeline = snapshot["Timeline"] as JsonArray
+                ?? throw new InvalidOperationException($"Goal {row.Id} snapshot has no Timeline array.");
+            timeline.Add(timelineEvent);
+        }
+
+        plan = new RequeuePlan(snapshot.ToJsonString(), previousStatus, nextStatus, occurredAt,
+            sequence, sequence is null ? null : timelineEvent.ToJsonString());
         rejection = null;
         return true;
+    }
+
+    // Mutation callers already hold BEGIN IMMEDIATE, so validation and append are atomic.
+    private static async Task ValidateRequeueTimelineAsync(SqliteConnection connection, GoalRow row)
+    {
+        using var document = JsonDocument.Parse(row.SnapshotJson);
+        if (!document.RootElement.TryGetProperty("TimelineInTable", out var marker) || marker.ValueKind == JsonValueKind.Null)
+            return;
+        if (marker.ValueKind != JsonValueKind.Number || !marker.TryGetInt32(out var count) || count < 0)
+            throw new InvalidOperationException($"Goal {row.Id} has invalid TimelineInTable count.");
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT sequence, entry_json FROM goal_timeline WHERE goal_id = $id ORDER BY sequence";
+        command.Parameters.AddWithValue("$id", row.Id);
+        using var reader = await command.ExecuteReaderAsync();
+        var actual = 0;
+        while (await reader.ReadAsync())
+        {
+            if (reader.GetInt64(0) != actual)
+                throw new InvalidOperationException($"Goal {row.Id} has noncontiguous timeline rows.");
+            using var entry = JsonDocument.Parse(reader.GetString(1));
+            if (entry.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException($"Goal {row.Id} has invalid timeline entry at {actual}.");
+            actual++;
+        }
+        if (actual != count)
+            throw new InvalidOperationException($"Goal {row.Id} timeline expected {count} rows, found {actual}.");
     }
 
     private static async Task<List<GoalRow>> ResolveGoalsAsync(SqliteConnection conn, List<string> prefixes)
@@ -914,5 +967,6 @@ internal static class OrchestratorSqliteTools
 
     private sealed record GoalRow(string Id, string Status, string SnapshotJson);
 
-    private sealed record RequeuePlan(string UpdatedJson, string PreviousStatus, string NextStatus, string OccurredAt);
+    private sealed record RequeuePlan(string UpdatedJson, string PreviousStatus, string NextStatus, string OccurredAt,
+        int? TimelineSequence = null, string? TimelineEntry = null);
 }

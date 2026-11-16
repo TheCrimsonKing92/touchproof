@@ -16,6 +16,7 @@ public sealed class OwnerDigestTimelineReaderRowCountTests
     public async Task Read_ManyEvents_CountsGoalRowsAndTimelineTextOnEveryRead()
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
         var loaded = await repository.LoadAsync();
         var kernel = AgentOrchestratorKernel.FromSnapshot(loaded.ExportSnapshot(), fixture.Clock);
@@ -30,6 +31,7 @@ public sealed class OwnerDigestTimelineReaderRowCountTests
                     "operator", "cli", null, "applied", OperatorActorKind.Human);
         }
         await repository.SaveAsync(kernel);
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         fixture.Clock.UtcNow = OwnerDigestTestFixture.End;
         MutateSnapshot(fixture, "json_set(snapshot_json, '$.Timeline', json('[]'))", EventlessGoal);
 
@@ -77,6 +79,7 @@ public sealed class OwnerDigestTimelineReaderRowCountTests
     public async Task Read_MixedGoals_MatchesReferenceForExplicitAndDefaultWindows(bool defaultWindow)
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         var start = OwnerDigestTestFixture.Start;
         var end = OwnerDigestTestFixture.End;
         var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
@@ -111,6 +114,7 @@ public sealed class OwnerDigestTimelineReaderRowCountTests
         kernel.RecordOperatorIntentApplied(new GoalId(OwnerDigestTestFixture.GoalC), "at-end", "retry", null,
             "operator", "cli", null, "applied", OperatorActorKind.Human);
         await repository.SaveAsync(kernel);
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         var landings = new Dictionary<string, DateTimeOffset>
         {
             [OwnerDigestTestFixture.GoalA.ToUpperInvariant()] = start.AddHours(8),
@@ -141,6 +145,7 @@ public sealed class OwnerDigestTimelineReaderRowCountTests
     public async Task Read_MutatedSnapshot_MatchesReferenceAndPreservesOtherGoals(string expression)
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         var landings = new Dictionary<string, DateTimeOffset>();
         var reference = new ReferenceReader();
         var baseline = reference.Read(fixture.Workspace.SqliteStatePath, landings,
@@ -168,6 +173,7 @@ public sealed class OwnerDigestTimelineReaderRowCountTests
     public async Task Read_MetadataOnlySnapshot_CountsRowAndMatchesReferenceWithEmptyTimeline()
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        GoalTimelineTestSupport.InlineStoredTimelines(fixture.Workspace.SqliteStatePath);
         MutateSnapshot(fixture, "json_set(snapshot_json, '$.IsMetadataOnly', json('true'))");
         var landings = new Dictionary<string, DateTimeOffset>();
         var expected = new ReferenceReader().Read(fixture.Workspace.SqliteStatePath, landings,
