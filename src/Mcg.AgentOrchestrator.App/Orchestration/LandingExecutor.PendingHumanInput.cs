@@ -13,8 +13,9 @@ internal static partial class LandingExecutor
         OrchestratorProjectRegistry? repositoryRegistry = null)
     {
         var orchestratorDirectory = workspace.OrchestratorDirectory;
+        var repositoryScope = new GateTestObligationEvaluator.RenameScope(workspace.ExecutionDirectory, workspace.IntegrationBranch);
         // Resolve candidate-bound gate and role reports before projecting pending input.
-        var resolution = ProspectiveEvidenceGateResolver.Resolve(kernel, goal, orchestratorDirectory, candidateRevision);
+        var resolution = ProspectiveEvidenceGateResolver.Resolve(kernel, goal, orchestratorDirectory, candidateRevision, repositoryScope);
         IReadOnlyDictionary<HumanInputRequestId, string> skipReasons = new Dictionary<HumanInputRequestId, string>();
         if (!string.IsNullOrWhiteSpace(candidateRevision))
             skipReasons = kernel.CloseRoleReportEvidence(goal.Id, candidateRevision,
@@ -26,7 +27,7 @@ internal static partial class LandingExecutor
                 RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision, goal.AuthoritativeBrief.Version));
         OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, goal, kernel.HumanInputRequests.ToArray());
         var obligations = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision,
-            new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray(),
+            repositoryScope, kernel.HumanInputRequests.ToArray(),
             journalDirectory: workspace.ExecutionDirectory,
             currentRepositoryTuple: () => MultiRepositoryGoal.Applies(goal)
                 ? MultiRepositoryLandingTuplePin.For(goal.Id)

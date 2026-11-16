@@ -13,7 +13,8 @@ internal static class ProspectiveEvidenceGateResolver
         AgentOrchestratorKernel kernel,
         Goal goal,
         string orchestratorDirectory,
-        string? candidateBranchHeadSha)
+        string? candidateBranchHeadSha,
+        GateTestObligationEvaluator.RenameScope? repositoryScope = null)
     {
         var pendingWaits = kernel.GetPendingHumanInput(goal.Id);
         var waits = pendingWaits
@@ -27,6 +28,28 @@ internal static class ProspectiveEvidenceGateResolver
         if (waits.Length == 0 && selectorlessWaits.Length == 0) return new([], []);
 
         var attempts = ReadAttempts(orchestratorDirectory, goal.Id, candidateBranchHeadSha);
+        TestClassExtractionEvidence? lineage = null;
+        IReadOnlyList<TestClassRenameEvidence.ClassRename>? renames = null;
+        (string Selector, string OldClass, string NewClass, string Kind)? Rewrite(string selector)
+        {
+            if (repositoryScope is null || string.IsNullOrWhiteSpace(candidateBranchHeadSha))
+                return null;
+            try
+            {
+                lineage ??= new(repositoryScope.RepositoryDirectory, repositoryScope.IntegrationBranch, candidateBranchHeadSha);
+                renames ??= TestClassRenameEvidence.Read(repositoryScope.RepositoryDirectory,
+                    lineage.MergeBase, lineage.CandidateSha);
+                return lineage.Rewrite(selector, renames);
+            }
+            catch (Exception exception)
+            {
+                // Missing history, unresolved declarations or incomplete process output are not proof.
+                // A selector-specific failure must not disable evidence for other waits.
+                Console.Error.WriteLine($"PROSPECTIVE_EVIDENCE_CLASS_LINEAGE_UNAVAILABLE selector={selector} " +
+                    $"candidate={candidateBranchHeadSha} {exception.GetType().Name}: {exception.Message}");
+                return null;
+            }
+        }
         var resolved = new List<HumanInputRequestId>();
         var unresolved = new List<ProspectiveEvidenceGateUnresolvedWait>();
         foreach (var wait in waits)
@@ -41,9 +64,16 @@ internal static class ProspectiveEvidenceGateResolver
             string? submissionFailure = null;
             foreach (var attempt in attempts)
             {
+                var followed = new HashSet<string>(StringComparer.Ordinal);
                 var unsatisfied = names.Select(name =>
                 {
                     var matches = ProspectiveEvidenceTrxRows.Match(name, attempt.Results);
+                    if (matches.Length == 0 && Rewrite(name) is { } rewrite)
+                    {
+                        matches = ProspectiveEvidenceTrxRows.Match(rewrite.Selector, attempt.Results);
+                        followed.Add($"PROSPECTIVE_EVIDENCE_CLASS_LINEAGE_FOLLOWED old={rewrite.OldClass} " +
+                            $"new={rewrite.NewClass} kind={rewrite.Kind} candidate={candidateBranchHeadSha}");
+                    }
                     var ambiguous = ProspectiveEvidenceTrxRows.AmbiguousClassNames(matches);
                     return matches.Length == 0 || matches.Any(result => !result.Passed) || ambiguous is not null
                         ? ProspectiveEvidenceTrxRows.FormatEntry(name, ambiguous) : null;
@@ -54,7 +84,8 @@ internal static class ProspectiveEvidenceGateResolver
                 try
                 {
                     kernel.SubmitHumanInput(wait.Id,
-                        $"Satisfied by gate attempt {attempt.Id}; TRX {string.Join(", ", attempt.Paths)}; {wait.TestNames.Count} named tests passed.",
+                        $"Satisfied by gate attempt {attempt.Id}; TRX {string.Join(", ", attempt.Paths)}; {wait.TestNames.Count} named tests passed." +
+                        (followed.Count == 0 ? "" : " " + string.Join("; ", followed.Order(StringComparer.Ordinal))),
                         origin: HumanInputAnswerOrigin.Worker, supersedeSiblings: false);
                     resolved.Add(wait.Id);
                 }
