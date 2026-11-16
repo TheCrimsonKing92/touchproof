@@ -16,6 +16,8 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
     private readonly string _root = Path.Combine(Path.GetTempPath(), "execution-real", Guid.NewGuid().ToString("N"));
     private readonly string _repository = RepositoryRoot();
     private readonly List<string> _buildOutputs = [];
+    private readonly Dictionary<string, int> _buildCounts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _identityCommandCounts = new(StringComparer.Ordinal);
 
     [Fact]
     public async Task ColdThenWarm_ProveExecutionProvenanceAndRejectStaleInputs()
@@ -62,6 +64,18 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
         var rebuilt = await Build(sibling, "sibling", cache);
         Assert.Contains("Execution=miss", rebuilt.Summary);
         ValidateReceiptAndTests(sibling, rebuilt.Environment, "sibling");
+
+        // All setup builds pass through Build; there are no shared fixture setup builds.
+        Assert.Equal(5, _buildCounts.Values.Sum());
+        Assert.Equal(1, _buildCounts["cold"]);
+        Assert.Equal(1, _buildCounts["warm"]);
+        Assert.Equal(2, _buildCounts["changed"]);
+        Assert.Equal(1, _buildCounts["sibling"]);
+        Assert.Equal(42, _identityCommandCounts.Values.Sum());
+        Assert.Equal(12, _identityCommandCounts["cold"]);
+        Assert.Equal(6, _identityCommandCounts["warm"]);
+        Assert.Equal(12, _identityCommandCounts["changed"]);
+        Assert.Equal(12, _identityCommandCounts["sibling"]);
     }
 
     [Fact]
@@ -227,6 +241,8 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
             // Keep evaluation JSON intact. PerformanceSummary only changes console logging.
             var measuredArguments = kind == "build" || isRestore
                 ? arguments.Append("-clp:PerformanceSummary").ToArray() : arguments;
+            var counts = kind == "build" ? _buildCounts : _identityCommandCounts;
+            counts[slot] = counts.GetValueOrDefault(slot) + 1;
             var watch = Stopwatch.StartNew();
             var result = Run(tree, environment, measuredArguments);
             watch.Stop();
@@ -315,7 +331,10 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
 
     private void ValidateReceiptAndTests(string tree, DotnetBuildEnvironment environment, string label)
     {
+        var validation = Stopwatch.StartNew();
         ValidateReceipt(tree, environment, expectValid: true);
+        output.WriteLine(FormattableString.Invariant($"ISOLATED_EXECUTION_VALIDATION slot={label} phase=receipt elapsed_seconds={validation.Elapsed.TotalSeconds:F6}"));
+        validation.Restart();
         var results = Path.Combine(_root, "results", label);
         Directory.CreateDirectory(results);
         var run = Run(tree, environment, ["dotnet", Assembly(environment, InfrastructureTestsProject),
@@ -331,6 +350,7 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
         var result = Assert.Single(trx.Descendants(ns + "UnitTestResult"));
         Assert.Equal("Passed", result.Attribute("outcome")!.Value);
         Assert.Contains("ReadsExecution", result.Attribute("testName")!.Value);
+        output.WriteLine(FormattableString.Invariant($"ISOLATED_EXECUTION_VALIDATION slot={label} phase=test_host_and_trx elapsed_seconds={validation.Elapsed.TotalSeconds:F6}"));
     }
 
     private TestChildProcessCapture.Result ValidateReceipt(string tree, DotnetBuildEnvironment environment, bool expectValid)

@@ -10,6 +10,28 @@ internal sealed record AcceptanceTestClassSource(string FullName, IReadOnlyList<
 
 internal static class AcceptanceTestClassSourceScanner
 {
+    private static readonly AsyncLocal<ParseCountScope?> ParseCounter = new();
+
+    internal static ParseCountScope CountParsesForTests() => new();
+
+    // Flow-scoped: parallel extracts inherit the scope; unrelated scans cannot change its count.
+    internal sealed class ParseCountScope : IDisposable
+    {
+        private readonly ParseCountScope? previous = ParseCounter.Value;
+        private int count;
+        internal int Count => Volatile.Read(ref count);
+
+        internal ParseCountScope() => ParseCounter.Value = this;
+        internal void Record() => Interlocked.Increment(ref count);
+        public void Dispose() => ParseCounter.Value = previous;
+    }
+
+    private static SyntaxTree ParseText(string text, string path = "")
+    {
+        ParseCounter.Value?.Record();
+        return CSharpSyntaxTree.ParseText(text, path: path);
+    }
+
     // Strict inventory callers cannot interpret missing or malformed candidate input as no tests.
     internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanProject(string worktreePath, string project)
     {
@@ -21,7 +43,7 @@ internal static class AcceptanceTestClassSourceScanner
         if (files.Length == 0) throw new InvalidDataException($"No test sources in '{project}'.");
         foreach (var file in files)
         {
-            var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file).GetRoot();
+            var syntax = ParseText(File.ReadAllText(file), path: file).GetRoot();
             if (syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
                 throw new InvalidDataException($"Cannot parse test source '{file}'.");
         }
@@ -61,7 +83,7 @@ internal static class AcceptanceTestClassSourceScanner
         var extracts = new List<FileExtract>(files.Length);
         foreach (var file in files)
         {
-            var root = CSharpSyntaxTree.ParseText(sourceTexts.Read(file), path: file).GetRoot();
+            var root = ParseText(sourceTexts.Read(file), path: file).GetRoot();
             if (root.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
                 throw new InvalidDataException($"Cannot parse test source '{file}'.");
             extracts.Add(ExtractRoot(root));
@@ -79,7 +101,7 @@ internal static class AcceptanceTestClassSourceScanner
         foreach (var path in sourceFiles)
         {
             var text = File.ReadAllText(path);
-            var syntax = CSharpSyntaxTree.ParseText(text).GetRoot();
+            var syntax = ParseText(text).GetRoot();
             if (syntax.ContainsDiagnostics && syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
                 throw new InvalidDataException($"Cannot parse test source '{path}'.");
             foreach (var node in syntax.DescendantNodes().OfType<ClassDeclarationSyntax>())
@@ -138,6 +160,9 @@ internal static class AcceptanceTestClassSourceScanner
     internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanSourceTexts(IEnumerable<string> sources) =>
         ScanExtracts(sources.Select(ExtractText).ToArray());
 
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanSyntaxTreesForTests(IEnumerable<SyntaxTree> trees) =>
+        ScanExtracts(trees.Select(tree => ExtractRoot(tree.GetRoot())).ToArray());
+
     private static IReadOnlyList<AcceptanceTestClassDescriptor> ScanExtracts(IReadOnlyList<FileExtract> extracts)
     {
         var derivedFacts = AcceptanceTestClassSourceScannerFactAncestry.Resolve(
@@ -168,7 +193,7 @@ internal static class AcceptanceTestClassSourceScanner
             .ToArray();
     }
 
-    internal static FileExtract ExtractText(string text) => ExtractRoot(CSharpSyntaxTree.ParseText(text).GetRoot());
+    internal static FileExtract ExtractText(string text) => ExtractRoot(ParseText(text).GetRoot());
 
     private static FileExtract ExtractRoot(SyntaxNode root)
     {
