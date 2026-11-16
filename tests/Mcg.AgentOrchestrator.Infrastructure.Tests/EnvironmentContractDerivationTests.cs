@@ -56,7 +56,8 @@ public sealed class EnvironmentContractDerivationTests
             var tools = EnvironmentContract.FromManifest(emitted.Json!).Tools;
             var isNextest = framework.Trim().Equals("nextest", StringComparison.OrdinalIgnoreCase);
             var name = isNextest ? "cargo nextest" : "gradle";
-            Assert.Equal(new[] { name, "crosswalk" }.OrderBy(value => value, StringComparer.Ordinal), tools.Select(tool => tool.Name));
+            Assert.Equal(isNextest ? ["cargo nextest", "crosswalk", "cargo"]
+                : new[] { "crosswalk", "gradle", "cargo", "cargo nextest" }, tools.Select(tool => tool.Name));
             var tool = Assert.Single(tools, tool => tool.Name == name);
             Assert.Equal(isNextest ? "cargo" : "gradle", tool.Command);
             Assert.Equal(isNextest ? ["nextest", "--version"] : new[] { "--version" }, tool.Arguments);

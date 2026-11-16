@@ -24,6 +24,7 @@ public static class LearnedAcceptanceManifest
         var nodeChecks = isNode ? NodeVerificationChecks.For(model) : default;
         var luaChecks = isLua ? LuaProjectDiscoveryAdapter.For(model, applied) : default;
         var declaredChecks = isDeclared ? DeclaredProjectDiscoveryAdapter.For(model, applied) : default;
+        var crosswalkDeclaredChecks = isCrosswalk ? CrosswalkDeclaredChecks(model, applied) : default;
         var checkNames = isDotnet ? LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray()) : default;
         var learned = LearnedEngineSettingsDeriver.Derive(model);
         var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
@@ -44,6 +45,8 @@ public static class LearnedAcceptanceManifest
             blockers.AddRange(luaChecks.Blockers);
         if (isDeclared)
             blockers.AddRange(declaredChecks.Blockers);
+        if (isCrosswalk)
+            blockers.AddRange(crosswalkDeclaredChecks.Blockers);
         if (isDotnet)
             foreach (var check in checks.Where(check => check.Runner == "mtp"))
                 if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
@@ -65,6 +68,8 @@ public static class LearnedAcceptanceManifest
         }
         else if (isCrosswalk)
         {
+            foreach (var declaredCheck in crosswalkDeclaredChecks.Checks)
+                emittedChecks.Add(DeclaredProjectDiscoveryAdapter.Emit(declaredCheck));
             var check = CrosswalkProjectDiscoveryAdapter.VerificationCheck();
             emittedChecks.Add(new JsonObject
             {
@@ -169,5 +174,33 @@ public static class LearnedAcceptanceManifest
                 return;
             questions.Add(learned.OwnerQuestions.First(question => question.FactKey == key));
         }
+    }
+
+    internal static (IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> Checks,
+        IReadOnlyList<ManifestBlocker> Blockers) CrosswalkDeclaredChecks(
+        ProjectModel model, AppliedOwnerAnswers applied)
+    {
+        var keys = new[] { DeclaredProjectDiscoveryAdapter.BuildQuestion, DeclaredProjectDiscoveryAdapter.TestQuestion,
+            DeclaredProjectDiscoveryAdapter.ReportsQuestion };
+        // Missing answers preserve crosswalk-only discovery; supplied but rejected answers must surface blockers.
+        if (keys.Any(key => !applied.AnsweredFacts.Any(fact => fact.FactKey == key) &&
+            !applied.StaleAnswers.Any(stale => stale.Answer.FactKey == key)))
+            return ([], []);
+
+        // Declared answers remain usable beside crosswalk even though its snapshot no longer asks for them.
+        // Only lift answers that passed validation and were rejected solely because their keys were not live.
+        var lifted = applied.AnsweredFacts.Concat(applied.StaleAnswers
+            .Where(stale => stale.Reason == OwnerAnswerApplier.NotLiveReason &&
+                stale.Answer.FactKey is DeclaredProjectDiscoveryAdapter.BuildQuestion or
+                    DeclaredProjectDiscoveryAdapter.TestQuestion or DeclaredProjectDiscoveryAdapter.ReportsQuestion)
+            .Select(stale => new AppliedOwnerAnswers.AnsweredFact(stale.Answer.FactKey,
+                new ProjectFact<string>(OwnerAnswerValidator.Validate(stale.Answer.FactKey, stale.Answer.Value),
+                    new FactSource(measurementReference: $"owner-answer:{stale.Answer.FactKey}"), FactConfidence.High),
+                OwnerAnswerApplier.FormatRecorded(stale.Answer.RecordedUtc)))).ToArray();
+        var declared = DeclaredProjectDiscoveryAdapter.For(model, applied with { AnsweredFacts = lifted });
+        return (declared.Checks, declared.Blockers.Select(blocker =>
+            applied.StaleAnswers.LastOrDefault(stale => stale.Answer.FactKey == blocker.FactKey &&
+                stale.Reason != OwnerAnswerApplier.NotLiveReason) is { } rejected
+                ? new ManifestBlocker(blocker.FactKey, rejected.Reason) : blocker).ToArray());
     }
 }

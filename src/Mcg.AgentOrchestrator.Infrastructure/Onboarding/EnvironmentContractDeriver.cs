@@ -16,7 +16,10 @@ public static class EnvironmentContractDeriver
             case ProjectStack.Declared:
                 foreach (var check in DeclaredProjectDiscoveryAdapter.For(model, applied).Checks) Add(check.Command, check.Type, check.Arguments);
                 break;
-            case ProjectStack.Crosswalk: Add("crosswalk", "crosswalk-test", []); break;
+            case ProjectStack.Crosswalk:
+                foreach (var check in LearnedAcceptanceManifest.CrosswalkDeclaredChecks(model, applied).Checks) Add(check.Command, check.Type, check.Arguments);
+                Add("crosswalk", "crosswalk-test", []);
+                break;
             case ProjectStack.Go:
                 foreach (var check in GoVerificationChecks.Entries) Add(check.Command, "command", check.Arguments);
                 break;
@@ -39,10 +42,14 @@ public static class EnvironmentContractDeriver
     public static EnvironmentContract Derive(JsonElement checks, ProjectModel? model = null, AppliedOwnerAnswers? answers = null)
     {
         var tools = new Dictionary<string, EnvironmentToolRequirement>(StringComparer.OrdinalIgnoreCase);
-        void Add(string command, string source, IReadOnlyList<string>? prefix = null, string? name = null)
+        var crosswalkTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hasCrosswalkCompanionChecks = false;
+        void Add(string command, string source, IReadOnlyList<string>? prefix = null, string? name = null,
+            bool crosswalkDerived = false)
         {
             var arguments = (prefix ?? []).Concat(new[] { command == "go" ? "version" : "--version" }).ToArray();
             var key = name ?? command;
+            if (crosswalkDerived) crosswalkTools.Add(key);
             tools.TryAdd(key, new(key, command, arguments, Variables: command == "crosswalk"
                 ? ["MCG_ORCHESTRATOR_DATA", "LOCALAPPDATA"] : [], Source: source));
         }
@@ -52,7 +59,8 @@ public static class EnvironmentContractDeriver
             var command = check.TryGetProperty("command", out var executable) && executable.ValueKind == JsonValueKind.String ? executable.GetString() : type switch
             { "dotnet-test" or "dotnet-build" => "dotnet", "crosswalk-test" => "crosswalk", _ => null };
             if (string.IsNullOrWhiteSpace(command)) continue;
-            Add(command, "check");
+            hasCrosswalkCompanionChecks |= model?.Stack == ProjectStack.Crosswalk && type != "crosswalk-test";
+            Add(command, "check", crosswalkDerived: type == "crosswalk-test");
             if (Path.GetFileNameWithoutExtension(command).Equals("cargo", StringComparison.OrdinalIgnoreCase) &&
                 check.TryGetProperty("arguments", out var args) && args.GetArrayLength() > 0 &&
                 args[0].GetString() is { } sub && !sub.StartsWith('-') && !CargoBuiltins.Contains(sub))
@@ -63,7 +71,7 @@ public static class EnvironmentContractDeriver
             if (need.Name is "lua-test-framework" or "crosswalk-test-framework")
             {
                 if (StackTool(need.Value.Value) is { } probe)
-                    Add(probe.Command, "environment-need:" + need.Name, probe.Prefix, probe.Name);
+                    Add(probe.Command, "environment-need:" + need.Name, probe.Prefix, probe.Name, crosswalkDerived: true);
                 continue;
             }
             var command = need.Name switch
@@ -76,9 +84,13 @@ public static class EnvironmentContractDeriver
                 // those names establishes a PATH executable; owners can declare additional tools.
                 _ => null
             };
-            if (!string.IsNullOrWhiteSpace(command)) Add(command, "environment-need:" + need.Name);
+            if (!string.IsNullOrWhiteSpace(command)) Add(command, "environment-need:" + need.Name, crosswalkDerived: true);
         }
         var contract = OwnerAnsweredEnvironmentTools.Overlay(new(1, tools.Values.OrderBy(tool => tool.Name, StringComparer.Ordinal).ToArray()), answers);
+        // Preserve crosswalk's existing sorted probes, then append companion tools without duplicates.
+        // Overlay sorts by name, so apply this stable partition after owner customizations.
+        if (hasCrosswalkCompanionChecks)
+            contract = contract with { Tools = contract.Tools.OrderBy(tool => crosswalkTools.Contains(tool.Name) ? 0 : 1).ToArray() };
         contract.Validate();
         return contract;
     }
