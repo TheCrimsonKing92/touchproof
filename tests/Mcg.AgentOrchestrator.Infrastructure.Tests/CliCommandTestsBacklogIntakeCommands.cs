@@ -978,7 +978,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
             Xunit.Assert.NotEmpty(slotLines);
             Xunit.Assert.All(slotLines, line => Xunit.Assert.EndsWith(" verdict=NONE", line));
             Xunit.Assert.Contains("host: verdict=NONE running=0 stalled=0", result.Stdout);
-            Xunit.Assert.Contains("no process check needed", result.Stdout);
+            Xunit.Assert.Contains("NONE covers build-slot lease occupancy only; a live acceptance coordinator or remote receipt finalization may still be running; verify the exact attempt and process identity before concluding a terminal state; do not restart acceptance solely because observation is absent", result.Stdout);
             Xunit.Assert.Contains("covers per-goal and cohort gates alike", result.Stdout);
         }
         finally

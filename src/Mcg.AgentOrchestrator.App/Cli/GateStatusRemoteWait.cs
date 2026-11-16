@@ -9,8 +9,13 @@ internal static class GateStatusRemoteWait
     {
         var observedAt = DateTimeOffset.UtcNow;
         GateStatusTextView.Print(GateHeartbeatArtifacts.ReadStableSlots(observedAt), observedAt,
-            Count(workspace, observedAt));
+            Count(workspace, observedAt), Rows(workspace, observedAt));
     }
+
+    internal static IReadOnlyList<GateStatusRemoteWaitDetail.Row> Rows(OrchestratorWorkspace? workspace,
+        DateTimeOffset observedAt) => workspace is null ? [] : GateStatusRemoteWaitDetail.Read(
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), observedAt,
+            ConductorInvariantThresholds.GateIdleWhileReady).Where(row => !row.Stale).ToArray();
 
     internal static int Count(OrchestratorWorkspace? workspace, DateTimeOffset observedAt)
     {

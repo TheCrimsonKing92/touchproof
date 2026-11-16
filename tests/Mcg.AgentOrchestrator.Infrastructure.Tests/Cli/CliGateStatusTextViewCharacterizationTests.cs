@@ -37,7 +37,7 @@ public sealed class CliGateStatusTextViewCharacterizationTests : CliTaskQueryTes
                 expected += $"slot-{slot}: unavailable reason=missing heartbeat=<heartbeat-{slot}> verdict=NONE\r\n";
             expected += populatedSlots switch
             {
-                0 => $"host: verdict=NONE running=0 stalled=0 slots={DotnetBuildEnvironmentManager.StableSlotCount}; covers per-goal and cohort gates alike; no gate running on any build slot; no process check needed\r\n",
+                0 => $"host: verdict=NONE running=0 stalled=0 slots={DotnetBuildEnvironmentManager.StableSlotCount}; covers per-goal and cohort gates alike; NONE covers build-slot lease occupancy only; a live acceptance coordinator or remote receipt finalization may still be running; verify the exact attempt and process identity before concluding a terminal state; do not restart acceptance solely because observation is absent\r\n",
                 1 => $"host: verdict=RUNNING running=1 stalled=0 slots={DotnetBuildEnvironmentManager.StableSlotCount}; covers per-goal and cohort gates alike\r\n",
                 _ => $"host: verdict=STALLED running=1 stalled=1 slots={DotnetBuildEnvironmentManager.StableSlotCount}; covers per-goal and cohort gates alike\r\n"
             };

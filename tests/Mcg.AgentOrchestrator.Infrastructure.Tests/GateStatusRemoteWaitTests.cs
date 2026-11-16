@@ -68,6 +68,87 @@ public sealed class GateStatusRemoteWaitTests
         Assert.False(JsonHost([], 0).TryGetProperty("remoteWaits", out _));
     }
 
+    [Fact]
+    public void Render_EmptyDetailRows_PreservesLiteralBytesExceptNoneSuffix()
+    {
+        var expected = string.Join(Environment.NewLine,
+            "Gate status:",
+            "host: verdict=NONE running=0 stalled=0 slots=0; covers per-goal and cohort gates alike; NONE covers build-slot lease occupancy only; a live acceptance coordinator or remote receipt finalization may still be running; verify the exact attempt and process identity before concluding a terminal state; do not restart acceptance solely because observation is absent",
+            "");
+        Assert.Equal(expected, CaptureConsole(() => GateStatusTextView.Print([], Now, 0, [])));
+        Assert.Equal(CaptureConsole(() => GateStatusTextView.Print([], Now)), expected);
+        Assert.Equal(CaptureConsole(() => GateStatusTextView.Print([], Now, 1)),
+            CaptureConsole(() => GateStatusTextView.Print([], Now, 1, [])));
+    }
+
+    [Fact]
+    public void Rows_TextShowsAttemptFields_AndExcludesStaleHeartbeat()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            const string goal = "abcdef12abcdef12abcdef12abcdef12";
+            const string attempt = "abcdef12-0-attempt";
+            const string candidate = "0123456789abcdef0123456789abcdef01234567";
+            var folder = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", goal);
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, attempt + ".heartbeat.json");
+            var ownerPid = Environment.ProcessId;
+            var ownerStartedAt = RemoteExecutorOccupancy.DefaultStartTime(ownerPid);
+            Assert.NotNull(ownerStartedAt); // The default probe checks only this test host's identity.
+            File.WriteAllText(path, JsonSerializer.Serialize(new { state = "running", lastProgressAt = Now.AddSeconds(-30) }));
+            File.SetLastWriteTimeUtc(path, Now.UtcDateTime);
+            File.WriteAllText(Path.Combine(folder, attempt + ".attempt.json"), JsonSerializer.Serialize(new
+            {
+                attemptId = attempt, goalId = goal, ownerProcessId = ownerPid,
+                ownerProcessStartedAt = ownerStartedAt, branchHeadSha = candidate, outcome = 0
+            }));
+
+            var count = GateStatusRemoteWait.Count(workspace, Now);
+            Assert.Equal(1, count);
+            var rows = GateStatusRemoteWait.Rows(workspace, Now);
+            Assert.Single(rows);
+            var output = CaptureConsole(() => GateStatusTextView.Print([], Now, count, rows));
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[]
+            {
+                "Gate status:",
+                "host: verdict=RUNNING (remote) remote_waits=1 running=0 stalled=0 slots=0; covers per-goal and cohort gates alike; gate waiting on remote lane; no build-slot process to check",
+                $"remote-wait: goal=abcdef12 attempt={attempt} owner_pid={ownerPid} candidate={candidate} last_progress=2026-10-17T11:59:30.0000000+00:00 age=30s outcome=Running owner=alive state=running"
+            }, lines);
+
+            File.SetLastWriteTimeUtc(path, Now.AddMinutes(-11).UtcDateTime);
+            var staleRows = GateStatusRemoteWait.Rows(workspace, Now);
+            Assert.Empty(staleRows);
+            Assert.Equal(0, GateStatusRemoteWait.Count(workspace, Now));
+            var staleOutput = CaptureConsole(() => GateStatusTextView.Print([], Now, 0, staleRows));
+            Assert.DoesNotContain("remote-wait:", staleOutput);
+            Assert.Equal(CaptureConsole(() => GateStatusTextView.Print([], Now)), staleOutput);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void Render_NoneGuidance_RequiresIdentityBeforeTerminalConclusion()
+    {
+        var line = HostLine([], 0);
+        Assert.DoesNotContain("no process check needed", line);
+        Assert.Contains("NONE covers build-slot lease occupancy only", line);
+        Assert.Contains("a live acceptance coordinator or remote receipt finalization may still be running", line);
+        Assert.Contains("verify the exact attempt and process identity before concluding a terminal state", line);
+        Assert.Contains("do not restart acceptance solely because observation is absent", line);
+    }
+
+    [Fact]
+    public void Runbook_NoneGuidance_DistinguishesOccupancyFromAcceptanceLifecycle()
+    {
+        var runbook = File.ReadAllText(Path.Combine(VerifiedRepositoryRoot.Find(), "docs", "operator-runbook.md"));
+        const string sentence = "NONE covers build-slot lease occupancy only: a live acceptance coordinator or remote receipt finalization can still be running, so verify the exact attempt and process identity before concluding a terminal state, and do not restart acceptance solely because observation is absent.";
+        Assert.Contains(sentence, runbook);
+        Assert.DoesNotContain("no process check is needed", runbook);
+    }
+
     [Theory]
     [InlineData(false, "RUNNING")]
     [InlineData(true, "STALLED")]
@@ -123,11 +204,13 @@ public sealed class GateStatusRemoteWaitTests
     public void Count_MissingWorkspaceOrRoot_ReturnsZeroWithoutWriting()
     {
         Assert.Equal(0, GateStatusRemoteWait.Count(null, Now));
+        Assert.Empty(GateStatusRemoteWait.Rows(null, Now));
         var root = CreateTempDirectory();
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             Assert.Equal(0, GateStatusRemoteWait.Count(workspace, Now));
+            Assert.Empty(GateStatusRemoteWait.Rows(workspace, Now));
             Assert.Empty(Directory.GetFileSystemEntries(root));
         }
         finally { Directory.Delete(root, recursive: true); }

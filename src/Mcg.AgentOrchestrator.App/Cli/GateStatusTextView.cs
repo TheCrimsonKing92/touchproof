@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class GateStatusTextView
 {
     public static void Print(IReadOnlyList<GateHeartbeatStatus> statuses, DateTimeOffset? observedAt = null,
-        int remoteWaits = 0)
+        int remoteWaits = 0, IReadOnlyList<GateStatusRemoteWaitDetail.Row>? remoteWaitRows = null)
     {
         Console.WriteLine("Gate status:");
         var now = observedAt ?? DateTimeOffset.UtcNow;
@@ -38,9 +38,22 @@ internal static class GateStatusTextView
         Console.WriteLine(
             $"host: verdict={hostVerdict}" + (remoteWaits > 0 ? $" remote_waits={remoteWaits}" : "") +
             $" running={running} stalled={stalled} slots={statuses.Count}; covers per-goal and cohort gates alike" +
-            (hostVerdict == "NONE" ? "; no gate running on any build slot; no process check needed" :
+            (hostVerdict == "NONE" ? "; NONE covers build-slot lease occupancy only; a live acceptance coordinator or remote receipt finalization may still be running; verify the exact attempt and process identity before concluding a terminal state; do not restart acceptance solely because observation is absent" :
                 hostVerdict == "RUNNING (remote)" ? "; gate waiting on remote lane; no build-slot process to check" : ""));
+
+        if (remoteWaitRows is not null)
+            foreach (var row in remoteWaitRows)
+                Console.WriteLine(FormatRemoteWait(row));
     }
+
+    private static string FormatRemoteWait(GateStatusRemoteWaitDetail.Row row) =>
+        $"remote-wait: goal={ShortGateGoal(row.GoalId)} attempt={row.AttemptId} " +
+        $"owner_pid={row.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+        $"candidate={row.CandidateSha ?? "unknown"} " +
+        $"last_progress={row.LastProgressAt?.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+        $"age={FormatGateDuration(row.Age)} outcome={row.Outcome?.ToString() ?? "unknown"} " +
+        $"owner={row.Owner.ToString().ToLowerInvariant()} state={row.State}" +
+        (row.IdentityVerified ? "" : " identity=unverified");
 
     private static string ShortGateGoal(string? goalId) =>
         string.IsNullOrWhiteSpace(goalId) ? "unknown" : goalId.Length <= 8 ? goalId : goalId[..8];
