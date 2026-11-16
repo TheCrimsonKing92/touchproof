@@ -646,7 +646,7 @@ internal sealed class GitRevisionReader : IDisposable
                 if (reader is not null && key is not null) Discard(key, reader);
             }
 
-            var result = GitCli.Run(workingDirectory, Remaining(deadline), "rev-parse", "--verify", revision);
+            var result = GitCli.RunDirect(workingDirectory, Remaining(deadline), null, "rev-parse", "--verify", revision);
             objectId = result.Succeeded ? result.Output.Trim() : string.Empty;
             if (reader is null && key is not null && IsBranchObjectId(objectId))
                 RecordQualifyingRead(key);

@@ -100,11 +100,20 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     Action<OwnedProcessGroup.SuspendedProcessStart>? beforeOwnedExitObservation = null,
     IReadOnlyDictionary<string, string?>? verificationEnvironment = null)
 {
-    if (GitProbeRefFileFastPath.TryAnswer(workingDirectory, arguments,
-            GitProbeSeamScope.Value is not null || startProcess is not null ||
+    var hasSeamOverrideOrHook = GitProbeSeamScope.Value is not null || startProcess is not null ||
             commandEnvironment is not null || verificationEnvironment is not null ||
             inheritedEnvironment is not null || beforeOwnedCaptureRead is not null ||
-            beforeOwnedExitObservation is not null, out var answer))
+            beforeOwnedExitObservation is not null;
+    // Canonical metadata forms share the wrapper's refusal policy. Peel expressions
+    // retain the older shortcut used by fixture HEAD probes, along with quiet shapes.
+    var peelExpression = arguments.Count == 3 && arguments[0] == "rev-parse" &&
+        arguments[1] == "--verify" && arguments[2].Contains("^{", StringComparison.Ordinal);
+    if (GitMetadataLookup.IsLookupShape(arguments) && !peelExpression)
+    {
+        if (GitProbeRefFileFastPath.TryAnswerMetadata(workingDirectory, arguments, hasSeamOverrideOrHook, out var metadata))
+            return metadata;
+    }
+    else if (GitProbeRefFileFastPath.TryAnswer(workingDirectory, arguments, hasSeamOverrideOrHook, out var answer))
         return answer;
 
     RecordGitProbeLaunch();

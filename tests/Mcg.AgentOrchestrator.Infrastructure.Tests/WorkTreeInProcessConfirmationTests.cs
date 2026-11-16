@@ -279,7 +279,7 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
     }
 
     private static GitCli.GitResult Oracle(string directory) =>
-        GitCli.Run(directory, "rev-parse", "--is-inside-work-tree");
+        GitCli.RunDirect(directory, "rev-parse", "--is-inside-work-tree");
 
     private static void Require(string directory) => GoalWorktrees.RequireGitWorkTree(directory);
 

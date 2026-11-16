@@ -96,7 +96,6 @@ public sealed class GitProbeRefFileFastPathFallbackTests
     {
         yield return [new[] { "rev-parse" }];
         yield return [new[] { "rev-parse", "--verify" }];
-        yield return [new[] { "rev-parse", "--show-toplevel" }];
         yield return [new[] { "rev-parse", "--short", "HEAD" }];
         yield return [new[] { "rev-parse", "--", "HEAD" }];
         yield return [new[] { "rev-parse", "HEAD", "--verify" }];

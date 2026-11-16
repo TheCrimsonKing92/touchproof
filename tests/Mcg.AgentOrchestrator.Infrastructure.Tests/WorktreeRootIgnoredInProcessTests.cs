@@ -95,7 +95,7 @@ public sealed class WorktreeRootIgnoredInProcessTests : IDisposable
     public void PlainDirectory_DeclinesAndGitHasNoAnswer()
     {
         var plain = Directory.CreateDirectory(Path.Combine(root, "plain")).FullName;
-        var reference = GitCli.Run(plain, "rev-parse", "--git-dir");
+        var reference = GitCli.RunDirect(plain, "rev-parse", "--git-dir");
         Assert.False(reference.Succeeded);
         Assert.True(string.IsNullOrWhiteSpace(reference.Output));
         AssertDeclines(plain);
@@ -114,7 +114,7 @@ public sealed class WorktreeRootIgnoredInProcessTests : IDisposable
         else
             File.AppendAllText(Path.Combine(expected, "config"), "\n[core]\n unknown = true\n");
 
-        var reference = GitCli.Run(repo, "rev-parse", "--git-dir");
+        var reference = GitCli.RunDirect(repo, "rev-parse", "--git-dir");
         if (reference.Succeeded && !string.IsNullOrWhiteSpace(reference.Output))
             Assert.Equal(expected, ResolveAnswer(repo, reference.Output));
         else
@@ -225,7 +225,7 @@ public sealed class WorktreeRootIgnoredInProcessTests : IDisposable
 
     private static string ReferenceDirectory(string directory)
     {
-        var result = GitCli.Run(directory, "rev-parse", "--git-dir");
+        var result = GitCli.RunDirect(directory, "rev-parse", "--git-dir");
         Assert.True(result.Succeeded, result.Error);
         Assert.False(string.IsNullOrWhiteSpace(result.Output));
         return ResolveAnswer(directory, result.Output);

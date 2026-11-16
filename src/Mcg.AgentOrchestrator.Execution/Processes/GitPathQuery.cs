@@ -4,20 +4,27 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // The caller owns its Git invocation (including timeout, environment and error handling).
 internal static class GitPathQuery
 {
+    internal static IReadOnlyList<string> RefusingEnvironmentVariables { get; } = Array.AsReadOnly<string>(
+    [
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG",
+        "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+    ]);
+
+    internal static string? EnvironmentValue(IReadOnlyDictionary<string, string>? gitEnvironment, string name)
+    {
+        if (gitEnvironment is not null)
+            foreach (var entry in gitEnvironment)
+                if (string.Equals(entry.Key, name, OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    return entry.Value;
+        return Environment.GetEnvironmentVariable(name);
+    }
+
     internal static (string? Output, string? FallbackReason) QueryCommonDirectory(string directory,
         IReadOnlyDictionary<string, string>? gitEnvironment)
     {
-        string? EnvironmentValue(string name)
-        {
-            if (gitEnvironment is not null)
-                foreach (var entry in gitEnvironment)
-                    if (string.Equals(entry.Key, name, OperatingSystem.IsWindows()
-                        ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-                        return entry.Value;
-            return Environment.GetEnvironmentVariable(name);
-        }
-
-        return TryQuery(directory, ["--git-common-dir"], EnvironmentValue, out var output, out var reason)
+        return TryQuery(directory, ["--git-common-dir"], name => EnvironmentValue(gitEnvironment, name), out var output, out var reason)
             ? (output, null) : (null, reason);
     }
 
@@ -38,8 +45,13 @@ internal static class GitPathQuery
 
     internal static bool TryQuery(string directory, IReadOnlyList<string> arguments,
         Func<string, string?> environment, out string output, out string? fallbackReason)
+        => TryQuery(directory, arguments, environment, out output, out fallbackReason, out _);
+
+    internal static bool TryQuery(string directory, IReadOnlyList<string> arguments,
+        Func<string, string?> environment, out string output, out string? fallbackReason, out string commonDirectory)
     {
         output = "";
+        commonDirectory = "";
         fallbackReason = "unproven-git-layout";
         try
         {
@@ -52,17 +64,14 @@ internal static class GitPathQuery
                 form is not ("--show-toplevel" or "--git-dir" or "--git-common-dir" or "--git-path" or
                     "--is-inside-work-tree")) return false;
             // Do not guess how an override, config include, alias or subdirectory affects Git.
-            foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
-                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG_COUNT", "GIT_CONFIG", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
-                "GIT_DISCOVERY_ACROSS_FILESYSTEM" })
+            foreach (var name in RefusingEnvironmentVariables)
                 if (environment(name) is not null)
                 {
                     fallbackReason = "git-environment-override:" + name;
                     return false;
                 }
             if (!GitRevisionReader.TryLocateRefStore(directory, environment,
-                out var gitDirectory, out var commonDirectory, allowIdentityConfiguration: true)) return false;
+                out var gitDirectory, out commonDirectory, allowIdentityConfiguration: true)) return false;
             if (!File.Exists(Path.Combine(commonDirectory, "HEAD")) ||
                 !Directory.Exists(Path.Combine(commonDirectory, "objects")) ||
                 !Directory.Exists(Path.Combine(commonDirectory, "refs"))) return false;
@@ -95,7 +104,8 @@ internal static class GitPathQuery
                 var basis = name switch
                 {
                     "objects" or "info/exclude" => common,
-                    "index" or "HEAD" or "mcg-rematerialization" or
+                    "index" or "index.lock" or "HEAD" or "mcg-rematerialization" or
+                        "mcg-conductor-integration.json" or "sequencer" or
                         "rebase-merge" or "rebase-apply" or "MERGE_HEAD" or "CHERRY_PICK_HEAD" or "REVERT_HEAD" => git,
                     _ => null
                 };

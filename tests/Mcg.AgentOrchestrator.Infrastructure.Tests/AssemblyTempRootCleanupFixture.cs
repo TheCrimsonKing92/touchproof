@@ -52,7 +52,7 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
         try
         {
             return Type.GetType(
-                    "Mcg.AgentOrchestrator.Infrastructure.GitRevisionReader, Mcg.AgentOrchestrator.Infrastructure",
+                    "Mcg.AgentOrchestrator.Infrastructure.GitRevisionReader, Mcg.AgentOrchestrator.Execution",
                     throwOnError: false)
                 ?.GetProperty("Shared", BindingFlags.Static | BindingFlags.NonPublic)
                 ?.GetValue(null) as IDisposable;

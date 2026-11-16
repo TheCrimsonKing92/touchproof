@@ -13,6 +13,18 @@ internal static class GitRefFileResolver
 
     internal static bool TryResolve(string directory, string revision, out string objectId,
         Func<string, string?> environment)
+        => TryResolveCore(directory, revision, out objectId, environment, fullReference: false);
+
+    internal static bool TryResolveFullReference(string directory, string revision, out string objectId,
+        Func<string, string?> environment)
+    {
+        objectId = string.Empty;
+        return (revision == "HEAD" || IsFullReference(revision)) &&
+            TryResolveCore(directory, revision, out objectId, environment, fullReference: true);
+    }
+
+    private static bool TryResolveCore(string directory, string revision, out string objectId,
+        Func<string, string?> environment, bool fullReference)
     {
         objectId = string.Empty;
         try
@@ -35,7 +47,8 @@ internal static class GitRefFileResolver
             }
             if (!TryLocateRefStore(directory, environment, out var gitDirectory, out var commonDirectory) ||
                 !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"), out var idLength)) return false;
-            var shorthand = revision != "HEAD" && !IsFullBranchRef(revision) ? revision : null;
+            if (fullReference && !FullReferenceUnambiguous(gitDirectory, commonDirectory, revision)) return false;
+            var shorthand = !fullReference && revision != "HEAD" && !IsFullBranchRef(revision) ? revision : null;
             if (shorthand is not null)
             {
                 if (!CanUseBranchShorthand(gitDirectory, commonDirectory, shorthand)) return false;
@@ -56,7 +69,7 @@ internal static class GitRefFileResolver
                     if (head is null || !head.StartsWith(prefix, StringComparison.Ordinal)) return false;
                     reference = head[prefix.Length..];
                 }
-                if (!IsFullBranchRef(reference) ||
+                if (!(fullReference ? IsFullReference(reference) : IsFullBranchRef(reference)) ||
                     !TryProbeLooseRef(commonDirectory, reference, out var exists, out var refPath) ||
                     Locked(refPath)) return false;
                 if (exists)
@@ -81,7 +94,8 @@ internal static class GitRefFileResolver
                 ReadBranchMetadataLine(headPath) != head ||
                 !TryLocateRefStore(directory, environment, out var finalGit, out var finalCommon) ||
                 finalGit != gitDirectory || finalCommon != commonDirectory ||
-                shorthand is not null && !CanUseBranchShorthand(finalGit, finalCommon, shorthand)) return false;
+                shorthand is not null && !CanUseBranchShorthand(finalGit, finalCommon, shorthand) ||
+                fullReference && !FullReferenceUnambiguous(finalGit, finalCommon, revision)) return false;
             objectId = id!;
             return true;
         }
@@ -214,6 +228,29 @@ internal static class GitRefFileResolver
         var branch = revision[prefix.Length..];
         return IsBranchRefName(branch) && !HasDescribeObjectSuffix(branch) &&
             (!OperatingSystem.IsWindows() || !branch.Split('/').Any(IsAmbiguousWindowsRefComponent));
+    }
+
+    private static bool IsFullReference(string revision)
+        // These namespaces live in the common store, including for linked worktrees.
+        // Worktree-private ref namespaces need their own location proof and stay with Git.
+        => (revision.StartsWith("refs/heads/", StringComparison.Ordinal) ||
+            revision.StartsWith("refs/tags/", StringComparison.Ordinal)) && IsBranchRefName(revision) &&
+            !HasDescribeObjectSuffix(revision) &&
+            (!OperatingSystem.IsWindows() || !revision.Split('/').Any(IsAmbiguousWindowsRefComponent));
+
+    private static bool FullReferenceUnambiguous(string gitDirectory, string commonDirectory, string name)
+    {
+        if (!TryReadPackedRefs(commonDirectory, out var packed)) return false;
+        foreach (var alternative in new[] { "refs/" + name, "refs/tags/" + name,
+            "refs/heads/" + name, "refs/remotes/" + name, "refs/remotes/" + name + "/HEAD" })
+        {
+            if (!TryProbeLooseRef(commonDirectory, alternative, out var exists, out _) || exists ||
+                packed.Any(entry => entry.Name.Equals(alternative, OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))) return false;
+            if (gitDirectory != commonDirectory && WorkTreeMetadataEntryExists(Path.Combine(gitDirectory, alternative)))
+                return false;
+        }
+        return true;
     }
 
     private static bool Locked(string path) => WorkTreeMetadataEntryExists(path + ".lock");

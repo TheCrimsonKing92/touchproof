@@ -49,7 +49,7 @@ public sealed class GitPathQueryParityTests
         foreach (var absolute in new[] { false, true })
         {
             string[] arguments = absolute ? ["--path-format=absolute", .. form] : form;
-            var expected = GitCli.Run(directory, ["rev-parse", .. arguments]);
+            var expected = GitCli.RunDirect(directory, ["rev-parse", .. arguments]);
             Assert.True(expected.Succeeded, expected.Error);
             var fallbacks = 0;
             var actual = GitPathQuery.Run(directory, () => { fallbacks++; return expected; },
@@ -89,7 +89,7 @@ public sealed class GitPathQueryParityTests
             Assert.NotNull(delta);
             return (result, delta.Launches);
         }
-        var oracle = Validate((root, arguments) => GitCli.Run(root, arguments));
+        var oracle = Validate((root, arguments) => GitCli.RunDirect(root, arguments));
         var actual = Validate(null);
         Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, actual.Result.Status);
         Assert.Contains("contains no CRLF conversion", actual.Result.Message, StringComparison.Ordinal);

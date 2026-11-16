@@ -60,7 +60,7 @@
     "Callable": "AssemblyTempRootCleanupFixture.ResolveSharedGitReaders()",
     "Api": "GetProperty",
     "Member": "Shared",
-    "Receiver": "Type.GetType(\"Mcg.AgentOrchestrator.Infrastructure.GitRevisionReader, Mcg.AgentOrchestrator.Infrastructure\", throwOnError: false)",
+    "Receiver": "Type.GetType(\"Mcg.AgentOrchestrator.Infrastructure.GitRevisionReader, Mcg.AgentOrchestrator.Execution\", throwOnError: false)",
     "Reason": "Optional cleanup adapter: this fixture is linked into Execution.Tests without an Infrastructure reference. The dynamically loaded target contract explicitly names Infrastructure.GitRevisionReader and reads Shared only when that assembly is available; direct binding would break the documented optional-assembly boundary."
   },
   {

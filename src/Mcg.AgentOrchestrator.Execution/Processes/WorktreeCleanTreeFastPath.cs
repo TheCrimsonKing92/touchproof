@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Infrastructure registers the file readers once at module load; Execution cannot reference it.
+// Infrastructure registers these optional readers once at module load.
 // These readers provide positive evidence only. Missing or inconclusive readers preserve the git path.
 internal static class WorktreeCleanTreeFastPath
 {
