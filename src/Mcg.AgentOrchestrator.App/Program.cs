@@ -361,6 +361,11 @@ if (CliClaudeUsageBackfillCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliClaudeUsageBackfillCommand.Run(startupArgs, workspace));
 }
 
+if (CliPromotionFactBackfillCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliPromotionFactBackfillCommand.Run(startupArgs, workspace));
+}
+
 if (CliAuthorDraftCommand.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliAuthorDraftCommand.Run(startupArgs, workspace));
