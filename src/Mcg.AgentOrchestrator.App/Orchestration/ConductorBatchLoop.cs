@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using static Mcg.AgentOrchestrator.App.Orchestration.ConductorRelaunchDrainIntentBoundary;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -501,7 +502,8 @@ internal sealed partial class ConductorBatchLoop
                         checkpointHeldGoalIds: checkpointHeldGoals);
                     drainHold.Wait(sleepFunc, interval => SleepUntilNextTick(
                         interval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId)));
-                    return new(SelfRelaunchDrainDisposition.ContinueTick);
+                    return new(SelfRelaunchDrainDisposition.ContinueTick,
+                        HeldForRunningDispatches: drainHold.DispatchesPending);
                 }
             }
 
@@ -728,7 +730,9 @@ internal sealed partial class ConductorBatchLoop
             }
             var intentBoundaryClock = StartDiagnosticTimer();
             var intentBoundaryCpuStart = ReadProcessCpu();
-            var intentBoundary = pendingSelfRelaunch is null
+            var ranIntentBoundaryAtTickStart = ConductorRelaunchDrainIntentBoundary.RunsAtTickStart(
+                pendingSelfRelaunch is not null);
+            var intentBoundary = ranIntentBoundaryAtTickStart
                 ? ServiceOperatorIntentBoundary(kernel, driver, onlyGoalId, checkpointHeldGoals,
                     nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay)
                 : new ConductorOperatorIntentBoundary.Result();
@@ -773,12 +777,19 @@ internal sealed partial class ConductorBatchLoop
                     "self-relaunch-drain",
                     nextTick,
                     () => DrainSelfRelaunch(nextTick));
-                if (drainOutcome?.Fault is not null)
-                {
-                    throw drainOutcome.Fault;
-                }
+                drainOutcome?.ThrowIfFaulted();
                 if (drainOutcome is null || drainOutcome.Disposition == SelfRelaunchDrainDisposition.ContinueTick)
                 {
+                    if (ConductorRelaunchDrainIntentBoundary.RunsAfterDrainStep(
+                        ranIntentBoundaryAtTickStart, drainOutcome, pendingSelfRelaunch is not null))
+                    {
+                        var drainIntentBoundary = ServiceOperatorIntentBoundary(
+                            kernel, driver, onlyGoalId, checkpointHeldGoals, nextTick,
+                            persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay);
+                        drainIntentBoundary.ReadmitAppliedGoals(excludedGoals, setAsideGoals, selfClearedSetAsideEntries,
+                            escalatedGoals, completedGoals, reapedGoals, goalProjectionCache);
+                        foreach (var line in drainIntentBoundary.Lines) EmitProgress(line);
+                    }
                     continue;
                 }
                 if (drainOutcome.Disposition == SelfRelaunchDrainDisposition.BreakLoop)
@@ -2001,17 +2012,6 @@ internal sealed partial class ConductorBatchLoop
         EmitProgress(
             $"LOOP_RELAUNCH_ROLLBACK tick={tick} goal={goalId} phase={SanitizeHandoffDetail(phase)} " +
             $"rolledBack=true continuing=true reason={SanitizeHandoffDetail(reason)}");
-
-    private enum SelfRelaunchDrainDisposition
-    {
-        Proceed,
-        ContinueTick,
-        BreakLoop
-    }
-
-    private sealed record SelfRelaunchDrainOutcome(
-        SelfRelaunchDrainDisposition Disposition,
-        Exception? Fault = null);
 
     private T? RunJanitorialPhase<T>(
         string phase,
