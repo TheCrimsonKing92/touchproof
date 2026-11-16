@@ -34,8 +34,8 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
         Assert.True(GoalRepositoryDispatchProvisioning.TryProvision(Goal, Goal.Tasks.Single(), out var failure), failure);
         SecondaryWorktree = Repositories.Crosswalk.WorktreePath(Goal.Id, "crosswalk");
         Assert.False(File.Exists(Path.Combine(SecondaryWorktree, "config", "acceptance-manifest.json")));
-        GoalRepositoryWorktreeProvisionerFixture.CommitChange(HomeWorktree, "fixture home change\n");
-        GoalRepositoryWorktreeProvisionerFixture.CommitChange(SecondaryWorktree, "fixture secondary change\n");
+        CommitTrackedChange(HomeWorktree, "fixture home change\n");
+        CommitTrackedChange(SecondaryWorktree, "fixture secondary change\n");
         ConductorDriverTests.PassVerification(Repositories.Kernel, Goal, Goal.Tasks.Single());
         Verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
         {
@@ -99,9 +99,16 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
         var failed = result.Checks?.Where(check => !check.Passed).ToArray() ?? [];
         if (result.Passed)
             GoalOperationJournal.AcceptancePassed(Repositories.Home.CheckoutPath, Goal, "fixture:acceptance",
-                GoalRepositoryWorktreeProvisionerFixture.Run(HomeWorktree, "rev-parse", "HEAD"), Repositories.Home.Git("rev-parse", "main"));
+                FixtureRefFileReader.Read(HomeWorktree, "HEAD"), FixtureRefFileReader.Read(Repositories.Home.CheckoutPath, "main"));
         return AcceptanceVerificationSummary.FromVerification(result, failed, failed.Select(check => check.Name).ToArray(),
             null, null, result.TestResultPaths, null, null);
+    }
+
+    private static void CommitTrackedChange(string path, string content)
+    {
+        File.WriteAllText(Path.Combine(path, "example.txt"), content);
+        // A pathspec stages the tracked file as part of the commit; neither caller needs the tip.
+        GoalRepositoryWorktreeProvisionerFixture.Run(path, "commit", "-m", "Change example", "--", "example.txt");
     }
 
     internal static string Manifest(string name, string argument) => JsonSerializer.Serialize(new

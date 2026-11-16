@@ -458,11 +458,15 @@ public sealed class MultiRepositoryLandingRepairTests
     private static MultiRepositoryLandingRecordStore Store(MultiRepositoryAcceptanceGateFixture f) =>
         new(f.Repositories.Workspace.OrchestratorDirectory);
     private static string Git(string root, params string[] args) => GoalRepositoryWorktreeProvisionerFixture.Run(root, args);
-    private static string Repositories(MultiRepositoryAcceptanceGateFixture f) => JsonSerializer.Serialize(
-        new[] { f.Repositories.Home.CheckoutPath, f.Repositories.Crosswalk.CheckoutPath, f.HomeWorktree, f.SecondaryWorktree }
-            .Select(path => new { Refs = Git(path, "show-ref"), Head = Git(path, "rev-parse", "HEAD"),
-                Status = Git(path, "status", "--porcelain"), Diff = Git(path, "diff", "HEAD"),
-                Worktrees = Git(path, "worktree", "list", "--porcelain") }));
+    internal static string Repositories(MultiRepositoryAcceptanceGateFixture f) => JsonSerializer.Serialize(new
+    {
+        // Linked worktrees share these refs and registrations with their main checkout.
+        Shared = new[] { f.Repositories.Home.CheckoutPath, f.Repositories.Crosswalk.CheckoutPath }
+            .Select(path => new { Refs = Git(path, "show-ref"), Worktrees = Git(path, "worktree", "list", "--porcelain") }),
+        Checkouts = new[] { f.Repositories.Home.CheckoutPath, f.Repositories.Crosswalk.CheckoutPath, f.HomeWorktree, f.SecondaryWorktree }
+            // Porcelain v2 includes branch.oid (HEAD), including for detached worktrees.
+            .Select(path => new { Status = Git(path, "status", "--porcelain=v2", "--branch"), Diff = Git(path, "diff", "HEAD") })
+    });
     private static string Snapshot(MultiRepositoryAcceptanceGateFixture f) => JsonSerializer.Serialize(new
     {
         Repos = Repositories(f), Failure = Store(f).ReadFailure(f.Goal.Id),
