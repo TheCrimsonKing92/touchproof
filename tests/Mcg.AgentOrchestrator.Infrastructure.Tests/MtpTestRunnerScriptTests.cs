@@ -95,26 +95,20 @@ public sealed class MtpTestRunnerScriptTests
         }
     }
 
-    [Xunit.Theory(DisplayName = "Managed_MTP_runner_executes_every_repository_test_project_after_isolated_build")]
-    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests")]
-    public void ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild(string project, string testClass)
-    {
-        MtpTestRunnerScriptTestSupport.RunManagedProjectContract(project, testClass);
-    }
+    private static readonly (string Project, string TestClass)[] RepositoryManagedProjectCases =
+    [
+        ("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests"),
+        ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests"),
+        ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests"),
+        ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests"),
+    ];
 
     [Xunit.Fact]
     public void ManagedProjectTheoriesRetainAllRepositoryProjectCases()
     {
-        (string Project, string TestClass)[] expected =
-        [
-            ("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests"),
-            ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests"),
-            ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests"),
-            ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests"),
-        ];
+        var expected = RepositoryManagedProjectCases;
         var theoryMethods = new[]
         {
-            typeof(MtpTestRunnerScriptTests).GetMethod(nameof(ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild))!,
             typeof(MtpTestRunnerScriptTestsManagedProjectRebuild).GetMethod(nameof(MtpTestRunnerScriptTestsManagedProjectRebuild.ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild))!
         };
         var actual = theoryMethods
@@ -128,11 +122,43 @@ public sealed class MtpTestRunnerScriptTests
     }
 
     [Xunit.Fact]
+    public void ManagedProjectGuardRejectsEachSingleMissingRepositoryProjectCase()
+    {
+        var expected = RepositoryManagedProjectCases;
+        var actual = typeof(MtpTestRunnerScriptTestsManagedProjectRebuild)
+            .GetMethod(nameof(MtpTestRunnerScriptTestsManagedProjectRebuild.ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild))!
+            .CustomAttributes
+            .Where(attribute => attribute.AttributeType == typeof(Xunit.InlineDataAttribute))
+            .Select(InlineDataPair)
+            .OrderBy(item => item.Project, StringComparer.Ordinal)
+            .ToArray();
+        Xunit.Assert.Equal(expected.OrderBy(item => item.Project, StringComparer.Ordinal), actual);
+
+        var exercised = 0;
+        foreach (var omitted in expected)
+        {
+            var missing = actual.Where(item => item != omitted).ToArray();
+            Xunit.Assert.ThrowsAny<Xunit.Sdk.XunitException>(() =>
+                Xunit.Assert.Equal(expected.OrderBy(item => item.Project, StringComparer.Ordinal), missing));
+            var duplicateReplacement = missing.Append(missing[0])
+                .OrderBy(item => item.Project, StringComparer.Ordinal).ToArray();
+            Xunit.Assert.ThrowsAny<Xunit.Sdk.XunitException>(() =>
+                Xunit.Assert.Equal(expected.OrderBy(item => item.Project, StringComparer.Ordinal), duplicateReplacement));
+            exercised++;
+        }
+        Xunit.Assert.Equal(4, exercised);
+    }
+
+    [Xunit.Fact]
     public void ManagedProjectTheoriesPlaceOnlyCoreCaseInOrdinaryTheory()
     {
         static (string Project, string TestClass)[] Cases(Type type)
         {
-            var method = type.GetMethod(nameof(ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild))!;
+            var method = type.GetMethod(nameof(MtpTestRunnerScriptTestsManagedProjectRebuild.ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild));
+            if (method is null)
+            {
+                return [];
+            }
             return method.CustomAttributes
                 .Where(attribute => attribute.AttributeType == typeof(Xunit.InlineDataAttribute))
                 .Select(InlineDataPair)
@@ -142,13 +168,11 @@ public sealed class MtpTestRunnerScriptTests
 
         var ordinary = Cases(typeof(MtpTestRunnerScriptTests));
         var rebuild = Cases(typeof(MtpTestRunnerScriptTestsManagedProjectRebuild));
-        (string Project, string TestClass)[] expectedOrdinary =
-        [
-            ("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests")
-        ];
+        (string Project, string TestClass)[] expectedOrdinary = [];
         Xunit.Assert.Equal(expectedOrdinary, ordinary);
         (string Project, string TestClass)[] expectedRebuild =
         [
+            ("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests"),
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests"),
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests"),
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests"),
@@ -3025,11 +3049,20 @@ public sealed class MtpTestRunnerScriptTests
     }
 }
 
+// Only these tests may build a repository test project. This opt-in class runs in
+// the "Mtp managed project rebuild" lane when the build system changes.
+// Each real build produces an apphost and managed assembly in isolated artifacts;
+// the built test host runs at least one test from the named class and exits 0:
+// - Mcg.AgentOrchestrator.Core.Tests: RepositoryChangeClassifierTests.
+// - Mcg.AgentOrchestrator.Infrastructure.Tests: ProcessStartInfoSourceGuardTests.
+// - Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests: ProviderDefaultTests.
+// - Mcg.AgentOrchestrator.Infrastructure.Cli.Tests: CliArgumentNormalizationTests.
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 [Xunit.Trait("Category", "AcceptanceOptIn")]
 public sealed class MtpTestRunnerScriptTestsManagedProjectRebuild
 {
     [Xunit.Theory(DisplayName = "Managed_MTP_runner_executes_large_repository_test_projects_after_isolated_build")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests")]
