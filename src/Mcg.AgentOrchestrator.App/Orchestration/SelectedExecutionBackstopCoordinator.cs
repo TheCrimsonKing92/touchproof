@@ -319,6 +319,47 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         finally { _transitions.Release(); }
     }
 
+    internal async Task<SelectedExecutionGateMissDetector.Detection> RecordGateMissesAsync(
+        Func<IReadOnlyList<SelectedExecutionBackstopLanding>, SelectedExecutionGateMissDetector.Detection> detect)
+    {
+        await _transitions.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var state = await store.ReadAsync().ConfigureAwait(false);
+            var detection = detect(state?.RangeLandings ?? []);
+            if (state is not null && detection.Misses.Count > 0)
+            {
+                var terminal = (await items.ListAsync().ConfigureAwait(false))
+                    .Where(item => CollaborationItemLifecycle.IsTerminal(item.Status))
+                    .Select(item => item.CorrelationKey).ToHashSet(StringComparer.Ordinal);
+                var pending = detection.Misses.Where(miss => !terminal.Contains(miss.CorrelationKey)).ToArray();
+                if (pending.Length > 0)
+                {
+                    if (state.OpenMiss is not null)
+                        state = await ReconcileMissAsync(state).ConfigureAwait(false);
+                    if (state.OpenMiss is null)
+                    {
+                        state = state with { OpenMiss = pending[0] };
+                        await store.WriteAsync("gate-miss", state, clock()).ConfigureAwait(false);
+                        state = await ReconcileMissAsync(state).ConfigureAwait(false);
+                    }
+                    foreach (var miss in pending)
+                        await EnsureMissItemAsync(miss).ConfigureAwait(false);
+                }
+            }
+            var unclassifiable = detection.UnclassifiableLandings;
+            Report(detection.Misses.Count > 0 ? "gate-miss" : "gate-no-miss",
+                new("gate", state?.CoveredCommit ?? state?.RangeStartCommit ?? "none",
+                    state?.RangeLandings.LastOrDefault()?.Commit ?? "none", 0,
+                    detection.Misses.SelectMany(miss => miss.GoalIds).Distinct(StringComparer.Ordinal).ToArray(), clock()),
+                detection.Misses.Sum(miss => miss.FailingTests.Count),
+                unclassifiable.Count == 0 ? null : "unclassifiable=" + string.Join(',',
+                    unclassifiable.Select(landing => landing.GoalId + "@" + landing.Commit)));
+            return detection;
+        }
+        finally { _transitions.Release(); }
+    }
+
     private async Task<SelectedExecutionBackstopState> ReconcileMissAsync(SelectedExecutionBackstopState state)
     {
         if (state.OpenMiss is not { } miss)
@@ -327,15 +368,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             return state;
         }
         AcceptanceSelectedExecutionSessionSuspension.Write(home, new(miss.Id, stateHome), stateHome);
-        var existing = (await items.ListAsync().ConfigureAwait(false)).SingleOrDefault(item => item.CorrelationKey == miss.CorrelationKey);
-        if (existing is null)
-        {
-            var item = await items.RaiseAsync(CollaborationItemType.Verify, null, "Selected execution backstop found a miss",
-                JsonSerializer.Serialize(miss), miss.CorrelationKey).ConfigureAwait(false);
-            Report("miss-raised", new(miss.Id, miss.CoveredFromCommit, miss.CoveredToCommit, 0, miss.GoalIds, clock()),
-                miss.FailingTests.Count, "item=" + item.Id);
-        }
-        else if (CollaborationItemLifecycle.IsTerminal(existing.Status))
+        var existing = await EnsureMissItemAsync(miss).ConfigureAwait(false);
+        if (CollaborationItemLifecycle.IsTerminal(existing.Status))
         {
             state = state with { OpenMiss = null };
             await store.WriteAsync("miss-resolved", state, clock()).ConfigureAwait(false);
@@ -344,6 +378,17 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                 miss.FailingTests.Count, "miss=" + miss.Id);
         }
         return state;
+    }
+
+    private async Task<CollaborationItem> EnsureMissItemAsync(SelectedExecutionBackstopMissRecord miss)
+    {
+        var existing = (await items.ListAsync().ConfigureAwait(false)).SingleOrDefault(item => item.CorrelationKey == miss.CorrelationKey);
+        if (existing is not null) return existing;
+        var item = await items.RaiseAsync(CollaborationItemType.Verify, null, "Selected execution backstop found a miss",
+            JsonSerializer.Serialize(miss), miss.CorrelationKey).ConfigureAwait(false);
+        Report("miss-raised", new(miss.Id, miss.CoveredFromCommit, miss.CoveredToCommit, 0, miss.GoalIds, clock()),
+            miss.FailingTests.Count, "item=" + item.Id);
+        return item;
     }
 
     private void Report(string result, SelectedExecutionBackstopRequest request, int failingTests = 0, string? detail = null,
