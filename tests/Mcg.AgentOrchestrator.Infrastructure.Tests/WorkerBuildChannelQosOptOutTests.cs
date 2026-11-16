@@ -13,10 +13,11 @@ public sealed class WorkerBuildChannelQosOptOutTests
     public async Task Execute_Enabled_OptsOutRegisteredChildAndLogsOnce()
     {
         using var fixture = new WorkerBuildRequestFixture();
+        Assert.NotNull(fixture.LaunchOverride);
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixture.StatePath)!, "conductor-policy.json"),
             (ConductorAutonomyPolicy.Conservative with { AcceptanceChildrenOptOutExecutionThrottling = true }).ToJson());
         var calls = new ConcurrentQueue<(int Pid, uint Control, uint State)>();
-        var host = new WorkerBuildRequestHost(fixture.Reference, storageRoot: fixture.Storage,
+        var host = new WorkerBuildRequestHost(fixture.Reference, storageRoot: fixture.Storage, launchOverride: fixture.LaunchOverride,
             executionQosSetter: (pid, control, state) => { calls.Enqueue((pid, control, state)); return true; },
             executionQosInterval: TimeSpan.FromMilliseconds(50));
         using var current = Process.GetCurrentProcess();
@@ -28,6 +29,7 @@ public sealed class WorkerBuildChannelQosOptOutTests
             .GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
         Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
         var child = Assert.Single(invocation.Children!);
+        fixture.AssertCompilerImages(invocation);
         var recorded = calls.ToArray();
         Assert.Equal(child.Pid, recorded.First().Pid);
         Assert.Single(recorded.Where(call => call.Pid == child.Pid));
@@ -44,8 +46,9 @@ public sealed class WorkerBuildChannelQosOptOutTests
     public async Task Execute_AbsentPolicy_PreservesSuccessWithoutOptOut()
     {
         using var fixture = new WorkerBuildRequestFixture();
+        Assert.NotNull(fixture.LaunchOverride);
         var setters = 0;
-        var host = new WorkerBuildRequestHost(fixture.Reference, storageRoot: fixture.Storage,
+        var host = new WorkerBuildRequestHost(fixture.Reference, storageRoot: fixture.Storage, launchOverride: fixture.LaunchOverride,
             executionQosSetter: (_, _, _) => { Interlocked.Increment(ref setters); return true; },
             executionQosInterval: TimeSpan.FromMilliseconds(50));
         using var current = Process.GetCurrentProcess();
@@ -55,6 +58,10 @@ public sealed class WorkerBuildChannelQosOptOutTests
         Assert.Equal(WorkerBuildOutcome.Success, response.Outcome);
         Assert.Equal(0, setters);
         Assert.False(File.Exists(LogPath(fixture)));
+        var invocation = Assert.Single(fixture.Operations.Load(fixture.GoalId.Value)
+            .GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
+        Assert.Single(invocation.Children!);
+        fixture.AssertCompilerImages(invocation);
     }
 
     private static string LogPath(WorkerBuildRequestFixture fixture) =>

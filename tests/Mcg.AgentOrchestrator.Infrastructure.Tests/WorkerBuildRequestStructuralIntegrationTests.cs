@@ -10,7 +10,8 @@ public sealed class WorkerBuildRequestStructuralIntegrationTests
     [InlineData(true)]
     public async Task RealCompileViolationReplayAndFreshCorrection(bool aggregate)
     {
-        using var fixture = new WorkerBuildRequestFixture(seedRepository: root => WorkerBuildRequestFixture.SeedSizePolicy(root, aggregate));
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Real,
+            seedRepository: root => WorkerBuildRequestFixture.SeedSizePolicy(root, aggregate));
         var expected = DeveloperCompletionStructuralPreflight.Evaluate(fixture.RepositoryRoot);
         Assert.True(expected.EvaluationComplete);
         Assert.True(expected.HasViolation);

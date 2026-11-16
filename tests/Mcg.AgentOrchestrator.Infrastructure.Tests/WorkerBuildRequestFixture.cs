@@ -40,7 +40,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
 
     internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false,
         bool goalBranch = false, bool extraProject = false, bool reportWorkerResult = false,
-        CompilerMode compilerMode = CompilerMode.Real, Action<string>? seedRepository = null,
+        CompilerMode compilerMode = CompilerMode.Fake, Action<string>? seedRepository = null,
         string? projectHomeDirectory = null, IReadOnlyList<string>? fakeCompilerProjects = null)
     {
         _lowIntegrity = lowIntegrity;
