@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
@@ -186,15 +188,32 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundGateMembership : Acce
         finally
         {
             registrationProbe?.TrySetResult();
+            var releaseTimestamp = Stopwatch.GetTimestamp();
             gateRelease.Set();
             teardown = RemoveAfterObservedDrain(
                 () => driver is null || driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
                 "ActiveRootCount == 0",
                 TimeSpan.FromSeconds(10),
+                () => driver is null
+                    ? "driver not constructed"
+                    : DescribeActiveRoots(driver.GetActiveAcceptanceCohortCapacity(), Stopwatch.GetElapsedTime(releaseTimestamp)),
                 () => { if (File.Exists(trx)) File.Delete(trx); },
                 () => DeleteDirectory(repo));
         }
         teardown.AssertDrained();
+    }
+
+    internal static string DescribeActiveRoots(ConductorAcceptanceCapacitySnapshot snapshot, TimeSpan elapsedSinceRelease)
+    {
+        var header = FormattableString.Invariant(
+            $"elapsed_since_release_ms={elapsedSinceRelease.TotalMilliseconds:F0} active_roots={snapshot.ActiveRootCount}");
+        if (snapshot.ActiveRootCount == 0)
+            return $"{header}; no active roots.";
+
+        var roots = snapshot.ActiveRoots.Select(root =>
+            $"[key={root.Key} members={string.Join(",", root.MemberGoalIds.OrderBy(id => id, StringComparer.Ordinal))} " +
+            $"started_at={root.StartedAt.ToString("O", CultureInfo.InvariantCulture)}]");
+        return $"{header}; {string.Join(" ", roots)}";
     }
 
     [Theory]

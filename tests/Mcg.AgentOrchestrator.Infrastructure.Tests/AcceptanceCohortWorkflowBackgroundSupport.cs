@@ -8,14 +8,24 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCohortWorkflowTests
 {
-    internal readonly record struct DrainedTeardown(bool Drained, string Condition)
+    internal readonly record struct DrainedTeardown(bool Drained, string Condition, string? StateDescription = null)
     {
-        public void AssertDrained() =>
-            Assert.True(Drained, $"Background cohort gate did not drain: {Condition}.");
+        public void AssertDrained()
+        {
+            var message = $"Background cohort gate did not drain: {Condition}.";
+            if (!string.IsNullOrWhiteSpace(StateDescription))
+                message += $" State at bound: {StateDescription}";
+            Assert.True(Drained, message);
+        }
     }
 
     internal static DrainedTeardown RemoveAfterObservedDrain(
-        Func<bool> drainCondition, string conditionName, TimeSpan bound, params Action[] removals)
+        Func<bool> drainCondition, string conditionName, TimeSpan bound, params Action[] removals) =>
+        RemoveAfterObservedDrain(drainCondition, conditionName, bound, null, removals);
+
+    internal static DrainedTeardown RemoveAfterObservedDrain(
+        Func<bool> drainCondition, string conditionName, TimeSpan bound,
+        Func<string?>? describeUndrainedState, params Action[] removals)
     {
         var drained = SpinWait.SpinUntil(drainCondition, bound);
         if (drained)
@@ -23,7 +33,8 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
             foreach (var removal in removals)
                 removal();
         }
-        return new DrainedTeardown(drained, conditionName);
+        var stateDescription = drained ? null : describeUndrainedState?.Invoke();
+        return new DrainedTeardown(drained, conditionName, stateDescription);
     }
 
     private protected void AssertLongTrainGateLandsBothGoals(int iteration = 1, Action? whileGateHeld = null)
