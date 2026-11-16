@@ -240,7 +240,7 @@ internal static class AcceptanceCheckProcessInvoker
                 {
                     throw;
                 }
-
+                if (laneStall is { Stopped: true }) laneStall.EmitTree(await AcceptanceLaneStallTreeSnapshot.CaptureAsync(process.Id, cancellationToken).ConfigureAwait(false));
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
 
                 timedOut = !captureLimitStop.Stopped;

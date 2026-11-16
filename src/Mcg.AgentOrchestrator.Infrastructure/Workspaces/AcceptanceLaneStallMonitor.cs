@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // One monitor owns one heartbeat-backed child. Output or extra-progress changes reset its silence window.
 internal sealed class AcceptanceLaneStallMonitor : IDisposable
 {
+    private static readonly AsyncLocal<TestInputs?> Inputs = new();
     private readonly string _lane;
     private readonly TimeProvider _time;
     private readonly Action<string> _emit;
@@ -28,8 +29,23 @@ internal sealed class AcceptanceLaneStallMonitor : IDisposable
     internal static AcceptanceLaneStallMonitor? ForHeartbeat(GateHeartbeatContext? context, TimeProvider time,
         IAcceptanceLaneProgressProbe? probe = null) =>
         context?.Phase == "verification-check"
-            ? new(context.CurrentTarget, time, AcceptanceLaneStallPolicy.StallLimit, probe: probe)
+            ? new(context.CurrentTarget, time, Inputs.Value?.Limit ?? AcceptanceLaneStallPolicy.StallLimit,
+                emit: Inputs.Value?.Emit, probe: probe)
             : null;
+
+    internal static IDisposable PushInputsForTests(TimeSpan limit, Action<string> emit)
+    {
+        var previous = Inputs.Value;
+        Inputs.Value = new(limit, emit);
+        return new RestoreScope(() => Inputs.Value = previous);
+    }
+
+    internal void EmitTree(AcceptanceLaneStallTreeSnapshot snapshot)
+    {
+        if (!Stopped) return;
+        try { _emit(snapshot.ToLine(_lane)); }
+        catch { /* Diagnostic failure must not prevent the child stop. */ }
+    }
 
     internal CancellationToken Token => _source.Token;
     internal bool Stopped => Volatile.Read(ref _state) == 1;
@@ -77,4 +93,7 @@ internal sealed class AcceptanceLaneStallMonitor : IDisposable
     internal void Complete() => Interlocked.CompareExchange(ref _state, 2, 0);
 
     public void Dispose() => _source.Dispose();
+
+    private sealed record TestInputs(TimeSpan Limit, Action<string> Emit);
+    private sealed class RestoreScope(Action restore) : IDisposable { public void Dispose() => restore(); }
 }
