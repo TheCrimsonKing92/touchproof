@@ -6,6 +6,12 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Scopes gate impact checks to the loaded manifest's declared test checks.</summary>
 internal static class ManifestScopedImpactPlan
 {
+    internal static VerificationPolicy CompileRequiredPolicy(string worktreePath,
+        IReadOnlyList<string> changedFiles, IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
+        SelectionSourceTexts? sourceTexts) => VerificationPolicyCompiler.Compile(
+            AgentRole.Reviewer, goalObjective: string.Empty, taskDescription: string.Empty,
+            verificationPlan: null, changedFiles, Plan(changedFiles, worktreePath, manifestChecks, sourceTexts));
+
     internal static RepositoryTestImpactPlan? PlanChangeScoped(
         RepositoryChangeSummary summary,
         string worktreePath,
@@ -23,15 +29,15 @@ internal static class ManifestScopedImpactPlan
     internal static RepositoryTestImpactPlan Plan(
         IEnumerable<string> changedFiles,
         string worktreePath,
-        IReadOnlyList<AcceptanceManifestCheck> manifestChecks) =>
-        Plan(RepositoryChangeClassifier.Classify(changedFiles), worktreePath, manifestChecks);
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks, SelectionSourceTexts? sourceTexts = null) =>
+        Plan(RepositoryChangeClassifier.Classify(changedFiles), worktreePath, manifestChecks, sourceTexts);
 
     internal static RepositoryTestImpactPlan Plan(
         RepositoryChangeSummary summary,
         string worktreePath,
-        IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks, SelectionSourceTexts? sourceTexts = null)
     {
-        return Scope(RepositoryTestImpactPlanner.Plan(summary, worktreePath), manifestChecks);
+        return Scope(RepositoryTestImpactPlanner.Plan(summary, worktreePath, sourceTexts), manifestChecks);
     }
 
     internal static RepositoryTestImpactPlan Scope(

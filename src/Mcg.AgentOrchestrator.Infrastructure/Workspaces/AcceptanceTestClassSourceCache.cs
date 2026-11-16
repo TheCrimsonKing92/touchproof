@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Owns file-local extracts for a bounded set of worktrees, never resolved cross-file membership.
@@ -34,7 +35,8 @@ internal sealed class AcceptanceTestClassSourceCache
 
     internal IReadOnlyList<AcceptanceTestClassSourceScanner.FileExtract> Extract(
         string worktreePath, IReadOnlyList<string> paths,
-        Func<string, AcceptanceTestClassSourceScanner.FileExtract>? extractFile = null)
+        Func<string, AcceptanceTestClassSourceScanner.FileExtract>? extractFile = null,
+        SelectionSourceTexts? sourceTexts = null)
     {
         var root = Path.GetFullPath(worktreePath);
         object gate;
@@ -54,7 +56,7 @@ internal sealed class AcceptanceTestClassSourceCache
             // but retain enumeration order for cross-file resolution and deterministic errors.
             Parallel.For(0, paths.Count, new ParallelOptions { MaxDegreeOfParallelism = 4 }, index =>
             {
-                try { parsed[index] = ReadFile(paths[index], previous, store, extractFile); }
+                try { parsed[index] = ReadFile(paths[index], previous, store, extractFile, sourceTexts); }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
                     errors[index] = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error);
@@ -90,7 +92,8 @@ internal sealed class AcceptanceTestClassSourceCache
 
     private CachedFile ReadFile(string inputPath, WorktreeEntry? previous,
         AcceptanceTestClassSourceExtractStore? store,
-        Func<string, AcceptanceTestClassSourceScanner.FileExtract>? extractFile)
+        Func<string, AcceptanceTestClassSourceScanner.FileExtract>? extractFile,
+        SelectionSourceTexts? sourceTexts)
     {
         var path = Path.GetFullPath(inputPath);
         // Stat before reading: never associate old contents with a later write's metadata.
@@ -107,7 +110,8 @@ internal sealed class AcceptanceTestClassSourceCache
             extract = extractFile(path);
         else
         {
-            var text = File.ReadAllText(path);
+            var text = sourceTexts is null ? SelectionFileReadProbe.ReadAllText(path)
+                : sourceTexts.Read(path, out length, out lastWriteUtc);
             var hash = store is null ? null : AcceptanceTestClassSourceExtractStore.HashText(text);
             if (hash is not null && store!.TryRead(hash, out extract))
                 return new CachedFile(length, lastWriteUtc, extract, parses);

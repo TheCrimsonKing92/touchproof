@@ -174,7 +174,7 @@ public sealed class ConductorBatchLoopTestsWalkStepLedger(ITestOutputHelper outp
                 "walk-set-aside:0:0:0,walk-projection-invalidate:0:0:2," +
                 "walk-pretester-declared-resolve:1:2:1,walk-pretester-changed-file-guards:2:4:1," +
                 "walk-pretester-cli-surface:3:6:1,walk-pretester-coupled-class:4:8:1," +
-                "walk-pretester-reverse-dependency:5:10:1,walk-pretester-always-run:6:12:1," +
+                "walk-pretester-reverse-dependency:5:10:1," + ZeroReverseDependencyParts + "walk-pretester-always-run:6:12:1," +
                 "walk-pretester-test-source:7:14:1," + HoldSteps(1) + "walk-remainder:0:0:1", Field(line, "walk_steps"));
             Assert.Equal(ConductorTickStepLedger.WalkNames.Append(ConductorTickStepLedger.WalkRemainderName),
                 Field(line, "walk_steps").Split(',').Select(entry => entry.Split(':')[0]));
@@ -190,7 +190,13 @@ public sealed class ConductorBatchLoopTestsWalkStepLedger(ITestOutputHelper outp
     private const string ZeroSelectionSteps =
         "walk-pretester-declared-resolve:0:0:0,walk-pretester-changed-file-guards:0:0:0," +
         "walk-pretester-cli-surface:0:0:0,walk-pretester-coupled-class:0:0:0," +
-        "walk-pretester-reverse-dependency:0:0:0,walk-pretester-always-run:0:0:0,walk-pretester-test-source:0:0:0,";
+        "walk-pretester-reverse-dependency:0:0:0," + ZeroReverseDependencyParts +
+        "walk-pretester-always-run:0:0:0,walk-pretester-test-source:0:0:0,";
+
+    private const string ZeroReverseDependencyParts =
+        "walk-pretester-reverse-dependency-read-selection:0:0:0," +
+        "walk-pretester-reverse-dependency-resolve-class-names:0:0:0," +
+        "walk-pretester-reverse-dependency-evaluate-cost-rule:0:0:0,";
 
     private static string HoldSteps(int calls, int refreshCpu = 0, int refreshWall = 0, int entryCpu = 0, int entryWall = 0) =>
         $"walk-held-goal:0:0:{calls},walk-running-refresh:{refreshCpu}:{refreshWall}:{calls},walk-running-glance:0:0:0," +

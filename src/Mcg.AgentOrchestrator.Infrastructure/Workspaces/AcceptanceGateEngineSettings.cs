@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
@@ -49,7 +50,7 @@ internal sealed class AcceptanceGateEngineSettings
             return new AcceptanceGateEngineSettings();
         }
 
-        return Parse(File.ReadAllText(manifestPath));
+        return Parse(SelectionFileReadProbe.ReadAllText(manifestPath));
     }
 
     internal static AcceptanceGateEngineSettings Parse(string manifestJson)

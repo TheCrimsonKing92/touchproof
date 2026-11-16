@@ -1,16 +1,17 @@
 using System.IO.Enumeration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ReverseDependencyEvidenceGateClasses
 {
     internal static IReadOnlyList<string> Read(string worktree, IReadOnlyList<string> changedFiles,
-        string? projectHomeDirectory)
+        string? projectHomeDirectory, SelectionSourceTexts? sourceTexts = null)
     {
         var settings = AcceptanceGateEngineSettings.Load(worktree, projectHomeDirectory);
         var checks = GoalAcceptanceVerifier.CreateEffectiveGatePlan(worktree, changedFiles, settings, projectHomeDirectory,
-                AcceptanceInfrastructureLaneResolver.ResolveIdentity(settings, worktree)).Checks
+                AcceptanceInfrastructureLaneResolver.ResolveIdentity(settings, worktree, sourceTexts), sourceTexts: sourceTexts).Checks
             .Where(check => check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)).ToArray();
         var classes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var group in checks.GroupBy(check => check.Project, StringComparer.OrdinalIgnoreCase))
@@ -18,7 +19,9 @@ internal static class ReverseDependencyEvidenceGateClasses
             var projects = group.Key is { Length: > 0 } project ? new[] { project } :
                 GoalAcceptanceVerifier.DiscoverTrustedTestProjects(worktree);
             foreach (var projectPath in projects)
-            foreach (var item in AcceptanceTestClassSourceScanner.ScanProject(worktree, projectPath))
+            foreach (var item in sourceTexts is null
+                ? AcceptanceTestClassSourceScanner.ScanProject(worktree, projectPath)
+                : AcceptanceTestClassSourceScanner.ScanProject(worktree, projectPath, sourceTexts))
                 if (group.Any(check => Includes(check.Arguments, item.FullName))) classes.Add(item.FullName);
         }
         return classes.Order(StringComparer.Ordinal).ToArray();

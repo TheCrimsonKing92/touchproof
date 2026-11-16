@@ -26,7 +26,8 @@ internal static class ReverseDependencyTestImpactReader
         bool bypassCache = false,
         int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
         bool propagateShippingSourceReach = false,
-        Action<string, string>? shippingReachDiagnostics = null)
+        Action<string, string>? shippingReachDiagnostics = null,
+        SelectionSourceTexts? sourceTexts = null)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null,
@@ -77,7 +78,7 @@ internal static class ReverseDependencyTestImpactReader
                 repositoryRoot,
                 projects,
                 sourceOwnership,
-                out var snapshotFailure);
+                out var snapshotFailure, sourceTexts);
             if (snapshot is null)
             {
                 return ReverseDependencyTestSelection.Unreadable(snapshotFailure!, headroom: headroom);
@@ -411,7 +412,7 @@ internal static class ReverseDependencyTestImpactReader
                 continue;
             }
 
-            var projectSource = File.ReadAllText(projectPath);
+            var projectSource = SelectionFileReadProbe.ReadAllText(projectPath);
             var document = XDocument.Parse(projectSource, LoadOptions.None);
             projects.Add(new ProjectSnapshot(projectPath, HashText(projectSource)));
             var projectDirectory = Path.GetDirectoryName(projectPath)!;
@@ -448,7 +449,7 @@ internal static class ReverseDependencyTestImpactReader
         string repositoryRoot,
         IReadOnlyList<ProjectSnapshot> projects,
         IReadOnlyDictionary<string, bool> sourceOwnership,
-        out string? failure)
+        out string? failure, SelectionSourceTexts? sourceTexts)
     {
         failure = null;
         var sources = new List<SourceFileSnapshot>(sourceOwnership.Count);
@@ -456,7 +457,7 @@ internal static class ReverseDependencyTestImpactReader
         foreach (var pair in sourceOwnership.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             var before = ReadFileVersion(pair.Key);
-            var source = File.ReadAllText(pair.Key);
+            var source = sourceTexts is null ? SelectionFileReadProbe.ReadAllText(pair.Key) : sourceTexts.Read(pair.Key);
             var after = ReadFileVersion(pair.Key);
             if (before != after)
             {
@@ -476,7 +477,7 @@ internal static class ReverseDependencyTestImpactReader
 
         foreach (var project in projects)
         {
-            if (!HashText(File.ReadAllText(project.Path)).Equals(project.ContentHash, StringComparison.Ordinal))
+            if (!HashText(SelectionFileReadProbe.ReadAllText(project.Path)).Equals(project.ContentHash, StringComparison.Ordinal))
             {
                 failure =
                     $"Reverse-dependency project graph changed while it was indexed: {ToRepositoryPath(repositoryRoot, project.Path)}";
@@ -683,7 +684,7 @@ internal static class ReverseDependencyTestImpactReader
         var markerIdentity = "git:directory";
         if (File.Exists(markerPath))
         {
-            var marker = File.ReadAllText(markerPath).Trim();
+            var marker = SelectionFileReadProbe.ReadAllText(markerPath).Trim();
             markerIdentity = $"git:file:{HashText(marker)}";
             const string prefix = "gitdir:";
             if (!marker.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -701,7 +702,7 @@ internal static class ReverseDependencyTestImpactReader
             return markerIdentity;
         }
 
-        var head = File.ReadAllText(headPath).Trim();
+        var head = SelectionFileReadProbe.ReadAllText(headPath).Trim();
         var resolved = head;
         const string refPrefix = "ref:";
         if (head.StartsWith(refPrefix, StringComparison.OrdinalIgnoreCase))
@@ -718,7 +719,7 @@ internal static class ReverseDependencyTestImpactReader
         var directPath = Path.Combine(gitDirectory, reference);
         if (File.Exists(directPath))
         {
-            return File.ReadAllText(directPath).Trim();
+            return SelectionFileReadProbe.ReadAllText(directPath).Trim();
         }
 
         var commonDirectory = gitDirectory;
@@ -727,11 +728,11 @@ internal static class ReverseDependencyTestImpactReader
         {
             commonDirectory = Path.GetFullPath(Path.Combine(
                 gitDirectory,
-                File.ReadAllText(commonDirectoryPath).Trim()));
+                SelectionFileReadProbe.ReadAllText(commonDirectoryPath).Trim()));
             var commonRefPath = Path.Combine(commonDirectory, reference);
             if (File.Exists(commonRefPath))
             {
-                return File.ReadAllText(commonRefPath).Trim();
+                return SelectionFileReadProbe.ReadAllText(commonRefPath).Trim();
             }
         }
 
@@ -742,7 +743,7 @@ internal static class ReverseDependencyTestImpactReader
         }
 
         var normalizedReference = reference.Replace(Path.DirectorySeparatorChar, '/');
-        foreach (var line in File.ReadLines(packedRefsPath))
+        foreach (var line in SelectionFileReadProbe.ReadLines(packedRefsPath))
         {
             if (line.Length == 0 || line[0] is '#' or '^')
             {

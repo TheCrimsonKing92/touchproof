@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -26,6 +27,46 @@ internal static class AcceptanceTestClassSourceScanner
         }
         var classes = Scan(worktreePath, files);
         return classes.Count > 0 ? classes : throw new InvalidDataException($"No runnable test classes in '{project}'.");
+    }
+
+    // The selection already read its closure. Preserve strict whole-project validation,
+    // while extracting from the same parse and handing source contents to subsequent parts.
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanProject(string worktreePath, string project,
+        SelectionSourceTexts sourceTexts)
+    {
+        var projectPath = Path.Combine(worktreePath, project.Replace('/', Path.DirectorySeparatorChar));
+        var document = System.Xml.Linq.XDocument.Parse(SelectionFileReadProbe.ReadAllText(projectPath));
+        if (document.Root?.Name.LocalName != "Project")
+            throw new InvalidDataException($"Invalid test project '{project}'.");
+        var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project).ToArray();
+        if (files.Length == 0) throw new InvalidDataException($"No test sources in '{project}'.");
+        var classes = ScanTexts(files, sourceTexts);
+        return classes.Count > 0 ? classes : throw new InvalidDataException($"No runnable test classes in '{project}'.");
+    }
+
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> Scan(string worktreePath, SelectionSourceTexts sourceTexts)
+    {
+        var files = LaneTestSourceRootResolver.SourceFiles(worktreePath, LaneTestSourceRootResolver.Resolve(worktreePath));
+        if (files.Length == 0)
+        {
+            AcceptanceTestClassSourceCache.Current.Forget(worktreePath);
+            return [];
+        }
+        // Lane identity uses the same non-validating extracts and warm/store hits as Scan.
+        return ScanExtracts(AcceptanceTestClassSourceCache.Current.Extract(worktreePath, files, sourceTexts: sourceTexts));
+    }
+
+    private static IReadOnlyList<AcceptanceTestClassDescriptor> ScanTexts(string[] files, SelectionSourceTexts sourceTexts)
+    {
+        var extracts = new List<FileExtract>(files.Length);
+        foreach (var file in files)
+        {
+            var root = CSharpSyntaxTree.ParseText(sourceTexts.Read(file), path: file).GetRoot();
+            if (root.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+                throw new InvalidDataException($"Cannot parse test source '{file}'.");
+            extracts.Add(ExtractRoot(root));
+        }
+        return ScanExtracts(extracts);
     }
 
     // Preserve Scan's membership contract; diagnostic callers can request only declaring files.
@@ -127,9 +168,10 @@ internal static class AcceptanceTestClassSourceScanner
             .ToArray();
     }
 
-    internal static FileExtract ExtractText(string text)
+    internal static FileExtract ExtractText(string text) => ExtractRoot(CSharpSyntaxTree.ParseText(text).GetRoot());
+
+    private static FileExtract ExtractRoot(SyntaxNode root)
     {
-        var root = CSharpSyntaxTree.ParseText(text).GetRoot();
         var constants = root.DescendantNodes().OfType<FieldDeclarationSyntax>()
             .Where(field => field.Parent is ClassDeclarationSyntax)
             .Where(field => field.Modifiers.Any(SyntaxKind.ConstKeyword) &&

@@ -1792,7 +1792,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceGateEngineSettings engineSettings,
         string? projectHomeDirectory = null,
         AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null,
-        Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null)
+        Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null,
+        SelectionSourceTexts? sourceTexts = null)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
@@ -1823,7 +1824,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         infrastructureTestLanes = laneTransform?.Invoke(infrastructureTestLanes) ?? infrastructureTestLanes;
         // This owns environment and scope expansion for both execution and identity.
         // Identity supplies a flattened pool; execution retains its measured lane layout.
-        var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks));
+        var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks, sourceTexts));
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
             manifest.Checks,
@@ -1859,17 +1860,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
-        IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks, SelectionSourceTexts? sourceTexts = null)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return [];
 
-        var policy = VerificationPolicyCompiler.Compile(
-            AgentRole.Reviewer,
-            goalObjective: string.Empty,
-            taskDescription: string.Empty,
-            verificationPlan: null,
-            changedFiles, ManifestScopedImpactPlan.Plan(changedFiles, worktreePath, manifestChecks));
+        var policy = ManifestScopedImpactPlan.CompileRequiredPolicy(worktreePath, changedFiles, manifestChecks, sourceTexts);
         return MapRequiredPolicyChecks(worktreePath, policy);
     }
 
@@ -3828,7 +3824,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     AcceptanceManifestLocator.SearchedLocations(worktreePath, projectHomeDirectory));
 
             return AcceptanceManifestOmittedChecks.Scope(JsonSerializer.Deserialize<AcceptanceManifest>(
-                File.ReadAllText(path), JsonOptions) ?? new AcceptanceManifest(), projectHomeDirectory);
+                SelectionFileReadProbe.ReadAllText(path), JsonOptions) ?? new AcceptanceManifest(), projectHomeDirectory);
         }
 
     }

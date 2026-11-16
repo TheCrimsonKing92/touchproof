@@ -112,13 +112,16 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
     private static readonly string[] ExcludedDirectorySegments = ["bin", "obj", "artifacts", ".scratch"];
     private readonly string _repositoryRoot;
     private readonly int _maximumIndexedSourceFiles;
+    private readonly SelectionSourceTexts? _sourceTexts;
 
     internal FileSystemTestClassDeclarationReader(
         string repositoryRoot,
-        int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles)
+        int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles,
+        SelectionSourceTexts? sourceTexts = null)
     {
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
         _maximumIndexedSourceFiles = maximumIndexedSourceFiles;
+        _sourceTexts = sourceTexts;
     }
 
     internal static ITestClassDeclarationReader CreateForCurrentRepository()
@@ -167,6 +170,8 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
             }
 
             var sourceFiles = EnumerateProjectSourceFiles(directory);
+            // Selection texts belong to an earlier read, not the current filesystem stamp.
+            if (_sourceTexts is not null) return ReadProjectDeclarations(sourceFiles);
             var newestWrite = sourceFiles.Length == 0
                 ? 0
                 : sourceFiles.Max(path => File.GetLastWriteTimeUtc(path).Ticks);
@@ -182,7 +187,8 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
     public ReverseDependencyTestSelection ReadReverseDependentTestClasses(
         IReadOnlyList<string> changedSourcePaths) =>
         ReverseDependencyTestImpactReader.Read(
-            _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles);
+            _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles,
+            sourceTexts: _sourceTexts);
 
     private TestClassDeclarations ReadProjectDeclarations(string[] sourceFiles)
     {
@@ -203,9 +209,9 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
             : TestClassDeclarations.Resolved(classNames);
     }
 
-    private static TestClassDeclarations ReadDeclarations(string path)
+    private TestClassDeclarations ReadDeclarations(string path)
     {
-        var source = File.ReadAllText(path);
+        var source = _sourceTexts is null ? SelectionFileReadProbe.ReadAllText(path) : _sourceTexts.Read(path);
         return CSharpTestClassScanner.TryReadClassNames(source, out var classNames)
             ? classNames.Count == 0
                 ? TestClassDeclarations.NoQualifyingClass

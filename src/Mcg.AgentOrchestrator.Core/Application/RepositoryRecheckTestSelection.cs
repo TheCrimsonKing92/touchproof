@@ -4,6 +4,10 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record RepositoryRecheckTestSelection(bool Resolved, IReadOnlyList<string> TestClasses, string? Reason = null)
 {
     public static RepositoryRecheckTestSelection Read(string repositoryRoot, IReadOnlyList<string> changedSourcePaths)
+        => Read(repositoryRoot, changedSourcePaths, null);
+
+    internal static RepositoryRecheckTestSelection Read(string repositoryRoot,
+        IReadOnlyList<string> changedSourcePaths, SelectionSourceTexts? sourceTexts)
     {
         // Missing paths include deletions and rename sources; silently skipping them
         // would turn an incomplete dependency closure into authorization to land.
@@ -11,7 +15,7 @@ public sealed record RepositoryRecheckTestSelection(bool Resolved, IReadOnlyList
             !File.Exists(Path.Combine(repositoryRoot, path))))
             return new(false, [], "non-source-or-missing-path");
         var selection = ReverseDependencyTestImpactReader.Read(repositoryRoot, changedSourcePaths,
-            propagateShippingSourceReach: true);
+            propagateShippingSourceReach: true, sourceTexts: sourceTexts);
         return new(selection.Outcome == ReverseDependencySelectionOutcome.Resolved,
             selection.TestClassNames, selection.Reason);
     }

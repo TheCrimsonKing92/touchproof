@@ -36,7 +36,7 @@ internal sealed class AcceptanceTestClassSourceExtractStore(string directory)
         extract = null!;
         try
         {
-            var entry = JsonSerializer.Deserialize<Envelope>(File.ReadAllText(EntryPath(hash)));
+            var entry = JsonSerializer.Deserialize<Envelope>(Mcg.AgentOrchestrator.Core.SelectionFileReadProbe.ReadAllText(EntryPath(hash)));
             if (entry is null || entry.ExtractorVersion != ExtractorVersion || entry.ContentHash != hash ||
                 !IsUsable(entry.Extract)) return false;
             extract = entry.Extract!;

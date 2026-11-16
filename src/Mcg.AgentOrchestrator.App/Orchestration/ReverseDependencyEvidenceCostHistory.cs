@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -10,7 +11,7 @@ internal static class ReverseDependencyEvidenceCostHistory
 
     internal static ReverseDependencyEvidenceCostInputs Read(string? worktree, string? orchestratorDirectory,
         IReadOnlyList<string> selections, IReadOnlyList<string> changedFiles, string? projectHomeDirectory = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null, SelectionSourceTexts? sourceTexts = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         if (string.IsNullOrWhiteSpace(worktree) || string.IsNullOrWhiteSpace(orchestratorDirectory))
@@ -21,7 +22,7 @@ internal static class ReverseDependencyEvidenceCostHistory
                 ?? new AcceptanceBalancedLanePoolSettings();
             var medians = AcceptanceClassDurationHistoryStore.ReadMedians(worktree, settings.HistoryWindow, out var failure);
             if (failure is not null) return ReverseDependencyEvidenceCostInputs.Unavailable(failure);
-            var classes = ReverseDependencyEvidenceGateClasses.Read(worktree, changedFiles, projectHomeDirectory);
+            var classes = ReverseDependencyEvidenceGateClasses.Read(worktree, changedFiles, projectHomeDirectory, sourceTexts);
             var attempts = ReadAttempts(worktree, orchestratorDirectory, now);
             return ReverseDependencyEvidenceCostInputs.Compute(selections, classes, medians,
                 settings.DefaultClassSecondsWhenNoHistory, attempts, now);
@@ -41,7 +42,7 @@ internal static class ReverseDependencyEvidenceCostHistory
         var repository = AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktree);
         foreach (var path in Directory.EnumerateFiles(root, "*.attempt.json", SearchOption.AllDirectories))
         {
-            var metadata = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(path), Json)
+            var metadata = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(SelectionFileReadProbe.ReadAllText(path), Json)
                 ?? throw new InvalidDataException($"Null attempt receipt: {path}");
             if (metadata.Kind != "gate" || metadata.CompletedAt is not { } completed ||
                 completed < now.AddDays(-14) || completed > now) continue;
@@ -51,7 +52,7 @@ internal static class ReverseDependencyEvidenceCostHistory
             var resultPath = path[..^".attempt.json".Length] + ".result.json";
             // Older completed attempts with no recorded attribution still belong to the denominator.
             var result = File.Exists(resultPath)
-                ? JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(File.ReadAllText(resultPath), Json)
+                ? JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(SelectionFileReadProbe.ReadAllText(resultPath), Json)
                     ?? throw new InvalidDataException($"Null result receipt: {resultPath}")
                 : null;
             yield return new(metadata, result);

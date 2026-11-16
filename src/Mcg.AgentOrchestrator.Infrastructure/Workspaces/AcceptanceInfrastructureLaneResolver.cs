@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Owns infrastructure lane expansion for measured execution and stable coverage identity.
@@ -16,16 +18,21 @@ internal static class AcceptanceInfrastructureLaneResolver
     }
 
     internal static AcceptanceBalancedLaneExpansion ResolveIdentity(
-        AcceptanceGateEngineSettings settings, string worktreePath)
+        AcceptanceGateEngineSettings settings, string worktreePath, SelectionSourceTexts? sourceTexts = null)
     {
         if (settings.BalancedLanePool is not { } pool)
-            return ResolveExecution(settings, worktreePath);
+            return sourceTexts is null ? ResolveExecution(settings, worktreePath) : new(
+                settings.InfrastructureTestLanes.All(lane => lane.OwnedCollections.Count == 0)
+                    ? settings.InfrastructureTestLanes
+                    : AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes,
+                        AcceptanceTestClassSourceScanner.Scan(worktreePath, sourceTexts)), null);
 
         // Identity describes the coverage contract, not the measured scheduling layout.
         // Reuse constrained membership and the scanner complement, but flatten the pool
         // so neither duration history nor the number of occupied lanes can change it.
         var expansion = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes,
-            AcceptanceTestClassSourceScanner.Scan(worktreePath), new Dictionary<string, double>(), pool);
+            sourceTexts is null ? AcceptanceTestClassSourceScanner.Scan(worktreePath)
+                : AcceptanceTestClassSourceScanner.Scan(worktreePath, sourceTexts), new Dictionary<string, double>(), pool);
         var members = expansion.Layout!.Lanes.SelectMany(lane => lane.Members)
             .Order(StringComparer.Ordinal).ToArray();
         AcceptanceTestLane[] identityPool = members.Length == 0 ? [] :

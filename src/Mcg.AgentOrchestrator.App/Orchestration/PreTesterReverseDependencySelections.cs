@@ -28,10 +28,13 @@ internal static class PreTesterReverseDependencySelections
             Degraded("non-source-or-missing-path");
             return ([], []);
         }
+        var sourceTexts = new SelectionSourceTexts();
         RepositoryRecheckTestSelection result;
         try
         {
-            result = (selector ?? RepositoryRecheckTestSelection.Read)(worktreePath, paths);
+            result = Measure("read-selection", () => selector is null
+                ? RepositoryRecheckTestSelection.Read(worktreePath, paths, sourceTexts)
+                : selector(worktreePath, paths));
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
         {
@@ -45,28 +48,31 @@ internal static class PreTesterReverseDependencySelections
         }
         if (result.TestClasses.Count == 0) return ([], []);
 
-        IReadOnlyList<AcceptanceTestClassDescriptor> resolved;
-        try
+        var resolved = Measure("resolve-class-names", () =>
         {
-            resolved = AcceptanceTestClassSourceScanner.ScanProject(worktreePath, Project);
-        }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
-        {
-            resolved = [];
-        }
-        // Resolve the entire contribution before emitting success or creating any obligation.
-        foreach (var name in result.TestClasses)
-        {
-            if (resolved.Count(item => item.FullName == name ||
-                    item.FullName.EndsWith("." + name, StringComparison.Ordinal)) != 1)
+            IReadOnlyList<AcceptanceTestClassDescriptor> inventory;
+            try
             {
-                (progress ?? Console.WriteLine)(
-                    $"PRE_TESTER_GUARD_SELECTED class={name} kind=reverse-dependency-unresolved reason=class-match-not-unique path={paths[0]}");
-                return ([], []);
+                inventory = AcceptanceTestClassSourceScanner.ScanProject(worktreePath, Project, sourceTexts);
             }
-        }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                inventory = [];
+            }
+            // Resolve the entire contribution before emitting success or creating any obligation.
+            foreach (var name in result.TestClasses)
+                if (inventory.Count(item => item.FullName == name ||
+                        item.FullName.EndsWith("." + name, StringComparison.Ordinal)) != 1)
+                {
+                    (progress ?? Console.WriteLine)(
+                        $"PRE_TESTER_GUARD_SELECTED class={name} kind=reverse-dependency-unresolved reason=class-match-not-unique path={paths[0]}");
+                    return false;
+                }
+            return true;
+        });
+        if (!resolved) return ([], []);
         var classes = result.TestClasses.Distinct(StringComparer.Ordinal).ToArray();
-        var decision = (costDecision ?? ReadCostDecision)(classes);
+        var decision = Measure("evaluate-cost-rule", () => (costDecision ?? ReadCostDecision)(classes));
         if (!decision.Run)
         {
             (progress ?? Console.WriteLine)(
@@ -84,7 +90,7 @@ internal static class PreTesterReverseDependencySelections
         ReverseDependencyEvidenceCostRule.Decision ReadCostDecision(IReadOnlyList<string> selectedClasses)
         {
             var inputs = ReverseDependencyEvidenceCostHistory.Read(worktreePath,
-                HostLedgerStateDirectory.Resolve(worktreePath), selectedClasses, changedPaths);
+                HostLedgerStateDirectory.Resolve(worktreePath), selectedClasses, changedPaths, sourceTexts: sourceTexts);
             var evaluated = ReverseDependencyEvidenceCostRule.Evaluate(
                 inputs.SelectionSeconds, inputs.FullGateSeconds, inputs.FailureRate);
             return inputs.UnavailableReason is { } reason
@@ -92,6 +98,10 @@ internal static class PreTesterReverseDependencySelections
                 : evaluated;
         }
     }
+
+    private static T Measure<T>(string part, Func<T> action) =>
+        ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-reverse-dependency-" + part,
+            () => SelectionFileReadProbe.InPart(part, action));
 
     internal static IEnumerable<FindingEvidenceSelection> RecordedSelections(IReadOnlyList<string> selections)
     {

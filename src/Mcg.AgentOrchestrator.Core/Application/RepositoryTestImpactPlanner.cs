@@ -139,6 +139,10 @@ public static partial class RepositoryTestImpactPlanner
     public static RepositoryTestImpactPlan Plan(
         RepositoryChangeSummary summary,
         string repositoryRoot)
+        => Plan(summary, repositoryRoot, null);
+
+    internal static RepositoryTestImpactPlan Plan(
+        RepositoryChangeSummary summary, string repositoryRoot, SelectionSourceTexts? sourceTexts)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         if (!Path.IsPathFullyQualified(repositoryRoot))
@@ -151,7 +155,7 @@ public static partial class RepositoryTestImpactPlanner
         ITestClassDeclarationReader declarationReader = ReverseDependencyTestImpactReader
             .IsDeliberatelyPartialRepositoryRoot(repositoryRoot)
                 ? UnavailableTestClassDeclarationReader.Instance
-                : new FileSystemTestClassDeclarationReader(repositoryRoot);
+                : new FileSystemTestClassDeclarationReader(repositoryRoot, sourceTexts: sourceTexts);
         return Plan(summary, declarationReader, CandidateTreeProbe.ForRepositoryRoot(repositoryRoot));
     }
 

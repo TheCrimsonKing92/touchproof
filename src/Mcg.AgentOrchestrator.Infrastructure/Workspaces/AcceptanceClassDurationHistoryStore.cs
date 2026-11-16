@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -114,7 +115,7 @@ internal static class AcceptanceClassDurationHistoryStore
     {
         try
         {
-            var store = JsonSerializer.Deserialize<Store>(File.ReadAllText(path), JsonOptions);
+            var store = JsonSerializer.Deserialize<Store>(SelectionFileReadProbe.ReadAllText(path), JsonOptions);
             if (store is null || store.Version != 1 || store.Classes is null || store.Classes.Any(pair =>
                     pair.Value is null || pair.Value.Any(sample => sample is null || sample.ClassName != pair.Key ||
                         string.IsNullOrWhiteSpace(sample.AttemptId) || string.IsNullOrWhiteSpace(sample.Lane) ||
