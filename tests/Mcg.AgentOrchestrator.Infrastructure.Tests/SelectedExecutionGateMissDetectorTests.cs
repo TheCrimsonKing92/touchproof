@@ -75,8 +75,10 @@ public sealed class SelectedExecutionGateMissDetectorTests
         Assert.Single(fixture.Lines.Where(line => line.Contains("result=miss-resolved ", StringComparison.Ordinal)));
     }
 
-    [Fact]
-    public async Task EveryMatchingLandingGetsAnItemAndUnreadableLandingsRemainReported()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task EveryMatchingLandingGetsAnItemAndUnreadableLandingsRemainReported(int resolvedFirst)
     {
         using var fixture = new SelectedExecutionBackstopFixture();
         await fixture.Land();
@@ -101,10 +103,33 @@ public sealed class SelectedExecutionGateMissDetectorTests
         Assert.Equal(2, items.Count);
         Assert.All(result.Misses, miss => Assert.Single(items.Where(item => item.CorrelationKey == miss.CorrelationKey)));
         Assert.Equal(result.Misses[0].Id, (await fixture.Store.ReadAsync())!.OpenMiss!.Id);
-        Assert.Equal(result.Misses[0].Id,
-            (await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home))!.MissId);
+        Assert.NotNull(await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home));
 
         await detector.ObserveAsync("repeat", Arm(FindingEvidenceArm.Candidate, failures), Arm(FindingEvidenceArm.Baseline, failures));
+        Assert.Equal(2, (await fixture.Items.ListAsync()).Count);
+        Assert.Equal(2, fixture.Lines.Count(line => line.Contains("result=miss-raised ", StringComparison.Ordinal)));
+
+        var first = result.Misses[resolvedFirst];
+        var remaining = result.Misses[1 - resolvedFirst];
+        Assert.True(await fixture.Items.TryResolveAsync(first.CorrelationKey, "first landing verified"));
+        Assert.NotNull(await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home));
+
+        // A restarted coordinator must recover every open miss from canonical items.
+        var restarted = fixture.CreateCoordinator(consumeInitialTick: false);
+        await restarted.ServiceAsync(() => fixture.Head, [], [], false, false);
+
+        Assert.Equal(remaining.Id, (await fixture.Store.ReadAsync())!.OpenMiss!.Id);
+        Assert.Equal(remaining.Id,
+            (await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home))!.MissId);
+        Assert.True(File.Exists(AcceptanceSelectedExecutionSessionSuspension.MarkerPath(fixture.Home)));
+        Assert.Empty(fixture.Calls);
+
+        Assert.True(await fixture.Items.TryResolveAsync(remaining.CorrelationKey, "second landing verified"));
+        await restarted.ServiceAsync(() => fixture.Head, [], [], false, false);
+
+        Assert.Null((await fixture.Store.ReadAsync())!.OpenMiss);
+        Assert.Null(await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home));
+        Assert.False(File.Exists(AcceptanceSelectedExecutionSessionSuspension.MarkerPath(fixture.Home)));
         Assert.Equal(2, (await fixture.Items.ListAsync()).Count);
         Assert.Equal(2, fixture.Lines.Count(line => line.Contains("result=miss-raised ", StringComparison.Ordinal)));
     }
