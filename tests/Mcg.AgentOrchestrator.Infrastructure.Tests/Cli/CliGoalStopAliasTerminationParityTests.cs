@@ -38,17 +38,30 @@ public sealed class CliGoalStopAliasTerminationParityTests : CliGoalStopAliasTes
                 var inMemoryCalls = new List<int>();
                 var probe = new GoalTransactionProbeRepository(seed.Repository);
 
+                Directory.CreateDirectory(seed.Workspace.LogDirectory);
+                Directory.CreateDirectory(inMemoryWorkspace.LogDirectory);
+
                 CommandResult result;
+                var aliasLogs = CaptureLogDirectory("alias", seed.Workspace.LogDirectory);
                 using (RecordTerminations(calls))
                     result = RunCommand(args, probe, seed.Workspace);
                 // The legacy route sees only nonexistent pids from CreateActiveSeed (900001+).
                 // It exercises the existing handler without ever terminating a real process.
                 string inMemory;
+                var legacyLogs = CaptureLogDirectory("legacy", inMemoryWorkspace.LogDirectory);
                 using (RecordTerminations(inMemoryCalls))
                     inMemory = RunInMemory(args, inMemoryKernel, inMemoryWorkspace);
 
                 Xunit.Assert.Null(result.Error);
-                Xunit.Assert.Equal(inMemory, result.Output);
+                try
+                {
+                    Xunit.Assert.Equal(inMemory, result.Output);
+                }
+                catch (Xunit.Sdk.XunitException exception)
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        $"{exception.Message}{Environment.NewLine}{aliasLogs}{Environment.NewLine}{legacyLogs}");
+                }
                 Xunit.Assert.Equal(calls, inMemoryCalls);
                 Xunit.Assert.Equal(confirmed, result.Changed);
                 Xunit.Assert.Equal(confirmed ? Enumerable.Range(900001, live) : [], calls);
@@ -103,6 +116,27 @@ public sealed class CliGoalStopAliasTerminationParityTests : CliGoalStopAliasTes
             Xunit.Assert.Equal([900001, 900002], calls);
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static string CaptureLogDirectory(string arm, string logDirectory)
+    {
+        var exists = Directory.Exists(logDirectory);
+        var prefix = $"{arm} logs before invocation: path={logDirectory}, exists={exists}";
+        if (!exists) return $"{prefix}, entries=<absent>";
+
+        try
+        {
+            var entries = new DirectoryInfo(logDirectory).EnumerateFileSystemInfos().Take(21).ToArray();
+            var contents = entries.Length == 0
+                ? "<empty>"
+                : string.Join(", ", entries.Take(20).OrderBy(entry => entry.Name, StringComparer.Ordinal)
+                    .Select(entry => $"{((entry.Attributes & FileAttributes.Directory) != 0 ? "dir" : "file")}: {entry.Name}"));
+            return $"{prefix}, entries=[{contents}]{(entries.Length > 20 ? " (truncated)" : "")}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return $"{prefix}, entries=<{exception.GetType().Name}: {exception.Message}>";
+        }
     }
 
     private static string RunInMemory(IReadOnlyList<string> args, AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
