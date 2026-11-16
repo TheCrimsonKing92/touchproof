@@ -12,6 +12,26 @@ internal static class ProjectInstallManifestCommand
     internal const string Usage = "Usage: project install-manifest [name] --from <path>";
     internal static Action? ReplaceFaultForTests { get; set; }
     private static readonly AsyncLocal<Func<DateTimeOffset>?> ClockOverride = new();
+    private static readonly AsyncLocal<IEnvironmentProbeRunner?> ProbeRunnerOverride = new();
+
+    internal static IDisposable UseProbeRunner(IEnvironmentProbeRunner runner)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        var scope = new ProbeRunnerScope(ProbeRunnerOverride.Value);
+        ProbeRunnerOverride.Value = runner;
+        return scope;
+    }
+
+    private sealed class ProbeRunnerScope(IEnvironmentProbeRunner? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                ProbeRunnerOverride.Value = previous;
+        }
+    }
 
     // Scopes follow normal ExecutionContext inheritance and are disposed in reverse creation order in the owning flow.
     internal static IDisposable UseClock(Func<DateTimeOffset> clock)
@@ -148,6 +168,9 @@ internal static class ProjectInstallManifestCommand
         var previous = backup is null ? "no previous manifest" : $"previous saved as {backup}";
         using var manifest = JsonDocument.Parse(result.Json!);
         output.WriteLine($"Installed manifest: {live} ({manifest.RootElement.GetProperty("checks").GetArrayLength()} checks; {previous})");
+        foreach (var line in InstalledManifestProbeReport.Lines(result.Json!, root,
+            ProbeRunnerOverride.Value ?? new ProcessEnvironmentProbeRunner()))
+            output.WriteLine(line);
         return 0;
 
         int Refuse(string reason)

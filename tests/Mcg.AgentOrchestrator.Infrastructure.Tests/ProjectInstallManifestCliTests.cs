@@ -32,6 +32,36 @@ public sealed class ProjectInstallManifestCliTests
         Assert.Equal(backup, Assert.Single(Directory.GetFiles(fixture.ModelDirectory, "*.bak-*")));
         Assert.Equal(fixture.Live, AcceptanceManifestLocator.Resolve(fixture.Source.Root, fixture.ModelDirectory));
         Assert.Empty(Directory.GetFiles(fixture.ModelDirectory, "*.tmp"));
+        var tools = EnvironmentContract.FromManifest(File.ReadAllText(fixture.Emitted)).Tools;
+        Assert.NotEmpty(tools);
+        Assert.Equal(tools.Select(tool => (tool.Name, tool.ProbeCommand)),
+            fixture.Runner.Tools.Select(tool => (tool.Name, tool.ProbeCommand)));
+        Assert.All(fixture.Runner.WorkingDirectories, directory => Assert.Equal(fixture.Source.Root, directory));
+    }
+
+    [Theory]
+    [InlineData("not-found")]
+    [InlineData("failed")]
+    public void Install_FailedProbes_ReportsAfterInstalledWithoutChangingBytes(string outcome)
+    {
+        using var fixture = new Fixture();
+        fixture.PrepareEmission();
+        var prior = File.ReadAllBytes(fixture.Live);
+        var emitted = File.ReadAllBytes(fixture.Emitted);
+        var tools = EnvironmentContract.FromManifest(File.ReadAllText(fixture.Emitted)).Tools;
+        Assert.NotEmpty(tools);
+        fixture.Runner.Outcome = outcome;
+
+        var (exit, lines) = fixture.Install(fixture.Emitted);
+
+        Assert.Equal(0, exit);
+        Assert.StartsWith($"Installed manifest: {fixture.Live} ", lines[0]);
+        Assert.Equal(tools.Select(tool =>
+            $"ProbeUnresolved {tool.Name} probe={tool.ProbeCommand} outcome={outcome}"), lines.Skip(1));
+        Assert.Equal(tools.Select(tool => (tool.Name, tool.ProbeCommand)),
+            fixture.Runner.Tools.Select(tool => (tool.Name, tool.ProbeCommand)));
+        Assert.Equal(emitted, File.ReadAllBytes(fixture.Live));
+        Assert.Equal(prior, File.ReadAllBytes(Assert.Single(Directory.GetFiles(fixture.ModelDirectory, "*.bak-*"))));
     }
 
     [Theory]
@@ -59,6 +89,7 @@ public sealed class ProjectInstallManifestCliTests
 
         Assert.Equal(1, exit);
         Assert.Equal($"Refused: --from differs from the current learned manifest at byte offset {offset}", Assert.Single(lines));
+        Assert.Empty(fixture.Runner.Tools);
         fixture.AssertUnchanged(before);
         fixture.AssertNoInstallArtifacts();
     }
@@ -217,6 +248,7 @@ public sealed class ProjectInstallManifestCliTests
             var (exit, lines) = fixture.Install(fixture.Emitted);
 
             Assert.True(reachedReplace);
+            Assert.Empty(fixture.Runner.Tools);
             Assert.Equal(1, exit);
             Assert.Equal($"Refused: could not install {fixture.Live}: simulated replace failure", Assert.Single(lines));
             Assert.Equal(prior, File.ReadAllBytes(fixture.Live));
@@ -294,6 +326,22 @@ public sealed class ProjectInstallManifestCliTests
         fixture.AssertNoInstallArtifacts();
     }
 
+    private sealed class RecordingRunner : IEnvironmentProbeRunner
+    {
+        internal string Outcome { get; set; } = "pass";
+        internal List<EnvironmentToolRequirement> Tools { get; } = [];
+        internal List<string> WorkingDirectories { get; } = [];
+
+        public Task<EnvironmentProbeResult> RunAsync(EnvironmentToolRequirement tool,
+            ConductorChildEnvironment environment, string workingDirectory, CancellationToken cancellationToken = default)
+        {
+            Tools.Add(tool);
+            WorkingDirectories.Add(workingDirectory);
+            return Task.FromResult(new EnvironmentProbeResult(tool, Outcome == "pass",
+                Outcome == "pass" ? 0 : null, "", Outcome));
+        }
+    }
+
     private sealed class Fixture : IDisposable
     {
         public ProjectOnboardingFixture Home { get; } = new("no-solution");
@@ -305,6 +353,7 @@ public sealed class ProjectInstallManifestCliTests
         public string AnswersPath => Path.Combine(ModelDirectory, OwnerAnswerFile.FileName);
         public string Live => Path.Combine(ModelDirectory, "acceptance-manifest.json");
         public string Emitted => Path.Combine(Scratch.Root, "learned.json");
+        public RecordingRunner Runner { get; } = new();
 
         public Fixture()
         {
@@ -329,6 +378,7 @@ public sealed class ProjectInstallManifestCliTests
         {
             using var output = new StringWriter();
             using var crosswalk = new FakeCrosswalkProcess("dotnet");
+            using var probes = ProjectInstallManifestCommand.UseProbeRunner(Runner);
             var exit = ProjectCliCommand.Execute(parts, Registry, Home.Root, activeProject, output, crosswalkReaderFactory: () => crosswalk.Reader);
             return (exit, output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         }

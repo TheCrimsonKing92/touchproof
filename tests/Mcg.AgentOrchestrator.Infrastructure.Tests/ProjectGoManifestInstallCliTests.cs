@@ -87,6 +87,7 @@ public sealed class ProjectGoManifestInstallCliTests
         public (int Exit, string[] Lines) Execute(string[] parts)
         {
             using var output = new StringWriter();
+            using var probes = ProjectInstallManifestCommand.UseProbeRunner(new EnvironmentContractTestFixture.Runner { Pass = true });
             var exit = ProjectCliCommand.Execute(parts, Registry, Home.Root, null, output);
             return (exit, output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         }
