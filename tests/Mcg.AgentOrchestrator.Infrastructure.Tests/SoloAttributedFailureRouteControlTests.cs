@@ -217,7 +217,10 @@ public sealed class SoloAttributedFailureRouteControlTests
                 summary = fixture.Summary;
                 break;
         }
-        fixture.Complete(summary);
+        // Receipt corruption is consumed on the routing tick. Complete the executed
+        // pair first so a stale summary does not supersede it during completion.
+        fixture.Complete(fault is "candidate" or "main" ? fixture.Summary : summary);
+        if (fault is "candidate" or "main") fixture.Record(summary);
         await fixture.Restart();
         var driver = fixture.Driver();
         if (fault == "current-candidate") driver.SoloAcceptanceContextReader = _ => fixture.Context with { CandidateSha = "changed" };

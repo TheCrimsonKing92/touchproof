@@ -19,7 +19,10 @@ internal sealed class SoloAcceptanceFailureHandler(
     internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
         Record(goal, acceptance);
-        return Hold(goal, prefix, policy, SoloHoldReasons.AwaitingConsumption);
+        var current = readContext(goal);
+        return SoloFreshGateAdmission.TryConsume(kernelReader(), goal, prefix, policy,
+            current is null ? null : new(current.CandidateSha, current.MainSha), recordEscalation)
+            ?? Hold(goal, prefix, policy, SoloHoldReasons.AwaitingConsumption);
     }
 
     private void Record(Goal goal, AcceptanceVerificationSummary acceptance)
@@ -30,7 +33,10 @@ internal sealed class SoloAcceptanceFailureHandler(
         {
             kernel.RecordAcceptanceFailure(goal.Id, checks, acceptance.BranchHeadSha, acceptance.MainHeadSha,
                 acceptance.CheckAttributions, acceptance.BaselineAttestation, acceptance.AttemptId, acceptance.SoloFailureReceipt);
-            kernel.RouteRecordedAcceptanceFailure(goal.Id, "Solo acceptance failure retained for evidence validation.");
+            var current = readContext(goal);
+            kernel.RouteRecordedAcceptanceFailure(goal.Id, "Solo acceptance failure retained for evidence validation.",
+                failure => AcceptanceFailurePairCurrency.Classify(failure.BranchHeadSha, failure.MainHeadSha,
+                    current?.CandidateSha, current?.MainSha) == AcceptanceFailurePairCurrency.Currency.Current);
         }
         else
         {
@@ -45,6 +51,20 @@ internal sealed class SoloAcceptanceFailureHandler(
     {
         var current = readContext(goal);
         var evidence = SoloAcceptanceFailureReceiptReader.Read(goal, current);
+        var recorded = goal.LatestAcceptanceFailure;
+        var currency = AcceptanceFailurePairCurrency.Classify(recorded?.BranchHeadSha, recorded?.MainHeadSha,
+            current?.CandidateSha, current?.MainSha);
+        if (recorded is not null && currency != AcceptanceFailurePairCurrency.Currency.Current)
+        {
+            var cause = evidence.Reason == SoloHoldReasons.RevisionMismatch
+                ? SoloHoldReasons.RevisionMismatch : SoloHoldReasons.CandidateMismatch;
+            if (currency == AcceptanceFailurePairCurrency.Currency.Superseded && current is not null &&
+                SoloFreshGateAdmission.WasAdmitted(goal, cause, current.CandidateSha, current.MainSha))
+                return Hold(goal, prefix, policy, cause);
+            if (SoloFreshGateAdmission.TryConsume(kernelReader(), goal, prefix, policy,
+                current is null ? null : new(current.CandidateSha, current.MainSha), recordEscalation, cause) is { } consumed)
+                return consumed;
+        }
         var failure = evidence.Failure;
         if (evidence.Reason == SoloHoldReasons.RevisionMismatch)
         {
@@ -66,7 +86,7 @@ internal sealed class SoloAcceptanceFailureHandler(
                     ?? Hold(goal, prefix, policy, SoloHoldReasons.FreshGateUnavailable);
             }
         }
-        var route = AttributedFailureDeveloperRoute.Decide(goal, failure, current?.CandidateSha);
+        var route = AttributedFailureDeveloperRoute.Decide(goal, failure, current?.CandidateSha, current?.MainSha);
         if (route.DeclineReason == SoloHoldReasons.CandidateMismatch)
         {
             if (current is not null && SoloFreshGateAdmission.WasAdmitted(goal, route.DeclineReason, current.CandidateSha, current.MainSha))

@@ -97,7 +97,7 @@ public sealed class MergeTrainSurvivorDifferentialRouteTests(CohortCandidateTemp
         {
             Assert.Equal(GoalStatus.AcceptanceFailed, scenario.Dropped.Status);
             var harness = new AttributedFailureDeveloperRouteTests.RouteHarness(scenario.Kernel,
-                scenario.Selection.Members[2].CandidateRevision);
+                scenario.Selection.Members[2].CandidateRevision, scenario.Red.Identity.ObservedMainRevision);
             var routing = harness.Configure();
             var attemptFiles = Files(scenario.Workspace.OrchestratorDirectory);
             for (var tick = 1; tick <= 3; tick++)

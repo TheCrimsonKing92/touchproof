@@ -111,7 +111,8 @@ internal sealed class MergeTrainSurvivorDifferentialFixture(CohortCandidateTempl
         internal string Advance(Goal goal, string source)
         {
             var index = Array.IndexOf(Goals, goal);
-            var harness = new AttributedFailureDeveloperRouteTests.RouteHarness(Kernel, Selection.Members[index].CandidateRevision);
+            var harness = new AttributedFailureDeveloperRouteTests.RouteHarness(Kernel,
+                Selection.Members[index].CandidateRevision, Red.Identity.ObservedMainRevision);
             var routing = harness.Configure();
             routing.BeginTick(Kernel, 1);
             var result = routing.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });

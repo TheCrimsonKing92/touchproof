@@ -18,7 +18,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal AgentOrchestratorKernel Kernel { get; private set; } = new();
     internal Goal Goal { get; private set; }
     internal AcceptanceVerificationSummary Summary { get; private set; } = null!;
-    internal SoloAcceptanceConsumptionContext Context { get; private set; } = null!;
+    internal SoloAcceptanceConsumptionContext Context { get; set; } = null!;
     internal List<TaskId> Starts { get; } = [];
     internal int BaselineRuns { get; private set; }
     internal int CandidateRuns { get; private set; }
@@ -63,7 +63,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     }
 
     internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
-        bool collidingPassedRows = false)
+        bool collidingPassedRows = false, string? attemptId = null)
     {
         var failedBuilds = 0;
         var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
@@ -100,7 +100,8 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                     $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}."));
         });
         await using var owner = AcceptanceExecutionOwners.CreateAttempt(Repo, Goal.Id,
-            options: new(RunId: "solo-attempt", ResultsPrefix: Path.Combine(Root, "results"), IntegrationBranch: "main"));
+            options: new(RunId: attemptId ?? "solo-attempt", ResultsPrefix: attemptId is null
+                ? Path.Combine(Root, "results") : Path.Combine(Root, attemptId, "results"), IntegrationBranch: "main"));
         var verification = await verifier.RunOwnedAsync(Repo, Goal.Id, ["README.md"], null, null, owner);
         Assert.False(verification.Passed);
         if (buildFails)
@@ -179,6 +180,16 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         await repository.SaveAsync(Kernel);
         Kernel = await repository.LoadAsync();
         Goal = Kernel.GetGoal(Goal.Id);
+    }
+
+    internal async Task RefreshMetadata()
+    {
+        var repository = new SqliteOrchestratorStateRepository(Path.Combine(Root, "state.db"));
+        var prior = Goal;
+        var persisted = await repository.LoadAsync();
+        Assert.Equal(1, Kernel.RefreshTrackedGoals(persisted.ExportSnapshot()));
+        Goal = Kernel.GetGoal(Goal.Id);
+        Assert.NotSame(prior, Goal);
     }
 
     internal void Record(AcceptanceVerificationSummary summary)

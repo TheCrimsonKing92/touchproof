@@ -8,6 +8,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Consumes recorded, candidate-bound failures. It neither attributes failures nor runs evidence.
 internal static class AttributedFailureDeveloperRoute
 {
+    internal static AcceptanceFailurePairCurrency.Currency ClassifyAcceptanceFailure(
+        AcceptanceFailureSummary summary, string? currentCandidate, string? currentMain) =>
+        AcceptanceFailurePairCurrency.Classify(summary.BranchHeadSha, summary.MainHeadSha,
+            currentCandidate, currentMain);
+
     internal static AttributedFailure? ReadAcceptanceFailure(AcceptanceFailureSummary? summary)
     {
         if (summary is null || string.IsNullOrWhiteSpace(summary.BranchHeadSha)) return null;
@@ -75,7 +80,8 @@ internal static class AttributedFailureDeveloperRoute
         return new("tester-receipt", receipt.ReceiptId, receipt.CandidateSha, red.FailingTestIdentities);
     }
 
-    internal static AttributedFailureRouteDecision Decide(Goal goal, AttributedFailure? failure, string? currentCandidate)
+    internal static AttributedFailureRouteDecision Decide(Goal goal, AttributedFailure? failure, string? currentCandidate,
+        string? currentMain = null)
     {
         if (failure is null) return AttributedFailureRouteDecision.Decline(SoloHoldReasons.NoAttributedFailure);
         var tests = failure.FailingTests.Select(test => test.Trim()).Distinct(StringComparer.Ordinal)
@@ -84,8 +90,13 @@ internal static class AttributedFailureDeveloperRoute
                 ? test.Length == 0 || test.Any(char.IsControl)
                 : !AttributedCohortFailureDetail.IsRepresentableTestName(test)))
             return AttributedFailureRouteDecision.Decline(SoloHoldReasons.UnrepresentableFailingTests);
+        if (currentMain is not null && goal.LatestAcceptanceFailure is { } pair &&
+            string.Equals(pair.BranchHeadSha, failure.CandidateSha, StringComparison.OrdinalIgnoreCase) &&
+            ClassifyAcceptanceFailure(pair, currentCandidate, currentMain)
+                != AcceptanceFailurePairCurrency.Currency.Current)
+            return AttributedFailureRouteDecision.Decline(SoloHoldReasons.CandidateMismatch);
         if (string.IsNullOrWhiteSpace(currentCandidate) ||
-            !string.Equals(failure.CandidateSha, currentCandidate, StringComparison.Ordinal))
+            !string.Equals(failure.CandidateSha, currentCandidate, currentMain is null ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase))
             return AttributedFailureRouteDecision.Decline(SoloHoldReasons.CandidateMismatch);
         if (goal.LatestAcceptanceFailure is { } recorded && (recorded.IsEnvironmentalApparatus ||
             recorded.CheckAttributions?.Any(check => check.Cause != AcceptanceFailureCause.NotClassified) == true))

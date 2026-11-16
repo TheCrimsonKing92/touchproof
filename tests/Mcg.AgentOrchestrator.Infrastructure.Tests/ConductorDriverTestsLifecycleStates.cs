@@ -817,92 +817,6 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(0, task.CriterionRetryCount);
     }
 
-    [Xunit.Theory]
-    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus)]
-    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryApparatus)]
-    public void ConductorDriverIntroducedEnvironmentalApparatusRegatesWithoutRetry(
-        string failureClassification)
-    {
-        var (kernel, goal) = SoftwareGoal("Five-role typed apparatus re-gate");
-        foreach (var task in goal.Tasks)
-        {
-            PassVerification(kernel, goal, task);
-        }
-        var retryCalled = false;
-        var acceptanceRuns = 0;
-        var escalationWrites = 0;
-        var acceptanceHeads = (BranchHeadSha: (string?)"candidate-a", MainHeadSha: (string?)"main-a");
-        var failure = new AcceptanceCheckResult(
-            "infrastructure tests: Remainder",
-            false,
-            1,
-            "typed seeded repository fixture/process apparatus receipt",
-            FailureClassification: failureClassification,
-            ExecutedTestCount: 42);
-        var acceptance = new AcceptanceVerificationSummary(
-            false,
-            [failure],
-            FailedChecks: [failure.Name],
-            BranchHeadSha: "candidate-a",
-            MainHeadSha: "main-a",
-            CheckAttributions:
-            [
-                new AcceptanceCheckAttribution(
-                    failure.Name,
-                    AcceptanceFailureOrigin.Introduced,
-                    "first observed typed apparatus receipt",
-                    AcceptanceFailureCause.EnvironmentalApparatus)
-            ]);
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            runAcceptanceSummary: _ =>
-            {
-                acceptanceRuns++;
-                return acceptance;
-            },
-            retryTask: (goalId, taskId, message) =>
-            {
-                retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
-            },
-            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
-            recordAcceptanceFailure: (heldGoal, checks, branch, main, attributions, attestation) =>
-                kernel.RecordAcceptanceFailure(
-                    heldGoal.Id,
-                    checks,
-                    branch,
-                    main,
-                    attributions,
-                    attestation),
-            resolveAcceptanceHeads: _ => acceptanceHeads,
-            writeEscalation: (_, _, _) => escalationWrites++);
-
-        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
-        var unchangedPairResult = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
-
-        var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(unchangedPairResult.Outcome);
-        Xunit.Assert.Equal(GoalLifecycleState.Verified, held.State);
-        Xunit.Assert.Equal(1, acceptanceRuns);
-        Xunit.Assert.Equal(1, escalationWrites);
-        Xunit.Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
-        Xunit.Assert.False(retryCalled);
-        Xunit.Assert.Equal(4, goal.Tasks.Count);
-        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status));
-        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(0, task.CriterionRetryCount));
-
-        Xunit.Assert.Equal(1, kernel.RetryAcceptanceGate(goal.Id, "Operator confirmed the apparatus repair."));
-        Xunit.Assert.Null(goal.LatestAcceptanceFailure);
-        Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
-            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
-        Xunit.Assert.Equal(2, acceptanceRuns);
-
-        acceptanceHeads = ("candidate-a", "main-b");
-        Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
-            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
-        Xunit.Assert.Equal(3, acceptanceRuns);
-    }
-
     [Xunit.Fact]
     public void IntroducedFailureOutsideChangedScopeRetries()
     {
@@ -968,6 +882,92 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Assert.True(retryCalled);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.Equal(1, task.CriterionRetryCount);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus)]
+    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryApparatus)]
+    public void ConductorDriverIntroducedEnvironmentalApparatusRegatesWithoutRetry(
+        string failureClassification)
+    {
+        var (kernel, goal) = SoftwareGoal("Five-role typed apparatus re-gate");
+        foreach (var task in goal.Tasks)
+        {
+            PassVerification(kernel, goal, task);
+        }
+        var retryCalled = false;
+        var acceptanceRuns = 0;
+        var escalationWrites = 0;
+        var acceptanceHeads = (BranchHeadSha: (string?)"candidate-a", MainHeadSha: (string?)"main-a");
+        var failure = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false, 1, "typed seeded repository fixture/process apparatus receipt",
+            FailureClassification: failureClassification,
+            ExecutedTestCount: 42);
+        var acceptance = new AcceptanceVerificationSummary(
+            false, [failure], FailedChecks: [failure.Name],
+            BranchHeadSha: "candidate-a",
+            MainHeadSha: "main-a",
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    failure.Name,
+                    AcceptanceFailureOrigin.Introduced,
+                    "first observed typed apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ =>
+            {
+                acceptanceRuns++;
+                return acceptance with
+                {
+                    BranchHeadSha = acceptanceHeads.BranchHeadSha,
+                    MainHeadSha = acceptanceHeads.MainHeadSha
+                };
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalled = true;
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            recordAcceptanceFailure: (heldGoal, checks, branch, main, attributions, attestation) =>
+                kernel.RecordAcceptanceFailure(
+                    heldGoal.Id, checks, branch, main, attributions, attestation),
+            resolveAcceptanceHeads: _ => acceptanceHeads,
+            writeEscalation: (_, _, _) => escalationWrites++);
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var unchangedPairResult = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(unchangedPairResult.Outcome);
+        Xunit.Assert.Equal(GoalLifecycleState.Verified, held.State);
+        Xunit.Assert.Equal(1, acceptanceRuns);
+        Xunit.Assert.Equal(1, escalationWrites);
+        Xunit.Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
+        Xunit.Assert.False(retryCalled);
+        Xunit.Assert.Equal(4, goal.Tasks.Count);
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status));
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(0, task.CriterionRetryCount));
+        Xunit.Assert.Equal(1, kernel.RetryAcceptanceGate(goal.Id, "Operator confirmed the apparatus repair."));
+        Xunit.Assert.Null(goal.LatestAcceptanceFailure);
+        Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+        Xunit.Assert.Equal(2, acceptanceRuns);
+        acceptanceHeads = ("candidate-a", "main-b");
+        Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+        Xunit.Assert.Equal(3, acceptanceRuns);
+        Xunit.Assert.Equal("candidate-a", goal.LatestAcceptanceFailure?.BranchHeadSha);
+        Xunit.Assert.Equal("main-b", goal.LatestAcceptanceFailure?.MainHeadSha);
+        Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+        Xunit.Assert.Equal(3, acceptanceRuns);
+        Xunit.Assert.False(retryCalled);
+        Xunit.Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status));
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(0, task.CriterionRetryCount));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_inherited_impacted_identity_holds_without_retry")]

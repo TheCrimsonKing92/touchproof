@@ -768,13 +768,12 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
-    public bool RouteRecordedAcceptanceFailure(GoalId goalId, string reason)
+    public bool RouteRecordedAcceptanceFailure(GoalId goalId, string reason) => RouteRecordedAcceptanceFailure(goalId, reason, _ => true);
+    public bool RouteRecordedAcceptanceFailure(GoalId goalId, string reason, Func<AcceptanceFailureSummary, bool> canConsume)
     {
         var goal = GetGoal(goalId);
-        if (goal.Status != GoalStatus.Verified || goal.LatestAcceptanceFailure is null)
-        {
+        if (goal.Status != GoalStatus.Verified || goal.LatestAcceptanceFailure is not { } failure || !canConsume(failure))
             return false;
-        }
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.AcceptanceFailed), GoalStatusTransitionRecorder.GoalLifecycleRouteRecordedAcceptanceFailure);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
@@ -917,7 +916,7 @@ public sealed partial class AgentOrchestratorKernel
         string? currentMainHeadSha)
     {
         var goal = GetGoal(goalId);
-        if (goal.Status != GoalStatus.AcceptanceFailed ||
+        if (goal.Status is not (GoalStatus.AcceptanceFailed or GoalStatus.Verified or GoalStatus.Active) ||
             goal.LatestAcceptanceFailure is not { } failure ||
             string.IsNullOrWhiteSpace(failure.BranchHeadSha) ||
             string.IsNullOrWhiteSpace(failure.MainHeadSha) ||
@@ -943,7 +942,8 @@ public sealed partial class AgentOrchestratorKernel
 
         goal.ClearAcceptanceFailure();
         goal.ResetAcceptanceIdentityStale();
-        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleRestoreVerifiedForSupersededAcceptanceFailure);
+        if (goal.Status != GoalStatus.Verified)
+            GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleRestoreVerifiedForSupersededAcceptanceFailure);
         Append(
             goal,
             null,

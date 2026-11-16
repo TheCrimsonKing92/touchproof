@@ -249,7 +249,7 @@ public sealed class AttributedFailureDeveloperRouteTests
     internal static ProgressEvent[] MarkerRetries(Goal goal) => goal.Timeline
         .Where(evt => evt.Kind == ProgressKind.TaskRetried && evt.Message.StartsWith(Marker, StringComparison.Ordinal)).ToArray();
 
-    internal sealed class RouteHarness(AgentOrchestratorKernel kernel, string candidate = Candidate)
+    internal sealed class RouteHarness(AgentOrchestratorKernel kernel, string candidate = Candidate, string main = Main)
     {
         internal string CurrentCandidate { get; set; } = candidate;
         internal List<TaskId> Dispatches { get; } = [];
@@ -290,7 +290,7 @@ public sealed class AttributedFailureDeveloperRouteTests
                 recordFindingEvidenceRequestDispositions: (goal, task, dispositions) => kernel.RecordFindingEvidenceRequestDispositions(goal, task, dispositions),
                 beforeFailedGoalRecoveryEffect: (_, decision) => RecoveryEffectDecision = decision,
                 writeEscalation: (_, _, reason) => Escalations.Add(reason));
-            driver.CohortAttributionRevisionReader = _ => new(CurrentCandidate, Main);
+            driver.CohortAttributionRevisionReader = _ => new(CurrentCandidate, main);
             return driver;
         }
     }

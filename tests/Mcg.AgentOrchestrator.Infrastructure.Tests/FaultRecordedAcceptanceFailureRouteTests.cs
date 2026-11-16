@@ -17,6 +17,7 @@ public sealed class FaultRecordedAcceptanceFailureRouteTests : ConductorBatchLoo
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Probe.cs");
         RecordFault(kernel, goal, WorkspaceProbeFaultClassifierTests.F2);
         var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
+        driver.CohortAttributionRevisionReader = _ => new(CandidateSha, "main-a");
         driver.BeginTick(kernel, 1);
 
         var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -70,6 +71,7 @@ public sealed class FaultRecordedAcceptanceFailureRouteTests : ConductorBatchLoo
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Probe.cs");
         RecordFault(kernel, goal, WorkspaceProbeFaultClassifierTests.F2);
         var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
+        driver.CohortAttributionRevisionReader = _ => new(CandidateSha, "main-a");
         driver.BeginTick(kernel, 1);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
@@ -87,6 +89,7 @@ public sealed class FaultRecordedAcceptanceFailureRouteTests : ConductorBatchLoo
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Probe.cs");
         RecordFault(kernel, goal, "background-acceptance-fault: " + WorkspaceProbeFaultClassifierTests.F3.Replace(' ', '_'));
         var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
+        driver.CohortAttributionRevisionReader = _ => new(CandidateSha, "main-a");
         driver.BeginTick(kernel, 1);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -125,6 +128,7 @@ public sealed class FaultRecordedAcceptanceFailureRouteTests : ConductorBatchLoo
                 parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
                     root, TrunkBranchName.Default, runInline: true),
                 writeEscalation: (_, _, reason) => escalations.Add(reason));
+            driver.CohortAttributionRevisionReader = _ => new(CandidateSha, "main-a");
 
             var first = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Permissive,
                 NoStopPath(), maxIterations: 1);

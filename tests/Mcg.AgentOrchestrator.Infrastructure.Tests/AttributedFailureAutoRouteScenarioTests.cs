@@ -130,14 +130,14 @@ public sealed class AttributedFailureAutoRouteScenarioTests : AcceptanceCohortWo
             var candidate = selection.Members[culpritIndex].CandidateRevision;
             var receipt = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory,
                 "merge-train-acceptance.db")).ReadReceiptsSince(DateTimeOffset.MinValue).Single(item => item.Outcome == MergeTrainGateOutcome.Failed);
-            inspect(new TrainScenario(kernel, goals, culpritIndex, candidate, receipt, names, ownership,
+            inspect(new TrainScenario(kernel, goals, culpritIndex, candidate, selection.Members[culpritIndex].MainRevision, receipt, names, ownership,
                 run, admissionIdentities.ToArray(), delays, verifier.RunCount));
         }
         finally { DeleteDirectory(repo); }
     }
 
     internal sealed record TrainScenario(AgentOrchestratorKernel Kernel, Goal[] Goals, int CulpritIndex,
-        string CandidateRevision, MergeTrainReceipt FailedReceipt, string[] TestNames, bool Ownership,
+        string CandidateRevision, string MainRevision, MergeTrainReceipt FailedReceipt, string[] TestNames, bool Ownership,
         ConductorMergeTrainRunResult Run, IReadOnlyList<string> AdmissionIdentities, int DelayCount, int VerifierRunCount)
     {
         internal Goal Culprit => Goals[CulpritIndex];
@@ -147,6 +147,7 @@ public sealed class AttributedFailureAutoRouteScenarioTests : AcceptanceCohortWo
             Assert.Equal(GoalStatus.AcceptanceFailed, Culprit.Status);
             var harness = new RouteHarness(Kernel, CandidateRevision);
             var driver = harness.Configure();
+            driver.CohortAttributionRevisionReader = _ => new(CandidateRevision, MainRevision);
             for (var tick = 1; tick <= 2; tick++)
             {
                 driver.BeginTick(Kernel, tick);

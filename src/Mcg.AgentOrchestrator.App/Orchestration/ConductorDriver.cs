@@ -1288,23 +1288,24 @@ internal sealed partial class ConductorDriver
 
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
-
         if (goal.CurrentHold?.State == EnvironmentHold.State && EnvironmentGate?.Check(goal, policy, state,
                 state is GoalLifecycleState.Verifying or GoalLifecycleState.Verified) is { } environmentHold) return environmentHold;
 
         if (AcceptanceAttributionPendingHandler.TryHoldRetained(goal, goalPrefix, policy, RecordEscalation) is { } pendingAttribution) return pendingAttribution;
-
         if (TryDecideLifecycleEntry(goal, goalPrefix, policy, state, out var lifecycleEntryResult, out var lifecycleEntryDecision))
             return lifecycleEntryResult;
         if (lifecycleEntryDecision.DiscriminatingEvidence == "failed-recovery")
             return ExecuteFailedGoalRecovery(goal, goalPrefix, policy, state);
 
         if (TryRunDeferredNoChangeEvidence(goal, goalPrefix, policy, state, out var deferredNoChangeResult) || TryRouteDeliveredFindingEvidenceToDeveloper(goal, goalPrefix, policy, state, out deferredNoChangeResult)) return deferredNoChangeResult;
+        // Classified policy holds own Verified re-admission; they do not route the recorded failure to workers.
         if (state == GoalLifecycleState.AcceptanceFailed &&
             (goal.LatestAcceptanceFailure?.SoloFailureReceipt is not null || goal.LatestAcceptanceFailure?.AttemptId is not null))
             return SoloAcceptanceFailure.Route(goal, goalPrefix, policy);
         return state switch
         {
+            GoalLifecycleState.Verified when goal.LatestAcceptanceFailure is { IsEnvironmentalApparatus: true } || goal.LatestAcceptanceFailure is { FailedChecks.Count: > 0 } policyFailure && policyFailure.FailedChecks.All(IsOwnerReviewCheckName) => ExecuteLanding(goal, goalPrefix, policy),
+            _ when goal.LatestAcceptanceFailure is not null && SoloFreshGateAdmission.TryConsume(_cohortKernel ?? _conductorTickKernel, goal, goalPrefix, policy, ReadCurrentCohortAttributionRevisions(goal), RecordEscalation) is { } consumed => consumed,
             GoalLifecycleState.Created => ExecuteCreateWorkspace(goal, goalPrefix, policy),
             GoalLifecycleState.WorkspaceReady => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady),
             GoalLifecycleState.Dispatched => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.Dispatched),
@@ -1318,9 +1319,8 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
-            GoalLifecycleState.AcceptanceFailed when AttributedFailureDeveloperRoute.Decide(goal,
-                AttributedFailureDeveloperRoute.ReadAcceptanceFailure(goal.LatestAcceptanceFailure),
-                ReadCurrentCohortAttributionRevisions(goal)?.BranchRevision) is { IsRoute: true } route => RouteAttributedFailure(goal, goalPrefix, policy, route),
+            GoalLifecycleState.AcceptanceFailed when ReadCurrentCohortAttributionRevisions(goal) is { } current && AttributedFailureDeveloperRoute.Decide(goal,
+                AttributedFailureDeveloperRoute.ReadAcceptanceFailure(goal.LatestAcceptanceFailure), current.BranchRevision, current.MainRevision) is { IsRoute: true } route => RouteAttributedFailure(goal, goalPrefix, policy, route),
             GoalLifecycleState.AcceptanceFailed when FaultRecordedAcceptanceFailureRoute.Decide(goal) is { } faultRecorded => ExecuteFaultRecordedAcceptanceFailure(goal, goalPrefix, policy, faultRecorded),
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
