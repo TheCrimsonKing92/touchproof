@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -119,37 +120,57 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     internal const string DispatchProperty = "DispatchHistory";
     internal const string MarkerProperty = "HistoryInTable";
 
-    // Customize only the persisted task shape; callers and row writes keep the original lists.
-    private static JsonSerializerOptions CreateDocumentOptions(JsonSerializerOptions source,
-        IReadOnlyDictionary<TaskSnapshot, HistoryCounts> counts)
+    private static readonly ConditionalWeakTable<JsonSerializerOptions, DocumentOptions> SharedDocumentOptions = new();
+
+    [ThreadStatic]
+    private static IReadOnlyDictionary<TaskSnapshot, HistoryCounts>? _activeCounts;
+
+    private static HistoryCounts ActiveCounts(TaskSnapshot task) =>
+        (_activeCounts ?? throw new InvalidOperationException("No active goal document serialization."))[task];
+
+    // Test-only observation of task metadata construction, isolated by source options identity.
+    internal int TaskShapeModifierRunCount => SharedDocumentOptions.TryGetValue(options, out var shared)
+        ? shared.TaskShapeModifierRunCount : 0;
+
+    private sealed class DocumentOptions
     {
-        var resolver = new DefaultJsonTypeInfoResolver();
-        resolver.Modifiers.Add(type =>
+        private int _taskShapeModifierRunCount;
+        internal int TaskShapeModifierRunCount => Volatile.Read(ref _taskShapeModifierRunCount);
+        internal JsonSerializerOptions Options { get; }
+
+        // Customize only the persisted task shape; callers and row writes keep the original lists.
+        internal DocumentOptions(JsonSerializerOptions source)
         {
-            if (type.Type != typeof(TaskSnapshot)) return;
-            foreach (var property in type.Properties.Where(property =>
-                property.AttributeProvider is System.Reflection.PropertyInfo
-                    { Name: VerificationProperty or DispatchProperty }).ToArray())
-                type.Properties.Remove(property);
-            foreach (var property in type.Properties)
+            var resolver = new DefaultJsonTypeInfoResolver();
+            resolver.Modifiers.Add(type =>
             {
-                if (property.AttributeProvider is not System.Reflection.PropertyInfo member) continue;
-                if (member.Name == nameof(TaskSnapshot.LastVerification))
-                    property.ShouldSerialize = (value, _) => !counts[(TaskSnapshot)value].LatestVerificationInTable;
-                else if (member.Name == nameof(TaskSnapshot.LastDispatch))
-                    property.ShouldSerialize = (value, _) => !counts[(TaskSnapshot)value].LatestDispatchInTable;
-            }
-            var marker = type.CreateJsonPropertyInfo(typeof(HistoryCounts), MarkerProperty);
-            marker.Get = value => counts[(TaskSnapshot)value];
-            type.Properties.Add(marker);
-        });
-        return new(source) { TypeInfoResolver = resolver };
+                if (type.Type != typeof(TaskSnapshot)) return;
+                Interlocked.Increment(ref _taskShapeModifierRunCount);
+                foreach (var property in type.Properties.Where(property =>
+                    property.AttributeProvider is System.Reflection.PropertyInfo
+                        { Name: VerificationProperty or DispatchProperty }).ToArray())
+                    type.Properties.Remove(property);
+                foreach (var property in type.Properties)
+                {
+                    if (property.AttributeProvider is not System.Reflection.PropertyInfo member) continue;
+                    if (member.Name == nameof(TaskSnapshot.LastVerification))
+                        property.ShouldSerialize = (value, _) => !ActiveCounts((TaskSnapshot)value).LatestVerificationInTable;
+                    else if (member.Name == nameof(TaskSnapshot.LastDispatch))
+                        property.ShouldSerialize = (value, _) => !ActiveCounts((TaskSnapshot)value).LatestDispatchInTable;
+                }
+                var marker = type.CreateJsonPropertyInfo(typeof(HistoryCounts), MarkerProperty);
+                marker.Get = value => ActiveCounts((TaskSnapshot)value);
+                type.Properties.Add(marker);
+            });
+            Options = new(source) { TypeInfoResolver = resolver };
+        }
     }
 
     internal string SerializeDocument(GoalSnapshot goal) => PrepareWrite(goal).Document;
 
     // One per-save preparation supplies both the document decisions and the exact row payloads.
-    // Reference keys keep equal-valued task instances independent; nothing is cached across saves.
+    // Options, resolver and task metadata are shared lazily per source options object. Reference-keyed
+    // counts belong to this save, scoped to its synchronous document write on this thread. No output is kept.
     internal PreparedWrite PrepareWrite(GoalSnapshot goal)
     {
         var rows = new List<HistoryWriteRow>();
@@ -176,8 +197,19 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
             counts[task] = new(task.VerificationHistory?.Count, task.DispatchHistory?.Count,
                 Matches(task.LastVerification, verification), Matches(task.LastDispatch, dispatch));
         }
-        return new(goal.Id, JsonSerializer.Serialize(goal, CreateDocumentOptions(options, counts)),
-            JsonSerializer.Serialize(rows, options));
+        var documentOptions = SharedDocumentOptions.GetValue(options, static source => new(source)).Options;
+        var previousCounts = _activeCounts;
+        string document;
+        _activeCounts = counts;
+        try
+        {
+            document = JsonSerializer.Serialize(goal, documentOptions);
+        }
+        finally
+        {
+            _activeCounts = previousCounts;
+        }
+        return new(goal.Id, document, JsonSerializer.Serialize(rows, options));
     }
 
     internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson);
