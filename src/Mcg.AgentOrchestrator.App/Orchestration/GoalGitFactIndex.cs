@@ -35,6 +35,7 @@ internal sealed class GoalGitFactIndex(
 {
     internal const string GoalBranchRefPrefix = "refs/heads/goal/";
     private readonly Dictionary<string, GoalBranchContentState> branchContentStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, GoalBranchContentState> treeContentStates = new(StringComparer.Ordinal);
     private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner = gitRunner ?? RunGitCli;
 
     internal static GitCli.GitResult RunGitCli(string workingDirectory, IReadOnlyList<string> args) =>
@@ -130,7 +131,7 @@ internal sealed class GoalGitFactIndex(
             hasGoalBranchArtifact &&
             (!hasGoalBranch || mergedGoalBranches.Contains(branch));
         var contentState = isAcceptedOrVerifiedGitGoal && hasGoalBranch && !branchAlreadyLanded
-            ? GetBranchContentState(branch)
+            ? GetBranchContentState(branch, treeContentFallback: goal.Status == GoalStatus.Verified)
             : GoalBranchContentState.NotChecked;
 
         return new GoalBranchFacts(
@@ -155,7 +156,7 @@ internal sealed class GoalGitFactIndex(
         // from the durable operation journal in GoalReplacementEvidence.
         const bool branchAlreadyLanded = false;
         var contentState = hasGoalBranch
-            ? GetBranchContentState(branch)
+            ? GetBranchContentState(branch, treeContentFallback: false)
             : GoalBranchContentState.NotChecked;
 
         return new GoalBranchFacts(
@@ -183,7 +184,27 @@ internal sealed class GoalGitFactIndex(
             $"merged={(merged ? "true" : "false")}");
     }
 
-    private GoalBranchContentState GetBranchContentState(string branch)
+    private GoalBranchContentState GetBranchContentState(string branch, bool treeContentFallback)
+    {
+        var cherryState = GetCherryContentState(branch);
+        if (!treeContentFallback || cherryState != GoalBranchContentState.AbsentFromMain || mainSha is null)
+        {
+            return cherryState;
+        }
+
+        // Both existing caches are status-blind. Only cherry results may enter them;
+        // a tree comparison belongs to the Verified lookup of this immutable snapshot.
+        if (!treeContentStates.TryGetValue(branch, out var state))
+        {
+            var detected = GoalBranchTreeContentDetector.Classify(
+                executionDirectory, mainSha, branch, goalBranchTips.GetValueOrDefault(branch), _gitRunner);
+            state = detected == GoalBranchContentState.EquivalentToMain ? detected : cherryState;
+            treeContentStates[branch] = state;
+        }
+        return state;
+    }
+
+    private GoalBranchContentState GetCherryContentState(string branch)
     {
         if (branchContentStates.TryGetValue(branch, out var cached))
         {

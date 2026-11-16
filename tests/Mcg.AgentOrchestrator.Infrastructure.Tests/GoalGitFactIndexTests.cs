@@ -233,6 +233,118 @@ public sealed class GoalGitFactIndexTests
         Assert.False(index.HasGoalBranch("goal/malformed"));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(0, "", "NoCommitsAhead")]
+    [Xunit.InlineData(0, "- 1111111111111111111111111111111111111111\n", "EquivalentToMain")]
+    [Xunit.InlineData(1, "", "Inconclusive")]
+    [Xunit.InlineData(0, "malformed", "Inconclusive")]
+    public void BuildGoalBranchFacts_OtherCherryStates_DoNotRunDetector(int exitCode, string output, string expected)
+    {
+        var goal = CreateGoalWithStatus("Cherry result is final", GoalStatus.Verified);
+        var calls = 0;
+        var index = CreateContentIndex(goal, (_, args) =>
+        {
+            calls++;
+            Assert.Equal("cherry", args[0]);
+            return new GitCli.GitResult(exitCode, output, "");
+        });
+
+        Assert.Equal(expected, index.BuildGoalBranchFacts(goal).ContentState.ToString());
+        Assert.Equal(1, calls);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void BuildBranchFacts_CompletedOrReplacement_DoesNotRunDetector(bool replacement)
+    {
+        var goal = CreateGoalWithStatus("Cherry-only lookup", replacement ? GoalStatus.Verified : GoalStatus.Completed);
+        var calls = 0;
+        var index = CreateContentIndex(goal, (_, args) =>
+        {
+            calls++;
+            Assert.Equal("cherry", args[0]);
+            return new GitCli.GitResult(0, $"+ {new string('2', 40)}\n", "");
+        });
+
+        var facts = replacement ? index.BuildReplacementFacts(goal) : index.BuildGoalBranchFacts(goal);
+        Assert.Equal(GoalBranchContentState.AbsentFromMain, facts.ContentState);
+        Assert.Equal(1, calls);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void BuildGoalBranchFacts_TreePromotion_DoesNotLeakToCherryOnlyLookups(bool cherryOnlyFirst)
+    {
+        var goal = CreateGoalWithStatus("Verified tree promotion", GoalStatus.Verified);
+        var completed = Goal.FromSnapshot(goal.ToSnapshot() with { Status = GoalStatus.Completed });
+        var cache = new GoalBranchContentStateCache();
+        var commands = new List<string>();
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var tip = new string('2', 40);
+        var main = new string('1', 40);
+        var baseSha = new string('3', 40);
+        GitCli.GitResult Runner(string _, IReadOnlyList<string> args)
+        {
+            commands.Add(args[0]);
+            if (args[0] == "cherry") return new(0, $"+ {tip}\n", "");
+            if (args[0] == "merge-base")
+            {
+                Assert.Equal(new[] { "merge-base", "--all", main, tip }, args.ToArray());
+                return new(0, baseSha + "\n", "");
+            }
+            Assert.Equal("diff-tree", args[0]);
+            Assert.Equal(tip, args[^1]);
+            return new(0, args[^2] == baseSha
+                ? $":100644 100644 {main} {tip} M\0path\0" : "", "");
+        }
+        var index = CreateContentIndex(goal, Runner, cache);
+        if (cherryOnlyFirst)
+        {
+            Assert.Equal(GoalBranchContentState.AbsentFromMain, index.BuildReplacementFacts(goal).ContentState);
+            Assert.Equal(GoalBranchContentState.AbsentFromMain, index.BuildGoalBranchFacts(completed).ContentState);
+        }
+
+        Assert.Equal(GoalBranchContentState.EquivalentToMain, index.BuildGoalBranchFacts(goal).ContentState);
+        Assert.Equal(GoalBranchContentState.EquivalentToMain, index.BuildGoalBranchFacts(goal).ContentState);
+        Assert.Equal(1, commands.Count(command => command == "merge-base"));
+        Assert.Equal(GoalBranchContentState.AbsentFromMain, index.BuildGoalBranchFacts(completed).ContentState);
+        Assert.Equal(GoalBranchContentState.AbsentFromMain, index.BuildReplacementFacts(goal).ContentState);
+        Assert.True(cache.TryGet(main, branch, tip, out var shared));
+        Assert.Equal(GoalBranchContentState.AbsentFromMain, shared);
+
+        var priorCalls = commands.Count;
+        var next = CreateContentIndex(goal, (_, _) => throw new Xunit.Sdk.XunitException("Cherry cache should suffice"), cache);
+        Assert.Equal(GoalBranchContentState.AbsentFromMain, next.BuildGoalBranchFacts(completed).ContentState);
+        Assert.Equal(GoalBranchContentState.AbsentFromMain, next.BuildReplacementFacts(goal).ContentState);
+        Assert.Equal(priorCalls, commands.Count);
+    }
+
+    [Xunit.Fact]
+    public void BuildGoalBranchFacts_DetectorFailure_KeepsAbsentCherryResult()
+    {
+        var goal = CreateGoalWithStatus("Unavailable comparison", GoalStatus.Verified);
+        var commands = new List<string>();
+        var index = CreateContentIndex(goal, (_, args) =>
+        {
+            commands.Add(args[0]);
+            return args[0] == "cherry"
+                ? new(0, $"+ {new string('2', 40)}\n", "")
+                : new(1, "", "comparison unavailable");
+        });
+
+        Assert.Equal(GoalBranchContentState.AbsentFromMain, index.BuildGoalBranchFacts(goal).ContentState);
+        Assert.Equal(new[] { "cherry", "merge-base" }, commands.ToArray());
+    }
+
+    private static GoalGitFactIndex CreateContentIndex(Goal goal,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> runner, GoalBranchContentStateCache? cache = null) =>
+        new(Path.GetTempPath(), true,
+            new Dictionary<string, string> { [GoalWorktrees.BranchName(goal.Id)] = new('2', 40) },
+            new HashSet<string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            new string('1', 40), gitRunner: runner, branchContentStateCache: cache);
+
     private static Goal CreateGoalWithStatus(string objective, GoalStatus status)
     {
         var kernel = new AgentOrchestratorKernel();
