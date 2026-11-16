@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.ComponentModel;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -116,6 +117,93 @@ public sealed class ConductorLeaseLivenessProbeTests
                 ConductorLoopLease.IsActive(root, probe)));
             Assert.Equal(2, probe.Calls.Count);
         });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnavailableOwner_ReturnsUnknownWithEitherLeaseFormat(bool hasStartTime)
+    {
+        WithDirectory(root =>
+        {
+            WriteOwner(root, hasStartTime);
+            IConductLockPidProbe probe = new UnavailablePidProbe();
+            Assert.Equal(ConductorLiveness.Unknown, ConductorLoopLease.ProbeLiveness(root, probe));
+        });
+    }
+
+    [Theory]
+    [InlineData("missing", false, "Gone", "NotRunning")]
+    [InlineData("missing", true, "Gone", "NotRunning")]
+    [InlineData("win32", false, "Unavailable", "Unknown")]
+    [InlineData("win32", true, "Unavailable", "Unknown")]
+    [InlineData("invalid-state", false, "Unavailable", "Unknown")]
+    [InlineData("invalid-state", true, "Unavailable", "Unknown")]
+    public void ProcessReadFailure_ClassifiesAbsenceSeparatelyFromUnavailable(
+        string failureKind, bool hasStartTime, string outcome, string liveness)
+    {
+        WithDirectory(root =>
+        {
+            WriteOwner(root, hasStartTime);
+            Exception failure = failureKind switch
+            {
+                "missing" => new ArgumentException("synthetic process is absent"),
+                "win32" => new Win32Exception(5),
+                _ => new InvalidOperationException("synthetic process state is unreadable")
+            };
+            var reads = new List<(int Pid, bool ReadStartTime)>();
+            IConductLockPidProbe probe = new ConductLockPidProbe((pid, readStartTime) =>
+            {
+                reads.Add((pid, readStartTime));
+                throw failure;
+            });
+            Assert.Equal(outcome, probe.Probe(OwnerPid, hasStartTime ? StartedAt : null).ToString());
+            Assert.Equal(liveness, ConductorLoopLease.ProbeLiveness(root, probe).ToString());
+            Assert.False(probe.IsRunning(OwnerPid));
+            Assert.False(probe.IsSameProcess(OwnerPid, StartedAt));
+            Assert.Equal([(OwnerPid, hasStartTime), (OwnerPid, hasStartTime),
+                (OwnerPid, false), (OwnerPid, true)], reads);
+        });
+    }
+
+    [Theory]
+    [InlineData(false, true, false, "Alive", "Running", true)]
+    [InlineData(false, true, true, "Alive", "Running", true)]
+    [InlineData(true, true, false, "Gone", "NotRunning", false)]
+    [InlineData(true, true, true, "Gone", "NotRunning", false)]
+    [InlineData(false, false, false, "Alive", "Running", false)]
+    [InlineData(false, false, true, "Gone", "NotRunning", false)]
+    public void ProcessSnapshot_PreservesIdentityAndBooleanResults(
+        bool exited, bool matchingStartTime, bool hasStartTime, string outcome,
+        string liveness, bool sameProcess)
+    {
+        WithDirectory(root =>
+        {
+            WriteOwner(root, hasStartTime);
+            var reads = new List<(int Pid, bool ReadStartTime)>();
+            IConductLockPidProbe probe = new ConductLockPidProbe((pid, readStartTime) =>
+            {
+                reads.Add((pid, readStartTime));
+                return (exited, readStartTime
+                    ? (matchingStartTime ? StartedAt : StartedAt.AddMinutes(1)) : default);
+            });
+            var recordedStart = hasStartTime ? StartedAt.ToOffset(TimeSpan.FromHours(2)) : (DateTimeOffset?)null;
+            Assert.Equal(outcome, probe.Probe(OwnerPid, recordedStart).ToString());
+            Assert.Equal(liveness, ConductorLoopLease.ProbeLiveness(root, probe).ToString());
+            Assert.Equal(!exited, probe.IsRunning(OwnerPid));
+            Assert.Equal(sameProcess, probe.IsSameProcess(OwnerPid, StartedAt));
+            Assert.Equal([(OwnerPid, hasStartTime), (OwnerPid, hasStartTime),
+                (OwnerPid, false), (OwnerPid, true)], reads);
+        });
+    }
+
+    private sealed class UnavailablePidProbe : IConductLockPidProbe
+    {
+        public bool IsRunning(int processId) => throw new InvalidOperationException("Use the three-state probe");
+        public bool IsSameProcess(int processId, DateTimeOffset processStartedAt) =>
+            throw new InvalidOperationException("Use the three-state probe");
+        public ConductLockProbeOutcome Probe(int processId, DateTimeOffset? processStartedAt = null) =>
+            ConductLockProbeOutcome.Unavailable;
     }
 
     private static void WriteOwner(string root, bool hasStartTime)
