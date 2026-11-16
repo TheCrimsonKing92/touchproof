@@ -86,10 +86,10 @@ public sealed class PlannerOutputContractTestsSearchPatternMention : WorkerDispa
     public void ConcreteMissingFileWithPatternCue_IsRejected()
     {
         var result = PlannerOutputContract.Resolve(
-            PlanWithTargetLine("- Inspect `Missing.json` for pattern handling."),
+            PlanWithTargetLine("- Inspect `src/Missing.json` for pattern handling."),
             string.Empty, CreateTempDirectory());
 
-        AssertMissingFileRejection(result, "Missing.json");
+        AssertMissingFileRejection(result, "src/Missing.json");
     }
 
     private static void AssertMissingFileRejection(PlannerOutputContractResult result, string citation)
@@ -105,6 +105,6 @@ public sealed class PlannerOutputContractTestsSearchPatternMention : WorkerDispa
         const string heading = "## Target seams and symbols";
         var bodyStart = plan.IndexOf(heading, StringComparison.Ordinal) + heading.Length;
         var bodyEnd = plan.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
-        return plan[..bodyStart] + "\n\nValidate new file targets against the cited implementation path.\n" + line + "\n" + plan[bodyEnd..];
+        return plan[..bodyStart] + "\n\nInspect `PlannerOutputContract.Resolve` for target citation validation.\n" + line + "\n" + plan[bodyEnd..];
     }
 }
