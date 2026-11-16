@@ -80,33 +80,57 @@ public sealed class RelaunchDrainV1GroupedGateScenarioTests : AcceptanceCohortWo
     [Trait("Category", "CrossTick")]
     public void AdvancedIntegrationHead_RefusesAndCancelsOriginalLease()
     {
+        using var trace = new ScenarioStageTrace(ScenarioStageTrace.RetainedRoot,
+            nameof(AdvancedIntegrationHead_RefusesAndCancelsOriginalLease));
         using var scenario = new Scenario();
-        var original = scenario.LaunchFirstGeneration();
-        AssertImmediateHandoff(scenario);
-        var head = scenario.AdvanceIntegrationHead();
-        Assert.NotEqual(original.MainRevision, head);
+        var original = trace.Run("first-generation-launch", () => scenario.LaunchFirstGeneration());
+        trace.Run("immediate-handoff", () => AssertImmediateHandoff(scenario));
+        var head = string.Empty;
+        trace.Run("head-advance", () =>
+        {
+            head = scenario.AdvanceIntegrationHead();
+            Assert.NotEqual(original.MainRevision, head);
+        });
 
-        scenario.FirstAlive = false;
-        var successor = scenario.Successor();
-        var driver = scenario.Driver(successor);
-        scenario.Now = scenario.Now.AddSeconds(1);
-        scenario.Tick(driver);
+        var driver = trace.Run("successor-construction", () =>
+        {
+            scenario.FirstAlive = false;
+            var successor = scenario.Successor();
+            return scenario.Driver(successor);
+        });
+        trace.Run("successor-tick", () =>
+        {
+            scenario.Now = scenario.Now.AddSeconds(1);
+            scenario.Tick(driver);
+        });
 
-        var refusal = Assert.Single(scenario.SuccessorEvents,
-            line => line.StartsWith("ACCEPTANCE_COHORT_ADOPTION_REFUSED ", StringComparison.Ordinal));
-        foreach (var member in original.Members)
-            Assert.Contains(member.GoalId, refusal, StringComparison.Ordinal);
-        Assert.Contains($"reason=identity-changed field={scenario.Workspace.IntegrationBranch}",
-            refusal, StringComparison.Ordinal);
-        Assert.Equal(1, scenario.Cancels);
-        Assert.Equal("Cancelled", scenario.Lease.Read(AcceptanceHolderBinding.For(original)).Phase);
-        var saved = ConductorGroupedGateAttemptCoordinator.Read(original.MetadataPath);
-        Assert.NotNull(saved.ReconciledAt);
-        Assert.StartsWith("refused:identity-changed", saved.Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain(scenario.SuccessorEvents,
-            line => line.StartsWith("ACCEPTANCE_COHORT_ADOPTED ", StringComparison.Ordinal) &&
-                line.Contains($"identity={original.IdentityValue}", StringComparison.Ordinal));
-        Assert.All(scenario.LaunchedBySuccessor, attempt => Assert.Equal(head, attempt.MainRevision));
+        trace.Run("assertion-group", () =>
+        {
+            var refusal = Assert.Single(scenario.SuccessorEvents,
+                line => line.StartsWith("ACCEPTANCE_COHORT_ADOPTION_REFUSED ", StringComparison.Ordinal));
+            foreach (var member in original.Members)
+                Assert.Contains(member.GoalId, refusal, StringComparison.Ordinal);
+            Assert.Contains($"reason=identity-changed field={scenario.Workspace.IntegrationBranch}",
+                refusal, StringComparison.Ordinal);
+            Assert.Equal(1, scenario.Cancels);
+            Assert.Equal("Cancelled", scenario.Lease.Read(AcceptanceHolderBinding.For(original)).Phase);
+            var saved = ConductorGroupedGateAttemptCoordinator.Read(original.MetadataPath);
+            Assert.NotNull(saved.ReconciledAt);
+            Assert.StartsWith("refused:identity-changed", saved.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain(scenario.SuccessorEvents,
+                line => line.StartsWith("ACCEPTANCE_COHORT_ADOPTED ", StringComparison.Ordinal) &&
+                    line.Contains($"identity={original.IdentityValue}", StringComparison.Ordinal));
+            Assert.All(scenario.LaunchedBySuccessor, attempt => Assert.Equal(head, attempt.MainRevision));
+        });
+
+        using var stream = new FileStream(trace.TracePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line) lines.Add(line[(line.IndexOf(' ') + 1)..]);
+        string[] stages = ["first-generation-launch", "immediate-handoff", "head-advance",
+            "successor-construction", "successor-tick", "assertion-group"];
+        var expected = stages.SelectMany(stage => new[] { $"started {stage}", $"completed {stage}" });
+        Assert.True(expected.SequenceEqual(lines), $"Unexpected stage trace order: {string.Join(", ", lines)}. {trace.Describe()}");
     }
 
     private static void AssertImmediateHandoff(Scenario scenario)
