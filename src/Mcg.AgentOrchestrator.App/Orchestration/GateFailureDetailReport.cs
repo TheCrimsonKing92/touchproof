@@ -17,8 +17,7 @@ internal sealed record GateFailureDetailReport(string AttemptId, string Cause, s
     {
         var problems = new List<string>();
         // Addressing an explicit id must not depend on the census's default window.
-        var attempt = GateFailureClassificationReader.Read(directory, int.MaxValue, problems, out _)
-            .SingleOrDefault(attempt => attempt.Id.Equals(attemptId, StringComparison.Ordinal));
+        var attempt = GateFailureClassificationReader.ReadById(directory, attemptId, problems, out var prefix);
         foreach (var problem in problems) warnings.Add(problem);
         if (attempt is null)
             throw new ArgumentException($"gate-stats failure: no recorded gate attempt matches id '{attemptId}'");
@@ -37,10 +36,8 @@ internal sealed record GateFailureDetailReport(string AttemptId, string Cause, s
         var classified = GateFailureClassificationReport.Classify(attempt);
         var history = GateStatsReport.Flakes(directory, 20, int.MaxValue).Tests
             .ToDictionary(row => row.Test, StringComparer.Ordinal);
-        var sources = GateStatsReader.DiscoverWaitRuns(directory, out _)
-            .Where(run => Path.GetFileName(run.Attempt).Equals(attemptId, StringComparison.Ordinal))
-            .ToDictionary(run => (run.Lane, run.Retry), run => run.Attempt + "." + run.Lane +
-                (run.Retry == 0 ? "" : $"-run-{run.Retry.ToString(CultureInfo.InvariantCulture)}") + ".trx");
+        var sources = attempt.Runs.ToDictionary(run => (run.Lane, run.Run), run => prefix + "." + run.Lane +
+            (run.Run == 0 ? "" : $"-run-{run.Run.ToString(CultureInfo.InvariantCulture)}") + ".trx");
         var diagnostics = new Dictionary<string, AcceptanceTrxReadResult>(StringComparer.Ordinal);
         var tests = classified.Tests.Select(test =>
         {

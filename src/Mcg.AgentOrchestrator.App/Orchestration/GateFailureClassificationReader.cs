@@ -51,6 +51,57 @@ internal static class GateFailureClassificationReader
             .Select(row => ReadAttempt(row.Prefix, row.Time, observedAt)).ToArray();
     }
 
+    internal static Attempt? ReadById(string directory, string attemptId, ICollection<string> problems,
+        out string? prefix, DateTimeOffset? now = null)
+    {
+        if (attemptId.Contains('/') || attemptId.Contains('\\'))
+            throw new ArgumentException($"gate-stats failure: attempt id '{attemptId}' must not contain a path separator");
+        prefix = null;
+        if (Time(attemptId) is null) return null;
+
+        var prefixes = new HashSet<string>(StringComparer.Ordinal);
+        var trxPrefix = attemptId + ".";
+        var root = Path.Combine(directory, "acceptance-gate-attempts");
+        if (File.Exists(root)) problems.Add($"{root}: discovery requires a directory, found a file");
+        try
+        {
+            foreach (var goal in Directory.GetDirectories(root))
+            {
+                try
+                {
+                    // List fixed patterns only; the id is an ordinal name, never a search pattern.
+                    foreach (var path in Directory.GetFiles(goal, "*.json"))
+                    {
+                        if (!path.EndsWith(".attempt.json", StringComparison.Ordinal) &&
+                            !path.EndsWith(".result.json", StringComparison.Ordinal)) continue;
+                        var candidate = path[..path.LastIndexOf('.', path.Length - 6)];
+                        if (Path.GetFileName(candidate).Equals(attemptId, StringComparison.Ordinal))
+                            prefixes.Add(candidate);
+                    }
+                    foreach (var path in Directory.GetFiles(goal, "*.trx"))
+                    {
+                        var name = Path.GetFileName(path);
+                        if (!name.StartsWith(trxPrefix, StringComparison.Ordinal)) continue;
+                        // Match GateStatsReader.AttemptFile's greedy stem extraction, including TRX-only attempts.
+                        var match = Regex.Match(name,
+                            @"^(?<attempt>.+-(?<time>\d{17})-[0-9a-f]{32})\.(?<lane>.+)\.trx$",
+                            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+                        if (match.Success && match.Groups["attempt"].Value.Equals(attemptId, StringComparison.Ordinal))
+                            prefixes.Add(Path.Combine(goal, match.Groups["attempt"].Value));
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { problems.Add($"{goal}: discovery {ex.GetType().Name}"); }
+            }
+        }
+        catch (DirectoryNotFoundException) { /* No home gate attempts yet. */ }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { problems.Add($"{root}: discovery {ex.GetType().Name}"); }
+
+        prefix = prefixes.SingleOrDefault();
+        return prefix is null ? null : ReadAttempt(prefix, Time(prefix), now ?? DateTimeOffset.UtcNow);
+    }
+
     private static Attempt ReadAttempt(string prefix, DateTimeOffset? time, DateTimeOffset now)
     {
         var problems = new List<string>();

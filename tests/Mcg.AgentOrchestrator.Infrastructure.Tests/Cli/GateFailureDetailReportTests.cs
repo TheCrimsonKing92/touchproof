@@ -141,6 +141,103 @@ public sealed class GateFailureDetailReportTests : CliTaskQueryTestSupport
         Assert.Contains("tests=none", fixture.Run(2));
     }
 
+    [Fact]
+    public void MalformedOlderAttempts_DoNotChangeReportOrEmitWarnings()
+    {
+        using var healthy = new Fixture();
+        using var withHistory = new Fixture();
+        foreach (var fixture in new[] { healthy, withHistory })
+        {
+            for (var index = 21; index <= 41; index++)
+            {
+                fixture.Accepted(index);
+                fixture.Trx(index, Lane, 0, Name, index >= 40 ? "Failed" : "Passed");
+            }
+            fixture.Trx(41, Lane, 1, Name, "Passed");
+            fixture.Artifact(41, ".out.log", $"LANE_RERUN lane=\"{Check}\" outcome=flake\n" +
+                $"LANE_RERUN_CREDIT_DENIED lane=\"{Check}\" reason=no-cross-goal-history\n");
+        }
+        // The most recent twenty attempts remain healthy for the unchanged flake window.
+        for (var index = 1; index <= 20; index++)
+        {
+            withHistory.Artifact(index, ".result.json", "{broken");
+            withHistory.Artifact(index, ".attempt.json", "[]");
+            withHistory.Artifact(index, $".{Lane}.trx", "<broken");
+            // Whole-history discovery warns on this overflowing run ordinal.
+            withHistory.Artifact(index, $".{Lane}-run-99999999999.trx", "<broken");
+            withHistory.Artifact(index, ".out.log", "malformed unrelated log \0");
+        }
+
+        foreach (var options in new[] { Array.Empty<string>(), new[] { "--json" } })
+        {
+            var expected = healthy.Run(41, options);
+            string? actual = null;
+            var stderr = AsyncLocalConsoleRouter.Error.CaptureLocal(() => actual = withHistory.Run(41, options));
+            Assert.Equal(expected, actual);
+            Assert.Empty(stderr);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void UnknownOrUnparseableAttempt_ThrowsExactNotFoundError(bool parseable)
+    {
+        using var fixture = new Fixture();
+        fixture.Result(1, new { kind = "fault", faultKind = "blocked-build-slot" });
+        var id = parseable ? Fixture.Id(99) : "not-an-attempt";
+        var error = Assert.Throws<ArgumentException>(() => CliGateStatsQueryCommand.Execute(
+            ["gate-stats", "failure", "--attempt", id], fixture.Workspace));
+        Assert.Equal($"gate-stats failure: no recorded gate attempt matches id '{id}'", error.Message);
+    }
+
+    [Theory]
+    [InlineData('/')]
+    [InlineData('\\')]
+    public void PathSeparatorAttempt_IsRejectedWithOutsideEvidencePresent(char separator)
+    {
+        using var fixture = new Fixture();
+        fixture.Accepted(1);
+        fixture.Trx(1, Lane, 0, Name, "Failed");
+        var outside = Path.Combine(fixture.Workspace.OrchestratorDirectory, "outside");
+        Directory.CreateDirectory(outside);
+        foreach (var path in Directory.GetFiles(Path.GetDirectoryName(fixture.PathFor(1, ".result.json"))!))
+            File.Copy(path, Path.Combine(outside, Path.GetFileName(path)));
+        var id = string.Join(separator.ToString(), "..", "..", "outside", Fixture.Id(1));
+
+        var error = Assert.Throws<ArgumentException>(() => CliGateStatsQueryCommand.Execute(
+            ["gate-stats", "failure", "--attempt", id, "--json"], fixture.Workspace));
+        Assert.Contains("path separator", error.Message);
+    }
+
+    [Fact]
+    public void TrxOnlyAttempt_IsAddressableAndDoesNotMatchALongerStem()
+    {
+        using var fixture = new Fixture();
+        fixture.Trx(1, Lane, 0, Name, "Failed");
+        var report = fixture.Json(1);
+        Assert.Equal(Fixture.Id(1), report.GetProperty("attemptId").GetString());
+        Assert.Single(report.GetProperty("tests").EnumerateArray());
+
+        // The existing greedy TRX grammar assigns this file to the longer attempt id.
+        var path = fixture.PathFor(1, $".{Lane}.trx");
+        var longerId = Fixture.Id(1) + "." + Fixture.Id(2);
+        File.Move(path, Path.Combine(Path.GetDirectoryName(path)!, longerId + $".{Lane}.trx"));
+        var error = Assert.Throws<ArgumentException>(() => fixture.Run(1));
+        Assert.Equal($"gate-stats failure: no recorded gate attempt matches id '{Fixture.Id(1)}'", error.Message);
+    }
+
+    [Fact]
+    public void DuplicateAttemptInDifferentGoals_PreservesUniquenessError()
+    {
+        using var fixture = new Fixture();
+        fixture.Result(1, new { kind = "fault", faultKind = "blocked-build-slot" });
+        var otherGoal = Path.Combine(fixture.Workspace.OrchestratorDirectory, "acceptance-gate-attempts", "other-goal");
+        Directory.CreateDirectory(otherGoal);
+        File.Copy(fixture.PathFor(1, ".result.json"), Path.Combine(otherGoal, Fixture.Id(1) + ".result.json"));
+        Assert.Throws<InvalidOperationException>(() => fixture.Run(1));
+    }
+
     [Theory]
     [InlineData(".result.json", "{broken")]
     [InlineData(".result.json", "[]")]
