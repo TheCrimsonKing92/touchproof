@@ -620,45 +620,29 @@ internal static partial class CliPersistentStateRunner
     internal static bool IsConductLoop(IReadOnlyList<string> args) =>
         ConductCommandArguments.IsLoop(args);
 
-    internal static bool IsSingleGoalConductCommand(IReadOnlyList<string> args)
-    {
-        return args.Count > 1 &&
-            args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase) &&
-            !args[1].StartsWith("--", StringComparison.Ordinal) &&
-            !IsConductLoop(args);
-    }
+    internal static bool IsSingleGoalConductCommand(IReadOnlyList<string> args) =>
+        args.Count > 1 &&
+        args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase) &&
+        !args[1].StartsWith("--", StringComparison.Ordinal) &&
+        !IsConductLoop(args);
 
-    internal static bool IsAcceptanceCommand(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0)
-        {
-            return false;
-        }
+    internal static bool IsAcceptanceCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        (args[0].Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("accept", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase));
 
-        return args[0].Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("accept", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase);
-    }
+    internal static bool IsProcessRefreshCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        (args[0].Equals("reconcile", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase));
 
-    internal static bool IsProcessRefreshCommand(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0)
-        {
-            return false;
-        }
-
-        return args[0].Equals("reconcile", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase);
-    }
-
-    internal static bool IsBacklogIntakeCommand(IReadOnlyList<string> args)
-    {
-        return args.Count > 0 &&
-            (args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
-             (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
-               args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
-    }
+    internal static bool IsBacklogIntakeCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        (args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
+         (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+          args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
 
     internal static bool IsBacklogIntakeGoalCreationCommand(IReadOnlyList<string> args) =>
         IsBacklogIntakeCommand(args) &&
@@ -689,10 +673,8 @@ internal static partial class CliPersistentStateRunner
         args.Count > 0 &&
         args[0].Equals("goal-delivery-retry", StringComparison.OrdinalIgnoreCase);
 
-    internal static bool IsGoalMarkLandedCommand(IReadOnlyList<string> args)
-    {
-        return args.Count > 0 && args[0].Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
-    }
+    internal static bool IsGoalMarkLandedCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 && args[0].Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsSingleGoalSnapshotCommand(IReadOnlyList<string> args)
     {
@@ -711,15 +693,8 @@ internal static partial class CliPersistentStateRunner
     internal static bool IsSingleGoalReportCommand(IReadOnlyList<string> args) =>
         CliSingleGoalReportCommand.IsCommand(args);
 
-    internal static bool IsGoalLifecycleDispositionCommand(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0)
-        {
-            return false;
-        }
-
-        return IsGoalScopedLifecycleInvocation(args);
-    }
+    internal static bool IsGoalLifecycleDispositionCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 && IsGoalScopedLifecycleInvocation(args);
 
     private static bool ExecuteGoalMarkLandedWithPromptBudget(
         IReadOnlyList<string> args,
@@ -1110,32 +1085,7 @@ internal static partial class CliPersistentStateRunner
 
     internal static bool RebaseCheckpointAfterDurableSave(
         AgentOrchestratorKernel checkpoint,
-        GoalSnapshotSaveResult result)
-    {
-        ArgumentNullException.ThrowIfNull(checkpoint);
-        ArgumentNullException.ThrowIfNull(result);
-
-        if (result.PersistedSnapshot is null ||
-            result.Disposition is not (GoalSnapshotSaveDisposition.Merged or GoalSnapshotSaveDisposition.Skipped))
-        {
-            return false;
-        }
-
-        // A merge/skip means the store, not the submitted tick snapshot, is authoritative. Keeping
-        // the old aggregate alive lets the following tick repeat a side effect for a task that the
-        // merged row has already advanced (for example, redispatching a manually verified Tester).
-        if (result.PersistedHumanInputRequests is null)
-        {
-            checkpoint.ReplaceGoalWithSnapshot(result.PersistedSnapshot);
-        }
-        else
-        {
-            checkpoint.ReplaceGoalStateWithSnapshot(
-                result.PersistedSnapshot,
-                result.PersistedHumanInputRequests);
-        }
-        return true;
-    }
+        GoalSnapshotSaveResult result) => CliGoalCheckpointRebaser.Apply(checkpoint, result);
 
     internal static void PersistCriticalGoalSnapshotsOrThrow(
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -1181,14 +1131,39 @@ internal static partial class CliPersistentStateRunner
         var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
+        // Keep the original baseline: applying the rejection moves the tick baseline
+        // to the store and would make a later save overwrite concurrent progress.
+        var recoveryRequests = results
+            .Where(result => result.Disposition == GoalSnapshotSaveDisposition.Skipped)
+            .Select(result =>
+            {
+                var beforeStart = checkpoint.GetSnapshotBeforeDispatchStart(new GoalId(result.GoalId));
+                var request = requests.Single(request => request.Current.Id == result.GoalId);
+                return beforeStart is null ? null : request with { Current = beforeStart, RejectConflict = false };
+            })
+            .OfType<GoalSnapshotSaveRequest>()
+            .ToArray();
         applyDurableResults(results);
 
         var conflict = results.FirstOrDefault(result => result.Disposition != GoalSnapshotSaveDisposition.Saved);
-        if (conflict is not null)
+        if (conflict is null)
+            return;
+
+        // Merge pre-start progress against the original baseline; never recover the rejected dispatch.
+        string? recoveryFailure = null;
+        try
         {
-            throw new DispatchCheckpointConflictException(
-                $"Critical dispatch checkpoint rejected stale state for goal {conflict.GoalId[..Math.Min(8, conflict.GoalId.Length)]}; worker start was aborted and the next tick will re-evaluate the authoritative task state.");
+            if (recoveryRequests.Length > 0)
+                applyDurableResults(stateRepository.SaveGoalSnapshotsWithMergeAsync(recoveryRequests, CancellationToken.None)
+                    .GetAwaiter().GetResult());
         }
+        catch (Exception ex)
+        {
+            // Keep the authoritative rebase even if recovery cannot be saved.
+            recoveryFailure = $" Pre-start progress recovery failed ({ex.GetType().Name}): {ex.Message}";
+        }
+        throw new DispatchCheckpointConflictException(
+            $"Critical dispatch checkpoint rejected stale state for goal {conflict.GoalId[..Math.Min(8, conflict.GoalId.Length)]}; worker start was aborted and the next tick will re-evaluate the authoritative task state.{recoveryFailure}");
     }
 
     internal static GoalSnapshotSaveRequest[] BuildConductLoopCheckpointRequests(

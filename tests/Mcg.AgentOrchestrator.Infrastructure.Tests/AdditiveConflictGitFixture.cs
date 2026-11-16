@@ -78,11 +78,23 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
 
     internal void AssertRestored()
     {
-        Assert.Equal(OriginalHead, Git(Worktree, "rev-parse", "HEAD").Trim());
-        Assert.Equal(OriginalHead, Git(Repository, "rev-parse", GoalWorktrees.BranchName(GoalId)).Trim());
+        var head = InfrastructureTestSupport.TryReadGitHeadInProcess(Worktree, out var currentHead) && currentHead is not null
+            ? currentHead
+            : Git(Worktree, "rev-parse", "HEAD").Trim();
+        Assert.Equal(OriginalHead, head);
+        var branchHead = InfrastructureTestSupport.RunGitProbe(Repository, ["rev-parse", GoalWorktrees.BranchName(GoalId)]);
+        Assert.True(branchHead.Succeeded, branchHead.StandardError);
+        Assert.Equal(OriginalHead, branchHead.StandardOutput.Trim());
         Assert.Equal("", Git(Worktree, "status", "--porcelain=v1", "--untracked-files=all"));
-        Assert.Equal(1, GitCli.Run(Worktree, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").ExitCode);
-        Assert.Equal(GoalWorktrees.BranchName(GoalId), Git(Worktree, "symbolic-ref", "--short", "HEAD").Trim());
+        if (GitProbeRefFileFastPath.TryAnswerMetadata(Worktree,
+                ["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"], false, out var mergeHead))
+            Assert.False(File.Exists(mergeHead.StandardOutput.Trim()));
+        else
+            Assert.Equal(1, GitCli.Run(Worktree, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").ExitCode);
+        var branch = GitProbeRefFileFastPath.TryAnswerMetadata(Worktree, ["branch", "--show-current"], false, out var currentBranch)
+            ? currentBranch.StandardOutput.Trim()
+            : Git(Worktree, "symbolic-ref", "--short", "HEAD").Trim();
+        Assert.Equal(GoalWorktrees.BranchName(GoalId), branch);
     }
 
     internal static string Git(string path, params string[] args)

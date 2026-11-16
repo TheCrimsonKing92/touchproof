@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -5,6 +6,38 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Owns the translation from an impact plan to broker-ready pre-review evidence context.
 internal static class PreReviewEvidenceContextBuilder
 {
+    internal static PreReviewEvidenceContext WithFailedGateClasses(
+        PreReviewEvidenceContext context, IReadOnlyList<(string Alias, string ClassName)> classes)
+    {
+        if (classes.Count == 0 || context.MappingNeedsInput || context.RequiresSourceCleanup) return context;
+
+        var requests = new List<string>();
+        foreach (var group in classes.Distinct().OrderBy(item => item.Alias, StringComparer.Ordinal)
+                     .ThenBy(item => item.ClassName, StringComparer.Ordinal).GroupBy(item => item.Alias))
+        {
+            var clauses = group.Select(item => $"FullyQualifiedName~{item.ClassName}")
+                .Where(clause => !context.SelectedFocusedTests.Any(selection =>
+                    PreReviewFocusedRequestSplitter.TryResolveBrokerAlias(selection, out var alias) && alias == group.Key &&
+                    Regex.Matches(selection, @"(?<![A-Za-z0-9_!])FullyQualifiedName\s*~\s*([A-Za-z_][A-Za-z0-9_.]*)",
+                        RegexOptions.CultureInvariant).Any(match => "FullyQualifiedName~" + match.Groups[1].Value == clause)))
+                .ToArray();
+            if (clauses.Length > 0 && PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+                    group.Key, string.Join('|', clauses), out var items))
+                requests.AddRange(items);
+        }
+        if (requests.Count == 0) return context;
+
+        // Use the broker items as selections, as Build does, so each check retains reusable coverage.
+        return context with
+        {
+            SelectedFocusedTests = context.SelectedFocusedTests.Concat(requests).ToArray(),
+            FocusedRequest = string.Join("; ", new[] { context.FocusedRequest }.OfType<string>()
+                .Where(request => !string.IsNullOrWhiteSpace(request)).Concat(requests)),
+            NoApplicableTests = false,
+            MappingReason = context.MappingReason + "; failed-gate coverage: " + string.Join("; ", requests)
+        };
+    }
+
     internal static PreReviewEvidenceContext Build(
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan,
         Action<string>? log = null) =>

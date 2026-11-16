@@ -205,7 +205,10 @@ internal static class SourceSizeRatchetRetightener
         if (names.Length == 0) return null;
         // Revision evidence cannot authorise uncommitted or untracked source growth.
         var status = GitText(root, "status", "--porcelain", "--untracked-files=all", "--", "src");
-        var mainSha = GitText(root, "rev-parse", "--verify", $"{main}^{{commit}}")?.Trim();
+        var mainSha = GitRevisionReader.Shared.TryResolve(root, $"{main}^{{commit}}", out var resolvedMain) &&
+            GoalWorktrees.IsFullObjectId(resolvedMain)
+            ? resolvedMain
+            : GitText(root, "rev-parse", "--verify", $"{main}^{{commit}}")?.Trim();
         if (status is null || !string.IsNullOrWhiteSpace(status) || string.IsNullOrEmpty(mainSha)) return null;
         var cache = new Dictionary<string, IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)>?>(StringComparer.Ordinal);
         (int TotalLines, int PartialFiles)? Measure(string revision, string name)

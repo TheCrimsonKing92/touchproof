@@ -60,7 +60,7 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        var context = _getPreReviewEvidenceContext(goal);
+        var context = PreReviewEvidenceContextBuilder.WithFailedGateClasses(_getPreReviewEvidenceContext(goal), FailedGateFocusedClasses.Read(goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest));
         if (string.IsNullOrWhiteSpace(context.CandidateSha))
         {
             result = Escalate(

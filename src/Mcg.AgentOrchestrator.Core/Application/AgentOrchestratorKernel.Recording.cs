@@ -3,6 +3,27 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed partial class AgentOrchestratorKernel
 {
     private readonly PlannerEvidenceSources _plannerEvidenceSources = new();
+    private readonly Dictionary<GoalId, GoalSnapshot> _dispatchStartSnapshots = [];
+
+    // The start owns only mutations after this boundary. Completion refreshes before it
+    // must survive a rejected start, even when the store rebases this kernel.
+    public IDisposable BeginDispatchStart(GoalId goalId)
+    {
+        if (!_dispatchStartSnapshots.TryAdd(goalId, ExportGoalSnapshot(goalId)))
+            throw new InvalidOperationException($"Dispatch start already active for goal '{goalId}'.");
+        return new DispatchStartScope(_dispatchStartSnapshots, goalId);
+    }
+
+    public GoalSnapshot? GetSnapshotBeforeDispatchStart(GoalId goalId) =>
+        _dispatchStartSnapshots.GetValueOrDefault(goalId);
+
+    // Once a start mutation is durable, its pre-start snapshot cannot own recovery.
+    public void ReleaseDispatchStartRecovery(GoalId goalId) => _dispatchStartSnapshots.Remove(goalId);
+
+    private sealed class DispatchStartScope(Dictionary<GoalId, GoalSnapshot> snapshots, GoalId goalId) : IDisposable
+    {
+        public void Dispose() => snapshots.Remove(goalId);
+    }
 
     public void SetTestIdentityListingSource(Func<Goal, TaskSpec, IReadOnlyList<RunnerTestIdentity>?> source) =>
         _plannerEvidenceSources.SetTestIdentities(source);
@@ -1521,26 +1542,14 @@ public sealed partial class AgentOrchestratorKernel
             : message;
     }
 
-    public void RecordDispatchBaseCommit(GoalId goalId, TaskId taskId, string baseCommit, WorkerBuildScopeIdentity? buildScope = null)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.SetDispatchBaseCommit(baseCommit, buildScope);
-    }
+    public void RecordDispatchBaseCommit(GoalId goalId, TaskId taskId, string baseCommit, WorkerBuildScopeIdentity? buildScope = null) =>
+        GetTask(goalId, taskId).SetDispatchBaseCommit(baseCommit, buildScope);
 
-    public void RecordDispatchResultCommit(GoalId goalId, TaskId taskId, string resultCommit)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.SetDispatchResultCommit(resultCommit);
-    }
+    public void RecordDispatchResultCommit(GoalId goalId, TaskId taskId, string resultCommit) =>
+        GetTask(goalId, taskId).SetDispatchResultCommit(resultCommit);
 
-    public void RecordDispatchSandboxLowIntegrity(GoalId goalId, TaskId taskId, bool sandboxLowIntegrity)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.SetDispatchSandboxLowIntegrity(sandboxLowIntegrity);
-    }
+    public void RecordDispatchSandboxLowIntegrity(GoalId goalId, TaskId taskId, bool sandboxLowIntegrity) =>
+        GetTask(goalId, taskId).SetDispatchSandboxLowIntegrity(sandboxLowIntegrity);
 
     public void RecordDispatchSpawnReceipt(
         GoalId goalId,
@@ -1548,26 +1557,14 @@ public sealed partial class AgentOrchestratorKernel
         string command,
         string? providerSessionId,
         string? worktreeHeadSha,
-        string? dirtyStateHash)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.SetDispatchSpawnReceipt(command, providerSessionId, worktreeHeadSha, dirtyStateHash);
-    }
+        string? dirtyStateHash) =>
+        GetTask(goalId, taskId).SetDispatchSpawnReceipt(command, providerSessionId, worktreeHeadSha, dirtyStateHash);
 
-    public void RecordDispatchProviderSessionId(GoalId goalId, TaskId taskId, string providerSessionId)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.SetDispatchProviderSessionId(providerSessionId);
-    }
+    public void RecordDispatchProviderSessionId(GoalId goalId, TaskId taskId, string providerSessionId) =>
+        GetTask(goalId, taskId).SetDispatchProviderSessionId(providerSessionId);
 
-    public void RetireDispatchProviderSession(GoalId goalId, TaskId taskId, DateTimeOffset retiredAt)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.RetireDispatchProviderSession(retiredAt);
-    }
+    public void RetireDispatchProviderSession(GoalId goalId, TaskId taskId, DateTimeOffset retiredAt) =>
+        GetTask(goalId, taskId).RetireDispatchProviderSession(retiredAt);
 
     public void RecordDispatchContextPackageReceipt(
         GoalId goalId,
@@ -1910,6 +1907,8 @@ public sealed partial class AgentOrchestratorKernel
 
     public void RecordTaskProcessStarted(GoalId goalId, TaskId taskId, TaskProcessRecord process)
     {
+        // A live process makes restoration to the pre-start boundary unsafe.
+        _dispatchStartSnapshots.Remove(goalId);
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
         TaskProcessStartRecording.Record(_eventWriter, goal.Id, task, process);
