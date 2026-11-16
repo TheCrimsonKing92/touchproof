@@ -9,6 +9,7 @@ public sealed record GoalPromotionFact
     public const string MergeTrainProvenance = "merge-train-main-compare-and-swap";
     public const string CliFastForwardProvenance = "cli-workspace-fast-forward";
     public const string PullRequestMergedProvenance = "pull-request-merged";
+    public const string ReconstructedProvenancePrefix = "reconstructed:";
 
     public GoalPromotionFact(string goalId, string candidateRevision, string priorMainRevision,
         string promotedMainRevision, DateTimeOffset promotedAt, string provenance)
@@ -16,7 +17,8 @@ public sealed record GoalPromotionFact
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
         if (promotedAt == default || promotedAt.Offset != TimeSpan.Zero)
             throw new ArgumentException("Promotion time must be a non-default UTC instant.", nameof(promotedAt));
-        if (provenance is not (SoloProvenance or CohortProvenance or MergeTrainProvenance or CliFastForwardProvenance or PullRequestMergedProvenance))
+        if (provenance is not (SoloProvenance or CohortProvenance or MergeTrainProvenance or CliFastForwardProvenance or PullRequestMergedProvenance)
+            && !IsReconstructedProvenance(provenance))
             throw new ArgumentException("Unrecognized successful promotion provenance.", nameof(provenance));
         GoalId = goalId;
         CandidateRevision = Revision(candidateRevision);
@@ -34,6 +36,15 @@ public sealed record GoalPromotionFact
     public string PromotedMainRevision { get; }
     public DateTimeOffset PromotedAt { get; }
     public string Provenance { get; }
+
+    private static bool IsReconstructedProvenance(string? provenance)
+    {
+        if (provenance is null || !provenance.StartsWith(ReconstructedProvenancePrefix, StringComparison.Ordinal))
+            return false;
+        var source = provenance[ReconstructedProvenancePrefix.Length..];
+        return source.Length > 0 && source.Split('-').All(segment =>
+            segment.Length > 0 && segment.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9'));
+    }
 
     private static string Revision(string revision)
     {

@@ -513,6 +513,8 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     [Xunit.Fact]
     public void Create_EmptyTopLevelOutput_RetainsTypedApparatusReceiptAndValidHeadBytes()
     {
+        // This apparatus-failure case requires a real child's output and identity.
+        using var probeSeam = InfrastructureTestSupport.UseGitProbeSeam(readExitCode: actual => actual());
         var runner = new InterceptingGitRunner(
             arguments => arguments.SequenceEqual(["rev-parse", "--show-toplevel"]),
             (_, _, result) => result with

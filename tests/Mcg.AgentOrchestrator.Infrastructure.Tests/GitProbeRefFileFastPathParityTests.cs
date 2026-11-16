@@ -10,7 +10,10 @@ public sealed class GitProbeRefFileFastPathParityTests(
         foreach (var shape in new[] { "normal", "linked", "packed" })
         foreach (var revision in new[]
                  { "HEAD", "refs/heads/fixture-main", "fixture-main", "HEAD^{commit}", "HEAD^{tree}" })
-        foreach (var flags in new[] { "", "--verify", "-q", "--quiet", "--verify -q", "-q --verify" })
+        // Canonical --verify forms and their refusal cases belong to GitMetadataLookupSeam*Tests;
+        // peel expressions retain the helper's existing ref-file behavior.
+        foreach (var flags in new[] { "", "-q", "--quiet", "--verify -q", "-q --verify", "--verify" })
+        if (flags != "--verify" || revision.Contains("^{", StringComparison.Ordinal))
             yield return [shape, revision, flags];
     }
 

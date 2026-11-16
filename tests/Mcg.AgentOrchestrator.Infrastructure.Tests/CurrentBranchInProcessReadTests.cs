@@ -263,7 +263,7 @@ public sealed class CurrentBranchInProcessReadTests : IDisposable
 
     private static string? Oracle(string repo)
     {
-        var result = GitCli.Run(repo, "branch", "--show-current");
+        var result = GitCli.RunDirect(repo, "branch", "--show-current");
         var branch = result.Output.Trim();
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(branch) ? branch : null;
     }

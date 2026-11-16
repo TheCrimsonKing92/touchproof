@@ -166,6 +166,16 @@ internal static class GitCli
     public static GitResult Run(string workingDirectory, int timeoutMilliseconds, params string[] args)
         => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
 
+    // Explicit process boundary after an in-process proof declines, and for independent oracles.
+    internal static GitResult RunDirect(string workingDirectory, params string[] args) =>
+        RunDirect(workingDirectory, null, null, args);
+
+    internal static GitResult RunDirect(string workingDirectory, int? timeoutMilliseconds,
+        IReadOnlyDictionary<string, string>? environment, params string[] args) =>
+        RunExecutableCore("git", workingDirectory, timeoutMilliseconds, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System, environment,
+            allowMetadataLookup: false);
+
     internal static GitResult RunForRepository(string workingDirectory, params string[] args) =>
         RunExecutableCore("git", workingDirectory, null, null, args,
             Volatile.Read(ref CompletionObserver), TimeProvider.System,
@@ -195,7 +205,8 @@ internal static class GitCli
     internal static GitResult RunExecutableObserved(string executable, string workingDirectory,
         int timeoutMilliseconds, Func<string, Action<GitProcessTiming>?>? completionObserver,
         TimeProvider clock, params string[] args) =>
-        RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args, completionObserver, clock);
+        RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args, completionObserver, clock,
+            allowMetadataLookup: false);
 
     // Instance-scoped observation for coordinated launch-window tests; no ambient hook.
     internal static GitResult RunExecutable(
@@ -219,11 +230,20 @@ internal static class GitCli
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null,
         Action? lockContended = null, Action<HandleListLaunchedProcess>? startedObserver = null,
         GitIdleGapHistory? idleGapHistory = null, Action<GitProgressWatch.Observation>? sampled = null,
-        Action<ProcessStartInfo>? configureStart = null)
+        Action<ProcessStartInfo>? configureStart = null, bool allowMetadataLookup = true)
     {
         var processStarted = false;
         try
         {
+            if (allowMetadataLookup && executable == "git" && standardInput is null &&
+                errorModeAccess is null && lockContended is null && startedObserver is null &&
+                idleGapHistory is null && sampled is null && configureStart is null &&
+                GitMetadataLookup.TryAnswer(workingDirectory, args,
+                    name => GitPathQuery.EnvironmentValue(environment, name), out var metadata))
+                // Legacy consumers use ProcessStarted as part of their success contract. Actual
+                // process counts come from launch observers, which this path never invokes.
+                return new GitResult(0, metadata, "");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = executable,

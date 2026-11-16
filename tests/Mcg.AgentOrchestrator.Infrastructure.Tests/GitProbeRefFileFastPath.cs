@@ -24,8 +24,23 @@ internal static class GitProbeRefFileFastPath
             !GitRefFileResolver.TryResolve(workingDirectory, revision, out var id, ReadEnvironment))
             return false;
 
-        var output = id + "\n";
-        answer = new GitProbeResult(
+        answer = Answer(workingDirectory, arguments, id + "\n");
+        return true;
+    }
+
+    internal static bool TryAnswerMetadata(string workingDirectory, IReadOnlyList<string> arguments,
+        bool hasSeamOverrideOrHook, out GitProbeResult answer)
+    {
+        answer = null!;
+        if (hasSeamOverrideOrHook ||
+            !GitMetadataLookup.TryAnswer(workingDirectory, arguments, ReadEnvironment, out var output)) return false;
+        answer = Answer(workingDirectory, arguments, output);
+        return true;
+    }
+
+    private static GitProbeResult Answer(string workingDirectory, IReadOnlyList<string> arguments, string output)
+    {
+        var answer = new GitProbeResult(
             "git " + string.Join(' ', arguments) + " [resolved from ref files]",
             // GitProbeResult.Succeeded requires this legacy flag; no child identity is invented.
             ProcessStarted: true, ExitCode: 0, StandardOutput: output, StandardError: string.Empty,
@@ -35,10 +50,10 @@ internal static class GitProbeRefFileFastPath
             StandardOutputByteCount: Encoding.UTF8.GetByteCount(output),
             Classification: GitProbeClassification.Success, Observations: new(new(), new(), new()));
         InfrastructureTestSupport.RecordGitProbeRefFileAnswer();
-        return true;
+        return answer;
     }
 
-    private static string? ReadEnvironment(string name) => name.ToUpperInvariant() switch
+    internal static string? ReadEnvironment(string name) => name.ToUpperInvariant() switch
     {
         "GIT_DIR" or "GIT_WORK_TREE" or "GIT_INDEX_FILE" or "GIT_OBJECT_DIRECTORY" or
             "GIT_ALTERNATE_OBJECT_DIRECTORIES" or "GIT_COMMON_DIR" => null,

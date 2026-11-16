@@ -1306,8 +1306,8 @@ public static void DropToLow() {
                 var commonDirResult = proven
                     ? new GitCli.GitResult(0, output!, "", ProcessStarted: false)
                     : gitEnvironment is null
-                        ? GitCli.Run(worktree, "rev-parse", "--git-common-dir")
-                        : GitCli.RunWithEnvironment(worktree, gitEnvironment, "rev-parse", "--git-common-dir");
+                        ? GitCli.RunDirect(worktree, "rev-parse", "--git-common-dir")
+                        : GitCli.RunDirect(worktree, null, gitEnvironment, "rev-parse", "--git-common-dir");
                 if (!commonDirResult.Succeeded || string.IsNullOrWhiteSpace(commonDirResult.Output))
                 {
                     return;

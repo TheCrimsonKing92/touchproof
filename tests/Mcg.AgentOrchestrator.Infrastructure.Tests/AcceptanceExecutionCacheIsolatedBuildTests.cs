@@ -18,6 +18,7 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
     private readonly List<string> _buildOutputs = [];
     private readonly Dictionary<string, int> _buildCounts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _identityCommandCounts = new(StringComparer.Ordinal);
+    private readonly List<(string Slot, string? Components, string? Summary)> _slotEvidence = [];
 
     [Fact]
     public async Task ColdThenWarm_ProveExecutionProvenanceAndRejectStaleInputs()
@@ -119,6 +120,75 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
         }
     }
 
+    [Fact]
+    public void RestoredAssertion_Mismatch_NamesSlotSummaryAndComponentDiff()
+    {
+        _slotEvidence.Add(("cold", "Core:imports=a;Core:items=b", "summary-cold"));
+        var cold = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertRestored(true, false));
+        Assert.Contains("slot 'cold'", cold.Message);
+        Assert.Contains("expected restored=True, actual restored=False", cold.Message);
+        Assert.Contains("summary-cold", cold.Message);
+        Assert.Contains("no previous slot", cold.Message);
+        AssertRestored(true, true);
+        AssertRestored(false, false);
+
+        _slotEvidence.Add(("warm", "Core:imports=a;Core:items=c", "summary-warm"));
+        var warm = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertRestored(true, false));
+        Assert.Contains("slot 'warm'", warm.Message);
+        Assert.Contains("previous slot 'cold'", warm.Message);
+        Assert.Contains("summary-warm", warm.Message);
+        Assert.Contains("Core:items", warm.Message);
+        Assert.DoesNotContain("Core:imports", warm.Message);
+
+        _slotEvidence.Add(("changed", "Core:imports=a;Core:items=c", "summary-changed"));
+        var changed = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertRestored(false, true));
+        Assert.Contains("slot 'changed'", changed.Message);
+        Assert.Contains("expected restored=False, actual restored=True", changed.Message);
+        Assert.Contains("summary-changed", changed.Message);
+        Assert.Contains("previous slot 'warm'", changed.Message);
+        Assert.Contains("no identity component differs", changed.Message);
+
+        _slotEvidence.Add(("unresolved", null, null));
+        var unresolved = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertRestored(true, false));
+        Assert.Contains("Cache-phase result summary: (none recorded)", unresolved.Message);
+        Assert.Contains("identity not resolved for slot 'unresolved'", unresolved.Message);
+
+        _slotEvidence.Add(("resolved", "Core:imports=a;Core:items=c", "summary-resolved"));
+        var missingBaseline = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertRestored(true, false));
+        Assert.Contains("identity components unavailable for previous slot 'unresolved'", missingBaseline.Message);
+    }
+
+    private void AssertRestored(bool expectedRestored, bool restored) =>
+        Assert.True(expectedRestored == restored, RestoredAssertionMessage(expectedRestored, restored));
+
+    private string RestoredAssertionMessage(bool expectedRestored, bool restored)
+    {
+        var current = _slotEvidence[^1];
+        string comparison;
+        if (_slotEvidence.Count == 1)
+        {
+            comparison = "Identity comparison: no previous slot; no baseline exists.";
+        }
+        else
+        {
+            var previous = _slotEvidence[^2];
+            if (string.IsNullOrEmpty(current.Components))
+                comparison = $"Identity comparison with previous slot '{previous.Slot}': unavailable; identity not resolved for slot '{current.Slot}'.";
+            else if (string.IsNullOrEmpty(previous.Components))
+                comparison = $"Identity comparison: identity components unavailable for previous slot '{previous.Slot}'.";
+            else
+            {
+                var differences = DotnetBaseBuildCacheMissDetail.DifferingComponents(previous.Components, current.Components);
+                comparison = $"Identity components differing from previous slot '{previous.Slot}': " +
+                    (differences.Length == 0 ? "no identity component differs." : differences);
+            }
+        }
+
+        return $"Cache restore mismatch in slot '{current.Slot}': expected restored={expectedRestored}, actual restored={restored}." +
+            Environment.NewLine + $"Cache-phase result summary: {(string.IsNullOrEmpty(current.Summary) ? "(none recorded)" : current.Summary)}" +
+            Environment.NewLine + comparison;
+    }
+
     private static void ApplyImportOrder(DotnetBuildEnvironment environment, string? order, bool changeImport = false)
     {
         if (order is null) return;
@@ -158,6 +228,7 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
             [InfrastructureTestsProject], [CoreProject, ExecutionProject, InfrastructureTestsProject]);
         var phase = new DotnetTestBuildPhase(["dotnet", "build", InfrastructureTestsProject, "-v:minimal"], plan);
         var restored = false;
+        string? components = null;
         var sourceInputs = Directory.EnumerateFiles(tree, "*", SearchOption.AllDirectories)
             .OrderBy(file => Path.GetRelativePath(tree, file), StringComparer.Ordinal)
             .Select(file => new { Path = Path.GetRelativePath(tree, file), Sha256 = Hash(file) }).ToArray();
@@ -205,6 +276,7 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
                 }, ProcessEnvironment(tree, owned));
             watch.Stop();
             identityMilliseconds += watch.Elapsed.TotalMilliseconds;
+            components ??= identity?.Components;
             output.WriteLine("ISOLATED_EXECUTION_IDENTITY " + JsonSerializer.Serialize(new
             {
                 slot, fingerprint = identity?.Fingerprint, components = identity?.Components, elapsedMs = watch.Elapsed.TotalMilliseconds
@@ -229,8 +301,9 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
                 note = "Wall times include process startup/capture. Identity non-command time includes hashing, evaluation processing and measurement output, not compiler time. MSBuild cumulative task/target times are rounded, overlapping observations, not additive wall-time components. Cache probe/publication timing is unavailable separately. Fixture results do not prove production speedup."
             }));
         }
+        _slotEvidence.Add((slot, components, completed.Run.Result.ResultSummary));
         Assert.True(completed.Run.Result.Passed);
-        Assert.Equal(expectedRestoredHash is not null, restored);
+        AssertRestored(expectedRestoredHash is not null, restored);
         Assert.NotNull(completed.Run.Result.ResultSummary);
         output.WriteLine($"ISOLATED_EXECUTION_CACHE tree={tree} slot={slot} {completed.Run.Result.ResultSummary}");
         return (environment, completed.Run.Result.ResultSummary!);

@@ -123,6 +123,7 @@ internal static class CliCommandHelp
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent] [--json]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json] [--sections]";
     public const string ClaudeUsageBackfillUsage = "Usage: claude-usage-backfill [--since <ISO-8601-with-offset>] [--goal <goal-prefix>] [--apply] [--json]";
+    public const string PromotionFactsBackfillUsage = "Usage: promotion-facts-backfill [--apply] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop | conductor setup | conductor apply-intents <goal-prefix>";
@@ -800,6 +801,11 @@ internal static class CliCommandHelp
         ClaudeUsageBackfillUsage,
         "Report historical Claude transcript usage fills; --apply queues a workspace intent for the conductor tick.",
         ["--since", "--goal", "--apply", "--json", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry PromotionFactsBackfill = new(
+        PromotionFactsBackfillUsage,
+        "Plan original promotion facts from landing events; --apply records unambiguous reconstructed facts.",
+        ["--apply", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AuthorDraft = new(
         AuthorDraftUsage,
@@ -1495,6 +1501,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("claude-usage-backfill", StringComparison.OrdinalIgnoreCase))
         {
             entry = ClaudeUsageBackfill;
+            return true;
+        }
+
+        if (args[0].Equals("promotion-facts-backfill", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = PromotionFactsBackfill;
             return true;
         }
 

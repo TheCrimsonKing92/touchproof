@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 using Fixture = GoalRepositoryWorktreeProvisionerFixture;
 using static GoalRepositoryWorktreeProvisionerFixtureSeedTests;
@@ -23,8 +24,6 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
     }
 
     [Theory]
-    [InlineData("rev-parse", "--git-path", "HEAD")]
-    [InlineData("rev-parse", "--verify", "HEAD")]
     [InlineData("rev-parse", "main")]
     [InlineData("rev-parse", "HEAD", "refs/heads/main")]
     [InlineData("for-each-ref", "--format=%(refname)", "refs/heads")]
@@ -39,6 +38,22 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
 
         Assert.Equal(new[] { arguments[0] }, launches.Commands);
         Assert.Equal(0, answers.Count);
+    }
+
+    [Theory]
+    [InlineData("rev-parse", "--git-path", "HEAD")]
+    [InlineData("rev-parse", "--verify", "HEAD")]
+    public void Run_MetadataLookups_MatchesGitWithoutLaunching(params string[] arguments)
+    {
+        using var fixture = new Fixture();
+        var expected = GitCli.RunDirect(fixture.CheckoutPath, arguments);
+        Assert.True(expected.Succeeded, expected.Error);
+        using var launches = new GitLaunches();
+
+        GitMetadataLookupFixture.EqualBytes(expected, GitCli.Run(fixture.CheckoutPath, arguments));
+        Assert.Equal(expected.Output.TrimEnd('\r', '\n'), Fixture.Run(fixture.CheckoutPath, arguments));
+
+        Assert.Empty(launches.Commands);
     }
 
     [Fact]

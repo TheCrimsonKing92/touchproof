@@ -40,10 +40,10 @@ internal sealed class AcceptanceLaneStallMonitor : IDisposable
         return new RestoreScope(() => Inputs.Value = previous);
     }
 
-    internal void EmitTree(AcceptanceLaneStallTreeSnapshot snapshot)
+    internal void EmitTree(AcceptanceLaneStallTreeSnapshot snapshot, SpawnProcessIdentity? tracked)
     {
         if (!Stopped) return;
-        try { _emit(snapshot.ToLine(_lane)); }
+        try { _emit(snapshot.WithTracked(tracked).ToLine(_lane)); }
         catch { /* Diagnostic failure must not prevent the child stop. */ }
     }
 
