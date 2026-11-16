@@ -164,7 +164,7 @@ public sealed class OwnerConsoleActivityPresentationTests
 
             Assert.Equal(new[]
             {
-                $"{passed.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Improve the owner console: passed its tests, landing next",
+                $"{passed.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Improve the owner console: passed its tests",
                 $"{escalation.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Waiting: Improve the owner console has been held 0 min: owner review required"
             }, view.ActivityLines);
             Assert.Equal(2, recent.Count);
@@ -248,7 +248,7 @@ public sealed class OwnerConsoleActivityPresentationTests
 
     [Theory]
     [InlineData("goal-escalation", OwnerReviewDetail, "escalated: approval of the completed work")]
-    [InlineData("acceptance", "result=passed commit=internal-sha", "passed its tests, landing next")]
+    [InlineData("acceptance", "result=passed commit=internal-sha", "passed its tests")]
     public async Task LongGoalTitlesLeaveTheActivityPhraseVisible(string kind, string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();

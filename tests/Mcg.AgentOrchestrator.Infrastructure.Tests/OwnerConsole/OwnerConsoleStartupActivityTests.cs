@@ -34,7 +34,7 @@ public sealed class OwnerConsoleStartupActivityTests
 
             Assert.Equal(2, view.ActivityLines.Count);
             Assert.Contains("failed its tests (the failure reason has not been recorded)", view.ActivityLines[0]);
-            Assert.Contains("passed its tests, landing next", view.ActivityLines[1]);
+            Assert.Contains("passed its tests", view.ActivityLines[1]);
             Assert.DoesNotContain(view.ActivityLines, line => line.Contains("newest health", StringComparison.Ordinal));
             Assert.DoesNotContain(view.ActivityLines, line => line.Contains("unclassified", StringComparison.Ordinal));
         }

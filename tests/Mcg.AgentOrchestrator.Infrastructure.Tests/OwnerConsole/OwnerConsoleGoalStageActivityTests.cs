@@ -45,7 +45,7 @@ public sealed class OwnerConsoleGoalStageActivityTests
             Assert.Equal(new[]
             {
                 $"{time.AddSeconds(3).ToLocalTime():HH:mm:ss} Landed: Console stages (11111111)",
-                $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} 11111111 Console stages: passed its tests, landing next",
+                $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} 11111111 Console stages: passed its tests",
                 $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} 11111111 Tester sent Console stages back: a problem needs correction",
                 $"{time.ToLocalTime():HH:mm:ss} 11111111 Developer started on Console stages"
             }, view.ActivityLines);
@@ -140,7 +140,7 @@ public sealed class OwnerConsoleGoalStageActivityTests
     [Theory]
     [InlineData("result=started", null)]
     [InlineData("result=failed", "Console stages: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
-    [InlineData("result=passed", "Console stages: passed its tests, landing next")]
+    [InlineData("result=passed", "Console stages: passed its tests")]
     public void GateTransitions_RenderPlainPhrases(string detail, string? phrase)
     {
         var item = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "acceptance", "11111111", detail);
