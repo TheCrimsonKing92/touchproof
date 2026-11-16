@@ -16,7 +16,7 @@ internal static class MergeTrainMemberRecheck
     }
 
     internal sealed record MemberResult(string GoalId, string CandidateRevision, string BranchRevision,
-        int? BriefVersion, string Result, long? CpuMilliseconds);
+        int? BriefVersion, string Result, long? CpuMilliseconds, MergeTrainMemberRecheckUnavailable? Unavailable = null);
 
     internal sealed record Outcome(IReadOnlyList<MemberResult> Members, string? FallbackReason)
     {
@@ -41,7 +41,7 @@ internal static class MergeTrainMemberRecheck
             $"MEMBER_RECHECK train={receipt.Identity.Value} receipt={receipt.ReceiptId} attribution={AttributionSource} " +
             $"reason={FallbackReason ?? "attributed"} cpu_ms={CpuText(CpuMillisecondsTotal)} members=[" +
             string.Join(';', Members.Select(member => $"member={member.GoalId} candidate_revision={member.CandidateRevision} " +
-                $"result={member.Result} cpu_ms={CpuText(member.CpuMilliseconds)}")) + "]";
+                $"result={member.Result} cpu_ms={CpuText(member.CpuMilliseconds)}{member.Unavailable?.EventText}")) + "]";
 
         private static string CpuText(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
     }
@@ -49,16 +49,23 @@ internal static class MergeTrainMemberRecheck
     internal static Outcome? Run(MergeTrainReceipt receipt, MergeTrainMemberBinding? attributed,
         bool messageSubjectFailure, int attempt, MergeTrainMemberRecheckRunner.Runner runner,
         IOutcomeCache cache, Action<MergeTrainMemberBinding, string> implicate,
-        Action<MergeTrainEjection> eject, Action<string, string> log, CancellationToken token)
+        Action<MergeTrainEjection> eject, Action<string, string> log, CancellationToken token, bool recordSkips)
     {
-        if (attributed is not null || messageSubjectFailure || attempt != 0 || receipt.Identity.Members.Count != 3 ||
-            receipt.Outcome != MergeTrainGateOutcome.Failed) return null;
+        if (MergeTrainMemberRecheckSkip.Guard(receipt, attributed, messageSubjectFailure, attempt) is { } skip)
+        {
+            if (recordSkips) MergeTrainMemberRecheckSkip.Record(receipt, skip, attempt, cache, log);
+            return null;
+        }
         token.ThrowIfCancellationRequested();
         var outcome = cache.Read(receipt);
         var saved = false;
         if (outcome is null)
         {
-            if (!MergeTrainRedAttribution.IsGenuineTrainRed(receipt)) return null;
+            if (!MergeTrainRedAttribution.IsGenuineTrainRed(receipt))
+            {
+                if (recordSkips) MergeTrainMemberRecheckSkip.Record(receipt, "not-genuine-train-red", attempt, cache, log);
+                return null;
+            }
             outcome = Decide(receipt, runner, token);
             token.ThrowIfCancellationRequested();
             // Persist before implication/ejection so replay cannot change the experiment.
@@ -68,7 +75,8 @@ internal static class MergeTrainMemberRecheck
         Validate(receipt, outcome);
         foreach (var member in outcome.Implicated(receipt)) implicate(member, AttributionSource);
         foreach (var ejection in outcome.Ejections(receipt)) eject(ejection);
-        if (saved) log(outcome.EventKind, outcome.EventDetail(receipt));
+        if (saved && (!recordSkips || !MergeTrainMemberRecheckSkip.WasRecorded(receipt, cache)))
+            log(outcome.EventKind, outcome.EventDetail(receipt));
         return outcome;
     }
 
@@ -91,9 +99,11 @@ internal static class MergeTrainMemberRecheck
         {
             token.ThrowIfCancellationRequested();
             MergeTrainFocusedRecheckRunner.RunResult? run;
+            MergeTrainMemberRecheckUnavailable? unavailable = null;
             try { run = runner(receipt.Identity.Members[index], receipt.Identity.ObservedMainRevision, selection, token); }
             catch (OperationCanceledException) { throw; }
-            catch (Exception) { run = null; }
+            catch (MergeTrainMemberRecheckUnavailableException exception) { run = null; unavailable = exception.Unavailable; }
+            catch (Exception exception) { run = null; unavailable = MergeTrainMemberRecheckUnavailable.Threw(exception); }
             var refusal = MergeTrainFocusedRecheckDecision.ExecutionRefusal(run, selection);
             var results = run is null ? null : MergeTrainFocusedRecheckRunner.ReadExecution(run.Verification.TestResultPaths);
             var bound = run is not null && run.MainRevision == receipt.Identity.ObservedMainRevision &&
@@ -104,7 +114,10 @@ internal static class MergeTrainMemberRecheck
             var verdict = bound && refusal is null ? "pass" :
                 bound && refusal == "recheck-failed" && selectedFailure ? "fail" : "unavailable";
             entries[index] = entries[index] with { Result = verdict,
-                CpuMilliseconds = run?.CpuMilliseconds is { } cpu && cpu >= 0 ? cpu : null };
+                CpuMilliseconds = run?.CpuMilliseconds is { } cpu && cpu >= 0 ? cpu : null,
+                Unavailable = verdict != "unavailable" ? null : unavailable ?? (run is null ? new("no-run") :
+                    !bound ? new("run-not-bound-to-observed-main", detail: run.MainRevision != receipt.Identity.ObservedMainRevision
+                        ? "main-revision-mismatch" : "missing-tree-revision") : new("execution-refusal", detail: refusal)) };
             if (verdict == "unavailable") return new(entries, "execution-failure");
         }
         var failed = entries.Count(entry => entry.Result == "fail");
@@ -127,6 +140,7 @@ internal static class MergeTrainMemberRecheck
             "interaction" => complete && failed == 0,
             "all-members-failed" => complete && failed == outcome.Members.Count,
             "unreadable-identities" or "focused-bounds" => outcome.Members.All(member => member.Result == "unrun"),
+            "skipped" => outcome.Members.All(member => member.Result == "unrun"),
             "execution-failure" => !complete && outcome.Members.Any(member => member.Result == "unavailable"),
             _ => false
         };

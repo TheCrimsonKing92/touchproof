@@ -19,10 +19,11 @@ internal static class MergeTrainMemberRecheckRunner
                     member.MergeStatus, member.MergeReason, member.BriefVersion),
                 workspace.IntegrationBranch, cleanupHooks, requireCurrentMain: false);
             var runId = "train-member-recheck-" + Guid.NewGuid().ToString("N");
-            using var lease = acquireLease(runId, token);
+            using var lease = AcquireLease(acquireLease, runId, token);
             using var build = new MergeTrainReproductionBuildScope(lease.Environment);
             var tree = MergeTrainReproductionTree.Read(partition.Path);
-            if (tree != partition.TreeRevision) return null;
+            if (tree != partition.TreeRevision)
+                throw new MergeTrainMemberRecheckUnavailableException(new("tree-mismatch", detail: "before-run"));
             var result = AcceptanceExecutionRunner.RunFocusedVerification(verifier, partition.Path, member.GoalId,
                 selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false, token,
                 integrationBranch: workspace.IntegrationBranch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull,
@@ -34,8 +35,10 @@ internal static class MergeTrainMemberRecheckRunner
             var provenance = new MergeTrainReproductionProvenance(main, member.CandidateRevision, partition.TreeRevision, tree,
                 build.Environment.ArtifactsPath, result.Checks.Select(check => check.ArtifactsPath ?? "").ToArray(),
                 AcceptanceTrxCodeBaseReader.Read(interpreted.TestResultPaths));
-            if (MergeTrainReproductionTree.Read(partition.Path) != tree ||
-                MergeTrainReproductionEvidenceCheck.InvalidReason(provenance, member, main) is not null) return null;
+            if (MergeTrainReproductionTree.Read(partition.Path) != tree)
+                throw new MergeTrainMemberRecheckUnavailableException(new("tree-mismatch", detail: "after-run"));
+            if (MergeTrainReproductionEvidenceCheck.InvalidReason(provenance, member, main) is { } invalidReason)
+                throw new MergeTrainMemberRecheckUnavailableException(new("invalid-evidence", detail: invalidReason));
             // The decision reads these files after this scope has disposed its build output.
             var evidenceRoot = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", runId);
             Directory.CreateDirectory(evidenceRoot);
@@ -48,6 +51,18 @@ internal static class MergeTrainMemberRecheckRunner
             return new(runId, main, interpreted with { TestResultPaths = paths },
                 result.Arms?.Sum(arm => arm.NotRunSelections?.Count ?? 0) ?? 0, ReadCpuMilliseconds(result.Checks));
         };
+
+    internal static DotnetBuildEnvironmentLease AcquireLease(
+        Func<string, CancellationToken, DotnetBuildEnvironmentLease> acquireLease, string runId, CancellationToken token)
+    {
+        try { return acquireLease(runId, token); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            throw new MergeTrainMemberRecheckUnavailableException(
+                MergeTrainMemberRecheckUnavailable.Threw(exception, "build-lease-not-acquired"));
+        }
+    }
 
     internal static long? ReadCpuMilliseconds(IReadOnlyList<AcceptanceCheckResult> checks)
     {

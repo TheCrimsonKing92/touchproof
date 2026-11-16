@@ -385,10 +385,11 @@ internal sealed partial class ConductorDriver
                 if (!messageSubjectFailure && attributed is not null)
                     RecordTrainImplicatedMember(attributed, receipt, subjects, attributionSource);
                 RecordTrainRedPair(selection, members, receipt, attributed);
-                var detail = $"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary";
-                return Fallback(detail);
+                MergeTrainMemberRecheckSkip.RecordEarlyReturn(receipt, attributed, messageSubjectFailure, attempt,
+                    new MergeTrainMemberRecheckOutcomeCache(Path.Combine(_cohortWorkspace.OrchestratorDirectory, "merge-train-acceptance.db")),
+                    (kind, detail) => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath), members[0].GoalId.Value, detail, eventKind: kind));
+                return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
             }
-
             var memberRecheck = MergeTrainMemberRecheck.Run(receipt, attributed, messageSubjectFailure, attempt,
                 MergeTrainMemberRunner ?? MergeTrainMemberRecheckRunner.Create(_cohortAcceptanceVerifier, _cohortWorkspace,
                     _cohortCleanupHooks, (runId, token) => CohortPartitionStableSlotLeaseSource is { } source
@@ -402,7 +403,7 @@ internal sealed partial class ConductorDriver
                     AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, memberEjection.GoalId, memberEjection.Reason, "member-recheck");
                 },
                 (kind, detail) => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath),
-                    members[0].GoalId.Value, detail, eventKind: kind), cancellationToken);
+                    members[0].GoalId.Value, detail, eventKind: kind), cancellationToken, recordSkips: true);
             if (memberRecheck is { FallbackReason: null })
             {
                 var memberSurvivors = memberRecheck.Remaining(receipt).Select(member => member.GoalId).ToHashSet();
@@ -413,7 +414,6 @@ internal sealed partial class ConductorDriver
                     return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
                 continue;
             }
-
             // Keep the bounded bisection; an inconclusive member sweep retains drop-newest.
             // The dropped member remains absent from MemberResults for its later solo gate.
             var dropped = attributed ?? members[^1];

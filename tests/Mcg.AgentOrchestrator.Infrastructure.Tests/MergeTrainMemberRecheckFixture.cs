@@ -41,14 +41,14 @@ internal sealed class MergeTrainMemberRecheckFixture : IDisposable
 
     internal MergeTrainMemberRecheck.Outcome? Run(MergeTrainMemberRecheckRunner.Runner runner,
         MergeTrainMemberBinding? attributed = null, bool messageSubject = false, int attempt = 0,
-        CancellationToken token = default) => MergeTrainMemberRecheck.Run(Receipt, attributed, messageSubject, attempt,
+        CancellationToken token = default, bool recordSkips = false) => MergeTrainMemberRecheck.Run(Receipt, attributed, messageSubject, attempt,
         (member, main, selection, cancellation) =>
         {
             Calls.Add(member);
             Assert.Equal(Main, main);
             return runner(member, main, selection, cancellation);
         }, Cache, (member, source) => Implicated[member.GoalId] = source, Ejections.Add,
-        (kind, detail) => Events.Add((kind, detail)), token);
+        (kind, detail) => Events.Add((kind, detail)), token, recordSkips);
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
@@ -58,6 +58,8 @@ internal sealed class MergeTrainMemberRecheckFixture : IDisposable
         internal Action? BeforeSave { get; set; }
         internal Func<MergeTrainMemberRecheck.Outcome, MergeTrainMemberRecheck.Outcome>? OnRead { get; set; }
         internal int Count => _outcomes.Count;
+        internal void Seed(MergeTrainReceipt receipt, string json) =>
+            _outcomes.Add((receipt.ReceiptId, receipt.Identity.Value), json);
         public MergeTrainMemberRecheck.Outcome? Read(MergeTrainReceipt receipt)
         {
             if (!_outcomes.TryGetValue((receipt.ReceiptId, receipt.Identity.Value), out var json)) return null;
