@@ -293,6 +293,8 @@ internal sealed partial class OperatorIntentCoordinator
             {
                 _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Rejected,
                     "Rejected: task-intent-admission-expired.", _utcNow()).GetAwaiter().GetResult();
+                if (_decisions is not null)
+                    TaskIntentAdmissionExpiredAttention.Raise(_decisions, goal, intent);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=rejected reason=task-intent-admission-expired");
                 continue;
             }
