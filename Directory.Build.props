@@ -31,4 +31,9 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\obj\**;$(MSBuildProjectDirectory)\bin\**</DefaultItemExcludes>
   </PropertyGroup>
+  <!-- Short-lived processes rarely recover dynamic PGO instrumentation costs: capture profiling helpers used 12.8 of 223.7 dotnet CPU-seconds (5.7%).
+       Core tests averaged 95.4 to 87.6 CPU-seconds with PGO off (about 8% less, indicative). -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Mcg.AgentOrchestrator.App' or '$(MSBuildProjectName)' == 'Mcg.AgentOrchestrator.RealProcessShardProbe' or ($(MSBuildProjectName.StartsWith('Mcg.AgentOrchestrator.')) and $(MSBuildProjectName.EndsWith('.Tests')))">
+    <TieredPGO>false</TieredPGO>
+  </PropertyGroup>
 </Project>
