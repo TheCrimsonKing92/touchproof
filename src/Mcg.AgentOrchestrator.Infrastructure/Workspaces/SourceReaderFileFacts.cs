@@ -54,7 +54,9 @@ internal sealed record SourceReaderFileFacts(
         var root = tree.GetRoot();
         var nodes = root.DescendantNodes().ToArray();
         var references = root.DescendantTokens().Where(token => token.IsKind(SyntaxKind.IdentifierToken))
-            .Select(token => token.ValueText).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            .Select(token => token.ValueText).Concat(nodes.SelectMany(ImplicitReferences))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         // Include namespace segments and attribute shorthand as conservative invalidation names.
         var names = nodes.SelectMany(node => node switch
         {
@@ -68,16 +70,13 @@ internal sealed record SourceReaderFileFacts(
             BaseNamespaceDeclarationSyntax space => space.Name.DescendantTokens()
                 .Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText),
             _ => Enumerable.Empty<string>()
-        }).SelectMany(name => name.EndsWith("Attribute", StringComparison.Ordinal)
+        }).Where(name => !string.IsNullOrWhiteSpace(name))
+            .SelectMany(name => name.Length > 9 && name.EndsWith("Attribute", StringComparison.Ordinal)
             ? new[] { name, name[..^9] } : new[] { name }).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        // These declarations participate in implicit binding: callers need not spell their names.
-        // Either changed version must force full analysis, including changes of type kind.
+        // These causes cannot be bounded by declaration/reference names in either changed version.
         var unbounded = nodes.Any(node => node is OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax or
                 IndexerDeclarationSyntax or DelegateDeclarationSyntax ||
             node is BaseTypeDeclarationSyntax and not ClassDeclarationSyntax ||
-            node is MethodDeclarationSyntax method && ImplicitBindingName(method.Identifier.ValueText) ||
-            node is PropertyDeclarationSyntax property && ImplicitBindingName(property.Identifier.ValueText) ||
-            node is VariableDeclaratorSyntax variable && ImplicitBindingName(variable.Identifier.ValueText) ||
             node is UsingDirectiveSyntax directive && directive.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword)) ||
             references.Any(name => IsCollectionBuilder(name) || name is
                 "InterpolatedStringHandler" or "InterpolatedStringHandlerAttribute" or
@@ -132,6 +131,29 @@ internal sealed record SourceReaderFileFacts(
         "Select" or "SelectMany" or "Where" or "Join" or "GroupJoin" or "GroupBy" or
         "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending" or "Cast";
 
+    // Implicit syntax can bind members without an identifier token. Conservative names keep those
+    // consumers in the same fixed-point dependency closure as explicit member references.
+    private static string[] ImplicitReferences(SyntaxNode node) => node switch
+    {
+        CommonForEachStatementSyntax => ["GetEnumerator", "Current", "MoveNext", "Dispose",
+            "GetAsyncEnumerator", "MoveNextAsync", "DisposeAsync", "GetAwaiter", "IsCompleted",
+            "GetResult", "OnCompleted", "UnsafeOnCompleted"],
+        AwaitExpressionSyntax => ["GetAwaiter", "IsCompleted", "GetResult", "OnCompleted", "UnsafeOnCompleted"],
+        UsingStatementSyntax => ["Dispose", "DisposeAsync", "GetAwaiter", "IsCompleted", "GetResult",
+            "OnCompleted", "UnsafeOnCompleted"],
+        LocalDeclarationStatementSyntax declaration when declaration.UsingKeyword.IsKind(SyntaxKind.UsingKeyword) =>
+            ["Dispose", "DisposeAsync", "GetAwaiter", "IsCompleted", "GetResult", "OnCompleted", "UnsafeOnCompleted"],
+        TupleExpressionSyntax or DeclarationExpressionSyntax or PositionalPatternClauseSyntax => ["Deconstruct"],
+        CollectionExpressionSyntax => ["Add", "GetEnumerator", "Current", "MoveNext", "Dispose", "Count", "Length"],
+        InitializerExpressionSyntax initializer when initializer.IsKind(SyntaxKind.CollectionInitializerExpression) => ["Add"],
+        RangeExpressionSyntax or ListPatternSyntax => ["Length", "Count", "Slice"],
+        PrefixUnaryExpressionSyntax prefix when prefix.IsKind(SyntaxKind.IndexExpression) => ["Length", "Count"],
+        QueryExpressionSyntax => ["Select", "SelectMany", "Where", "Join", "GroupJoin", "GroupBy",
+            "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending", "Cast"],
+        InterpolatedStringExpressionSyntax => ["AppendLiteral", "AppendFormatted"],
+        _ => []
+    };
+
     private static bool IsCollectionBuilder(string name) => name is "CollectionBuilder" or "CollectionBuilderAttribute";
 
     internal static string Hash(string text)
@@ -150,7 +172,7 @@ internal sealed record SourceReaderFileFacts(
     // A null plan means dependency coverage cannot be bounded, so the caller must analyse every file.
     internal static HashSet<string>? Plan(SourceReaderFileFacts[] baseline, SourceReaderFileFacts[] candidate)
     {
-        if (!HasUniquePaths(candidate)) return null;
+        if (!HasUniquePaths(baseline) || !HasUniquePaths(candidate)) return null;
         var old = baseline.ToDictionary(file => file.Path, StringComparer.Ordinal);
         var current = candidate.ToDictionary(file => file.Path, StringComparer.Ordinal);
         var changed = old.Keys.Union(current.Keys, StringComparer.Ordinal).Where(path =>
@@ -158,18 +180,26 @@ internal sealed record SourceReaderFileFacts(
             before.ContentHash != after.ContentHash).ToHashSet(StringComparer.Ordinal);
         var versions = baseline.Concat(candidate).Where(file => changed.Contains(file.Path)).ToArray();
         if (versions.Any(file => file.Unbounded)) return null;
-        // Changes to inheritance can affect lookup through types not named at the call site.
-        // Conservatively fall back for added/removed base lists and edited base relationships.
+        var names = versions.SelectMany(file => file.DeclaredNames).ToHashSet(StringComparer.Ordinal);
+        var baseListChanged = false;
+        // Inheritance changes can rebind callers through unchanged intermediary declarations.
+        // Seed both old and new base names, then follow those intermediaries to their callers.
         foreach (var path in changed)
         {
             var before = old.GetValueOrDefault(path)?.Types ?? [];
             var after = current.GetValueOrDefault(path)?.Types ?? [];
             if (!before.Select(type => (type.Owner, type.BaseList)).OrderBy(type => type.Owner, StringComparer.Ordinal)
                     .SequenceEqual(after.Select(type => (type.Owner, type.BaseList)).OrderBy(type => type.Owner, StringComparer.Ordinal)) &&
-                before.Concat(after).Any(type => type.BaseList.Length != 0)) return null;
+                before.Concat(after).Any(type => type.BaseList.Length != 0))
+            {
+                baseListChanged = true;
+                names.UnionWith(before.Concat(after).SelectMany(type => SyntaxFactory.ParseTokens(type.BaseList))
+                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText)
+                    .Where(name => !string.IsNullOrWhiteSpace(name)));
+            }
         }
-        var names = versions.SelectMany(file => file.DeclaredNames).ToHashSet(StringComparer.Ordinal);
-        if (changed.Any(path => !(old.GetValueOrDefault(path)?.TypeDeclarationShapes ?? [])
+        if (baseListChanged || names.Any(ImplicitBindingName) ||
+            changed.Any(path => !(old.GetValueOrDefault(path)?.TypeDeclarationShapes ?? [])
                 .SequenceEqual(current.GetValueOrDefault(path)?.TypeDeclarationShapes ?? [], StringComparer.Ordinal)))
         {
             // A type or constant change can rebind an unchanged intermediary's signature or value. Its callers may
