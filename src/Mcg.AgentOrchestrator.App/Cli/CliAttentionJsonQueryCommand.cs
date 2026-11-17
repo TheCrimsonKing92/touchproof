@@ -23,11 +23,14 @@ internal static class CliAttentionJsonQueryCommand
         var context = AttentionJsonReadContext.ReadAsync(stateQueries, workspace,
             (time ?? TimeProvider.System).GetUtcNow(), new AttentionProjectionReadOptions(!summary),
             cancellationToken).GetAwaiter().GetResult();
+        var unlinkedGoals = UnlinkedGoalAttentionView.Rows(context.GoalFacts, workspace.PortfolioStorePath);
         Console.WriteLine(summary
             ? AttentionAgentReadView.RenderSummary(context.Waits, context.Items, time,
-                context.ProviderHolds, context.OwnerQuestions, context.PostLandingDuties, context.Goals, context.AmendmentHolds)
+                context.ProviderHolds, context.OwnerQuestions, context.PostLandingDuties, context.Goals, context.AmendmentHolds,
+                unlinkedGoals)
             : AttentionAgentReadView.Render(context.Waits, context.Items, time,
                 context.ProviderHolds, goals: context.Goals, gateEvidence: context.GateEvidence, ownerQuestions: context.OwnerQuestions,
-                postLandingDuties: context.PostLandingDuties, amendmentHolds: context.AmendmentHolds));
+                postLandingDuties: context.PostLandingDuties, amendmentHolds: context.AmendmentHolds,
+                unlinkedGoals: unlinkedGoals));
     }
 }

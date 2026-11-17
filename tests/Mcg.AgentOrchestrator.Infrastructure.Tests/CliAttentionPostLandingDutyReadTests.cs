@@ -43,7 +43,9 @@ public sealed class CliAttentionPostLandingDutyReadTests : Xunit.IClassFixture<I
                 ? ["waits", "items", "providerHolds", "ownerQuestionHolds"]
                 : ["waits", "gateEvidence", "items", "providerHolds", "ownerQuestionHolds"];
         if (form == "show") legacyFields = [.. legacyFields, "decisions", "hiddenByReason"];
-        Assert.Equal(legacyFields.Concat(["postLandingDuties"]),
+        var addedFields = form.StartsWith("show", StringComparison.Ordinal)
+            ? new[] { "postLandingDuties" } : ["postLandingDuties", "unlinkedGoals"];
+        Assert.Equal(legacyFields.Concat(addedFields),
             payload.EnumerateObject().Select(property => property.Name));
         var row = Assert.Single(payload.GetProperty("postLandingDuties").EnumerateArray());
         Assert.Equal(fixture.Goal.Id.Value, row.GetProperty("goalId").GetString());
