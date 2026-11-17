@@ -41,7 +41,7 @@ public sealed class CliAuthorDraftCommandTests
         Assert.Equal(fixture.Item.Id, root.GetProperty("backlogItemId").GetString());
         Assert.Equal(Fixture.MainSha, root.GetProperty("mainHead").GetString());
         Assert.Equal(0, root.GetProperty("exitCode").GetInt32());
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "premise-bullets", "provided-by-goals", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion", "prose-obligations", "modification-targets", "ratchet-rows", "measurement-only-draft" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "premise-bullets", "provided-by-goals", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion", "prose-obligations", "modification-targets", "ratchet-rows", "measurement-only-draft", "cost-goal-outcome-metric" },
             root.GetProperty("checks").EnumerateArray().Select(check => check.GetProperty("name").GetString()).ToArray());
         Assert.All(root.GetProperty("checks").EnumerateArray(), check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Contains($"goal --brief-file \"{draft}\" --backlog-item {fixture.Item.Id} --backlog-coverage full",

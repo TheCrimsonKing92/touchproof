@@ -264,6 +264,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal":
+            CostGoalOutcomeMetric.ValidateFilingArguments(parts);
             if (EpicAtCreation.HasArgument(parts) &&
                 (HasCliConfirmation(parts, "--simple") || HasCliConfirmation(parts, "--run") || HasCliConfirmation(parts, "--from-backlog")))
             {
@@ -346,6 +347,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
+            CostGoalOutcomeMetric.EnforceAtFiling(parts, goalObjective, goalSourceBacklogLink?.Item, context.Workspace);
             var goalEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, requestedEpic, goalSourceBacklogLink?.Item.Id);
             context.ReportGoalCreationProgress();
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(

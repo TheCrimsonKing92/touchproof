@@ -47,6 +47,7 @@ internal static class AuthorBriefDraftService
             Directory.CreateDirectory(directory);
             receiptPath = Path.Combine(directory, stem + ".receipt.json");
             var measureTagged = AuthorBriefDraftMeasurementOnlyCheck.IsMeasureTagged(workspace.BacklogStorePath, item.Id);
+            var costGoal = CostGoalOutcomeMetric.IsCostBacklogItem(item, workspace);
             var resolvedModel = ConductorRoundModelResolver.Resolve(seams.Catalog, ModelFunctionPurposes.ConductorAuthor);
             model = resolvedModel.Alias;
             var repository = seams.Repository.ResolveMainHeadOrTrackedEdits();
@@ -92,7 +93,7 @@ internal static class AuthorBriefDraftService
             {
                 retainedDependencyGoals = roundDependencyGoals;
                 var draftChecks = AuthorBriefDraftChecks.Run(markdown, mainHead, seams.Repository, stack,
-                    retainedDependencyGoals, measureTagged: measureTagged);
+                    retainedDependencyGoals, measureTagged: measureTagged, costGoal: costGoal);
                 var findings = BriefLint.Lint(markdown, workspace.ExecutionDirectory);
                 return new(markdown, [.. draftChecks, .. findings
                     .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
