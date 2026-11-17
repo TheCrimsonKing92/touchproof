@@ -93,6 +93,7 @@ internal static class OrchestratorArtifactRegistry
         Source("remote-lane-executors.json", "Infrastructure/Workspaces/RemoteLaneExecutorConfiguration.cs"),
         Source("prompt-rollout-watches.jsonl", "App/Orchestration/PromptRolloutWatchStore.cs"),
         Source("conductor-policy.json", "App/Orchestration/GoalRefinementWorkCoordinator.Policy.cs"),
+        Source("conductor-policy.json.last-valid.json", "App/Cli/ConductorPolicyLastValidSnapshot.cs"),
         Source("failure-clusters-daily-state.json", "App/Orchestration/FailureClustersDailyRunner.cs"),
         Source("host-health-state.json", "App/Orchestration/ConductorHostHealthMonitor.cs"),
         Source("program-health-state.json", "App/Orchestration/ConductorProgramHealthMonitor.cs"),

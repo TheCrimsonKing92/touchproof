@@ -452,6 +452,150 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         }
     }
 
+    [Xunit.Theory(DisplayName = "Startup recovers the validated file snapshot after primary policy becomes invalid")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void StartupUsesLastValidPolicySnapshot(bool malformed)
+    {
+        var root = CreateTempDirectory("mcg-policy-startup-snapshot");
+        try
+        {
+            var path = Path.GetFullPath(Path.Combine(root, "conductor-policy.json"));
+            var configured = ConductorAutonomyPolicy.Conservative with
+                { Name = "Last valid file", BoardFillMaxDraftsPerDay = 60, MaxConcurrentPaidWorkers = 2 };
+            File.WriteAllText(path, configured.ToJson());
+            Assert.NotNull(CliConductLoopStartup.PrepareConductLoopPolicy(root, null, TextWriter.Null, storeSetup: _ => []));
+            var snapshotPath = ConductorPolicyLastValidSnapshot.PathFor(root);
+            var snapshot = File.ReadAllText(snapshotPath);
+            File.WriteAllText(path, malformed ? "{ not-json" : (configured with { BoardFillMaxDraftsPerDay = 101 }).ToJson());
+
+            var resolved = CliConductLoopStartup.PrepareConductLoopPolicy(root, null, TextWriter.Null, storeSetup: _ => []);
+
+            Assert.NotNull(resolved);
+            Assert.Equal(configured.Name, resolved.Policy.Name);
+            Assert.Equal(60, resolved.Policy.BoardFillMaxDraftsPerDay);
+            Assert.Equal(2, resolved.Policy.MaxConcurrentPaidWorkers);
+            Assert.Equal($"last-valid:{snapshotPath}", resolved.Source);
+            var warning = Assert.Single(resolved.Warnings);
+            Assert.Contains("POLICY_INVALID", warning, StringComparison.Ordinal);
+            Assert.Contains(path, warning, StringComparison.Ordinal);
+            Assert.Contains(malformed ? "not valid JSON" : "boardFillMaxDraftsPerDay must be between 0 and 100",
+                warning, StringComparison.Ordinal);
+            Assert.Equal(snapshot, File.ReadAllText(snapshotPath));
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
+    [Xunit.Theory(DisplayName = "Startup uses Conservative when invalid primary has no usable snapshot")]
+    [Xunit.InlineData("missing")]
+    [Xunit.InlineData("malformed")]
+    [Xunit.InlineData("invalid")]
+    [Xunit.InlineData("unreadable")]
+    public void StartupUsesConservativeWithoutValidSnapshot(string snapshotState)
+    {
+        var root = CreateTempDirectory("mcg-policy-startup-fallback");
+        try
+        {
+            var path = Path.GetFullPath(Path.Combine(root, "conductor-policy.json"));
+            var invalid = (ConductorAutonomyPolicy.Conservative with { BoardFillMaxDraftsPerDay = 101 }).ToJson();
+            File.WriteAllText(path, invalid);
+            var snapshotPath = ConductorPolicyLastValidSnapshot.PathFor(root);
+            if (snapshotState == "unreadable")
+                Directory.CreateDirectory(snapshotPath);
+            else if (snapshotState != "missing")
+                File.WriteAllText(snapshotPath, snapshotState == "malformed" ? "{ not-json" : invalid);
+
+            var resolved = CliConductLoopStartup.PrepareConductLoopPolicy(root, null, TextWriter.Null, storeSetup: _ => []);
+
+            Assert.NotNull(resolved);
+            Assert.Same(ConductorAutonomyPolicy.Conservative, resolved.Policy);
+            Assert.Equal("fallback:Conservative", resolved.Source);
+            var warning = Assert.Single(resolved.Warnings);
+            Assert.Contains("POLICY_INVALID", warning, StringComparison.Ordinal);
+            Assert.Contains(path, warning, StringComparison.Ordinal);
+            Assert.Contains("boardFillMaxDraftsPerDay must be between 0 and 100", warning, StringComparison.Ordinal);
+            if (snapshotState == "missing")
+                Assert.False(File.Exists(snapshotPath));
+            else if (snapshotState == "unreadable")
+                Assert.True(Directory.Exists(snapshotPath));
+            else
+                Assert.Equal(snapshotState == "malformed" ? "{ not-json" : invalid, File.ReadAllText(snapshotPath));
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
+    [Xunit.Theory(DisplayName = "File snapshots canonicalize formatting and preserve timestamp for unchanged policy")]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("Permissive")]
+    public void FileSnapshotWritesOnlyWhenResolvedPolicyChanges(string? preset)
+    {
+        var root = CreateTempDirectory("mcg-policy-snapshot-write");
+        var originalCulture = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+            var configured = ConductorAutonomyPolicy.Conservative with
+                { Name = "Snapshot file policy", BoardFillMaxDraftsPerDay = 60, EmptyOutputRetryBackoffMultiplier = 1.5 };
+            var json = configured.ToJson();
+            var reordered = (configured with { TransitionMap = configured.TransitionMap.Reverse()
+                .ToDictionary(pair => pair.Key, pair => pair.Value) }).ToJson();
+            var changed = (configured with { BoardFillMaxDraftsPerDay = 100 }).ToJson();
+            var path = Path.Combine(root, "conductor-policy.json");
+            File.WriteAllText(path, json);
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fr-FR");
+
+            Assert.NotNull(CliConductLoopStartup.PrepareConductLoopPolicy(root, preset, TextWriter.Null, storeSetup: _ => []));
+
+            var snapshotPath = ConductorPolicyLastValidSnapshot.PathFor(root);
+            Assert.True(File.Exists(snapshotPath));
+            Assert.Contains(OrchestratorArtifactRegistry.Entries, entry => entry.Pattern == Path.GetFileName(snapshotPath));
+            var snapshot = File.ReadAllText(snapshotPath);
+            var parsed = ConductorAutonomyPolicy.ParseJson(snapshot);
+            Assert.Equal(configured.Name, parsed.Name);
+            Assert.Equal(60, parsed.BoardFillMaxDraftsPerDay);
+            Assert.Equal(1.5, parsed.EmptyOutputRetryBackoffMultiplier);
+            Assert.Equal("fr-FR", System.Globalization.CultureInfo.CurrentCulture.Name);
+            var sentinel = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(snapshotPath, sentinel);
+            CliConductLoopStartup.PrepareConductLoopPolicy(root, preset, TextWriter.Null, storeSetup: _ => []);
+            Assert.Equal(sentinel, File.GetLastWriteTimeUtc(snapshotPath));
+            File.WriteAllText(path, System.Text.Json.Nodes.JsonNode.Parse(reordered)!.ToJsonString());
+            CliConductLoopStartup.PrepareConductLoopPolicy(root, preset, TextWriter.Null, storeSetup: _ => []);
+            Assert.Equal(snapshot, File.ReadAllText(snapshotPath));
+            Assert.Equal(sentinel, File.GetLastWriteTimeUtc(snapshotPath));
+            File.WriteAllText(path, changed);
+            CliConductLoopStartup.PrepareConductLoopPolicy(root, preset, TextWriter.Null, storeSetup: _ => []);
+            Assert.Equal(100, ConductorAutonomyPolicy.ParseJson(File.ReadAllText(snapshotPath)).BoardFillMaxDraftsPerDay);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = originalCulture;
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Snapshot publication failure warns and still resolves valid primary policy")]
+    public void SnapshotWriteFailureDoesNotRejectValidFile()
+    {
+        var root = CreateTempDirectory("mcg-policy-snapshot-failure");
+        try
+        {
+            var path = Path.Combine(root, "conductor-policy.json");
+            var configured = ConductorAutonomyPolicy.Conservative with { Name = "Valid primary" };
+            File.WriteAllText(path, configured.ToJson());
+            Directory.CreateDirectory(ConductorPolicyLastValidSnapshot.PathFor(root));
+
+            var resolved = CliConductLoopStartup.PrepareConductLoopPolicy(root, null, TextWriter.Null, storeSetup: _ => []);
+
+            Assert.NotNull(resolved);
+            Assert.Equal(configured.Name, resolved.Policy.Name);
+            Assert.Equal($"file:{Path.GetFullPath(path)}", resolved.Source);
+            Assert.Contains(resolved.Warnings, warning => warning.StartsWith("POLICY_SNAPSHOT_WRITE_FAILED", StringComparison.Ordinal));
+            Assert.Empty(Directory.GetFiles(root, "*.tmp"));
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_reloads_file_policy_at_tick_boundary_and_applies_new_worker_cap")]
     public void BatchLoopReloadsFilePolicyAtTickBoundaryAndAppliesNewWorkerCap()
     {
@@ -516,8 +660,10 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_keeps_current_policy_when_midflight_reload_is_malformed")]
-    public void BatchLoopKeepsCurrentPolicyWhenMidflightReloadIsMalformed()
+    [Xunit.Theory(DisplayName = "Invalid midflight reload retains policy and later valid file recovers")]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void BatchLoopKeepsCurrentPolicyWhenMidflightReloadIsInvalid(bool malformed)
     {
         var root = CreateTempDirectory("mcg-conductor-policy-reload-malformed");
         try
@@ -559,7 +705,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                     File.WriteAllText(
                         policyPath,
                         sleeps == 1
-                            ? "{ not-json"
+                            ? malformed ? "{ not-json" : (initialPolicy with
+                                { BoardFillMaxDraftsPerDay = 101, MaxConcurrentPaidWorkers = 8 }).ToJson()
                             : (initialPolicy with { MaxConcurrentPaidWorkers = 2 }).ToJson());
                     return false;
                 },
@@ -569,8 +716,14 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             Assert.Equal(2, sleeps);
             Assert.Equal(1, dispatches);
             Assert.Contains("POLICY_RELOAD_FAILED tick=2", output, StringComparison.Ordinal);
+            Assert.Contains("POLICY_INVALID tick=2", output, StringComparison.Ordinal);
             Assert.Contains(policyPath.Replace(' ', '_'), output, StringComparison.Ordinal);
             Assert.Contains("POLICY_RELOAD tick=3", output, StringComparison.Ordinal);
+            Assert.Contains("oldMaxConcurrentPaidWorkers=1", output, StringComparison.Ordinal);
+            Assert.Contains("newMaxConcurrentPaidWorkers=2", output, StringComparison.Ordinal);
+            Assert.Equal(2, ConductorAutonomyPolicy.ParseJson(File.ReadAllText(
+                ConductorPolicyLastValidSnapshot.PathFor(orchestratorDirectory))).MaxConcurrentPaidWorkers);
+            Assert.Contains("\"eventKind\":\"policy-invalid\"", File.ReadAllText(eventLogPath), StringComparison.Ordinal);
             Assert.Contains(
                 "\"eventKind\":\"policy-reload-failed\"",
                 File.ReadAllText(eventLogPath),
