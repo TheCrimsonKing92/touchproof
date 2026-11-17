@@ -30,11 +30,14 @@ internal sealed class WorkerGitContext
             ? null : new ReviewerMergeTreeStatusMemo(reviewerMergeTreeCommitResolver);
     }
 
-    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory, string integrationBranch)
+    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory, string integrationBranch,
+        Func<string, string, string?>? resolveRevision = null)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
             return null;
 
+        var resolved = (resolveRevision ?? ResolveRevision)(workingDirectory, integrationBranch);
+        if (resolved is not null) return resolved;
         var main = GitCli.Run(workingDirectory, "rev-parse", integrationBranch);
         if (main.ExitCode != 0)
             return null;
@@ -88,7 +91,11 @@ internal sealed class WorkerGitContext
         return files.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    internal ReviewerChangedFileScope ReadReviewerChangedFileScope(string workingDirectory, string integrationBranch)
+    private static string? ResolveRevision(string workingDirectory, string revision) =>
+        GitRevisionReader.Shared.TryResolve(workingDirectory, revision, out var id) ? id : null;
+
+    internal ReviewerChangedFileScope ReadReviewerChangedFileScope(string workingDirectory, string integrationBranch,
+        Func<string, string, string?>? resolveRevision = null)
     {
         if (!LooksLikeGitWorkspace(workingDirectory))
         {
@@ -97,7 +104,9 @@ internal sealed class WorkerGitContext
                 "Reviewer changed-file scope unavailable because the working directory is not a git workspace.");
         }
 
-        var mainResult = GitCli.Run(workingDirectory, "rev-parse", "--verify", $"{integrationBranch}^{{commit}}");
+        var resolved = (resolveRevision ?? ResolveRevision)(workingDirectory, $"{integrationBranch}^{{commit}}");
+        var mainResult = resolved is not null ? new GitCli.GitResult(0, resolved + "\n", "") :
+            GitCli.Run(workingDirectory, "rev-parse", "--verify", $"{integrationBranch}^{{commit}}");
         if (!mainResult.Succeeded || string.IsNullOrWhiteSpace(mainResult.Output))
         {
             throw new ReviewerChangedFileScopeException(

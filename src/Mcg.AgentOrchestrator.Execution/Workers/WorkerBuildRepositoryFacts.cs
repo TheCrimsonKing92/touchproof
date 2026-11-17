@@ -11,6 +11,15 @@ internal static class WorkerBuildRepositoryFacts
 
     internal static Identity ReadIdentity(string root, bool includeTopLevel = false)
     {
+        if (!includeTopLevel &&
+            GitMetadataLookup.TryAnswer(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                Environment.GetEnvironmentVariable, out var common) &&
+            GitRefFileResolver.TryResolve(root, "HEAD", out var head) &&
+            GitRevisionReader.TryReadCurrentBranch(root, out var currentBranch) &&
+            (currentBranch is null || currentBranch.All(char.IsAscii) &&
+                GitRefFileResolver.TryResolve(root, currentBranch, out var branchHead) && branchHead == head))
+            return new(null, common.Trim(), head, currentBranch);
+
         var arguments = new List<string> { "rev-parse" };
         if (includeTopLevel) arguments.Add("--show-toplevel");
         arguments.AddRange(["--path-format=absolute", "--git-common-dir", "HEAD", "--abbrev-ref=loose", "HEAD"]);

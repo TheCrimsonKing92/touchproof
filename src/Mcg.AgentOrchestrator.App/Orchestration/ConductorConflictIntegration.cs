@@ -35,7 +35,7 @@ internal sealed partial class ConductorConflictIntegration(
         var attached = GitCli.Run(worktree, "symbolic-ref", "--quiet", "HEAD");
         if (!attached.Succeeded || attached.DrainTimedOut || attached.Output.Trim() != "refs/heads/" + GoalWorktrees.BranchName(goal.Id))
             return (false, "detached or unexpected branch");
-        var original = Run(worktree, "rev-parse", "HEAD").Trim();
+        var original = ReadRevision(worktree, "HEAD").Trim();
         var entries = GoalOperationJournal.Read(executionDirectory, goal.Id).Entries.Where(entry => entry.Operation == OperationName).ToArray();
         if (entries.Any(entry => ReadRound(entry).OriginalHead == original))
             return (false, "repeat conflict on unchanged candidate");
@@ -43,14 +43,14 @@ internal sealed partial class ConductorConflictIntegration(
         if (developer is null) return (false, "no completed Developer task");
         if (!goal.Tasks.SkipWhile(task => task.Id != developer.Id).Skip(1).Any(task => task.RequiredRole == AgentRole.Tester))
             return (false, "no Tester task after completed Developer");
-        var main = Run(worktree, "rev-parse", integrationBranch + "^{commit}").Trim();
+        var main = ReadRevision(worktree, integrationBranch + "^{commit}").Trim();
         var tree = new WorkerGitContext().ReadReviewerMergeTreeStatus(worktree, main, original);
         if (tree.Truncated) return (false, "conflict path set truncated");
         if (tree.IsClean)
         {
             Run(worktree, [.. Identity, "merge", "--no-ff", "--no-edit", "-m",
                 $"Integrate {integrationBranch} into {GoalWorktrees.BranchName(goal.Id)} before acceptance", main]);
-            ResolvedCandidateObligationRebinder.Rebind(kernel, goal, Run(worktree, "rev-parse", "HEAD").Trim());
+            ResolvedCandidateObligationRebinder.Rebind(kernel, goal, ReadRevision(worktree, "HEAD").Trim());
             return (true, "merged main cleanly");
         }
         var paths = tree.ConflictPaths.Order(StringComparer.Ordinal).ToArray();
@@ -137,7 +137,7 @@ internal sealed partial class ConductorConflictIntegration(
         if (round is null || !round.Admitted) return null;
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id)
             ?? throw new InvalidOperationException("Admitted integration worktree disappeared.");
-        var candidate = Run(worktree, "rev-parse", "HEAD").Trim();
+        var candidate = ReadRevision(worktree, "HEAD").Trim();
         string? failure;
         string? buildOutput = null;
         try { failure = ValidateCandidate(worktree, goal.Id.Value, round, candidate, out buildOutput); }
@@ -350,8 +350,17 @@ internal sealed partial class ConductorConflictIntegration(
     private static readonly string[] Identity = [.. ConductorGitIdentity.ConductorArguments, "-c", "commit.gpgSign=false"];
     private static bool SamePaths(IEnumerable<string> left, IEnumerable<string> right) =>
         left.Order(StringComparer.Ordinal).SequenceEqual(right.Order(StringComparer.Ordinal), StringComparer.Ordinal);
-    private static string? ReadRef(string worktree, string reference)
+    private string? ReadRef(string worktree, string reference) =>
+        ReadReference(worktree, reference, integrationBranch);
+
+    internal static string? ReadReference(string worktree, string reference, string integrationBranch,
+        Func<string, string, string?>? resolveRevision = null)
     {
+        // Pseudo-refs keep the original single process call, including on absence.
+        if ((reference == "HEAD" || reference.StartsWith("refs/heads/", StringComparison.Ordinal) ||
+             reference == integrationBranch) &&
+            (resolveRevision ?? ResolveRevision)(worktree, reference) is { } resolved)
+            return resolved;
         var result = GitCli.Run(worktree, "rev-parse", "--verify", "--quiet", reference);
         if (result.Succeeded && !result.DrainTimedOut) return result.Output.Trim();
         if (result.ExitCode == 1 && !result.DrainTimedOut) return null;
@@ -364,4 +373,11 @@ internal sealed partial class ConductorConflictIntegration(
             throw new InvalidOperationException("git " + string.Join(' ', args) + ": " + result.Error);
         return result.Output;
     }
+
+    private static string? ResolveRevision(string worktree, string revision) =>
+        GitRevisionReader.Shared.TryResolve(worktree, revision, out var id) ? id : null;
+
+    internal static string ReadRevision(string worktree, string revision,
+        Func<string, string, string?>? resolveRevision = null) =>
+        (resolveRevision ?? ResolveRevision)(worktree, revision) ?? Run(worktree, "rev-parse", revision);
 }

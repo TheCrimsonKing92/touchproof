@@ -9,6 +9,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class DispatchWorktreeCommitter
 {
     private readonly Func<string, string[], GitCli.GitResult> _runGit;
+    private readonly Func<string, string, string?>? _resolveRevision;
     private readonly Func<string, bool> _directoryExists;
     private readonly Func<string, bool> _fileExists;
     private readonly Action? _beforeWorktreeInspection;
@@ -18,9 +19,12 @@ internal sealed class DispatchWorktreeCommitter
         Func<string, string[], GitCli.GitResult>? runGit = null,
         Func<string, bool>? directoryExists = null,
         Func<string, bool>? fileExists = null,
-        Action? beforeWorktreeInspection = null)
+        Action? beforeWorktreeInspection = null,
+        Func<string, string, string?>? resolveRevision = null)
     {
         _runGit = runGit ?? ((workingDirectory, arguments) => GitCli.Run(workingDirectory, arguments));
+        _resolveRevision = runGit is null ? resolveRevision ??
+            ((directory, revision) => GitRevisionReader.Shared.TryResolve(directory, revision, out var id) ? id : null) : null;
         _directoryExists = directoryExists ?? Directory.Exists;
         _fileExists = fileExists ?? File.Exists;
         _beforeWorktreeInspection = beforeWorktreeInspection;
@@ -315,7 +319,9 @@ internal sealed class DispatchWorktreeCommitter
                 $"expected={expectedBranch}; actual={NormalizeDiagnosticText(branch.Output)}");
         }
 
-        var head = _runGit(workingDirectory, ["rev-parse", "HEAD"]);
+        var resolved = _resolveRevision?.Invoke(workingDirectory, "HEAD");
+        var head = resolved is not null ? new GitCli.GitResult(0, resolved + "\n", "") :
+            _runGit(workingDirectory, ["rev-parse", "HEAD"]);
         var status = _runGit(workingDirectory, ["status", "--short", "--untracked-files=all"]);
         var dispatch = _runGit(workingDirectory, ["log", "--format=%H", $"--since={dispatchedAt:O}"]);
         var changedPaths = _runGit(workingDirectory, ["log", "--name-only", "--format=", $"--since={dispatchedAt:O}"]);
