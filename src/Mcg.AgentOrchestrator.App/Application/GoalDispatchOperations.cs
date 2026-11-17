@@ -683,6 +683,9 @@ internal sealed partial class GoalDispatchOperations
                     ThrowFailed(goal.Id, ensured.State.Detail);
                 if (ensured.Disposition == OrchestratorStateOutboxEnsureDisposition.Quarantined)
                     ThrowQuarantined(goal.Id, ensured.State.Detail);
+                if (string.Equals(readiness.Detail, "resolved-answers-pending-sync", StringComparison.Ordinal) &&
+                    ensured.Disposition == OrchestratorStateOutboxEnsureDisposition.Acquired)
+                    GoalRefinementWorkCoordinator.ResetFailedClaimEscalation(workspace, goal.Id);
                 GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
                 ThrowPending(
                     workspace,
