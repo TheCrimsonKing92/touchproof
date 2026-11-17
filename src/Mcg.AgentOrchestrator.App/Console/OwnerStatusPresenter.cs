@@ -15,6 +15,8 @@ internal sealed class OwnerStatusPresenter
         var state = _lastStableLiveness == ConductorLiveness.Running ? "running" : "stopped";
         var protectedParts = new List<string> { "conductor: " + state };
         if (gate is not null) protectedParts.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
+        if (OwnerConsoleBoardFillStatusSegment.Text(status.BoardFillMode) is { } boardFill)
+            protectedParts.Add(boardFill);
         protectedParts.Add($"active: {status.ActiveGoals}");
         protectedParts.Add($"decisions: {status.LiveDecisions}");
         var optionalParts = new List<string> {

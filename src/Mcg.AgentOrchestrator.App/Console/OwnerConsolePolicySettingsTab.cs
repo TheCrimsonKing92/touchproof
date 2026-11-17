@@ -13,7 +13,8 @@ internal sealed class OwnerConsolePolicySettingsTab : IOwnerConsoleSettingsTab
         "maxConcurrentPaidWorkers", "acceptanceWidth", "acceptanceAttemptBelowNormalPriority",
         "acceptanceChildrenOptOutExecutionThrottling", "buildGcConserveMemory", "buildGcConserveMemoryLevel",
         "buildGcHeapCount", "buildRootRetentionDays", "maxTotalBudget", "maxCriterionRetries",
-        "plannerSampleCount", "cascadeTesterCheapFirst", "autoPromoteRiskThreshold", "boardFillMaxDraftsPerDay"
+        "plannerSampleCount", "cascadeTesterCheapFirst", "autoPromoteRiskThreshold", "boardFillMaxDraftsPerDay",
+        "boardFillMode", "boardFillTargetActiveGoals"
     };
     private readonly OwnerConsolePolicySettingsStore _store;
     private readonly List<string> _keys = [];
@@ -101,6 +102,12 @@ internal sealed class OwnerConsolePolicySettingsTab : IOwnerConsoleSettingsTab
     private string ParseInput(string key)
     {
         var input = _input.Trim();
+        if (key == "boardFillMode")
+        {
+            var name = Enum.GetNames<ConductorBoardFillMode>().FirstOrDefault(candidate => candidate.Equals(input, StringComparison.OrdinalIgnoreCase));
+            return name is not null ? JsonSerializer.Serialize(name) : throw new FormatException(
+                $"{key}: valid values are {string.Join(", ", Enum.GetNames<ConductorBoardFillMode>())}.");
+        }
         if (key == "autoPromoteRiskThreshold")
         {
             if (input == "null") return input;
@@ -121,7 +128,12 @@ internal sealed class OwnerConsolePolicySettingsTab : IOwnerConsoleSettingsTab
             if (value.ValueKind is JsonValueKind.True or JsonValueKind.False) return input;
             throw new FormatException($"{key} must be a boolean (true or false).");
         }
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out _)) return input;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+        {
+            if (key == "boardFillTargetActiveGoals" && number is < 0 or > 30)
+                throw new FormatException($"{key} must be between 0 and 30.");
+            return input;
+        }
         throw new FormatException($"{key} must be an integer.");
     }
 
