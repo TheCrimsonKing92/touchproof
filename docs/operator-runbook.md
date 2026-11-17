@@ -27,7 +27,7 @@ This documentation slice is verified by document review, link verification and d
 
 On a newer-store read failure, goal detail loading, goal detail refresh, or the board's failed state-read row displays: "This console build is older than the shared store. You must restart the console on a current build."
 
-The owner restarts the console on a current build. Setup does not repair a newer store; follow the [runtime upgrade procedure](#explicit-workspace-binding-and-schema-transitions) for shared-store compatibility. The console does not detect staleness itself. Automatic detection with a restart prompt, and routing decision detail, command handler and onboarding reads through this diagnostic, are follow-up work outside this slice.
+The owner restarts the console on a current build. Setup does not repair a newer store. The console does not detect staleness itself. Automatic detection with a restart prompt, and routing decision detail, command handler and onboarding reads through this diagnostic, are follow-up work outside this slice.
 
 ## Atomic live task graph repair
 
