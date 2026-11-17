@@ -37,15 +37,20 @@ internal static class AcceptanceTestSourceResolver
         return genericStart >= 0 ? className[..genericStart] : className;
     }
 
-    /// <summary>One stable completion's source snapshot; never retained across candidates or requests.</summary>
+    /// <summary>
+    /// One completion's source snapshot. Requests are never retained; default filesystem requests
+    /// share the incrementally refreshed type-name index across requests and candidates.
+    /// </summary>
     internal sealed class Request
     {
         private readonly string? _rootPath;
         private readonly Func<string, IEnumerable<string>> _enumerate;
         private readonly Func<string, string> _read;
         private readonly Func<string, bool> _directoryExists;
+        private readonly bool _useSharedIndex;
         private readonly Dictionary<string, Dictionary<string, string[]>?> _indexes = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, CompilationUnitSyntax?> _sources = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, (long Size, DateTime LastWriteTimeUtc, CompilationUnitSyntax? Syntax)> _indexedSources = new(StringComparer.Ordinal);
         private readonly Dictionary<string, IReadOnlySet<string>> _identifiers = new(StringComparer.OrdinalIgnoreCase);
 
         internal Request(string? rootPath,
@@ -53,6 +58,7 @@ internal static class AcceptanceTestSourceResolver
             Func<string, string>? read = null,
             Func<string, bool>? directoryExists = null)
         {
+            _useSharedIndex = enumerate is null && read is null;
             _enumerate = enumerate ?? (path => Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories));
             _read = read ?? File.ReadAllText;
             _directoryExists = directoryExists ?? Directory.Exists;
@@ -112,6 +118,11 @@ internal static class AcceptanceTestSourceResolver
         private CompilationUnitSyntax? ReadSource(string path)
         {
             if (_sources.TryGetValue(path, out var cached)) return cached;
+            return ReadFreshSource(path);
+        }
+
+        private CompilationUnitSyntax? ReadFreshSource(string path)
+        {
             CompilationUnitSyntax? syntax = null;
             try
             {
@@ -120,7 +131,19 @@ internal static class AcceptanceTestSourceResolver
                 syntax = CSharpSyntaxTree.ParseText(source, path: path).GetCompilationUnitRoot();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            _sources.Add(path, syntax);
+            _sources[path] = syntax;
+            return syntax;
+        }
+
+        private CompilationUnitSyntax? ReadIndexSource(string path, long size, DateTime lastWriteTimeUtc)
+        {
+            // Only parses read for an index have metadata provenance. Reuse them across overlapping
+            // roots, but never publish a prior ReadSyntax result under newly observed metadata.
+            if (_indexedSources.TryGetValue(path, out var cached) &&
+                cached.Size == size && cached.LastWriteTimeUtc == lastWriteTimeUtc)
+                return cached.Syntax;
+            var syntax = ReadFreshSource(path);
+            _indexedSources[path] = (size, lastWriteTimeUtc, syntax);
             return syntax;
         }
 
@@ -129,20 +152,27 @@ internal static class AcceptanceTestSourceResolver
             if (_indexes.TryGetValue(searchRoot, out var cached)) return cached;
             try
             {
-                var matches = new Dictionary<string, List<string>>(StringComparer.Ordinal);
                 EnumerationCount++;
+                if (_useSharedIndex)
+                {
+                    var shared = AcceptanceTestSourceIndexStore.GetIndex(searchRoot, ReadIndexSource);
+                    var sharedIndex = shared?.ToDictionary(pair => pair.Key,
+                        pair => pair.Value.Select(path => ToRepositoryRelativePath(_rootPath!, path))
+                            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+                        StringComparer.Ordinal);
+                    _indexes.Add(searchRoot, sharedIndex);
+                    return sharedIndex;
+                }
+
+                var matches = new Dictionary<string, List<string>>(StringComparer.Ordinal);
                 foreach (var discoveredPath in _enumerate(searchRoot))
                 {
                     var path = Path.GetFullPath(discoveredPath);
                     if (!IsWithinDirectory(path, searchRoot) || HasGeneratedPathSegment(path)) continue;
                     var syntax = ReadSource(path);
                     if (syntax is null) continue;
-                    var source = syntax.ToFullString();
-                    foreach (var name in syntax.DescendantNodes().OfType<TypeDeclarationSyntax>()
-                        .Select(declaration => declaration.Identifier.ValueText).Distinct(StringComparer.Ordinal))
+                    foreach (var name in ExtractTypeNames(syntax))
                     {
-                        // Preserve the original literal text prefilter (notably escaped identifiers).
-                        if (!source.Contains(name, StringComparison.Ordinal)) continue;
                         if (!matches.TryGetValue(name, out var paths)) matches[name] = paths = [];
                         paths.Add(ToRepositoryRelativePath(_rootPath!, path));
                     }
@@ -161,7 +191,16 @@ internal static class AcceptanceTestSourceResolver
         }
     }
 
-    private static bool IsResolutionFailure(Exception ex) => ex is IOException or UnauthorizedAccessException or
+    internal static IEnumerable<string> ExtractTypeNames(CompilationUnitSyntax syntax)
+    {
+        var source = syntax.ToFullString();
+        // Preserve the original literal text prefilter (notably escaped identifiers).
+        return syntax.DescendantNodes().OfType<TypeDeclarationSyntax>()
+            .Select(declaration => declaration.Identifier.ValueText).Distinct(StringComparer.Ordinal)
+            .Where(name => source.Contains(name, StringComparison.Ordinal));
+    }
+
+    internal static bool IsResolutionFailure(Exception ex) => ex is IOException or UnauthorizedAccessException or
         ArgumentException or NotSupportedException;
 
     private static IReadOnlyList<string> ResolveSearchRoots(string rootPath, string? testProjectPath,
@@ -192,12 +231,12 @@ internal static class AcceptanceTestSourceResolver
     private static string ToRepositoryRelativePath(string rootPath, string path) =>
         Path.GetRelativePath(rootPath, path).Replace('\\', '/');
 
-    private static bool HasGeneratedPathSegment(string path) =>
+    internal static bool HasGeneratedPathSegment(string path) =>
         path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(segment =>
             segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
 
-    private static bool IsWithinDirectory(string path, string directory)
+    internal static bool IsWithinDirectory(string path, string directory)
     {
         var fullPath = Path.GetFullPath(path);
         var fullDirectory = Path.GetFullPath(directory)
