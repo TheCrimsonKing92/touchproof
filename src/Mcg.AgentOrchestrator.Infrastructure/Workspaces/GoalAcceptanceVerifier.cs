@@ -1498,22 +1498,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             var retryInvocation = AllocateTestTelemetryInvocation(check);
             var retryInvocationId = AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, retryInvocation.Ordinal, currentAttemptId);
-            cacheContext.RecordWithinAttemptRetry(
-                check,
-                original,
-                originalInvocationId,
-                retryInvocationId,
-                retainedDiagnostic);
-            var rerun = await RunCheckWithCancellationProbeAsync(
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                dotnetTestBuildPhase,
-                cancellationToken,
-                testResultsDirectoryOverride,
-                retryInvocation).ConfigureAwait(false);
+            var diagnostic = retainedDiagnostic!;
+            var rerun = await AcceptanceRetryReceiptFailure.RecordThenRerunAsync(
+                () => cacheContext.RecordWithinAttemptRetry(check, original, originalInvocationId, retryInvocationId, diagnostic),
+                async () => (await RunCheckWithCancellationProbeAsync(
+                    check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase,
+                    cancellationToken, testResultsDirectoryOverride, retryInvocation).ConfigureAwait(false)).Result,
+                original, diagnostic, originalInvocationId).ConfigureAwait(false);
+            if (!rerun.RerunStarted)
+            {
+                cacheContext.RecordExecution(check, rerun.Result);
+                return (rerun.Result, false);
+            }
             var rerunDecision = rerun.Result.CompletionDecision ?? InferPartitionCompletionDecision(rerun.Result);
             var rerunResult = rerun.Result with
             {

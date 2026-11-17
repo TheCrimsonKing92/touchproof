@@ -8,6 +8,7 @@ public static class AcceptanceFailureClassifications
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
     public const string FocusedSelectionAbsentAtBaseline = "focused-selection-absent-at-baseline";
     public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
+    public const string RetryReceiptFailure = "retry-receipt-failed";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
     public const string SeededRepositoryApparatus = "seeded-repository-apparatus";
