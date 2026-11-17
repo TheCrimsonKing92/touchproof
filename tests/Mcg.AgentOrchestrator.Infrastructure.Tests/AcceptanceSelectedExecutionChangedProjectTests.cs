@@ -16,7 +16,7 @@ public sealed class AcceptanceSelectedExecutionChangedProjectTests
     [InlineData(OwnerConsoleTestsProject, "owner console tests", "data")]
     [InlineData(CliTestsProject, "cli tests", "project")]
     [InlineData(OwnerConsoleTestsProject, "owner console tests", "project")]
-    public void LiveSession_ChangedProjectFile_KeepsOnlyAffectedCheckWhole(
+    public void LiveSession_ChangedProjectFile_PreservesAffectedTests(
         string projectPath, string checkName, string kind)
     {
         using var repository = Repository();
@@ -60,6 +60,23 @@ public sealed class AcceptanceSelectedExecutionChangedProjectTests
         var plan = EffectivePlan(repository.Root, session, changes);
 
         Assert.True(session.Applied); // A full-gate fallback cannot satisfy the regression.
+        Assert.Equal("skipped", Assert.Single(session.ProjectChecks, item => item.Name != checkName).Lane.Disposition);
+        Assert.DoesNotContain(plan.Checks, item => Checks.Any(other => other.Name != checkName && other.Name == item.Name));
+        if (kind == "source")
+        {
+            // Changed test classes already have a focused check before whole-project selection runs.
+            Assert.DoesNotContain(session.ProjectChecks, item => item.Name == checkName);
+            var focused = Assert.Single(plan.Checks, item => item.Project is not null && ProjectMatches(item.Project, projectPath));
+            Assert.True(IsFocusedProjectDotnetCheck(focused));
+            var filterIndex = focused.Arguments.ToList().IndexOf("--filter");
+            Assert.InRange(filterIndex, 0, focused.Arguments.Count - 2);
+            var includes = AcceptanceLaneMembership.CreateClassMatcher(new(checkName, focused.Arguments[filterIndex + 1]));
+            Assert.True(includes("Candidate.ChangedTests"));
+            Assert.False(includes("Candidate.OtherTests"));
+            Assert.Same(focused, Assert.Single(session.TransformProjectChecks([focused])));
+            return;
+        }
+
         var entry = Assert.Single(session.ProjectChecks, item => item.Name == checkName);
         Assert.Equal("retained", entry.Lane.Disposition);
         Assert.Contains("Candidate.OtherTests", entry.Lane.SelectedClasses);
@@ -68,7 +85,5 @@ public sealed class AcceptanceSelectedExecutionChangedProjectTests
         var original = Assert.Single(Checks, item => item.Name == checkName);
         Assert.Equal(original.Arguments, Assert.Single(plan.Checks, item => item.Name == checkName).Arguments);
         Assert.Same(original, Assert.Single(session.TransformProjectChecks(Checks)));
-        Assert.Equal("skipped", Assert.Single(session.ProjectChecks, item => item.Name != checkName).Lane.Disposition);
-        Assert.DoesNotContain(plan.Checks, item => Checks.Any(other => other.Name != checkName && other.Name == item.Name));
     }
 }
