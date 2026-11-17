@@ -43,46 +43,14 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
 
         if (files.Count == 0) return ([], unresolved, []);
         var filter = new ImpactReplayChangedSupportNameFilter(files.SelectMany(file => file.Declared), trees.Values);
-        foreach (var tree in trees.Values)
+        Match(files.Select((file, index) => (index, (IReadOnlySet<INamedTypeSymbol>)file.Declared)).ToArray(), filter, probe);
+        var unmatched = Enumerable.Range(0, files.Count).Where(index => files[index].Found.Count == 0).ToArray();
+        if (unmatched.Length > 0)
         {
-            probe?.EnterTree(tree.FilePath);
-            var model = compilation.GetSemanticModel(tree);
-            foreach (var node in tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>())
-            {
-                if (model.GetDeclaredSymbol(node) is not INamedTypeSymbol owner) continue;
-                var name = ImpactReplayChangedTestSupportSelection.FullName(owner);
-                if (!runnable.Contains(name)) continue;
-                var matched = new bool[files.Count];
-                for (var index = 0; index < files.Count; index++)
-                    matched[index] = files[index].Declared.Contains(owner);
-                var pending = matched.Count(value => !value);
-                foreach (var reference in node.DescendantNodes().OfType<NameSyntax>())
-                {
-                    if (pending == 0) break;
-                    if (!filter.Matches(reference)) continue;
-                    probe?.Bound(name, ImpactReplayChangedSupportNameFilter.RightmostIdentifier(reference),
-                        ImpactReplayChangedSupportNameFilter.IsAttributeName(reference));
-                    var symbol = model.GetSymbolInfo(reference).Symbol;
-                    if (symbol is IAliasSymbol alias) symbol = alias.Target;
-                    if (symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor)
-                        symbol = constructor.ContainingType;
-                    if (symbol is not INamedTypeSymbol type) continue;
-                    for (var index = 0; index < files.Count; index++)
-                    {
-                        if (matched[index] || !files[index].Declared.Contains(type.OriginalDefinition)) continue;
-                        matched[index] = true;
-                        pending--;
-                    }
-                }
-                for (var index = 0; index < files.Count; index++)
-                {
-                    if (!matched[index]) continue;
-                    files[index].Found.Add(name);
-                    if (infrastructurePaths.Contains(tree.FilePath)) files[index].Classes.Add(name);
-                    else
-                        files[index].Other.Add(Path.GetRelativePath(checkout, tree.FilePath).Replace('\\', '/'));
-                }
-            }
+            var closure = new ImpactReplayChangedSupportReferrerClosure(compilation, trees.Values, runnable);
+            var expanded = unmatched.Select(index => (Index: index, Types: closure.Expand(files[index].Declared))).ToArray();
+            var expandedFilter = new ImpactReplayChangedSupportNameFilter(expanded.SelectMany(file => file.Types), trees.Values);
+            Match(expanded, expandedFilter, null);
         }
 
         // Replay outcomes in input order: later references cannot leak into an earlier abandon.
@@ -96,5 +64,48 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
             other.UnionWith(file.Other);
         }
         return (unresolved is null ? selected.ToArray() : [], unresolved, other.ToArray());
+
+        void Match(IReadOnlyList<(int Index, IReadOnlySet<INamedTypeSymbol> Types)> candidates,
+            ImpactReplayChangedSupportNameFilter names, ImpactReplayChangedSupportScanProbe? scanProbe)
+        {
+            foreach (var tree in trees.Values)
+            {
+                scanProbe?.EnterTree(tree.FilePath);
+                var model = compilation.GetSemanticModel(tree);
+                foreach (var node in tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>())
+                {
+                    if (model.GetDeclaredSymbol(node) is not INamedTypeSymbol owner) continue;
+                    var name = ImpactReplayChangedTestSupportSelection.FullName(owner);
+                    if (!runnable.Contains(name)) continue;
+                    var matched = new bool[candidates.Count];
+                    for (var index = 0; index < candidates.Count; index++)
+                        matched[index] = candidates[index].Types.Contains(owner);
+                    var pending = matched.Count(value => !value);
+                    foreach (var reference in node.DescendantNodes().OfType<NameSyntax>())
+                    {
+                        if (pending == 0) break;
+                        if (!names.Matches(reference)) continue;
+                        scanProbe?.Bound(name, ImpactReplayChangedSupportNameFilter.RightmostIdentifier(reference),
+                            ImpactReplayChangedSupportNameFilter.IsAttributeName(reference));
+                        if (ImpactReplayChangedSupportReferrerClosure.ReferencedType(model, reference) is not { } type) continue;
+                        for (var index = 0; index < candidates.Count; index++)
+                        {
+                            if (matched[index] || !candidates[index].Types.Contains(type)) continue;
+                            matched[index] = true;
+                            pending--;
+                        }
+                    }
+                    for (var index = 0; index < candidates.Count; index++)
+                    {
+                        if (!matched[index]) continue;
+                        var file = files[candidates[index].Index];
+                        file.Found.Add(name);
+                        if (infrastructurePaths.Contains(tree.FilePath)) file.Classes.Add(name);
+                        else
+                            file.Other.Add(Path.GetRelativePath(checkout, tree.FilePath).Replace('\\', '/'));
+                    }
+                }
+            }
+        }
     }
 }
