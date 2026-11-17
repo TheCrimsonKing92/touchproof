@@ -143,7 +143,8 @@ internal sealed record SourceReaderFileFacts(
             "OnCompleted", "UnsafeOnCompleted"],
         LocalDeclarationStatementSyntax declaration when declaration.UsingKeyword.IsKind(SyntaxKind.UsingKeyword) =>
             ["Dispose", "DisposeAsync", "GetAwaiter", "IsCompleted", "GetResult", "OnCompleted", "UnsafeOnCompleted"],
-        TupleExpressionSyntax or DeclarationExpressionSyntax or PositionalPatternClauseSyntax => ["Deconstruct"],
+        TupleExpressionSyntax or DeclarationExpressionSyntax or PositionalPatternClauseSyntax or
+            ParenthesizedVariableDesignationSyntax => ["Deconstruct"],
         CollectionExpressionSyntax => ["Add", "GetEnumerator", "Current", "MoveNext", "Dispose", "Count", "Length"],
         InitializerExpressionSyntax initializer when initializer.IsKind(SyntaxKind.CollectionInitializerExpression) => ["Add"],
         RangeExpressionSyntax or ListPatternSyntax => ["Length", "Count", "Slice"],

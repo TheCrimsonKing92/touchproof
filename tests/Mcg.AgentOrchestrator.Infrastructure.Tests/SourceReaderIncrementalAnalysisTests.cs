@@ -484,6 +484,62 @@ public sealed class SourceReaderIncrementalAnalysisTests
     }
 
     [Theory]
+    [InlineData("is", true)]
+    [InlineData("is", false)]
+    [InlineData("case", true)]
+    [InlineData("case", false)]
+    [InlineData("switch-arm", true)]
+    [InlineData("switch-arm", false)]
+    public void VarPatternDeconstructChange_ReextractsConsumerAndMatchesFullAnalysis(string kind, bool creates)
+    {
+        using var storage = new Storage();
+        var baseline = Base();
+        baseline.Add("tests/Plain.cs", "public class Plain { public int Run() => 0; }");
+        baseline.Add("tests/Reading.cs", """
+            public class Reading {
+                public int Run() { RepositorySourceSnapshotCache.Get("root"); return 0; }
+            }
+            """);
+        baseline.Add("tests/Factory.cs", "public class Bag {} public static class Factory { public static Bag Make() => new Bag(); }");
+        baseline.Add("tests/Binding.cs", Binding(!creates));
+        var caller = kind switch
+        {
+            "is" => "if (Factory.Make() is var (item, ignored)) { item.Run(); }",
+            "case" => "switch (Factory.Make()) { case var (item, ignored): item.Run(); break; }",
+            _ => "_ = Factory.Make() switch { var (item, ignored) => item.Run() };"
+        };
+        baseline.Add("tests/Uses.cs", $"public class UsesTests {{ public void Act() {{ {caller} }} }}");
+        var before = Analyze(new(storage.Path), baseline);
+        Assert.Equal(!creates, before.ReaderOwners.Contains("UsesTests"));
+        var candidate = new Dictionary<string, string>(baseline)
+        {
+            ["tests/Binding.cs"] = Binding(creates)
+        };
+        var extractions = new List<HashSet<string>?>();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var actual = Analyze(cache, candidate, extractions);
+        var paths = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Contains("tests/Binding.cs", paths);
+        Assert.Contains("tests/Uses.cs", paths);
+        Assert.True(paths.Count < candidate.Count);
+        Assert.Equal(paths.Count, cache.SemanticFileCount);
+        AssertEquivalent(Analyze(new(null), candidate), actual);
+        Assert.Equal(creates, actual.ReaderOwners.Contains("UsesTests"));
+
+        static string Binding(bool reads)
+        {
+            var type = reads ? "Reading" : "Plain";
+            return $$"""
+                public static class Ext {
+                    public static void Deconstruct(this Bag value, out {{type}} result, out int other) {
+                        result = new {{type}}(); other = 0;
+                    }
+                }
+                """;
+        }
+    }
+
+    [Theory]
     [InlineData("InterpolatedStringHandler", true)]
     [InlineData("InterpolatedStringHandler", false)]
     [InlineData("CollectionBuilder", true)]
