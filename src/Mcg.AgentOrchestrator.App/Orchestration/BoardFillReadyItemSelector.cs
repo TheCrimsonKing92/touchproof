@@ -29,7 +29,7 @@ internal static class BoardFillReadyItemSelector
 
     internal static bool IsAuthorRefused(BacklogItem item) => HasTag(item, AuthorStaleRetirement.Tag);
 
-    private static bool HasTag(BacklogItem item, string tag) =>
+    internal static bool HasTag(BacklogItem item, string tag) =>
         item.Tags.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Contains(tag, StringComparer.OrdinalIgnoreCase);
 
