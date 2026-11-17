@@ -114,9 +114,9 @@ public static class DeveloperCriteriaSelfCheck
         string? value = null;
         foreach (var line in latestBlock ?? fallback)
         {
-            var separator = line.IndexOf(':');
-            if (separator > 0 && NormalizeMarker(line[..separator]).Equals("criteria_self_check", StringComparison.OrdinalIgnoreCase))
-                value = line[(separator + 1)..].Trim();
+            if (WorkerResultMarkdownEmphasis.TrySplitField(line, out var label, out var fieldValue) &&
+                NormalizeMarker(label).Equals("criteria_self_check", StringComparison.OrdinalIgnoreCase))
+                value = fieldValue;
         }
         return Parse(value);
     }

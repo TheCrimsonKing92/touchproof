@@ -128,6 +128,125 @@ public sealed class WorkerResultParserEvidenceTests
         Assert.Equal("WORKER_RESULT tests reported failure: fail - 2 assertions failed.", diagnostic);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("blockers: none", true)]
+    [Xunit.InlineData("**blockers:** none", true)]
+    [Xunit.InlineData("**blockers**: none", true)]
+    [Xunit.InlineData("blockers: none", false)]
+    [Xunit.InlineData("**blockers:** none", false)]
+    [Xunit.InlineData("**blockers**: none", false)]
+    public void LabelForms_BlockAndScan_ReturnUndecoratedValues(string line, bool inBlock)
+    {
+        var text = WorkerResultBlock("source inspection", "pass - inspected")
+            .Replace("blockers: none", line, StringComparison.Ordinal);
+        if (!inBlock)
+            text = text.Replace("WORKER_RESULT:", string.Empty, StringComparison.Ordinal)
+                .Replace("END_WORKER_RESULT", string.Empty, StringComparison.Ordinal);
+
+        Assert.True(WorkerResultParser.TryParseFields(text, out var fields, out var diagnostic), diagnostic);
+        Assert.Equal("none", fields["blockers"]);
+    }
+
+    [Xunit.Fact]
+    public void CapturedHaikuShape_CriteriaVerdicts_StartWithJsonArray()
+    {
+        // Captured label shape from c0bb706d55fb78bb1213bc2f64c6dc2507b6ffba;
+        // the abbreviated payload is filled with representative arithmetic evidence.
+        const string fixture = """
+            **criteria_verdicts:** [{"criterion_index":0,"verdict":"met","evidence":"Arithmetic result is 4."}]
+            """;
+        var text = WorkerResultBlock("source inspection", "pass - inspected")
+            .Replace("END_WORKER_RESULT", fixture + "\nEND_WORKER_RESULT", StringComparison.Ordinal);
+
+        Assert.True(WorkerResultParser.TryParseFields(text, out var fields, out var diagnostic), diagnostic);
+        var value = fields["criteria_verdicts"];
+        Assert.StartsWith("[", value, StringComparison.Ordinal);
+        Assert.DoesNotContain("**", value, StringComparison.Ordinal);
+        using var json = System.Text.Json.JsonDocument.Parse(value);
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, json.RootElement.ValueKind);
+        Assert.Equal(0, Assert.Single(json.RootElement.EnumerateArray()).GetProperty("criterion_index").GetInt32());
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("commands:", true)]
+    [Xunit.InlineData("**commands:**", true)]
+    [Xunit.InlineData("**commands**:", true)]
+    [Xunit.InlineData("commands:", false)]
+    [Xunit.InlineData("**commands:**", false)]
+    [Xunit.InlineData("**commands**:", false)]
+    public void JsonValue_BlockAndScan_PreserveInteriorBytes(string label, bool inBlock)
+    {
+        const string value = """[ {"evidence":"see **note** _under_score_: C:\\work:42 \"quoted\"\nnext"} ]""";
+        var text = WorkerResultBlock("source inspection", "pass - inspected")
+            .Replace("commands: source inspection", label + " \t" + value + "\t ", StringComparison.Ordinal);
+        if (!inBlock)
+            text = text.Replace("WORKER_RESULT:", string.Empty, StringComparison.Ordinal)
+                .Replace("END_WORKER_RESULT", string.Empty, StringComparison.Ordinal);
+
+        Assert.True(WorkerResultParser.TryParseFields(text, out var fields, out var diagnostic), diagnostic);
+        Assert.Equal(value, fields["commands"]);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("**blockers: none", "none", true)]
+    [Xunit.InlineData("blockers:** none", "** none", true)]
+    [Xunit.InlineData("*blockers:* none", "* none", true)]
+    [Xunit.InlineData("**blockers: none", "none", false)]
+    [Xunit.InlineData("blockers:** none", "** none", false)]
+    [Xunit.InlineData("*blockers:* none", "* none", false)]
+    public void UnbalancedDecoration_BlockAndScan_KeepNormalizerOutcome(
+        string line, string expected, bool inBlock)
+    {
+        var text = WorkerResultBlock("source inspection", "pass - inspected")
+            .Replace("blockers: none", line, StringComparison.Ordinal);
+        if (!inBlock)
+            text = text.Replace("WORKER_RESULT:", string.Empty, StringComparison.Ordinal)
+                .Replace("END_WORKER_RESULT", string.Empty, StringComparison.Ordinal);
+
+        Assert.True(WorkerResultParser.TryParseResult(text, out var result, out var diagnostic), diagnostic);
+        Assert.Equal(expected, result.Fields["blockers"]);
+        Assert.Equal(expected == "none" ? WorkerResultParser.BlockersStatus.None : WorkerResultParser.BlockersStatus.Unknown,
+            result.BlockersStatus);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void ConflictingFields_BlockLastAndScanFirst_PreserveBlocker(bool inBlock)
+    {
+        const string blocker = "exact-blocker - fixture cannot build";
+        var duplicateLines = inBlock
+            ? "blockers: none\n**blockers:** " + blocker
+            : "**blockers:** " + blocker + "\nblockers: none";
+        var text = WorkerResultBlock("source inspection", "pass - inspected")
+            .Replace("blockers: none", duplicateLines, StringComparison.Ordinal);
+        if (!inBlock)
+            text = text.Replace("WORKER_RESULT:", string.Empty, StringComparison.Ordinal)
+                .Replace("END_WORKER_RESULT", string.Empty, StringComparison.Ordinal);
+
+        Assert.True(WorkerResultParser.TryParseResult(text, out var result, out var diagnostic), diagnostic);
+        Assert.Equal(blocker, result.Fields["blockers"]);
+        Assert.Equal(WorkerResultParser.BlockersStatus.Present, result.BlockersStatus);
+        Assert.False(WorkerResultParser.TryParseSuccessfulResult(text, out _, out diagnostic,
+            allowNoChangedFiles: true, requireNoBlockers: true));
+        Assert.Equal("WORKER_RESULT reports a blocker.", diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void DecoratedReviewFields_NotMetAndBlockingFinding_PassThrough()
+    {
+        const string verdicts = """[{"criterion_index":0,"verdict":"not-met","evidence":"Missing **assertion**: _outcome_."}]""";
+        const string findings = """[{"stable_id":"missing-assertion","state":"open","severity":"blocking","category":"test-coverage","location":{"file":"Parser.cs","region":"Parse"},"description":"Missing **assertion**: _outcome_."}]""";
+        var text = WorkerResultBlock("source inspection", "pass - inspected")
+            .Replace("END_WORKER_RESULT",
+                $"**criteria_verdicts:** {verdicts}\n**findings:** {findings}\nEND_WORKER_RESULT",
+                StringComparison.Ordinal);
+
+        Assert.True(WorkerResultParser.TryParseFields(text, out var fields, out var diagnostic), diagnostic);
+        Assert.Equal(verdicts, fields["criteria_verdicts"]);
+        Assert.Equal(findings, fields["findings"]);
+    }
+
     private static string WorkerResultBlock(
         string commands,
         string tests,

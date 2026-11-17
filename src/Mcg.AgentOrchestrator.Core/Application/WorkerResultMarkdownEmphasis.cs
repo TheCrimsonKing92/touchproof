@@ -2,6 +2,22 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public static class WorkerResultMarkdownEmphasis
 {
+    public static bool TrySplitField(string trimmedLine, out string label, out string value)
+    {
+        var line = Normalize(trimmedLine);
+        var separator = line.IndexOf(':');
+        if (separator < 0)
+        {
+            label = string.Empty;
+            value = string.Empty;
+            return false;
+        }
+
+        label = line[..separator].Trim();
+        value = line[(separator + 1)..].Trim();
+        return true;
+    }
+
     public static string Normalize(string trimmedLine)
     {
         var line = trimmedLine;

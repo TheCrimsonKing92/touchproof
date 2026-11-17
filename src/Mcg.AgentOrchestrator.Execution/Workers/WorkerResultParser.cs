@@ -215,17 +215,16 @@ internal static class WorkerResultParser
                 continue;
             }
 
-            var sep = line.IndexOf(':', StringComparison.Ordinal);
-            if (sep <= 0)
+            if (!WorkerResultMarkdownEmphasis.TrySplitField(line, out var label, out var value))
             {
                 continue;
             }
 
-            var key = NormalizeKey(line[..sep]);
+            var key = NormalizeKey(label);
             if (!string.IsNullOrWhiteSpace(key))
             {
                 // Last-writer-wins within the block (matches original behavior).
-                fields[key] = line[(sep + 1)..].Trim();
+                fields[key] = value;
             }
         }
 
@@ -266,13 +265,12 @@ internal static class WorkerResultParser
                 continue;
             }
 
-            var sep = trimmed.IndexOf(':', StringComparison.Ordinal);
-            if (sep <= 0)
+            if (!WorkerResultMarkdownEmphasis.TrySplitField(trimmed, out var label, out var value))
             {
                 continue;
             }
 
-            var key = NormalizeKey(trimmed[..sep]);
+            var key = NormalizeKey(label);
             if (string.IsNullOrWhiteSpace(key))
             {
                 continue;
@@ -283,7 +281,7 @@ internal static class WorkerResultParser
                 !fields.ContainsKey(key))
             {
                 // First-wins: take the first occurrence of each field.
-                fields[key] = trimmed[(sep + 1)..].Trim();
+                fields[key] = value;
             }
         }
 
