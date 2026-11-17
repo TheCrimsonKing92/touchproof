@@ -158,6 +158,23 @@ public sealed class BacklogItemSummaryTests : IDisposable
         Assert.DoesNotContain("\"schema\"", help);
     }
 
+    [Theory]
+    [InlineData(null, "normal")]
+    [InlineData("Low", "low")]
+    public async Task Summary_text_and_json_normalize_stored_priority(string? stored, string expected)
+    {
+        var seed = await SeedAsync("unclaimed");
+        var store = new BacklogStore(seed.Workspace.BacklogStorePath);
+        if (stored is not null)
+            await store.UpdateAsync(seed.Item.Id, new BacklogItemUpdate(Priority: stored));
+        Assert.Equal(stored, (await store.GetByExactIdAsync(seed.Item.Id))!.Priority);
+
+        using var summary = AssertSummary(Read(seed, "--summary", "--json"));
+        Assert.Equal(expected, summary.RootElement.GetProperty("payload").GetProperty("priority").GetString());
+        Assert.Contains($"Priority: {expected}" + Environment.NewLine, Read(seed, "--summary"));
+        Assert.Equal(stored, (await store.GetByExactIdAsync(seed.Item.Id))!.Priority);
+    }
+
     private sealed record Seed(OrchestratorWorkspace Workspace, AgentOrchestratorKernel Kernel, BacklogItem Item);
 
     private async Task<Seed> SeedAsync(string mode, bool rich = false)
@@ -215,8 +232,10 @@ public sealed class BacklogItemSummaryTests : IDisposable
     private static void AssertParity(JsonElement full, JsonElement summary)
     {
         foreach (var property in new[] { "id", "title", "status", "createdAt", "updatedAt", "sourceGoalId",
-            "priority", "tags", "supersededBy", "owner", "ownerAmbiguous", "claimVersion", "coverage" })
+            "tags", "supersededBy", "owner", "ownerAmbiguous", "claimVersion", "coverage" })
             Assert.Equal(full.GetProperty(property).GetRawText(), summary.GetProperty(property).GetRawText());
+        Assert.Equal(BacklogPriorityLevels.Read(full.GetProperty("priority").GetString()),
+            summary.GetProperty("priority").GetString());
         foreach (var (collection, count) in new[] { ("linkedGoals", "linkedGoalCount"), ("lineage", "lineageCount"),
             ("dependencies", "dependencyCount"), ("dependents", "dependentCount"), ("notes", "noteCount"),
             ("ambiguousLinkedGoalIds", "ambiguousLinkedGoalCount") })

@@ -130,12 +130,12 @@ public sealed class BacklogRecentOrderingTests
         Assert.Equal("claimed", recent.GetProperty("status").GetString());
         Assert.Equal(OwnerId, recent.GetProperty("goalId").GetString());
         Assert.Equal("--needle recent", recent.GetProperty("title").GetString());
-        Assert.Equal("P2", recent.GetProperty("priority").GetString());
+        Assert.Equal("normal", recent.GetProperty("priority").GetString());
         Assert.Equal("recent,fixture", recent.GetProperty("tags").GetString());
         Assert.True(recent.GetProperty("eligible").GetBoolean());
         var dependent = Assert.Single(rows, row => row.GetProperty("id").GetString() == Id(5));
         Assert.Equal(JsonValueKind.Null, dependent.GetProperty("goalId").ValueKind);
-        Assert.Equal(JsonValueKind.Null, dependent.GetProperty("priority").ValueKind);
+        Assert.Equal("normal", dependent.GetProperty("priority").GetString());
         Assert.False(dependent.GetProperty("eligible").GetBoolean());
         await AssertBothAsync(fixture, [6, 3],
             "--newest-first", "--status", "open", "--text", "needle", "--limit", "2");

@@ -13,6 +13,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
     [Xunit.InlineData(new[] { "backlog-similar", "--help" }, "backlog-similar", "--excerpt")]
     [Xunit.InlineData(new[] { "backlog-update", "--help" }, "backlog-update", "--description")]
+    [Xunit.InlineData(new[] { "backlog-update", "--help" }, "backlog-update", "critical|high|normal|low")]
     [Xunit.InlineData(new[] { "backlog-show", "--help" }, "backlog-show", "-h")]
     [Xunit.InlineData(new[] { "backlog-annotate", "--help" }, "backlog-annotate", "--text-file")]
     [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--text-file")]

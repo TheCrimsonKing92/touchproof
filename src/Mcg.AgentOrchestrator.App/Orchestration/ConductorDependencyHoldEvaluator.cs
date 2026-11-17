@@ -12,8 +12,22 @@ internal static class ConductorDependencyHoldEvaluator
         AgentOrchestratorKernel kernel,
         out bool requiresPerson,
         IReadOnlySet<string>? dependencyEscalatedGoals = null)
+        => Evaluate(goal, completedGoals, escalatedGoals, kernel, out requiresPerson,
+            out _, out _, dependencyEscalatedGoals);
+
+    internal static string? Evaluate(
+        Goal goal,
+        HashSet<string> completedGoals,
+        HashSet<string> escalatedGoals,
+        AgentOrchestratorKernel kernel,
+        out bool requiresPerson,
+        out GoalId? terminalDependencyId,
+        out string? terminalDependencyStatus,
+        IReadOnlySet<string>? dependencyEscalatedGoals = null)
     {
         requiresPerson = true;
+        terminalDependencyId = null;
+        terminalDependencyStatus = null;
         foreach (var depId in goal.DependsOn)
         {
             var producer = kernel.Goals.FirstOrDefault(candidate => candidate.Id == depId);
@@ -33,6 +47,8 @@ internal static class ConductorDependencyHoldEvaluator
             if (kernel.TryGetKnownDependencyGoalStatus(depId, out var terminalStatus) &&
                 IsTerminalWithoutLandingDependencyStatus(terminalStatus))
             {
+                terminalDependencyId = depId;
+                terminalDependencyStatus = terminalStatus;
                 return $"dependency-terminal-without-landing: {depId.Value[..8]} state={terminalStatus}";
             }
 
@@ -53,6 +69,10 @@ internal static class ConductorDependencyHoldEvaluator
 
         return null;
     }
+
+    internal static bool IsRemovableTerminalDependencyStatus(string status) =>
+        status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase);
 
     private static bool IsMetadataSatisfiedDependencyStatus(string status) =>
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);

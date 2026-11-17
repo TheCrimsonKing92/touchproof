@@ -12,13 +12,37 @@ internal static class BoardFillScopeDepends
         var report = GoalScopeCollisionAdvisor.Build([markdown], goals, backlogItemId);
         var dependencies = report.ConflictingGoalIds.Select(id =>
         {
-            var reasons = report.Collisions.Where(collision => collision.GoalId == id && Counts(collision))
+            var reasons = report.Collisions.Where(collision => collision.GoalId == id && CreatesDependency(collision))
                 .Select(collision => $"{collision.Kind} {collision.ProposedPath}<->{collision.ConflictingPath}").Distinct().ToArray();
             return (GoalId: id, Reasons: reasons);
         }).Where(candidate => candidate.Reasons.Length > 0)
             .Select(candidate => new BoardFillProposedDependency(candidate.GoalId, string.Join("; ", candidate.Reasons)))
             .ToArray();
         return new(report.VerdictToken, dependencies);
+    }
+
+    internal static bool CreatesDependency(ScopeCollision collision) =>
+        collision.Kind == ScopeCollisionKind.ExactFile &&
+        IsConcreteFilePath(collision.ProposedPath) && IsConcreteFilePath(collision.ConflictingPath);
+
+    private static bool IsConcreteFilePath(string path)
+    {
+        // Normalization erases the declared directory signal, so inspect it first.
+        var declared = path.Trim();
+        if (declared.EndsWith('/') || declared.EndsWith('\\'))
+        {
+            return false;
+        }
+
+        var normalized = RepositoryPathOverlap.Normalize(declared);
+        if (normalized.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0)
+        {
+            return false;
+        }
+
+        var name = normalized[(normalized.LastIndexOf('/') + 1)..];
+        var extensionSeparator = name.LastIndexOf('.');
+        return extensionSeparator > 0 && extensionSeparator < name.Length - 1;
     }
 
     internal static bool Counts(ScopeCollision collision)

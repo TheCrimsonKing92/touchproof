@@ -24,6 +24,7 @@ internal static class BoardFillReadyItemSelector
         HasTag(item, "owner-gated") ||
         OwnerMarkers.Any(marker => item.Body.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
             item.Notes.Any(note => !BoardFillContradictionHold.IsMarker(note.Text) &&
+                !note.Text.StartsWith(BoardFillNearDuplicate.NotePrefix, StringComparison.Ordinal) &&
                 note.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)));
 
     internal static bool IsAuthorRefused(BacklogItem item) => HasTag(item, AuthorStaleRetirement.Tag);
@@ -36,7 +37,9 @@ internal static class BoardFillReadyItemSelector
         IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness,
         IReadOnlyList<BoardFillDraftRound>? rounds = null, IReadOnlyList<string>? preferredOrder = null,
         string? currentMainHead = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
-        IReadOnlySet<string>? epicMembers = null, Action<BacklogItem>? epicMissing = null)
+        IReadOnlySet<string>? epicMembers = null, Action<BacklogItem>? epicMissing = null,
+        Func<BacklogItem, BoardFillNearDuplicateReference?>? nearDuplicate = null,
+        Action<BacklogItem, BoardFillNearDuplicateReference>? nearDuplicateSkipped = null)
     {
         var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
         if (preferredOrder is not null)
@@ -58,8 +61,15 @@ internal static class BoardFillReadyItemSelector
             epicMissing?.Invoke(candidate.Item);
             return false;
         })
+        .Where(candidate =>
+        {
+            var reference = nearDuplicate?.Invoke(candidate.Item);
+            if (reference is null) return true;
+            nearDuplicateSkipped?.Invoke(candidate.Item, reference);
+            return false;
+        })
         .OrderBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
-        .ThenByDescending(candidate => !string.IsNullOrWhiteSpace(candidate.Item.Priority))
+        .ThenBy(candidate => BacklogPriorityLevels.Rank(candidate.Item.Priority))
         .ThenByDescending(candidate => candidate.Ready.HasLandedDependency)
         .ThenByDescending(candidate => candidate.Item.UpdatedAt)
         .ThenBy(candidate => candidate.Item.Id, StringComparer.Ordinal)

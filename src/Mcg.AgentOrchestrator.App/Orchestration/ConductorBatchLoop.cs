@@ -1220,7 +1220,7 @@ internal sealed partial class ConductorBatchLoop
                 var dependencyRequiresPerson = true;
                 var depHoldReason = HasStartedGoalWork(goal)
                     ? null
-                    : GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel, out dependencyRequiresPerson, dependencyEscalatedGoals);
+                    : ConductorDependencyEdgeReconciler.Evaluate(goal, completedGoals, escalatedGoals, kernel, out dependencyRequiresPerson, dependencyEscalatedGoals, changedGoalIds);
                 if (depHoldReason is not null)
                 {
                     var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(depHoldReason)}";
