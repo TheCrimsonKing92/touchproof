@@ -700,9 +700,9 @@ internal sealed partial class ConductorBatchLoop
                 }
                 catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
                 {
-                    EmitProgress(
-                        $"POLICY_RELOAD_FAILED tick={nextTick} source={SanitizeReason(policySource)} " +
-                        $"currentPolicy={Sanitize(policy.Name)} reason={SanitizeReason($"{ex.GetType().Name}: {ex.Message}")}");
+                    EmitProgress($"POLICY_RELOAD_FAILED tick={nextTick} source={SanitizeReason(policySource)} currentPolicy={Sanitize(policy.Name)} reason={SanitizeReason($"{ex.GetType().Name}: {ex.Message}")}");
+                    if (ex is FormatException)
+                        EmitProgress($"POLICY_INVALID tick={nextTick} source={SanitizeReason(policySource)} currentPolicy={Sanitize(policy.Name)} reason={SanitizeReason(ex.Message)}");
                 }
             }
 

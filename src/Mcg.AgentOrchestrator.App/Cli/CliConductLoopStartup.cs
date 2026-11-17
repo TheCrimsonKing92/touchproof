@@ -56,7 +56,23 @@ internal static class CliConductLoopStartup
                 (seedOutput ?? Console.Out).WriteLine(line);
         }
 
-        return ResolveConductorPolicy(policyName, orchestratorDirectory);
+        try
+        {
+            return ResolveConductorPolicy(policyName, orchestratorDirectory);
+        }
+        catch (FormatException ex)
+        {
+            var policyPath = Path.GetFullPath(Path.Combine(orchestratorDirectory, "conductor-policy.json"));
+            var snapshotPath = ConductorPolicyLastValidSnapshot.PathFor(orchestratorDirectory);
+            var snapshot = ConductorPolicyLastValidSnapshot.TryRead(orchestratorDirectory, out var failure);
+            var fallback = snapshot is null ? "Conservative" : "last-valid";
+            var warning = $"POLICY_INVALID path={policyPath} fallback={fallback} snapshot={snapshotPath} " +
+                $"message={ex.Message.ReplaceLineEndings(" ")}";
+            if (failure is not null)
+                warning += $" snapshotUnavailable={failure}";
+            return new ConductorPolicyResolution(snapshot ?? ConductorAutonomyPolicy.Conservative,
+                snapshot is null ? "fallback:Conservative" : $"last-valid:{snapshotPath}", [warning]);
+        }
     }
 
     internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetName, string orchestratorDirectory)
@@ -74,6 +90,9 @@ internal static class CliConductLoopStartup
                 var filePolicy = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(orchestratorDirectory));
                 if (!ReferenceEquals(filePolicy, ConductorAutonomyPolicy.Default))
                 {
+                    var snapshotWarning = ConductorPolicyLastValidSnapshot.Write(orchestratorDirectory, filePolicy);
+                    if (snapshotWarning is not null)
+                        warnings.Add(snapshotWarning);
                     var differences = DescribeConductorPolicyDifferences(preset, filePolicy);
                     if (differences.Count > 0)
                     {
@@ -115,6 +134,9 @@ internal static class CliConductLoopStartup
                 $"above the highest preset value {highestPresetWorkerCap}; honoring the configured value.");
         }
 
+        var writeWarning = ConductorPolicyLastValidSnapshot.Write(orchestratorDirectory, loaded);
+        if (writeWarning is not null)
+            fileWarnings.Add(writeWarning);
         return new ConductorPolicyResolution(loaded, $"file:{policyPath}", fileWarnings);
     }
 

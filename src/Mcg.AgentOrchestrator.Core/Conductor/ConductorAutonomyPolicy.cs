@@ -209,8 +209,8 @@ public sealed record ConductorAutonomyPolicy(
             errors.Add($"boardFillMode must be Off, Shadow or File (got {BoardFillMode}).");
         if (BoardFillTargetActiveGoals is < 0 or > 30)
             errors.Add($"boardFillTargetActiveGoals must be between 0 and 30 (got {BoardFillTargetActiveGoals}).");
-        if (BoardFillMaxDraftsPerDay is < 0 or > 30)
-            errors.Add($"boardFillMaxDraftsPerDay must be between 0 and 30 (got {BoardFillMaxDraftsPerDay}).");
+        if (BoardFillMaxDraftsPerDay is < 0 or > 100)
+            errors.Add($"boardFillMaxDraftsPerDay must be between 0 and 100 (got {BoardFillMaxDraftsPerDay}).");
 
         if (BuildGcConserveMemoryLevel is < 0 or > 9)
             errors.Add($"buildGcConserveMemoryLevel must be between 0 and 9 (got {BuildGcConserveMemoryLevel}).");

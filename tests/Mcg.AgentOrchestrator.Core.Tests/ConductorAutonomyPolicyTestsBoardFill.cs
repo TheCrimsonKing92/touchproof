@@ -33,6 +33,8 @@ public sealed class ConductorAutonomyPolicyTestsBoardFill
     [InlineData(ConductorBoardFillMode.Shadow, 10, 3)]
     [InlineData(ConductorBoardFillMode.File, 30, 20)]
     [InlineData(ConductorBoardFillMode.File, 30, 30)]
+    [InlineData(ConductorBoardFillMode.File, 30, 60)]
+    [InlineData(ConductorBoardFillMode.File, 30, 100)]
     public void Board_fill_values_round_trip(ConductorBoardFillMode mode, int target, int cap)
     {
         var policy = ConductorAutonomyPolicy.Permissive with
@@ -50,7 +52,7 @@ public sealed class ConductorAutonomyPolicyTestsBoardFill
     [InlineData(-1, 3, "boardFillTargetActiveGoals")]
     [InlineData(31, 3, "boardFillTargetActiveGoals")]
     [InlineData(10, -1, "boardFillMaxDraftsPerDay")]
-    [InlineData(10, 31, "boardFillMaxDraftsPerDay")]
+    [InlineData(10, 101, "boardFillMaxDraftsPerDay")]
     public void Invalid_ranges_name_the_parameter(int target, int cap, string name)
     {
         var policy = ConductorAutonomyPolicy.Permissive with
@@ -61,7 +63,7 @@ public sealed class ConductorAutonomyPolicyTestsBoardFill
         Assert.Contains(name, Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(policy.ToJson())).Message);
         if (name == "boardFillMaxDraftsPerDay")
         {
-            const string range = "boardFillMaxDraftsPerDay must be between 0 and 30";
+            const string range = "boardFillMaxDraftsPerDay must be between 0 and 100";
             Assert.Contains(policy.Validate(), error => error.Contains(range, StringComparison.Ordinal));
             Assert.Contains(range, Assert.Throws<FormatException>(() =>
                 ConductorAutonomyPolicy.ParseJson(policy.ToJson())).Message);
