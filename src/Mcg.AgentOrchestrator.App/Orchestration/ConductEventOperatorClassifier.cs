@@ -66,6 +66,8 @@ internal static class ConductEventOperatorClassifier
                 || StartsWithToken("ACCEPTANCE_COHORT_RECONCILED_DEAD")
                 || StartsWithToken("ACCEPTANCE_COHORT_CHILD_COMPLETED") => Outcome,
             "board-fill-draft" when StartsWithToken("BOARD_FILL_DRAFT") => Decision,
+            "board-fill-draft" when StartsWithToken("BOARD_BELOW_TARGET") => Decision,
+            "board-fill-draft" when StartsWithToken("BOARD_TARGET_RECOVERED") => Outcome,
             "board-fill-filed" when StartsWithToken("BOARD_FILL_FILED") => Decision,
             _ => null
         };
