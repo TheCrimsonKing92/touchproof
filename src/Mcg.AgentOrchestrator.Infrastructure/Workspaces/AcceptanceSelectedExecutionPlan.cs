@@ -12,6 +12,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
 {
     public IReadOnlyList<AcceptanceSelectedExecutionMethodFormResolution> MethodFormResolutions { get; init; } = [];
     public IReadOnlyList<AcceptanceSelectedExecutionCheckCoverage> WholeProjectCoverage { get; init; } = [];
+    public IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks { get; init; } = [];
 
     internal bool HasPlan => Outcome == ReverseDependencySelectionOutcome.Resolved;
 
@@ -19,7 +20,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         ReverseDependencyTestSelection selection, IReadOnlyList<AcceptanceTestLane> lanes,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, IReadOnlyList<string> floorLanes,
         IReadOnlyList<string> guardClasses, IReadOnlyList<string>? obligationSelectors = null,
-        Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? wholeProjectChecks = null)
+        Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? wholeProjectChecks = null,
+        bool projectReachAvailable = true)
     {
         var obligations = new HashSet<string>(StringComparer.Ordinal);
         var methodFormResolutions = new List<AcceptanceSelectedExecutionMethodFormResolution>();
@@ -95,10 +97,15 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         }
         var names = new HashSet<string>(StringComparer.Ordinal);
         var guards = new HashSet<string>(StringComparer.Ordinal);
+        projectInventories ??= wholeProjectChecks?.Invoke() ?? [];
+        var selectableProjects = projectInventories.Where(check =>
+            new AcceptanceWholeProjectCheck(check.CheckName, check.Project).SupportsSelectedExecution).ToArray();
+        var selectableClasses = classes.Concat(selectableProjects.SelectMany(check => check.Classes)).ToArray();
         foreach (var selector in selection.TestClassNames.Concat(guardClasses).Distinct(StringComparer.Ordinal))
         {
-            var matches = Resolve(selector);
-            if (matches.Length == 0 || matches.Any(item => !membership.Values.Any(includes => includes(item.FullName))))
+            var matches = Resolve(selector, selectableClasses);
+            if (matches.Length == 0 || matches.Any(item => !InLane(item) &&
+                !selectableProjects.Any(check => check.Classes.Any(candidate => candidate.FullName == item.FullName))))
                 return Full(ReverseDependencySelectionOutcome.Abandoned, "UnmappedTestClass: " + selector);
             names.UnionWith(matches.Select(item => item.FullName));
             if (guardClasses.Contains(selector, StringComparer.Ordinal))
@@ -136,7 +143,11 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         }
         return new(ReverseDependencySelectionOutcome.Resolved, null, execution, records, floorLanes,
             guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray())
-        { MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray() };
+        {
+            MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray(),
+            ProjectChecks = selectableProjects.Select(check => AcceptanceSelectedExecutionProjectCheckEntry.Create(
+                check, names, floorLanes, projectReachAvailable)).ToArray()
+        };
     }
 
     internal static bool IsDefaultFloor(string name) =>

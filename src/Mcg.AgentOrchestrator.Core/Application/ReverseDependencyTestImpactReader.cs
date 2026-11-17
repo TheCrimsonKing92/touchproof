@@ -27,7 +27,8 @@ internal static class ReverseDependencyTestImpactReader
         int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
         bool propagateShippingSourceReach = false,
         Action<string, string>? shippingReachDiagnostics = null,
-        SelectionSourceTexts? sourceTexts = null)
+        SelectionSourceTexts? sourceTexts = null,
+        IReadOnlyList<string>? additionalTargetTestProjects = null)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null,
@@ -58,7 +59,16 @@ internal static class ReverseDependencyTestImpactReader
                         $"The dependent test project could not be read: {InfrastructureTestProject}", headroom: headroom);
             }
 
-            var closure = ReadIndexedSourceClosure(repositoryRoot, testProjectPath, out var projectFailure);
+            var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { testProjectPath };
+            foreach (var project in additionalTargetTestProjects ?? [])
+            {
+                var target = ResolveWithinRepository(repositoryRoot, project);
+                if (target is null || !File.Exists(target))
+                    return ReverseDependencyTestSelection.Unreadable(
+                        $"The dependent test project could not be read: {project}", headroom: headroom);
+                targets.Add(target);
+            }
+            var closure = ReadIndexedSourceClosure(repositoryRoot, testProjectPath, out var projectFailure, targets);
             if (closure is null)
             {
                 return ReverseDependencyTestSelection.Unreadable(projectFailure!, headroom: headroom);
@@ -78,7 +88,7 @@ internal static class ReverseDependencyTestImpactReader
                 repositoryRoot,
                 projects,
                 sourceOwnership,
-                out var snapshotFailure, sourceTexts);
+                out var snapshotFailure, sourceTexts, targets);
             if (snapshot is null)
             {
                 return ReverseDependencyTestSelection.Unreadable(snapshotFailure!, headroom: headroom);
@@ -375,9 +385,11 @@ internal static class ReverseDependencyTestImpactReader
     }
 
     private static (ProjectSnapshot[] Projects, Dictionary<string, bool> SourceOwnership)? ReadIndexedSourceClosure(
-        string repositoryRoot, string testProjectPath, out string? failure)
+        string repositoryRoot, string testProjectPath, out string? failure,
+        IReadOnlySet<string>? targetTestProjects = null)
     {
-        var projects = ReadProjectClosure(repositoryRoot, testProjectPath, out failure);
+        targetTestProjects ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase) { testProjectPath };
+        var projects = ReadProjectClosure(repositoryRoot, targetTestProjects, out failure);
         if (projects is null) return null;
         var sourceOwnership = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         foreach (var project in projects)
@@ -388,7 +400,7 @@ internal static class ReverseDependencyTestImpactReader
             {
                 sourceOwnership.TryAdd(
                     sourcePath,
-                    project.Path.Equals(testProjectPath, StringComparison.OrdinalIgnoreCase));
+                    targetTestProjects.Contains(project.Path));
             }
         }
         return (projects, sourceOwnership);
@@ -396,14 +408,14 @@ internal static class ReverseDependencyTestImpactReader
 
     private static ProjectSnapshot[]? ReadProjectClosure(
         string repositoryRoot,
-        string testProjectPath,
+        IEnumerable<string> targetTestProjects,
         out string? failure)
     {
         failure = null;
         var found = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var projects = new List<ProjectSnapshot>();
         var pending = new Queue<string>();
-        pending.Enqueue(testProjectPath);
+        foreach (var target in targetTestProjects.Order(StringComparer.Ordinal)) pending.Enqueue(target);
         while (pending.Count > 0)
         {
             var projectPath = pending.Dequeue();
@@ -449,7 +461,7 @@ internal static class ReverseDependencyTestImpactReader
         string repositoryRoot,
         IReadOnlyList<ProjectSnapshot> projects,
         IReadOnlyDictionary<string, bool> sourceOwnership,
-        out string? failure, SelectionSourceTexts? sourceTexts)
+        out string? failure, SelectionSourceTexts? sourceTexts, IReadOnlySet<string> targetTestProjects)
     {
         failure = null;
         var sources = new List<SourceFileSnapshot>(sourceOwnership.Count);
@@ -486,7 +498,6 @@ internal static class ReverseDependencyTestImpactReader
         }
 
         var currentOwnership = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        var testProjectPath = ResolveWithinRepository(repositoryRoot, InfrastructureTestProject)!;
         foreach (var project in projects)
         {
             foreach (var sourcePath in FileSystemTestClassDeclarationReader.EnumerateProjectSourceFiles(
@@ -494,7 +505,7 @@ internal static class ReverseDependencyTestImpactReader
             {
                 currentOwnership.TryAdd(
                     sourcePath,
-                    project.Path.Equals(testProjectPath, StringComparison.OrdinalIgnoreCase));
+                    targetTestProjects.Contains(project.Path));
             }
         }
 

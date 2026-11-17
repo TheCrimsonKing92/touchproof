@@ -572,7 +572,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var selectedExecution = await AcceptanceSelectedExecutionSession.CreateAsync(engineSettings, worktreePath, changedFiles,
             executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory, executionOwner.GateTestObligationSelectors).ConfigureAwait(false);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
-            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform);
+            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform, projectCheckTransform: selectedExecution.ProjectCheckTransform);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
             var message = StructuralCoverageFailureMessage.Build(worktreePath, executionOwner.ProjectHomeDirectory,
@@ -1793,7 +1793,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? projectHomeDirectory = null,
         AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null,
         Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceWholeProjectCheck>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null,
-        SelectionSourceTexts? sourceTexts = null)
+        SelectionSourceTexts? sourceTexts = null, Func<IReadOnlyList<AcceptanceManifestCheck>, IReadOnlyList<AcceptanceManifestCheck>>? projectCheckTransform = null)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
@@ -1841,7 +1841,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : new StructuralCoverageDeclarationPlan(policyEffectiveChecks, []);
         var semanticDeduplication = DeduplicateSemanticExecutionChecks(ApplyDotnetShardDisposition(
             ExpandBroadInfrastructureChecks(
-                structuralCoverageDeclarations.Checks,
+                projectCheckTransform?.Invoke(structuralCoverageDeclarations.Checks) ?? structuralCoverageDeclarations.Checks,
                 infrastructureTestLanes),
             dotnetShardDisposition));
         return new EffectiveGatePlan(
