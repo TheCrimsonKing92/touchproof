@@ -313,7 +313,7 @@ public static partial class GoalWorktrees
                 branch,
                 $"Rebase of {branch} onto {baseBranch} found conflicts; branch was restored to its pre-rebase state.",
                 conflictFiles,
-                $"Create an operator task to resolve conflicts in order: {string.Join(", ", conflictFiles)}");
+                PreLandingConflictRemedy.Build(Prefix(goalId), conflictFiles));
         }
 
         // Report the EXIT CODE and both streams, not just whichever one happened to be non-empty. git writes
