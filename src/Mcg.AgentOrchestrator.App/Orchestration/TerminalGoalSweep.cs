@@ -841,24 +841,40 @@ internal static partial class TerminalGoalSweep
                 branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
             }
 
-            var equivalentBranchTip = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain
+            var retirementTip = goal.Status == GoalStatus.Completed &&
+                branchFacts.ContentState == GoalBranchContentState.EquivalentToMain
                 ? branchFactIndex.TryGetGoalBranchTip(goal.Id)
                 : null;
             LandedGoalBranchRetirement.Proof? landedProof = null;
-            equivalentBranchTip ??= LandedGoalBranchRetirement.TryGetLandedBranchTip(
+            string? landedProofCheck = null;
+            retirementTip ??= LandedGoalBranchRetirement.TryGetLandedBranchTip(
                 goal, branchFacts, branchFactIndex.TryGetGoalBranchTip(goal.Id), branchFactIndex.MainSha,
                 recoveryJournal, mergeTrainAcceptanceStore, cohortAcceptanceStore,
-                executionDirectory, gitRunner, out landedProof, cache?.Ancestry);
+                executionDirectory, gitRunner, out landedProof, out landedProofCheck, cache?.Ancestry);
+            if (!blockedByDirtyWorktree && blockers.Count == 0 &&
+                goal.Status == GoalStatus.Verified && retirementTip is not null && landedProof is not null)
+            {
+                // Terminal cleanup requires completion; a refused completion must leave the branch intact.
+                try
+                {
+                    goal = kernel.CompleteGoal(goal.Id, landedProof.Describe(goal, "landed-proof completion"));
+                }
+                catch (InvalidOperationException)
+                {
+                    retirementTip = null;
+                    landedProofCheck = "completion-refused";
+                }
+            }
             if (!blockedByDirtyWorktree &&
                 blockers.Count == 0 &&
                 goal.Status == GoalStatus.Completed &&
-                equivalentBranchTip is not null)
+                retirementTip is not null)
             {
                 var removeResult = GoalWorktrees.RemoveSupersededTerminal(
                     executionDirectory,
                     goal.Id,
                     kernel,
-                    equivalentBranchTip,
+                    retirementTip,
                     branchFacts.HasRegisteredWorktree,
                     branchFacts.HasGoalBranch,
                     cleanupHooks);
@@ -905,7 +921,9 @@ internal static partial class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
                     contentEquivalent
-                        ? BuildSupersededBranchEvidence(goal, "retirement required")
+                        ? BuildSupersededBranchEvidence(goal, landedProofCheck is null
+                            ? "retirement required"
+                            : $"retirement required; landedProofCheck={landedProofCheck}")
                         : AppendAcceptanceHold(
                             $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
                             acceptance),
