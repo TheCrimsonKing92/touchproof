@@ -454,6 +454,51 @@ public sealed class GoalTimingReportTests
             source.Count == 1);
     }
 
+    [Xunit.Fact]
+    public void DispatchValueReport_NonLatestSubscriptionTesterSuccess_IsProductive()
+    {
+        // Parallel-safe: fixed snapshots and an in-memory kernel; no processes or files.
+        var at = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+        const string output = """
+            WORKER_RESULT:
+            files: none
+            commands: inspected packaged test receipts
+            tests: pass - packaged test receipt records 150 passed, 0 failed
+            commit: none
+            blockers: none
+            model_fit: fixture
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """;
+        var first = new TaskDispatchSnapshot("codex-cli", Command, WorkDir, at,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli);
+        var latest = first with { DispatchedAt = at.AddHours(1) };
+        var success = new TaskVerificationSnapshot(Command, WorkDir, 0, output, string.Empty,
+            at.AddMinutes(15), WorkerResultPresent: true, DispatchStartedAt: at.AddSeconds(2),
+            AuthoritativeStandardOutput: output, EvidenceSource: VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt: at);
+        var task = new TaskSnapshot("subscription-tester", "Verify subscription worker receipts", AgentRole.Tester,
+            WorkTaskStatus.Assigned, null, null, null, [success], latest, null, DispatchHistory: [first, latest]);
+        ProgressEventSnapshot[] events =
+        [
+            new("goal", task.Id, ProgressKind.TaskDispatchRecorded, $"Dispatched to codex-cli: {Command}", at),
+            new("goal", task.Id, ProgressKind.TaskCompleted, "verified test receipts", success.CompletedAt),
+            new("goal", task.Id, ProgressKind.TaskDispatchRecorded, $"Dispatched to codex-cli: {Command}", latest.DispatchedAt)
+        ];
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [new GoalSnapshot("goal", "Subscription Tester stored timing", GoalStatus.Active, [task], events)], []));
+        var restoredTask = kernel.Goals.Single().Tasks.Single();
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationIncomplete,
+            DispatchFailureClassifier.Classify(restoredTask, restoredTask.VerificationHistory.Single()).Kind);
+
+        var round = kernel.BuildDispatchValueReport().Goals.Single().Rounds.Single(r => r.RoundNumber == 1);
+
+        Xunit.Assert.Equal(DispatchRoundValueClass.Productive, round.ValueClass);
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, round.OutcomeVerdict);
+        Xunit.Assert.Equal(string.Empty, round.WasteSource);
+    }
+
     private static TaskDispatchRecord Dispatch(DateTimeOffset at) =>
         new("codex-cli", Command, WorkDir, at, SandboxLowIntegrity: true);
 

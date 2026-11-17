@@ -43,7 +43,7 @@ internal static class FalseFailBridgeDetector
     internal static bool HasLaterSuccess(TaskSpec task, IEnumerable<TaskVerificationRecord> verifications,
         DateTimeOffset after) => verifications.Any(candidate =>
             candidate.CompletedAt > after &&
-            DispatchFailureClassifier.Classify(task, candidate).Kind == DispatchOutcomeKind.VerifiedSuccess);
+            DispatchFailureClassifier.ClassifyStoredRound(task, candidate).Kind == DispatchOutcomeKind.VerifiedSuccess);
 
     internal static bool IsFalseFailBridge(TaskVerificationRecord verification, bool laterSuccess,
         bool goalLanded) =>

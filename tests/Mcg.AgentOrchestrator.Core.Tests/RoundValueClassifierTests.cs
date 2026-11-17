@@ -99,6 +99,81 @@ public sealed class RoundValueClassifierTests
         Assert.Equal(cause, rounds[1].WasteCause);
     }
 
+    [Fact]
+    public void HasLaterSuccess_SubscriptionTesterNonLatestRound_UsesStoredRecord()
+    {
+        var task = SubscriptionTesterGoal().Tasks.Single();
+
+        Assert.True(FalseFailBridgeDetector.HasLaterSuccess(task, task.VerificationHistory,
+            task.VerificationHistory[0].CompletedAt));
+    }
+
+    [Fact]
+    public void SubscriptionTesterNonLatestRound_LiveIsStaleWhileStoredIsVerifiedSuccess()
+    {
+        var task = SubscriptionTesterGoal().Tasks.Single();
+        var success = task.VerificationHistory[1];
+
+        var live = DispatchFailureClassifier.Classify(task, success);
+        Assert.Equal(DispatchOutcomeKind.VerificationIncomplete, live.Kind);
+        Assert.Contains("terminal_contract=Stale", live.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Equal(DispatchOutcomeKind.VerifiedSuccess,
+            DispatchFailureClassifier.ClassifyStoredRound(task, success).Kind);
+    }
+
+    [Fact]
+    public void Classify_SubscriptionTesterGuardRound_BridgesThroughNonLatestStoredSuccess()
+    {
+        var goal = SubscriptionTesterGoal();
+
+        var round = RoundValueClassifier.Classify([goal]).Single(r => r.Round.RoundIndex == 1);
+
+        Assert.Equal(RoundGoalOutcome.Pending, round.Outcome);
+        Assert.Equal(RoundValueClass.Wasted, round.ValueClass);
+        Assert.Equal("classifier-false-fail-bridge", round.WasteCause);
+    }
+
+    private static Goal SubscriptionTesterGoal()
+    {
+        const string command = "codex verify";
+        const string workDir = @"C:\repo";
+        const string output = """
+            WORKER_RESULT:
+            files: none
+            commands: inspected packaged test receipts
+            tests: pass - packaged test receipt records 150 passed, 0 failed
+            commit: none
+            blockers: none
+            model_fit: fixture
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """;
+        var dispatches = Enumerable.Range(1, 3).Select(hour => new TaskDispatchSnapshot(
+            "codex-cli", command, workDir, RoundValueFixture.Since.AddHours(hour),
+            WorkerProviderKind: ProviderKind.OpenAICodexCli)).ToArray();
+        var guard = new TaskVerificationSnapshot(command, workDir, 1, string.Empty,
+            "Developer/Tester dispatch exited 0 but did not produce required relevant file-change evidence",
+            dispatches[0].DispatchedAt.AddMinutes(15),
+            DispatchStartedAt: dispatches[0].DispatchedAt.AddSeconds(2),
+            EvidenceSource: VerificationEvidenceSource.Dispatch, DispatchAttemptAt: dispatches[0].DispatchedAt);
+        var success = new TaskVerificationSnapshot(command, workDir, 0, output, string.Empty,
+            dispatches[1].DispatchedAt.AddMinutes(15), WorkerResultPresent: true,
+            DispatchStartedAt: dispatches[1].DispatchedAt.AddSeconds(2), AuthoritativeStandardOutput: output,
+            EvidenceSource: VerificationEvidenceSource.Dispatch, DispatchAttemptAt: dispatches[1].DispatchedAt);
+        var task = new TaskSnapshot("subscription-tester", "Verify subscription worker receipts", AgentRole.Tester,
+            WorkTaskStatus.Assigned, null, null, null, [guard, success], dispatches[2], null,
+            DispatchHistory: dispatches);
+        ProgressEventSnapshot[] events =
+        [
+            new("goal", task.Id, ProgressKind.TaskFailed, "file-change guard", guard.CompletedAt),
+            new("goal", task.Id, ProgressKind.TaskCompleted, "verified test receipts", success.CompletedAt)
+        ];
+        return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [new GoalSnapshot("goal", "Subscription Tester stored rounds", GoalStatus.Active, [task], events)], []))
+            .Goals.Single();
+    }
+
     private static Goal GoalWith(GoalStatus status, AgentRole role, string? first, string? second,
         string message, ProgressKind kind = ProgressKind.TaskRetried, bool omitFirstEnding = false)
     {

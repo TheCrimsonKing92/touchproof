@@ -702,7 +702,7 @@ public static class GoalTimingReport
                 : new(null, DispatchRoundValueClass.Corrective, "no verification paired to dispatch round; pending/active work remains auditable from dispatch timeline", "unpaired-dispatch");
         }
 
-        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        var outcome = DispatchFailureClassifier.ClassifyStoredRound(task, verification);
         var receipt = string.IsNullOrWhiteSpace(outcome.ClassifierReceipt)
             ? $"classifier={outcome.Kind}"
             : outcome.ClassifierReceipt;
