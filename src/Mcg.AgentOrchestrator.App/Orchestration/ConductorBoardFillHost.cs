@@ -76,7 +76,16 @@ internal sealed partial class ConductorBoardFillHost
     {
         if (onlyGoalId is not null || _shutdown.IsCancellationRequested) return;
         var policy = _policy();
-        if (policy.BoardFillMode == ConductorBoardFillMode.Off) return;
+        if (policy.BoardFillMode == ConductorBoardFillMode.Off)
+        {
+            if (_round is { IsCompleted: true })
+            {
+                _kernel = kernel;
+                Harvest(_utcNow());
+                ReportFinished();
+            }
+            return;
+        }
         var errors = policy.Validate();
         if (errors.Count != 0) throw new InvalidOperationException(string.Join("; ", errors));
         var now = _utcNow();

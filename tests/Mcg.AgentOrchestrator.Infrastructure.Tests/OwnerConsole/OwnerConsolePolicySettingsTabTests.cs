@@ -62,6 +62,81 @@ public sealed class OwnerConsolePolicySettingsTabTests
         Assert.Single(Directory.GetFiles(fixture.Root));
     }
 
+    [Fact]
+    public void BoardFillMode_EditsPersistEachModeAndKeepOtherValues()
+    {
+        using var fixture = new Fixture();
+        var tab = new OwnerConsolePolicySettingsTab(fixture.Path);
+        using var view = new OwnerConsoleSettingsView([tab]);
+        view.Open(OwnerConsolePane.Board);
+
+        foreach (var (input, mode) in new[] { (" off ", ConductorBoardFillMode.Off),
+            ("Shadow", ConductorBoardFillMode.Shadow), ("FILE", ConductorBoardFillMode.File) })
+        {
+            var before = Parse(File.ReadAllText(fixture.Path));
+            Edit(view, "boardFillMode", input);
+
+            Assert.False(tab.Editing);
+            Assert.Contains("saved boardFillMode", tab.StatusText);
+            var text = File.ReadAllText(fixture.Path);
+            Assert.Equal(mode, ConductorAutonomyPolicy.ParseJson(text).BoardFillMode);
+            var saved = Parse(text);
+            Assert.Equal(JsonSerializer.Serialize(mode.ToString()), saved["boardFillMode"]!.ToJsonString());
+            Assert.Equal(before.Count, saved.Count);
+            foreach (var pair in before)
+                if (pair.Key != "boardFillMode")
+                    Assert.True(JsonNode.DeepEquals(pair.Value, saved[pair.Key]), pair.Key);
+            Assert.Single(Directory.GetFiles(fixture.Root));
+        }
+    }
+
+    [Fact]
+    public void BoardFillTarget_PersistsInRangeValuesAndRefusesInvalidInput()
+    {
+        using var fixture = new Fixture();
+        var tab = new OwnerConsolePolicySettingsTab(fixture.Path);
+        using var view = new OwnerConsoleSettingsView([tab]);
+        view.Open(OwnerConsolePane.Board);
+
+        foreach (var target in new[] { 0, 15, 30 })
+        {
+            Edit(view, "boardFillTargetActiveGoals", target.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Assert.False(tab.Editing);
+            Assert.Contains("saved boardFillTargetActiveGoals", tab.StatusText);
+            Assert.Equal(target, ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.Path)).BoardFillTargetActiveGoals);
+        }
+
+        foreach (var input in new[] { "31", "-1", "abc", "2147483648", "1.5" })
+        {
+            var before = File.ReadAllBytes(fixture.Path);
+            Edit(view, "boardFillTargetActiveGoals", input);
+            Assert.True(tab.Editing);
+            Assert.Contains("Save refused", tab.StatusText);
+            if (input is "31" or "-1") Assert.Contains("between 0 and 30", tab.StatusText);
+            Assert.Equal(before, File.ReadAllBytes(fixture.Path));
+            Assert.Single(Directory.GetFiles(fixture.Root));
+            view.HandleKey(Key.Esc);
+        }
+    }
+
+    [Fact]
+    public void BoardFillMode_InvalidNameIsRefusedNamingValidValues()
+    {
+        using var fixture = new Fixture();
+        var before = File.ReadAllBytes(fixture.Path);
+        var tab = new OwnerConsolePolicySettingsTab(fixture.Path);
+        using var view = new OwnerConsoleSettingsView([tab]);
+        view.Open(OwnerConsolePane.Board);
+
+        Edit(view, "boardFillMode", "Maybe");
+
+        Assert.True(tab.Editing);
+        Assert.Contains("Save refused", tab.StatusText);
+        Assert.Contains("Off, Shadow, File", tab.StatusText);
+        Assert.Equal(before, File.ReadAllBytes(fixture.Path));
+        Assert.Single(Directory.GetFiles(fixture.Root));
+    }
+
     [Theory]
     [InlineData("acceptanceWidth", "\"3\"", "integer")]
     [InlineData("acceptanceWidth", "1.5", "integer")]
@@ -75,6 +150,10 @@ public sealed class OwnerConsolePolicySettingsTabTests
     [InlineData("autoPromoteRiskThreshold", "Extreme", "valid values")]
     [InlineData("autoPromoteRiskThreshold", "7", "valid values")]
     [InlineData("autoPromoteRiskThreshold", "1", "valid values")]
+    [InlineData("boardFillMode", "0", "Off, Shadow, File")]
+    [InlineData("boardFillMode", "1", "Off, Shadow, File")]
+    [InlineData("boardFillMode", "null", "Off, Shadow, File")]
+    [InlineData("boardFillMode", "Off, File", "Off, Shadow, File")]
     [InlineData("maxTotalBudget", "\"20\"", "decimal")]
     public void InvalidInput_ReportsRefusalAndLeavesBytesUntouched(string key, string input, string message)
     {
@@ -96,7 +175,6 @@ public sealed class OwnerConsolePolicySettingsTabTests
     [InlineData("transitionMap")]
     [InlineData("perProviderBudgetCaps")]
     [InlineData("unknownExtra")]
-    [InlineData("boardFillMode")]
     public void ReadOnlyKeys_HaveNoEditingAction(string key)
     {
         using var fixture = new Fixture();
