@@ -1999,7 +1999,7 @@ public sealed partial class AgentOrchestratorKernel
             goal,
             taskId,
             ProgressKind.TaskNote,
-            $"Gracefully detached process {process.ProcessId}; a successor conductor may reconcile it.");
+            $"Gracefully detached process {process.ProcessId}; the process was detached and needs a conductor to be started to reconcile it.");
     }
 
     public void RecordTaskProcessCancelled(
