@@ -2565,7 +2565,7 @@ public sealed partial class AgentOrchestratorKernel
     public void RemoveGoalDependency(GoalId dependentId, GoalId dependencyId)
     {
         var dependent = GetGoal(dependentId);
-        GetGoal(dependencyId);
+        if (!TryGetKnownDependencyGoalStatus(dependencyId, out _)) GetGoal(dependencyId);
         if (!dependent.RemoveDependency(dependencyId))
             throw new InvalidOperationException(
                 $"Goal '{dependentId.Value[..8]}' does not depend on '{dependencyId.Value[..8]}'.");
