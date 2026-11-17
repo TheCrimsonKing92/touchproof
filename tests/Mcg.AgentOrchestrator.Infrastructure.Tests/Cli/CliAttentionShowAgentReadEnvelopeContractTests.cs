@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -237,7 +238,13 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
             using var bare = JsonDocument.Parse(Run(["attention", "--json"], seed.Workspace, seed.Kernel));
             Assert.Equal("mcg.attention", bare.RootElement.GetProperty("schema").GetString());
             Assert.Equal(1, bare.RootElement.GetProperty("schemaVersion").GetInt32());
-            Assert.Equal(expectedBarePayload, bare.RootElement.GetProperty("payload").GetRawText());
+            var expectedListPayload = JsonNode.Parse(expectedBarePayload)!.AsObject();
+            expectedListPayload.Add("unlinkedGoals", JsonSerializer.SerializeToNode(new[]
+            {
+                new { goalId = seed.First.Id.Value, title = "First goal", reason = "no-epic-no-backlog-link" },
+                new { goalId = seed.Second.Id.Value, title = "Second goal", reason = "no-epic-no-backlog-link" }
+            }));
+            Assert.Equal(expectedListPayload.ToJsonString(), bare.RootElement.GetProperty("payload").GetRawText());
             var expectedEnvelope = "{\"schema\":\"mcg.attention\",\"schemaVersion\":1,\"generatedAt\":\"2026-10-06T00:00:00.0000000Z\",\"payload\":" + expectedBarePayload + "}";
             Assert.Equal(expectedEnvelope, AttentionAgentReadView.Render([seed.Wait],
                 await seed.Store.GetAttentionQueueAsync(), new FixedTimeProvider()));

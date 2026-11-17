@@ -28,7 +28,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         await using var command = connection.CreateCommand();
         // LoadGoalsAsync's primary-key IN scan supplies the baseline goal order. Archives only
         // replace metadata stubs, exactly as GoalSnapshotArchive.HydrateAsync does.
-        command.CommandText = "SELECT id, snapshot_json FROM goals ORDER BY id";
+        command.CommandText = "SELECT id, snapshot_json, source_backlog_item_id FROM goals ORDER BY id";
         _statementObserver?.Invoke(command.CommandText);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -62,7 +62,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                 var versions = metadataOnly ? [] : ReadAttentionArray<GoalBriefVersion>(root, "BriefVersions");
                 var briefVersion = versions.Length == 0 ? 1 : versions.Single(version => version.IsAuthoritative).Version;
                 facts.Add(new(id, status, briefVersion, !metadataOnly && AttentionElements(root, "Tasks")
-                    .Any(task => ReadAttentionField<WorkTaskStatus>(task, "Status") == WorkTaskStatus.WaitingForHuman)));
+                    .Any(task => ReadAttentionField<WorkTaskStatus>(task, "Status") == WorkTaskStatus.WaitingForHuman),
+                    reader.IsDBNull(2) ? null : reader.GetString(2), ReadAttentionField<string>(root, "Objective") ?? ""));
                 if (metadataOnly) continue; // A missing archive retains the baseline metadata-only behavior.
 
                 duties.AddRange(ReadAttentionArray<CriterionEvidenceObligation>(root, "CriterionEvidenceObligations")

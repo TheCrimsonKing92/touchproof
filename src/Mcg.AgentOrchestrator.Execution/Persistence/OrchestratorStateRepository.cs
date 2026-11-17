@@ -102,7 +102,7 @@ public sealed record TerminalOwnerQuestionHold(
     string GoalId, string Identity, string State, string Blocker, DateTimeOffset StartedAt);
 
 public sealed record AttentionGoalReadFacts(string GoalId, GoalStatus Status, int BriefVersion,
-    bool HasWaitingTasks = false);
+    bool HasWaitingTasks = false, string? SourceBacklogItemId = null, string Title = "");
 public sealed record AttentionGateEvidence(string GoalId, GateTestObligation Obligation);
 public sealed record AttentionPostLandingDuty(string GoalId, CriterionEvidenceObligation Obligation);
 public sealed record AttentionOwnerQuestionEvidence(string GoalId, GoalHoldSnapshot Hold, IReadOnlyList<string> TaskIds);
