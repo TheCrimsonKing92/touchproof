@@ -348,7 +348,7 @@ internal sealed partial class ConductorDriver
                 GetActiveAcceptanceCohortCapacity(),
                 goal.Id.Value,
                 Math.Min(GetAcceptanceSlotCount(goal), policy.AcceptanceWidth),
-                _conductorTick, BackstopReservationId?.Invoke());
+                _conductorTick);
             facts = facts with { AdmissionAdmitted = admission.IsAdmitted, AdmissionReason = admission.Reason };
             if (!admission.IsAdmitted)
             {

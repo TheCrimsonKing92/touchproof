@@ -406,7 +406,6 @@ internal sealed partial class ConductorBatchLoop
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         _selectedExecutionBackstop ??= SelectedExecutionBackstopCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
         driver.GateMissDetector ??= _selectedExecutionBackstop is { } backstop ? new(backstop, line => EmitProgress(line)) : null;
-        driver.BackstopReservationId = () => _selectedExecutionBackstop?.ActiveRequestId;
         driver.SuccessfulLandingSink = receipt =>
         {
             var landedAt = _promptRolloutWatch is null ? default : _utcNow();
@@ -425,7 +424,7 @@ internal sealed partial class ConductorBatchLoop
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
             $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
             $"acceptanceWidth={policy.AcceptanceWidth} adoptedBuildPushEnabled={policy.AdoptedBuildPushEnabled} {policy.Features.ToLogFields()} gitPath={SanitizeReason(ConductorGitResolution.Current.LogValue)}" +
-            (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}") + $" {SelectedExecutionBackstopYieldBounds.ToLogFieldsFor(_selectedExecutionBackstop)}");
+            (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
         SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)
         {
             if (pendingSelfRelaunch?.HomeBuildTarget is { } homeTarget)
@@ -451,8 +450,8 @@ internal sealed partial class ConductorBatchLoop
             {
                 return new(SelfRelaunchDrainDisposition.ContinueTick);
             }
-            var gateCounts = RunJanitorialPhase<(int Live, int Backstop)?>(
-                "count-live-grouped-gates", tick, () => _selectedExecutionBackstop?.ResumeRelaunchDrain(_countLiveGroupedGates) ?? (_countLiveGroupedGates(), 0)) ?? (Live: 0, Backstop: 0);
+            var liveGates = RunJanitorialPhase<int?>(
+                "count-live-grouped-gates", tick, () => _countLiveGroupedGates()) ?? 0;
             var drainElapsed = _utcNow() - (selfRelaunchDrainStartedAt ?? _utcNow());
             var capDecision = new SelfRelaunchCapDecision(false, false, string.Empty);
             if (activeDispatches.Value > 0)
@@ -474,12 +473,11 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var drainHold = new ConductorSelfRelaunchDrainHold(
-                activeDispatches.Value > 0 && !capDecision.Detach && !capDecision.AlreadyDetached, gateCounts.Live, drainElapsed);
+                activeDispatches.Value > 0 && !capDecision.Detach && !capDecision.AlreadyDetached, liveGates, drainElapsed);
             if (drainHold.ShouldWait)
             {
                 if (drainHold.TimedOut)
                 {
-                    _selectedExecutionBackstop?.CancelForRelaunchDrainTimeout(gateCounts.Live, gateCounts.Backstop, totalTicks);
                     EmitSelfRelaunchRollback(totalTicks, pendingSelfRelaunch!.GoalId, "drain", drainHold.TimeoutReason);
                     deferredSelfRelaunch = pendingSelfRelaunch;
                     selfRelaunchRetryAfterTick = totalTicks + 1;
@@ -596,7 +594,7 @@ internal sealed partial class ConductorBatchLoop
         }
 
         IReadOnlyList<string> HomeBuildBlockers() => ProjectConductorIdleCheck.ReadBlockers(
-            () => CountRunningDispatches(kernel, onlyGoalId), driver, () => _countLiveGroupedGates() + (_selectedExecutionBackstop?.RunningCount ?? 0),
+            () => CountRunningDispatches(kernel, onlyGoalId), driver, _countLiveGroupedGates,
             _operatorIntents, _homeBuildIdleBlockers);
 
         while (true)
@@ -908,7 +906,7 @@ internal sealed partial class ConductorBatchLoop
                 admissionHold.Acknowledge();
                 RunJanitorialPhase("selected-execution-backstop-idle", nextTick, () =>
                 {
-                    _selectedExecutionBackstop?.ServiceIdle(_workspace!, driver, kernel, SelectedExecutionBackstopWaitingGoals.Select(kernel, driver, policy), policy.AcceptanceWidth, SuppressNewAcceptanceAdmission(), nextTick);
+                    _selectedExecutionBackstop?.ServiceAsync().GetAwaiter().GetResult();
                     return true;
                 });
                 if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
@@ -1752,7 +1750,6 @@ internal sealed partial class ConductorBatchLoop
         }
 
         AwaitCanaryTasks(canaryTasks, canaryTasksGate);
-        _selectedExecutionBackstop?.CancelAndDrainAsync().GetAwaiter().GetResult();
         ConductorLoopHandoffResult? handoff = selfRelaunchHandoff;
         if (selfRelaunchHandoff is not null && stopReason is null)
         {
@@ -1803,8 +1800,6 @@ internal sealed partial class ConductorBatchLoop
             StopStewardAndAuthor();
             driver.AdmissionFacts.Stop();
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
-            _selectedExecutionBackstop?.CancelAndDrainAsync().GetAwaiter().GetResult();
-            driver.BackstopReservationId = null;
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
             driver.LandingMutationBlocker = previousLandingMutationBlocker;
@@ -2251,9 +2246,11 @@ internal sealed partial class ConductorBatchLoop
         var (priorityOccupantsBefore, priorityResultsBefore, priorityBaseOrder) = ConductorTickStepLedger.Measure("priority-order", () =>
             (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver),
              state.Results.Keys.ToHashSet(StringComparer.Ordinal), GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible)));
-        state.AcceptanceCensus = RunJanitorialPhase("selected-execution-backstop-admission", tick, () =>
-            _selectedExecutionBackstop?.ServiceAdmission(_workspace!, state.OrderedEligible.Where(goal => !state.Results.ContainsKey(goal.Id.Value) && !priorityOccupantsBefore.Contains(goal.Id.Value)).ToArray(), SelectedExecutionBackstopWaitingGoals.Select(kernel, driver, policy), state.AcceptanceCensus, configuredAcceptanceWidth, suppressNewAcceptanceAdmission()))
-            ?? _selectedExecutionBackstop?.Reserve(state.AcceptanceCensus) ?? state.AcceptanceCensus;
+        RunJanitorialPhase("selected-execution-backstop-admission", tick, () =>
+        {
+            _selectedExecutionBackstop?.ServiceAsync().GetAwaiter().GetResult();
+            return true;
+        });
         if (!suppressNewAcceptanceAdmission())
             ConductorTickStepLedger.Measure("merge-train", () => { if (PairTrainAdmission.CanAdmitTrain(state.GroupedAdmissionOpen, suppressNewAcceptanceAdmission(), DecideLiveAcceptanceAdmission(state.AcceptanceCensus, configuredAcceptanceWidth).IsAdmitted)) AdmitMergeTrain(state, driver, kernel, policy, tick, changedGoalLines); });
         ConductorTickStepLedger.Measure("pair-cohort", () => AdmitPairCohort(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
@@ -2266,11 +2263,6 @@ internal sealed partial class ConductorBatchLoop
             ConductorTickStepLedger.Measure("solo-admission", () => AdmitSoloAcceptance(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
                 suppressNewAcceptanceAdmission));
         ConductorTickStepLedger.Measure("priority-guard", () => _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityBaseOrder, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, changedGoalLines.Add));
-        RunJanitorialPhase("selected-execution-backstop-served", tick, () =>
-        {
-            _selectedExecutionBackstop?.ObserveServedAsync(priorityBaseOrder.Where(goal => !priorityOccupantsBefore.Contains(goal.Id.Value) && (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Contains(goal.Id.Value) || state.Results.TryGetValue(goal.Id.Value, out var outcome) && outcome.SlotIndex is not null && !priorityResultsBefore.Contains(goal.Id.Value)))).GetAwaiter().GetResult();
-            return true;
-        });
         ConductorTickStepLedger.Measure("deferral-summary", () => SummarizeAcceptanceDeferrals(state, tick, changedGoalLines));
 
         return state.Results;

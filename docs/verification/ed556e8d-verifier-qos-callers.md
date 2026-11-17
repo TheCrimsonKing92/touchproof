@@ -13,8 +13,6 @@ eligibility only in their async flow and never call the setter for the hosting p
 
 | Caller | Host / prior Enable | Disposition |
 | --- | --- | --- |
-| `Orchestration/SelectedExecutionBackstopGateRunner.cs::Run` | conductor / no | Begin scope from workspace policy; aggregate all command sweeps and log once after cleanup. |
-| `Orchestration/SelectedExecutionBackstopFailureRerun.cs::Create` | conductor / no | Inherits the originating runner's scope, policy snapshot and totals; no separate policy read. |
 | `Orchestration/ConductorDriver.MainSuspectReleaseProbe.cs::Run` | conductor / no | Begin hosted scope before checkout and focused verification. |
 | `Orchestration/MultiRepositoryProjectVerifier.cs::Run` | conductor or operator CLI / no | Covered by `MultiRepositoryAcceptanceGate.Run`; one snapshot covers home and secondary repositories. |
 | `Cli/CliMultiRepositoryAcceptance.cs::RunHome` | operator CLI / no | Same gate scope. |
@@ -59,13 +57,8 @@ unsafe queueing, or raw thread dispatch on these verifier lane paths. `Configure
 does not suppress execution context. The per-run snapshot therefore reaches each lane's
 existing sweep without changing selection, concurrency, priority, or process ownership.
 
-Added test classes:
+Current test coverage:
 
-- `SelectedExecutionBackstopGateRunnerQosTests`: enabled/disabled root and members, exact
-  masks, failed setter counts, both successive policy orders, overlapping decisions,
-  and one exact summary on success, exception and cancellation.
-- `SelectedExecutionBackstopFailureRerunQosTests`: actual automatic focused re-run,
-  on-disk policy flipped before re-run, original decision retained and totals summed.
 - `HostedVerifierRunQosTests`: policy fallback, scope restoration, idempotent aggregation,
   logging failure, and additional hosted probe/CLI/multi-repository/manifest paths.
 
@@ -75,7 +68,10 @@ recording setter has observed the reported job members. It does not launch a tes
 Each repository, child and event is fixture-owned; the seams are async-flow scoped, so no
 serial collection or manifest census entry is needed.
 
-Tests are deferred to Acceptance. The enabled runner assertions discriminate the base
+The per-landing full-suite backstop callers and their dedicated QoS tests were removed
+by goal `5868f96c`; they are excluded from this current inventory.
+
+Tests are deferred to Acceptance. The enabled hosted-scope assertions discriminate the base
 revision: without the hosted scope, a false attempt flag produces no setter calls. Removing
 the scope also removes the summary entirely. Disabled cases additionally pin precedence
 over a true attempt flag. No negative-control execution receipt is claimed by the Developer.

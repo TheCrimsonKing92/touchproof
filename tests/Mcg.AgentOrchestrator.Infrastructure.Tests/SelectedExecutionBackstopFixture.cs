@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: every filesystem/database identity is fixture-local; the runner never starts a process.
-internal sealed class SelectedExecutionBackstopFixture : ISelectedExecutionBackstopRunner, IDisposable
+// Parallel-safe: every filesystem/database identity is fixture-local.
+internal sealed class SelectedExecutionBackstopFixture : IDisposable
 {
     internal string Home { get; } = Path.Combine(Path.GetTempPath(), "mcg-backstop-tests", Guid.NewGuid().ToString("N"));
     internal SqliteRunEventStore Events { get; }
@@ -11,13 +12,7 @@ internal sealed class SelectedExecutionBackstopFixture : ISelectedExecutionBacks
     internal CollaborationItemStore Items { get; }
     internal ConcurrentQueue<SelectedExecutionBackstopRequest> Calls { get; } = new();
     internal ConcurrentQueue<string> Lines { get; } = new();
-    internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    internal Func<SelectedExecutionBackstopRequest, Task<SelectedExecutionBackstopOutcome>> Run { get; set; } =
-        _ => Task.FromResult(SelectedExecutionBackstopOutcome.Green);
-    internal Func<SelectedExecutionBackstopRequest, CancellationToken, Task<SelectedExecutionBackstopOutcome>>? RunWithCancellation { get; set; }
-    internal ConcurrentQueue<CancellationToken> Tokens { get; } = new();
     internal DateTimeOffset Now { get; set; } = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
-    internal string Head { get; set; } = "main-2";
     internal SelectedExecutionBackstopCoordinator Coordinator { get; }
 
     internal SelectedExecutionBackstopFixture()
@@ -29,30 +24,20 @@ internal sealed class SelectedExecutionBackstopFixture : ISelectedExecutionBacks
         Coordinator = CreateCoordinator();
     }
 
-    internal SelectedExecutionBackstopCoordinator CreateCoordinator(Action<string>? progress = null, bool consumeInitialTick = true)
-    {
-        var coordinator = new SelectedExecutionBackstopCoordinator(Store, this, Items, Home, () => Now,
-            line => { Lines.Enqueue(line); progress?.Invoke(line); });
-        // Ordinary fixture calls observe a coordinator whose initial service tick is consumed.
-        if (consumeInitialTick) coordinator.ServiceAsync(() => Head, [], [], false, false).GetAwaiter().GetResult();
-        return coordinator;
-    }
+    internal SelectedExecutionBackstopCoordinator CreateCoordinator(Action<string>? progress = null) =>
+        new(Store, Items, Home, () => Now, line => { Lines.Enqueue(line); progress?.Invoke(line); });
     internal static AcceptanceSelectedExecutionRecord Applied => AcceptanceSelectedExecutionFixture.Observe(
         AcceptanceSelectedExecutionFixture.Session(AcceptanceSelectedExecutionMode.Enforce)).SelectedExecution!;
     internal Task Land(string goal = "goal-1", string commit = "main-1", AcceptanceSelectedExecutionRecord? record = null) =>
         Coordinator.NoteLandingAsync(goal, commit, record ?? Applied, "main-0");
-    internal Task Service(bool capacity = true, bool suppressed = false) => Coordinator.ServiceAsync(() => Head, [], [], capacity, suppressed);
-    internal async Task Finish()
-    {
-        await Service();
-        await Coordinator.DrainAsync();
-    }
-    public Task<SelectedExecutionBackstopOutcome> RunAsync(SelectedExecutionBackstopRequest request, CancellationToken cancellationToken)
-    {
-        Calls.Enqueue(request);
-        Tokens.Enqueue(cancellationToken);
-        Entered.TrySetResult();
-        return RunWithCancellation?.Invoke(request, cancellationToken) ?? Run(request);
-    }
+    internal Task Service() => Coordinator.ServiceAsync();
+    internal Task<SelectedExecutionGateMissDetector.Detection> DetectMiss() =>
+        new SelectedExecutionGateMissDetector(Coordinator).ObserveAsync("gate-goal",
+            Arm(FindingEvidenceArm.Candidate), Arm(FindingEvidenceArm.Baseline));
+
+    private static FindingEvidenceArmReceipt Arm(FindingEvidenceArm arm) =>
+        new(arm, "gate-sha", FindingEvidenceArmDisposition.Red,
+            Accepted: true, Passed: false, Summary: "synthetic gate failure",
+            FailingTestIdentities: ["Candidate.X.Missed"], TestResultPaths: []);
     public void Dispose() => Directory.Delete(Home, recursive: true);
 }

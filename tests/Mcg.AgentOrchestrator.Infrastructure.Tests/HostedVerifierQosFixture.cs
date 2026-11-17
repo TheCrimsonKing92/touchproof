@@ -41,10 +41,6 @@ internal sealed class HostedVerifierQosFixture : GoalWorktreeTestBase, IDisposab
     internal void WritePolicy(bool enabled) => File.WriteAllText(PolicyPath,
         (ConductorAutonomyPolicy.Conservative with { AcceptanceChildrenOptOutExecutionThrottling = enabled }).ToJson());
 
-    internal Task<SelectedExecutionBackstopOutcome> RunAsync() =>
-        new SelectedExecutionBackstopGateRunner(Driver).RunAsync(
-            new(Guid.NewGuid().ToString("N"), tip, tip, 1, [], DateTimeOffset.UnixEpoch), cancellation.Token);
-
     internal string[] Summaries() => File.Exists(Workspace.ConductEventsLogPath)
         ? File.ReadAllLines(Workspace.ConductEventsLogPath).Select(line =>
         {

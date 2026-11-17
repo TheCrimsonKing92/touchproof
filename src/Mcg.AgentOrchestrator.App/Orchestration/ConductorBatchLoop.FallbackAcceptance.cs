@@ -10,7 +10,7 @@ internal sealed partial class ConductorBatchLoop
         ConductorAcceptanceCapacitySnapshot activeCohorts,
         string goalId,
         int width,
-        int tick, string? backstopRequestId = null)
+        int tick)
     {
         var reservations = BuildActiveParallelAcceptanceReservations(coordinator, goals);
         if (reservations.Failure is { } capacityFailure)
@@ -26,7 +26,7 @@ internal sealed partial class ConductorBatchLoop
             activeCohorts,
             tick,
             new List<string>(),
-            blockAdmissionOnFailure: true, backstopRequestId);
+            blockAdmissionOnFailure: true);
         if (census.CaptureFailure is null &&
             census.Occupants.Contains($"goal:{ShortIdentity(goalId)}", StringComparer.OrdinalIgnoreCase))
         {

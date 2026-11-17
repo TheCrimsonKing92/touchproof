@@ -8,6 +8,22 @@ public sealed class AcceptanceGateEngineSettingsTests
 {
     private GoalAcceptanceVerifierTestOverrides TestOverrides { get; } = new();
 
+    [Xunit.Fact]
+    public void LegacyYieldKeysAreIgnoredAndHaveNoEngineMembers()
+    {
+        var members = typeof(AcceptanceGateEngineSettings)
+            .GetMembers(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var legacyKeys = new[] { "selectedExecutionBackstopMaxUncoveredLandings", "selectedExecutionBackstopMaxOldestLandingAgeHours" };
+        Xunit.Assert.DoesNotContain(members, member => legacyKeys.Contains(member.Name, StringComparer.OrdinalIgnoreCase));
+        var settings = AcceptanceGateEngineSettings.Parse("""
+            { "version": 1, "engine": {
+              "selectedExecutionBackstopMaxUncoveredLandings": 0,
+              "selectedExecutionBackstopMaxOldestLandingAgeHours": -1,
+              "maxConcurrentShards": 3 } }
+            """);
+        Xunit.Assert.Equal(3, settings.MaxConcurrentShards);
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_checked_in_manifest_splits_heavy_lanes_without_narrowing_coverage")]
     public void AcceptanceGateEngineCheckedInManifestSplitsHeavyLanesWithoutNarrowingCoverage()
     {

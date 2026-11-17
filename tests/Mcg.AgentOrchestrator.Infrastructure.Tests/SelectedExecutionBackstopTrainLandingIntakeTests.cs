@@ -39,7 +39,7 @@ public sealed class SelectedExecutionBackstopTrainLandingIntakeTests : Acceptanc
             Assert.Equal(2, result.MemberResults.Count);
             var state = Assert.IsType<SelectedExecutionBackstopState>(await backstop.Store.ReadAsync());
             Assert.Equal(new[] { first.Id.Value, second.Id.Value }.Order(), state.RangeLandings.Select(landing => landing.GoalId).Order());
-            Assert.Equal(2, state.Uncovered.Count);
+            Assert.Equal(2, state.RangeLandings.Count);
             var expectedSkipped = verifier.PublishedPlan!.SelectedExecution!.Lanes
                 .SelectMany(lane => lane.SkippedClasses).Distinct(StringComparer.Ordinal).ToArray();
             Assert.NotEmpty(expectedSkipped);
@@ -47,7 +47,6 @@ public sealed class SelectedExecutionBackstopTrainLandingIntakeTests : Acceptanc
             {
                 Assert.True(landing.Applied);
                 Assert.False(landing.RecordUnreadable);
-                Assert.Contains(landing, state.Uncovered);
                 Assert.Equal(expectedSkipped, landing.SkippedClasses);
             });
             Assert.DoesNotContain(backstop.Lines, line => line.Contains("landing-record-unreadable"));

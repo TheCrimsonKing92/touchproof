@@ -109,7 +109,6 @@ internal sealed partial class ConductorDriver
     internal readonly OrchestratorWorkspace? _cohortWorkspace;
     private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = new();
     internal readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
-    internal Func<string?>? BackstopReservationId { get; set; }
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
     private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
     private readonly MergeTrainAcceptanceStore? _mergeTrainAcceptanceStore;

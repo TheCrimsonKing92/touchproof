@@ -10,16 +10,15 @@ public sealed class AcceptanceSelectedExecutionSuspensionTests
     public async Task UnchangedOpenMissMarkerIsNotReplacedWhileAGateReadsIt()
     {
         using var fixture = new SelectedExecutionBackstopFixture();
-        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Candidate.X.Missed"], ["lane"]));
         await fixture.Land();
-        await fixture.Finish();
+        await fixture.DetectMiss();
         var miss = (await fixture.Store.ReadAsync())!.OpenMiss!;
         var path = AcceptanceSelectedExecutionSessionSuspension.MarkerPath(fixture.Home);
         // Windows denies replacement while this reader is open. The service must leave
         // identical content untouched, rather than retrying an unnecessary marker write.
         using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            await fixture.Service(capacity: false);
+            await fixture.Service();
             Assert.Equal(miss.Id, (await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home))!.MissId);
         }
         AcceptanceSelectedExecutionSessionSuspension.Write(fixture.Home, new("replacement"));
@@ -30,9 +29,8 @@ public sealed class AcceptanceSelectedExecutionSuspensionTests
     public async Task OpenMissSuspendsEnforceAndResolutionRestoresSameSelectionImmediately()
     {
         using var fixture = new SelectedExecutionBackstopFixture();
-        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Candidate.X.Missed"], ["lane"]));
         await fixture.Land();
-        await fixture.Finish();
+        await fixture.DetectMiss();
         var miss = (await fixture.Store.ReadAsync())!.OpenMiss!;
         var suspension = await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home);
         var suspended = Create(AcceptanceSelectedExecutionMode.Enforce, suspension);
@@ -53,7 +51,7 @@ public sealed class AcceptanceSelectedExecutionSuspensionTests
             await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home));
         Assert.DoesNotContain("Balanced 2", Observe(restored).Scheduled);
         Assert.True(restored.Applied);
-        await fixture.Service(capacity: false);
+        await fixture.Service();
         Assert.Null((await fixture.Store.ReadAsync())!.OpenMiss);
     }
 

@@ -9,13 +9,11 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ConductorBatchLoopTestsTrainAdmissionAfterBackstopStart : AcceptanceCohortWorkflowTests
 {
     [Theory]
-    [InlineData(1, 0)]
-    [InlineData(2, 1)]
-    public async Task DueBackstop_TrainStartsOnlyWhenWidthRemains(int width, int expectedStarts)
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task LegacyRequestDoesNotOccupyAcceptanceWidth(int width)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
-        using var backstopEntered = new ManualResetEventSlim();
-        using var releaseBackstop = new ManualResetEventSlim();
         try
         {
             ConductorBatchLoop.ResetParallelAcceptanceFairnessForTests();
@@ -30,13 +28,7 @@ public sealed class ConductorBatchLoopTestsTrainAdmissionAfterBackstopStart : Ac
             var kernel = new AgentOrchestratorKernel();
             var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
                 new AcceptanceVerificationResult(true, false, 0, null,
-                    Checks: [new AcceptanceCheckResult("backstop", true, 0, null)]),
-                onRun: (_, _) =>
-                {
-                    backstopEntered.Set();
-                    if (!releaseBackstop.Wait(TimeSpan.FromMinutes(2)))
-                        throw new TimeoutException("Tick callback did not release the backstop verifier.");
-                });
+                    Checks: [new AcceptanceCheckResult("backstop", true, 0, null)]));
             var driver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 runAcceptanceAttemptsInCurrentProcess: true,
@@ -55,16 +47,17 @@ public sealed class ConductorBatchLoopTestsTrainAdmissionAfterBackstopStart : Ac
             var policy = ConductorAutonomyPolicy.Permissive with { AcceptanceWidth = width };
             var stop = Path.Combine(repo, "stop-does-not-exist");
 
-            // Consume the coordinator's initial service tick before making a request due.
+            // Initialize the loop before loading a snapshot from an older build.
             loop.Run(kernel, driver, policy, stop, maxIterations: 1);
             var store = new SelectedExecutionBackstopStore(new SqliteRunEventStore(workspace.RunEventStorePath));
             Assert.Null(await store.ReadAsync());
             var head = RunGitOutput(repo, "rev-parse", "main").Trim();
-            var landings = Enumerable.Range(1, SelectedExecutionBackstopYieldBounds.Default.MaxUncoveredLandings)
+            var landings = Enumerable.Range(1, 20)
                 .Select(index => new SelectedExecutionBackstopLanding(index, $"landed-{index}", head, Applied: true))
                 .ToArray();
             await store.WriteAsync("landing", new SelectedExecutionBackstopState(head,
                 LastLandingOrdinal: landings.Length, Landings: landings,
+                Request: new("legacy", head, head, landings.Length, [], now, Attempts: 1),
                 LandingInstants: landings.Select(landing =>
                     new SelectedExecutionBackstopLandingInstant(landing.Ordinal, now)).ToArray()), now);
 
@@ -78,58 +71,26 @@ public sealed class ConductorBatchLoopTestsTrainAdmissionAfterBackstopStart : Ac
             });
             AdmissionFactsTestData.Warm(driver, kernel);
             BatchTickSummary? observed = null;
-            SelectedExecutionBackstopRequest? started = null;
-            var enteredVerifier = false;
-            loop.Run(kernel, driver, policy, stop, maxIterations: 1, onTick: summary =>
-            {
-                try
-                {
-                    observed = summary;
-                    started = store.ReadAsync().GetAwaiter().GetResult()?.Request;
-                    enteredVerifier = backstopEntered.Wait(TimeSpan.FromMinutes(1));
-                }
-                finally { releaseBackstop.Set(); }
-            });
+            loop.Run(kernel, driver, policy, stop, maxIterations: 1, onTick: summary => observed = summary);
 
-            Assert.True(enteredVerifier, "The same-tick backstop did not enter its verifier.");
-            Assert.NotNull(started);
-            Assert.Equal(1, started.Attempts);
+            Assert.Null((await store.ReadAsync())!.Request);
             var tick = Assert.IsType<BatchTickSummary>(observed);
             Assert.Equal(1, tick.Tick);
             var events = File.ReadAllLines(logPath);
-            Assert.Contains(events, line => line.Contains(
+            Assert.DoesNotContain(events, line => line.Contains(
                 "SELECTED_EXECUTION_BACKSTOP result=started", StringComparison.Ordinal));
-            Assert.Equal(expectedStarts, starts.StartCount);
-            Assert.Equal(expectedStarts, starts.PendingCount);
-            Assert.Equal(1, verifier.RunCount);
+            Assert.Equal(1, starts.StartCount);
+            Assert.Equal(1, starts.PendingCount);
+            Assert.Equal(0, verifier.RunCount);
             var progress = tick.ProgressLines ?? [];
-            if (expectedStarts == 0)
-            {
-                Assert.DoesNotContain(progress, line => line.Contains("ACCEPTANCE_TRAIN", StringComparison.Ordinal));
-                Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
-                Assert.Equal(goals.Length, tick.Held);
-                Assert.All(goals, goal =>
-                {
-                    Assert.Equal(GoalStatus.Verified, goal.Status);
-                    Assert.Contains(progress, line =>
-                        line.Contains($"GOAL goal={goal.Id.Value[..8]} result=held state=Verified", StringComparison.Ordinal) &&
-                        line.Contains("reason=acceptance_width_1_reached;", StringComparison.Ordinal) &&
-                        line.Contains("backstop:" + started.Id, StringComparison.Ordinal));
-                });
-                Assert.Empty(driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts(
-                    goals.Select(goal => goal.Id.Value).ToArray()));
-            }
-            else
-            {
-                Assert.Contains(progress, line =>
-                    line.Contains("ACCEPTANCE_TRAIN tick=1 members=", StringComparison.Ordinal) &&
-                    line.Contains("outcome=inflight", StringComparison.Ordinal));
-                Assert.Equal(goals.Length, driver.GetActiveCohortGateMemberGoalIds().Count);
-            }
+            Assert.DoesNotContain(progress, line => line.Contains("backstop:", StringComparison.Ordinal));
+            Assert.Contains(progress, line =>
+                line.Contains("ACCEPTANCE_TRAIN tick=1 members=", StringComparison.Ordinal) &&
+                line.Contains("outcome=inflight", StringComparison.Ordinal));
+            Assert.Equal(goals.Length, driver.GetActiveCohortGateMemberGoalIds().Count);
         }
         finally
         {
-            releaseBackstop.Set();
             ConductorBatchLoop.ResetParallelAcceptanceFairnessForTests();
             DeleteDirectory(repo);
         }
