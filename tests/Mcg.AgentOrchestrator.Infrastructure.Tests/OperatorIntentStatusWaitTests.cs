@@ -1,12 +1,70 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Parallel-safe: each test owns its store, writer and manual clock; no process or shared state.
+// Parallel-safe: each test owns its store, database directory, writer and manual clock.
 public sealed class OperatorIntentStatusWaitTests
 {
     private const string IntentId = "0123456789abcdef0123456789abcdef";
     private static readonly DateTimeOffset Start = new(2026, 10, 2, 0, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public async Task HeldRetryRendersPersistedWaitNoteInTextAndJson()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-intent-status-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel, AgentCatalog.Default().Agents, "Show the held retry's clearing command");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"), Path.Combine(root, "logs"));
+            // Missing causes enter below the CLI; its cause contract stays unchanged.
+            var intent = new OperatorIntentRecord(
+                IntentId, IntentId, OperatorIntentVerbs.Retry, goal.Id.Value, task.Id.Value,
+                JsonSerializer.Serialize(new RetryOperatorIntentPayload("retry", RetryRoundKind.Mechanical),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [], "operator", "test", "test-assurance", Start);
+            await store.EnqueueAsync(intent);
+            Assert.True(new OperatorIntentCoordinator(store).ExecutePending(kernel, goal).MutatedGoalState);
+            var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            var held = (await store.GetAsync(intent.Id))!;
+            Assert.Equal(OperatorIntentStatus.Claimed, held.Status);
+            Assert.Null(held.CompletedAt);
+            Assert.NotNull(held.Outcome);
+            var clearingCommand = $"answer {request.Id.Value} <cause>";
+            Assert.Contains(clearingCommand, held.Outcome, StringComparison.Ordinal);
+            var clock = new ManualClock();
+            using var text = new StringWriter();
+            using var json = new StringWriter();
+            Action<TimeSpan> noDelay = _ => throw new InvalidOperationException("Status reads must not delay.");
+
+            Assert.Equal(0, CliCriterionEvidenceIntents.PrintStatus(
+                ["operator-intent-status", intent.Id], store, text, clock, TimeSpan.FromSeconds(1), noDelay));
+            Assert.Equal(0, CliCriterionEvidenceIntents.PrintStatus(
+                ["operator-intent-status", intent.Id, "--json"], store, json, clock, TimeSpan.FromSeconds(1), noDelay));
+
+            Assert.Contains("status=Claimed", text.ToString(), StringComparison.Ordinal);
+            Assert.Contains($"outcome={held.Outcome}", text.ToString(), StringComparison.Ordinal);
+            Assert.Contains(clearingCommand, text.ToString(), StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(json.ToString());
+            var payload = document.RootElement.GetProperty("payload");
+            Assert.Equal("Claimed", payload.GetProperty("status").GetString());
+            var jsonOutcome = payload.GetProperty("outcome").GetString();
+            Assert.Equal(held.Outcome, jsonOutcome);
+            Assert.Contains(clearingCommand, jsonOutcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 
     [Fact]
     public void WaitPrintsAppliedBlockedDetail()
