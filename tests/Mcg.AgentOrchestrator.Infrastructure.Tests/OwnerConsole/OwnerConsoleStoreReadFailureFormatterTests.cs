@@ -13,7 +13,8 @@ public sealed class OwnerConsoleStoreReadFailureFormatterTests
     public async Task NewerStore_LoadRefreshAndBoardSayRestartWithoutMutatingStore()
     {
         using var scene = new OwnerQuestionResolutionDialogTests.Scene();
-        await scene.ResolveSpec("Which direction?", "Use the current build.", OwnerQuestionResolutionDialogTests.Scene.At);
+        // Isolate the incompatible intent store; current collaboration-store reads have their own WAL lifecycle.
+        SqliteOperatorIntentStore.Setup(Path.Combine(scene.DirectoryPath, SqliteOperatorIntentStore.DatabaseFileName));
         SetVersion(scene.DirectoryPath, StoreSchemaRegistry.OperatorIntents.CurrentVersion!.Value + 1);
         var before = Snapshot(scene.DirectoryPath);
 
@@ -49,11 +50,12 @@ public sealed class OwnerConsoleStoreReadFailureFormatterTests
         using var scene = new OwnerQuestionResolutionDialogTests.Scene();
         const string question = "Which current direction?";
         await scene.ResolveSpec(question, "Use the current build.", OwnerQuestionResolutionDialogTests.Scene.At);
-        Assert.Single(await scene.Reader.ListForGoalAsync(scene.Goal.Id.Value, Token));
+        var resolution = Assert.Single(await scene.Reader.ListForGoalAsync(scene.Goal.Id.Value, Token));
+        Assert.Equal("Use the current build.", resolution.Answer);
 
         await scene.Controller.ShowGoalDetailAsync(scene.Goal.Id.Value, cancellationToken: Token);
         var text = Assert.Single(scene.Dialogs.Texts).Text;
-        Assert.Contains(scene.Goal.Id.Value, text);
+        Assert.StartsWith(OwnerConsoleViewModelBuilder.Prefix(scene.Goal.Id.Value) + "  " + scene.Goal.Objective + Environment.NewLine, text);
         Assert.Contains(scene.Goal.Objective, text);
         Assert.Contains(question, text);
         Assert.DoesNotContain("Load failed:", text);
