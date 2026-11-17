@@ -30,8 +30,8 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
             using var bare = JsonDocument.Parse(Run(["attention", "--json"], workspace, repository));
             using var list = JsonDocument.Parse(Run(["attention", "list", "--json"], workspace, repository));
-            var payload = AssertEnvelope(bare.RootElement);
-            Assert.Equal(payload.GetRawText(), AssertEnvelope(list.RootElement).GetRawText());
+            var payload = AssertEnvelope(bare.RootElement, unlinked: true);
+            Assert.Equal(payload.GetRawText(), AssertEnvelope(list.RootElement, unlinked: true).GetRawText());
             var row = Assert.Single(payload.GetProperty("waits").EnumerateArray());
             Assert.Equal(new[] { "id", "goalId", "taskId", "kind", "question", "plannerIdentity", "plannerEvidence", "owner", "availability", "nextAction", "requestedAt",
                 "isAutoDefaultable", "isDismissible", "isAnswerRequired", "isExternallyBlocked", "resumeCommand" },
@@ -116,7 +116,7 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
             AttentionAgentReadView.RenderSummary([], [], new FixedTimeProvider()));
     }
 
-    private static JsonElement AssertEnvelope(JsonElement envelope)
+    private static JsonElement AssertEnvelope(JsonElement envelope, bool unlinked = false)
     {
         Assert.Equal(new[] { "schema", "schemaVersion", "generatedAt", "payload" },
             envelope.EnumerateObject().Select(property => property.Name));
@@ -129,7 +129,9 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
         Assert.Equal(TimeSpan.Zero, DateTimeOffset.ParseExact(timestamp, "O", CultureInfo.InvariantCulture).Offset);
         Assert.EndsWith("Z", timestamp);
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "waits", "gateEvidence", "items", "providerHolds", "ownerQuestionHolds" }, payload.EnumerateObject().Select(property => property.Name));
+        var fields = new[] { "waits", "gateEvidence", "items", "providerHolds", "ownerQuestionHolds" };
+        Assert.Equal(unlinked ? [.. fields, "unlinkedGoals"] : fields,
+            payload.EnumerateObject().Select(property => property.Name));
         return payload;
     }
 

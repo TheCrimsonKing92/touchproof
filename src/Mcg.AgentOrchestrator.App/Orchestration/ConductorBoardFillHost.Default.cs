@@ -70,35 +70,38 @@ internal sealed partial class ConductorBoardFillHost
         epicAttention: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
     }
 
-    private static Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>
-        CreateRevisionSeam(OrchestratorWorkspace workspace) => async (request, token) =>
+    internal static Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>
+        CreateRevisionSeam(OrchestratorWorkspace workspace,
+            Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcess = null,
+            IAuthorBriefDraftRepository? repository = null) => async (request, token) =>
     {
-        var repository = new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch);
-        var observedHead = repository.ResolveMainHead();
+        var draftRepository = repository ?? new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch);
+        var observedHead = draftRepository.ResolveMainHead();
         if (observedHead != request.MainHead) return new("failed", 1, null, observedHead, [], "main-head-changed");
         var model = ConductorRoundModelResolver.Resolve(ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             ModelFunctionPurposes.ConductorAuthor);
         var item = AuthorBriefDraftBacklog.Read(workspace.BacklogStorePath, request.BacklogItemId);
+        var measureTagged = AuthorBriefDraftMeasurementOnlyCheck.IsMeasureTagged(workspace.BacklogStorePath, item.Id);
         var stack = GoalIntakeTargetStack.For(workspace);
         var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
             .Select(ConductorLessonSelector.AuthorTags("brief"));
-        var prompt = AuthorBriefDraftPrompt.Render(item, lessons, request.MainHead, stack) +
+        var prompt = AuthorBriefDraftPrompt.Render(item, lessons, request.MainHead, stack, measureTagged: measureTagged) +
             Environment.NewLine + Environment.NewLine + request.Prompt;
         var round = await AuthorBriefDraftRound.DispatchAsync(prompt, workspace.ExecutionDirectory,
-            WorkerProcessRunner.RunBufferedAsync, model, token).ConfigureAwait(false);
+            runProcess ?? WorkerProcessRunner.RunBufferedAsync, model, token).ConfigureAwait(false);
         if (round.ExitCode != 0) return new("failed", round.ExitCode, null, null, [], round.StandardError);
         var parsed = AuthorBriefDraftResultParser.Parse(round.StandardOutput);
         if (parsed is null) return new("unparseable", 0, null, null, []);
         if (parsed.Kind != "draft") return new(parsed.Kind, 0, null, null, [], parsed.Reason);
 
         var markdown = parsed.Markdown!;
-        var checks = AuthorBriefDraftChecks.Run(markdown, request.MainHead, repository, stack);
+        var checks = AuthorBriefDraftChecks.Run(markdown, request.MainHead, draftRepository, stack, measureTagged: measureTagged);
         var findings = BriefLint.Lint(markdown, workspace.ExecutionDirectory);
         IReadOnlyList<AuthorBriefDraftCheck> refreshed = [.. checks, .. findings
             .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
             .Select(finding => new AuthorBriefDraftCheck($"brief-lint:{finding.Kind}", false,
                 string.IsNullOrEmpty(finding.Remedy) ? finding.Message : $"{finding.Message} remedy: {finding.Remedy}"))];
-        return new("draft", 0, markdown, repository.ResolveMainHead(), refreshed);
+        return new("draft", 0, markdown, draftRepository.ResolveMainHead(), refreshed);
     };
 
     private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace,

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -13,7 +14,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     OwnerConsoleRefreshGoalSnapshots? snapshots = null,
     Func<Goal, (string? Candidate, IReadOnlyList<GoalOperationJournalEntry> Attempts)?>? candidateGate = null,
     Func<string?>? decisionsMarker = null, Func<string?>? boardMarker = null,
-    Func<string?>? epicMarker = null)
+    Func<string?>? epicMarker = null, Func<ConductorBoardFillMode?>? boardFillMode = null)
 {
     internal const int MaxActivityItems = 100;
     internal const int RecentTerminalTitleRows = 200;
@@ -169,8 +170,11 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         DateTimeOffset? tick = null;
         try { tick = latestTick?.Invoke(); }
         catch { /* An unavailable tick must not prevent status refresh or produce a stale alarm. */ }
+        ConductorBoardFillMode? mode = null;
+        try { mode = boardFillMode?.Invoke(); }
+        catch { /* Unavailable policy must not prevent status refresh. */ }
         return new(new(liveness.IsRunning(), board.Where(row => !row.Dimmed).Select(row => row.GoalId).Distinct().Count(), 0, 0, null, 0,
-            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick), [], board.ToImmutable(), [], Gate: gate);
+            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick, BoardFillMode: mode), [], board.ToImmutable(), [], Gate: gate);
     }
 
     internal OwnerConsoleViewModel WithPanes(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs) =>
