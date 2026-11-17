@@ -288,7 +288,9 @@ public sealed record TaskDispatchSnapshot(
     int WorkerBuildProtocolVersion = 0,
     FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
     FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
-    string? PlannerEvidenceCriteriaVersionHash = null);
+    string? PlannerEvidenceCriteriaVersionHash = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    bool? BriefSnapshotFromVersion = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

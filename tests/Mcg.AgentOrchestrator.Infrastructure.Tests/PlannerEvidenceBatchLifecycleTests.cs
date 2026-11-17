@@ -415,7 +415,7 @@ public sealed class PlannerEvidenceBatchLifecycleTests
                 var snapshot = Kernel.ExportSnapshot();
                 var saved = snapshot.Goals.Single();
                 saved = saved with { Tasks = saved.Tasks.Select(task => task.Id == planner.Id.Value ? task with
-                    { LastDispatch = task.LastDispatch! with { BriefSnapshot = null }, DispatchHistory = task.DispatchHistory!.Select(item => item with { BriefSnapshot = null }).ToArray() } : task).ToArray() };
+                    { LastDispatch = task.LastDispatch! with { BriefSnapshot = null, BriefSnapshotFromVersion = null }, DispatchHistory = task.DispatchHistory!.Select(item => item with { BriefSnapshot = null, BriefSnapshotFromVersion = null }).ToArray() } : task).ToArray() };
                 Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [saved] });
             }
         }
