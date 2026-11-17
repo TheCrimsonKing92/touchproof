@@ -317,7 +317,10 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         Assert.Equal(ordinary.RootElement.GetProperty("generatedAt").GetString(), envelope.GetProperty("generatedAt").GetString());
         Assert.Equal("gateEvidence", Assert.Single(envelope.GetProperty("omittedSections").EnumerateArray()).GetString());
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "waits", "items", "providerHolds", "ownerQuestionHolds" },
+        var fields = new[] { "waits", "items", "providerHolds", "ownerQuestionHolds" };
+        if (ordinary.RootElement.GetProperty("payload").TryGetProperty("unlinkedGoals", out _))
+            fields = [.. fields, "unlinkedGoals"];
+        Assert.Equal(fields,
             payload.EnumerateObject().Select(property => property.Name));
         foreach (var section in payload.EnumerateObject())
             Assert.Equal(ordinary.RootElement.GetProperty("payload").GetProperty(section.Name).GetRawText(), section.Value.GetRawText());
@@ -326,7 +329,8 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
     private static void AssertJsonEqual(string expected, string actual) =>
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(expected), JsonNode.Parse(actual)), "Attention envelopes differ");
     private static string Render(AttentionJsonReadContext context) => AttentionAgentReadView.Render(context.Waits,
-        context.Items, new FixedTime(), context.ProviderHolds, gateEvidence: context.GateEvidence, ownerQuestions: context.OwnerQuestions);
+        context.Items, new FixedTime(), context.ProviderHolds, gateEvidence: context.GateEvidence, ownerQuestions: context.OwnerQuestions,
+        unlinkedGoals: UnlinkedGoalAttentionView.Rows(context.GoalFacts, ""));
     private static string Id(int index) => $"{index:x8}aaaaaaaaaaaaaaaaaaaaaaaa";
     private static PlannerEvidenceIdentity Identity(GoalSnapshot goal, int version) => new(goal.Id, goal.Tasks[0].Id, version, 0, "wait");
     private static GateTestObligation Gate(int version) => new("gate-" + version, version, ["Selector"], null, "Pending", Now);
@@ -422,7 +426,10 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
             var items = await Store.GetAttentionQueueAsync();
             return AttentionAgentReadView.Render(CliCommandHandlers.HumanWaitsForAttention(kernel, null, false),
                 CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, false), new FixedTime(),
-                ProviderUsageHoldView.Read(kernel.Goals, Now), kernel.Goals);
+                ProviderUsageHoldView.Read(kernel.Goals, Now), kernel.Goals,
+                unlinkedGoals: UnlinkedGoalAttentionView.Rows(kernel.Goals.Select(goal => new AttentionGoalReadFacts(
+                    goal.Id.Value, goal.Status, goal.AuthoritativeBrief.Version,
+                    SourceBacklogItemId: goal.SourceBacklogItemId, Title: goal.Objective)).ToArray(), Workspace.PortfolioStorePath));
         }
         public void Dispose() => Directory.Delete(_root, true);
     }
