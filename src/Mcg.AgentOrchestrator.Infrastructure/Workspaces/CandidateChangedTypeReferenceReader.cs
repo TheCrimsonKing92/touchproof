@@ -44,7 +44,7 @@ internal static class CandidateChangedTypeReferenceReader
                 }
 
                 var syntax = request is null
-                    ? CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetCompilationUnitRoot()
+                    ? CSharpSourceFileRootReader.Read(path)
                     : request.ReadSyntax(normalized);
                 if (syntax is null) continue;
                 foreach (var declaration in syntax.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
@@ -91,7 +91,7 @@ internal static class CandidateChangedTypeReferenceReader
                     continue;
                 }
 
-                var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetCompilationUnitRoot();
+                var syntax = CSharpSourceFileRootReader.Read(path);
                 foreach (var token in syntax.DescendantTokens())
                 {
                     if (token.IsKind(SyntaxKind.IdentifierToken) && declaredTypes.Contains(token.ValueText))

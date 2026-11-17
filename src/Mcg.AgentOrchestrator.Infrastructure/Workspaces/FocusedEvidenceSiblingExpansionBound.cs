@@ -129,7 +129,7 @@ internal sealed class FocusedEvidenceSiblingExpansionBound
                 if (!IsWithinDirectory(path, directory) || HasGeneratedPathSegment(path) ||
                     nestedDirectories.Any(nested => IsWithinDirectory(path, nested))) continue;
 
-                var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path);
+                var tree = CSharpSourceFileRootReader.Read(path).SyntaxTree;
                 if (tree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
                     return null;
 

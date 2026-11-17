@@ -1,4 +1,3 @@
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -20,7 +19,7 @@ internal static class SourceSizeRatchetPreflight
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         try
         {
-            var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root, SourceSizeRatchet.SourcePath))).GetRoot();
+            var syntax = CSharpSourceFileRootReader.Read(Path.Combine(root, SourceSizeRatchet.SourcePath));
             var files = new List<SourceSizeCeiling>();
             var classes = new List<SourceClassCeiling>();
             var complete = true;

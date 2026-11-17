@@ -26,7 +26,7 @@ internal sealed class MainTestDisplayNameResolver
                     continue;
                 }
 
-                var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path);
+                var tree = CSharpSourceFileRootReader.Read(path).SyntaxTree;
                 if (tree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
                 {
                     continue;

@@ -100,7 +100,7 @@ internal static class SourceConfirmedTheoryRowRemovals
     {
         try
         {
-            var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root, file)));
+            var tree = CSharpSourceFileRootReader.Read(Path.Combine(root, file)).SyntaxTree;
             if (tree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)) return null;
             var types = tree.GetRoot().DescendantNodes().OfType<TypeDeclarationSyntax>().Where(type =>
                 string.Join(".", type.AncestorsAndSelf().Reverse().Select(node => node switch

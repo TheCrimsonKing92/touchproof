@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -13,7 +12,10 @@ internal sealed class ImpactReplayTestSourceIndex
     internal ImpactReplayTestSourceIndex(IEnumerable<string> files,
         IReadOnlyList<ImpactReplayChangedSourceRouting.Project>? projects = null, string? repositoryRoot = null)
         : this(files.Distinct(StringComparer.Ordinal).Select(file =>
-            CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file)), projects, repositoryRoot)
+        {
+            var tree = CSharpSourceFileRootReader.Read(file).SyntaxTree;
+            return tree.FilePath.Equals(file, StringComparison.Ordinal) ? tree : tree.WithFilePath(file);
+        }), projects, repositoryRoot)
     {
     }
 

@@ -39,7 +39,7 @@ internal sealed class DeferredTestClassTestMethodProbe
     {
         try
         {
-            var root = CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetCompilationUnitRoot();
+            var root = CSharpSourceFileRootReader.Read(path);
             return root.ContainsDiagnostics ? null : root;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

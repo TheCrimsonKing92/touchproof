@@ -418,12 +418,7 @@ internal static partial class FocusedEvidenceRequestResolver
         string path,
         out System.Collections.Immutable.ImmutableArray<FocusedEvidenceParsedRootCache.DeclaredTypeName> names)
     {
-        var file = FocusedEvidenceParsedRootCache.Get(path, static sourcePath =>
-        {
-            var text = File.ReadAllText(sourcePath);
-            FocusedEvidenceParsedRootCache.RecordParse(sourcePath);
-            return CSharpSyntaxTree.ParseText(text, path: sourcePath).GetCompilationUnitRoot();
-        });
+        var file = CSharpSourceFileRootReader.ReadFile(path);
         names = file.Names;
         return file.Root;
     }

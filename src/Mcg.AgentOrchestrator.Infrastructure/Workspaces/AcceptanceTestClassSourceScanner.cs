@@ -41,9 +41,10 @@ internal static class AcceptanceTestClassSourceScanner
             throw new InvalidDataException($"Invalid test project '{project}'.");
         var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project).ToArray();
         if (files.Length == 0) throw new InvalidDataException($"No test sources in '{project}'.");
+        var counter = ParseCounter.Value;
         foreach (var file in files)
         {
-            var syntax = ParseText(File.ReadAllText(file), path: file).GetRoot();
+            var syntax = CSharpSourceFileRootReader.Read(file, counter is null ? null : counter.Record);
             if (syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
                 throw new InvalidDataException($"Cannot parse test source '{file}'.");
         }
