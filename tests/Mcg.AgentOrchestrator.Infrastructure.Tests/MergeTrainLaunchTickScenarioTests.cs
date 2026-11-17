@@ -56,7 +56,7 @@ public sealed class MergeTrainLaunchTickScenarioTests : AcceptanceCohortWorkflow
         // Prove the production lease path would permit self-inspection without the own-launch fence.
         Assert.True(lease.CanAdopt(AcceptanceHolderBinding.For(launched), generation));
         if (redDrop) Assert.Contains(firstTick.Ejections, ejection =>
-            ejection.Reason == MergeTrainEjectionReason.RedNewestMember);
+            ejection.Reason == MergeTrainEjectionReason.RedAttributedMember);
 
         var secondTick = Run(driver, selection, scenario.Goals);
         var active = driver.GetActiveCohortGateMemberGoalIds();
@@ -196,7 +196,8 @@ public sealed class MergeTrainLaunchTickScenarioTests : AcceptanceCohortWorkflow
                 };
                 for (var index = 0; index < Goals.Length; index++)
                 {
-                    var revision = CreateWorktreeCandidate(_repo, Goals[index].Id, paths[index], $"member-{index}");
+                    var revision = CreateWorktreeCandidate(_repo, Goals[index].Id, paths[index],
+                        index == 2 ? "public class ThirdTests { }" : $"member-{index}");
                     _kernel.RecordGoalRefinement(Goals[index].Id, new RefinedSpec(Goals[index].Objective,
                         ["The acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                         { AcceptanceGateOwnedAcceptanceCriteria = ["The acceptance gate passes"] });
@@ -238,7 +239,8 @@ public sealed class MergeTrainLaunchTickScenarioTests : AcceptanceCohortWorkflow
                 selection.Members[0].MainRevision, integration.TreeRevision, manifest);
             var store = new MergeTrainAcceptanceStore(Path.Combine(_workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
             store.SaveGateReceipt(new MergeTrainReceipt("full-composition-red", identity,
-                MergeTrainGateOutcome.Failed, DateTimeOffset.UtcNow, 1, ["cli tests"], 1, []));
+                MergeTrainGateOutcome.Failed, DateTimeOffset.UtcNow, 1, ["cli tests"], 1,
+                [MergeTrainFocusedRecheckTests.WriteTrx(_repo, "launch-red.trx", [("ThirdTests.Fails", "Failed")])]));
             Assert.Equal(MergeTrainGateOutcome.Failed, store.TryReadReceipt(identity.Value)!.Outcome);
         }
 

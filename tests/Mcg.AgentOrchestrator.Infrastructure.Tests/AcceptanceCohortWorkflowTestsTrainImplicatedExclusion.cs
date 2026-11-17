@@ -13,12 +13,12 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
     [InlineData(true)]
     public void PassingRemainder_ExcludesEjectedRevisionFromBothSelectors(bool gateOnly)
     {
-        WithTrain(repo => [FailedVerification(repo, "red.trx", "train"), Passing(repo)], scenario =>
+        WithTrain(repo => [OwnedRed(repo), Passing(repo)], scenario =>
         {
             Assert.Equal(MergeTrainGateOutcome.Passed, scenario.Result.Receipt!.Outcome);
             Assert.Equal(2, scenario.Verifier.RunCount);
             var dropped = Assert.Single(scenario.Result.Ejections,
-                item => item.Reason == MergeTrainEjectionReason.RedNewestMember);
+                item => item.Reason == MergeTrainEjectionReason.RedAttributedMember);
             Assert.Equal(scenario.Goals[2].Id, dropped.GoalId);
             Assert.Equal(GoalStatus.AcceptanceFailed, scenario.Goals[2].Status);
             Assert.IsNotType<GateReadyCandidateProjectionResult.Ready>(
@@ -54,7 +54,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
     [Fact]
     public void PassingRemainder_NewRevisionIsEligibleForBothSelectors()
     {
-        WithTrain(repo => [FailedVerification(repo, "red.trx", "train"), Passing(repo)], scenario =>
+        WithTrain(repo => [OwnedRed(repo), Passing(repo)], scenario =>
         {
             var old = scenario.Selection.Members[2];
             var revision = CreateWorktreeCandidate(scenario.Repo, old.GoalId, old.LandingPaths[0], "revised");
@@ -87,10 +87,17 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
         {
             Assert.Null(scenario.Result.Receipt);
             Assert.Empty(scenario.Result.MemberResults);
-            Assert.Equal(memberCount == 3 ? 2 : 1, scenario.Verifier.RunCount);
-            Assert.Equal(memberCount == 3 ? 1 : 0, scenario.Result.Ejections.Count);
+            Assert.Equal(1, scenario.Verifier.RunCount);
+            Assert.Empty(scenario.Result.Ejections);
             Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
             var pairs = scenario.Driver.ReadSuppressedGroupedPairs();
+            if (memberCount == 3)
+            {
+                Assert.Empty(pairs);
+                Assert.Contains("reason=inconclusive", scenario.Result.Detail);
+                Assert.NotNull(ConductorMergeTrainSelector.Select(scenario.Selection.Members.Select(Candidate).ToArray(), pairs));
+                return;
+            }
             Assert.Equal(2, pairs.Count);
             Assert.Empty(scenario.Driver.ReadSuppressedCohortPairs());
             var first = Candidate(scenario.Selection.Members[0]);
@@ -141,7 +148,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
             : [ApparatusRed(repo, "apparatus.trx"),
                 remainderPasses ? Passing(repo) : ApparatusRed(repo, "remainder.trx")], scenario =>
         {
-            Assert.Equal(memberCount == 3 ? 2 : 1, scenario.Verifier.RunCount);
+            Assert.Equal(1, scenario.Verifier.RunCount);
             Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
             Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
             var candidates = scenario.Selection.Members.Select(Candidate).ToArray();
@@ -175,13 +182,14 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
     }
 
     [Fact]
-    public void InfrastructureRemainder_DoesNotImplicateTheEjectedCandidate()
+    public void InconclusiveRed_DoesNotRunOrImplicateARemainder()
     {
         WithTrain(repo => [FailedVerification(repo, "red.trx", "train"),
             new AcceptanceVerificationResult(false, true, null, "deferred", Checks: [], TestResultPaths: [])], scenario =>
         {
-            Assert.Equal(2, scenario.Verifier.RunCount);
-            Assert.Equal(scenario.Goals[2].Id, Assert.Single(scenario.Result.Ejections).GoalId);
+            Assert.Equal(1, scenario.Verifier.RunCount);
+            Assert.Empty(scenario.Result.Ejections);
+            Assert.Contains("reason=inconclusive", scenario.Result.Detail);
             Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
             Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
             Assert.NotNull(ConductorMergeTrainSelector.Select(scenario.Selection.Members.Select(Candidate).ToArray(),
@@ -216,7 +224,8 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
         {
             AddAcceptanceManifest(preparedRepo);
             for (var index = 0; index < ids.Length; index++)
-                CreateWorktreeCandidate(preparedRepo, ids[index], paths[index], $"member {index}");
+                CreateWorktreeCandidate(preparedRepo, ids[index], paths[index],
+                    index == 2 ? "public class NewestTests { }" : $"member {index}");
         });
         var repo = copy.Repo;
         var cleanup = CreateIsolatedCleanupContext(repo);
@@ -254,6 +263,10 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
 
     private static AcceptanceVerificationResult Passing(string repo) => new(true, false, 0, null,
         Checks: [new AcceptanceCheckResult("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")]);
+
+    private static AcceptanceVerificationResult OwnedRed(string repo) => new(false, false, 1, "train failed",
+        Checks: [new AcceptanceCheckResult("train", false, 1, "train failed")],
+        TestResultPaths: [MergeTrainFocusedRecheckTests.WriteTrx(repo, "owned-red.trx", [("NewestTests.Fails", "Failed")])]);
 
     private static AcceptanceVerificationResult ApparatusRed(string repo, string fileName)
     {

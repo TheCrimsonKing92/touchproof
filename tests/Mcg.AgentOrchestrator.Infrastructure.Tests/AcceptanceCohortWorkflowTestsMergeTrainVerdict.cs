@@ -46,8 +46,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
             var verifier = new SequenceAcceptanceVerifier(infrastructureFailure
                 ? [new AcceptanceVerificationResult(false, true, null, "gate unavailable",
                     Checks: [new AcceptanceCheckResult("combined", false, null, "gate unavailable")])]
-                : [FailedVerification(repo, "three-red.trx", "three-member train"),
-                    FailedVerification(repo, "two-red.trx", "two-member train")]);
+                : [FailedVerification(repo, "three-red.trx", "three-member train")]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
@@ -55,15 +54,11 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
             var mainBefore = selection.Members[0].MainRevision;
             var bindings = selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version);
             var originalIdentity = MaterializeIdentity(bindings);
-            // A binary red drops the newest member, then records a second red for the shorter train.
-            var decidingIdentity = infrastructureFailure
-                ? originalIdentity : MaterializeIdentity(bindings.Take(2).ToArray());
             var expectedOutcome = infrastructureFailure
                 ? MergeTrainGateOutcome.InfrastructureFailure : MergeTrainGateOutcome.Failed;
             var store = new MergeTrainAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
             Assert.Null(store.TryReadReceipt(originalIdentity.Value));
-            Assert.Null(store.TryReadReceipt(decidingIdentity.Value));
 
             if (gateOnly && publishChildResult)
             {
@@ -82,7 +77,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
 
                 Assert.Equal(0, exitCode);
                 Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
-                var saved = Assert.IsType<MergeTrainReceipt>(store.TryReadReceipt(decidingIdentity.Value));
+                var saved = Assert.IsType<MergeTrainReceipt>(store.TryReadReceipt(originalIdentity.Value));
                 Assert.Equal(expectedOutcome, saved.Outcome);
                 using var result = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
                 Assert.Equal("completed", result.RootElement.GetProperty("Status").GetString());
@@ -94,7 +89,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
                 }
                 else
                 {
-                    Assert.NotEqual(originalIdentity.Value, saved.Identity.Value);
+                    Assert.Equal(originalIdentity.Value, saved.Identity.Value);
                     Assert.Equal("failed", result.RootElement.GetProperty("Verdict").GetString());
                     Assert.Equal(saved.ReceiptId, result.RootElement.GetProperty("ReceiptId").GetString());
                 }
@@ -106,17 +101,17 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
 
                 Assert.Null(result.Receipt);
                 var recorded = Assert.IsType<MergeTrainReceipt>(result.RecordedReceipt);
-                Assert.Equal(decidingIdentity.Value, recorded.Identity.Value);
+                Assert.Equal(originalIdentity.Value, recorded.Identity.Value);
                 Assert.Equal(expectedOutcome, recorded.Outcome);
-                Assert.Equal(store.TryReadReceipt(decidingIdentity.Value)!.ReceiptId, recorded.ReceiptId);
+                Assert.Equal(store.TryReadReceipt(originalIdentity.Value)!.ReceiptId, recorded.ReceiptId);
                 Assert.Empty(result.MemberResults);
-                Assert.Equal("outcome=Failed attempts=2 fallback=ordinary", result.Detail);
-                Assert.Equal(goals[2].Id, Assert.Single(result.Ejections).GoalId);
+                Assert.Equal("outcome=Failed attempts=1 fallback=ordinary reason=inconclusive", result.Detail);
+                Assert.Empty(result.Ejections);
                 Assert.Equal(expectedOutcome,
-                    Assert.IsType<MergeTrainReceipt>(store.TryReadReceipt(decidingIdentity.Value)).Outcome);
+                    Assert.IsType<MergeTrainReceipt>(store.TryReadReceipt(originalIdentity.Value)).Outcome);
             }
-            Assert.Equal(infrastructureFailure ? 1 : 2, verifier.RunCount);
-            Assert.Equal(infrastructureFailure ? new[] { 3 } : new[] { 3, 2 },
+            Assert.Equal(1, verifier.RunCount);
+            Assert.Equal(new[] { 3 },
                 verifier.ChangedFiles.Select(files => files.Count).ToArray());
             Assert.Equal(expectedOutcome,
                 Assert.IsType<MergeTrainReceipt>(store.TryReadReceipt(originalIdentity.Value)).Outcome);

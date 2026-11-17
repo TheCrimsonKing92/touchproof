@@ -84,6 +84,27 @@ internal sealed class MergeTrainSurvivorDifferentialFixture(CohortCandidateTempl
             var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
             var receipts = store.ReadReceiptsSince(DateTimeOffset.MinValue);
             var first = Assert.Single(receipts, receipt => receipt.Identity.Members.Count == 3);
+            if (mode is not ("attributed" or "unreadable"))
+            {
+                // Exercise the deferred historical differential path from an explicit
+                // legacy ejection. Current inconclusive trains no longer create one.
+                Assert.Empty(result.Ejections);
+                var legacy = new MergeTrainEjection(goals[2].Id, MergeTrainEjectionReason.RedNewestMember,
+                    [], $"Dropped after RED receipt {first.ReceiptId}.");
+                store.RecordEjections(first.GateAttemptId ?? first.ReceiptId, [legacy]);
+                result = executingDriver.RunMergeTrain(new(selection.Members.Take(2).ToArray()),
+                    goals.Take(2).Select(goal => executingKernel.GetGoal(goal.Id)).ToArray(),
+                    ConductorAutonomyPolicy.Permissive, gateOnly: true) with { Ejections = [legacy] };
+                if (mode is "fatal" or "theory" && result.Receipt is { Outcome: MergeTrainGateOutcome.Passed } survivors)
+                    MergeTrainSurvivorDifferentialFailure.OnSurvivorsPassed(first, survivors, first.Identity.Members[2],
+                        result.Ejections, executingKernel.GetGoal(goals[2].Id),
+                        goal => executingDriver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive),
+                        (goal, checks, branch, main, attributions, baseline) =>
+                            executingKernel.RecordAcceptanceFailure(goal.Id, checks, branch, main, attributions, baseline),
+                        executingKernel.RouteRecordedAcceptanceFailure,
+                        () => store.RecordTrainImplicatedCandidate(goals[2].Id,
+                            first.Identity.Members[2].CandidateRevision, first.Identity.Value, first.Identity.ObservedMainRevision));
+            }
             assert(new Scenario(repo, workspace, kernel, executingKernel, goals, driver, selection, result,
                 first, verifier, () => verifier.RunCount, store, repository, cleanup.Hooks));
             AssertNoMergeTrainWorkspaces(repo);

@@ -550,7 +550,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
     }
 
     [Fact]
-    public void ProductionMergeTrain_RedNewestDropsThenShorterTrainLands()
+    public void ProductionMergeTrain_InconclusiveRedFallsBackWithoutLanding()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanupContext = CreateIsolatedCleanupContext(repo);
@@ -599,16 +599,16 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                 [firstGoal, secondGoal, thirdGoal],
                 ConductorAutonomyPolicy.Permissive);
 
-            Assert.Equal(2, result.MemberResults.Count);
-            Assert.DoesNotContain(thirdGoal.Id.Value, result.MemberResults.Keys);
-            var dropped = Assert.Single(result.Ejections, item => item.Reason == MergeTrainEjectionReason.RedNewestMember);
-            Assert.Equal(thirdGoal.Id, dropped.GoalId);
-            Assert.True(File.Exists(Path.Combine(
+            Assert.Empty(result.MemberResults);
+            Assert.Empty(result.Ejections);
+            Assert.Null(result.Receipt);
+            Assert.Contains("reason=inconclusive", result.Detail);
+            Assert.False(File.Exists(Path.Combine(
                 repo,
                 "tests",
                 "Mcg.AgentOrchestrator.Core.Tests",
                 "RedTrainFirst.cs")));
-            Assert.True(File.Exists(Path.Combine(
+            Assert.False(File.Exists(Path.Combine(
                 repo,
                 "tests",
                 "Mcg.AgentOrchestrator.Infrastructure.Tests",
@@ -618,13 +618,12 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                 "tests",
                 "Mcg.AgentOrchestrator.Dashboard.Tests",
                 "RedTrainNewest.cs")));
-            Assert.Equal(GoalStatus.AcceptanceFailed, thirdGoal.Status);
-            Assert.IsNotType<GateReadyCandidateProjectionResult.Ready>(
+            Assert.Equal(GoalStatus.Verified, thirdGoal.Status);
+            Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
                 driver.ProjectGateReadyCandidate(thirdGoal, ConductorAutonomyPolicy.Permissive));
-            Assert.Equal(2, verifier.RunCount);
-            Assert.Equal<GoalId?>([firstGoal.Id, firstGoal.Id], verifier.GoalIds);
+            Assert.Equal(1, verifier.RunCount);
+            Assert.Equal<GoalId?>([firstGoal.Id], verifier.GoalIds);
             Assert.Equal(3, verifier.ChangedFiles[0].Count);
-            Assert.Equal(2, verifier.ChangedFiles[1].Count);
             Assert.False(File.Exists(Path.Combine(
                 repo,
                 "tests",
@@ -635,7 +634,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM merge_train_receipts;";
-            Assert.Equal(2, Convert.ToInt32(command.ExecuteScalar()));
+            Assert.Equal(1, Convert.ToInt32(command.ExecuteScalar()));
             AssertNoMergeTrainWorkspaces(repo);
         }
         finally

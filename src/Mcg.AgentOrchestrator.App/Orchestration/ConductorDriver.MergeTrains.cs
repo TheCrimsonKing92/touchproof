@@ -373,6 +373,9 @@ internal sealed partial class ConductorDriver
                     culprit, "bisection", MergeTrainRecheckDependencySelector);
                 continue;
             }
+            if (attributed is null && !messageSubjectFailure && receipt.Outcome == MergeTrainGateOutcome.Failed && members.Count > 2 && attempt == 0 &&
+                (attributed = MergeTrainClassReachAttribution.TryAttribute(receipt, workspace.Path, members, out subjects)) is not null)
+                attributionSource = "reach";
             // Record positively attributed RED before the bisect can lose its build slot;
             // the existing sink keeps repeat implication records idempotent.
             if (attributed is not null && (messageSubjectFailure || MergeTrainBisectRedRetention.RecordsBeforeBisect(receipt, members.Count, attempt, attributed)))
@@ -400,7 +403,7 @@ internal sealed partial class ConductorDriver
                 {
                     allEjections.Add(memberEjection);
                     _mergeTrainAcceptanceStore.RecordEjections(attemptId, [memberEjection]);
-                    AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, memberEjection.GoalId, memberEjection.Reason, "member-recheck");
+                    AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, memberEjection.GoalId, memberEjection.Reason, "member-recheck", receipt);
                 },
                 (kind, detail) => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath),
                     members[0].GoalId.Value, detail, eventKind: kind), cancellationToken, recordSkips: true);
@@ -414,36 +417,33 @@ internal sealed partial class ConductorDriver
                     return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
                 continue;
             }
-            // Keep the bounded bisection; an inconclusive member sweep retains drop-newest.
-            // The dropped member remains absent from MemberResults for its later solo gate.
-            var dropped = attributed ?? members[^1];
+            if (attributed is null)
+            {
+                TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath), members[0].GoalId.Value,
+                    MergeTrainClassReachAttribution.FormatInconclusive(outerAttemptId ?? attemptId, receipt, memberRecheck?.FallbackReason));
+                return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary reason=inconclusive");
+            }
             if (!messageSubjectFailure)
                 pendingRecheck = MergeTrainFocusedRecheckDecision.Plan(receipt, workspace.Path,
-                    dropped, attributed is null ? null : attributionSource, MergeTrainRecheckDependencySelector);
-            redDropped = messageSubjectFailure ? null : dropped;
+                    attributed, attributionSource, MergeTrainRecheckDependencySelector);
+            redDropped = messageSubjectFailure ? null : attributed;
             redReceipt = receipt;
             redSubjects = subjects;
             redAttributionSource = attributionSource;
-            var ejection = new MergeTrainEjection(
-                dropped.GoalId,
-                attributed is null ? MergeTrainEjectionReason.RedNewestMember : MergeTrainEjectionReason.RedAttributedMember,
-                [],
+            var ejection = new MergeTrainEjection(attributed.GoalId, MergeTrainEjectionReason.RedAttributedMember, [],
                 $"Dropped after RED receipt {receipt.ReceiptId}.");
             allEjections.Add(ejection);
             _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]);
-            AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, dropped.GoalId, ejection.Reason, attributed is null ? "position" : attributionSource, receipt);
-            var remainingIds = members.Where(member => member.GoalId != dropped.GoalId)
+            AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, attributed.GoalId, ejection.Reason, attributionSource, receipt);
+            var remainingIds = members.Where(member => member.GoalId != attributed.GoalId)
                 .Select(member => member.GoalId).ToHashSet();
             composition = originalBindings.Where(member => remainingIds.Contains(member.GoalId)).ToArray();
         }
 
         throw new InvalidOperationException("Merge train bounded bisection exhausted without a disposition.");
 
-        ConductorMergeTrainRunResult Fallback(string detail) => new(
-            Receipt: null,
-            new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
-            allEjections,
-            detail) { RecordedReceipt = lastRecordedReceipt };
+        ConductorMergeTrainRunResult Fallback(string detail) => new(null,
+            new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal), allEjections, detail) { RecordedReceipt = lastRecordedReceipt };
 
         Dictionary<string, ConductorAdvanceResult> Hold(IReadOnlyList<Goal> goals, string detail) =>
             MergeTrainLandingCompletion.Hold(goals, policy, detail);

@@ -37,7 +37,11 @@ public sealed class ConductorBatchLoopTestsTrainInFlightSoloLandingHold : Accept
         Assert.Equal(soloRuns, SoloRuns(fixture));
         CompleteLandedSoloLifecycle(fixture);
         Assert.Equal(soloRuns, SoloRuns(fixture));
-        Assert.Equal(3, fixture.Verifier.RunCount);
+        // Total drops from 3 to 2: the seeded non-member solo gate and the failed train gate.
+        // Inconclusive fallback removes the drop-newest survivor-pair retry; no gate runs are added.
+        // The unqualified "Fails" identity cannot trigger focused rechecks, and these ticks select
+        // only the non-member, leaving the former train members' solo gates for later ticks.
+        Assert.Equal(2, fixture.Verifier.RunCount);
     }
 
     [Fact]

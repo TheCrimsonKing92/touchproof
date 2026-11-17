@@ -39,21 +39,17 @@ public sealed class MergeTrainMemberDiffAttributionTests(CohortCandidateTemplate
         }, withApparatus: true);
 
     [Fact]
-    public void ClassFileChangedByTwoMembers_RetainsNewestDrop() =>
+    public void ClassFileChangedByTwoMembers_EjectsNobody() =>
         WithTrain("shared", train =>
         {
             Assert.Contains(SourcePath, train.Selection.Members[0].LandingPaths);
             Assert.Contains(SourcePath, train.Selection.Members[1].LandingPaths);
             var workspace = GoalWorktrees.TryResolve(train.Repo, train.Goals[1].Id)!;
             Assert.Null(MergeTrainRedAttribution.TryAttribute(train.Red, workspace, train.Selection.BindMembers()));
-            var ejection = Assert.Single(train.Result.Ejections);
-            Assert.Equal(train.Goals[2].Id, ejection.GoalId);
-            Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
-            // Passing survivors implicate the dropped newest member, even when ownership is ambiguous.
-            var newest = train.Selection.Members[2];
-            Assert.Equal(ConductorAcceptanceCohortAttributedMembers.Key(newest.GoalId, newest.CandidateRevision),
-                Assert.Single(train.Driver.ReadTrainImplicatedMemberKeys()));
-            Assert.Equal(train.Goals.Take(2).Select(goal => goal.Id), train.Result.Receipt!.Identity.Members.Select(member => member.GoalId));
+            Assert.Empty(train.Result.Ejections);
+            Assert.Empty(train.Driver.ReadTrainImplicatedMemberKeys());
+            Assert.Null(train.Result.Receipt);
+            Assert.Contains("reason=inconclusive", train.Result.Detail);
         });
 
     [Fact]

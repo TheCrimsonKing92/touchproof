@@ -81,7 +81,7 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
     [Theory]
     [InlineData(2)]
     [InlineData(3)]
-    public void SharedReach_KeepsOrdinaryFallbackAndNewestDrop(int count)
+    public void SharedReach_KeepsOrdinaryFallbackWithoutEjection(int count)
     {
         WithTrain(count, shared: true, ownership: false, scenario =>
         {
@@ -94,11 +94,10 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
             Assert.Empty(AttributionEvents(scenario.Repo));
             if (count == 3)
             {
-                var ejection = Assert.Single(scenario.Result.Ejections);
-                Assert.Equal(scenario.Goals[2].Id, ejection.GoalId);
-                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
-                AssertPersistedEjection(scenario, scenario.Goals[2].Id, "RedNewestMember");
-                Assert.Equal(2, scenario.Verifier.RunCount);
+                Assert.Empty(scenario.Result.Ejections);
+                Assert.Null(scenario.Result.Receipt);
+                Assert.Contains("reason=inconclusive", scenario.Result.Detail);
+                Assert.Equal(1, scenario.Verifier.RunCount);
             }
             else
             {
@@ -287,9 +286,7 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
     {
         WithTrain(count, shared: true, ownership: false, scenario =>
         {
-            Assert.Equal(count == 3 ? 1 : 0, scenario.Result.Ejections.Count);
-            Assert.All(scenario.Result.Ejections, ejection =>
-                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason));
+            Assert.Empty(scenario.Result.Ejections);
             Assert.Empty(scenario.Driver.ReconcileAttributedTrainFailures(ConductorAutonomyPolicy.Permissive));
             Assert.All(scenario.Goals, goal =>
             {

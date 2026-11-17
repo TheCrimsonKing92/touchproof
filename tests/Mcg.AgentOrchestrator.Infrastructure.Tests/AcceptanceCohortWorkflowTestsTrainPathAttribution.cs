@@ -68,15 +68,16 @@ public sealed class AcceptanceCohortWorkflowTestsTrainPathAttribution : Acceptan
     }
 
     [Fact]
-    public void SameFailureWithoutPath_PreservesNewestDropAndPassingRemainder()
+    public void SameFailureWithoutPath_EjectsNobody()
     {
         WithTrain("Ns.UnchangedTests.Fails", "Unproven occupancy identity: Ns.X at nowhere: x.", train =>
         {
-            AssertPassingRemainder(train, 2, MergeTrainEjectionReason.RedNewestMember);
+            Assert.Equal(1, train.Verifier.RunCount);
+            Assert.Empty(train.Result.Ejections);
+            Assert.Null(train.Result.Receipt);
+            Assert.Contains("reason=inconclusive", train.Result.Detail);
             Assert.Empty(AttributionEvents(train.Repo));
-            Assert.Equal(GoalStatus.AcceptanceFailed, train.Goals[2].Status);
-            Assert.NotNull(train.Goals[2].LatestAcceptanceFailure);
-            Assert.All(train.Goals.Take(2), goal =>
+            Assert.All(train.Goals, goal =>
             {
                 Assert.Equal(GoalStatus.Verified, goal.Status);
                 Assert.Null(goal.LatestAcceptanceFailure);

@@ -97,6 +97,15 @@ public sealed class MergeTrainFocusedRecheckTests(ITestOutputHelper output) : Ac
         ObservedTrain(mode, true, train =>
         {
             Assert.Equal(train.Goals.Select(goal => goal.Id), train.Red.Identity.Members.Select(member => member.GoalId));
+            if (mode == "unattributed")
+            {
+                Assert.Equal(1, train.FullGateCount());
+                Assert.Empty(train.Calls);
+                Assert.Empty(train.Result.Ejections);
+                Assert.Null(train.Result.Receipt);
+                Assert.Contains("reason=inconclusive", train.Result.Detail);
+                return;
+            }
             Assert.Equal(2, train.FullGateCount());
             Assert.Equal(focusedCalls, train.Calls.Count);
             var receipt = Assert.IsType<MergeTrainReceipt>(train.Result.Receipt);
@@ -105,8 +114,7 @@ public sealed class MergeTrainFocusedRecheckTests(ITestOutputHelper output) : Ac
             Assert.Equal(train.Goals.Take(2).Select(goal => goal.Id), receipt.Identity.Members.Select(member => member.GoalId));
             var dropped = Assert.Single(train.Result.Ejections);
             Assert.Equal(train.Goals[2].Id, dropped.GoalId);
-            Assert.Equal(mode == "unattributed" ? MergeTrainEjectionReason.RedNewestMember :
-                MergeTrainEjectionReason.RedAttributedMember, dropped.Reason);
+            Assert.Equal(MergeTrainEjectionReason.RedAttributedMember, dropped.Reason);
             AssertDecision(train, "fallback", reason, selectionCount);
             if (mode is "unexplained-command" or "unexplained-test")
             {

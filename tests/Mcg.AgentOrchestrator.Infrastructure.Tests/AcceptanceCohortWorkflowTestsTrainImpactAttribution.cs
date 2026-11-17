@@ -48,22 +48,19 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
     }
 
     [Fact]
-    public void AmbiguousImpactRed_RecordsNoImplicationAndDropsNewestMember()
+    public void AmbiguousImpactRed_RecordsNoImplicationOrEjection()
     {
         WithTrain(ownership: false, (repo, driver, selection, goals, result, verifier) =>
         {
-            Assert.Equal(2, verifier.RunCount);
-            var ejection = Assert.Single(result.Ejections);
-            Assert.Equal(goals[^1].Id, ejection.GoalId);
-            Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
+            Assert.Equal(1, verifier.RunCount);
+            Assert.Empty(result.Ejections);
             Assert.Equal(selection.Members.SelectMany(member => member.LandingPaths), verifier.ChangedFiles[0]);
-            Assert.Equal(selection.Members.Take(2).SelectMany(member => member.LandingPaths), verifier.ChangedFiles[1]);
             Assert.Null(result.Receipt);
             var red = Assert.IsType<MergeTrainReceipt>(result.RecordedReceipt);
             Assert.Equal(MergeTrainGateOutcome.Failed, red.Outcome);
-            Assert.Equal(goals.Take(2).Select(goal => goal.Id), red.Identity.Members.Select(member => member.GoalId));
+            Assert.Equal(goals.Select(goal => goal.Id), red.Identity.Members.Select(member => member.GoalId));
             Assert.Empty(result.MemberResults);
-            Assert.Contains("attempts=2 fallback=ordinary", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("attempts=1 fallback=ordinary reason=inconclusive", result.Detail, StringComparison.Ordinal);
 
             var keys = driver.ReadTrainImplicatedMemberKeys();
             Assert.Empty(keys);

@@ -215,7 +215,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution(CohortCandi
             return memberCount == 2 || reason == "unreadable" ? [red] : [red, Passing(repo)];
         }, scenario =>
         {
-            Assert.Equal(memberCount == 2 || reason == "unreadable" ? 1 : 2, scenario.Verifier.RunCount);
+            Assert.Equal(1, scenario.Verifier.RunCount);
             Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
             Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
             Assert.Empty(AttributionEvents(scenario));
@@ -226,7 +226,11 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution(CohortCandi
                 Assert.Empty(scenario.Result.Ejections);
             }
             else if (memberCount == 3)
-                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, Assert.Single(scenario.Result.Ejections).Reason);
+            {
+                Assert.Empty(scenario.Result.Ejections);
+                Assert.Null(scenario.Result.Receipt);
+                Assert.Contains("reason=inconclusive", scenario.Result.Detail);
+            }
         }, memberCount: memberCount);
     }
 
@@ -340,7 +344,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution(CohortCandi
     [InlineData("unchanged")]
     [InlineData("shared")]
     [InlineData("different-members")]
-    public void AmbiguousRed_RetainsNewestDropAndPassingRemainder(string scenario)
+    public void AmbiguousRed_EjectsNobodyAndFallsBackToSoloGates(string scenario)
     {
         var names = scenario switch
         {
@@ -352,14 +356,11 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution(CohortCandi
         };
         WithTrain(repo => [Red(repo, "red.trx", names), Passing(repo)], train =>
         {
-            Assert.Equal(2, train.Verifier.RunCount);
-            Assert.Equal(MergeTrainGateOutcome.Passed, train.Result.Receipt!.Outcome);
-            Assert.Equal(Paths.Take(2), train.Verifier.ChangedFiles[1]);
-            var ejection = Assert.Single(train.Result.Ejections);
-            Assert.Equal(train.Goals[2].Id, ejection.GoalId);
-            Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
-            Assert.Equal(train.Goals.Take(2).Select(goal => goal.Id),
-                train.Result.Receipt.Identity.Members.Select(member => member.GoalId));
+            Assert.Equal(1, train.Verifier.RunCount);
+            Assert.Null(train.Result.Receipt);
+            Assert.Empty(train.Result.MemberResults);
+            Assert.Empty(train.Result.Ejections);
+            Assert.Contains("reason=inconclusive", train.Result.Detail);
         });
     }
 

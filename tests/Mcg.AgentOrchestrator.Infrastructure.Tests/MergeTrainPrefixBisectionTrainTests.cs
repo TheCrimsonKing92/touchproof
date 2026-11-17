@@ -91,14 +91,14 @@ public sealed class MergeTrainPrefixBisectionTrainTests : AcceptanceCohortWorkfl
     [InlineData("incomplete")]
     [InlineData("skipped")]
     [InlineData("exception")]
-    public void UnavailableMachineryKeepsNewestFallbackAndRecordsReason(string mode)
+    public void UnavailableMachineryEjectsNobodyAndRecordsReason(string mode)
     {
         WithTrain(0, mode, train =>
         {
-            var ejection = Assert.Single(train.Result.Ejections);
-            Assert.Equal(train.Goals[2].Id, ejection.GoalId);
-            Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
-            Assert.Equal(2, train.Verifier.RunCount);
+            Assert.Empty(train.Result.Ejections);
+            Assert.Null(train.Result.Receipt);
+            Assert.Contains("reason=inconclusive", train.Result.Detail);
+            Assert.Equal(1, train.Verifier.RunCount);
             Assert.All(Events(train.Repo, "train-bisection-outcome"), record =>
             {
                 Assert.Contains("prefix-bisection unavailable", record.Detail);

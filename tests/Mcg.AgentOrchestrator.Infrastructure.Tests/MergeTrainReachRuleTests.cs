@@ -70,11 +70,20 @@ public sealed class MergeTrainReachRuleTests : AcceptanceCohortWorkflowTests
             Assert.Equal(6, selection.Members[0].LandingPaths.Count(path => path.StartsWith("src/", StringComparison.Ordinal)));
             Assert.All(selection.Members, member => Assert.DoesNotContain(TestFile, member.LandingPaths));
             var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, gateOnly: true);
-            var ejection = Assert.Single(result.Ejections);
-            Assert.Equal(goals[shared ? 2 : 0].Id, ejection.GoalId);
-            Assert.Equal(shared ? MergeTrainEjectionReason.RedNewestMember : MergeTrainEjectionReason.RedAttributedMember, ejection.Reason);
-            if (shared) Assert.NotEqual(0, calls);
-            else Assert.Equal(0, calls);
+            if (shared)
+            {
+                Assert.Empty(result.Ejections);
+                Assert.Null(result.Receipt);
+                Assert.Contains("reason=inconclusive", result.Detail);
+                Assert.NotEqual(0, calls);
+            }
+            else
+            {
+                var ejection = Assert.Single(result.Ejections);
+                Assert.Equal(goals[0].Id, ejection.GoalId);
+                Assert.Equal(MergeTrainEjectionReason.RedAttributedMember, ejection.Reason);
+                Assert.Equal(0, calls);
+            }
             var events = File.ReadAllLines(OrchestratorWorkspace.ForDirectory(repo).ConductEventsLogPath)
                 .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
                 .Where(record => record.EventKind == "train-attribution").ToArray();

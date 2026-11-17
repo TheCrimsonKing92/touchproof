@@ -152,24 +152,21 @@ public sealed class MergeTrainBisectSlotLossTests(CohortCandidateTemplate templa
                 Assert.Equal(receipt.ReceiptId, scenario.Store.TryReadReceipt(receipt.Identity.Value)?.ReceiptId);
                 Assert.Null(run.Receipt);
                 Assert.Equal(1, scenario.Verifier.Inner.RunCount);
-                Assert.NotNull(beforeLease);
-                Assert.Empty(beforeLease);
-                var ejection = Assert.Single(run.Ejections);
-                Assert.Equal(scenario.Goals[^1].Id, ejection.GoalId);
-                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
-                Assert.StartsWith("outcome=deferred-slots-busy ", run.Detail);
-                AssertHeldVerified(scenario, run);
-                AssertRecordedRows(scenario, 1, 1);
+                Assert.Null(beforeLease);
+                Assert.Empty(run.Ejections);
+                Assert.Contains("reason=inconclusive", run.Detail);
+                Assert.All(scenario.Goals, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
+                AssertRecordedRows(scenario, 1, 0);
                 Assert.Equal("Ns.UnchangedTests.Fails",
                     Assert.Single(MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)).TestName);
             }
             else
             {
-                Assert.Equal(2, scenario.Verifier.Inner.RunCount);
-                Assert.Equal(MergeTrainGateOutcome.Passed, Assert.IsType<MergeTrainReceipt>(run.Receipt).Outcome);
-                Assert.NotNull(beforeLease);
-                Assert.Empty(beforeLease);
-                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, Assert.Single(run.Ejections).Reason);
+                Assert.Equal(1, scenario.Verifier.Inner.RunCount);
+                Assert.Null(run.Receipt);
+                Assert.Null(beforeLease);
+                Assert.Empty(run.Ejections);
+                Assert.Contains("reason=inconclusive", run.Detail);
             }
             Assert.False(MergeTrainBisectRedRetention.KeepsFailedReceipt(null));
         });
