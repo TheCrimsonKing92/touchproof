@@ -146,10 +146,8 @@ internal static partial class PlannerOutputContract
         var integrationSeams = 0;
         var verificationClasses = 0;
         var stopConditions = 0;
-        var eligibleMappingLines = mappingBody.Split('\n').Where(line =>
-            TryParseCriterionMappingLine(line, out var criterion, out var mapping) &&
-            criterion > 0 && !string.IsNullOrWhiteSpace(mapping));
-        var mappings = SelectCriterionMappings(string.Join("\n", eligibleMappingLines));
+        var mappings = SelectCriterionMappings(ParseCriterionMappings(mappingBody)
+            .Where(entry => entry.Criterion > 0 && !string.IsNullOrWhiteSpace(entry.Mapping)));
 
         var boundedCriterionCount = criterionCount ?? CountContiguousCriteria(mappings);
         foreach (var mapping in mappings
@@ -645,15 +643,14 @@ internal static partial class PlannerOutputContract
     }
 
     internal static IReadOnlyDictionary<int, string> SelectCriterionMappings(string mappingSectionBody)
+        => SelectCriterionMappings(ParseCriterionMappings(mappingSectionBody));
+
+    private static IReadOnlyDictionary<int, string> SelectCriterionMappings(
+        IEnumerable<(int Criterion, string Mapping)> entries)
     {
         var mappings = new Dictionary<int, string>();
-        foreach (var line in mappingSectionBody.Split('\n'))
+        foreach (var (criterion, mapping) in entries)
         {
-            if (!TryParseCriterionMappingLine(line, out var criterion, out var mapping))
-            {
-                continue;
-            }
-
             if (!mappings.TryGetValue(criterion, out var selected) ||
                 (!Regex.IsMatch(selected, @"(?i)\bdisposition\s*=") &&
                  Regex.IsMatch(mapping, @"(?i)\bdisposition\s*=")))
@@ -663,6 +660,43 @@ internal static partial class PlannerOutputContract
         }
 
         return new System.Collections.ObjectModel.ReadOnlyDictionary<int, string>(mappings);
+    }
+
+    private static IEnumerable<(int Criterion, string Mapping)> ParseCriterionMappings(string body)
+    {
+        var lines = body.Split('\n');
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index].Trim();
+            var labelLine = CriterionMappingLabelLine().Match(line);
+            var label = labelLine.Success
+                ? CriterionMappingLabelNumber().Match(labelLine.Groups["label"].Value)
+                : Match.Empty;
+            if (label.Success && int.TryParse(label.Groups["criterion"].Value, out var number))
+            {
+                var next = index + 1;
+                while (next < lines.Length && string.IsNullOrWhiteSpace(lines[next]))
+                    next++;
+
+                if (next < lines.Length)
+                {
+                    var disposition = lines[next].Trim();
+                    var codeSpan = CriterionMappingCodeSpan().Match(disposition);
+                    if (codeSpan.Success)
+                        disposition = codeSpan.Groups["mapping"].Value.Trim();
+
+                    if (CriterionMappingDispositionLead().IsMatch(disposition))
+                    {
+                        yield return (number, disposition);
+                        index = next;
+                        continue;
+                    }
+                }
+            }
+
+            if (TryParseCriterionMappingLine(line, out var criterion, out var mapping))
+                yield return (criterion, mapping);
+        }
     }
 
     internal static bool TryParseCriterionMappingLine(
@@ -736,8 +770,20 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?<open>\*{1,2}|_{1,2})?(?:criterion[ \t]+)?(?<criterion>\d+)\b(?<skip>(?:[ \t]*(?:\*{1,2}|_{1,2}|\([^()\n]*\)|\[[^\[\]\n]*\]))*)(?:[ \t]*[.)\]:\-–—][ \t]*(?:(?:maps?(?:[ \t]+to)?|covers)[ \t]+)?|[ \t]+(?:maps?(?:[ \t]+to)?|covers|→|=>|[–—])[ \t]*)(?<mapping>.*)$", RegexOptions.IgnoreCase)]
     private static partial Regex CriterionMappingLine();
 
-    [GeneratedRegex(@"^[ \t]*(?:#{1,6}[ \t]+)?(?:[-*][ \t]+)?(?:\*{1,2}|_{1,2})?(?:criterion[ \t]+)?(?<criterion>\d+)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[ \t]*(?:#{1,6}[ \t]+)?(?:[-*][ \t]+)?(?:\*{1,3}|_{1,3})?(?:criterion[ \t]+|ac(?:[ \t]+|-)?)?(?<criterion>\d+)\b", RegexOptions.IgnoreCase)]
     private static partial Regex CriterionMappingPrefix();
+
+    [GeneratedRegex(@"^(?:#{1,6}[ \t]+(?<label>.*?)(?:[ \t]+#+)?|(?<emphasis>\*{1,3}|_{1,3})(?<label>.+?)\k<emphasis>)[ \t]*$")]
+    private static partial Regex CriterionMappingLabelLine();
+
+    [GeneratedRegex(@"^(?:\*{1,3}|_{1,3})?(?:criterion[ \t]+|ac(?:[ \t]+|-)?)(?<criterion>\d+)(?=$|[ \t:.\-–—*_])", RegexOptions.IgnoreCase)]
+    private static partial Regex CriterionMappingLabelNumber();
+
+    [GeneratedRegex(@"^(?<ticks>`+)(?<mapping>[^`](?:.*[^`])?)\k<ticks>$")]
+    private static partial Regex CriterionMappingCodeSpan();
+
+    [GeneratedRegex(@"^disposition[ \t]*=", RegexOptions.IgnoreCase)]
+    private static partial Regex CriterionMappingDispositionLead();
 
     [GeneratedRegex(@"(?i)(?<name>disposition|plan|would-settle|required-source|unavailable-because)\s*=\s*(?<value>[^;]+)")]
     private static partial Regex CriterionMappingField();
