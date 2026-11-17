@@ -2635,7 +2635,7 @@ public sealed class LauncherScriptTests
     {
         var scriptsPath = Path.Combine(repositoryRoot, "scripts");
         Directory.CreateDirectory(scriptsPath);
-        foreach (var name in new[] { "Invoke-RepoScript.ps1", "Start-OrchestratorCommand.ps1" })
+        foreach (var name in new[] { "Invoke-RepoScript.ps1", "Invoke-OrchestratorCommand.ps1", "Start-OrchestratorCommand.ps1" })
             File.Copy(Path.Combine(sourceRoot, "scripts", name), Path.Combine(scriptsPath, name));
     }
 
