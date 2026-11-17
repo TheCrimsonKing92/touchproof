@@ -1129,7 +1129,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void PlannerContract_HeadingMapping_ReportsHeadingAndCanonicalRepair()
+    public void PlannerContract_HeadingMapping_Resolves()
     {
         const string heading = "### Criterion 1";
         var workingDirectory = CreateTempDirectory();
@@ -1148,15 +1148,11 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             workingDirectory,
             acceptanceCriteria: ["Implement the mapped behavior."]);
 
-        Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("criterion 1 is unmapped", result.Diagnostic, StringComparison.Ordinal);
-        Xunit.Assert.Contains("was found but was not parsed as a mapping", result.Diagnostic, StringComparison.Ordinal);
-        Xunit.Assert.Contains(heading, result.Diagnostic, StringComparison.Ordinal);
-        Xunit.Assert.Contains("1. disposition=planned; plan=<mapping>", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_HeadingMapping_PreservesCriterionNumberInRepair()
+    public void PlannerContract_MixedHeadingMapping_Resolves()
     {
         const string heading = "### Criterion 2";
         var workingDirectory = CreateTempDirectory();
@@ -1176,11 +1172,81 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             workingDirectory,
             acceptanceCriteria: ["Implement the first mapped behavior.", "Implement the second mapped behavior."]);
 
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("# Criterion 1", "###### Criterion 2", "\n", "")]
+    [Xunit.InlineData("## Criterion 1: First", "### Criterion 2 — Second", "\n\n", "`")]
+    [Xunit.InlineData("#### **Criterion 1**", "##### __Criterion 2__ ###", "\r\n\r\n", "``")]
+    [Xunit.InlineData("**AC1: First**", "**AC2 Second**", "\n", "`")]
+    [Xunit.InlineData("*AC 1*", "_AC 2_", "\n\n", "")]
+    [Xunit.InlineData("__AC-1__", "__AC-2: Second__", "\r\n", "`")]
+    [Xunit.InlineData("### **AC-1: First**", "###### ac2", "\n", "`")]
+    [Xunit.InlineData("**Criterion 1: First**", "__Criterion 2. Second__", "\n", "`")]
+    public void PlannerContract_LabelPairs_MatchSingleLineMappingsAndQuality(
+        string firstLabel, string secondLabel, string separator, string ticks)
+    {
+        const string first = "disposition=planned; plan=Developer owns `seed.txt` integration seam; Acceptance executes TEST-VERIFIABLE coverage with a stop on missing evidence.";
+        const string second = "disposition=planned; plan=Developer owns `seed.txt` second seam; Acceptance executes TEST-VERIFIABLE coverage with a stop on missing evidence.";
+        var paired = firstLabel + separator + ticks + first + ticks + separator +
+                     secondLabel + separator + ticks + second + ticks;
+        var canonical = "1. " + first + "\n2. " + second;
+        var expected = PlannerOutputContract.SelectCriterionMappings(canonical);
+        var actual = PlannerOutputContract.SelectCriterionMappings(paired);
+
+        Xunit.Assert.Equal(2, actual.Count);
+        foreach (var (criterion, mapping) in expected)
+            Xunit.Assert.Equal(mapping, actual[criterion]);
+
+        var pairedPlan = ReplaceSectionBody(PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping", paired);
+        var canonicalPlan = ReplaceSectionBody(PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping", canonical);
+        var expectedQuality = PlannerOutputContract.EvaluateStructuralQuality(canonicalPlan, 2);
+        Xunit.Assert.Equal(2, expectedQuality.CompleteMappings);
+        Xunit.Assert.Equal(2, expectedQuality.ConcreteOwningSeams);
+        Xunit.Assert.Equal(expectedQuality, PlannerOutputContract.EvaluateStructuralQuality(pairedPlan, 2));
+
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        var result = PlannerOutputContract.Resolve(pairedPlan, string.Empty, root,
+            acceptanceCriteria: ["Implement the first behavior.", "Implement the second behavior."]);
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("### Criterion 1\nIntervening prose.\ndisposition=planned; plan=Implement behavior.", "was found but was not parsed as a mapping")]
+    [Xunit.InlineData("**AC1**\nIntervening prose.\ndisposition=planned; plan=Implement behavior.", "was found but was not parsed as a mapping")]
+    [Xunit.InlineData("### Criterion 2\ndisposition=planned; plan=Implement behavior.", "no line was found for criterion 1")]
+    [Xunit.InlineData("### Criterion 1\n`disposition=undecidable; would-settle=receipt; required-source=Acceptance`", "must include a non-empty unavailable-because")]
+    [Xunit.InlineData("### Criterion 1\n`disposition=planned; plan=`", "must include a non-empty plan")]
+    public void PlannerContract_InvalidLabelPair_Fails(string mapping, string diagnostic)
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping", mapping);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, root,
+            acceptanceCriteria: ["Implement behavior."]);
+
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("criterion 2 is unmapped", result.Diagnostic, StringComparison.Ordinal);
-        Xunit.Assert.Contains(heading, result.Diagnostic, StringComparison.Ordinal);
-        Xunit.Assert.Contains("2. disposition=planned; plan=<mapping>", result.Diagnostic, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("1. disposition=planned; plan=<mapping>", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains(diagnostic, result.Diagnostic, StringComparison.Ordinal);
+        if (diagnostic == "was found but was not parsed as a mapping")
+            Xunit.Assert.Contains("1. disposition=planned; plan=<mapping>", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Criterion 1")]
+    [Xunit.InlineData("####### Criterion 1")]
+    [Xunit.InlineData("### AC1x")]
+    [Xunit.InlineData("**AC1")]
+    [Xunit.InlineData("<h3>Criterion 1</h3>")]
+    public void PlannerContract_NonLabel_DoesNotPair(string label)
+    {
+        Xunit.Assert.Empty(PlannerOutputContract.SelectCriterionMappings(
+            label + "\ndisposition=planned; plan=Implement behavior."));
     }
 
     [Xunit.Fact]
@@ -1211,7 +1277,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Acceptance criteria mapping",
-            heading + "\n`disposition=planned; plan=Implement the mapped behavior.`");
+            heading + "\nIntervening prose prevents pairing.\n`disposition=planned; plan=Implement the mapped behavior.`");
 
         var result = PlannerOutputContract.Resolve(
             plan,

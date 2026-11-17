@@ -7,6 +7,7 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
     {
         var directive = PlannerDirective();
 
+        Xunit.Assert.Contains("Example: `1. disposition=planned; plan=<one sentence>`. Use bare criterion number", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("bare criterion number followed by a period", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("non-empty one-sentence summary on that same line", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("detail bullets that follow must not begin with a digit and a period", directive, StringComparison.Ordinal);

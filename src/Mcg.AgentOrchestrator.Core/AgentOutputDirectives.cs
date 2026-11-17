@@ -96,6 +96,7 @@ public static class AgentOutputDirectives
                 "## Ownership and lifecycle; ## External and edge contracts; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
                 "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, " +
                 "For every criterion mapping use `disposition=planned; plan=<mapping>` or `disposition=undecidable; would-settle=<evidence>; required-source=<producer/store>; unavailable-because=<reason>`. " +
+                "Example: `1. disposition=planned; plan=<one sentence>`. " +
                 "Use bare criterion number followed by a period; no prefix. " +
                 "`plan=`: non-empty one-sentence summary on that same line; detail bullets that follow must not begin with a digit and a period. " +
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
