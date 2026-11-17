@@ -38,7 +38,7 @@ public sealed class StoreSetupRunnerTests
         Assert.Equal(StoreSchemaRegistry.ExperimentReplay.CurrentVersion!.Value, replay.Version);
         var backlog = Assert.Single(results, result => result.StoreName == "backlog");
         Assert.Equal(workspace.BacklogStorePath, backlog.DatabasePath);
-        Assert.Equal(1, backlog.Version);
+        Assert.Equal(StoreSchemaRegistry.Backlog.CurrentVersion!.Value, backlog.Version);
         var mergeTrain = Assert.Single(results, result => result.StoreName == "merge-train-acceptance");
         Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"), mergeTrain.DatabasePath);
         Assert.Equal(2, mergeTrain.Version);

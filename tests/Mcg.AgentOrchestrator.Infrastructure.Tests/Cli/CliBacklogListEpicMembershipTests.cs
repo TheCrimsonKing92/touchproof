@@ -37,7 +37,7 @@ public sealed class CliBacklogListEpicMembershipTests : CliTaskQueryTestSupport,
         foreach (var (id, row) in rows)
         {
             Assert.Equal(new[] { "id", "status", "goalId", "ownerAmbiguous", "eligible", "title",
-                "createdAt", "updatedAt", "priority", "tags", "supersededBy", "epicId" },
+                "createdAt", "updatedAt", "priority", "tags", "supersededBy", "epicId", "pinnedAt" },
                 row.EnumerateObject().Select(property => property.Name));
             foreach (var property in row.EnumerateObject().Where(property => property.Name != "epicId"))
                 Assert.Equal(before[id].GetProperty(property.Name).GetRawText(), property.Value.GetRawText());

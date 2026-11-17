@@ -259,7 +259,7 @@ public sealed class CliBacklogReadOnlyRouteTests : CliTaskQueryTestSupport
             var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
                 RunBacklogRead(args, workspace, new AgentOrchestratorKernel()));
 
-            Xunit.Assert.Equal($"Backlog store '{workspace.BacklogStorePath}' schema is Missing (expected version 1); run setup.", error.Message);
+            Xunit.Assert.Equal($"Backlog store '{workspace.BacklogStorePath}' schema is Missing (expected version {StoreSchemaRegistry.Backlog.CurrentVersion}); run setup.", error.Message);
             if (legacy)
             {
                 Xunit.Assert.Equal(bytes, File.ReadAllBytes(workspace.BacklogStorePath));
