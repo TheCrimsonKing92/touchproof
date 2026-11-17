@@ -10,9 +10,9 @@ public static class JudgePanelStoreSetup
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
 
-        using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;");
-        connection.Open();
-        RunNonQuery(connection, "PRAGMA busy_timeout=30000");
+        using var connection = SqliteStoreConnectionPolicy.Open(
+            dbPath, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
+            operationTag: "JudgePanelStoreSetup.Setup");
         var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.JudgePanel);
         if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
             return;

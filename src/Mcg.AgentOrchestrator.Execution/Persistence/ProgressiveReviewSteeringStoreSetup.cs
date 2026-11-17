@@ -10,9 +10,9 @@ public static class ProgressiveReviewSteeringStoreSetup
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
 
-        using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;");
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        using var conn = SqliteStoreConnectionPolicy.Open(
+            dbPath, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
+            operationTag: "ProgressiveReviewSteeringStoreSetup.Setup");
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.ProgressiveReviewSteering);
         if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
             return;
