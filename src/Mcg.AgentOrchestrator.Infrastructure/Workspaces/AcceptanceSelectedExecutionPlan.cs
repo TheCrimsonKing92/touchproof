@@ -21,7 +21,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, IReadOnlyList<string> floorLanes,
         IReadOnlyList<string> guardClasses, IReadOnlyList<string>? obligationSelectors = null,
         Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? wholeProjectChecks = null,
-        bool projectReachAvailable = true)
+        bool projectReachAvailable = true,
+        Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? selectableProjectChecks = null)
     {
         var obligations = new HashSet<string>(StringComparer.Ordinal);
         var methodFormResolutions = new List<AcceptanceSelectedExecutionMethodFormResolution>();
@@ -97,8 +98,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         }
         var names = new HashSet<string>(StringComparer.Ordinal);
         var guards = new HashSet<string>(StringComparer.Ordinal);
-        projectInventories ??= wholeProjectChecks?.Invoke() ?? [];
-        var selectableProjects = projectInventories.Where(check =>
+        // Only selectable projects need inventories for reach; other project scans remain obligation-driven.
+        var selectableProjects = (selectableProjectChecks?.Invoke() ?? projectInventories ?? []).Where(check =>
             new AcceptanceWholeProjectCheck(check.CheckName, check.Project).SupportsSelectedExecution).ToArray();
         var selectableClasses = classes.Concat(selectableProjects.SelectMany(check => check.Classes)).ToArray();
         foreach (var selector in selection.TestClassNames.Concat(guardClasses).Distinct(StringComparer.Ordinal))

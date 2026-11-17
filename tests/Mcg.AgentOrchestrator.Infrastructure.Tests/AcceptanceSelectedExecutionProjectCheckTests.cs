@@ -140,7 +140,63 @@ public sealed class AcceptanceSelectedExecutionProjectCheckTests
         Assert.Equal(original.Runner, narrowed.Runner);
         Assert.Equal(original.EstimatedSerialSeconds, narrowed.EstimatedSerialSeconds);
         Assert.Equal(original.ExclusiveResourceKeys, narrowed.ExclusiveResourceKeys);
+        Assert.Null(original.Environment);
+        Assert.Null(narrowed.Environment);
+        narrowed.ValidateEnvironment();
         Assert.True(narrowed.RequiresBuildSystemChange);
+    }
+
+    [Fact]
+    public void Entry_InvalidDotnetEnvironment_RejectsInsteadOfDroppingIt()
+    {
+        var original = new Check { Name = "cli tests", Type = "dotnet-test", Project = CliTestsProject,
+            Environment = new Dictionary<string, string>() };
+        var entry = AcceptanceSelectedExecutionProjectCheckEntry.Create(Inventories[0],
+            new HashSet<string> { "Candidate.CliReached" }, []);
+
+        var error = Assert.Throws<ArgumentException>(() => entry.Apply(original));
+        Assert.Equal("The environment field is supported only on junit-command checks.", error.Message);
+    }
+
+    [Fact]
+    public void Session_LaneObligation_ScansOnlySelectableProjects()
+    {
+        var reads = new List<string>();
+        var session = Session(reached: ["Candidate.CliReached"], obligations: ["Candidate.B"],
+            projectClasses: project =>
+            {
+                Assert.NotEqual(CoreTestsProject, project);
+                reads.Add(project);
+                return Inventories.Single(check => check.Project == project).Classes;
+            });
+
+        session.Transform(AcceptanceSelectedExecutionFixture.Lanes,
+            [new("core tests", CoreTestsProject), .. Scheduled]);
+
+        Assert.True(session.Applied);
+        Assert.Equal(Scheduled.Select(check => check.Project), reads);
+        var narrowed = Assert.Single(session.TransformProjectChecks(Checks));
+        Assert.Equal("cli tests", narrowed.Name);
+        Assert.Equal("(FullyQualifiedName=Candidate.CliReached)", narrowed.Arguments.Last());
+    }
+
+    [Fact]
+    public void Session_ProjectObligation_ReusesSelectableInventories()
+    {
+        var reads = new List<string>();
+        var session = Session(obligations: ["Candidate.CliGuard"], projectClasses: project =>
+        {
+            reads.Add(project);
+            return Inventories.Single(check => check.Project == project).Classes;
+        });
+
+        session.Transform(AcceptanceSelectedExecutionFixture.Lanes, Scheduled);
+
+        Assert.True(session.Applied);
+        Assert.Equal(Scheduled.Select(check => check.Project), reads);
+        var narrowed = Assert.Single(session.TransformProjectChecks(Checks));
+        Assert.Equal("cli tests", narrowed.Name);
+        Assert.Equal("(FullyQualifiedName=Candidate.CliGuard)", narrowed.Arguments.Last());
     }
 
     [Fact]

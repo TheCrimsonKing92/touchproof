@@ -70,11 +70,17 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 var input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changedFiles, engineSettings)
                     : read(worktreePath, changedFiles);
                 _classes = input.Classes;
-                IReadOnlyList<AcceptanceWholeProjectCheckInventory>? inventories = null;
-                IReadOnlyList<AcceptanceWholeProjectCheckInventory> Inventories() => inventories ??= wholeProjectChecks.Select(check =>
-                    new AcceptanceWholeProjectCheckInventory(check.Name, check.Project, ReadProject(check.Project))).ToArray();
-                var projectReachAvailable = true;
                 var targets = wholeProjectChecks.Where(check => check.SupportsSelectedExecution).ToArray();
+                var inventories = new Dictionary<AcceptanceWholeProjectCheck, AcceptanceWholeProjectCheckInventory>();
+                AcceptanceWholeProjectCheckInventory Inventory(AcceptanceWholeProjectCheck check)
+                {
+                    if (!inventories.TryGetValue(check, out var inventory))
+                        inventories.Add(check, inventory = new(check.Name, check.Project, ReadProject(check.Project)));
+                    return inventory;
+                }
+                IReadOnlyList<AcceptanceWholeProjectCheckInventory> Inventories() => wholeProjectChecks.Select(Inventory).ToArray();
+                IReadOnlyList<AcceptanceWholeProjectCheckInventory> SelectableInventories() => targets.Select(Inventory).ToArray();
+                var projectReachAvailable = true;
                 if (read is null && input.Selection.Outcome == ReverseDependencySelectionOutcome.Resolved && targets.Length > 0)
                 {
                     var routing = new ImpactReplayChangedSourceRouting(worktreePath);
@@ -88,9 +94,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                         projectReachAvailable = reach.Outcome == ReverseDependencySelectionOutcome.Resolved;
                         if (projectReachAvailable)
                         {
-                            var projectClasses = Inventories().Where(check =>
-                                new AcceptanceWholeProjectCheck(check.CheckName, check.Project).SupportsSelectedExecution)
-                                .SelectMany(check => check.Classes).ToArray();
+                            var projectClasses = SelectableInventories().SelectMany(check => check.Classes).ToArray();
                             var reached = reach.TestClassNames.Where(name => projectClasses.Any(item =>
                                 name.Contains('.') || name.Contains('+') ? item.FullName == name : item.FullName.Split('.', '+').Last() == name));
                             input = input with { Selection = input.Selection with { TestClassNames = input.Selection.TestClassNames
@@ -101,7 +105,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 _plan = AcceptanceSelectedExecutionPlan.Create(changedFiles, input.Selection, lanes, input.Classes,
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
                         .Select(lane => lane.Name).ToArray(), input.GuardClasses,
-                    obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable);
+                    obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable, SelectableInventories);
                 IReadOnlyList<AcceptanceTestClassDescriptor> ReadProject(string project)
                 {
                     try { return input.ProjectClasses?.Invoke(project) ?? []; }

@@ -28,17 +28,23 @@ internal sealed record AcceptanceSelectedExecutionProjectCheckEntry(
         AcceptancePolicyShardPlanner.ProjectMatches(check.Project, Project) &&
         !AcceptancePolicyShardPlanner.IsFocusedProjectDotnetCheck(check);
 
-    internal Check Apply(Check check) => Lane.Disposition != "narrowed" ? check : new()
+    internal Check Apply(Check check)
     {
-        Name = check.Name, Type = check.Type, Command = check.Command, Project = check.Project,
-        Arguments = [.. check.Arguments, "--filter", Lane.Filter!], Reports = check.Reports,
-        Environment = check.Environment, Pattern = check.Pattern, FilePath = check.FilePath,
-        TimeoutMinutes = check.TimeoutMinutes, Advisory = check.Advisory, Runner = check.Runner,
-        EstimatedSerialSeconds = check.EstimatedSerialSeconds, ExclusiveResourceKeys = check.ExclusiveResourceKeys,
-        IsFocusedEvidenceSelection = check.IsFocusedEvidenceSelection,
-        FocusedEvidenceTokens = check.FocusedEvidenceTokens, FocusedEvidenceSelections = check.FocusedEvidenceSelections,
-        FocusedEvidenceMatchedClasses = check.FocusedEvidenceMatchedClasses,
-        RequiresBuildSystemChange = check.RequiresBuildSystemChange,
-        IsResolvedInfrastructureLane = true, AllowsEmptySelection = true
-    };
+        if (Lane.Disposition != "narrowed") return check;
+        // Dotnet checks cannot declare an environment; leave the absent field unset.
+        check.ValidateEnvironment();
+        return new()
+        {
+            Name = check.Name, Type = check.Type, Command = check.Command, Project = check.Project,
+            Arguments = [.. check.Arguments, "--filter", Lane.Filter!], Reports = check.Reports,
+            Pattern = check.Pattern, FilePath = check.FilePath,
+            TimeoutMinutes = check.TimeoutMinutes, Advisory = check.Advisory, Runner = check.Runner,
+            EstimatedSerialSeconds = check.EstimatedSerialSeconds, ExclusiveResourceKeys = check.ExclusiveResourceKeys,
+            IsFocusedEvidenceSelection = check.IsFocusedEvidenceSelection,
+            FocusedEvidenceTokens = check.FocusedEvidenceTokens, FocusedEvidenceSelections = check.FocusedEvidenceSelections,
+            FocusedEvidenceMatchedClasses = check.FocusedEvidenceMatchedClasses,
+            RequiresBuildSystemChange = check.RequiresBuildSystemChange,
+            IsResolvedInfrastructureLane = true, AllowsEmptySelection = true
+        };
+    }
 }
