@@ -121,8 +121,11 @@ public sealed class HermesAcpTrialTests
         Assert.Contains("contained trial root", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Xunit.Fact]
-    public async Task LifecycleAcceptsNativeVersionOnlyWithGitProvenance()
+    [Xunit.Theory]
+    [Xunit.InlineData("default")]
+    [Xunit.InlineData("populated")]
+    [Xunit.InlineData("unavailable")]
+    public async Task LifecycleAcceptsNativeVersionOnlyWithGitProvenance(string contextCase)
     {
         using var fixture = new Fixture();
         using var identity = new HermesIdentityTestFixture();
@@ -136,7 +139,17 @@ public sealed class HermesAcpTrialTests
             "gpt-test",
             "OpenAI",
             AgentRole.Developer);
-        var version = new FakeHermesProcess(identity.NativeVersionOutput, launchedImagePath: identity.ExecutablePath);
+        IHermesAcpProcess version = new FakeHermesProcess(
+            identity.NativeVersionOutput, launchedImagePath: identity.ExecutablePath);
+        Assert.Null(version.LaunchContext); // This fake deliberately uses the default interface member.
+        HermesLaunchContext? context = contextCase switch
+        {
+            "populated" => new(HermesIntegrityLevel.FromRid(0x1000), true),
+            "unavailable" => new(HermesIntegrityLevel.Unavailable("fixture token query refused"), false),
+            _ => null
+        };
+        if (context is not null)
+            version = new ContextReportingHermesProcess(version, context);
         var protocol = string.Join(Environment.NewLine,
         [
             JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, result = new { protocolVersion = 1 } }),
@@ -221,6 +234,14 @@ public sealed class HermesAcpTrialTests
         Assert.False(receipt.UnexpectedChild);
         Assert.NotNull(receipt.ExecutableIdentity);
         Assert.Equal(identity.Pin.Commit, receipt.ExecutableIdentity.HeadCommit);
+        Assert.Same(context, receipt.ExecutableIdentity.LaunchContext);
+        if (contextCase == "unavailable")
+        {
+            var integrity = Assert.IsType<HermesLaunchContext>(receipt.ExecutableIdentity.LaunchContext).IntegrityLevel;
+            Assert.Equal(HermesIntegrityLevelKind.Unavailable, integrity.Kind);
+            Assert.Null(integrity.Rid);
+            Assert.False(string.IsNullOrWhiteSpace(integrity.UnavailableReason));
+        }
         Assert.True(File.Exists(receiptPath));
         var persisted = JsonSerializer.Deserialize<HermesAcpTerminalReceipt>(
             File.ReadAllText(receiptPath),
@@ -468,6 +489,11 @@ public sealed class HermesAcpTrialTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
+        using var testHost = Process.GetCurrentProcess();
+        var inheritedIntegrity = HermesLaunchContextReader.ReadIntegrityLevel(testHost.SafeHandle);
+        Assert.True(inheritedIntegrity.Kind != HermesIntegrityLevelKind.Unavailable,
+            inheritedIntegrity.UnavailableReason);
+
         var startInfo = new ProcessStartInfo
         {
             FileName = "cmd.exe",
@@ -481,6 +507,11 @@ public sealed class HermesAcpTrialTests
 
         var operationStarted = Stopwatch.GetTimestamp();
         using var process = new HermesAcpProcessLauncher().Start(startInfo);
+        var capturedContext = Assert.IsType<HermesLaunchContext>(process.LaunchContext);
+        Assert.True(capturedContext.ObservedInOwnedJob);
+        Assert.True(capturedContext.IntegrityLevel.Kind != HermesIntegrityLevelKind.Unavailable,
+            capturedContext.IntegrityLevel.UnavailableReason);
+        Assert.Equal(inheritedIntegrity, capturedContext.IntegrityLevel);
         Assert.True(process.ProcessId > 0);
         Assert.True(process.ProcessStartedAt.HasValue);
         process.CompleteInput();
@@ -494,6 +525,7 @@ public sealed class HermesAcpTrialTests
             process.ExitCode == 0,
             $"Expected exit 0, observed {process.ExitCode}. stdout='{stdoutText}' stderr='{stderrText}'.");
         Assert.True(process.JobExitConfirmed, process.DescribeJobExitObservation());
+        Assert.Same(capturedContext, process.LaunchContext);
         var jobExitObservation = process.DescribeJobExitObservation();
         var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
         Assert.Contains("confirmed=true", jobExitObservation, StringComparison.Ordinal);
@@ -1203,9 +1235,9 @@ public sealed class HermesAcpTrialTests
         }
     }
 
-    private sealed class FakeHermesProcessLauncher(params FakeHermesProcess[] processes) : IHermesAcpProcessLauncher
+    private sealed class FakeHermesProcessLauncher(params IHermesAcpProcess[] processes) : IHermesAcpProcessLauncher
     {
-        private readonly Queue<FakeHermesProcess> _processes = new(processes);
+        private readonly Queue<IHermesAcpProcess> _processes = new(processes);
         public List<ProcessStartInfo> StartInfos { get; } = [];
 
         public IHermesAcpProcess Start(ProcessStartInfo startInfo)
@@ -1244,6 +1276,25 @@ public sealed class HermesAcpTrialTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(receipt);
         }
+    }
+
+    private sealed class ContextReportingHermesProcess(
+        IHermesAcpProcess inner,
+        HermesLaunchContext context) : IHermesAcpProcess
+    {
+        public HermesLaunchContext? LaunchContext => context;
+        public TextWriter StandardInput => inner.StandardInput;
+        public TextReader StandardOutput => inner.StandardOutput;
+        public TextReader StandardError => inner.StandardError;
+        public int ExitCode => inner.ExitCode;
+        public bool JobExitConfirmed => inner.JobExitConfirmed;
+        public bool SurvivorInventoryEmpty => inner.SurvivorInventoryEmpty;
+        public string? LaunchedImagePath => inner.LaunchedImagePath;
+        public void CompleteInput() => inner.CompleteInput();
+        public void Kill() => inner.Kill();
+        public Task WaitForExitAsync(CancellationToken cancellationToken) => inner.WaitForExitAsync(cancellationToken);
+        public Task WaitForOwnedExitAsync(CancellationToken cancellationToken) => inner.WaitForOwnedExitAsync(cancellationToken);
+        public void Dispose() => inner.Dispose();
     }
 
     private sealed class FakeHermesProcess(
