@@ -6,6 +6,85 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ConductorBoardFillHostTests
 {
+    [Fact]
+    public void ServiceTick_Near_duplicate_Annotates_once_and_never_starts_round()
+    {
+        using var h = new BoardFillTestHarness();
+        h.Items = [h.Items[0] with { Title = "Fix board fill regression", Body = "See src/BoardFill.cs" }];
+        var goal = h.Kernel.CreateGoal("# Fix board fill regression\nSee src/BoardFill.cs");
+        var writes = new List<(string Id, string Text)>();
+        var draftCalls = 0;
+        var host = new ConductorBoardFillHost(h.Store, (_, _) =>
+        {
+            Interlocked.Increment(ref draftCalls);
+            return h.Draft();
+        }, () => h.Items, (_, _) => _ => new(true, false, "ready"), () => h.Policy,
+            new(h.EventsPath), items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal),
+            () => h.Clock.UtcNow, appendBacklogNote: (id, text) =>
+            {
+                writes.Add((id, text));
+                h.Items = [h.Items[0] with { UpdatedAt = h.Clock.UtcNow,
+                    Notes = [.. h.Items[0].Notes, new(h.Clock.UtcNow, text)] }];
+            });
+        try
+        {
+            host.ServiceTick(h.Kernel);
+            var write = Assert.Single(writes);
+            Assert.Equal(h.Items[0].Id, write.Id);
+            Assert.Contains("goal " + goal.Id.Value, write.Text);
+            Assert.Contains("Fix board fill regression", write.Text);
+            Assert.Single(h.Items[0].Notes);
+            Assert.Empty(h.Store.ReadAll());
+            Assert.Null(host.CurrentRound);
+
+            // An unrelated later note must not hide the earlier pair token.
+            h.Clock.UtcNow += TimeSpan.FromMinutes(1);
+            h.Items = [h.Items[0] with { Notes = [.. h.Items[0].Notes, new(h.Clock.UtcNow, "Unrelated update")] }];
+            host.ServiceTick(h.Kernel);
+            Assert.Single(writes);
+            Assert.Empty(h.Store.ReadAll());
+            Assert.Null(host.CurrentRound);
+            Assert.Equal(0, Volatile.Read(ref draftCalls));
+        }
+        finally { host.Stop(); }
+    }
+
+    [Fact]
+    public void ServiceTick_Throwing_duplicate_writer_Skips_and_retries_next_tick()
+    {
+        using var h = new BoardFillTestHarness();
+        h.Items = [h.Items[0] with { Title = "Fix board fill regression", Body = "See src/BoardFill.cs" }];
+        h.Kernel.CreateGoal("# Fix board fill regression\nSee src/BoardFill.cs");
+        var attempts = 0;
+        var draftCalls = 0;
+        var host = new ConductorBoardFillHost(h.Store, (_, _) =>
+        {
+            Interlocked.Increment(ref draftCalls);
+            return h.Draft();
+        }, () => h.Items, (_, _) => _ => new(true, false, "ready"), () => h.Policy,
+            new(h.EventsPath), items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal),
+            () => h.Clock.UtcNow, appendBacklogNote: (_, _) =>
+            {
+                attempts++;
+                throw new IOException("Fixture note write failed");
+            });
+        try
+        {
+            Assert.Null(Record.Exception(() => host.ServiceTick(h.Kernel)));
+            Assert.Equal(1, attempts);
+            Assert.Empty(h.Store.ReadAll());
+            Assert.Null(host.CurrentRound);
+            h.Clock.UtcNow += TimeSpan.FromMinutes(1);
+            Assert.Null(Record.Exception(() => host.ServiceTick(h.Kernel)));
+            Assert.Equal(2, attempts);
+            Assert.Empty(h.Items[0].Notes);
+            Assert.Empty(h.Store.ReadAll());
+            Assert.Null(host.CurrentRound);
+            Assert.Equal(0, Volatile.Read(ref draftCalls));
+        }
+        finally { host.Stop(); }
+    }
+
     [Theory]
     [InlineData("persisted", GoalStatus.Completed, true)]
     [InlineData("persisted", GoalStatus.Cancelled, true)]

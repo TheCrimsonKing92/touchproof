@@ -62,7 +62,7 @@ public sealed class BoardFillScopeDependsTestsTestTreePrefix
     [InlineData("docs//", "docs/Sample.md")]
     [InlineData("docs/tests/", "docs/tests/Sample.md")]
     [InlineData("src/Feature/Tests/", "src/Feature/Tests/Sample.cs")]
-    public void Prefix_outside_root_test_tree_still_proposes_dependency(string activePath, string draftPath)
+    public void Prefix_outside_root_test_tree_omits_dependency(string activePath, string draftPath)
     {
         using var h = new BoardFillAssessmentTestFixture();
         var goal = h.Kernel.CreateGoal($"Change {activePath} and tests/Suppressed/.");
@@ -74,9 +74,8 @@ public sealed class BoardFillScopeDependsTestsTestTreePrefix
 
         var proposal = BoardFillScopeDepends.Propose(draft, goals, h.Item.Id);
 
-        var dependency = Assert.Single(proposal.Depends);
-        Assert.Equal(goal.Id.Value, dependency.GoalId);
-        Assert.Equal($"DirectoryPrefix {draftPath}<->{activePath}", dependency.Reason);
+        Assert.Empty(proposal.Depends);
+        Assert.Equal(report.VerdictToken, proposal.Verdict);
     }
 
     [Fact]
