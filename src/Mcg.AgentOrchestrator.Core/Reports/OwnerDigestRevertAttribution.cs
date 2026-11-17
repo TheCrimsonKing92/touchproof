@@ -30,6 +30,10 @@ public sealed record OwnerDigestRevertAttribution(int Count, IReadOnlyList<Owner
             var match = RevertedCommitLine.Match(revert.Message);
             var revertedSha = match.Success ? match.Groups[1].Value : null;
             var goalId = revertedSha is not null && introducedBy.TryGetValue(revertedSha, out var id) ? id : null;
+            // A correction bundled into the same landing never escaped that landing.
+            if (goalId is not null && introducedBy.TryGetValue(revert.Sha, out var revertGoalId) &&
+                string.Equals(goalId, revertGoalId, StringComparison.OrdinalIgnoreCase))
+                goalId = null;
             return new OwnerDigestRevertMatch(revert.Sha, revertedSha, goalId);
         }).ToArray();
         return new(reverts.Count, matches);

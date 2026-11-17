@@ -34,6 +34,34 @@ public sealed class OwnerDigestRevertAttributionNegativeControlTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Attribute_RevertIntroducedByLanding_OnlyEscapesEarlierLanding(bool sameLanding)
+    {
+        var revertSha = new string('d', 40);
+        IReadOnlyList<OwnerDigestLandingCommits> landings = sameLanding
+            ? [new("goal", [IntroducedSha, revertSha])]
+            : [new("goal", [IntroducedSha]), new("later-goal", [revertSha])];
+        var attribution = OwnerDigestRevertAttribution.Attribute(
+            [new(revertSha.ToUpperInvariant(), $"This reverts commit {IntroducedSha}.")],
+            landings);
+
+        Assert.Equal(1, attribution.Count);
+        var match = Assert.Single(attribution.Matches);
+        Assert.Equal(revertSha.ToUpperInvariant(), match.RevertSha);
+        Assert.Equal(IntroducedSha, match.RevertedSha);
+        Assert.Equal(sameLanding ? null : "goal", match.GoalId);
+
+        var digest = Build(attribution);
+        Assert.Equal("1", digest.Reverts);
+        var row = Assert.Single(digest.Goals);
+        Assert.Equal(sameLanding ? "correct" : "escape", row.LandingStatus);
+        Assert.Equal(sameLanding ? null : "revert", row.EscapeSource);
+        Assert.Equal(sameLanding ? 0 : 1, digest.Totals.Escapes);
+        Assert.Equal(sameLanding ? 1 : 0, digest.Totals.CorrectLandings);
+    }
+
+    [Theory]
     [InlineData(39)]
     [InlineData(41)]
     public void Attribute_NonFullSha_CountsWithoutAttribution(int length)
