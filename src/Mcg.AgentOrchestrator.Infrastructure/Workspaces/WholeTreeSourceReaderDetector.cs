@@ -7,28 +7,36 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // A reader reaches both a root lookup and a repository-wide enumeration. Neither alone is sufficient.
 internal static class WholeTreeSourceReaderDetector
 {
-    internal static HashSet<ISymbol> Read(Dictionary<ISymbol, HashSet<ISymbol>> edges,
-        Dictionary<ISymbol, List<SyntaxNode>> declarations, CSharpCompilation compilation)
+    private sealed record Body(SourceReaderFileFacts.MemberFact Facts, SyntaxNode Node);
+
+    internal static HashSet<string> Read(ImpactReplayTestSourceIndex sources, SourceReaderFileFacts[] files,
+        Dictionary<string, HashSet<string>> edges)
     {
-        var roots = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        var traversals = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        var gitCallers = new HashSet<ISymbol>(declarations.Where(pair => pair.Value.Any(node =>
-            node.DescendantNodes().OfType<ObjectCreationExpressionSyntax>().Any(creation =>
-                creation.Type.ToString().Split('.').Last() is "Process" or "ProcessStartInfo") ||
-            node.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
-                call.Expression is MemberAccessExpressionSyntax access && Name(access.Expression) == "Process" &&
-                access.Name.Identifier.ValueText == "Start"))).Select(pair => pair.Key), SymbolEqualityComparer.Default);
+        var declarations = new Dictionary<string, List<Body>>(StringComparer.Ordinal);
+        // The merged facts follow candidate tree order, including full-only inputs with empty paths.
+        foreach (var (tree, file) in sources.Trees.Zip(files))
+        {
+            var nodes = SourceReaderFileFacts.Declarations(tree.GetRoot()).ToArray();
+            foreach (var member in file.Members)
+            {
+                if (!declarations.TryGetValue(member.Id, out var bodies)) declarations[member.Id] = bodies = [];
+                bodies.Add(new(member, nodes[member.Ordinal]));
+            }
+        }
+        var roots = new HashSet<string>(StringComparer.Ordinal);
+        var traversals = new HashSet<string>(StringComparer.Ordinal);
+        var gitCallers = new HashSet<string>(declarations.Where(pair => pair.Value.Any(body => body.Facts.ProcessSeed))
+            .Select(pair => pair.Key), StringComparer.Ordinal);
         Propagate(gitCallers, edges);
         foreach (var (member, nodes) in declarations)
-        foreach (var node in nodes)
+        foreach (var body in nodes)
         {
+            var node = body.Node;
             var calls = node.DescendantNodes().OfType<InvocationExpressionSyntax>().ToArray();
-            if (calls.Any(call => call.Expression is MemberAccessExpressionSyntax access &&
-                    access.Name.Identifier.ValueText == "Find" && Name(access.Expression) == "VerifiedRepositoryRoot"))
-                roots.Add(member);
-            if (calls.Any(call => IsWholeDirectoryTraversal(call, node, member, edges)) ||
-                gitCallers.Contains(member) && GitThroughHelpers(member, node, new Dictionary<string, ExpressionSyntax>(),
-                    new HashSet<ISymbol>(SymbolEqualityComparer.Default), gitCallers, declarations, compilation))
+            if (body.Facts.RootSeed) roots.Add(member);
+            if (calls.Any(call => IsWholeDirectoryTraversal(call, node, member, edges, declarations)) ||
+                gitCallers.Contains(member) && GitThroughHelpers(member, body, new Dictionary<string, ExpressionSyntax>(),
+                    new HashSet<string>(StringComparer.Ordinal), gitCallers, declarations))
                 traversals.Add(member);
         }
         Propagate(roots, edges);
@@ -37,36 +45,47 @@ internal static class WholeTreeSourceReaderDetector
         return roots;
     }
 
-    private static bool GitThroughHelpers(ISymbol symbol, SyntaxNode member,
-        Dictionary<string, ExpressionSyntax> bindings, HashSet<ISymbol> active, HashSet<ISymbol> gitCallers,
-        Dictionary<ISymbol, List<SyntaxNode>> declarations, CSharpCompilation compilation)
+    internal static bool RootSeed(SyntaxNode node) => node.DescendantNodes().OfType<InvocationExpressionSyntax>()
+        .Any(call => call.Expression is MemberAccessExpressionSyntax access &&
+            access.Name.Identifier.ValueText == "Find" && Name(access.Expression) == "VerifiedRepositoryRoot");
+
+    internal static bool ProcessSeed(SyntaxNode node) =>
+        node.DescendantNodes().OfType<ObjectCreationExpressionSyntax>().Any(creation =>
+            creation.Type.ToString().Split('.').Last() is "Process" or "ProcessStartInfo") ||
+        node.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
+            call.Expression is MemberAccessExpressionSyntax access && Name(access.Expression) == "Process" &&
+            access.Name.Identifier.ValueText == "Start");
+
+    private static bool GitThroughHelpers(string symbol, Body body,
+        Dictionary<string, ExpressionSyntax> bindings, HashSet<string> active, HashSet<string> gitCallers,
+        Dictionary<string, List<Body>> declarations)
     {
         if (!active.Add(symbol)) return false;
         try
         {
+            var member = body.Node;
             var calls = member.DescendantNodes().OfType<InvocationExpressionSyntax>().ToArray();
             if (IsGitTraversal(member, calls, bindings)) return true;
-            var model = compilation.GetSemanticModel(member.SyntaxTree);
-            foreach (var call in calls)
+            for (var callIndex = 0; callIndex < calls.Length; callIndex++)
             {
-                var info = model.GetSymbolInfo(call);
-                foreach (var target in info.Symbol is { } resolved ? new[] { resolved } : info.CandidateSymbols.ToArray())
+                var call = calls[callIndex];
+                foreach (var canonical in body.Facts.InvocationTargets[callIndex])
                 {
-                    var canonical = target.OriginalDefinition;
-                    if (canonical is not IMethodSymbol method || !gitCallers.Contains(canonical) ||
+                    if (!gitCallers.Contains(canonical) ||
                         !declarations.TryGetValue(canonical, out var bodies)) continue;
+                    var parameters = bodies[0].Facts.Parameters;
                     var arguments = new Dictionary<string, ExpressionSyntax>(StringComparer.Ordinal);
                     for (var index = 0; index < call.ArgumentList.Arguments.Count; index++)
                     {
                         var argument = call.ArgumentList.Arguments[index];
                         var parameter = argument.NameColon is { } named
-                            ? method.Parameters.FirstOrDefault(parameter => parameter.Name == named.Name.Identifier.ValueText)
-                            : index < method.Parameters.Length ? method.Parameters[index] : null;
+                            ? parameters.FirstOrDefault(parameter => parameter == named.Name.Identifier.ValueText)
+                            : index < parameters.Length ? parameters[index] : null;
                         if (parameter is not null)
-                            arguments[parameter.Name] = Resolve(argument.Expression, member, bindings);
+                            arguments[parameter] = Resolve(argument.Expression, member, bindings);
                     }
-                    if (bodies.Any(body => GitThroughHelpers(canonical, body, arguments, active,
-                            gitCallers, declarations, compilation))) return true;
+                    if (bodies.Any(target => GitThroughHelpers(canonical, target, arguments, active,
+                            gitCallers, declarations))) return true;
                 }
             }
             return false;
@@ -74,7 +93,7 @@ internal static class WholeTreeSourceReaderDetector
         finally { active.Remove(symbol); }
     }
 
-    private static void Propagate(HashSet<ISymbol> readers, Dictionary<ISymbol, HashSet<ISymbol>> edges)
+    internal static void Propagate(HashSet<string> readers, Dictionary<string, HashSet<string>> edges)
     {
         bool changed;
         do
@@ -85,14 +104,14 @@ internal static class WholeTreeSourceReaderDetector
         } while (changed);
     }
 
-    private static bool Reaches(ISymbol from, ISymbol target, Dictionary<ISymbol, HashSet<ISymbol>> edges)
+    private static bool Reaches(string from, string target, Dictionary<string, HashSet<string>> edges)
     {
-        var pending = new Stack<ISymbol>();
-        var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var pending = new Stack<string>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
         pending.Push(from);
         while (pending.TryPop(out var current))
         {
-            if (SymbolEqualityComparer.Default.Equals(current, target)) return true;
+            if (current == target) return true;
             if (visited.Add(current) && edges.TryGetValue(current, out var calls))
                 foreach (var call in calls) pending.Push(call);
         }
@@ -100,7 +119,7 @@ internal static class WholeTreeSourceReaderDetector
     }
 
     private static bool IsWholeDirectoryTraversal(InvocationExpressionSyntax call, SyntaxNode member,
-        ISymbol symbol, Dictionary<ISymbol, HashSet<ISymbol>> edges)
+        string symbol, Dictionary<string, HashSet<string>> edges, Dictionary<string, List<Body>> declarations)
     {
         if (call.Expression is not MemberAccessExpressionSyntax access || Name(access.Expression) != "Directory" ||
             access.Name.Identifier.ValueText is not ("EnumerateFiles" or "GetFiles" or
@@ -122,7 +141,8 @@ internal static class WholeTreeSourceReaderDetector
             directoryAccess.Name.Identifier.ValueText is "EnumerateDirectories" or "GetDirectories" &&
             loop.Statement.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().Any(recursiveCall =>
                 edges.TryGetValue(symbol, out var targets) && targets.Any(target =>
-                    target.Name == Name(recursiveCall.Expression) && Reaches(target, symbol, edges)) &&
+                    declarations.TryGetValue(target, out var bodies) &&
+                    bodies.Any(body => body.Facts.Name == Name(recursiveCall.Expression)) && Reaches(target, symbol, edges)) &&
                 recursiveCall.ArgumentList.Arguments.Any(argument =>
                     argument.Expression is IdentifierNameSyntax identifier && identifier.Identifier.ValueText == loop.Identifier.ValueText)));
     }

@@ -29,8 +29,10 @@ public sealed class SourceReaderAnalysisCacheTests
         {
             miss = SourceReadingGuardTestClasses.Read(sources, classes);
             Assert.Equal(1, cache.AnalysisCount);
+            Assert.Equal(sources.Trees.Count, cache.SemanticFileCount);
             AssertReport(miss, SourceReadingGuardTestClasses.Read(sources, classes));
             Assert.Equal(1, cache.AnalysisCount);
+            Assert.Equal(sources.Trees.Count, cache.SemanticFileCount);
         }
 
         if (scenario == "null") Assert.Null(miss);
@@ -47,6 +49,7 @@ public sealed class SourceReaderAnalysisCacheTests
             else Assert.Equal(scenario == "readers" ? new[] { "Sample.SecondTests" } : [],
                 Assert.IsType<ImpactReplaySourceGuardReport>(filtered).Classes);
             Assert.Equal(0, fresh.AnalysisCount);
+            Assert.Equal(0, fresh.SemanticFileCount);
         }
     }
 
