@@ -135,8 +135,8 @@ public sealed class PlannerAcceptanceOwnershipTests
             {
                 Tasks = saved.Tasks.Select(task => task.Id == f.Planner.Id.Value ? task with
                 {
-                    LastDispatch = task.LastDispatch! with { BriefSnapshot = null },
-                    DispatchHistory = task.DispatchHistory!.Select(dispatch => dispatch with { BriefSnapshot = null }).ToArray()
+                    LastDispatch = task.LastDispatch! with { BriefSnapshot = null, BriefSnapshotFromVersion = null },
+                    DispatchHistory = task.DispatchHistory!.Select(dispatch => dispatch with { BriefSnapshot = null, BriefSnapshotFromVersion = null }).ToArray()
                 } : task).ToArray()
             }] });
         }

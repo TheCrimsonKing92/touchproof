@@ -198,6 +198,9 @@ public sealed partial class TaskSpec
     }
 
     internal TaskSnapshot ToSnapshot()
+        => ToSnapshot(null);
+
+    internal TaskSnapshot ToSnapshot(IReadOnlyDictionary<int, string>? briefVersions)
     {
         var lastStandardOutput = LastVerification is null ? string.Empty
             : VerificationTextBounds.BoundText(LastVerification.StandardOutput, LastVerification.StandardOutputPath);
@@ -332,7 +335,7 @@ public sealed partial class TaskSpec
                 .ToList(),
             LastDispatch is null
                 ? null
-                : ToDispatchSnapshot(LastDispatch),
+                : ToDispatchSnapshot(LastDispatch, briefVersions, isNewest: true),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -378,7 +381,8 @@ public sealed partial class TaskSpec
             PreReviewEvidenceReceipt,
             InterruptedDispatchRecoveryId,
             WasCancelledByConductor,
-            _dispatchHistory.Select(ToDispatchSnapshot).ToArray(),
+            _dispatchHistory.Select((dispatch, index) => ToDispatchSnapshot(
+                dispatch, briefVersions, isNewest: index == _dispatchHistory.Count - 1)).ToArray(),
             PendingRetryCause,
             _retryAdmissionHistory.ToArray(),
             RetryAdmissionHoldRoute,
@@ -401,6 +405,9 @@ public sealed partial class TaskSpec
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
+        => FromSnapshot(snapshot, null);
+
+    internal static TaskSpec FromSnapshot(TaskSnapshot snapshot, IReadOnlyDictionary<int, string>? briefVersions)
     {
         var task = new TaskSpec(new TaskId(snapshot.Id), snapshot.Description, snapshot.RequiredRole, snapshot.VerificationPlan);
 
@@ -570,7 +577,7 @@ public sealed partial class TaskSpec
         {
             foreach (var dispatch in snapshot.DispatchHistory)
             {
-                task._dispatchHistory.Add(FromDispatchSnapshot(dispatch));
+                task._dispatchHistory.Add(FromDispatchSnapshot(DispatchSnapshotShaping.FromStorage(dispatch, briefVersions)));
             }
         }
 
@@ -579,7 +586,7 @@ public sealed partial class TaskSpec
 
         if (snapshot.LastDispatch is not null)
         {
-            var currentDispatch = FromDispatchSnapshot(snapshot.LastDispatch);
+            var currentDispatch = FromDispatchSnapshot(DispatchSnapshotShaping.FromStorage(snapshot.LastDispatch, briefVersions));
             var historyIndex = task._dispatchHistory.FindIndex(
                 dispatch => dispatch.DispatchedAt == currentDispatch.DispatchedAt);
             if (historyIndex >= 0)
@@ -1326,6 +1333,13 @@ public sealed partial class TaskSpec
     internal void RecordProcess(TaskProcessRecord process)
     {
         LastProcess = process;
+    }
+
+    private static TaskDispatchSnapshot ToDispatchSnapshot(
+        TaskDispatchRecord dispatch, IReadOnlyDictionary<int, string>? briefVersions, bool isNewest)
+    {
+        var snapshot = ToDispatchSnapshot(dispatch);
+        return briefVersions is null ? snapshot : DispatchSnapshotShaping.ForStorage(snapshot, isNewest, briefVersions);
     }
 
     private static TaskDispatchSnapshot ToDispatchSnapshot(TaskDispatchRecord dispatch) => new(

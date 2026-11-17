@@ -18,30 +18,143 @@
 .EXAMPLE
   .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-TestSummary.ps1 -Target .\Mcg.AgentOrchestrator.sln
 #>
-param(
-    [Parameter(Mandatory = $true, Position = 0)]
-    [string]$ScriptPath,
-
-    [string]$Pipeline,
-
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [object[]]$ScriptArguments
-)
-
 $ErrorActionPreference = 'Stop'
+# Keep this raw-token boundary identical in all three command wrappers. A script
+# param block would let PowerShell consume child flags before this code can run.
+function Read-WrapperArguments {
+    param(
+        [object[]]$Tokens,
+        [hashtable]$Controls,
+        [string]$PositionalControl = ''
+    )
+
+    $values = @{}
+    $child = [System.Collections.Generic.List[string]]::new()
+    for ($index = 0; $index -lt $Tokens.Count; $index++) {
+        $token = [string]$Tokens[$index]
+        if ($token.StartsWith('--', [System.StringComparison]::Ordinal)) {
+            $child.Add($token)
+            if (-not $token.Contains('=') -and $index + 1 -lt $Tokens.Count -and
+                -not ([string]$Tokens[$index + 1]).StartsWith('--', [System.StringComparison]::Ordinal)) {
+                # Even a single-dash control spelling can be a child flag's value.
+                $child.Add([string]$Tokens[++$index])
+            }
+            continue
+        }
+        # Once the repository script is selected, its single-dash controls belong
+        # to that script too. Only the splatted remaining-arguments array is unwrapped.
+        if ($PositionalControl -and $values.ContainsKey($PositionalControl) -and
+            -not ($token -match '^-([^-:][^:]*):$' -and
+                $Controls.ContainsKey($Matches[1]) -and $Controls[$Matches[1]] -eq 'Arguments')) {
+            $child.Add($token)
+            continue
+        }
+
+        $control = $null
+        $attached = $null
+        if ($token -match '^-([^-:][^:]*)(?::(.*))?$') {
+            $spelling = $Matches[1]
+            if ($Matches.ContainsKey(2)) { $attached = $Matches[2] }
+            if ($Controls.ContainsKey($spelling)) {
+                $control = $spelling
+            } else {
+                $candidates = @($Controls.Keys | Where-Object {
+                    $_.StartsWith($spelling, [System.StringComparison]::OrdinalIgnoreCase)
+                })
+                if ($candidates.Count -gt 1) { throw "Ambiguous wrapper control: $token" }
+                if ($candidates.Count -eq 1) { $control = $candidates[0] }
+            }
+        }
+
+        if ($null -ne $control) {
+            $kind = $Controls[$control]
+            if ($kind -eq 'Switch') {
+                $value = $true
+                if (-not [string]::IsNullOrEmpty($attached)) {
+                    $value = [System.Convert]::ToBoolean($attached.TrimStart('$'))
+                } elseif ($null -ne $attached -and $index + 1 -lt $Tokens.Count -and
+                    ($Tokens[$index + 1] -is [bool] -or
+                     $Tokens[$index + 1] -is [System.Management.Automation.SwitchParameter])) {
+                    $value = [bool]$Tokens[++$index]
+                }
+            } else {
+                if (-not [string]::IsNullOrEmpty($attached)) {
+                    $value = $attached
+                } else {
+                    if ($index + 1 -ge $Tokens.Count -or
+                        ([string]$Tokens[$index + 1]).StartsWith('--', [System.StringComparison]::Ordinal)) {
+                        throw "Missing value for wrapper control: $token"
+                    }
+                    $value = $Tokens[++$index]
+                }
+            }
+            if ($kind -eq 'Arguments') {
+                foreach ($item in @($value)) { $child.Add([string]$item) }
+            } else {
+                $values[$control] = $value
+            }
+            continue
+        }
+
+        if ($PositionalControl -and -not $values.ContainsKey($PositionalControl)) {
+            $values[$PositionalControl] = $token
+        } else {
+            $child.Add($token)
+        }
+    }
+    return [pscustomobject]@{ Controls = $values; Arguments = $child.ToArray() }
+}
+
+$wrapperInput = Read-WrapperArguments -Tokens $args -Controls @{
+    ScriptPath = 'Value'; ScriptArguments = 'Arguments'
+} -PositionalControl 'ScriptPath'
+$ScriptPath = [string]$wrapperInput.Controls['ScriptPath']
+$ScriptArguments = @($wrapperInput.Arguments)
 if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     throw "Usage: .\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> [script arguments...]"
 }
 
-$ScriptArguments = if ($null -eq $ScriptArguments -or $ScriptArguments.Count -eq 0) {
-    @()
-} else {
-    @($ScriptArguments | ForEach-Object { [string]$_ })
-}
-if ($PSBoundParameters.ContainsKey('Pipeline')) {
-    # PowerShell otherwise abbreviates --pipeline to the common
-    # -PipelineVariable parameter and removes it before the target script sees it.
-    $ScriptArguments += @('--pipeline', $Pipeline)
+function ConvertTo-CommandLineArgument {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    if ($Value.Length -gt 0 -and $Value.IndexOfAny([char[]]@(' ', "`t", "`n", "`r", '"')) -lt 0) {
+        return $Value
+    }
+
+    $quoted = [System.Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+
+        if ($character -eq '"') {
+            [void]$quoted.Append('\', ($backslashes * 2) + 1)
+            [void]$quoted.Append('"')
+            $backslashes = 0
+            continue
+        }
+
+        if ($backslashes -gt 0) {
+            [void]$quoted.Append('\', $backslashes)
+            $backslashes = 0
+        }
+
+        [void]$quoted.Append($character)
+    }
+
+    if ($backslashes -gt 0) {
+        [void]$quoted.Append('\', $backslashes * 2)
+    }
+
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
 }
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -122,7 +235,10 @@ if ([string]::Equals([System.IO.Path]::GetFileName($resolved), 'Invoke-Git.ps1',
 }
 
 $powerShellPath = (Get-Process -Id $PID).Path
-& $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $resolved @ScriptArguments
+$PSNativeCommandArgumentPassing = 'Legacy'
+$nativeArguments = @(@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $resolved) + $ScriptArguments |
+    ForEach-Object { ConvertTo-CommandLineArgument $_ })
+& $powerShellPath @nativeArguments
 if ($LASTEXITCODE -is [int]) {
     exit $LASTEXITCODE
 }

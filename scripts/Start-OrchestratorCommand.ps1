@@ -3,28 +3,107 @@ Exit codes:
 - 1: generic launch failure
 - 2: conduct-loop launch refused because stop authority is active
 #>
-[CmdletBinding(PositionalBinding = $false)]
-param(
-    [string]$Name = "command",
-    [string]$AppDll,
-    [string]$Pipeline,
-    [string]$RepositoryRoot,
-    [string]$ExpectedStateDirectory,
-    [switch]$DisposableFixture,
-
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$Arguments
-)
-
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$Arguments = @($Arguments)
-if ($PSBoundParameters.ContainsKey('Pipeline')) {
-    # Keep the orchestrator's --pipeline flag from binding to PowerShell's
-    # common -PipelineVariable parameter instead of reaching the child CLI.
-    $Arguments += @('--pipeline', $Pipeline)
+# Keep this raw-token boundary identical in all three command wrappers. A script
+# param block would let PowerShell consume child flags before this code can run.
+function Read-WrapperArguments {
+    param(
+        [object[]]$Tokens,
+        [hashtable]$Controls,
+        [string]$PositionalControl = ''
+    )
+
+    $values = @{}
+    $child = [System.Collections.Generic.List[string]]::new()
+    for ($index = 0; $index -lt $Tokens.Count; $index++) {
+        $token = [string]$Tokens[$index]
+        if ($token.StartsWith('--', [System.StringComparison]::Ordinal)) {
+            $child.Add($token)
+            if (-not $token.Contains('=') -and $index + 1 -lt $Tokens.Count -and
+                -not ([string]$Tokens[$index + 1]).StartsWith('--', [System.StringComparison]::Ordinal)) {
+                # Even a single-dash control spelling can be a child flag's value.
+                $child.Add([string]$Tokens[++$index])
+            }
+            continue
+        }
+        # Once the repository script is selected, its single-dash controls belong
+        # to that script too. Only the splatted remaining-arguments array is unwrapped.
+        if ($PositionalControl -and $values.ContainsKey($PositionalControl) -and
+            -not ($token -match '^-([^-:][^:]*):$' -and
+                $Controls.ContainsKey($Matches[1]) -and $Controls[$Matches[1]] -eq 'Arguments')) {
+            $child.Add($token)
+            continue
+        }
+
+        $control = $null
+        $attached = $null
+        if ($token -match '^-([^-:][^:]*)(?::(.*))?$') {
+            $spelling = $Matches[1]
+            if ($Matches.ContainsKey(2)) { $attached = $Matches[2] }
+            if ($Controls.ContainsKey($spelling)) {
+                $control = $spelling
+            } else {
+                $candidates = @($Controls.Keys | Where-Object {
+                    $_.StartsWith($spelling, [System.StringComparison]::OrdinalIgnoreCase)
+                })
+                if ($candidates.Count -gt 1) { throw "Ambiguous wrapper control: $token" }
+                if ($candidates.Count -eq 1) { $control = $candidates[0] }
+            }
+        }
+
+        if ($null -ne $control) {
+            $kind = $Controls[$control]
+            if ($kind -eq 'Switch') {
+                $value = $true
+                if (-not [string]::IsNullOrEmpty($attached)) {
+                    $value = [System.Convert]::ToBoolean($attached.TrimStart('$'))
+                } elseif ($null -ne $attached -and $index + 1 -lt $Tokens.Count -and
+                    ($Tokens[$index + 1] -is [bool] -or
+                     $Tokens[$index + 1] -is [System.Management.Automation.SwitchParameter])) {
+                    $value = [bool]$Tokens[++$index]
+                }
+            } else {
+                if (-not [string]::IsNullOrEmpty($attached)) {
+                    $value = $attached
+                } else {
+                    if ($index + 1 -ge $Tokens.Count -or
+                        ([string]$Tokens[$index + 1]).StartsWith('--', [System.StringComparison]::Ordinal)) {
+                        throw "Missing value for wrapper control: $token"
+                    }
+                    $value = $Tokens[++$index]
+                }
+            }
+            if ($kind -eq 'Arguments') {
+                foreach ($item in @($value)) { $child.Add([string]$item) }
+            } else {
+                $values[$control] = $value
+            }
+            continue
+        }
+
+        if ($PositionalControl -and -not $values.ContainsKey($PositionalControl)) {
+            $values[$PositionalControl] = $token
+        } else {
+            $child.Add($token)
+        }
+    }
+    return [pscustomobject]@{ Controls = $values; Arguments = $child.ToArray() }
 }
+
+$wrapperInput = Read-WrapperArguments -Tokens $args -Controls @{
+    AppDll = 'Value'; RepositoryRoot = 'Value'; ExpectedStateDirectory = 'Value'
+    DisposableFixture = 'Switch'; Arguments = 'Arguments'
+    Name = 'Value'
+}
+$wrapperControls = $wrapperInput.Controls
+$AppDll = [string]$wrapperControls['AppDll']
+$RepositoryRoot = [string]$wrapperControls['RepositoryRoot']
+$ExpectedStateDirectory = [string]$wrapperControls['ExpectedStateDirectory']
+$DisposableFixture = [bool]$wrapperControls['DisposableFixture']
+$Arguments = @($wrapperInput.Arguments)
+$Name = if ($wrapperControls.ContainsKey('Name')) { [string]$wrapperControls['Name'] } else { 'command' }
 
 $driveJournalSchemaVersion = 1
 
@@ -217,7 +296,7 @@ try {
     }
 
     $usesLauncher = [string]::IsNullOrWhiteSpace($AppDll)
-    $hasBinding = $PSBoundParameters.ContainsKey('RepositoryRoot') -or $PSBoundParameters.ContainsKey('ExpectedStateDirectory') -or $DisposableFixture -or
+    $hasBinding = $wrapperControls.ContainsKey('RepositoryRoot') -or $wrapperControls.ContainsKey('ExpectedStateDirectory') -or $DisposableFixture -or
         @($Arguments | Where-Object { $_ -match '^--(repository-root|expected-state-directory|disposable-fixture)(=|$)' }).Count -gt 0
     $bindingArgs = @()
     if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) { $bindingArgs += @('--repository-root', $RepositoryRoot) }
@@ -244,7 +323,10 @@ try {
             }
             elseif ($Arguments[$i] -eq '--disposable-fixture') { $selectionArgs += $Arguments[$i] }
         }
-        $bindingJson = & $dotnetPath $AppDll '__workspace-binding-check' '--json' @selectionArgs @bindingArgs
+        $PSNativeCommandArgumentPassing = 'Legacy'
+        $nativeArguments = @(@($AppDll, '__workspace-binding-check', '--json') + $selectionArgs + $bindingArgs |
+            ForEach-Object { ConvertTo-CommandLineArgument $_ })
+        $bindingJson = & $dotnetPath @nativeArguments
         if ($LASTEXITCODE -ne 0) { throw 'Workspace binding prelaunch check refused; no launcher artifacts written.' }
         $verified = ($bindingJson -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop
         $requestedSelectors = @($selectionArgs) + @($bindingArgs)

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -61,7 +62,8 @@ public static class OwnerDigestReport
         IReadOnlyList<OwnerDigestCanaryReceipt> receipts,
         IClock clock, DateTimeOffset? since = null, DateTimeOffset? until = null,
         int malformedLifecycleLines = 0,
-        IReadOnlyList<OwnerDigestEscapeRecord>? escapeRecords = null)
+        IReadOnlyList<OwnerDigestEscapeRecord>? escapeRecords = null,
+        OwnerDigestRevertAttribution? revertAttribution = null)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(receipts);
@@ -80,7 +82,10 @@ public static class OwnerDigestReport
         var records = (escapeRecords ?? []).Where(r => r.RecordedAt < end && landedIds.Contains(r.GoalId))
             .OrderBy(r => r.RecordedAt).ThenBy(r => r.GoalId, StringComparer.Ordinal).ToArray();
         var escapedIds = records.Select(r => r.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var rows = landed.Select(g => BuildRow(g, receipts, end, landingBySha, escapedIds.Contains(g.GoalId))).ToArray();
+        var revertedIds = (revertAttribution?.Matches ?? []).Where(m => m.GoalId is not null)
+            .Select(m => m.GoalId!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rows = landed.Select(g => BuildRow(g, receipts, end, landingBySha,
+            escapedIds.Contains(g.GoalId), revertedIds.Contains(g.GoalId))).ToArray();
         var nonLanded = goals.Count(g => g.LandedAt is null &&
             g.Timeline.Any(e => e.OperatorIntentApplied is not null && e.OccurredAt >= start && e.OccurredAt < end));
         var interventionTotals = new OwnerDigestActorTotals(
@@ -113,7 +118,8 @@ public static class OwnerDigestReport
             latestDecisions.Add(new(goal.GoalId, decision.Stage, decision.Action, decision.Rung,
                 decision.DiscriminatingEvidence, decision.OccurredAt));
         }
-        return new OwnerDigestResult(start, end, "not tracked", rows, totals,
+        var reverts = revertAttribution?.Count.ToString(CultureInfo.InvariantCulture) ?? "not tracked";
+        return new OwnerDigestResult(start, end, reverts, rows, totals,
             nonLanded, malformedLifecycleLines, records.Length == 0 ? null : records)
         {
             LatestDecisions = new(latestDecisions.OrderByDescending(d => d.OccurredAt)
@@ -124,7 +130,7 @@ public static class OwnerDigestReport
     private static OwnerDigestGoalRow BuildRow(
         OwnerDigestGoalInput goal, IReadOnlyList<OwnerDigestCanaryReceipt> receipts,
         DateTimeOffset end, IReadOnlyDictionary<string, DateTimeOffset> landingBySha,
-        bool recordedEscape)
+        bool recordedEscape, bool revertedEscape)
     {
         var landedAt = goal.LandedAt!.Value;
         var events = goal.Timeline.Where(e => e.OccurredAt <= landedAt)
@@ -170,6 +176,8 @@ public static class OwnerDigestReport
         var canaryFailed = matching.Any(r => !r.Passed);
         var source = canaryFailed ? (recordedEscape ? "canary,record" : "canary") :
             recordedEscape ? "record" : null;
+        if (revertedEscape)
+            source = source is null ? "revert" : source + ",revert";
         var status = source is not null ? "escape" : matching.Length == 0 ? "pending" : "correct";
         return new OwnerDigestGoalRow(goal.GoalId, landedAt, goal.LandingSha,
             interventions, status, tail, new OwnerDigestHours(human, agent, other),
