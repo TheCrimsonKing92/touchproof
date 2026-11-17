@@ -1,11 +1,19 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal enum ConductorMaxDurationInFlightKind
+{
+    AcceptanceAttempt,
+    WorkerDispatch
+}
 
 internal sealed record ConductorMaxDurationInFlightAttempt(
     string AttemptId,
     IReadOnlyList<string> GoalIds,
-    DateTimeOffset StartedAt);
+    DateTimeOffset StartedAt,
+    ConductorMaxDurationInFlightKind Kind = ConductorMaxDurationInFlightKind.AcceptanceAttempt);
 
 internal enum ConductorMaxDurationStopVerdictKind
 {
@@ -58,13 +66,19 @@ internal static class ConductorMaxDurationStopDeferral
         DateTimeOffset deferralStartedAt,
         TimeSpan ceiling,
         IReadOnlyList<ConductorMaxDurationInFlightAttempt> attempts,
-        Exception? snapshotFailure = null) =>
-        $"LOOP_STOP_DEFERRED tick={tick} reason=max-duration " +
-        $"deferral_started_at={deferralStartedAt:O} ceiling_ms={Math.Max(0L, (long)ceiling.TotalMilliseconds)} " +
-        $"attempts={string.Join(',', attempts.Select(attempt => attempt.AttemptId))} " +
-        $"attempt_elapsed_ms={string.Join(',', attempts.Select(attempt => $"{attempt.AttemptId}:{Math.Max(0L, (long)(utcNow - attempt.StartedAt).TotalMilliseconds)}"))} " +
-        $"attempt_started_at={string.Join(',', attempts.Select(attempt => $"{attempt.AttemptId}:{attempt.StartedAt:O}"))}" +
-        (snapshotFailure is null ? string.Empty : $" inflightStateUnavailable=true error={snapshotFailure.GetType().Name}");
+        Exception? snapshotFailure = null)
+    {
+        var acceptanceAttempts = attempts
+            .Where(attempt => attempt.Kind == ConductorMaxDurationInFlightKind.AcceptanceAttempt)
+            .ToArray();
+        return $"LOOP_STOP_DEFERRED tick={tick} reason=max-duration " +
+            $"deferral_started_at={deferralStartedAt:O} ceiling_ms={Math.Max(0L, (long)ceiling.TotalMilliseconds)} " +
+            $"attempts={string.Join(',', acceptanceAttempts.Select(attempt => attempt.AttemptId))} " +
+            $"attempt_elapsed_ms={string.Join(',', acceptanceAttempts.Select(attempt => $"{attempt.AttemptId}:{Math.Max(0L, (long)(utcNow - attempt.StartedAt).TotalMilliseconds)}"))} " +
+            $"attempt_started_at={string.Join(',', acceptanceAttempts.Select(attempt => $"{attempt.AttemptId}:{attempt.StartedAt:O}"))}" +
+            FormatWorkerDetail(attempts) +
+            (snapshotFailure is null ? string.Empty : $" inflightStateUnavailable=true error={snapshotFailure.GetType().Name}");
+    }
 
     internal static string FormatStopDetail(
         TimeSpan maxDuration,
@@ -74,7 +88,10 @@ internal static class ConductorMaxDurationStopDeferral
         var detail = $"seconds={(int)maxDuration.TotalSeconds}";
         if (verdict.Kind == ConductorMaxDurationStopVerdictKind.StopExpired)
         {
-            detail += $" deferralExpired=true attempts={string.Join(',', verdict.Attempts.Select(attempt => attempt.AttemptId))}";
+            detail += $" deferralExpired=true attempts={string.Join(',', verdict.Attempts
+                .Where(attempt => attempt.Kind == ConductorMaxDurationInFlightKind.AcceptanceAttempt)
+                .Select(attempt => attempt.AttemptId))}";
+            detail += FormatWorkerDetail(verdict.Attempts);
         }
 
         if (snapshotFailure is not null)
@@ -84,15 +101,59 @@ internal static class ConductorMaxDurationStopDeferral
 
         return detail;
     }
+
+    private static string FormatWorkerDetail(IReadOnlyList<ConductorMaxDurationInFlightAttempt> attempts)
+    {
+        var workerIds = attempts
+            .Where(attempt => attempt.Kind == ConductorMaxDurationInFlightKind.WorkerDispatch)
+            .Select(attempt => attempt.AttemptId)
+            .ToArray();
+        return workerIds.Length == 0 ? string.Empty : $" workers={string.Join(',', workerIds)}";
+    }
 }
 
-internal sealed partial class ConductorBatchLoop
+internal static class ConductorMaxDurationSnapshotBuilder
 {
-    private sealed record MaxDurationAcceptanceSnapshot(
+    internal sealed record Snapshot(
         IReadOnlyList<ConductorMaxDurationInFlightAttempt> Attempts,
         Exception? Failure = null);
 
-    private static MaxDurationAcceptanceSnapshot BuildMaxDurationAcceptanceSnapshot(
+    internal static Snapshot Build(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        string? onlyGoalId,
+        IReadOnlySet<string>? trackedAttemptIds)
+    {
+        var snapshot = BuildMaxDurationAcceptanceSnapshot(kernel, driver, trackedAttemptIds);
+        return onlyGoalId is null
+            ? snapshot
+            : snapshot with
+            {
+                Attempts = snapshot.Attempts
+                    .Concat(BuildMaxDurationWorkerSnapshot(kernel, onlyGoalId, trackedAttemptIds))
+                    .ToArray()
+            };
+    }
+
+    private static IReadOnlyList<ConductorMaxDurationInFlightAttempt> BuildMaxDurationWorkerSnapshot(
+        AgentOrchestratorKernel kernel,
+        string onlyGoalId,
+        IReadOnlySet<string>? trackedAttemptIds) =>
+        kernel.Goals
+            .Where(goal => goal.Id.Value == onlyGoalId)
+            .SelectMany(goal => goal.Tasks)
+            .Where(task => task.LastProcess is { } process &&
+                (process.IsRunning || task.CompletionBuildEvidence is { IsPending: true } ||
+                 DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process)))
+            .Select(task => new ConductorMaxDurationInFlightAttempt(
+                $"worker:{task.Id.Value}:{task.LastProcess!.ProcessId}",
+                [onlyGoalId],
+                task.LastProcess!.StartedAt,
+                ConductorMaxDurationInFlightKind.WorkerDispatch))
+            .Where(attempt => trackedAttemptIds is null || trackedAttemptIds.Contains(attempt.AttemptId))
+            .ToArray();
+
+    private static Snapshot BuildMaxDurationAcceptanceSnapshot(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
         IReadOnlySet<string>? trackedAttemptIds)
@@ -117,11 +178,11 @@ internal sealed partial class ConductorBatchLoop
                     root.Key,
                     root.MemberGoalIds.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
                     root.StartedAt)));
-            return new MaxDurationAcceptanceSnapshot(attempts);
+            return new Snapshot(attempts);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            return new MaxDurationAcceptanceSnapshot([], ex);
+            return new Snapshot([], ex);
         }
     }
 }
