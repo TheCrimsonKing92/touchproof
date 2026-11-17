@@ -152,35 +152,39 @@ public sealed class ResolveRunDirLifecycleTests
         try
         {
             var appDll = CreateOutput(root);
+            // Publish the helper as part of the expected closure so its own executable path
+            // matches process capture without adding an extra file to the damaged run.
+            File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                Path.Combine(Path.GetDirectoryName(appDll)!, "cmd.exe"));
             var first = Resolve(root, appDll);
             Assert.True(first.ExitCode == 0, first.Stderr);
             var run = first.Stdout.Trim();
             var basePath = Path.GetDirectoryName(run)!;
             var markerPath = Path.Combine(run, ".mcg-run-closure.json");
             using var marker = JsonDocument.Parse(File.ReadAllText(markerPath));
-            var holderScript = Path.Combine(root, "holder.ps1");
+            var holderScript = Path.Combine(root, "holder.cmd");
             File.WriteAllText(holderScript, """
-                param([string]$AppDll)
-                $ErrorActionPreference = 'Stop'
-                $stream = [IO.File]::Open($AppDll, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-                try {
-                    [Console]::Out.WriteLine('holding')
-                    [Console]::Out.Flush()
-                    $null = [Console]::In.ReadLine()
-                }
-                finally { $stream.Dispose() }
+                @echo off
+                (
+                    echo holding
+                    set /p release=
+                ) 3< "%~1"
                 """);
-            var startInfo = new ProcessStartInfo("powershell.exe")
+            // Handle 3 holds the app DLL while stdin remains available for the release signal.
+            var startInfo = new ProcessStartInfo(Path.Combine(run, "cmd.exe"))
             {
+                Arguments = $"/d /q /c \"\"{holderScript}\" \"{Path.Combine(run, Path.GetFileName(appDll))}\"\"",
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-                         holderScript, Path.Combine(run, Path.GetFileName(appDll)) })
-                startInfo.ArgumentList.Add(argument);
+            startInfo.Environment.Clear();
+            foreach (var name in new[] { "SystemRoot", "WINDIR", "COMSPEC", "PATH", "PATHEXT" })
+                startInfo.Environment[name] = Environment.GetEnvironmentVariable(name);
+            startInfo.Environment["TEMP"] = root;
+            startInfo.Environment["TMP"] = root;
             holder = Process.Start(startInfo) ?? throw new InvalidOperationException("Holder did not start.");
             var holderErrors = holder.StandardError.ReadToEndAsync();
             var ready = await TestHangGuard.WaitAsync(holder.StandardOutput.ReadLineAsync(), "app DLL holder ready signal");
@@ -206,7 +210,7 @@ public sealed class ResolveRunDirLifecycleTests
             foreach (var section in new[] { "expected", "marker" })
             {
                 Assert.Equal(Path.GetFileName(run), evidence.GetProperty(section).GetProperty("digest").GetString());
-                Assert.Equal(3, evidence.GetProperty(section).GetProperty("fileCount").GetInt32());
+                Assert.Equal(4, evidence.GetProperty(section).GetProperty("fileCount").GetInt32());
             }
             Assert.Equal(marker.RootElement.GetProperty("sealedAtUtc").GetDateTimeOffset(),
                 evidence.GetProperty("marker").GetProperty("sealedAtUtc").GetDateTimeOffset());
@@ -214,8 +218,12 @@ public sealed class ResolveRunDirLifecycleTests
                 entry => entry.GetProperty("processId").GetInt32() == holder.Id);
             var recordedStart = process.GetProperty("startTimeUtc").GetDateTimeOffset();
             Assert.Equal(TimeSpan.Zero, recordedStart.Offset);
-            Assert.InRange((recordedStart.UtcDateTime - holderStartedAt).Duration(), TimeSpan.Zero, TimeSpan.FromSeconds(1));
-            Assert.Equal(new[] { ".mcg-run-closure.json", "Mcg.AgentOrchestrator.App.dll", "dependency.dll",
+            Assert.Equal(holderStartedAt, recordedStart.UtcDateTime);
+            Assert.Equal(Path.Combine(run, "cmd.exe"), process.GetProperty("executablePath").GetString());
+            Assert.Equal(JsonValueKind.Null, process.GetProperty("commandLine").ValueKind);
+            Assert.Contains(evidence.GetProperty("captureErrors").EnumerateArray(),
+                error => error.GetString()!.Contains("command lines are unavailable", StringComparison.Ordinal));
+            Assert.Equal(new[] { ".mcg-run-closure.json", "Mcg.AgentOrchestrator.App.dll", "cmd.exe", "dependency.dll",
                     "runtimes/win-x64/native/e_sqlite3.dll" }.Order(StringComparer.Ordinal),
                 Directory.GetFiles(run, "*", SearchOption.AllDirectories)
                     .Select(path => Path.GetRelativePath(run, path).Replace('\\', '/')).Order(StringComparer.Ordinal));

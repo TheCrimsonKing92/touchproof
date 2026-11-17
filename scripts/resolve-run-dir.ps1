@@ -432,9 +432,9 @@ function Write-PublishedRunDirectoryInventory {
         $runPrefix = $runRoot + [IO.Path]::DirectorySeparatorChar
         $unreadableProcesses = 0
         try {
-            foreach ($process in [Diagnostics.Process]::GetProcesses()) {
+            foreach ($process in (Get-Process -ErrorAction Stop)) {
                 try {
-                    $executablePath = $process.MainModule.FileName
+                    $executablePath = $process.Path
                     if ([string]::IsNullOrWhiteSpace($executablePath)) {
                         $unreadableProcesses++
                         continue
