@@ -2,6 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 // Parallel-safe: pure parsing or an owned workspace/database; model and git are fake.
 public sealed class CostGoalOutcomeMetricTests
@@ -126,14 +127,46 @@ public sealed class CostGoalOutcomeMetricTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AuthorPaths_CostTagWithoutMetric_ReturnFailedCheck(bool revision)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AuthorPaths_CostTagOrEpicWithoutMetric_KeepStoresUnchanged(bool revision, bool costEpic)
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
-        await fixture.Store.UpdateAsync(fixture.Item.Id, new BacklogItemUpdate(Tags: "cost"));
+        byte[]? portfolioBefore = null;
+        if (costEpic)
+        {
+            const string epicId = "79801150abcdef0123456789abcdef01";
+            var portfolio = new PortfolioStore(fixture.Workspace.PortfolioStorePath);
+            var epic = await portfolio.AddEpicAsync("Cost goals");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = fixture.Workspace.PortfolioStorePath, Pooling = false
+            }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE epics SET id = $id WHERE id = $original";
+                command.Parameters.AddWithValue("$id", epicId);
+                command.Parameters.AddWithValue("$original", epic.Id);
+                Assert.Equal(1, command.ExecuteNonQuery());
+                // Make accidental setup observable even with a current schema version.
+                // Membership reads do not require this optional lookup index.
+                command.CommandText = "DROP INDEX idx_epics_title";
+                command.ExecuteNonQuery();
+            }
+            await portfolio.AssignBacklogItemToEpicAsync(fixture.Item.Id, epicId);
+            Assert.Equal(epicId, (await PortfolioStore.OpenReadOnly(fixture.Workspace.PortfolioStorePath)
+                .GetBacklogMembershipAsync(fixture.Item.Id))!.EpicId);
+            portfolioBefore = File.ReadAllBytes(fixture.Workspace.PortfolioStorePath);
+        }
+        else
+            await fixture.Store.UpdateAsync(fixture.Item.Id, new BacklogItemUpdate(Tags: "cost"));
         var databaseBefore = File.ReadAllBytes(fixture.Workspace.BacklogStorePath);
-        Assert.Equal("cost", AuthorBriefDraftBacklog.Read(fixture.Workspace.BacklogStorePath, fixture.Item.Id).Tags);
+        var sourceItem = AuthorBriefDraftBacklog.Read(fixture.Workspace.BacklogStorePath, fixture.Item.Id);
+        if (costEpic) Assert.False(BoardFillReadyItemSelector.HasTag(sourceItem, "cost"));
+        else Assert.Equal("cost", sourceItem.Tags);
         WorkerProcessRunResult Draft() => new(0, JsonSerializer.Serialize(new
         {
             kind = "draft", markdown = CliAuthorDraftCommandTests.ValidMarkdown
@@ -159,5 +192,7 @@ public sealed class CostGoalOutcomeMetricTests
         Assert.Contains("no well-formed ## Outcome metric line", check.Detail);
         Assert.All(checks.Where(check => check.Name != CostGoalOutcomeMetric.CheckName), check => Assert.True(check.Passed, check.Detail));
         Assert.Equal(databaseBefore, File.ReadAllBytes(fixture.Workspace.BacklogStorePath));
+        if (portfolioBefore is not null)
+            Assert.Equal(portfolioBefore, File.ReadAllBytes(fixture.Workspace.PortfolioStorePath));
     }
 }

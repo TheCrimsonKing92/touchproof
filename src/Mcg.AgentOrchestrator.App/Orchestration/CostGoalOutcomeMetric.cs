@@ -27,7 +27,7 @@ internal static class CostGoalOutcomeMetric
     internal static bool IsCostBacklogItem(BacklogItem item, OrchestratorWorkspace workspace)
     {
         var membership = File.Exists(workspace.PortfolioStorePath)
-            ? new PortfolioStore(workspace.PortfolioStorePath).GetBacklogMembershipAsync(item.Id).GetAwaiter().GetResult()
+            ? PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).GetBacklogMembershipAsync(item.Id).GetAwaiter().GetResult()
             : null;
         return IsCostBacklogItem(item, membership?.EpicId);
     }
