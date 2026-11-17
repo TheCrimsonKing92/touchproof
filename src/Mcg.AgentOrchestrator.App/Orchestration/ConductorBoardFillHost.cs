@@ -12,6 +12,7 @@ internal sealed partial class ConductorBoardFillHost
     internal readonly Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> _readiness;
     private readonly Func<ConductorAutonomyPolicy> _policy;
     private readonly ConductEventLogWriter _events;
+    private readonly BoardBelowTargetMonitor _belowTarget = new();
     private readonly BoardFillEpicMissingQuestion _epicMembership;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?> _mainHead;
@@ -79,6 +80,15 @@ internal sealed partial class ConductorBoardFillHost
         var errors = policy.Validate();
         if (errors.Count != 0) throw new InvalidOperationException(string.Join("; ", errors));
         var now = _utcNow();
+        var reason = ServiceDraftTick(kernel, policy, now);
+        var detail = _belowTarget.Observe(kernel.Goals.Count(goal => !goal.IsTerminal),
+            policy.BoardFillTargetActiveGoals, _round is not null || _filing is not null ? null : reason, now);
+        if (detail is not null) _events.AppendRequired("board-fill-draft", null, detail, now);
+    }
+
+    private string? ServiceDraftTick(AgentOrchestratorKernel kernel, ConductorAutonomyPolicy policy,
+        DateTimeOffset now)
+    {
         _stalledEpics?.Service(now);
         _kernel = kernel;
         if (!_recovered)
@@ -93,21 +103,24 @@ internal sealed partial class ConductorBoardFillHost
         ReportFinished();
         var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
         var epicMembers = _epicMembership.Read(items, now);
-        if (epicMembers is null) return;
+        if (epicMembers is null) return null;
         ServiceFiling(items, epicMembers);
         // Admission refreshes membership on the filing thread; wait for that observation before spending another draft.
-        if (held || _round is not null || _filing is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
-            _store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay) return;
+        if (held || _round is not null || _filing is not null ||
+            kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals) return null;
+        if (_store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay)
+            return policy.BoardFillMode == ConductorBoardFillMode.Shadow
+                ? BoardBelowTargetMonitor.ModeNotFile : BoardBelowTargetMonitor.DailyCapReached;
         if (_heldMainHead is not null)
         {
             string? mainHead;
             try { mainHead = _mainHead(); }
-            catch { return; } // An unresolved head cannot release a repository hold.
+            catch { return null; } // An unresolved head cannot release a repository hold.
             if (string.IsNullOrWhiteSpace(mainHead) ||
-                string.Equals(mainHead, _heldMainHead, StringComparison.OrdinalIgnoreCase)) return;
+                string.Equals(mainHead, _heldMainHead, StringComparison.OrdinalIgnoreCase)) return null;
             _heldMainHead = null;
         }
-        if (_trackedEditsHold.Blocks(now)) return;
+        if (_trackedEditsHold.Blocks(now)) return null;
         string? observedMain;
         try { observedMain = _staleMainHead(); }
         catch { observedMain = null; }
@@ -126,10 +139,13 @@ internal sealed partial class ConductorBoardFillHost
             observedMain, epicMembers: epicMembers, epicMissing: missing => _epicMembership.Ask(missing, now),
             nearDuplicate: BoardFillNearDuplicate.Lookup(items, goals, rounds, now),
             nearDuplicateSkipped: AnnotateNearDuplicate);
-        if (item is null) return;
+        if (item is null)
+            return policy.BoardFillMode == ConductorBoardFillMode.Shadow ? BoardBelowTargetMonitor.ModeNotFile
+                : stopped.Count > 0 ? BoardBelowTargetMonitor.AuthorRefusalStreak : BoardBelowTargetMonitor.NoReadyItem;
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
         _round = Task.Run(() => RunRoundAsync(item.Id));
+        return null;
     }
 
     private void AnnotateNearDuplicate(BacklogItem item, BoardFillNearDuplicateReference reference)

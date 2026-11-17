@@ -68,6 +68,8 @@ internal sealed record TerminalGoalSweepResult(
     public long MergeEvidenceDurationMs { get; init; }
     public long GoalsDurationMs { get; init; }
     public long OwnedRootDurationMs { get; init; }
+    public TerminalGoalSweepRunTiming RunTiming { get; init; } = TerminalGoalSweepRunTiming.None;
+    public bool CacheConsulted { get; init; }
     public int GitSpawnCount { get; init; }
     public int GoalsSweptCount { get; init; }
     public int TerminalGoalsSweptCount { get; init; }
@@ -419,6 +421,8 @@ internal static partial class TerminalGoalSweep
         bool reclaimGoalRoots = false,
         BackgroundDispatchRunner? dispatchRunner = null)
     {
+        var runTiming = System.Diagnostics.Stopwatch.StartNew();
+        var setupTiming = System.Diagnostics.Stopwatch.StartNew();
         gitRunner ??= DefaultGitRunner;
         var gitRunnerIdentity = gitRunner;
         var gitSpawnCounter = new GitSpawnCounter();
@@ -447,6 +451,7 @@ internal static partial class TerminalGoalSweep
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(reconciliationStatePath, executionDirectory),
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(orchestratorDirectory, workspace.LogDirectory)
         };
+        setupTiming.Stop();
         var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
         var ownedRoots = ConductorTickStepLedger.Measure("owned-root-reap", () => ReapOwnedBuildRoots(workspace.SqliteStatePath, reclaimGoalRoots));
         ownedRootTiming.Stop();
@@ -1032,8 +1037,12 @@ internal static partial class TerminalGoalSweep
         }
         goalsTiming.Stop();
 
+        var cacheFlushTiming = System.Diagnostics.Stopwatch.StartNew();
+        TerminalGoalSweepRunTiming.BeforeCacheFlush(cache);
         cache?.Flush();
-        return new TerminalGoalSweepResult(
+        cacheFlushTiming.Stop();
+        var goalLoopRemainder = goalsTiming.Elapsed - TimeSpan.FromMilliseconds(goalDurations.Sum(item => item.ElapsedMs));
+        var result = new TerminalGoalSweepResult(
             results,
             CountGlobalStaleTerminalExclusions(results),
             cacheHits,
@@ -1044,6 +1053,7 @@ internal static partial class TerminalGoalSweep
             TerminalizedGoalIds: terminalizedGoalIds)
         {
             TerminalizationDecisions = terminalizationDecisions,
+            CacheConsulted = cache is not null,
             GitIndexDurationMs = gitIndexTiming.ElapsedMilliseconds,
             EvidenceDurationMs = evidenceTiming.ElapsedMilliseconds,
             EphemeralDurationMs = ephemeralTiming.ElapsedMilliseconds,
@@ -1056,6 +1066,12 @@ internal static partial class TerminalGoalSweep
             TerminalGoalsSweptCount = terminalGoalsSweptCount,
             GoalDurations = goalDurations,
             OwnedRoots = ownedRoots
+        };
+        runTiming.Stop();
+        return result with
+        {
+            RunTiming = new(runTiming.Elapsed, setupTiming.Elapsed,
+                cache is null ? TimeSpan.Zero : cacheFlushTiming.Elapsed, goalLoopRemainder)
         };
     }
 

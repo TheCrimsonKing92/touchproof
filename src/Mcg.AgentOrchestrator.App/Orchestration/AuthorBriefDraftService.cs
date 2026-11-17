@@ -46,6 +46,7 @@ internal static class AuthorBriefDraftService
             var stem = $"{item.Id[..8]}-{(utcNow ?? (() => DateTimeOffset.UtcNow))():yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
             Directory.CreateDirectory(directory);
             receiptPath = Path.Combine(directory, stem + ".receipt.json");
+            var measureTagged = AuthorBriefDraftMeasurementOnlyCheck.IsMeasureTagged(workspace.BacklogStorePath, item.Id);
             var resolvedModel = ConductorRoundModelResolver.Resolve(seams.Catalog, ModelFunctionPurposes.ConductorAuthor);
             model = resolvedModel.Alias;
             var repository = seams.Repository.ResolveMainHeadOrTrackedEdits();
@@ -62,7 +63,7 @@ internal static class AuthorBriefDraftService
             var stack = GoalIntakeTargetStack.For(workspace);
             var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
                 .Select(ConductorLessonSelector.AuthorTags("brief"));
-            var initialPrompt = AuthorBriefDraftPrompt.Render(item, lessons, mainHead, stack);
+            var initialPrompt = AuthorBriefDraftPrompt.Render(item, lessons, mainHead, stack, measureTagged: measureTagged);
             IReadOnlyList<string> roundDependencyGoals = [];
             IReadOnlyList<string> retainedDependencyGoals = [];
             var round = Dispatch(initialPrompt);
@@ -91,7 +92,7 @@ internal static class AuthorBriefDraftService
             {
                 retainedDependencyGoals = roundDependencyGoals;
                 var draftChecks = AuthorBriefDraftChecks.Run(markdown, mainHead, seams.Repository, stack,
-                    retainedDependencyGoals);
+                    retainedDependencyGoals, measureTagged: measureTagged);
                 var findings = BriefLint.Lint(markdown, workspace.ExecutionDirectory);
                 return new(markdown, [.. draftChecks, .. findings
                     .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
