@@ -73,6 +73,7 @@ public sealed class PartialGoalStoreBuildRootRetentionScenarioTests : IDisposabl
         var unstored = CreateLeaseless("aaaa0003");
         var activeBefore = Snapshot(active);
         var terminalBytes = Size(terminal);
+        var activeBytes = Size(active);
         var unstoredBytes = Size(unstored);
         Assert.True(StateDbMigrations.IsUpToDate(Db));
         Assert.True(StateDbMigrations.IsUpToDate(projectDb));
@@ -83,7 +84,7 @@ public sealed class PartialGoalStoreBuildRootRetentionScenarioTests : IDisposabl
         Assert.False(Directory.Exists(unstored));
         Assert.Equal(activeBefore, Snapshot(active));
         Assert.Equal(FormattableString.Invariant(
-            $"SWEEP_BUILD_ROOT_RETENTION window-days=7 reclaimed=1 bytes={terminalBytes} skipped=2 reasons=goal-not-stored:1,goal-not-terminal:1"), StoredSummary(result));
+            $"SWEEP_BUILD_ROOT_RETENTION window-days=7 reclaimed=1 bytes={terminalBytes} skipped=2 reasons=goal-not-stored:1,goal-not-terminal:1 size-budget-bytes=none goal-root-bytes={activeBytes + unstoredBytes} retained-not-terminal-bytes={activeBytes} retained-window-bytes=0 retained-owner-bytes=0 incomplete-roots=0"), StoredSummary(result));
         Assert.Equal(FormattableString.Invariant(
             $"SWEEP_UNSTORED_BUILD_ROOT_RETENTION window-days=7 inspected=1 reclaimed=1 bytes={unstoredBytes} kept=1 reasons=goal-stored:1"), UnstoredSummary(result));
         var events = result.OperatorEvents.ToList();
@@ -152,7 +153,7 @@ public sealed class PartialGoalStoreBuildRootRetentionScenarioTests : IDisposabl
 
         var result = Sweep();
 
-        Assert.Equal("SWEEP_BUILD_ROOT_RETENTION window-days=7 reclaimed=0 bytes=0 skipped=1 reasons=goal-not-stored:1 unavailable-stores=price-selector:read-failed unstored-skipped=goal-store-unavailable", StoredSummary(result));
+        Assert.Equal(FormattableString.Invariant($"SWEEP_BUILD_ROOT_RETENTION window-days=7 reclaimed=0 bytes=0 skipped=1 reasons=goal-not-stored:1 size-budget-bytes=none goal-root-bytes={Size(root)} retained-not-terminal-bytes=0 retained-window-bytes=0 retained-owner-bytes=0 incomplete-roots=0 unavailable-stores=price-selector:read-failed unstored-skipped=goal-store-unavailable"), StoredSummary(result));
         Assert.Equal(before, Snapshot(root));
         AssertNoUnstored(result);
     }

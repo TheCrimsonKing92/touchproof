@@ -57,7 +57,8 @@ public sealed record ConductorAutonomyPolicy(
     int BuildRootRetentionDays = 0,
     int AutomaticRetryOperatorRoutingHoldSeconds = 180,
     bool AdoptedBuildPushEnabled = false,
-    int AuthorRecommendationWaitSeconds = 300)
+    int AuthorRecommendationWaitSeconds = 300,
+    long? TerminalBuildRootMaxBytes = null)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
@@ -218,6 +219,8 @@ public sealed record ConductorAutonomyPolicy(
             errors.Add($"buildGcHeapCount must be between 0 and 64 (got {BuildGcHeapCount}).");
         if (BuildRootRetentionDays is < 0 or > 365)
             errors.Add($"buildRootRetentionDays must be between 0 and 365 (got {BuildRootRetentionDays}).");
+        if (TerminalBuildRootMaxBytes is < 0)
+            errors.Add($"terminalBuildRootMaxBytes must be zero or greater (got {TerminalBuildRootMaxBytes}).");
 
         foreach (var state in AllStates)
         {
@@ -256,6 +259,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"buildGcConserveMemoryLevel\": {BuildGcConserveMemoryLevel},");
         sb.AppendLine($"  \"buildGcHeapCount\": {BuildGcHeapCount},");
         sb.AppendLine($"  \"buildRootRetentionDays\": {BuildRootRetentionDays},");
+        sb.AppendLine($"  \"terminalBuildRootMaxBytes\": {TerminalBuildRootMaxBytes?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null"},");
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null"},");
@@ -414,6 +418,14 @@ public sealed record ConductorAutonomyPolicy(
                         $"conductor-policy.json{src}: buildRootRetentionDays must be an integer.");
                 buildRootRetentionDays = RequireInt(root, "buildRootRetentionDays", src);
             }
+            long? terminalBuildRootMaxBytes = null;
+            if (root.TryGetProperty("terminalBuildRootMaxBytes", out var maxBytesElement) &&
+                maxBytesElement.ValueKind != JsonValueKind.Null)
+            {
+                if (maxBytesElement.ValueKind != JsonValueKind.Number || !maxBytesElement.TryGetInt64(out var maxBytes))
+                    throw new FormatException($"conductor-policy.json{src}: terminalBuildRootMaxBytes must be an integer or null.");
+                terminalBuildRootMaxBytes = maxBytes;
+            }
             var cascadeTesterCheapFirst = true;
             if (root.TryGetProperty("cascadeTesterCheapFirst", out var cascadeSwitch) &&
                 cascadeSwitch.ValueKind != JsonValueKind.Null)
@@ -532,7 +544,8 @@ public sealed record ConductorAutonomyPolicy(
                 buildRootRetentionDays,
                 routingHoldSeconds,
                 adoptedBuildPushEnabled,
-                authorRecommendationWaitSeconds)
+                authorRecommendationWaitSeconds,
+                terminalBuildRootMaxBytes)
             {
                 Features = ParseFeatures(root, src)
             };
