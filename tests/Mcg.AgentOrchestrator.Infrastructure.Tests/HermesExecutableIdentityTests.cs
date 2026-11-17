@@ -131,6 +131,134 @@ public sealed class HermesExecutableIdentityTests
     }
 
     [Xunit.Fact]
+    public void ValidateReceiptContextVariantsPreserveEveryAcceptanceAndRefusal()
+    {
+        using var fixture = new HermesIdentityTestFixture();
+        var now = new DateTimeOffset(2026, 9, 6, 0, 0, 0, TimeSpan.Zero);
+        var valid = fixture.Receipt(now); // The original 15-argument constructor leaves context null.
+        Assert.Null(valid.LaunchContext);
+        (string Name, HermesExecutableIdentityReceipt? Receipt, HermesIdentityRefusal? Reason)[] cases =
+        [
+            ("fresh", valid, null),
+            ("maximum age", valid with { VerifiedAtUtc = now - TimeSpan.FromMinutes(1) }, null),
+            ("missing", null, HermesIdentityRefusal.ReceiptMissing),
+            ("stale", valid with { VerifiedAtUtc = now - TimeSpan.FromMinutes(1) - TimeSpan.FromTicks(1) }, HermesIdentityRefusal.ReceiptStale),
+            ("future", valid with { VerifiedAtUtc = now + TimeSpan.FromTicks(1) }, HermesIdentityRefusal.ReceiptStale),
+            ("release", valid with { Release = "v1900.1.1" }, HermesIdentityRefusal.ReceiptPinMismatch),
+            ("head", valid with { HeadCommit = new string('0', 40) }, HermesIdentityRefusal.ReceiptPinMismatch),
+            ("tag", valid with { TagObject = new string('0', 40) }, HermesIdentityRefusal.ReceiptPinMismatch),
+            ("peel", valid with { PeeledCommit = new string('0', 40) }, HermesIdentityRefusal.ReceiptPinMismatch),
+            ("dirty", valid with { WorkingTreeClean = false }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("exit", valid with { VersionExitCode = 1 }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("job", valid with { VersionJobExitConfirmed = false }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("install method", valid with { InstallMethod = "pip" }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("install root mismatch", valid with { ReportedInstallDirectory = Path.Combine(fixture.Root, "other") }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("empty image", valid with { ImagePath = " " }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("empty root", valid with { InstallRoot = " " }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("empty reported root", valid with { ReportedInstallDirectory = " " }, HermesIdentityRefusal.ReceiptEvidenceInvalid),
+            ("malformed path", valid with { InstallRoot = "\0" }, HermesIdentityRefusal.ReceiptEvidenceInvalid)
+        ];
+        HermesLaunchContext?[] contexts =
+        [
+            null,
+            new(HermesIntegrityLevel.FromRid(0x1000), true),
+            new(HermesIntegrityLevel.FromRid(0x1234), false),
+            new(HermesIntegrityLevel.Unavailable("fixture query refused"), false)
+        ];
+
+        foreach (var testCase in cases)
+        {
+            var baseline = Outcome(testCase.Receipt);
+            Assert.True(testCase.Reason == baseline.Reason, $"Unexpected baseline for {testCase.Name}: {baseline}");
+            foreach (var context in contexts)
+            {
+                var variant = testCase.Receipt is null ? null : testCase.Receipt with { LaunchContext = context };
+                Assert.Equal(baseline, Outcome(variant));
+            }
+        }
+
+        (HermesIdentityRefusal? Reason, string? Message) Outcome(HermesExecutableIdentityReceipt? receipt)
+        {
+            var exception = Record.Exception(() =>
+                GitHermesExecutableIdentityVerifier.ValidateReceipt(receipt, now, fixture.Pin));
+            if (exception is null) return (null, null);
+            var refusal = Assert.IsType<HermesIdentityException>(exception);
+            return (refusal.Reason, refusal.Message);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0x0000, "Untrusted")]
+    [Xunit.InlineData(0x1000, "Low")]
+    [Xunit.InlineData(0x2000, "Medium")]
+    [Xunit.InlineData(0x2100, "MediumPlus")]
+    [Xunit.InlineData(0x3000, "High")]
+    [Xunit.InlineData(0x4000, "System")]
+    [Xunit.InlineData(0x5000, "Protected")]
+    [Xunit.InlineData(0x1234, "Other")]
+    [Xunit.InlineData(-1, "Other")]
+    public void IntegrityRidPreservesRawValueAndDistinguishesUnknown(int rid, string expectedKind)
+    {
+        var integrity = HermesIntegrityLevel.FromRid(unchecked((uint)rid));
+
+        Assert.Equal(expectedKind, integrity.Kind.ToString());
+        Assert.Equal(unchecked((uint)rid), integrity.Rid);
+        Assert.Null(integrity.UnavailableReason);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(" ")]
+    [Xunit.InlineData("OpenProcessToken access refused")]
+    public void UnavailableIntegrityAlwaysCarriesReasonWithoutInventingRid(string? reason)
+    {
+        var integrity = HermesIntegrityLevel.Unavailable(reason);
+
+        Assert.Equal(HermesIntegrityLevelKind.Unavailable, integrity.Kind);
+        Assert.Null(integrity.Rid);
+        Assert.False(string.IsNullOrWhiteSpace(integrity.UnavailableReason));
+        if (!string.IsNullOrWhiteSpace(reason)) Assert.Equal(reason, integrity.UnavailableReason);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing")]
+    [Xunit.InlineData("invalid")]
+    [Xunit.InlineData("closed")]
+    public void IntegrityReaderUnusableHandleReturnsUnavailable(string handleCase)
+    {
+        using var handle = new Microsoft.Win32.SafeHandles.SafeProcessHandle(
+            handleCase == "closed" ? new IntPtr(1) : IntPtr.Zero, ownsHandle: false);
+        if (handleCase == "closed") handle.Dispose();
+
+        var integrity = HermesLaunchContextReader.ReadIntegrityLevel(handleCase == "missing" ? null : handle);
+
+        Assert.Equal(HermesIntegrityLevelKind.Unavailable, integrity.Kind);
+        Assert.Null(integrity.Rid);
+        Assert.False(string.IsNullOrWhiteSpace(integrity.UnavailableReason));
+    }
+
+    [Xunit.Fact]
+    public void LegacyReceiptWithoutLaunchContextStillDeserializes()
+    {
+        using var fixture = new HermesIdentityTestFixture();
+        var receipt = fixture.Receipt(new DateTimeOffset(2026, 9, 6, 0, 0, 0, TimeSpan.Zero));
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+        var legacyJson = JsonSerializer.Serialize(receipt, options);
+        using var document = JsonDocument.Parse(legacyJson);
+        Assert.False(document.RootElement.TryGetProperty("launchContext", out _));
+
+        var restored = JsonSerializer.Deserialize<HermesExecutableIdentityReceipt>(legacyJson, options);
+
+        Assert.NotNull(restored);
+        Assert.Null(restored.LaunchContext);
+        Assert.Equal(receipt, restored);
+    }
+
+    [Xunit.Fact]
     public void DefaultPinMatchesCheckedTrialPolicy()
     {
         var repositoryRoot = RepositoryRoot();
