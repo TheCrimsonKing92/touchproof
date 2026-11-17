@@ -2,9 +2,103 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using System.Collections.Concurrent;
+using System.Reflection;
 
 public sealed class CollaborationItemStoreTests
 {
+    // Policy cases are parallel-safe: unique database paths also scope diagnostic observations.
+    [Xunit.Fact]
+    public void OpenerAppliesStrictWritablePragmas()
+    {
+        var path = DbPath();
+        long foreignKeys;
+        using (var baseline = new SqliteConnection(new SqliteConnectionStringBuilder
+               {
+                   DataSource = path, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
+               }.ToString()))
+        {
+            baseline.Open();
+            foreignKeys = ReadPragma(baseline, "foreign_keys");
+        }
+
+        var store = new CollaborationItemStore(path);
+        using var connection = OpenThroughStore(store);
+
+        Assert.Equal(30_000L, ReadPragma(connection, "busy_timeout"));
+        Assert.Equal(2L, ReadPragma(connection, "synchronous"));
+        Assert.Equal(67_108_864L, ReadPragma(connection, "journal_size_limit"));
+        Assert.Equal(foreignKeys, ReadPragma(connection, "foreign_keys"));
+    }
+
+    [Xunit.Fact]
+    public void ReadOnlyOpenerAppliesBusyTimeout()
+    {
+        var path = DbPath();
+        _ = new CollaborationItemStore(path);
+        var store = CollaborationItemStore.OpenReadOnly(path);
+        using var connection = OpenThroughStore(store);
+
+        Assert.Equal(30_000L, ReadPragma(connection, "busy_timeout"));
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO collaboration_items (id, type, status, subject, body, raised_at)
+            VALUES ('probe', 'Clarification', 'Raised', 'subject', 'body', '2026-01-01T00:00:00Z')
+            """;
+        var error = Assert.Throws<SqliteException>(() => command.ExecuteNonQuery());
+        Assert.Equal(8, error.SqliteErrorCode); // SQLITE_READONLY
+    }
+
+    [Xunit.Fact]
+    public async Task OpenerAndSetupUseDistinctPolicyTags()
+    {
+        var path = Path.GetFullPath(DbPath());
+        var tags = new ConcurrentQueue<string>();
+        void Observe(string tag, string databasePath)
+        {
+            if (string.Equals(databasePath, path, StringComparison.OrdinalIgnoreCase))
+                tags.Enqueue(tag);
+        }
+
+        SqliteStoreConnectionPolicy.ConnectionOpenedForDiagnostics += Observe;
+        try
+        {
+            var store = new CollaborationItemStore(path);
+            Assert.Equal(new[] { "CollaborationItemStore.Setup" }, tags.ToArray());
+
+            await store.RaiseAsync(CollaborationItemType.Clarification, "goal-one", "Subject", "Body");
+
+            Assert.Equal(new[] { "CollaborationItemStore.Setup", "CollaborationItemStore.Open" }, tags.ToArray());
+        }
+        finally
+        {
+            SqliteStoreConnectionPolicy.ConnectionOpenedForDiagnostics -= Observe;
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task RepeatedUseLeavesDatabaseDeletable()
+    {
+        var path = DbPath();
+        var store = new CollaborationItemStore(path);
+        for (var i = 0; i < 3; i++)
+        {
+            var raised = await store.RaiseAsync(
+                CollaborationItemType.Clarification, "goal-one", $"Subject {i}", "Body");
+            var items = await store.ListAsync();
+            Assert.Equal(i + 1, items.Count);
+            Assert.Contains(items, item => item.Id == raised.Id);
+        }
+
+        Assert.Equal(3, (await CollaborationItemStore.OpenReadOnly(path).ListAsync()).Count);
+        Assert.True(File.Exists(path));
+        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+        {
+            File.Delete(path + suffix);
+            Assert.False(File.Exists(path + suffix));
+        }
+    }
+
     [Xunit.Fact]
     public async Task OpenExistingReadsWithoutCreatingOrMigratingStorage()
     {
@@ -739,6 +833,18 @@ public sealed class CollaborationItemStoreTests
 
     private static string DbPath() =>
         Path.Combine(CreateTempDirectory(), "collab.db");
+
+    private static SqliteConnection OpenThroughStore(CollaborationItemStore store) =>
+        (SqliteConnection)typeof(CollaborationItemStore)
+            .GetMethod("OpenConnection", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(store, null)!;
+
+    private static long ReadPragma(SqliteConnection connection, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA " + name;
+        return (long)command.ExecuteScalar()!;
+    }
 
     private static IReadOnlyList<string> ReadColumnNames(string databasePath)
     {
