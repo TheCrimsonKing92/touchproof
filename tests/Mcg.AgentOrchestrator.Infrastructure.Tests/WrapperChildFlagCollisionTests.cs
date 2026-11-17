@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-public sealed class WrapperChildFlagCollisionGuardTests
+// Behavioral wrapper coverage is selected by its changed file and deferred class,
+// rather than the repository-wide source-policy *GuardTests selection.
+public sealed class WrapperChildFlagCollisionTests
 {
     private static readonly string[] Wrappers =
         ["Invoke-RepoScript.ps1", "Invoke-OrchestratorCommand.ps1", "Start-OrchestratorCommand.ps1"];
@@ -125,6 +127,7 @@ public sealed class WrapperChildFlagCollisionGuardTests
     {
         var command = $$"""
             $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
             $command = Get-Command -Name '{{path.Replace("'", "''", StringComparison.Ordinal)}}' -ErrorAction Stop
             $names = @($command.Parameters.Values | Where-Object { $null -ne $_ } | ForEach-Object {
                 $_.Name
@@ -173,6 +176,7 @@ public sealed class WrapperChildFlagCollisionGuardTests
                     [Parameter(ValueFromRemainingArguments = $true)]
                     [string[]]$Arguments
                 )
+                $ProgressPreference = 'SilentlyContinue'
                 [pscustomobject]@{ args = @($Arguments) } | ConvertTo-Json -Compress
                 """);
         }
