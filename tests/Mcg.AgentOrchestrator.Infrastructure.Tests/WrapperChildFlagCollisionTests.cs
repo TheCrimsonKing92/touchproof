@@ -55,17 +55,18 @@ public sealed class WrapperChildFlagCollisionTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("--name", "Name", "foo")]
-    [Xunit.InlineData("--pipeline", "Pipeline", "five-role")]
-    [Xunit.InlineData("--erroract", null, "Stop")]
+    [Xunit.InlineData("--name", "Name", "foo", "Name")]
+    [Xunit.InlineData("--pipeline", "Pipeline", "five-role", "Pipeline", "PipelineVariable")]
+    [Xunit.InlineData("--erroract", null, "Stop", "ErrorAction")]
     public void OldBinding_EachCollision_IsReportedAndConsumesChildFlag(
-        string flag, string? parameter, string value)
+        string flag, string? parameter, string value, params string[] expectedCollisionNames)
     {
         using var baseline = new BindingStandIn(parameter);
         var bindableNames = ReadBindableNames(baseline.Path);
-        var matchingName = Assert.Single(bindableNames.Where(name =>
-            name.StartsWith(flag[2..], StringComparison.OrdinalIgnoreCase)));
-        Assert.Equal($"{flag} -> {matchingName}", Assert.Single(FindCollisions([flag], bindableNames)));
+        var expectedCollisions = expectedCollisionNames.Select(name => $"{flag} -> {name}")
+            .Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(expectedCollisions,
+            FindCollisions([flag], bindableNames).Order(StringComparer.Ordinal).ToArray());
 
         var stdout = RunPowerShell(["-File", baseline.Path, flag, value]);
         using var capture = JsonDocument.Parse(stdout);
