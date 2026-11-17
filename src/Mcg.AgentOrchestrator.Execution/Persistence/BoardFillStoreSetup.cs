@@ -10,9 +10,9 @@ public static class BoardFillStoreSetup
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
 
-        using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;");
-        connection.Open();
-        RunNonQuery(connection, "PRAGMA busy_timeout=30000");
+        using var connection = SqliteStoreConnectionPolicy.Open(
+            dbPath, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
+            operationTag: "BoardFillStoreSetup.Setup");
         var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.BoardFill);
         if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
             return;

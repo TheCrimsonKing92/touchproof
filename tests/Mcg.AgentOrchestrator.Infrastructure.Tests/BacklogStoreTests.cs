@@ -2,10 +2,202 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
+using System.Collections.Concurrent;
 
 // Parallel-safe: each case owns a unique database directory and disables connection pooling.
 public sealed class BacklogStoreTests
 {
+    [Xunit.Fact]
+    public void PolicyStrictAppliesWritablePragmas()
+    {
+        using var connection = SqliteStoreConnectionPolicy.Open(
+            TempDb(), readOnly: false, SqliteStoreDurability.Strict, foreignKeys: true,
+            operationTag: "strict-test");
+
+        Assert.Equal(30_000L, ReadPragma(connection, "busy_timeout"));
+        Assert.Equal(2L, ReadPragma(connection, "synchronous"));
+        Assert.Equal(67_108_864L, ReadPragma(connection, "journal_size_limit"));
+        Assert.Equal(1L, ReadPragma(connection, "foreign_keys"));
+    }
+
+    [Xunit.Fact]
+    public void PolicyRelaxedAppliesWritablePragmas()
+    {
+        long foreignKeys;
+        using (var baseline = new SqliteConnection(new SqliteConnectionStringBuilder
+               {
+                   DataSource = TempDb(), Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
+               }.ToString()))
+        {
+            baseline.Open();
+            foreignKeys = ReadPragma(baseline, "foreign_keys");
+        }
+
+        using var connection = SqliteStoreConnectionPolicy.Open(
+            TempDb(), readOnly: false, SqliteStoreDurability.Relaxed, foreignKeys: false,
+            operationTag: "relaxed-test");
+
+        Assert.Equal(30_000L, ReadPragma(connection, "busy_timeout"));
+        Assert.Equal(1L, ReadPragma(connection, "synchronous"));
+        Assert.Equal(67_108_864L, ReadPragma(connection, "journal_size_limit"));
+        Assert.Equal(foreignKeys, ReadPragma(connection, "foreign_keys"));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(1234)]
+    public void PolicyTimeoutUsesRequestedMilliseconds(int timeout)
+    {
+        using var connection = SqliteStoreConnectionPolicy.Open(
+            TempDb(), readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
+            operationTag: "timeout-test", busyTimeoutMilliseconds: timeout);
+
+        Assert.Equal((long)timeout, ReadPragma(connection, "busy_timeout"));
+    }
+
+    [Xunit.Fact]
+    public void PolicyRejectsNegativeTimeoutBeforeCreatingDatabase()
+    {
+        var path = TempDb();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => SqliteStoreConnectionPolicy.Open(
+            path, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
+            operationTag: "negative-timeout-test", busyTimeoutMilliseconds: -1));
+        Assert.False(File.Exists(path));
+    }
+
+    [Xunit.Fact]
+    public void PolicyReadOnlyPreservesDefaultsAndRejectsWrites()
+    {
+        var path = TempDb();
+        using (var writable = SqliteStoreConnectionPolicy.Open(
+                   path, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: true,
+                   operationTag: "read-only-arrange"))
+        {
+            RunSetupSql(writable, "CREATE TABLE policy_probe(value INTEGER)");
+        }
+
+        long synchronous, journalSizeLimit, foreignKeys;
+        using (var baseline = new SqliteConnection(new SqliteConnectionStringBuilder
+               {
+                   DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+               }.ToString()))
+        {
+            baseline.Open();
+            synchronous = ReadPragma(baseline, "synchronous");
+            journalSizeLimit = ReadPragma(baseline, "journal_size_limit");
+            foreignKeys = ReadPragma(baseline, "foreign_keys");
+        }
+
+        Assert.NotEqual(67_108_864L, journalSizeLimit);
+        using var connection = SqliteStoreConnectionPolicy.Open(
+            path, readOnly: true, SqliteStoreDurability.Relaxed, foreignKeys: true,
+            operationTag: "read-only-test");
+
+        Assert.Equal(30_000L, ReadPragma(connection, "busy_timeout"));
+        Assert.Equal(synchronous, ReadPragma(connection, "synchronous"));
+        Assert.Equal(journalSizeLimit, ReadPragma(connection, "journal_size_limit"));
+        Assert.Equal(foreignKeys, ReadPragma(connection, "foreign_keys"));
+        var error = Assert.Throws<SqliteException>(() =>
+            RunSetupSql(connection, "INSERT INTO policy_probe VALUES(1)"));
+        Assert.Equal(8, error.SqliteErrorCode); // SQLITE_READONLY
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PolicyDisposeReleasesFilesImmediately(bool readOnly)
+    {
+        var path = TempDb();
+        using (var connection = SqliteStoreConnectionPolicy.Open(
+                   path, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
+                   operationTag: "delete-arrange"))
+        {
+            RunSetupSql(connection, "CREATE TABLE policy_probe(value INTEGER)");
+        }
+
+        if (readOnly)
+        {
+            using var connection = SqliteStoreConnectionPolicy.Open(
+                path, readOnly: true, SqliteStoreDurability.Strict, foreignKeys: false,
+                operationTag: "delete-read-only-test");
+        }
+
+        Assert.True(File.Exists(path));
+        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+        {
+            File.Delete(path + suffix);
+            Assert.False(File.Exists(path + suffix));
+        }
+    }
+
+    [Xunit.Fact]
+    public void SetupsUsePolicyAndPreserveDatabaseBytes()
+    {
+        var boardPath = Path.GetFullPath(Path.Combine(CreateTempDirectory(), "board-fill.db"));
+        var backlogPath = Path.GetFullPath(TempDb());
+        var events = new ConcurrentQueue<(string Tag, string Path)>();
+        void Observe(string tag, string path)
+        {
+            if (path == boardPath || path == backlogPath)
+                events.Enqueue((tag, path));
+        }
+
+        SqliteStoreConnectionPolicy.ConnectionOpenedForDiagnostics += Observe;
+        try
+        {
+            BoardFillStoreSetup.Setup(boardPath);
+            BacklogStore.Setup(backlogPath);
+            var setupEvents = new[]
+            {
+                ("BoardFillStoreSetup.Setup", boardPath),
+                ("BacklogStore.Setup", backlogPath)
+            };
+            Assert.Equal(setupEvents, events.ToArray());
+            var boardBytes = File.ReadAllBytes(boardPath);
+            var backlogBytes = File.ReadAllBytes(backlogPath);
+
+            BoardFillStoreSetup.Setup(boardPath);
+            BacklogStore.Setup(backlogPath);
+
+            Assert.Equal(setupEvents.Concat(setupEvents).ToArray(), events.ToArray());
+            Assert.Equal(boardBytes, File.ReadAllBytes(boardPath));
+            Assert.Equal(backlogBytes, File.ReadAllBytes(backlogPath));
+
+            _ = BacklogStore.OpenReadOnly(backlogPath);
+            Assert.Equal(setupEvents.Concat(setupEvents)
+                .Append(("BacklogStore.OpenConnection", backlogPath)).ToArray(), events.ToArray());
+        }
+        finally
+        {
+            SqliteStoreConnectionPolicy.ConnectionOpenedForDiagnostics -= Observe;
+        }
+    }
+
+    [Xunit.Fact]
+    public void PolicyFailedReadOnlyOpenReleasesDirectory()
+    {
+        var directory = CreateTempDirectory();
+        var path = Path.Combine(directory, "missing.db");
+        Assert.False(File.Exists(path));
+
+        var error = Assert.Throws<SqliteException>(() => SqliteStoreConnectionPolicy.Open(
+            path, readOnly: true, SqliteStoreDurability.Strict, foreignKeys: false,
+            operationTag: "failed-open-test"));
+
+        Assert.Equal(14, error.SqliteErrorCode); // SQLITE_CANTOPEN
+        Assert.Empty(Directory.GetFileSystemEntries(directory));
+        Directory.Delete(directory);
+        Assert.False(Directory.Exists(directory));
+    }
+
+    private static long ReadPragma(SqliteConnection connection, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA " + name;
+        return (long)command.ExecuteScalar()!;
+    }
+
     // ── Store round-trip ──────────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BacklogStore_add_and_list_open_items")]

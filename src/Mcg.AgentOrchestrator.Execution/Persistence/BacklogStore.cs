@@ -109,20 +109,6 @@ public sealed class BacklogStore
     private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
         new($"Backlog store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.Backlog.CurrentVersion}); run setup.");
 
-    // Pooling=False matches the loop critical-path stores: a POOLED connection can be returned to the
-    // pool still holding a WAL read/lock slot, so a later writer meets "database is locked" that
-    // busy_timeout cannot wait out. Without it a backlog write concurrent with a reader could fail.
-    private string ConnectionString => CreateConnectionString(_dbPath, _readOnly);
-
-    private static string CreateConnectionString(string dbPath, bool readOnly) => readOnly
-        ? new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false
-        }.ToString()
-        : $"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;";
-
     // Bounded retry on a transient SQLITE_BUSY/LOCKED: busy_timeout (30s) handles the simple lock-wait,
     // but the deadlock-avoidance path can still surface an immediate BUSY; this turns that into a brief
     // wait instead of a fatal throw. Mirrors SqliteOrchestratorStateRepository.
@@ -149,12 +135,12 @@ public sealed class BacklogStore
         }
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        return conn;
-    }
+    // Pooling=False matches the loop critical-path stores: a POOLED connection can be returned to the
+    // pool still holding a WAL read/lock slot, so a later writer meets "database is locked" that
+    // busy_timeout cannot wait out. Without it a backlog write concurrent with a reader could fail.
+    private SqliteConnection OpenConnection() => SqliteStoreConnectionPolicy.Open(
+        _dbPath, _readOnly, SqliteStoreDurability.Strict, foreignKeys: false,
+        operationTag: "BacklogStore.OpenConnection");
 
     public static void Setup(string dbPath)
     {
@@ -162,10 +148,10 @@ public sealed class BacklogStore
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        using var conn = new SqliteConnection(CreateConnectionString(dbPath, readOnly: false));
-        conn.Open();
+        using var conn = SqliteStoreConnectionPolicy.Open(
+            dbPath, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
+            operationTag: "BacklogStore.Setup");
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS backlog (
                 id             TEXT PRIMARY KEY,
@@ -258,7 +244,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -291,7 +276,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -400,7 +384,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -430,7 +413,6 @@ public sealed class BacklogStore
         await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -462,7 +444,6 @@ public sealed class BacklogStore
         await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -493,7 +474,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -545,7 +525,6 @@ public sealed class BacklogStore
         var connection = OpenConnection();
         try
         {
-            RunNonQuery(connection, "PRAGMA busy_timeout=30000");
             RunNonQuery(connection, "BEGIN IMMEDIATE");
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT status FROM backlog WHERE id = $id";
@@ -579,7 +558,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -632,7 +610,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -682,7 +659,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -739,7 +715,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -788,7 +763,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -849,7 +823,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -929,7 +902,6 @@ public sealed class BacklogStore
             return await WithBusyRetryAsync(async () =>
             {
                 await using var conn = OpenConnection();
-                await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
                 await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
                 var updatedAt = DateTimeOffset.UtcNow.ToString("O");
                 try
@@ -1013,7 +985,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -1077,7 +1048,6 @@ public sealed class BacklogStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
