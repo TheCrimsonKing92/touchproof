@@ -26,6 +26,7 @@ internal static class GoalLandingPostActions
                 $"Dogfood acceptance evidence unavailable for goal {goal.Id.Value[..8]} ({ex.GetType().Name}); recording unknown status.");
         }
 
+        evidence = evidence with { IsParked = goal.IsExplicitlyParked };
         var entry = DogfoodLogRenderer.Render(goal, evidence);
         return new DogfoodLogStore(dogfoodLogStorePath)
             .UpsertAsync(new DogfoodLogAppend(
@@ -73,7 +74,24 @@ internal static class GoalLandingPostActions
             _ => DogfoodAcceptanceDisposition.Inconclusive
         };
 
-        return new DogfoodLandingEvidence(disposition, outcome, manualLanding);
+        var evidence = new DogfoodLandingEvidence(disposition, outcome, manualLanding);
+        if (disposition == DogfoodAcceptanceDisposition.Inconclusive && acceptance.HasCandidatePair &&
+            GoalOperationJournal.AcceptanceOutcomesForCandidate(
+                journal, acceptance.BranchHeadSha, acceptance.MainHeadSha)
+                .Any(entry => !ReferenceEquals(entry, acceptance) &&
+                    entry.Status == GoalOperationStatus.Failed &&
+                    string.Equals(entry.AcceptanceOutcome?.Trim(), "failed", StringComparison.OrdinalIgnoreCase)))
+        {
+            // The journal has no baseline execution receipt; retain only the observed candidate result.
+            evidence = evidence with
+            {
+                ExecutedCandidateResult = DogfoodExecutedCandidateResult.Failed,
+                BaselineState = DogfoodBaselineState.Unknown,
+                LatestSchedulingDisposition = outcome
+            };
+        }
+
+        return evidence;
     }
 
     public static bool AutoCloseSourceBacklogItem(
