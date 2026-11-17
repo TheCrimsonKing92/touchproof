@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 public sealed class BoardFillReadyItemSelectorTests
 {
@@ -8,6 +9,88 @@ public sealed class BoardFillReadyItemSelectorTests
     internal static BacklogItem Item(char id = 'a') => new(new string(id, 32), "Ready", "Build the receipt",
         BacklogItemStatus.Open, Now, Now, null);
     private static readonly IReadOnlySet<string> None = new HashSet<string>();
+
+    [Fact]
+    public void Pinned_normal_beats_plan_first_critical()
+    {
+        var pinned = Item('b') with { Priority = "normal", PinnedAt = Now };
+        var critical = Item('a') with { Priority = "critical" };
+        Assert.Same(pinned, BoardFillReadyItemSelector.Select([critical, pinned], [], None, Ready,
+            preferredOrder: [critical.Id, pinned.Id]));
+    }
+
+    [Fact]
+    public void Oldest_pin_beats_priority_and_recency()
+    {
+        var older = Item('b') with { Priority = "low", PinnedAt = Now.AddDays(-2), UpdatedAt = Now.AddDays(-1) };
+        var newer = Item('a') with { Priority = "critical", PinnedAt = Now.AddDays(-1), UpdatedAt = Now };
+        Assert.Same(older, Select([newer, older]));
+    }
+
+    [Fact]
+    public void Equal_pins_use_existing_plan_and_priority_order()
+    {
+        var low = Item('b') with { Priority = "low", PinnedAt = Now };
+        var critical = Item('a') with { Priority = "critical", PinnedAt = Now };
+        Assert.Same(critical, Select([low, critical]));
+        Assert.Same(low, BoardFillReadyItemSelector.Select([critical, low], [], None, Ready,
+            preferredOrder: [low.Id, critical.Id]));
+    }
+
+    [Theory]
+    [InlineData("not-ready")]
+    [InlineData("owner-gated")]
+    [InlineData("failed-cap")]
+    [InlineData("author-refused")]
+    [InlineData("drafted")]
+    public void Pin_does_not_bypass_eligibility(string exclusion)
+    {
+        var pinned = Item('a') with { PinnedAt = Now,
+            Tags = exclusion is "owner-gated" or "author-refused" ? exclusion : "" };
+        var eligible = Item('b');
+        IReadOnlyList<BoardFillDraftRound> rounds = exclusion == "failed-cap"
+            ? Enumerable.Range(0, BoardFillReadyItemSelector.MaxFailedRoundsPerChange)
+                .Select(index => new BoardFillDraftRound(index.ToString(), pinned.Id, pinned.UpdatedAt,
+                    null, null, "failed", null, null, [], Now, Now)).ToArray()
+            : [];
+        IReadOnlySet<string> drafted = exclusion == "drafted" ? new HashSet<string> { pinned.Id } : None;
+        BacklogReadiness Readiness(BacklogItem item) =>
+            exclusion == "not-ready" && item.Id == pinned.Id ? new(false, false, "blocked") : Ready(item);
+        Assert.Same(eligible, BoardFillReadyItemSelector.Select([pinned, eligible], [], drafted, Readiness, rounds));
+        Assert.Null(BoardFillReadyItemSelector.Select([pinned], [], drafted, Readiness, rounds));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Snapshot_reads_pin_or_null_without_legacy_column(bool legacy)
+    {
+        // Parallel-safe: this test owns its SQLite database and directory.
+        var root = Path.Combine(Path.GetTempPath(), "board-fill-pin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "backlog.db");
+            var store = new BacklogStore(path);
+            var item = await store.AddAsync("Pinned item", "Body");
+            var pinned = await store.UpdateAsync(item.Id, new(PinnedAt: Now, PinnedAtSpecified: true));
+            if (legacy)
+            {
+                using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                    { DataSource = path, Pooling = false }.ToString());
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "ALTER TABLE backlog DROP COLUMN pinned_at; UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog'";
+                command.ExecuteNonQuery();
+            }
+            var bytes = File.ReadAllBytes(path);
+            var snapshot = Assert.Single(BoardFillBacklogSnapshot.Read(path));
+            Assert.Equal(item.Id, snapshot.Id);
+            Assert.Equal(legacy ? null : pinned.PinnedAt, snapshot.PinnedAt);
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
 
     [Fact]
     public void Select_Lookup_omitted_Preserves_selection_despite_matching_goal()

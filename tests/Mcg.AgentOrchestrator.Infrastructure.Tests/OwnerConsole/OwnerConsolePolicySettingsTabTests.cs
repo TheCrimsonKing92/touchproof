@@ -143,6 +143,11 @@ public sealed class OwnerConsolePolicySettingsTabTests
     [InlineData("acceptanceWidth", "abc", "acceptanceWidth")]
     [InlineData("acceptanceWidth", "5", "acceptanceWidth must be between 1 and 4")]
     [InlineData("boardFillMaxDraftsPerDay", "101", "boardFillMaxDraftsPerDay must be between 0 and 100")]
+    [InlineData("boardFillMaxDraftsPerDay", "-1", "boardFillMaxDraftsPerDay must be between 0 and 100")]
+    [InlineData("boardFillMaxDraftsPerDay", "abc", "boardFillMaxDraftsPerDay")]
+    [InlineData("boardFillMaxDraftsPerDay", "1.5", "integer")]
+    [InlineData("boardFillMaxDraftsPerDay", "\"5\"", "integer")]
+    [InlineData("boardFillMaxDraftsPerDay", "", "boardFillMaxDraftsPerDay")]
     [InlineData("buildGcConserveMemoryLevel", "10", "buildGcConserveMemoryLevel must be between 0 and 9")]
     [InlineData("buildGcHeapCount", "65", "buildGcHeapCount must be between 0 and 64")]
     [InlineData("buildRootRetentionDays", "366", "buildRootRetentionDays must be between 0 and 365")]
@@ -363,6 +368,23 @@ public sealed class OwnerConsolePolicySettingsTabTests
         else Assert.Equal("{broken", File.ReadAllText(fixture.Path));
     }
 
+    [Fact]
+    public void Daily_cap_can_save_null_and_then_return_to_an_integer()
+    {
+        using var fixture = new Fixture();
+        var tab = new OwnerConsolePolicySettingsTab(fixture.Path);
+        using var view = new OwnerConsoleSettingsView([tab]);
+        view.Open(OwnerConsolePane.Board);
+        Edit(view, "boardFillMaxDraftsPerDay", " null ");
+        Assert.False(tab.Editing);
+        Assert.Null(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.Path)).BoardFillMaxDraftsPerDay);
+        using (var saved = JsonDocument.Parse(File.ReadAllText(fixture.Path), JsonOptions))
+            Assert.Equal(JsonValueKind.Null, saved.RootElement.GetProperty("boardFillMaxDraftsPerDay").ValueKind);
+        Edit(view, "boardFillMaxDraftsPerDay", "7");
+        Assert.False(tab.Editing);
+        Assert.Equal(7, ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.Path)).BoardFillMaxDraftsPerDay);
+    }
+
     private static void Edit(OwnerConsoleSettingsView view, string key, string value)
     {
         Highlight(view, key);
@@ -388,7 +410,7 @@ public sealed class OwnerConsolePolicySettingsTabTests
         internal string Path => System.IO.Path.Combine(Root, "conductor-policy.json");
         internal string Original { get; } = ConductorAutonomyPolicy.Permissive.ToJson().ReplaceLineEndings("\r\n")
             .Replace("\"acceptanceWidth\": 2", "\"acceptanceWidth\": 1", StringComparison.Ordinal)
-            .Replace("\"boardFillMaxDraftsPerDay\": 3", "\"boardFillMaxDraftsPerDay\": 6", StringComparison.Ordinal)
+            .Replace("\"boardFillMaxDraftsPerDay\": null", "\"boardFillMaxDraftsPerDay\": 6", StringComparison.Ordinal)
             .Insert(3, "  // owner comment\r\n  \"unknownExtra\": {\"keep\": [\"雪\", 2]},\r\n  \"maxTotalBudget\": 20.00,\r\n  \"perProviderBudgetCaps\": null,\r\n");
 
         internal Fixture() { Directory.CreateDirectory(Root); File.WriteAllBytes(Path, WithBom(Original)); }

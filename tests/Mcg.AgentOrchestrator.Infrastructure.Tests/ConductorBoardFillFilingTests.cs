@@ -53,14 +53,24 @@ public sealed class ConductorBoardFillFilingTests
         finally { release.TrySetResult(); }
     }
 
-    [Fact]
-    public void Daily_cap_counts_only_new_filings_on_the_injected_utc_date()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(null)]
+    public void Daily_cap_counts_only_new_filings_on_the_injected_utc_date(int? cap)
     {
         using var h = new BoardFillFilingTestFixture();
+        h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = cap };
         var first = h.Assessed();
         Assert.Equal("filed", h.Host.AttemptFiling(first.Id).Result);
         h.Drafts.Item = h.Drafts.Item with { Id = Guid.NewGuid().ToString("N") };
         var second = h.Assessed();
+        if (cap is null)
+        {
+            Assert.Equal("filed", h.Host.AttemptFiling(second.Id).Result);
+            Assert.Equal(2, h.Intake.Requests.Count);
+            Assert.Equal(2, h.Drafts.Store.FiledOnUtcDay(h.Drafts.Clock.UtcNow));
+            return;
+        }
         Assert.Equal("daily-cap-reached", h.Host.AttemptFiling(second.Id).Reason);
         Assert.Single(h.Intake.Requests);
         // An offset on the same UTC date does not replenish the cap.
@@ -71,6 +81,23 @@ public sealed class ConductorBoardFillFilingTests
         Assert.Equal("filed", h.Host.AttemptFiling(second.Id).Result);
         Assert.Equal(2, h.Intake.Requests.Count);
         Assert.Equal(1, h.Drafts.Store.FiledOnUtcDay(h.Drafts.Clock.UtcNow));
+    }
+
+    [Fact]
+    public async Task Uncapped_tick_starts_another_filing_after_a_prior_filing()
+    {
+        using var h = new BoardFillFilingTestFixture();
+        h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = null };
+        Assert.Equal("filed", h.Host.AttemptFiling(h.Assessed().Id).Result);
+        h.Drafts.Item = h.Drafts.Item with { Id = Guid.NewGuid().ToString("N") };
+        var second = h.Assessed();
+        h.Host.ServiceTick(h.Drafts.Kernel);
+        Assert.NotNull(h.Host.CurrentFiling);
+        await PanelTestHarness.Signal(h.Host.CurrentFiling, "uncapped second filing completed");
+        Assert.Equal(2, h.Intake.Requests.Count);
+        Assert.Equal("filed", Assert.Single(h.Drafts.Store.ReadAll()
+            .Single(round => round.Id == second.Id).Filings!).Result);
+        Assert.Equal(2, h.Drafts.Store.FiledOnUtcDay(h.Drafts.Clock.UtcNow));
     }
 
     [Fact]

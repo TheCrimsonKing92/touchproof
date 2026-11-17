@@ -98,6 +98,8 @@ public sealed class BoardFillConsecutiveNonDraftRoundsTests
         Assert.DoesNotContain(first.Id, h.Store.AlreadyDrafted(h.Items, h.MainHead));
         Assert.DoesNotContain(h.Store.ReadAll(), BoardFillFailureKind.CountsTowardItem);
 
+        // Exercise the per-item stop after the independent board-wide back-off expires.
+        h.Clock.UtcNow = h.Clock.UtcNow.AddMinutes(61);
         h.Host.ServiceTick(h.Kernel);
         Assert.NotNull(h.Host.CurrentRound);
         await PanelTestHarness.Signal(h.Host.CurrentRound, "other eligible item's draft finished");

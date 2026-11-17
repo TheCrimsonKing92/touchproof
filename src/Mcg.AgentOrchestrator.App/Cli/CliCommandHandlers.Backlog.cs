@@ -55,7 +55,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                         ambiguity is null ? linkedGoal?.Id.Value : null, ambiguity is not null, readiness.Eligible, epic?.EpicId));
                     continue;
                 }
-                Console.WriteLine($"{BacklogTextView.RenderBacklogListTag(item)}{BacklogTextView.RenderBacklogTimestampSuffix(item)}{BacklogListAgentReadView.FormatPriority(item.Priority)}{BacklogTextView.RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | epic={BacklogListAgentReadView.FormatEpic(epic)} | title={item.Title}");
+                Console.WriteLine($"{BacklogTextView.RenderBacklogListTag(item)}{BacklogTextView.RenderBacklogTimestampSuffix(item)}{BacklogListAgentReadView.FormatPriority(item.Priority)}{BacklogListAgentReadView.FormatPin(item.PinnedAt)}{BacklogTextView.RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | epic={BacklogListAgentReadView.FormatEpic(epic)} | title={item.Title}");
             }
             if (rows is not null)
             {
@@ -531,7 +531,11 @@ private static string RenderBacklogReadinessSuffix(
 
 private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> parts)
 {
-    var values = ReadBacklogUpdateValues(parts);
+    var values = CliArgumentParser.ReadBacklogUpdateValues(parts);
+    var pin = values.ContainsKey("--next");
+    var unpin = values.ContainsKey("--no-next");
+    if (pin && unpin)
+        throw new ArgumentException("--next and --no-next are mutually exclusive.");
     var title = values.GetValueOrDefault("--title");
     var description = values.GetValueOrDefault("--description");
     var priority = values.GetValueOrDefault("--priority") is { } rawPriority ? BacklogPriorityLevels.ParseOrThrow(rawPriority) : null;
@@ -549,12 +553,13 @@ private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> pa
         description is null &&
         priority is null &&
         tags is null &&
-        status is null)
+        status is null && !pin && !unpin)
     {
         throw new ArgumentException(CliCommandHelp.BacklogUpdateUsage);
     }
 
-    return new BacklogItemUpdate(title, description, priority, tags, status);
+    return new BacklogItemUpdate(title, description, priority, tags, status,
+        PinnedAt: pin ? DateTimeOffset.UtcNow : null, PinnedAtSpecified: pin || unpin);
 }
 
 private static bool IsBacklogListingStatus(string? status) =>

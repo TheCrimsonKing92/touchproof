@@ -30,7 +30,7 @@ public static class StoreSchemaRegistry
         new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", 1);
 
     public static StoreSchemaEntry Backlog { get; } =
-        new("backlog", Persistence + "BacklogStore.cs", "backlog.db", "backlog", 1);
+        new("backlog", Persistence + "BacklogStore.cs", "backlog.db", "backlog", 2);
 
     public static StoreSchemaEntry OperatorIntents { get; } =
         new("operator-intents", Persistence + "OperatorIntentStore.cs", SqliteOperatorIntentStore.DatabaseFileName, "backlog", 4);
