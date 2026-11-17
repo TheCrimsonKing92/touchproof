@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
+// Parallel-safe: each test owns its database, wake directory and kernel.
 public sealed class OperatorIntentStoreTests
 {
     [Xunit.Fact(DisplayName = "OperatorIntentStore_concurrent_submissions_have_no_busy_failures_or_lost_intents")]
@@ -442,7 +443,19 @@ public sealed class OperatorIntentStoreTests
             Xunit.Assert.DoesNotContain(
                 goal.Timeline,
                 item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried);
-            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+            var held = (await store.GetAsync(intent.Id))!;
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, held.Status);
+            Xunit.Assert.Null(held.CompletedAt);
+            Xunit.Assert.NotNull(held.Outcome);
+            Xunit.Assert.Contains($"answer {request.Id.Value} <cause>", held.Outcome, StringComparison.Ordinal);
+
+            Xunit.Assert.False(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            Xunit.Assert.Equal(request.Id, Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id)).Id);
+            var heldAgain = (await store.GetAsync(intent.Id))!;
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, heldAgain.Status);
+            Xunit.Assert.Equal(held.Outcome, heldAgain.Outcome);
+            Xunit.Assert.Equal(held.ClaimedAt, heldAgain.ClaimedAt);
+            Xunit.Assert.Null(heldAgain.CompletedAt);
 
             var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
             var restoredGoal = restored.GetGoal(goal.Id);
@@ -455,7 +468,45 @@ public sealed class OperatorIntentStoreTests
             Xunit.Assert.Single(restoredGoal.Timeline.Where(item =>
                 item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried));
             resumedCoordinator.CompletePersisted([goal.Id]);
-            Xunit.Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+            var completed = (await store.GetAsync(intent.Id))!;
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, completed.Status);
+            Xunit.Assert.NotNull(completed.CompletedAt);
+            Xunit.Assert.Equal(
+                $"Applied retry continuation to goal {goal.Id.Value[..8]} task {task.Id.Value[..8]}.",
+                completed.Outcome);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ExplicitCauseRetryPreservesAppliedOutcome()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel, AgentCatalog.Default().Agents, "Retry with an explicit cause");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"), Path.Combine(root, "logs"));
+            var intent = CreateRetryIntent(goal.Id.Value, task.Id.Value,
+                "explicit-cause-intent", "explicit-cause-key", retryCause: RetryCause.NewSourceFinding);
+            await store.EnqueueAsync(intent);
+            var coordinator = new OperatorIntentCoordinator(store);
+
+            Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+            coordinator.CompletePersisted([goal.Id]);
+
+            var completed = (await store.GetAsync(intent.Id))!;
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, completed.Status);
+            Xunit.Assert.Equal(
+                $"Applied retry to goal {goal.Id.Value[..8]} task {task.Id.Value[..8]}.", completed.Outcome);
         }
         finally
         {
@@ -556,7 +607,12 @@ public sealed class OperatorIntentStoreTests
             Xunit.Assert.True(correction.MutatedGoalState);
             var replacement = Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
             Xunit.Assert.NotEqual(original.Id, replacement.Id);
-            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+            var correcting = (await store.GetAsync(intent.Id))!;
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, correcting.Status);
+            Xunit.Assert.Null(correcting.CompletedAt);
+            Xunit.Assert.NotNull(correcting.Outcome);
+            Xunit.Assert.Contains($"answer {replacement.Id.Value} <cause>", correcting.Outcome, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(original.Id.Value, correcting.Outcome, StringComparison.Ordinal);
             Xunit.Assert.Empty(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
 
             var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
@@ -569,15 +625,51 @@ public sealed class OperatorIntentStoreTests
                 var otherRequest = restored.RequestHumanInput(
                     goal.Id, task.Id, "Confirm the unrelated implementation requirement.",
                     isAutoDefaultable: false, isDismissible: false);
+                var customRequest = restored.RequestHumanInput(
+                    goal.Id, task.Id, "Supply the external implementation decision.",
+                    isAutoDefaultable: false, isDismissible: false);
+                var customCommand = $"answer {customRequest.Id.Value} <decision>";
+                // Seed a persisted custom resume command using this request's actual id.
+                var snapshot = restored.ExportSnapshot();
+                restored = AgentOrchestratorKernel.FromSnapshot(snapshot with
+                {
+                    HumanInputRequests = snapshot.HumanInputRequests.Select(request =>
+                        request.Id == customRequest.Id.Value
+                            ? request with { ResumeCommand = customCommand }
+                            : request).ToArray()
+                });
+                restoredGoal = restored.GetGoal(goal.Id);
+                var prospective = restored.RequestHumanInputDeduplicated(
+                    goal.Id, task.Id, "Observe the future candidate.",
+                    HumanWaitKind.ProspectiveAcceptanceEvidence,
+                    questionFingerprint: "future-observation").Request;
                 Xunit.Assert.False(resumedCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
-                Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+                var held = (await store.GetAsync(intent.Id))!;
+                Xunit.Assert.Equal(OperatorIntentStatus.Claimed, held.Status);
+                Xunit.Assert.Null(held.CompletedAt);
+                Xunit.Assert.NotNull(held.Outcome);
+                Xunit.Assert.Contains("awaiting-task-human-input", held.Outcome, StringComparison.Ordinal);
+                Xunit.Assert.Contains($"answer {otherRequest.Id.Value} <answer>", held.Outcome, StringComparison.Ordinal);
+                Xunit.Assert.Contains(customRequest.Id.Value, held.Outcome, StringComparison.Ordinal);
+                Xunit.Assert.Contains(customCommand, held.Outcome, StringComparison.Ordinal);
+                Xunit.Assert.DoesNotContain(restoredReplacement.Id.Value, held.Outcome, StringComparison.Ordinal);
+                Xunit.Assert.DoesNotContain(prospective.Id.Value, held.Outcome, StringComparison.Ordinal);
                 Xunit.Assert.Empty(restoredGoal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+
+                restored.SubmitHumanInput(otherRequest.Id, "Confirmed.");
+                Xunit.Assert.False(resumedCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
+                var refreshed = (await store.GetAsync(intent.Id))!;
+                Xunit.Assert.Equal(OperatorIntentStatus.Claimed, refreshed.Status);
+                Xunit.Assert.NotNull(refreshed.Outcome);
+                Xunit.Assert.DoesNotContain($"request {otherRequest.Id.Value}:", refreshed.Outcome, StringComparison.Ordinal);
+                Xunit.Assert.Contains(customRequest.Id.Value, refreshed.Outcome, StringComparison.Ordinal);
+                Xunit.Assert.Contains(customCommand, refreshed.Outcome, StringComparison.Ordinal);
 
                 // Restart while the original intent still waits; answering the other obligation
                 // must resume that same correction once, without a second operator retry.
                 restored = AgentOrchestratorKernel.FromSnapshot(restored.ExportSnapshot());
                 restoredGoal = restored.GetGoal(goal.Id);
-                restored.SubmitHumanInput(otherRequest.Id, "Confirmed.");
+                restored.SubmitHumanInput(customRequest.Id, "Decision supplied.");
                 resumedCoordinator = new OperatorIntentCoordinator(store);
             }
             Xunit.Assert.True(resumedCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
