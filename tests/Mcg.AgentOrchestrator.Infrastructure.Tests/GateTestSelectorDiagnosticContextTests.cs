@@ -38,7 +38,16 @@ public sealed class GateTestSelectorDiagnosticContextTests
         Assert.Equal(WorkTaskStatus.Running, f.Task.Status);
         var prompt = File.ReadAllText(prepared.PromptPath);
         Assert.NotEmpty(diagnostic);
-        Assert.All(diagnostic, finding => Assert.Contains(finding, prompt));
+        var reportPath = Path.Combine(f.Root, ".orchestrator-context", f.Goal.Id.Value, "subscription-preflight.md");
+        Assert.All(diagnostic, finding => Assert.Contains(finding, File.ReadAllText(reportPath)));
+        Assert.Contains(diagnostic[0], prompt);
+        Assert.Contains("declarations and Developer assertions do not prove execution", prompt);
+        Assert.Contains("Full report: " + reportPath, prompt);
+        foreach (var finding in diagnostic.Skip(1))
+        {
+            var entry = JsonSerializer.Deserialize<GateTestSelectorDiagnostic.Entry>(finding[(GateTestSelectorDiagnostic.Marker.Length + 1)..])!;
+            Assert.Contains($"- criterion={entry.CriterionIndex?.ToString() ?? "?"} obligation={entry.ObligationId[..8]} selector={entry.EffectiveSelector} status={entry.Status}", prompt);
+        }
         Assert.Contains(GateTestSelectorDiagnostic.Marker, prompt);
         Assert.Contains(Prediction, prompt);
         Assert.Contains(InvalidEvidence, prompt);
@@ -166,6 +175,126 @@ public sealed class GateTestSelectorDiagnosticContextTests
         File.Delete(Path.Combine(f.Root, "tests", "UntrackedTests.cs"));
         // A declaration committed in the fixture does resolve through the same production boundary.
         Assert.Equal(GateTestSelectorDiagnostic.Resolution.Resolved, BuildEntry(f, selector: "OtherTests").Status);
+    }
+
+    [Fact]
+    public void TesterPromptCarriesCompactSelectorTableForThreeDiagnosticRecords()
+    {
+        using var f = new Fixture(AgentRole.Tester);
+        var advisory = GateTestSelectorDiagnostic.Render([BuildEntry(f)])[0];
+        var records = Enumerable.Range(1, 3).Select(index => GateTestSelectorDiagnostic.Marker + " " +
+            JsonSerializer.Serialize(new
+            {
+                ObligationId = new string((char)('0' + index), 8) + "-obligation",
+                CriterionIndex = index,
+                EffectiveSelector = $"Selector{index}.Check",
+                Status = index == 1 ? "Resolved" : index == 2 ? "Unresolved" : "Unknown",
+                DeveloperAssertions = new[] { $"Selector{index}.Check", $"Different{index}.Check" },
+                Evidence = new[] { "evidence-sentinel" }, Suggestions = new[] { "suggestion-sentinel" },
+                PlannerIdentity = "planner-sentinel", DeveloperReportSource = "report-source-sentinel"
+            })).ToArray();
+        string[] findings = [advisory, .. records, "ordinary-preflight-sentinel"];
+        var rendered = PrepareSelectorPrompt(f, findings);
+
+        for (var index = 1; index <= 3; index++)
+        {
+            var status = index == 1 ? "Resolved" : index == 2 ? "Unresolved" : "Unknown";
+            var line = $"- criterion={index} obligation={new string((char)('0' + index), 8)} selector=Selector{index}.Check status={status} developer-asserted=Different{index}.Check";
+            Assert.Contains(line, rendered.Prompt);
+            Assert.Equal(1, rendered.Prompt.Split('\n').Count(text => text.TrimEnd('\r') == line));
+            Assert.DoesNotContain($"developer-asserted=Selector{index}.Check", rendered.Prompt);
+        }
+        Assert.Contains(advisory, rendered.Prompt);
+        Assert.Contains("declarations and Developer assertions do not prove execution", rendered.Prompt);
+        Assert.Contains("Full report: " + rendered.ReportPath, rendered.Prompt);
+        foreach (var field in new[] { "Evidence", "Suggestions", "PlannerIdentity", "DeveloperReportSource" })
+            Assert.DoesNotContain($"\"{field}\":", rendered.Prompt);
+        foreach (var sentinel in new[] { "evidence-sentinel", "suggestion-sentinel", "planner-sentinel", "report-source-sentinel", "ordinary-preflight-sentinel" })
+            Assert.DoesNotContain(sentinel, rendered.Prompt);
+        Assert.All(findings, finding => Assert.Contains(finding, File.ReadAllText(rendered.ReportPath)));
+        Assert.Equal(ContextDeliveryMode.InlineFull, rendered.Section.DeliveryMode);
+    }
+
+    [Fact]
+    public void StoredPreflightReportRendersSelectorSectionUnderFourKilobytes()
+    {
+        using var f = new Fixture(AgentRole.Tester);
+        var fixturePath = Path.Combine(VerifiedRepositoryRoot.Find(), "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "Fixtures", "SubscriptionPreflight", "tester-preflight-2026-11-17.md");
+        Assert.True(new FileInfo(fixturePath).Length >= 20 * 1024);
+        var findings = File.ReadAllLines(fixturePath).Where(line => line.StartsWith("- ", StringComparison.Ordinal))
+            .Select(line => line[2..]).ToArray();
+        var records = findings.Where(line => line.StartsWith(GateTestSelectorDiagnostic.Marker + " ", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(records);
+        var rendered = PrepareSelectorPrompt(f, findings);
+
+        Assert.Equal(ContextDeliveryMode.InlineFull, rendered.Section.DeliveryMode);
+        Assert.InRange(rendered.Section.CharacterCount, 1, 4095);
+        Assert.InRange(rendered.Section.ByteCount, 1, 4095);
+        Assert.Contains("# Subscription Preflight selector summary", rendered.Prompt);
+        Assert.Contains("Full report: " + rendered.ReportPath, rendered.Prompt);
+        Assert.Contains("declarations and Developer assertions do not prove execution", rendered.Prompt);
+        Assert.All(records, record => Assert.DoesNotContain(record, rendered.Prompt));
+        Assert.All(findings, finding => Assert.Contains(finding, File.ReadAllText(rendered.ReportPath)));
+    }
+
+    [Theory]
+    [InlineData("{malformed")]
+    [InlineData("[]")]
+    public void UnparseableDiagnosticsRetainFullInlineReport(string payload)
+    {
+        using var f = new Fixture(AgentRole.Tester);
+        var diagnostic = GateTestSelectorDiagnostic.Marker + " " + payload;
+        var rendered = PrepareSelectorPrompt(f, [diagnostic]);
+        Assert.Contains(diagnostic, rendered.Prompt);
+        Assert.DoesNotContain("# Subscription Preflight selector summary", rendered.Prompt);
+        Assert.Equal(ContextDeliveryMode.InlineFull, rendered.Section.DeliveryMode);
+    }
+
+    [Fact]
+    public void PartialDiagnosticsShowUnknownFieldsAndUnparsedNotice()
+    {
+        using var f = new Fixture(AgentRole.Tester);
+        var rendered = PrepareSelectorPrompt(f,
+            [GateTestSelectorDiagnostic.Marker + " {malformed",
+             GateTestSelectorDiagnostic.Marker + " " + """{"ObligationId":"short","CriterionIndex":null,"EffectiveSelector":null,"Status":null}"""]);
+        Assert.Contains("- criterion=? obligation=short selector=unknown status=unknown", rendered.Prompt);
+        Assert.Contains("1 unparsed records; read the full report", rendered.Prompt);
+        Assert.Contains("Full report: " + rendered.ReportPath, rendered.Prompt);
+        Assert.DoesNotContain("{malformed", rendered.Prompt);
+    }
+
+    [Fact]
+    public void OversizedSelectorSummaryReportsOmittedRecords()
+    {
+        using var f = new Fixture(AgentRole.Tester);
+        var records = Enumerable.Range(1, 40).Select(index => GateTestSelectorDiagnostic.Marker + " " +
+            JsonSerializer.Serialize(new
+            {
+                ObligationId = $"{index:D8}", CriterionIndex = index,
+                EffectiveSelector = new string('s', 100), Status = "Unknown",
+                DeveloperAssertions = new[] { new string('a', 200), new string('b', 200), new string('c', 200), "fourth" }
+            })).ToArray();
+        var rendered = PrepareSelectorPrompt(f, [GateTestSelectorDiagnostic.Render([BuildEntry(f)])[0], .. records]);
+        Assert.Contains("- criterion=1 obligation=00000001", rendered.Prompt);
+        Assert.Contains("(+1 more)", rendered.Prompt);
+        Assert.Contains("further records omitted; read the full report", rendered.Prompt);
+        Assert.InRange(rendered.Section.ByteCount, 1, 4095);
+        Assert.All(records, record => Assert.Contains(record, File.ReadAllText(rendered.ReportPath)));
+    }
+
+    private static (string Prompt, string ReportPath, WorkerContextSectionReceipt Section) PrepareSelectorPrompt(
+        Fixture f, IReadOnlyList<string> findings)
+    {
+        var prepared = WorkerProfileDispatcher.PrepareTask(f.Kernel, f.Goal, f.Task,
+            new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"),
+            Path.Combine(f.Root, "prompts"), f.Root, DateTimeOffset.UtcNow,
+            providerName: "OpenAI", modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            preparationFindingsResolver: (_, _) => findings);
+        return (File.ReadAllText(prepared.PromptPath),
+            Path.Combine(f.Root, ".orchestrator-context", f.Goal.Id.Value, "subscription-preflight.md"),
+            Assert.Single(f.Task.LastDispatch!.ContextPackageReceipt!.Sections,
+                section => section.LogicalIdentity == "context/subscription-preflight.md"));
     }
 
     private static GateTestSelectorDiagnostic.Entry BuildEntry(Fixture f, Goal? goal = null, string? selector = null)
