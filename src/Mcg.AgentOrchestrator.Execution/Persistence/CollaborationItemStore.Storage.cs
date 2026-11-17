@@ -10,7 +10,7 @@ public sealed partial class CollaborationItemStore
     public static CollaborationItemStore OpenExisting(string directory) =>
         new(Path.Combine(directory, "collaboration-items.db"), readOnly: true);
 
-    private SqliteConnection OpenConnection() =>
+    internal SqliteConnection OpenConnection() =>
         SqliteStoreConnectionPolicy.Open(_dbPath, _readOnly, SqliteStoreDurability.Strict,
             foreignKeys: false, operationTag: "CollaborationItemStore.Open");
 

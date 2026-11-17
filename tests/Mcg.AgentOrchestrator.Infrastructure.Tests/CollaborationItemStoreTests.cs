@@ -3,7 +3,6 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Collections.Concurrent;
-using System.Reflection;
 
 public sealed class CollaborationItemStoreTests
 {
@@ -23,7 +22,7 @@ public sealed class CollaborationItemStoreTests
         }
 
         var store = new CollaborationItemStore(path);
-        using var connection = OpenThroughStore(store);
+        using var connection = store.OpenConnection();
 
         Assert.Equal(30_000L, ReadPragma(connection, "busy_timeout"));
         Assert.Equal(2L, ReadPragma(connection, "synchronous"));
@@ -37,7 +36,7 @@ public sealed class CollaborationItemStoreTests
         var path = DbPath();
         _ = new CollaborationItemStore(path);
         var store = CollaborationItemStore.OpenReadOnly(path);
-        using var connection = OpenThroughStore(store);
+        using var connection = store.OpenConnection();
 
         Assert.Equal(30_000L, ReadPragma(connection, "busy_timeout"));
         using var command = connection.CreateCommand();
@@ -833,11 +832,6 @@ public sealed class CollaborationItemStoreTests
 
     private static string DbPath() =>
         Path.Combine(CreateTempDirectory(), "collab.db");
-
-    private static SqliteConnection OpenThroughStore(CollaborationItemStore store) =>
-        (SqliteConnection)typeof(CollaborationItemStore)
-            .GetMethod("OpenConnection", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(store, null)!;
 
     private static long ReadPragma(SqliteConnection connection, string name)
     {
