@@ -22,7 +22,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         IReadOnlyList<string> guardClasses, IReadOnlyList<string>? obligationSelectors = null,
         Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? wholeProjectChecks = null,
         bool projectReachAvailable = true,
-        Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? selectableProjectChecks = null)
+        Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? selectableProjectChecks = null,
+        IReadOnlySet<string>? changedTestProjects = null)
     {
         var obligations = new HashSet<string>(StringComparer.Ordinal);
         var methodFormResolutions = new List<AcceptanceSelectedExecutionMethodFormResolution>();
@@ -147,7 +148,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         {
             MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray(),
             ProjectChecks = selectableProjects.Select(check => AcceptanceSelectedExecutionProjectCheckEntry.Create(
-                check, names, floorLanes, projectReachAvailable)).ToArray()
+                check, names, floorLanes, projectReachAvailable,
+                hasChangedTestFiles: changedTestProjects?.Contains(check.Project) == true)).ToArray()
         };
     }
 

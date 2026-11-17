@@ -8,11 +8,11 @@ internal sealed record AcceptanceSelectedExecutionProjectCheckEntry(
 {
     internal static AcceptanceSelectedExecutionProjectCheckEntry Create(
         AcceptanceWholeProjectCheckInventory check, IReadOnlySet<string> retainedClasses,
-        IReadOnlyList<string> floors, bool reachAvailable = true)
+        IReadOnlyList<string> floors, bool reachAvailable = true, bool hasChangedTestFiles = false)
     {
         var inventory = check.Classes.Select(item => item.FullName).Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal).ToArray();
-        var whole = !reachAvailable || inventory.Length == 0 || floors.Contains(check.CheckName, StringComparer.Ordinal) ||
+        var whole = !reachAvailable || hasChangedTestFiles || inventory.Length == 0 || floors.Contains(check.CheckName, StringComparer.Ordinal) ||
             AcceptanceSelectedExecutionPlan.IsDefaultFloor(check.CheckName);
         var retained = whole ? inventory : inventory.Where(retainedClasses.Contains).ToArray();
         var skipped = inventory.Except(retained, StringComparer.Ordinal).ToArray();

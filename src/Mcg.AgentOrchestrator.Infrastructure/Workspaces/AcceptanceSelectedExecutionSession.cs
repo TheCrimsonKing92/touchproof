@@ -81,9 +81,23 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 IReadOnlyList<AcceptanceWholeProjectCheckInventory> Inventories() => wholeProjectChecks.Select(Inventory).ToArray();
                 IReadOnlyList<AcceptanceWholeProjectCheckInventory> SelectableInventories() => targets.Select(Inventory).ToArray();
                 var projectReachAvailable = true;
+                var changedTestProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 if (read is null && input.Selection.Outcome == ReverseDependencySelectionOutcome.Resolved && targets.Length > 0)
                 {
                     var routing = new ImpactReplayChangedSourceRouting(worktreePath);
+                    var changedPaths = changedFiles.Select(path => Path.GetFullPath(path, worktreePath)).ToArray();
+                    foreach (var check in targets)
+                    {
+                        var project = routing.TestProjects.FirstOrDefault(item => item.Path.Equals(
+                            Path.GetFullPath(check.Project, worktreePath), StringComparison.OrdinalIgnoreCase));
+                        if (project is null) continue;
+                        var directory = Path.GetDirectoryName(project.Path)! + Path.DirectorySeparatorChar;
+                        // Support selection currently reports non-infrastructure readers as files, not classes.
+                        // Until those classes are available, changes to project files or linked sources require it whole.
+                        if (changedPaths.Any(path => path.StartsWith(directory, StringComparison.OrdinalIgnoreCase) ||
+                            project.Sources.Contains(path, StringComparer.OrdinalIgnoreCase)))
+                            changedTestProjects.Add(check.Project);
+                    }
                     var productionSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
                         !routing.IsTestSource(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                     if (productionSources.Length > 0)
@@ -105,7 +119,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 _plan = AcceptanceSelectedExecutionPlan.Create(changedFiles, input.Selection, lanes, input.Classes,
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
                         .Select(lane => lane.Name).ToArray(), input.GuardClasses,
-                    obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable, SelectableInventories);
+                    obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable, SelectableInventories,
+                    changedTestProjects);
                 IReadOnlyList<AcceptanceTestClassDescriptor> ReadProject(string project)
                 {
                     try { return input.ProjectClasses?.Invoke(project) ?? []; }
