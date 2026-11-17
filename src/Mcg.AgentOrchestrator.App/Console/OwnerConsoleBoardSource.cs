@@ -178,6 +178,6 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
     }
 
     internal static OwnerConsoleBoardRow Diagnostic(string name, Exception error) =>
-        new("", "", $"{name}: state read failed: {error.Message.ReplaceLineEndings(" ")}", "", "", null, "", Dimmed: true)
+        new("", "", $"{name}: state read failed: {OwnerConsoleStoreReadFailureFormatter.Message(error).ReplaceLineEndings(" ")}", "", "", null, "", Dimmed: true)
         { Project = name, IsDiagnostic = true };
 }

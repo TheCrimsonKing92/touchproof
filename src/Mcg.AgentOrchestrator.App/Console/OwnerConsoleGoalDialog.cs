@@ -154,7 +154,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 await ApplyAsync(() =>
                 {
                     if (_contentLoaded)
-                        TitleStatus = "refresh failed: " + ex.Message;
+                        TitleStatus = "refresh failed: " + OwnerConsoleStoreReadFailureFormatter.Message(ex);
                     else
                     {
                         Current = OwnerConsoleGoalDetailLoading.Unavailable(ex);

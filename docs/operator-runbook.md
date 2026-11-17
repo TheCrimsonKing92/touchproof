@@ -23,6 +23,12 @@ Evidence ownership when applying this policy:
 
 This documentation slice is verified by document review, link verification and diff review. It adds no runtime implementation, instrumentation, configuration flag, model call or heavy test suite, and requires no current measurements or future Operator evidence to accept the documentation. Existing review and acceptance gates remain intact.
 
+## Console older than the shared store
+
+On a newer-store read failure, goal detail loading, goal detail refresh, or the board's failed state-read row displays: "This console build is older than the shared store. You must restart the console on a current build."
+
+The owner restarts the console on a current build. Setup does not repair a newer store; follow the [runtime upgrade procedure](#explicit-workspace-binding-and-schema-transitions) for shared-store compatibility. The console does not detect staleness itself. Automatic detection with a restart prompt, and routing decision detail, command handler and onboarding reads through this diagnostic, are follow-up work outside this slice.
+
 ## Atomic live task graph repair
 
 Use the [task graph inbox contract](cli-reference.md#task-graph-repair-inbox) for insertion and ordered repair. Submission acknowledges only durable inbox intake. Poll the returned intent id until Applied or Rejected; a bare replay returns that same operation even after restart. A distinct later identical insertion needs a fresh explicit idempotency key.

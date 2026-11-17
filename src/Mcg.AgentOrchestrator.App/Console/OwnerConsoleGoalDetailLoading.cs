@@ -14,6 +14,6 @@ internal static class OwnerConsoleGoalDetailLoading
 
     internal static OwnerConsoleGoalDialog.Content Unavailable(Exception? failure) =>
         new(failure is null ? UnavailableText
-            : UnavailableText + Environment.NewLine + "Load failed: " + failure.Message,
+            : UnavailableText + Environment.NewLine + "Load failed: " + OwnerConsoleStoreReadFailureFormatter.Message(failure),
             [], [], null, null, null);
 }
