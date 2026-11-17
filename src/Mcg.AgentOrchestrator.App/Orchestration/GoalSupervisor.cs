@@ -253,6 +253,25 @@ public static class GoalSupervisor
             return;
         }
 
+        // Absence of dispatch evidence alone is advisory and must not set RequiresOperatorGate.
+        // Recorded evidence still gates: repeated dispatch failure, subscription-limit review,
+        // retry note, dirty worktree and missing verification retain their existing branches.
+        if (finding.Status == WorkTaskStatus.Assigned && task.LastDispatch is null &&
+            string.Equals(finding.SuggestedCommand, $"subscription-dispatch {finding.TaskNumber}", StringComparison.Ordinal))
+        {
+            proposals.Add(new GoalSupervisorProposal(
+                GoalSupervisorProposalKind.Monitor,
+                finding.TaskNumber,
+                task.Id,
+                null,
+                PolicyAllows: false,
+                CanApply: false,
+                RequiresOperatorGate: false,
+                finding.Finding,
+                finding.SuggestedCommand));
+            return;
+        }
+
         proposals.Add(new GoalSupervisorProposal(
             GoalSupervisorProposalKind.ParkForOperator,
             finding.TaskNumber,
