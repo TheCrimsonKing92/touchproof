@@ -10,6 +10,43 @@ public sealed class BoardFillReadyItemSelectorTests
     private static readonly IReadOnlySet<string> None = new HashSet<string>();
 
     [Fact]
+    public void Select_Lookup_omitted_Preserves_selection_despite_matching_goal()
+    {
+        var item = Item() with { Title = "Fix board fill regression", Body = "See src/BoardFill.cs" };
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("# Fix board fill regression\nSee src/BoardFill.cs");
+        var goals = kernel.Goals.ToArray();
+        Assert.Same(item, BoardFillReadyItemSelector.Select([item], goals, None, Ready));
+        Assert.Null(BoardFillReadyItemSelector.Select([item], goals, None, Ready,
+            nearDuplicate: BoardFillNearDuplicate.Lookup([item], goals, [], Now)));
+    }
+
+    [Fact]
+    public void Select_Ineligible_candidates_Do_not_invoke_near_duplicate_lookup()
+    {
+        var ready = Item();
+        var gated = Item('b') with { Tags = "owner-gated" };
+        var missingEpic = Item('c');
+        var notReady = Item('d');
+        var checkedItems = new List<BacklogItem>();
+        Assert.Same(ready, BoardFillReadyItemSelector.Select([ready, gated, missingEpic, notReady], [], None,
+            item => new(item.Id != notReady.Id, false, ""), epicMembers: new HashSet<string> { ready.Id },
+            nearDuplicate: item => { checkedItems.Add(item); return null; }));
+        Assert.Same(ready, Assert.Single(checkedItems));
+    }
+
+    [Fact]
+    public void IsOwnerGated_Generated_duplicate_note_Ignores_quoted_owner_phrase()
+    {
+        var note = BoardFillNearDuplicate.Note(new("goal", "existing-id", "Owner decision for board fill"));
+        var item = Item() with { Notes = [new(Now, note)] };
+        Assert.False(BoardFillReadyItemSelector.IsOwnerGated(item));
+        Assert.NotNull(Select([item]));
+        Assert.True(BoardFillReadyItemSelector.IsOwnerGated(item with
+        { Notes = [.. item.Notes, new(Now, "Requires owner decision")] }));
+    }
+
+    [Fact]
     public void Missing_epic_skips_item_until_membership_appears()
     {
         var item = Item();

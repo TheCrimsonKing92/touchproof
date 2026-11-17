@@ -118,15 +118,26 @@ internal sealed partial class ConductorBoardFillHost
         ReportStoppedItems(items, stopped, now);
         var excluded = _store.AlreadyDrafted(items, observedMain).ToHashSet(StringComparer.Ordinal);
         excluded.UnionWith(stopped.Keys);
-        var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), excluded,
+        var goals = kernel.Goals.ToArray();
+        var item = BoardFillReadyItemSelector.Select(items, goals, excluded,
             ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), rounds, preferredOrder,
             // Evidence releases must first advance the durable item stamp; otherwise Begin
             // would capture the marker time and the new round would fail backlog-changed.
-            observedMain, epicMembers: epicMembers, epicMissing: missing => _epicMembership.Ask(missing, now));
+            observedMain, epicMembers: epicMembers, epicMissing: missing => _epicMembership.Ask(missing, now),
+            nearDuplicate: BoardFillNearDuplicate.Lookup(items, goals, rounds, now),
+            nearDuplicateSkipped: AnnotateNearDuplicate);
         if (item is null) return;
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
         _round = Task.Run(() => RunRoundAsync(item.Id));
+    }
+
+    private void AnnotateNearDuplicate(BacklogItem item, BoardFillNearDuplicateReference reference)
+    {
+        if (_appendBacklogNote is null || item.Notes.Any(note =>
+            note.Text.Contains(BoardFillNearDuplicate.Token(reference), StringComparison.Ordinal))) return;
+        try { _appendBacklogNote(item.Id, BoardFillNearDuplicate.Note(reference)); }
+        catch (Exception) { } // Selection still skips the item; a later tick can retry the annotation.
     }
 
     private void ReportStoppedItems(IReadOnlyList<BacklogItem> items,
