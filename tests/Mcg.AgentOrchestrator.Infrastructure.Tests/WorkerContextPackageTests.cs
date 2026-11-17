@@ -577,6 +577,76 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(1)]
+    [Xunit.InlineData(3)]
+    public void MandatoryReadInstructionIsRenderedOncePerPackage(int artifactCount)
+    {
+        const string instruction = "The complete artifact remains readable at the path on demand. Normally report only this identity receipt and exact source locations; do not reproduce the artifact body on the happy path.";
+        var root = CreateTempDirectory();
+        try
+        {
+            var artifacts = new List<WorkerContextArtifact>();
+            for (var index = 0; index < artifactCount; index++)
+            {
+                var path = $"evidence-{index}.md";
+                var bytes = Encoding.UTF8.GetBytes($"Evidence {index}\n");
+                File.WriteAllBytes(Path.Combine(root, path), bytes);
+                artifacts.Add(Artifact($"context/{path}", bytes, ContextDeliveryMode.MandatoryFile, path));
+            }
+
+            var package = new WorkerContextPackageBuilder().Prepare(AgentRole.Developer, root, artifacts);
+            var semanticId = WorkerContextPackageBuilder.ComputeSemanticPackageId(package.Artifacts);
+            var rendered = WorkerContextPackageBuilder.Render(package);
+            var lines = rendered.Split(Environment.NewLine);
+
+            Assert.Equal(1, Count(rendered, instruction));
+            Assert.Equal(instruction, lines[3]);
+            Assert.Equal(semanticId, package.SemanticPackageId);
+            Assert.Equal($"Semantic package identity (attestation/cache only; not delivery proof): {semanticId}", lines[2]);
+            Assert.Equal(artifactCount, package.Artifacts.Count);
+            foreach (var artifact in package.Artifacts)
+            {
+                Assert.Contains(
+                    $"MANDATORY READ: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation=verified.",
+                    lines);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void PackageWithoutMandatoryFileArtifactRendersNoMandatoryReadInstruction()
+    {
+        const string instruction = "The complete artifact remains readable at the path on demand. Normally report only this identity receipt and exact source locations; do not reproduce the artifact body on the happy path.";
+        var root = CreateTempDirectory();
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes("On-demand evidence\n");
+            File.WriteAllBytes(Path.Combine(root, "evidence.md"), bytes);
+            var package = new WorkerContextPackageBuilder().Prepare(AgentRole.Developer, root,
+            [
+                Artifact("brief/current.md", Encoding.UTF8.GetBytes("Inline brief"), ContextDeliveryMode.InlineFull),
+                Artifact("context/evidence.md", bytes, ContextDeliveryMode.OnDemandFile, "evidence.md"),
+                Artifact("prior/evidence.md", bytes, ContextDeliveryMode.HistoricalFile, "evidence.md")
+            ]);
+
+            var rendered = WorkerContextPackageBuilder.Render(package);
+
+            Assert.Equal(0, Count(rendered, instruction));
+            Assert.Contains("INLINE FULL: identity=brief/current.md", rendered, StringComparison.Ordinal);
+            Assert.Contains("ON-DEMAND ATTESTATION: identity=context/evidence.md", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("prior/evidence.md", rendered, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact]
     public void MandatoryFile_LargeArtifact_RendersBoundedReceipt()
     {

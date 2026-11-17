@@ -183,8 +183,10 @@ internal static partial class TerminalGoalSweep
             reclaimed = new GoalBuildRootReclaimResult([], [readFailure!]);
         string? retentionSummary = null;
         string? unstoredRetentionSummary = null;
-        var retentionDays = policy?.BuildRootRetentionDays ?? LoadBuildRootRetentionDays(stateDbPath);
-        if (retentionDays > 0)
+        var retentionPolicy = policy ?? LoadBuildRootRetentionPolicy(stateDbPath);
+        var retentionDays = retentionPolicy?.BuildRootRetentionDays ?? 0;
+        var maxBytes = retentionPolicy?.TerminalBuildRootMaxBytes;
+        if (retentionDays > 0 || maxBytes is not null)
         {
             var retentionStores = GetSharedGoalStorePaths(stateDbPath, out var retentionDiscoveryFailure,
                 canonicalRepoRoot, projectRegistry);
@@ -196,15 +198,18 @@ internal static partial class TerminalGoalSweep
                 if (read.Unavailable.Count == 0 || read.ReadableStoreCount > 0)
                     retentionSummary = new TerminalBuildRootRetention(storageRoot, registry,
                         isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
-                        .Run(read.ReadableFacts, retentionDays, MaxTerminalBuildRootReclaimsPerSweep).SummaryLine;
+                        .Run(read.ReadableFacts, retentionDays, MaxTerminalBuildRootReclaimsPerSweep, maxBytes).SummaryLine;
                 if (read.Unavailable.Count == 0)
                 {
-                    var unstored = new UnstoredGoalBuildRootRetention(storageRoot, registry,
-                        isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
-                        .Run(read.ReadableFacts.Select(fact => fact.GoalId).ToArray(), retentionStores, retentionDays,
-                            MaxOwnedBuildRootsPerSweep, MaxUnstoredBuildRootReclaimBytesPerSweep, state.UnstoredRetentionCursor);
-                    state.UnstoredRetentionCursor = unstored.NextCursor;
-                    unstoredRetentionSummary = unstored.SummaryLine;
+                    if (retentionDays > 0)
+                    {
+                        var unstored = new UnstoredGoalBuildRootRetention(storageRoot, registry,
+                            isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
+                            .Run(read.ReadableFacts.Select(fact => fact.GoalId).ToArray(), retentionStores, retentionDays,
+                                MaxOwnedBuildRootsPerSweep, MaxUnstoredBuildRootReclaimBytesPerSweep, state.UnstoredRetentionCursor);
+                        state.UnstoredRetentionCursor = unstored.NextCursor;
+                        unstoredRetentionSummary = unstored.SummaryLine;
+                    }
                 }
                 else
                     retentionSummary = read.ReadableStoreCount > 0
@@ -235,13 +240,13 @@ internal static partial class TerminalGoalSweep
             UnstoredBuildRootRetentionSummary: unstoredRetentionSummary);
     }
 
-    private static int LoadBuildRootRetentionDays(string stateDbPath)
+    private static ConductorAutonomyPolicy? LoadBuildRootRetentionPolicy(string stateDbPath)
     {
         try
         {
             var directory = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(stateDbPath))!);
-            return ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(directory).BuildRootRetentionDays;
+            return ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(directory);
         }
-        catch (Exception) { return 0; }
+        catch (Exception) { return null; }
     }
 }

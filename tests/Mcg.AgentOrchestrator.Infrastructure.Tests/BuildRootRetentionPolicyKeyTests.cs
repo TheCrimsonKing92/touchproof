@@ -35,5 +35,44 @@ public sealed class BuildRootRetentionPolicyKeyTests
         Assert.Contains("SWEEP_BUILD_ROOT_RETENTION", text);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0L)]
+    [InlineData(26181486611L)]
+    public void SizeBudget_NullZeroAndInt64_RoundTrip(long? budget)
+    {
+        var policy = ConductorAutonomyPolicy.Conservative with { TerminalBuildRootMaxBytes = budget };
+        var parsed = ConductorAutonomyPolicy.ParseJson(policy.ToJson());
+        Assert.Equal(budget, parsed.TerminalBuildRootMaxBytes);
+        Assert.Contains($"\"terminalBuildRootMaxBytes\": {budget?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null"}", policy.ToJson());
+    }
+
+    [Fact]
+    public void SizeBudget_AbsentOrNull_DefaultsToNoLimit()
+    {
+        foreach (var preset in new[] { ConductorAutonomyPolicy.Conservative,
+                     ConductorAutonomyPolicy.Permissive, ConductorAutonomyPolicy.Manual })
+            Assert.Null(preset.TerminalBuildRootMaxBytes);
+        var node = JsonNode.Parse(ConductorAutonomyPolicy.Conservative.ToJson())!.AsObject();
+        node.Remove("terminalBuildRootMaxBytes");
+        Assert.Null(ConductorAutonomyPolicy.ParseJson(node.ToJsonString()).TerminalBuildRootMaxBytes);
+        node["terminalBuildRootMaxBytes"] = null;
+        Assert.Null(ConductorAutonomyPolicy.ParseJson(node.ToJsonString()).TerminalBuildRootMaxBytes);
+    }
+
+    [Theory]
+    [InlineData("-1", "terminalBuildRootMaxBytes must be zero or greater (got -1).")]
+    [InlineData("\"5\"", "terminalBuildRootMaxBytes must be an integer or null.")]
+    [InlineData("1.5", "terminalBuildRootMaxBytes must be an integer or null.")]
+    [InlineData("9223372036854775808", "terminalBuildRootMaxBytes must be an integer or null.")]
+    [InlineData("true", "terminalBuildRootMaxBytes must be an integer or null.")]
+    public void SizeBudget_InvalidValue_IsRejected(string value, string message)
+    {
+        var node = JsonNode.Parse(ConductorAutonomyPolicy.Conservative.ToJson())!.AsObject();
+        node["terminalBuildRootMaxBytes"] = JsonNode.Parse(value);
+        var error = Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(node.ToJsonString()));
+        Assert.Contains(message, error.Message);
+    }
+
     private static string RepositoryRoot([CallerFilePath] string source = "") => VerifiedRepositoryRoot.Find(source);
 }

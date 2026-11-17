@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 public sealed class ResolveRunDirLifecycleTests
 {
@@ -141,6 +142,130 @@ public sealed class ResolveRunDirLifecycleTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Xunit.Fact]
+    public async Task Damaged_published_run_records_missing_file_inventory_and_holding_process_before_repair()
+    {
+        var root = NewTestRoot();
+        Process? holder = null;
+        try
+        {
+            var appDll = CreateOutput(root);
+            // Publish the helper as part of the expected closure so its own executable path
+            // matches process capture without adding an extra file to the damaged run.
+            File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                Path.Combine(Path.GetDirectoryName(appDll)!, "cmd.exe"));
+            var first = Resolve(root, appDll);
+            Assert.True(first.ExitCode == 0, first.Stderr);
+            var run = first.Stdout.Trim();
+            var basePath = Path.GetDirectoryName(run)!;
+            var markerPath = Path.Combine(run, ".mcg-run-closure.json");
+            using var marker = JsonDocument.Parse(File.ReadAllText(markerPath));
+            var holderScript = Path.Combine(root, "holder.cmd");
+            File.WriteAllText(holderScript, """
+                @echo off
+                (
+                    echo holding
+                    set /p release=
+                ) 3< "%~1"
+                """);
+            // Handle 3 holds the app DLL while stdin remains available for the release signal.
+            var startInfo = new ProcessStartInfo(Path.Combine(run, "cmd.exe"))
+            {
+                Arguments = $"/d /q /c \"\"{holderScript}\" \"{Path.Combine(run, Path.GetFileName(appDll))}\"\"",
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.Environment.Clear();
+            foreach (var name in new[] { "SystemRoot", "WINDIR", "COMSPEC", "PATH", "PATHEXT" })
+                startInfo.Environment[name] = Environment.GetEnvironmentVariable(name);
+            startInfo.Environment["TEMP"] = root;
+            startInfo.Environment["TMP"] = root;
+            holder = Process.Start(startInfo) ?? throw new InvalidOperationException("Holder did not start.");
+            var holderErrors = holder.StandardError.ReadToEndAsync();
+            var ready = await TestHangGuard.WaitAsync(holder.StandardOutput.ReadLineAsync(), "app DLL holder ready signal");
+            Assert.Equal("holding", ready);
+            var holderStartedAt = holder.StartTime.ToUniversalTime();
+            File.Delete(Path.Combine(run, "dependency.dll"));
+
+            var repaired = Resolve(root, appDll);
+            Assert.True(repaired.ExitCode == 0, repaired.Stderr);
+            Assert.Equal(run, repaired.Stdout.Trim());
+            Assert.Equal("dependency", File.ReadAllText(Path.Combine(run, "dependency.dll")));
+            var inventoryPath = Assert.Single(Directory.GetFiles(basePath, "run-dir-inventory-*.json"));
+            Assert.Contains(Path.GetFileName(run)[..12], Path.GetFileName(inventoryPath));
+            Assert.Empty(Directory.GetFiles(basePath, ".run-dir-inventory-*.tmp"));
+            using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
+            var evidence = inventory.RootElement;
+            Assert.Equal(1, evidence.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(run, evidence.GetProperty("runDirectory").GetString());
+            Assert.Equal(TimeSpan.Zero, evidence.GetProperty("capturedAtUtc").GetDateTimeOffset().Offset);
+            Assert.Equal(new[] { "dependency.dll" }, InventoryPaths(evidence, "missingPaths"));
+            Assert.Empty(InventoryPaths(evidence, "hashMismatchPaths"));
+            Assert.Empty(InventoryPaths(evidence, "extraPaths"));
+            foreach (var section in new[] { "expected", "marker" })
+            {
+                Assert.Equal(Path.GetFileName(run), evidence.GetProperty(section).GetProperty("digest").GetString());
+                Assert.Equal(4, evidence.GetProperty(section).GetProperty("fileCount").GetInt32());
+            }
+            Assert.Equal(marker.RootElement.GetProperty("sealedAtUtc").GetDateTimeOffset(),
+                evidence.GetProperty("marker").GetProperty("sealedAtUtc").GetDateTimeOffset());
+            var process = Assert.Single(evidence.GetProperty("processes").EnumerateArray(),
+                entry => entry.GetProperty("processId").GetInt32() == holder.Id);
+            var recordedStart = process.GetProperty("startTimeUtc").GetDateTimeOffset();
+            Assert.Equal(TimeSpan.Zero, recordedStart.Offset);
+            Assert.Equal(holderStartedAt, recordedStart.UtcDateTime);
+            Assert.Equal(Path.Combine(run, "cmd.exe"), process.GetProperty("executablePath").GetString());
+            Assert.Equal(JsonValueKind.Null, process.GetProperty("commandLine").ValueKind);
+            Assert.Contains(evidence.GetProperty("captureErrors").EnumerateArray(),
+                error => error.GetString()!.Contains("command lines are unavailable", StringComparison.Ordinal));
+            Assert.Equal(new[] { ".mcg-run-closure.json", "Mcg.AgentOrchestrator.App.dll", "cmd.exe", "dependency.dll",
+                    "runtimes/win-x64/native/e_sqlite3.dll" }.Order(StringComparer.Ordinal),
+                Directory.GetFiles(run, "*", SearchOption.AllDirectories)
+                    .Select(path => Path.GetRelativePath(run, path).Replace('\\', '/')).Order(StringComparer.Ordinal));
+
+            await holder.StandardInput.WriteLineAsync("release");
+            await TestHangGuard.WaitAsync(holder.WaitForExitAsync(), "app DLL holder exit after release");
+            Assert.Equal(0, holder.ExitCode);
+            Assert.Equal(string.Empty, await holderErrors);
+        }
+        finally
+        {
+            if (holder is not null)
+            {
+                try
+                {
+                    if (!holder.HasExited) holder.Kill(entireProcessTree: true);
+                    await TestHangGuard.WaitAsync(holder.WaitForExitAsync(), "app DLL holder cleanup exit");
+                }
+                finally { holder.Dispose(); }
+            }
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Healthy_published_run_writes_no_inventory()
+    {
+        var root = NewTestRoot();
+        try
+        {
+            var appDll = CreateOutput(root);
+            var first = Resolve(root, appDll);
+            Assert.True(first.ExitCode == 0, first.Stderr);
+            var run = first.Stdout.Trim();
+            var basePath = Path.GetDirectoryName(run)!;
+            Assert.Empty(Directory.GetFiles(basePath, "*inventory*"));
+            var warm = Resolve(root, appDll);
+            Assert.True(warm.ExitCode == 0, warm.Stderr);
+            Assert.Equal(run, warm.Stdout.Trim());
+            Assert.Empty(Directory.GetFiles(basePath, "*inventory*"));
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     [Xunit.Fact]
@@ -314,12 +439,26 @@ public sealed class ResolveRunDirLifecycleTests
             {
                 Assert.Equal(before[path], after[path]);
             }
+            var inventoryPath = Assert.Single(Directory.GetFiles(Path.GetDirectoryName(run)!, "run-dir-inventory-*.json"));
+            using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
+            Assert.Empty(InventoryPaths(inventory.RootElement, "missingPaths"));
+            Assert.Equal(damage == "different-file" ? new[] { "dependency.dll" } : Array.Empty<string>(),
+                InventoryPaths(inventory.RootElement, "hashMismatchPaths"));
+            Assert.Equal(damage switch
+            {
+                "extra-file" => new[] { "sentinel.txt" },
+                "nested-marker" => new[] { "nested/.mcg-run-closure.json" },
+                _ => Array.Empty<string>()
+            }, InventoryPaths(inventory.RootElement, "extraPaths"));
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
     }
+
+    private static string?[] InventoryPaths(JsonElement inventory, string property) =>
+        inventory.GetProperty(property).EnumerateArray().Select(path => path.GetString()).ToArray();
 
     private static string NewTestRoot()
     {
