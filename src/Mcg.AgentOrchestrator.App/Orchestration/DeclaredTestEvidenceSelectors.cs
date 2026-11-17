@@ -29,11 +29,20 @@ internal static class DeclaredTestEvidenceSelectors
         try
         {
             var path = AcceptanceManifestLocator.Resolve(worktree, projectHomeDirectory);
-            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var json = File.ReadAllText(path);
+            using var document = JsonDocument.Parse(json);
             var checks = document.RootElement.GetProperty("checks")
                 .Deserialize<GoalAcceptanceVerifier.AcceptanceManifestCheck[]>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
             var check = checks?.SingleOrDefault(DeclaredTestReportRows.IsDeclaredCheck);
-            if (check is null) return null;
+            if (check is null)
+            {
+                var crosswalk = checks?.Where(candidate =>
+                    string.Equals(candidate.Type, "crosswalk-test", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+                if (crosswalk.Length != 1 || !CrosswalkFocusedEvidence.Applies(AcceptanceGateEngineSettings.Parse(json)))
+                    return null;
+                return new(FromDeveloperReport(testsField).Select(name =>
+                    new FindingEvidenceSelection(crosswalk[0].Name, name)).ToArray(), []);
+            }
             // At request creation no candidate-bound report is available. Keep the names literal.
             return new(FromDeveloperReport(testsField).Select(name =>
                 new FindingEvidenceSelection(check.Project ?? ".", name)).ToArray(), []);

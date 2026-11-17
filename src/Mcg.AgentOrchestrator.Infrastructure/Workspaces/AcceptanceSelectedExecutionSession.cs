@@ -169,6 +169,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
             mode == AcceptanceSelectedExecutionMode.Enforce ? suspension?.MissId : null)
         {
             MethodFormResolutions = _plan?.MethodFormResolutions ?? [],
+            UnresolvedObligationSelectors = _plan?.UnresolvedObligationSelectors ?? [],
             WholeProjectCoverage = _plan?.WholeProjectCoverage is { Count: > 0 } covered ? covered : null
         };
         return observation with { SelectedExecution = record };

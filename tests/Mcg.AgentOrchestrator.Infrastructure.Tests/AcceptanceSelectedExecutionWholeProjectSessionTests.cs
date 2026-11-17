@@ -41,6 +41,7 @@ public sealed class AcceptanceSelectedExecutionWholeProjectSessionTests
 
         Assert.Equal("plan", record.Decision);
         Assert.Null(record.FullGateReason);
+        Assert.Empty(record.UnresolvedObligationSelectors);
         Assert.Equal(mode == AcceptanceSelectedExecutionMode.Enforce, record.Applied);
         Assert.Contains(effective, check => check.Name == "core tests" && check.Project == CoreTestsProject);
         Assert.Equal(1, reads.Count(project => project == CoreTestsProject));
@@ -51,6 +52,7 @@ public sealed class AcceptanceSelectedExecutionWholeProjectSessionTests
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(record, new JsonSerializerOptions
             { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
         Assert.Equal("core tests", json.RootElement.GetProperty("wholeProjectCoverage")[0].GetProperty("checkName").GetString());
+        Assert.False(json.RootElement.TryGetProperty("unresolvedObligationSelectors", out _));
     }
 
     [Fact]
@@ -75,8 +77,11 @@ public sealed class AcceptanceSelectedExecutionWholeProjectSessionTests
         var effective = GoalAcceptanceVerifier.BuildPolicyEffectiveChecks("in-memory candidate", manifest, changes,
             [], policy, lanes);
         var record = session.Observe(new(AcceptanceGateLanePlan.CurrentSchemaVersion, "attempt", [], [])).SelectedExecution!;
-        Assert.Equal("full-gate", record.Decision);
-        Assert.Equal("UnresolvedObligationSelector: " + NewClass, record.FullGateReason);
+        Assert.Equal("plan", record.Decision);
+        Assert.Equal("Resolved", record.Outcome);
+        Assert.True(record.Applied);
+        Assert.Null(record.FullGateReason);
+        Assert.Equal(NewClass, Assert.Single(record.UnresolvedObligationSelectors).Selector);
         Assert.Null(record.WholeProjectCoverage);
         Assert.DoesNotContain(effective, check => check.Project == CoreTestsProject);
     }
@@ -121,14 +126,17 @@ public sealed class AcceptanceSelectedExecutionWholeProjectSessionTests
     }
 
     [Fact]
-    public void FailedProjectScan_KeepsUnresolvedSelectorReason()
+    public void FailedProjectScan_RecordsUnresolvedSelector()
     {
         var session = Session(["tests/Mcg.AgentOrchestrator.Core.Tests/NewCoreTests.cs"], AcceptanceSelectedExecutionMode.Enforce,
             _ => throw new IOException("Cannot read candidate sources"));
         session.Transform([new("Selectable", "FullyQualifiedName~Worker")], [new("core tests", CoreTestsProject)]);
         var record = session.Observe(new(AcceptanceGateLanePlan.CurrentSchemaVersion, "attempt", [], [])).SelectedExecution!;
-        Assert.Equal("Abandoned", record.Outcome);
-        Assert.Equal("UnresolvedObligationSelector: " + NewClass, record.FullGateReason);
+        Assert.Equal("plan", record.Decision);
+        Assert.Equal("Resolved", record.Outcome);
+        Assert.True(record.Applied);
+        Assert.Null(record.FullGateReason);
+        Assert.Equal(NewClass, Assert.Single(record.UnresolvedObligationSelectors).Selector);
         Assert.Null(record.WholeProjectCoverage);
     }
 

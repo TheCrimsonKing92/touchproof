@@ -50,7 +50,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -124,7 +123,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -171,7 +169,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -223,7 +220,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -314,7 +310,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -354,7 +349,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -406,7 +400,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -546,7 +539,6 @@ public sealed partial class CollaborationItemStore
         await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -587,7 +579,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -683,7 +674,6 @@ public sealed partial class CollaborationItemStore
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {

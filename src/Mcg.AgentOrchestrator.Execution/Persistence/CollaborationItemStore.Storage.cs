@@ -10,17 +10,9 @@ public sealed partial class CollaborationItemStore
     public static CollaborationItemStore OpenExisting(string directory) =>
         new(Path.Combine(directory, "collaboration-items.db"), readOnly: true);
 
-    private string ConnectionString => CreateConnectionString(_dbPath, _readOnly);
-
-    private static string CreateConnectionString(string dbPath, bool readOnly) =>
-        $"Data Source={dbPath};Mode={(readOnly ? "ReadOnly" : "ReadWriteCreate")};Pooling=False;";
-
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        return conn;
-    }
+    internal SqliteConnection OpenConnection() =>
+        SqliteStoreConnectionPolicy.Open(_dbPath, _readOnly, SqliteStoreDurability.Strict,
+            foreignKeys: false, operationTag: "CollaborationItemStore.Open");
 
     // Bounded retry on a transient SQLITE_BUSY/LOCKED: busy_timeout (30s) handles the simple lock-wait,
     // but the deadlock-avoidance path can still surface an immediate BUSY; this turns that into a brief
@@ -54,9 +46,8 @@ public sealed partial class CollaborationItemStore
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        using var conn = new SqliteConnection(CreateConnectionString(dbPath, readOnly: false));
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        using var conn = SqliteStoreConnectionPolicy.Open(dbPath, readOnly: false,
+            SqliteStoreDurability.Strict, foreignKeys: false, operationTag: "CollaborationItemStore.Setup");
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.CollaborationItems);
         if (state == StoreSchemaState.Newer)
             return;
