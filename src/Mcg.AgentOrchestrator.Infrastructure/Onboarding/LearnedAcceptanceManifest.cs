@@ -94,7 +94,8 @@ public static class LearnedAcceptanceManifest
         {
             var ecosystemChecks = isLua
                 ? luaChecks.Checks.Select(check => (check.Name, check.Type, check.Command, check.Project, check.Arguments))
-                : nodeChecks.Checks.Select(check => (check.Name, check.Type, check.Command, check.Project, check.Arguments));
+                : nodeChecks.Checks.Concat(NodeOwnerExtraChecks.For(applied))
+                    .Select(check => (check.Name, check.Type, check.Command, check.Project, check.Arguments));
             foreach (var check in ecosystemChecks)
             {
                 var emittedCheck = new JsonObject

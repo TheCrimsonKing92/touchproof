@@ -28,7 +28,7 @@ public static class ManifestCheckComparer
         if (model.Stack == ProjectStack.Declared)
             return DeclaredManifestCheckComparer.Compare(model, manifestJson, applied);
         if (model.Stack == ProjectStack.Node)
-            return NodeManifestCheckComparer.Compare(model, manifestJson);
+            return NodeManifestCheckComparer.Compare(model, manifestJson, applied);
         var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
         if (model.Stack == ProjectStack.Go)
             return GoManifestCheckComparer.Compare(unresolved, manifestJson);

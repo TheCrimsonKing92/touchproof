@@ -16,13 +16,16 @@ public static class OwnerAnswerValidator
         @"\A[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?\z",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
+    private static readonly Regex ExtraName = new(
+        @"\A[A-Za-z0-9-]+\z", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
     public static bool HasRule(string factKey) => FindRule(factKey) is not null;
 
     public static string Validate(string factKey, string value)
     {
         var rule = FindRule(factKey);
         if (rule is not null) return rule(value ?? "");
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, {DeclaredToolHomeValidator.KeyPrefix}<VARIABLE>, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}, {NodeVerificationChecks.RegistryQuestion}.");
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, {DeclaredToolHomeValidator.KeyPrefix}<VARIABLE>, commands/<unit>/test, commands/<unit>/timeoutMinutes, commands/<unit>/extra/<name>, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}, {NodeVerificationChecks.RegistryQuestion}.");
     }
 
     // Recognition and validation select the same rule, so the console cannot offer an unsupported key.
@@ -32,6 +35,18 @@ public static class OwnerAnswerValidator
             return value => OwnerAnsweredEnvironmentTools.Validate(factKey, value);
         if (DeclaredToolHomeValidator.IsToolHomeKey(factKey))
             return value => DeclaredToolHomeValidator.Validate(factKey[DeclaredToolHomeValidator.KeyPrefix.Length..], value);
+        if (TryParseExtraKey(factKey, out _))
+            return value =>
+            {
+                try
+                {
+                    return string.Join(" ", DeclaredCommandLine.Parse(value));
+                }
+                catch (ArgumentException exception)
+                {
+                    throw new ArgumentException($"{factKey} requires a non-empty command line with no shell operators, backticks or quotes.", exception);
+                }
+            };
         if (factKey is DefaultTimeoutKey or BuildServerShutdownKey or DiscoveryKey ||
             (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
              factKey.EndsWith("/timeoutMinutes", StringComparison.Ordinal) &&
@@ -79,5 +94,19 @@ public static class OwnerAnswerValidator
             };
 
         return null;
+    }
+
+    internal static bool TryParseExtraKey(string factKey, out string unit)
+    {
+        const string prefix = "commands/";
+        const string separator = "/extra/";
+        unit = "";
+        if (!factKey.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        var separatorIndex = factKey.LastIndexOf(separator, StringComparison.Ordinal);
+        if (separatorIndex <= prefix.Length || !ExtraName.IsMatch(factKey[(separatorIndex + separator.Length)..]))
+            return false;
+        unit = factKey[prefix.Length..separatorIndex];
+        return true;
     }
 }

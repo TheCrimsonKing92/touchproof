@@ -6,14 +6,16 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Compares learned Node invocations with command and whole-suite crosswalk checks.</summary>
 internal static class NodeManifestCheckComparer
 {
-    internal static IReadOnlyList<ManifestCheckComparison> Compare(ProjectModel model, string manifestJson)
+    internal static IReadOnlyList<ManifestCheckComparison> Compare(ProjectModel model, string manifestJson,
+        AppliedOwnerAnswers? applied = null)
     {
-        var (learned, blockers) = NodeVerificationChecks.For(model);
+        var (checks, blockers) = NodeVerificationChecks.For(model);
         var manifest = ReadChecks(manifestJson);
         if (blockers.Count > 0)
             return blockers.Select(blocker => new ManifestCheckComparison(blocker.FactKey,
                 ManifestCheckResultKind.Unresolved, null, null, blocker.Reason)).ToArray();
 
+        var learned = checks.Concat(NodeOwnerExtraChecks.For(applied));
         var results = new List<ManifestCheckComparison>();
         var used = new HashSet<NodeVerificationChecks.Check>();
         foreach (var check in learned)
@@ -83,7 +85,7 @@ internal static class NodeManifestCheckComparer
             var name = ReadString(check, "name") ?? "";
             var type = (ReadString(check, "type") ?? "command").ToLowerInvariant();
             var command = ReadString(check, "command");
-            if (type != "crosswalk-test" && !(type == "command" && command is "npm" or "npx") &&
+            if (type != "crosswalk-test" && type != "command" &&
                 !NodeVerificationChecks.Entries.Any(entry => entry.Name == name))
                 continue;
             if (type == "crosswalk-test" && TryProperty(check, "project", out var project) && project.ValueKind != JsonValueKind.String)
