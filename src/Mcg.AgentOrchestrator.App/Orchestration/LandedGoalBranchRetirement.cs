@@ -25,13 +25,62 @@ internal static class LandedGoalBranchRetirement
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
         out Proof? proof,
         GoalAncestryCache? ancestryCache = null)
+        => TryGetLandedBranchTip(goal, branchFacts, branchTip, mainSha, journal, mergeTrainStore,
+            cohortStore, executionDirectory, gitRunner, out proof, out _, ancestryCache);
+
+    public static string? TryGetLandedBranchTip(
+        Goal goal,
+        GoalBranchFacts branchFacts,
+        string? branchTip,
+        string? mainSha,
+        GoalOperationJournalSummary journal,
+        MergeTrainAcceptanceStore mergeTrainStore,
+        CohortAcceptanceStore cohortStore,
+        string executionDirectory,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        out Proof? proof,
+        out string? failingCheck,
+        GoalAncestryCache? ancestryCache = null)
     {
         proof = null;
-        if (goal.Status != GoalStatus.Completed || !branchFacts.HasGoalBranch ||
-            branchFacts.BranchAlreadyLanded || branchFacts.ContentState == GoalBranchContentState.EquivalentToMain ||
-            string.IsNullOrWhiteSpace(branchTip) || string.IsNullOrWhiteSpace(mainSha) ||
-            GoalOperationJournal.TryGetLatestLandingIntent(journal) is not { } intent)
+        failingCheck = null;
+        if (goal.Status is not (GoalStatus.Completed or GoalStatus.Verified))
+        {
+            failingCheck = "status";
             return null;
+        }
+        if (!branchFacts.HasGoalBranch)
+        {
+            failingCheck = "missing-branch";
+            return null;
+        }
+        if (branchFacts.BranchAlreadyLanded)
+        {
+            failingCheck = "branch-already-landed";
+            return null;
+        }
+        // Completed equivalent branches use the sweep's existing content retirement path.
+        // Verified branches still need the durable landing proof below.
+        if (goal.Status == GoalStatus.Completed && branchFacts.ContentState == GoalBranchContentState.EquivalentToMain)
+        {
+            failingCheck = "content-equivalent";
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(branchTip))
+        {
+            failingCheck = "missing-tip";
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(mainSha))
+        {
+            failingCheck = "missing-main";
+            return null;
+        }
+        if (GoalOperationJournal.TryGetLatestLandingIntent(journal) is not { } intent)
+        {
+            failingCheck = "missing-landing-intent";
+            return null;
+        }
 
         var finalized = mergeTrainStore.ReadFinalizedLandingsForGoal(goal.Id)
             .Concat(cohortStore.ReadFinalizedLandingsForGoal(goal.Id))
@@ -45,7 +94,10 @@ internal static class LandedGoalBranchRetirement
             isAncestor = AcceptanceCriterionEvidenceRecovery.IsAncestor(
                 executionDirectory, intent.MergeCommitSha, mainSha, gitRunner, ancestryCache);
             if (!isAncestor.Value)
+            {
+                failingCheck = "landing-commit-not-on-main";
                 return null;
+            }
             var landing = finalized.FirstOrDefault(item =>
                 string.Equals(item.CandidateRevision, branchTip, StringComparison.OrdinalIgnoreCase));
             if (landing is not null)
@@ -72,12 +124,16 @@ internal static class LandedGoalBranchRetirement
         }
 
         if (proof is null)
+        {
+            failingCheck = "no-matching-receipt";
             return null;
+        }
         if (isAncestor ?? AcceptanceCriterionEvidenceRecovery.IsAncestor(
             executionDirectory, intent.MergeCommitSha, mainSha, gitRunner, ancestryCache))
             return branchTip;
 
         proof = null;
+        failingCheck = "landing-commit-not-on-main";
         return null;
     }
 }
