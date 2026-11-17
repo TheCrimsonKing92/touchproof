@@ -61,7 +61,8 @@ public sealed class ProjectPolicySeedingStartupTests : HostCapacityBoundTestBase
         Assert.Equal("ProjectPermissive", second.Policy.Name);
         Assert.Equal("", output.ToString());
         Assert.Equal(bytes, File.ReadAllBytes(policyPath));
-        Assert.Equal([policyPath], Directory.GetFileSystemEntries(directory));
+        Assert.Equal([policyPath, ConductorPolicyLastValidSnapshot.PathFor(directory)],
+            Directory.GetFileSystemEntries(directory).Order(StringComparer.Ordinal));
     }
 
     [Fact]
