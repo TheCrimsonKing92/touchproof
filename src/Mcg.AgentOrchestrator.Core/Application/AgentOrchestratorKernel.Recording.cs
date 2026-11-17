@@ -40,6 +40,7 @@ public sealed partial class AgentOrchestratorKernel
     private const int ProviderConnectivityRetryLimit = 3;
     private const int ProviderInterruptionRetryLimit = 3;
     private const int VerificationContractRepairLimit = 2;
+    private static readonly TimeSpan UnparsedSubscriptionLimitRetryDelay = TimeSpan.FromMinutes(5);
 
     public void RecordTaskVerification(GoalId goalId, TaskId taskId, TaskVerificationRecord verification)
     {
@@ -452,10 +453,9 @@ public sealed partial class AgentOrchestratorKernel
         if (!verification.Succeeded &&
             outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit)
         {
-            if (ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
-            {
-                task.SetSubscriptionRetryAfter(retryAfter);
-            }
+            if (!ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
+                retryAfter = _clock.UtcNow + UnparsedSubscriptionLimitRetryDelay;
+            task.SetSubscriptionRetryAfter(retryAfter);
 
             var recoverableLimitFailures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
             task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);

@@ -91,16 +91,24 @@ public static class ProviderLimitSignals
         cooldown = default!;
         return IsSubscriptionRetryDeferred(task, now, out var retryAfter) &&
             task.VerificationHistory.LastOrDefault() is { } verification &&
-            TryGetSubscriptionCooldown(task, verification, now, out cooldown) &&
+            TryGetSubscriptionCooldown(task, verification, now, out cooldown, task.SubscriptionRetryAfter) &&
             cooldown.RetryAfter == retryAfter;
     }
 
     private static bool TryGetSubscriptionCooldown(TaskSpec task, TaskVerificationRecord verification,
-        DateTimeOffset now, out ProviderSubscriptionCooldown cooldown)
+        DateTimeOffset now, out ProviderSubscriptionCooldown cooldown, DateTimeOffset? storedFallback = null)
     {
         cooldown = default!;
-        if (verification.Succeeded || !IsRecoverableSubscriptionLimitFailure(verification) ||
-            !TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter) || retryAfter <= now)
+        if (verification.Succeeded || !IsRecoverableSubscriptionLimitFailure(verification))
+            return false;
+        if (!TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
+        {
+            // Only the task's latest refusal may use its stored recording-time fallback.
+            if (storedFallback is not { } fallback || fallback <= verification.CompletedAt)
+                return false;
+            retryAfter = fallback;
+        }
+        if (retryAfter <= now)
             return false;
         var dispatch = FindDispatchForVerification(task, verification);
         if (dispatch?.ProviderName is not { Length: > 0 } providerName ||

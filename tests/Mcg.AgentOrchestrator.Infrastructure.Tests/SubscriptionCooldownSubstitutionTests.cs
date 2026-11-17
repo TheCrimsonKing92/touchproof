@@ -8,6 +8,118 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class SubscriptionCooldownSubstitutionTests
 {
     [Xunit.Theory]
+    [Xunit.InlineData("You've hit your Fable limit · resets 11am (America/Chicago)", true)]
+    [Xunit.InlineData("You've hit your Fable limit · resets 11am (America/Chicago)", false)]
+    [Xunit.InlineData("You've hit your Fable limit · resets someday", true)]
+    [Xunit.InlineData("ERROR: You've hit your usage limit.", false)]
+    public void Start_DatelessOrUnparsedLimit_SubstitutesAndDispatchesAlternate(string refusal, bool sameProvider)
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        scenario.Clock.UtcNow = DateTimeOffset.Parse("2030-11-14T12:00:00Z");
+        var alternate = sameProvider
+            ? Scenario.Agent("opus-planner", "Anthropic", "claude-cli", "claude-opus-5-5")
+            : scenario.Alternate;
+        scenario.Agents = [scenario.Primary, alternate];
+        var goal = scenario.NewGoal();
+        var task = Assert.Single(goal.Tasks);
+        var recordedAt = scenario.Clock.UtcNow;
+        scenario.Limit(goal, refusal, model: "claude-fable-5-2", stdout: true);
+        var reset = refusal.Contains("11am", StringComparison.Ordinal)
+            ? DateTimeOffset.Parse("2030-11-14T17:00:00Z") : recordedAt.AddMinutes(5);
+        Assert.Equal(reset, task.SubscriptionRetryAfter);
+        Assert.Equal(1, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
+        Assert.Equal(AgentStatus.Available, alternate.Status);
+        var result = Assert.IsType<ProviderHoldAgentSubstitution.Result.Substitute>(scenario.Resolve(goal));
+        Assert.Equal(alternate.Id, result.Agent.Id);
+        Assert.Equal(reset, result.SubscriptionCooldown!.RetryAfter);
+
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+
+        Assert.Equal(alternate.Id, task.AssignedAgentId);
+        Assert.Null(task.SubscriptionRetryAfter);
+        var preflight = scenario.Preflight(goal, task, scenario.Kernel.Goals);
+        Assert.True(preflight.Allowed, string.Join("; ", preflight.Findings));
+        Assert.DoesNotContain(preflight.Findings, finding => finding.Contains("require operator review", StringComparison.Ordinal));
+        Assert.Equal(1, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
+        var evt = Assert.Single(goal.Timeline, item => item.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.Contains($"substitute={alternate.Id.Value}", evt.Message, StringComparison.Ordinal);
+        Assert.Contains($"reset={reset:O}", evt.Message, StringComparison.Ordinal);
+        using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
+        var launches = 0;
+
+        var started = scenario.Start(goal, requested => { launches++; return worker.Start(requested); });
+
+        Assert.Equal(1, launches);
+        Assert.Single(started.Dispatches);
+        Assert.Single(started.Processes.Tasks);
+        Assert.Equal(alternate.Id.Value, task.LastDispatch!.AssignedAgentId);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("You've hit your Fable limit · resets 11am (America/Chicago)")]
+    [Xunit.InlineData("ERROR: You've hit your usage limit.")]
+    public void Start_DeferredLimitWithoutAlternate_DoesNotLaunchOriginalSeat(string refusal)
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        scenario.Clock.UtcNow = DateTimeOffset.Parse("2030-11-14T12:00:00Z");
+        scenario.Agents = [scenario.Primary];
+        var goal = scenario.NewGoal();
+        var task = Assert.Single(goal.Tasks);
+        scenario.Limit(goal, refusal, model: "claude-fable-5-2", stdout: true);
+        var retryAfter = task.SubscriptionRetryAfter;
+        var preflight = scenario.Preflight(goal, task, scenario.Kernel.Goals);
+        Assert.False(preflight.Allowed);
+        Assert.Contains(preflight.Findings, finding => finding.StartsWith("blocked: subscription retry deferred until", StringComparison.Ordinal));
+        Assert.DoesNotContain(preflight.Findings, finding => finding.Contains("require operator review", StringComparison.Ordinal));
+        var launches = 0;
+
+        var started = scenario.Start(goal, _ =>
+        {
+            launches++;
+            throw new InvalidOperationException("Deferred seat must not launch.");
+        });
+
+        Assert.Equal(0, launches);
+        Assert.Empty(started.Dispatches);
+        Assert.Empty(started.Processes.Tasks);
+        Assert.Single(task.DispatchHistory);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
+        Assert.Equal(retryAfter, task.SubscriptionRetryAfter);
+        Assert.Equal(1, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
+    }
+
+    [Xunit.Fact]
+    public void Apply_NoAlternate_SecondUnparsedRefusalRetainsReviewBlock()
+    {
+        using var scenario = new Scenario();
+        scenario.Agents = [scenario.Primary];
+        var goal = scenario.NewGoal();
+        var task = Assert.Single(goal.Tasks);
+        const string refusal = "ERROR: You've hit your usage limit.";
+        scenario.Limit(goal, refusal);
+        Assert.Equal(1, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
+        Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
+        Assert.DoesNotContain(scenario.Preflight(goal, task, scenario.Kernel.Goals).Findings,
+            finding => finding.Contains("require operator review", StringComparison.Ordinal));
+        scenario.Clock.UtcNow = task.SubscriptionRetryAfter!.Value.AddSeconds(1);
+        var afterExpiry = scenario.Preflight(goal, task, scenario.Kernel.Goals);
+        Assert.True(afterExpiry.Allowed, string.Join("; ", afterExpiry.Findings));
+
+        scenario.Limit(goal, refusal);
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+
+        Assert.Equal(2, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
+        Assert.True(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
+        var preflight = scenario.Preflight(goal, task, scenario.Kernel.Goals);
+        Assert.False(preflight.Allowed);
+        Assert.Contains("blocked: repeated recoverable subscription limits require operator review", preflight.Findings);
+        Assert.IsType<ProviderHoldAgentSubstitution.Result.None>(scenario.Resolve(goal));
+        Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
     public void Start_ModelLimit_SelectsFirstUsableSeat(bool bothModelsLimited)
@@ -351,17 +463,58 @@ public sealed class SubscriptionCooldownSubstitutionTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("mismatched-attempt")]
+    [Xunit.InlineData("not-after-completion")]
+    [Xunit.InlineData("non-limit")]
+    [Xunit.InlineData("succeeded")]
+    public void Cooldown_UnparsedFallback_RequiresLatestMatchingRecoverableRefusal(string control)
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        var task = Assert.Single(goal.Tasks);
+        scenario.Limit(goal, "ERROR: You've hit your usage limit.");
+        Assert.True(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, scenario.Clock.UtcNow, out _));
+        var verification = Assert.Single(task.VerificationHistory);
+        var fallback = task.SubscriptionRetryAfter;
+        task.RecordVerification(control switch
+        {
+            "not-after-completion" => verification with { CompletedAt = fallback!.Value },
+            "mismatched-attempt" => verification with { DispatchAttemptAt = verification.DispatchStartedAt!.Value.AddSeconds(1) },
+            "non-limit" => verification with { StandardError = "ERROR: Unable to connect to API: network connection failed." },
+            "succeeded" => verification with { ExitCode = 0 },
+            _ => throw new InvalidOperationException("Unknown cooldown control.")
+        });
+        task.SetSubscriptionRetryAfter(fallback);
+
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, scenario.Clock.UtcNow, out _));
+        Assert.False(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, scenario.Clock.UtcNow, out _));
+        Assert.IsType<ProviderHoldAgentSubstitution.Result.None>(scenario.Resolve(goal));
+    }
+
+    [Xunit.Fact]
+    public void Cooldown_UnparsedFallback_DoesNotBecomeProviderWideHoldForSibling()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        var task = Assert.Single(goal.Tasks);
+        scenario.Limit(goal, "ERROR: You've hit your usage limit.");
+        Assert.True(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, scenario.Clock.UtcNow, out _));
+        var sibling = scenario.Kernel.AddTask(goal.Id, AgentRole.Planner, "Another request.", [scenario.Primary]);
+
+        Assert.False(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
+            goal, sibling.Id, "Anthropic", scenario.Clock.UtcNow, out _));
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("expired")]
     [Xunit.InlineData("at-reset")]
-    [Xunit.InlineData("missing-reset")]
     [Xunit.InlineData("connectivity")]
     [Xunit.InlineData("unrelated-provider")]
     public void Resolve_NonApplicableEvidence_DoesNotSubstitute(string control)
     {
         using var scenario = new Scenario();
         var goal = scenario.NewGoal();
-        scenario.Limit(goal, control == "missing-reset" ? "ERROR: You've hit your usage limit."
-            : control == "connectivity" ? "ERROR: Unable to connect to API: network connection failed."
+        scenario.Limit(goal, control == "connectivity" ? "ERROR: Unable to connect to API: network connection failed."
             : Scenario.LimitText, control == "unrelated-provider" ? "OpenAI" : null);
         if (control is "expired" or "at-reset")
             scenario.Clock.UtcNow = goal.Tasks.Single().SubscriptionRetryAfter!.Value.AddSeconds(control == "expired" ? 1 : 0);

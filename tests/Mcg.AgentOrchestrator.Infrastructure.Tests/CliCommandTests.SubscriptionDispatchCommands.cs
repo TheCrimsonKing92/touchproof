@@ -10,6 +10,11 @@ using System.Text.Json;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTestBase
 {
+    private sealed class LimitReviewClock(DateTimeOffset now) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = now;
+    }
+
     [Xunit.Fact(DisplayName = "Cli_start_dispatch_interactive_and_one_shot_multi_flags_match")]
     public void CliStartDispatchInteractiveAndOneShotMultiFlagsMatch()
     {
@@ -2692,7 +2697,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var root = CreateTempDirectory();
         Directory.CreateDirectory(Path.Combine(root, "repo"));
         var workspace = CreateRefinedWorkspace(root);
-        var kernel = new AgentOrchestratorKernel();
+        var clock = new LimitReviewClock(DateTimeOffset.UtcNow.AddMinutes(-20));
+        var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Review subscription limits", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         MarkGoalRefined(kernel, goal);
         IReadOnlyList<AgentDefinition> agents =
@@ -2719,7 +2725,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             "codex-cli",
             "codex exec attempt 1",
             root,
-            DateTimeOffset.UtcNow,
+            clock.UtcNow,
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 1",
@@ -2727,12 +2733,13 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             1,
             string.Empty,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
-            DateTimeOffset.UtcNow));
+            clock.UtcNow));
+        clock.UtcNow = clock.UtcNow.AddMinutes(6);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             "codex-cli",
             "codex exec attempt 2",
             root,
-            DateTimeOffset.UtcNow,
+            clock.UtcNow,
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 2",
@@ -2740,8 +2747,10 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             1,
             string.Empty,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
-            DateTimeOffset.UtcNow));
+            clock.UtcNow));
 
+        clock.UtcNow = DateTimeOffset.UtcNow;
+        Xunit.Assert.True(task.SubscriptionRetryAfter < clock.UtcNow);
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["subscription-dispatch", "1"],
             kernel,
@@ -2788,7 +2797,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var kernel = new AgentOrchestratorKernel();
+        var clock = new LimitReviewClock(DateTimeOffset.UtcNow.AddMinutes(-20));
+        var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Review subscription limit from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         MarkGoalRefined(kernel, goal);
         IReadOnlyList<AgentDefinition> agents =
@@ -2814,7 +2824,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             "codex-cli",
             "codex exec attempt 1",
             root,
-            DateTimeOffset.UtcNow,
+            clock.UtcNow,
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 1",
@@ -2822,12 +2832,13 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             1,
             string.Empty,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
-            DateTimeOffset.UtcNow));
+            clock.UtcNow));
+        clock.UtcNow = clock.UtcNow.AddMinutes(6);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             "codex-cli",
             "codex exec attempt 2",
             root,
-            DateTimeOffset.UtcNow,
+            clock.UtcNow,
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 2",
@@ -2835,7 +2846,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             1,
             string.Empty,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
-            DateTimeOffset.UtcNow));
+            clock.UtcNow));
+        clock.UtcNow = DateTimeOffset.UtcNow;
+        Xunit.Assert.True(task.SubscriptionRetryAfter < clock.UtcNow);
         var note = "Reviewed from a file.\n\nProfile and timing are acceptable.";
         var notePath = Path.Combine(root, "limit-review.md");
         File.WriteAllText(notePath, note, System.Text.Encoding.UTF8);

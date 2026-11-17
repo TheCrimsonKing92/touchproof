@@ -17,9 +17,10 @@ internal static partial class CliRefusalSignals
     {
         retryAfter = default;
         var match = AbsoluteCliReset().Match(line);
-        if (!match.Success ||
-            !DateTime.TryParseExact(match.Groups["month"].Value, "MMM", CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out var month))
+        var dateless = !match.Success;
+        if (dateless)
+            match = DatelessCliReset().Match(line);
+        if (!match.Success)
         {
             return false;
         }
@@ -42,6 +43,12 @@ internal static partial class CliRefusalSignals
         }
 
         hour = hour % 12 + (match.Groups["ampm"].Value.Equals("pm", StringComparison.OrdinalIgnoreCase) ? 12 : 0);
+        if (dateless)
+            return TryGetNextLocalReset(zone, completedAt, hour, minute, out retryAfter);
+
+        if (!DateTime.TryParseExact(match.Groups["month"].Value, "MMM", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var month))
+            return false;
         var day = int.Parse(match.Groups["day"].Value, CultureInfo.InvariantCulture);
         var year = completedAt.UtcDateTime.Year;
         try
@@ -68,6 +75,41 @@ internal static partial class CliRefusalSignals
             // Impossible dates and unsupported years leave the existing limit hold without a reset.
         }
 
+        return false;
+    }
+
+    private static bool TryGetNextLocalReset(TimeZoneInfo zone, DateTimeOffset completedAt,
+        int hour, int minute, out DateTimeOffset retryAfter)
+    {
+        retryAfter = default;
+        try
+        {
+            var date = TimeZoneInfo.ConvertTime(completedAt, zone).Date;
+            for (var day = 0; day <= 2; day++)
+            {
+                var local = date.AddDays(day).AddHours(hour).AddMinutes(minute);
+                if (zone.IsInvalidTime(local))
+                    continue;
+
+                // A repeated clock time has two instants; the larger offset occurs first.
+                var offsets = zone.IsAmbiguousTime(local)
+                    ? zone.GetAmbiguousTimeOffsets(local).OrderByDescending(offset => offset).ToArray()
+                    : new[] { zone.GetUtcOffset(local) };
+                foreach (var offset in offsets)
+                {
+                    var candidate = new DateTimeOffset(local, offset).ToUniversalTime();
+                    if (candidate > completedAt)
+                    {
+                        retryAfter = candidate;
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (ArgumentException)
+        {
+            // An unsupported date leaves the reset unparseable.
+        }
         return false;
     }
 
@@ -100,6 +142,9 @@ internal static partial class CliRefusalSignals
 
     [GeneratedRegex(@"\bresets\s+(?<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(?<day>\d{1,2}),?\s+(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<ampm>am|pm)\s*\((?<zone>[A-Za-z_]+(?:/[A-Za-z0-9_+\-]+)+)\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex AbsoluteCliReset();
+
+    [GeneratedRegex(@"\bresets\s+(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<ampm>am|pm)\s*\((?<zone>[A-Za-z_]+(?:/[A-Za-z0-9_+\-]+)+)\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex DatelessCliReset();
 
     [GeneratedRegex(@"^API Error:?\s*(?<status>[1-5]\d{2})\b", RegexOptions.CultureInvariant)]
     private static partial Regex CliApiErrorStatus();
