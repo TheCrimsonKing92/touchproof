@@ -229,6 +229,92 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
         }
     }
 
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task ScopedUnreadableSnapshotRetainsAcceptanceAfterWorkerCompletes()
+    {
+        var time = new ManualConductorTimeProviderForTests(
+            new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+        await using var fixture = new HoldingAcceptanceAttemptsAcrossTicksFixture(time);
+        var kernel = new AgentOrchestratorKernel();
+        var acceptanceGoal = CreateVerifiedSimpleGoal(kernel, "Update src/UnreadableScopedAcceptance.cs");
+        var starts = 0;
+        var driver = MakeAcceptanceDriver(fixture, () => starts++);
+        CaptureConsole(() => fixture.RunTickForTests(kernel, driver));
+        var handle = fixture.RequiredHandleForTests(acceptanceGoal);
+        Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(acceptanceGoal.Id.Value));
+        var metadataPath = handle.Attempt.MetadataPath;
+        var validMetadata = File.ReadAllText(metadataPath);
+
+        var scopedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel, DefaultAgents(), "Finish scoped worker while acceptance remains live");
+        RecordLiveWorker(kernel, scopedGoal);
+        var worker = scopedGoal.Tasks.Single();
+        var snapshot = ConductorMaxDurationSnapshotBuilder.Build(kernel, driver, scopedGoal.Id.Value, null);
+        Assert.Null(snapshot.Failure);
+        Assert.Equal(2, snapshot.Attempts.Count);
+        File.WriteAllText(metadataPath, "not-json");
+        snapshot = ConductorMaxDurationSnapshotBuilder.Build(kernel, driver, scopedGoal.Id.Value, null);
+        Assert.NotNull(snapshot.Failure);
+        Assert.Equal(ConductorMaxDurationInFlightKind.WorkerDispatch, Assert.Single(snapshot.Attempts).Kind);
+
+        var deferrals = 0;
+        var sleeps = 0;
+        BatchLoopSummary? summary = null;
+        var text = CaptureConsole(() => summary = new ConductorBatchLoop(
+            utcNow: time.GetUtcNow,
+            detachGoalRunningDispatches: (_, goal) => Assert.False(goal.Tasks.Single().LastProcess!.IsRunning)).Run(
+                kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                onlyGoalId: scopedGoal.Id.Value, maxDuration: TimeSpan.Zero,
+                maxDurationDeferralCeiling: TimeSpan.FromSeconds(30),
+                keepAliveWhenIdle: true, watchInterval: TimeSpan.FromSeconds(1),
+                onMaxDurationDeferralStateChanged: deferred =>
+                {
+                    if (deferred && ++deferrals == 1)
+                        File.WriteAllText(metadataPath, validMetadata);
+                },
+                sleepFunc: _ =>
+                {
+                    sleeps++;
+                    if (sleeps == 1)
+                    {
+                        Assert.Equal(1, deferrals);
+                        Assert.True(worker.LastProcess!.IsRunning);
+                        var completed = worker.LastProcess with { CompletedAt = time.GetUtcNow(), ExitCode = 0 };
+                        kernel.RecordTaskProcessRefreshed(scopedGoal.Id, worker.Id, completed, null);
+                        kernel.RecordTaskVerification(scopedGoal.Id, worker.Id,
+                            new TaskVerificationRecord(completed.Command, completed.WorkingDirectory,
+                                0, "worker finished", string.Empty, time.GetUtcNow()));
+                        Assert.True(DispatchProcessCompletionState.HasAlreadyBeenApplied(worker, worker.LastProcess!));
+                        time.AdvanceForTests(TimeSpan.FromSeconds(1));
+                    }
+                    else if (sleeps == 2)
+                    {
+                        Assert.Equal(2, deferrals);
+                        Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(acceptanceGoal.Id.Value));
+                        Assert.Equal(WorkTaskStatus.Completed, worker.Status);
+                        time.AdvanceForTests(TimeSpan.FromSeconds(30));
+                    }
+                    else
+                        throw new InvalidOperationException("Restored acceptance did not reach the deferral ceiling.");
+                    return false;
+                }));
+
+        Assert.Equal(2, sleeps);
+        Assert.Equal("max-duration", summary!.StopReason);
+        Assert.Equal(0, starts);
+        Assert.False(worker.LastProcess!.WasGracefullyDetachedByConductor);
+        Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(acceptanceGoal.Id.Value));
+        var lines = text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var deferred = Assert.Single(lines, line => line.StartsWith("LOOP_STOP_DEFERRED ", StringComparison.Ordinal));
+        Assert.Contains("inflightStateUnavailable=true", deferred, StringComparison.Ordinal);
+        Assert.Contains($"workers=worker:{worker.Id.Value}:{worker.LastProcess.ProcessId}", deferred, StringComparison.Ordinal);
+        var stopped = Assert.Single(lines, line => line.StartsWith("LOOP_STOP ", StringComparison.Ordinal));
+        Assert.Contains("reason=max-duration", stopped, StringComparison.Ordinal);
+        Assert.Contains("deferralExpired=true", stopped, StringComparison.Ordinal);
+        Assert.Contains(handle.Attempt.AttemptId, stopped, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public void MaxDurationBoundary_WithoutInFlightAttempt_StopsWithoutDeferral()
     {

@@ -654,7 +654,7 @@ internal sealed partial class ConductorBatchLoop
                 if (verdict.Kind == ConductorMaxDurationStopVerdictKind.Defer)
                 {
                     isDeferringMaxDurationStop = true;
-                    if (maxDurationDeferredAttemptIds is null && verdict.Attempts.Count > 0)
+                    if (maxDurationDeferredAttemptIds is null && snapshot.Failure is null && verdict.Attempts.Count > 0)
                         maxDurationDeferredAttemptIds = verdict.Attempts.Select(attempt => attempt.AttemptId).ToHashSet(StringComparer.Ordinal);
                     onMaxDurationDeferralStateChanged?.Invoke(true);
                     if (!maxDurationDeferralAnnounced)
