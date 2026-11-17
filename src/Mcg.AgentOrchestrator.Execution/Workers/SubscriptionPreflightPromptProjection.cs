@@ -6,6 +6,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class SubscriptionPreflightPromptProjection
 {
+    public static string ReadLegacyPromptSection(string contextDirectory)
+    {
+        var reportPath = Path.Combine(contextDirectory, "subscription-preflight.md");
+        var (bytes, _) = Apply("subscription-preflight.md", reportPath, File.ReadAllBytes(reportPath), null);
+        return Encoding.UTF8.GetString(bytes);
+    }
+
     public static (byte[] Bytes, ContextDeliveryMode? DeliveryMode) Apply(
         string artifactPath,
         string fullReportPath,

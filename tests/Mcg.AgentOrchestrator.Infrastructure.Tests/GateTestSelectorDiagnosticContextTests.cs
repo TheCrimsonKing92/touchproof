@@ -45,6 +45,7 @@ public sealed class GateTestSelectorDiagnosticContextTests
         Assert.Contains("Full report: " + reportPath, prompt);
         foreach (var finding in diagnostic.Skip(1))
         {
+            Assert.DoesNotContain(finding, prompt);
             var entry = JsonSerializer.Deserialize<GateTestSelectorDiagnostic.Entry>(finding[(GateTestSelectorDiagnostic.Marker.Length + 1)..])!;
             Assert.Contains($"- criterion={entry.CriterionIndex?.ToString() ?? "?"} obligation={entry.ObligationId[..8]} selector={entry.EffectiveSelector} status={entry.Status}", prompt);
         }

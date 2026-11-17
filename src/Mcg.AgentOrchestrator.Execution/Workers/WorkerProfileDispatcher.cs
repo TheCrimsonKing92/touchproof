@@ -249,7 +249,7 @@ public static partial class WorkerProfileDispatcher
         if (!usesTypedContextPackage && linkedBacklogPointer is not null)
             brief = brief with { Content = brief.Content + "\n\n" + linkedBacklogPointer };
         if (!usesTypedContextPackage && preparationFindings.Count > 0)
-            brief = brief with { Content = brief.Content + "\n\n" + string.Join(Environment.NewLine, preparationFindings) };
+            brief = brief with { Content = brief.Content + "\n\n" + SubscriptionPreflightPromptProjection.ReadLegacyPromptSection(contextDirectory) };
         WorkerContextPackageReceipt? contextPackageReceipt = null;
         WorkerContextPackage? contextPackage = null;
         var packagedBrief = brief;
