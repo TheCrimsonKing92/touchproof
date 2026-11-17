@@ -1238,7 +1238,8 @@ public sealed class HermesAcpTrialTests
             string versionStandardError,
             int versionExitCode,
             bool versionJobExitConfirmed,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            HermesLaunchContext? launchContext = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(receipt);
