@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Executes learned dotnet or go commands directly, with bounded lifetime and no shell interpretation.</summary>
+/// <summary>Executes learned dotnet, go or npx commands with bounded lifetime.</summary>
 public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
 {
     private readonly TimeSpan _timeout;
@@ -18,7 +18,7 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
     public static string? MeasurableTool(string command)
     {
         var tool = Tokenize(command).FirstOrDefault();
-        return tool is "dotnet" or "go" ? tool : null;
+        return tool is "dotnet" or "go" or "npx" ? tool : null;
     }
 
     public UnitCommandMeasurementResult Measure(string repositoryRoot, string unitId, UnitCommandKinds kind, string command)
@@ -37,7 +37,15 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var token in tokens.Skip(1)) start.ArgumentList.Add(token);
+        if (tool == "npx" && OperatingSystem.IsWindows())
+        {
+            // Windows npm installs expose npx.cmd; reuse the gate's PATH resolution and batch-file launch.
+            start = AcceptanceShellProcessStartInfo.Build(tokens.ToArray(), repositoryRoot, null, null,
+                forceUtf8ConsoleOutput: false, configureEnvironment: null, resolveBareCommand: true, out _);
+            start.RedirectStandardInput = true;
+        }
+        else
+            foreach (var token in tokens.Skip(1)) start.ArgumentList.Add(token);
         using var process = new HandleListLaunchedProcess { StartInfo = start };
         var clock = Stopwatch.StartNew();
         try

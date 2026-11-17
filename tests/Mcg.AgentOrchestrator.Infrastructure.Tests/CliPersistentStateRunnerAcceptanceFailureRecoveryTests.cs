@@ -57,9 +57,11 @@ public sealed class CliPersistentStateRunnerAcceptanceFailureRecoveryTests : Cli
             ref currentGoal,
             acceptanceVerifier: verifier));
 
-        Xunit.Assert.Contains("superseded failure is historical", output);
-        Xunit.Assert.Equal(1, AcceptanceStableSlotTestSupport.LastSelectionCount);
-        Xunit.Assert.Equal(1, verifier.RunCount);
+        var capturedOutputMessage = $"Captured CLI output:{Environment.NewLine}{output}";
+        Xunit.Assert.True(output.Contains("superseded failure is historical", StringComparison.Ordinal), capturedOutputMessage);
+        var selectionCount = AcceptanceStableSlotTestSupport.LastSelectionCount;
+        Xunit.Assert.True(selectionCount == 1, $"LastSelectionCount expected=1 actual={selectionCount}{Environment.NewLine}{capturedOutputMessage}");
+        Xunit.Assert.True(verifier.RunCount == 1, $"verifier.RunCount expected=1 actual={verifier.RunCount}{Environment.NewLine}{capturedOutputMessage}");
         var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
         Xunit.Assert.Equal(GoalStatus.Completed, storedGoal.Status);
         Xunit.Assert.Null(storedGoal.LatestAcceptanceFailure);

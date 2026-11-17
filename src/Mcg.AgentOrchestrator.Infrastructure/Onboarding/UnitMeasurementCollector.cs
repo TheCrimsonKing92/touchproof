@@ -14,11 +14,11 @@ internal static class UnitMeasurementCollector
             return measurements;
         foreach (var unit in commands)
         {
-            var build = Measure(unit, UnitCommandKinds.Build, unit.BuildCommand);
+            var build = unit.BuildCommand is null ? null : Measure(unit, UnitCommandKinds.Build, unit.BuildCommand);
             ProjectFact<double>? test = null;
             if (kinds.HasFlag(UnitCommandKinds.Test) && unit.TestCommand is not null)
             {
-                if (kinds.HasFlag(UnitCommandKinds.Build) && build is null)
+                if (unit.BuildCommand is not null && kinds.HasFlag(UnitCommandKinds.Build) && build is null)
                     Skip(unit, "test", unit.TestCommand, "Test measurement skipped because the requested build did not succeed.");
                 else if (kinds.HasFlag(UnitCommandKinds.Build) || PrerequisiteBuildSucceeded(unit))
                     test = Measure(unit, UnitCommandKinds.Test, unit.TestCommand);
@@ -47,6 +47,7 @@ internal static class UnitMeasurementCollector
 
         bool PrerequisiteBuildSucceeded(UnitCommands unit)
         {
+            if (unit.BuildCommand is null) return true;
             if (unit.TestCommand!.Confidence != FactConfidence.High)
             {
                 Skip(unit, "test", unit.TestCommand, "Measurement skipped; confirm the command before executing it.");

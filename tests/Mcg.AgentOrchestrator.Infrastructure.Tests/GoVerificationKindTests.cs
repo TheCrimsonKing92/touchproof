@@ -62,11 +62,12 @@ public sealed class GoVerificationKindTests
     }
 
     [Fact]
-    public void MeasurerAdmitsOnlyDotnetAndGo()
+    public void MeasurerAdmitsOnlyDotnetGoAndNpx()
     {
         Assert.Equal("go", ProcessUnitCommandMeasurer.MeasurableTool("go test ./internal/core"));
         Assert.Equal("go", ProcessUnitCommandMeasurer.MeasurableTool("go build -o NUL ./cmd/tool"));
         Assert.Equal("dotnet", ProcessUnitCommandMeasurer.MeasurableTool("dotnet build src/A/A.csproj"));
+        Assert.Equal("npx", ProcessUnitCommandMeasurer.MeasurableTool("npx vitest run"));
         foreach (var command in new[] { "gofmt -l .", "go.exe test ./...", "npm test", "" })
             Assert.Null(ProcessUnitCommandMeasurer.MeasurableTool(command));
 

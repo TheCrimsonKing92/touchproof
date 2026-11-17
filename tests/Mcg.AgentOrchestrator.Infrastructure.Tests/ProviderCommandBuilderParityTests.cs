@@ -246,5 +246,136 @@ public sealed class ProviderCommandBuilderParityTests
             command);
     }
 
+    // These cases only construct arguments and transform strings; they are parallel-safe.
+    [Xunit.Theory]
+    [Xunit.InlineData(false, null)]
+    [Xunit.InlineData(true, null)]
+    [Xunit.InlineData(false, "12345678-1234-1234-1234-123456789abc")]
+    [Xunit.InlineData(true, "12345678-1234-1234-1234-123456789abc")]
+    public void Claude_AvailableOrOmitted_PreservesLiteralBaseline(bool readOnly, string? sessionId)
+    {
+        var omitted = ProviderCommandBuilder.Build(
+            ProviderKind.AnthropicClaudeCli, "claude-sonnet-4-6", "high",
+            readOnly ? "plan" : "bypassPermissions", "read-only", null, sessionId);
+        var available = ProviderCommandBuilder.Build(
+            ProviderKind.AnthropicClaudeCli, "claude-sonnet-4-6", "high",
+            readOnly ? "plan" : "bypassPermissions", "read-only", null, sessionId,
+            claudeBashAvailability: ClaudeBashAvailability.Available);
+
+        Assert.Equal(ClaudeBaseline(readOnly, sessionId), omitted);
+        Assert.Equal(ClaudeBaseline(readOnly, sessionId), available);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("12345678-1234-1234-1234-123456789abc")]
+    public void Claude_UnusableWriteCapable_AddsOnlyBashDenial(string? sessionId)
+    {
+        var command = ProviderCommandBuilder.Build(
+            ProviderKind.AnthropicClaudeCli, "claude-sonnet-4-6", "high",
+            "bypassPermissions", "workspace-write", null, sessionId,
+            claudeBashAvailability: ClaudeBashAvailability.Unusable);
+
+        Assert.Equal(new[] { "--disallowed-tools", "'Bash'" }, command.Skip(8).Take(2));
+        var unchanged = command.ToList();
+        unchanged.RemoveRange(8, 2);
+        Assert.Equal(ClaudeBaseline(readOnly: false, sessionId), unchanged);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("12345678-1234-1234-1234-123456789abc")]
+    public void Claude_UnusableReadOnly_ChangesOnlyBashEntries(string? sessionId)
+    {
+        var command = ProviderCommandBuilder.Build(
+            ProviderKind.AnthropicClaudeCli, "claude-sonnet-4-6", "high",
+            "plan", "read-only", null, sessionId,
+            claudeBashAvailability: ClaudeBashAvailability.Unusable);
+
+        var expected = ClaudeBaseline(readOnly: true, sessionId).ToList();
+        expected[10] = "'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite'";
+        expected[12] = "'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite'";
+        expected[14] = "'Edit,Write,NotebookEdit,Bash'";
+        Assert.Equal(expected, command);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(ProviderKind.OpenAICodexCli, false)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexCli, true)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexLuna, false)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexLuna, true)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexOssCli, false)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexOssCli, true)]
+    [Xunit.InlineData(ProviderKind.OllamaQwenCodeCli, false)]
+    [Xunit.InlineData(ProviderKind.OllamaQwenCodeCli, true)]
+    public void NonClaude_BashAvailability_DoesNotChangeArguments(ProviderKind kind, bool readOnly)
+    {
+        var available = ProviderCommandBuilder.Build(
+            kind, "test-model", "high", readOnly ? "plan" : "bypassPermissions",
+            readOnly ? "read-only" : "workspace-write", @"C:\worker's repo",
+            openaiBaseUrl: "http://127.0.0.1:8080/v1", openaiApiKey: "test-key",
+            approvalMode: readOnly ? "plan" : "yolo", repositoryPolicyMaxBytes: 65536,
+            claudeBashAvailability: ClaudeBashAvailability.Available);
+        var unusable = ProviderCommandBuilder.Build(
+            kind, "test-model", "high", readOnly ? "plan" : "bypassPermissions",
+            readOnly ? "read-only" : "workspace-write", @"C:\worker's repo",
+            openaiBaseUrl: "http://127.0.0.1:8080/v1", openaiApiKey: "test-key",
+            approvalMode: readOnly ? "plan" : "yolo", repositoryPolicyMaxBytes: 65536,
+            claudeBashAvailability: ClaudeBashAvailability.Unusable);
+
+        Assert.Equal(available, unusable);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(ClaudeBashAvailability.Available,
+        "Read,Bash,BashOutput,bash,WebFetch", "Bash(rg *),Read,BashOutput(*),bash(*),WebSearch", "Edit,Write")]
+    [Xunit.InlineData(ClaudeBashAvailability.Unusable,
+        "Read,BashOutput,bash,WebFetch", "Read,BashOutput(*),bash(*),WebSearch", "Edit,Write,Bash")]
+    public void ToolLists_Availability_PreservesNonBashEntries(
+        ClaudeBashAvailability availability, string tools, string allowed, string disallowed)
+    {
+        const string originalTools = "Read,Bash,BashOutput,bash,WebFetch";
+        const string originalAllowed = "Bash(rg *),Read,BashOutput(*),bash(*),WebSearch";
+        const string originalDisallowed = "Edit,Write";
+
+        var result = ClaudeBashToolLists.Apply(
+            availability, originalTools, originalAllowed, originalDisallowed);
+
+        Assert.Equal((tools, allowed, disallowed), result);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("", "Bash")]
+    [Xunit.InlineData("Edit,Bash,Write", "Edit,Bash,Write")]
+    [Xunit.InlineData("Edit,Bash(git *),Write", "Edit,Bash(git *),Write,Bash")]
+    public void ToolLists_Unusable_HandlesEmptyListsAndExistingDenials(
+        string disallowed, string expected)
+    {
+        var result = ClaudeBashToolLists.Apply(
+            ClaudeBashAvailability.Unusable, "Bash", "Bash(rg *)", disallowed);
+
+        Assert.Equal((string.Empty, string.Empty, expected), result);
+    }
+
+    private static IReadOnlyList<string> ClaudeBaseline(bool readOnly, string? sessionId)
+    {
+        // Literal pre-change arguments, independent of the production tool constants.
+        List<string> baseline = readOnly
+            ? [
+                "claude", "-p", "--model", "'claude-sonnet-4-6'",
+                "--permission-mode", "'dontAsk'", "--effort", "'high'", "--restricted",
+                "--tools", "'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'",
+                "--allowed-tools", "'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'",
+                "--disallowed-tools", "'Edit,Write,NotebookEdit'"
+            ]
+            : [
+                "claude", "-p", "--model", "'claude-sonnet-4-6'",
+                "--permission-mode", "'bypassPermissions'", "--effort", "'high'"
+            ];
+        if (sessionId is not null)
+            baseline.AddRange(["--session-id", sessionId]);
+        return baseline;
+    }
+
     private static string Quote(string value) => $"'{value.Replace("'", "''")}'";
 }
