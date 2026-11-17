@@ -5,6 +5,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$ProgressPreference = 'SilentlyContinue'
+Import-Module (Join-Path $PSScriptRoot 'HiddenNativeProcess.psm1') -Force
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Target)) {
@@ -21,7 +23,10 @@ else {
 # This is the explicit online availability/bootstrap path. Vulnerability auditing remains
 # a separate fail-closed operation in Invoke-PackageAudit.ps1. If that audit fails after
 # writing error-bearing assets, this command is the explicit recovery path for routine reads.
-& $dotnetHost restore $Target --force-evaluate --nologo --verbosity minimal -p:NuGetAudit=false
-if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+# HiddenNativeProcess owns UseShellExecute = $false and CreateNoWindow = $true.
+$exitCode = Invoke-HiddenNativeProcess -FilePath $dotnetHost -ArgumentList @(
+    'restore', $Target, '--force-evaluate', '--nologo', '--verbosity', 'minimal', '-p:NuGetAudit=false'
+)
+if ($exitCode -ne 0) {
+    exit $exitCode
 }
