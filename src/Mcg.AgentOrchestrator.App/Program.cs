@@ -408,6 +408,9 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
 {
+    ConductorSupervisorCrashReceipt? crashReceipt = null;
+    UnhandledExceptionEventHandler? unhandledExceptionHandler = null;
+    EventHandler<UnobservedTaskExceptionEventArgs>? unobservedTaskExceptionHandler = null;
     try
     {
         VerifyWorkspaceBinding();
@@ -422,6 +425,13 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             !string.Equals(maxDurationRestage, "0", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(maxDurationRestage, "false", StringComparison.OrdinalIgnoreCase);
         var conductEventLogWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        crashReceipt = new ConductorSupervisorCrashReceipt(
+            (eventKind, goalId, detail) => conductEventLogWriter.Append(eventKind, goalId, detail));
+        unhandledExceptionHandler = (_, eventArgs) => crashReceipt.Record("unhandled",
+            eventArgs.ExceptionObject as Exception ?? new InvalidOperationException("non-Exception unhandled payload"));
+        unobservedTaskExceptionHandler = (_, eventArgs) => crashReceipt.Record("unobserved-task", eventArgs.Exception);
+        AppDomain.CurrentDomain.UnhandledException += unhandledExceptionHandler;
+        TaskScheduler.UnobservedTaskException += unobservedTaskExceptionHandler;
         Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>?
             stageSuccessorWithHook = null;
         var stageSuccessor = restageEnabled
@@ -474,8 +484,16 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
     }
     catch (Exception ex)
     {
+        crashReceipt?.Record("startup-or-run", ex);
         Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
         return 1;
+    }
+    finally
+    {
+        if (unhandledExceptionHandler is not null)
+            AppDomain.CurrentDomain.UnhandledException -= unhandledExceptionHandler;
+        if (unobservedTaskExceptionHandler is not null)
+            TaskScheduler.UnobservedTaskException -= unobservedTaskExceptionHandler;
     }
 }
 

@@ -28,12 +28,29 @@ public enum DogfoodAcceptanceDisposition
     Inconclusive
 }
 
+public enum DogfoodExecutedCandidateResult
+{
+    None,
+    Failed
+}
+
+public enum DogfoodBaselineState
+{
+    Unknown,
+    Unavailable,
+    Executed
+}
+
 public sealed record DogfoodLandingEvidence(
     DogfoodAcceptanceDisposition AcceptanceDisposition,
     string? AcceptanceOutcome = null,
     bool WasManuallyLanded = false,
     DogfoodLandingProvenance? Provenance = null,
-    string? Reason = null)
+    string? Reason = null,
+    DogfoodExecutedCandidateResult? ExecutedCandidateResult = null,
+    DogfoodBaselineState? BaselineState = null,
+    string? LatestSchedulingDisposition = null,
+    bool? IsParked = null)
 {
     public static DogfoodLandingEvidence Unknown { get; } =
         new(DogfoodAcceptanceDisposition.Unknown);
@@ -116,7 +133,7 @@ public static class DogfoodLogRenderer
             {
                 DogfoodAcceptanceDisposition.Failed => $"{manual} Acceptance failed.",
                 DogfoodAcceptanceDisposition.Inconclusive =>
-                    $"{manual} Acceptance inconclusive: {BoundOutcome(evidence.AcceptanceOutcome)}.",
+                    $"{manual} {BuildInconclusiveStatus(evidence)}",
                 _ => manual
             };
         }
@@ -126,9 +143,25 @@ public static class DogfoodLogRenderer
             DogfoodAcceptanceDisposition.Passed => "Acceptance passed.",
             DogfoodAcceptanceDisposition.Failed => "Acceptance failed.",
             DogfoodAcceptanceDisposition.Inconclusive =>
-                $"Acceptance inconclusive: {BoundOutcome(evidence.AcceptanceOutcome)}.",
+                BuildInconclusiveStatus(evidence),
             _ => "Acceptance status unknown (no durable acceptance receipt)."
         };
+    }
+
+    private static string BuildInconclusiveStatus(DogfoodLandingEvidence evidence)
+    {
+        var retainedFailure = evidence.ExecutedCandidateResult == DogfoodExecutedCandidateResult.Failed
+            ? " Executed candidate RED retained: an earlier acceptance run for this candidate recorded failed."
+            : string.Empty;
+        var baseline = evidence.BaselineState switch
+        {
+            DogfoodBaselineState.Unknown => " Baseline: unknown.",
+            DogfoodBaselineState.Unavailable => " Baseline: unavailable.",
+            DogfoodBaselineState.Executed => " Baseline: executed.",
+            _ => string.Empty
+        };
+        var parked = evidence.IsParked == true ? " Parked." : string.Empty;
+        return $"Acceptance inconclusive: {BoundOutcome(evidence.AcceptanceOutcome)}.{retainedFailure}{baseline}{parked}";
     }
 
     private static string BoundOutcome(string? outcome)
