@@ -1032,7 +1032,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains("artifact-kind noun", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("period, semicolon, or the end of the line", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("stdout is authoritative", directive, StringComparison.Ordinal);
-        Xunit.Assert.Contains("writing a separate artifact is not required", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Artifacts are optional fallbacks if stdout parsing fails; a summary or private model-home file path alone is invalid.", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("disposition=undecidable", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("PLANNER_EVIDENCE_REQUEST:", directive, StringComparison.Ordinal);
     }
