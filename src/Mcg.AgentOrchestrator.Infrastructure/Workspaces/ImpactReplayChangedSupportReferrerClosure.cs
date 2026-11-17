@@ -70,6 +70,19 @@ internal sealed class ImpactReplayChangedSupportReferrerClosure
         if (symbol is IAliasSymbol alias) symbol = alias.Target;
         if (symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor)
             symbol = constructor.ContainingType;
+        if (symbol is { IsStatic: true } && IsUnqualified(reference) &&
+            symbol is IMethodSymbol { MethodKind: MethodKind.Ordinary } or IFieldSymbol or IPropertySymbol or IEventSymbol)
+            symbol = symbol.ContainingType;
         return (symbol as INamedTypeSymbol)?.OriginalDefinition;
     }
+
+    private static bool IsUnqualified(NameSyntax reference) => reference is SimpleNameSyntax &&
+        (reference.Parent switch
+        {
+            MemberAccessExpressionSyntax access => access.Name != reference,
+            MemberBindingExpressionSyntax => false,
+            QualifiedNameSyntax qualified => qualified.Right != reference,
+            AliasQualifiedNameSyntax alias => alias.Name != reference,
+            _ => true
+        });
 }
