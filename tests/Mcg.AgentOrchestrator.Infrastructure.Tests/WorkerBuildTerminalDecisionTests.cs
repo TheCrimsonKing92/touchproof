@@ -52,8 +52,51 @@ public sealed class WorkerBuildTerminalDecisionTests
         var result = Decide(Building, Projects, [0, null], StopCause.CompileDeadline, Budget, Now);
         Assert.Equal(WorkerBuildOutcome.TimeoutAfterStart, result.Outcome);
         Assert.Null(result.CompilerExitCode);
-        Assert.Equal("Compile deadline 5m00s passed 6m00s after build slot acquisition while project 2/3 src/Feature/Two.csproj was building; 1 earlier projects exited 0; queue 3m00s (custody 1m00s, slot 2m00s).",
+        Assert.Equal("Compile deadline 5m00s passed 6m00s after build slot acquisition while project 2/3 src/Feature/Two.csproj was building; 1 earlier projects exited 0; queue 3m00s (custody 1m00s, slot 2m00s)."
+            + " Per-project timing: project 1 [src/Feature/One.csproj]: 1m00s; project 2 [src/Feature/Two.csproj]: 5m00s (still running at the deadline); project 3 [src/Feature/Three.csproj]: not started.",
             result.Diagnostic);
+    }
+
+    [Fact]
+    public void FiveStartedProjects_CompileDeadline_NamesPerProjectTiming()
+    {
+        string[] projects = ["src/P1.csproj", "src/P2.csproj", "src/P3.csproj", "src/P4.csproj", "src/P5.csproj"];
+        List<WorkerBuildObservation> observations =
+        [
+            new(WorkerBuildPhase.Requested, Requested),
+            new(WorkerBuildPhase.CustodyAcquired, Requested),
+            new(WorkerBuildPhase.WaitingForBuildSlot, Requested),
+            new(WorkerBuildPhase.BuildSlotAcquired, Requested)
+        ];
+        foreach (var seconds in new[] { 0, 127, 149, 181, 238 })
+        {
+            var at = Requested.AddSeconds(seconds);
+            observations.Add(new(WorkerBuildPhase.PreparingLaunch, at));
+            observations.Add(new(WorkerBuildPhase.ChildRegistered, at));
+            observations.Add(new(WorkerBuildPhase.CompilerStarted, at));
+        }
+
+        var result = Decide(observations, projects, [0, 0, 0, 0, null], StopCause.CompileDeadline, Budget, Requested.AddSeconds(407));
+
+        Assert.Equal(WorkerBuildOutcome.TimeoutAfterStart, result.Outcome);
+        Assert.Null(result.CompilerExitCode);
+        Assert.Equal("Compile deadline 5m00s passed 6m47s after build slot acquisition while project 5/5 src/P5.csproj was building; 4 earlier projects exited 0; queue 0m00s (custody 0m00s, slot 0m00s)."
+            + " Per-project timing: project 1 [src/P1.csproj]: 2m07s; project 2 [src/P2.csproj]: 0m22s; project 3 [src/P3.csproj]: 0m32s; project 4 [src/P4.csproj]: 0m57s; project 5 [src/P5.csproj]: 2m49s (still running at the deadline).",
+            result.Diagnostic);
+    }
+
+    [Theory]
+    [InlineData(5, false, WorkerBuildOutcome.Interrupted)]
+    [InlineData(4, true, WorkerBuildOutcome.CapacityBeforeStart)]
+    [InlineData(2, true, WorkerBuildOutcome.ApparatusFailure)]
+    public void NonTimeoutResults_CarryNoPerProjectTiming(int observationCount, bool queueDeadline, WorkerBuildOutcome expected)
+    {
+        var result = Decide(Building[..observationCount], Projects, [],
+            queueDeadline ? StopCause.QueueDeadline : StopCause.CompileDeadline, Budget, Now);
+
+        Assert.Equal(expected, result.Outcome);
+        Assert.Null(result.CompilerExitCode);
+        Assert.DoesNotContain("Per-project timing", result.Diagnostic);
     }
 
     [Fact]

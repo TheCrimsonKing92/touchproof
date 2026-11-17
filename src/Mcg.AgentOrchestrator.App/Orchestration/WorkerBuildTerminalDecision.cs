@@ -65,7 +65,23 @@ internal static class WorkerBuildTerminalDecision
             ? $"{Duration(now - (slot?.At ?? requested))} after build slot acquisition while {project} was building"
             : $"before {project} launched";
         return (started ? WorkerBuildOutcome.TimeoutAfterStart : WorkerBuildOutcome.Interrupted, null,
-            $"Compile deadline {bound} passed {detail}; {earlier} earlier projects exited 0; queue {queue} (custody {custodyTime}, slot {slotTime}).");
+            $"Compile deadline {bound} passed {detail}; {earlier} earlier projects exited 0; queue {queue} (custody {custodyTime}, slot {slotTime})."
+            + (started ? PerProjectTiming(observations, projects, now) : ""));
+    }
+
+    private static string PerProjectTiming(IReadOnlyList<WorkerBuildObservation> observations,
+        IReadOnlyList<string> projects, DateTimeOffset now)
+    {
+        var starts = observations.Where(o => o.Phase == WorkerBuildPhase.CompilerStarted).Select(o => o.At).ToArray();
+        var entries = projects.Select((path, index) =>
+        {
+            var label = $"project {index + 1} [{path}]: ";
+            if (index >= starts.Length) return label + "not started";
+            return index + 1 < starts.Length
+                ? label + Duration(starts[index + 1] - starts[index])
+                : label + Duration(now - starts[index]) + " (still running at the deadline)";
+        });
+        return " Per-project timing: " + string.Join("; ", entries) + ".";
     }
 
     private static string Duration(TimeSpan elapsed)
