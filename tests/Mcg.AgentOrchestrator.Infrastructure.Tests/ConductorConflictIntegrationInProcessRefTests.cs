@@ -57,10 +57,22 @@ public sealed class ConductorConflictIntegrationInProcessRefTests
 
         var directory = Path.Combine(fixture.Worktree, "missing-directory");
         var legacy = GitCli.Run(directory, "rev-parse", "--verify", "--quiet", "HEAD");
+        Assert.False(legacy.ProcessStarted);
+        Assert.Equal(1, legacy.ExitCode);
+        Assert.Null(ConductorConflictIntegration.ReadReference(directory, "HEAD", "trunk", Miss));
+
+        // A launch failure maps to exit 1 (null); a broken gitdir makes Git itself fail with 128.
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, ".git"), "gitdir: missing-git-directory\n");
+        legacy = GitCli.Run(directory, "rev-parse", "--verify", "--quiet", "HEAD");
+        Assert.True(legacy.ProcessStarted);
+        Assert.Equal(128, legacy.ExitCode);
         var error = Assert.Throws<InvalidOperationException>(() =>
             ConductorConflictIntegration.ReadReference(directory, "HEAD", "trunk", Miss));
         Assert.Equal("Could not read git reference HEAD: " + legacy.Error, error.Message);
         legacy = GitCli.Run(directory, "rev-parse", "HEAD");
+        Assert.True(legacy.ProcessStarted);
+        Assert.Equal(128, legacy.ExitCode);
         error = Assert.Throws<InvalidOperationException>(() =>
             ConductorConflictIntegration.ReadRevision(directory, "HEAD", Miss));
         Assert.Equal("git rev-parse HEAD: " + legacy.Error, error.Message);
