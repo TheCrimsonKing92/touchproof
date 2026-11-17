@@ -37,6 +37,13 @@ internal static class AcceptanceGateLanePlanPublisher
             // No matching check and no exclusion evidence means this is an unrelated manifest row.
             if (reason is not null) skipped.Add(new(lane.Name, reason));
         }
+        foreach (var entry in selectedExecution?.ProjectChecks ?? [])
+        {
+            if (dispatched.Any(check => check.Name == entry.Name && ProjectMatches(check.Project, entry.Project)))
+                scheduled.Add(entry.Name);
+            else if (selectedExecution!.Applied && entry.Lane.Disposition == "skipped")
+                skipped.Add(new(entry.Name, AcceptanceGateLaneSkip.LaneNotSelected));
+        }
         var observation = new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, attemptId, scheduled, skipped)
             { TestSettings = testSettings ?? AcceptanceDeclaredTestSettings.Empty };
         return selectedExecution?.Observe(observation) ?? observation;
