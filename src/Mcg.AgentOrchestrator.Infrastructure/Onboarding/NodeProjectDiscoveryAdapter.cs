@@ -5,7 +5,7 @@ using static Mcg.AgentOrchestrator.Infrastructure.ProjectFactHelpers;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Learns root Node declarations without invoking tools or inspecting installed packages.</summary>
+/// <summary>Learns root Node declarations and optionally measures their derived commands.</summary>
 public sealed class NodeProjectDiscoveryAdapter : IProjectDiscoveryAdapter
 {
     public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null,
@@ -32,6 +32,13 @@ public sealed class NodeProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 managerSource, questions);
 
         var framework = ReadFramework(root, questions);
+        var units = new List<ProjectUnit>();
+        var commands = new List<UnitCommands>();
+        if (NodeUnitCommandDeriver.Derive(framework) is { } derived)
+        {
+            units.Add(derived.Unit);
+            commands.Add(derived.Commands);
+        }
         var configSource = new FactSource("tsconfig.json", 1);
         var config = High(Exists("tsconfig.json") ? "tsconfig.json" : NodeVerificationChecks.AbsentTypeScriptConfig, configSource);
         Ask(NodeVerificationChecks.RegistryQuestion,
@@ -51,10 +58,11 @@ public sealed class NodeProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 $"Confirm that '{learned.Branch.Value}' is the integration branch learned from the checked-out branch hint.",
                 learned.Branch.Source, questions);
 
-        return new(ProjectModel.CurrentSchemaVersion, ".", [], [], [],
-            questions.OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), [],
+        var measurements = UnitMeasurementCollector.Collect(root, commands, measurer, measuredKinds, questions);
+        return new(ProjectModel.CurrentSchemaVersion, ".", units, [], [],
+            questions.OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands,
             [new(NodeVerificationChecks.PackageManagerFact, manager), new(NodeVerificationChecks.FrameworkFact, framework),
-                new(NodeVerificationChecks.TypeScriptConfigFact, config)], [], hazards, learned.Branch, ProjectStack.Node);
+                new(NodeVerificationChecks.TypeScriptConfigFact, config)], measurements, hazards, learned.Branch, ProjectStack.Node);
 
         bool Exists(string path) => IsSafePath(root, Path.Combine(root, path)) && File.Exists(Path.Combine(root, path));
     }

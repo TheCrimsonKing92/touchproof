@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
@@ -5,6 +7,121 @@ using Xunit;
 // Parallel-safe: fixtures own their directories; discovery invokes no processes or shared state.
 public sealed class NodeProjectDiscoveryAdapterTests
 {
+    [Fact]
+    public void Discover_HighConfidenceVitest_DerivesOneUnitWithNpxVitestRunCommand()
+    {
+        using var fixture = new Fixture();
+
+        var model = fixture.Discover();
+
+        var unit = Assert.Single(model.Units);
+        Assert.Equal(".", unit.Id);
+        Assert.Equal(".", unit.Name.Value);
+        Assert.Equal(".", unit.Location.Value);
+        Assert.False(unit.IsTest.Value);
+        var commands = Assert.Single(model.Commands);
+        Assert.Equal(unit.Id, commands.UnitId);
+        Assert.Null(commands.BuildCommand);
+        var test = Assert.IsType<ProjectFact<string>>(commands.TestCommand);
+        Assert.Equal("npx vitest run", test.Value);
+        Assert.Equal(FactConfidence.High, test.Confidence);
+        Assert.Equal("package.json", test.Source.Path);
+        Assert.Equal(9, test.Source.Line);
+        Assert.Equal(Assert.Single(model.EnvironmentNeeds, need => need.Name == "node-test-framework").Value.Source,
+            test.Source);
+    }
+
+    [Theory]
+    [InlineData("{\"devDependencies\":{\"jest\":\"30\"}}")]
+    [InlineData("{\"devDependencies\":{\"vitest\":\"4\",\"jest\":\"30\"}}")]
+    [InlineData("{}")]
+    public void Discover_NonVitestFramework_DerivesNoUnitOrCommand(string package)
+    {
+        using var fixture = new Fixture(package);
+
+        var model = fixture.Discover();
+
+        Assert.Empty(model.Units);
+        Assert.Empty(model.Commands);
+    }
+
+    [Fact]
+    public void Discover_MeasureTestOnly_MeasuresVitestOnceWithoutBuild() =>
+        AssertTestMeasurement(UnitCommandKinds.Test);
+
+    [Fact]
+    public void Discover_MeasureAll_MeasuresVitestOnceWithoutBuild() =>
+        AssertTestMeasurement(UnitCommandKinds.All);
+
+    private static void AssertTestMeasurement(UnitCommandKinds kinds)
+    {
+        using var fixture = new Fixture();
+        var measurer = new RecordingMeasurer();
+
+        var model = new NodeProjectDiscoveryAdapter().Discover(fixture.Root, measurer: measurer, measuredKinds: kinds);
+
+        var call = Assert.Single(measurer.Calls);
+        Assert.Equal((fixture.Root, ".", UnitCommandKinds.Test, "npx vitest run"), call);
+        var measurement = Assert.Single(model.Measurements);
+        Assert.Equal(Assert.Single(model.Units).Id, measurement.UnitId);
+        Assert.Null(measurement.BuildSeconds);
+        var seconds = Assert.IsType<ProjectFact<double>>(measurement.TestSeconds);
+        Assert.Equal(32d, seconds.Value);
+        Assert.Equal(FactConfidence.High, seconds.Confidence);
+        Assert.Equal("measurement:project-discover/./test", seconds.Source.MeasurementReference);
+        Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey.StartsWith("commands/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Discover_MeasureBuildOnly_SkipsAbsentBuildWithoutQuestions()
+    {
+        using var fixture = new Fixture();
+
+        var model = new NodeProjectDiscoveryAdapter().Discover(fixture.Root,
+            measurer: new RejectingMeasurer(), measuredKinds: UnitCommandKinds.Build);
+
+        Assert.Single(model.Commands);
+        Assert.Empty(model.Measurements);
+        Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey.StartsWith("commands/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LearnedManifest_VitestUnit_LeavesNodeEmissionAndComparisonUnchanged()
+    {
+        using var fixture = new Fixture();
+        var model = fixture.Discover();
+        Assert.Single(model.Units);
+        Assert.Single(model.Commands);
+        var baseline = model with { Units = [], Commands = [], Measurements = [] };
+
+        var previous = LearnedAcceptanceManifest.Build(baseline, Fixture.Answers());
+        var current = LearnedAcceptanceManifest.Build(model, Fixture.Answers());
+
+        Assert.Empty(previous.Blockers);
+        Assert.Empty(current.Blockers);
+        Assert.NotNull(previous.Json);
+        Assert.NotNull(current.Json);
+        Assert.Equal(Encoding.UTF8.GetBytes(previous.Json), Encoding.UTF8.GetBytes(current.Json));
+        var expectedChecks = JsonNode.Parse("""
+            [
+              {"name":"npm ci","type":"command","command":"npm","arguments":["ci"]},
+              {"name":"npx tsc --noEmit","type":"command","command":"npx","arguments":["tsc","--noEmit"]},
+              {"name":"crosswalk-test .","type":"crosswalk-test","project":".","arguments":[]}
+            ]
+            """);
+        Assert.True(JsonNode.DeepEquals(expectedChecks, JsonNode.Parse(current.Json)!["checks"]));
+        var previousRows = ManifestCheckComparer.Compare(baseline, previous.Json);
+        var currentRows = ManifestCheckComparer.Compare(model, current.Json);
+        Assert.Equal(3, currentRows.Count);
+        Assert.All(currentRows, row => Assert.Equal(ManifestCheckResultKind.Match, row.Kind));
+        Assert.Equal(previousRows.ToArray(), currentRows.ToArray());
+        var previousBlockers = LearnedAcceptanceManifest.Build(baseline, []).Blockers;
+        var currentBlockers = LearnedAcceptanceManifest.Build(model, []).Blockers;
+        Assert.NotEmpty(previousBlockers);
+        Assert.Equal(previousBlockers.Select(blocker => blocker.FactKey).Order(StringComparer.Ordinal),
+            currentBlockers.Select(blocker => blocker.FactKey).Order(StringComparer.Ordinal));
+    }
+
     [Fact]
     public void Discover_NpmVitestTypeScript_RecordsConfidentSourcedFacts()
     {
@@ -135,13 +252,14 @@ public sealed class NodeProjectDiscoveryAdapterTests
         using var fixture = new Fixture();
         fixture.Write(".git/refs/remotes/origin/HEAD", "ref: refs/remotes/origin/main\n");
 
-        var model = new NodeProjectDiscoveryAdapter().Discover(fixture.Root, measurer: new RejectingMeasurer());
+        var model = new NodeProjectDiscoveryAdapter().Discover(fixture.Root,
+            measurer: new RejectingMeasurer(), measuredKinds: UnitCommandKinds.None);
 
         Assert.Equal("main", model.IntegrationBranch?.Value);
         Assert.Equal(FactConfidence.High, model.IntegrationBranch?.Confidence);
-        Assert.Empty(model.Commands);
+        Assert.Single(model.Commands);
         Assert.Empty(model.Measurements);
-        Assert.Empty(model.Units);
+        Assert.Single(model.Units);
         Assert.Empty(model.TestSetups);
         Assert.Empty(model.Dependencies);
     }
@@ -158,7 +276,18 @@ public sealed class NodeProjectDiscoveryAdapterTests
     private sealed class RejectingMeasurer : IUnitCommandMeasurer
     {
         public UnitCommandMeasurementResult Measure(string repositoryRoot, string unitId, UnitCommandKinds kind, string command) =>
-            throw new InvalidOperationException("Node discovery must never measure or execute commands.");
+            throw new InvalidOperationException("No command measurement was requested.");
+    }
+
+    private sealed class RecordingMeasurer : IUnitCommandMeasurer
+    {
+        internal List<(string Root, string UnitId, UnitCommandKinds Kind, string Command)> Calls { get; } = [];
+
+        public UnitCommandMeasurementResult Measure(string repositoryRoot, string unitId, UnitCommandKinds kind, string command)
+        {
+            Calls.Add((repositoryRoot, unitId, kind, command));
+            return UnitCommandMeasurementResult.Succeeded(32);
+        }
     }
 
     internal sealed class Fixture : IDisposable
