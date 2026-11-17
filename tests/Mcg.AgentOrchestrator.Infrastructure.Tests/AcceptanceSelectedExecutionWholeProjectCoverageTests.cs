@@ -43,13 +43,18 @@ public sealed class AcceptanceSelectedExecutionWholeProjectCoverageTests
     [InlineData("FullyQualifiedName~Core.NewCoreTests")]
     [InlineData("Core.NewCoreTests|")]
     [InlineData("Shared")]
-    public void UncoveredOrMalformedSelector_PreservesFullGateReason(string selector)
+    public void UncoveredOrMalformedSelector_RecordsDiagnosticAndPreservesNarrowedLanes(string selector)
     {
+        var baseline = Create([]);
         var plan = Create([selector], () => Checks);
-        Assert.False(plan.HasPlan);
-        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, plan.Outcome);
-        Assert.Equal("UnresolvedObligationSelector: " + selector, plan.FullGateReason);
-        Assert.Equal(Lanes, plan.ExecutionLanes);
+        Assert.True(plan.HasPlan);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, plan.Outcome);
+        Assert.Null(plan.FullGateReason);
+        var diagnostic = Assert.Single(plan.UnresolvedObligationSelectors);
+        Assert.Equal(selector, diagnostic.Selector);
+        Assert.All(diagnostic.ClosestCandidateClassNames, name => Assert.Contains(Classes, item => item.FullName == name));
+        Assert.Equal(JsonSerializer.Serialize(baseline.Lanes), JsonSerializer.Serialize(plan.Lanes));
+        Assert.Equal(baseline.ExecutionLanes, plan.ExecutionLanes);
         Assert.Empty(plan.WholeProjectCoverage);
         Assert.Empty(plan.ObligationClasses);
     }
@@ -69,10 +74,13 @@ public sealed class AcceptanceSelectedExecutionWholeProjectCoverageTests
     {
         var classes = Classes.Concat(new[] { new AcceptanceTestClassDescriptor("Lane.Shared", null) }).ToArray();
         AcceptanceTestLane[] lanes = [new("Selectable", "FullyQualifiedName~Lane.")];
-        var failed = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved(["Selected"]),
+        var unresolved = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved(["Selected"]),
             lanes, classes, [], [], ["Shared"], () => Checks);
-        Assert.Equal("UnresolvedObligationSelector: Shared", failed.FullGateReason);
-        Assert.Empty(failed.WholeProjectCoverage);
+        Assert.True(unresolved.HasPlan);
+        Assert.Null(unresolved.FullGateReason);
+        Assert.Equal("Shared", Assert.Single(unresolved.UnresolvedObligationSelectors).Selector);
+        Assert.Empty(unresolved.ObligationClasses);
+        Assert.Empty(unresolved.WholeProjectCoverage);
 
         var covered = AcceptanceSelectedExecutionPlan.Create(Changes, ReverseDependencyTestSelection.Resolved(["Selected"]),
             lanes, classes.Where(item => item.FullName != "Uncovered.Shared")

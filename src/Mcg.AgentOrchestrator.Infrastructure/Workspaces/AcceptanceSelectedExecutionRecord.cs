@@ -24,6 +24,18 @@ internal sealed record AcceptanceSelectedExecutionRecord(
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<AcceptanceSelectedExecutionCheckCoverage>? WholeProjectCoverage { get; init; }
 
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<AcceptanceUnresolvedObligationSelector> UnresolvedObligationSelectors { get; init; } = [];
+
+    // Keep absent legacy fields empty in memory and omit empty collections on the wire.
+    [System.Text.Json.Serialization.JsonPropertyName("unresolvedObligationSelectors")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AcceptanceUnresolvedObligationSelector>? SerializedUnresolvedObligationSelectors
+    {
+        get => UnresolvedObligationSelectors.Count > 0 ? UnresolvedObligationSelectors : null;
+        init => UnresolvedObligationSelectors = value ?? [];
+    }
+
     internal static AcceptanceSelectedExecutionRecord Disabled { get; } =
         new("Off", "disabled", null, "Selected execution is disabled.", [], [], [], [], null, null, null, null, 0, false);
 }

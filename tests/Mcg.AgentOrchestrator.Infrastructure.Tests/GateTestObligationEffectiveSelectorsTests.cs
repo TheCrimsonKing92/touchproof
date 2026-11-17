@@ -65,7 +65,7 @@ public sealed class GateTestObligationEffectiveSelectorsTests
     }
 
     [Fact]
-    public void MissingMemberOrInvalidatedEnumerationForcesFullGate()
+    public void MissingMemberOrInvalidatedEnumeration_RecordsUnresolvedSentinel()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("gate member");
@@ -82,8 +82,11 @@ public sealed class GateTestObligationEffectiveSelectorsTests
         {
             Assert.StartsWith("Obligation snapshot unavailable: ", Assert.Single(selectors));
             var record = Observe(WithObligations(selectors)).SelectedExecution!;
-            Assert.Equal("full-gate", record.Decision);
-            Assert.StartsWith("UnresolvedObligationSelector: ", record.FullGateReason);
+            Assert.Equal("plan", record.Decision);
+            Assert.Equal("Resolved", record.Outcome);
+            Assert.True(record.Applied);
+            Assert.Null(record.FullGateReason);
+            Assert.Equal(Assert.Single(selectors), Assert.Single(record.UnresolvedObligationSelectors).Selector);
         }
     }
 }

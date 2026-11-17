@@ -7,17 +7,24 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class ImpactReplayChangedSupportNameFilter
 {
     private readonly HashSet<string> _names;
+    private readonly UsingDirectiveSyntax[] _aliases;
 
     internal ImpactReplayChangedSupportNameFilter(IEnumerable<INamedTypeSymbol> declared, IEnumerable<SyntaxTree> trees)
     {
-        _names = declared.Select(type => type.Name).ToHashSet(StringComparer.Ordinal);
-        var aliases = trees.SelectMany(tree => tree.GetRoot().DescendantNodes().OfType<UsingDirectiveSyntax>())
+        _names = new(StringComparer.Ordinal);
+        _aliases = trees.SelectMany(tree => tree.GetRoot().DescendantNodes().OfType<UsingDirectiveSyntax>())
             .Where(directive => directive.Alias is not null).ToArray();
+        Widen(declared);
+    }
+
+    internal void Widen(IEnumerable<INamedTypeSymbol> types)
+    {
+        foreach (var type in types) _names.Add(type.Name);
         bool added;
         do
         {
             added = false;
-            foreach (var alias in aliases)
+            foreach (var alias in _aliases)
             {
                 if (alias.NamespaceOrType is { } target && target.DescendantNodesAndSelf().OfType<SimpleNameSyntax>()
                     .Any(name => _names.Contains(name.Identifier.ValueText)))
