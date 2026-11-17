@@ -40,15 +40,13 @@ internal static partial class CliCommandHandlers
     }
 
     internal static void RenderGoalParkStopAliasOutcome(GoalParkCommand command,
-        GoalLifecycleTransitionOutcome outcome, int cancelledCount, OrchestratorWorkspace workspace,
+        GoalLifecycleTransitionOutcome outcome, IReadOnlyList<GoalWorkerTerminationReceipt> receipts, OrchestratorWorkspace workspace,
         Func<int>? deliverAttentionResolution = null)
     {
         var resolved = deliverAttentionResolution is not null ? deliverAttentionResolution() : CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
             .ResolveOpenForGoalAsync(outcome.GoalId.Value, GoalParkResolution.Build(command.Reason)).GetAwaiter().GetResult();
-        Console.WriteLine(GoalParkResolution.BuildConfirmation(outcome.GoalId.Value[..8]));
-        Console.WriteLine($"Cancelled running dispatches: {cancelledCount}");
-        Console.WriteLine($"Resolved human waits: {outcome.ResolvedHumanWaits}");
-        Console.WriteLine($"Resolved attention items: {resolved}");
+        GoalWorkerTerminationTextView.PrintParkOutcome(GoalParkResolution.BuildConfirmation(outcome.GoalId.Value[..8]),
+            receipts, outcome.ResolvedHumanWaits, resolved);
     }
 
     internal static GoalAbandonPlan PlanGoalAbandonStopAlias(GoalAbandonCommand command,
@@ -128,7 +126,7 @@ internal static partial class CliCommandHandlers
             throw GoalWorkerTermination.DidNotCommit("park", receipts, ex);
         }
         context.CurrentGoal = outcome.Goal;
-        RenderGoalParkStopAliasOutcome(command, outcome, receipts.Count, context.Workspace);
+        RenderGoalParkStopAliasOutcome(command, outcome, receipts, context.Workspace);
         return outcome.ShouldSave;
     }
 

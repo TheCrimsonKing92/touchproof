@@ -41,7 +41,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         currentGoal = outcome.Goal;
-        CliCommandHandlers.RenderGoalParkStopAliasOutcome(command, outcome, receipts.Count, workspace,
+        CliCommandHandlers.RenderGoalParkStopAliasOutcome(command, outcome, receipts, workspace,
             pendingMessageId is null ? null : () => DeliverCommittedGoalParkAttentionResolution(
                 (IOrchestratorStateOutboxRepository)repository, workspace, goalId, pendingMessageId));
         return true;
