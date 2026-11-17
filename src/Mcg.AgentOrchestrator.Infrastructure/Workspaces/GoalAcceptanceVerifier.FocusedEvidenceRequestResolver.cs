@@ -395,10 +395,11 @@ internal static partial class FocusedEvidenceRequestResolver
         string className)
     {
         return EnumerateFocusedEvidenceSourceFiles(worktreePath, project)
-            .Where(path => ParseCSharpRoot(path)
-                .DescendantNodes()
-                .OfType<TypeDeclarationSyntax>()
-                .Any(declaration => FocusedEvidenceTypeMatches(declaration, className)))
+            .Where(path =>
+            {
+                ParseCSharpRoot(path, out var names);
+                return names.Any(name => FocusedEvidenceParsedRootCache.FocusedEvidenceTypeMatches(name, className));
+            })
             .ToArray();
     }
 
@@ -411,30 +412,25 @@ internal static partial class FocusedEvidenceRequestResolver
             $"focused evidence source discovery failed: {exception.GetType().Name}: {exception.Message}");
 
     internal static CompilationUnitSyntax ParseCSharpRoot(string path) =>
-        CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetCompilationUnitRoot();
+        ParseCSharpRoot(path, out _);
 
-    internal static bool FocusedEvidenceTypeMatches(TypeDeclarationSyntax declaration, string className)
+    private static CompilationUnitSyntax ParseCSharpRoot(
+        string path,
+        out System.Collections.Immutable.ImmutableArray<FocusedEvidenceParsedRootCache.DeclaredTypeName> names)
     {
-        var requestedName = className.Trim();
-        if (declaration.Identifier.ValueText.Equals(requestedName, StringComparison.Ordinal))
+        var file = FocusedEvidenceParsedRootCache.Get(path, static sourcePath =>
         {
-            return true;
-        }
-
-        var namespaceNames = declaration.Ancestors()
-            .OfType<BaseNamespaceDeclarationSyntax>()
-            .Reverse()
-            .Select(item => item.Name.ToString());
-        var containingTypeNames = declaration.Ancestors()
-            .OfType<TypeDeclarationSyntax>()
-            .Reverse()
-            .Select(item => item.Identifier.ValueText);
-        var qualifiedName = string.Join(
-            '.',
-            namespaceNames.Concat(containingTypeNames).Append(declaration.Identifier.ValueText));
-        return qualifiedName.Equals(requestedName, StringComparison.Ordinal) ||
-            qualifiedName.EndsWith('.' + requestedName, StringComparison.Ordinal);
+            var text = File.ReadAllText(sourcePath);
+            FocusedEvidenceParsedRootCache.RecordParse(sourcePath);
+            return CSharpSyntaxTree.ParseText(text, path: sourcePath).GetCompilationUnitRoot();
+        });
+        names = file.Names;
+        return file.Root;
     }
+
+    internal static bool FocusedEvidenceTypeMatches(TypeDeclarationSyntax declaration, string className) =>
+        FocusedEvidenceParsedRootCache.FocusedEvidenceTypeMatches(
+            FocusedEvidenceParsedRootCache.GetDeclaredTypeName(declaration), className);
 
     internal static bool TryResolveFocusedEvidenceProject(
         string alias,
