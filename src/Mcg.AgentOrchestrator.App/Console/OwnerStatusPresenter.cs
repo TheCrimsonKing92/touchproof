@@ -13,10 +13,7 @@ internal sealed class OwnerStatusPresenter
     {
         if (status.ConductorRunning != ConductorLiveness.Unknown) _lastStableLiveness = status.ConductorRunning;
         var state = _lastStableLiveness == ConductorLiveness.Running ? "running" : "stopped";
-        var protectedParts = new List<string> { "conductor: " + state };
-        if (gate is not null) protectedParts.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
-        protectedParts.Add($"active: {status.ActiveGoals}");
-        protectedParts.Add($"decisions: {status.LiveDecisions}");
+        var protectedParts = ProtectedSegments(status, gate, state);
         var optionalParts = new List<string> {
             $"last event: {Age(status.LastEventAge)}", $"landed today: {status.LandedToday}", $"bell: {bellText}" };
         if (status.HiddenQuestions > 0) optionalParts.Add($"hidden: {status.HiddenQuestions}");
@@ -65,6 +62,17 @@ internal sealed class OwnerStatusPresenter
             text = Assemble();
         }
         return Fit(text, width);
+    }
+
+    private static List<string> ProtectedSegments(OwnerConsoleStatus status, OwnerConsoleGateProgress? gate, string state)
+    {
+        var parts = new List<string> { "conductor: " + state };
+        if (gate is not null) parts.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
+        if (OwnerConsoleBoardFillStatusSegment.Text(status.BoardFillMode) is { } boardFill)
+            parts.Add(boardFill);
+        parts.Add($"active: {status.ActiveGoals}");
+        parts.Add($"decisions: {status.LiveDecisions}");
+        return parts;
     }
 
     private static string Fit(string text, int width)

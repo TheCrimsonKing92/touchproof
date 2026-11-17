@@ -1,8 +1,49 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 // Parallel-safe: the harness owns a unique SQLite/event root and a fixed clock.
 public sealed class ConductorBoardFillHostHeldRoundTests
 {
+    [Fact]
+    public async Task Off_harvests_in_flight_round_and_starts_no_new_round()
+    {
+        using var h = new BoardFillTestHarness();
+        h.Held = true;
+        h.Host.ServiceTick(h.Kernel);
+        var inFlight = h.Host.CurrentRound;
+        Assert.NotNull(inFlight);
+        await PanelTestHarness.Signal(h.Started.Task, "draft round started before switching Off");
+
+        h.Policy = h.Policy with { BoardFillMode = ConductorBoardFillMode.Off };
+        h.Host.ServiceTick(h.Kernel);
+        Assert.Same(inFlight, h.Host.CurrentRound);
+        Assert.Null(Assert.Single(h.Store.ReadAll()).Outcome);
+        Assert.Empty(h.Events());
+
+        h.Release();
+        await PanelTestHarness.Signal(inFlight, "in-flight draft finished while Off");
+        h.Host.ServiceTick(h.Kernel);
+
+        var round = Assert.Single(h.Store.ReadAll());
+        Assert.Equal("draft", round.Outcome);
+        Assert.NotNull(round.Assessment);
+        Assert.True(round.Reported);
+        Assert.Null(h.Host.CurrentRound);
+        Assert.Null(h.Host.CurrentFiling);
+        using var reported = BoardFillTestHarness.Event(Assert.Single(h.Events()));
+        Assert.Equal("board-fill-draft", reported.RootElement.GetProperty("eventKind").GetString());
+        Assert.Contains("BOARD_FILL_DRAFT", reported.RootElement.GetProperty("detail").GetString());
+        Assert.Contains("outcome=draft", reported.RootElement.GetProperty("detail").GetString());
+
+        h.Items = [BoardFillReadyItemSelectorTests.Item('b'), BoardFillReadyItemSelectorTests.Item('c')];
+        h.Host.ServiceTick(h.Kernel);
+        Assert.Null(h.Host.CurrentRound);
+        Assert.Null(h.Host.CurrentFiling);
+        Assert.Equal(1, h.Calls);
+        Assert.Single(h.Store.ReadAll());
+        Assert.Single(h.Events());
+    }
+
     [Fact]
     public async Task Held_round_is_reported_once_and_retried_after_main_moves()
     {

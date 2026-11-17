@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
@@ -100,7 +101,9 @@ internal static class OwnerConsoleFullScreenHost
                 {
                     return (Candidate: OwnerConsoleCandidateRevision.Read(workspace.ExecutionDirectory, goal.Id),
                         Attempts: GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id).Entries);
-                }, boardMarker: stateChanges.Observe, epicMarker: portfolioChanges.Observe);
+                }, boardMarker: stateChanges.Observe, epicMarker: portfolioChanges.Observe,
+                boardFillMode: () => timings.Time("board-fill-mode", () => ConductorAutonomyPolicy
+                    .LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)).BoardFillMode));
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
             refresh = new(clock, token, builder, boardSource, snapshots, timings, refreshFilter, diagnostics,
                 activityLoader.ReadNew, new OwnerConsoleLandedTodayScan(workspace.GoalLifecycleEventsDirectory, clock).Current,
