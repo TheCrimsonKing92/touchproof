@@ -16,7 +16,7 @@ internal static class AuthorBriefDraftChecks
 
     internal static IReadOnlyList<AuthorBriefDraftCheck> Run(string markdown, string mainHead,
         IAuthorBriefDraftRepository repository, Toolchain? stack = null,
-        IReadOnlyList<string>? dependencyGoals = null)
+        IReadOnlyList<string>? dependencyGoals = null, bool measureTagged = false)
     {
         var headings = Headings.Matches(markdown).Cast<Match>().ToArray();
         var missing = Sections.Where(section => !headings.Any(heading =>
@@ -118,7 +118,8 @@ internal static class AuthorBriefDraftChecks
                     $"criterion {criterion.Index} matched \"{criterion.Match.Groups["anchor"].Value}\"")) +
                 ". " + BriefLint.PreChangeFailureRemedy),
             AuthorBriefDraftProseObligationCheck.Run(markdown),
-            .. AuthorBriefDraftTargetChecks.Run(markdown, mainHead, repository)
+            .. AuthorBriefDraftTargetChecks.Run(markdown, mainHead, repository),
+            AuthorBriefDraftMeasurementOnlyCheck.Run(markdown, measureTagged)
         ];
 
         string SectionText(string name)
