@@ -39,9 +39,9 @@ internal static partial class PlannerSearchPatternMention
             return false;
         }
 
-        // Blank every code span so code cannot supply a cue or join adjacent words.
+        // Both cue sets use prose only: code cannot supply a cue or join adjacent words.
         var prose = BacktickedCitation().Replace(line, " ");
-        return PatternCue().IsMatch(prose);
+        return PatternCue().IsMatch(prose) || HistoricalCue().IsMatch(prose);
     }
 
     [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
@@ -49,4 +49,7 @@ internal static partial class PlannerSearchPatternMention
 
     [GeneratedRegex(@"\b(?:patterns?|globs?)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex PatternCue();
+
+    [GeneratedRegex(@"\b(?:rejected|superseded|replaced|previously|formerly|earlier[\t\p{Zs}]+draft)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex HistoricalCue();
 }
