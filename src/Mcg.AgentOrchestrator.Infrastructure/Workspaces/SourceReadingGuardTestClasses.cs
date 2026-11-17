@@ -9,6 +9,9 @@ internal static class SourceReadingGuardTestClasses
 {
     internal static ImpactReplaySourceGuardReport? Read(ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes)
+        => Project(SourceReaderAnalysisCache.Current.GetOrAnalyze(sources, Analyze), classes);
+
+    private static SourceReaderAnalysisCache.Analysis Analyze(ImpactReplayTestSourceIndex sources)
     {
         var hasSnapshotCache = sources.Trees.Any(tree => tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>()
             .Any(type => type.Identifier.ValueText == "RepositorySourceSnapshotCache"));
@@ -81,9 +84,17 @@ internal static class SourceReadingGuardTestClasses
                 }
             }
         }
-        var names = classes.Where(item => owners.TryGetValue(item.FullName, out var members) && members.Any(readers.Contains))
+        return new(hasSnapshotCache, owners.Where(pair => pair.Value.Any(readers.Contains))
+            .Select(pair => pair.Key).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    private static ImpactReplaySourceGuardReport? Project(SourceReaderAnalysisCache.Analysis analysis,
+        IReadOnlyList<AcceptanceTestClassDescriptor> classes)
+    {
+        var owners = analysis.ReaderOwners.ToHashSet(StringComparer.Ordinal);
+        var names = classes.Where(item => owners.Contains(item.FullName))
             .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        return !hasSnapshotCache && names.Length == 0 ? null : new(names);
+        return !analysis.DeclaresSnapshotCache && names.Length == 0 ? null : new(names);
     }
 
     private static bool IsSnapshotRead(ISymbol symbol) =>

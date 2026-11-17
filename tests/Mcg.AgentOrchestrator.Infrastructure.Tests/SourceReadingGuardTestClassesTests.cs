@@ -28,6 +28,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [Fact]
     public void WholeTreeReaderThroughHelperIsAGuardWithoutSnapshotCache()
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
 
@@ -39,6 +40,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [Fact]
     public void SingleNamedFileReaderIsNotAGuardWhileWholeTreeReaderIs()
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
         fixture.Add("SingleFile.cs", """
@@ -59,6 +61,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [Fact]
     public void UnrelatedClassIsAbsentAndSnapshotReaderRemains()
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
         fixture.Add("Snapshot.cs", """
@@ -83,6 +86,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [InlineData("System.IO.Directory.GetFileSystemEntries(root, \"*\", System.IO.SearchOption.AllDirectories)")]
     public void RecursiveDirectoryEnumerationIsAGuard(string enumeration)
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
         fixture.Add("DirectoryTests.cs", $$"""
@@ -105,6 +109,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [InlineData("System.IO.Directory.GetFiles(subtree, \"*\", System.IO.SearchOption.AllDirectories)")]
     public void TopLevelAndConfinedDirectoryEnumerationAreNotGuards(string enumeration)
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
         fixture.Add("DirectoryTests.cs", $$"""
@@ -127,6 +132,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [Fact]
     public void RecursiveHelpersAndInheritedTestsReachBothOperations()
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
         fixture.Add("Recursive.cs", """
@@ -168,6 +174,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [InlineData("System.Diagnostics.Process.Start(\"git\", \"ls-files src\");", false)]
     public void GitTraversalRequiresAnInvocationAndNoPathRestriction(string body, bool expected)
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
         fixture.Add("GitTests.cs", $$"""
@@ -184,6 +191,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [Fact]
     public void GitCommandArgumentsFlowThroughResolvableHelpersWithoutMarkingOtherCommands()
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Helpers.cs", WholeTreeSources);
         // Keep synthetic launches out of the raw-source direct-git-launch guard.
@@ -220,6 +228,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [Fact]
     public void UnrelatedChangeAlwaysSelectsDirectTransitiveAndInheritedSnapshotReaders()
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Snapshot.cs", """
             public static class RepositorySourceSnapshotCache { public static RepositorySourceSnapshot Get(string root) => new RepositorySourceSnapshot(); }
@@ -272,6 +281,7 @@ public sealed class SourceReadingGuardTestClassesTests
     [Fact]
     public void AbsentHelpersOmitReportAndPresentHelpersReportAnExplicitEmptySet()
     {
+        using var cache = IsolatedCache();
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Tests.cs", "public class OrdinaryTests { [Fact] public void Works() {} }");
         Assert.Null(SourceReadingGuardTestClasses.Read(fixture.Sources, fixture.Classes));
@@ -282,5 +292,21 @@ public sealed class SourceReadingGuardTestClassesTests
         guards.AppendTo(text);
         Assert.Contains("Always-selected guard classes: 0", text.ToString());
         Assert.Contains("None.", text.ToString());
+    }
+
+    private static IDisposable IsolatedCache() => new CacheScope();
+
+    private sealed class CacheScope : IDisposable
+    {
+        private readonly DirectoryInfo _directory = Directory.CreateTempSubdirectory("source-reader-analysis-");
+        private readonly IDisposable _scope;
+
+        internal CacheScope() => _scope = SourceReaderAnalysisCache.Use(new(_directory.FullName));
+
+        public void Dispose()
+        {
+            _scope.Dispose();
+            _directory.Delete(recursive: true);
+        }
     }
 }
