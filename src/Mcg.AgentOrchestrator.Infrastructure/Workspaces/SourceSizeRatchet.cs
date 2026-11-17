@@ -628,7 +628,7 @@ internal static class SourceSizeRatchet
             // Goal 98758ac2: one composition-root census lifetime line; measured 11012 lines in the same 30 partials.
             // Goal 88d3f039 adds one post-commit call; citation parsing and output belong to GoalCitedDefectAdvisory.
             // Goal 06279914: render cross-goal items before attention early returns and retain a filtered remainder (+8 lines).
-            new SourceClassCeiling("CliCommandHandlers", 11021, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11009, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
