@@ -59,7 +59,7 @@ internal static class BoardFillReadyItemSelector
             return false;
         })
         .OrderBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
-        .ThenByDescending(candidate => !string.IsNullOrWhiteSpace(candidate.Item.Priority))
+        .ThenBy(candidate => BacklogPriorityLevels.Rank(candidate.Item.Priority))
         .ThenByDescending(candidate => candidate.Ready.HasLandedDependency)
         .ThenByDescending(candidate => candidate.Item.UpdatedAt)
         .ThenBy(candidate => candidate.Item.Id, StringComparer.Ordinal)

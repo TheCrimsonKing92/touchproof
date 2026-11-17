@@ -30,7 +30,7 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
                     "createdAt", "updatedAt", "priority", "tags", "supersededBy", "epicId" },
                 row.EnumerateObject().Select(property => property.Name));
             Assert.False(row.GetProperty("ownerAmbiguous").GetBoolean());
-            Assert.Equal(JsonValueKind.Null, row.GetProperty("priority").ValueKind);
+            Assert.Equal("normal", row.GetProperty("priority").GetString());
             Assert.Equal(JsonValueKind.Null, row.GetProperty("supersededBy").ValueKind);
             Assert.Equal("", row.GetProperty("tags").GetString());
             Assert.EndsWith("Z", row.GetProperty("createdAt").GetString()!);
@@ -105,8 +105,10 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
             var lines = output[..^Environment.NewLine.Length].Split(Environment.NewLine);
             Assert.Equal(3, lines.Length);
             Assert.StartsWith(HumanPrefix(seed.Prerequisite), lines[0]);
+            Assert.Contains(" [priority=normal]", lines[0]);
             Assert.EndsWith($" {seed.Prerequisite.Id} | status=claimed | goal={CliBacklogReadOnlyRouteTests.LinkedGoalId} | epic=none | title=Quartz query prerequisite", lines[0]);
             Assert.StartsWith(HumanPrefix(seed.Dependent), lines[1]);
+            Assert.Contains(" [priority=normal]", lines[1]);
             Assert.EndsWith($" {seed.Dependent.Id} | status=open | goal=- | epic=none | title=Quartz query dependent", lines[1]);
             Assert.Equal("Backlog list: 2 item(s) from backlog store", lines[2]);
         }
@@ -128,7 +130,7 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
         using var document = JsonDocument.Parse(output);
         Assert.Equal("2026-10-06T00:00:00.0000000Z", document.RootElement.GetProperty("generatedAt").GetString());
         var ambiguous = Items(document)[0];
-        Assert.Equal(JsonValueKind.Null, ambiguous.GetProperty("priority").ValueKind);
+        Assert.Equal("normal", ambiguous.GetProperty("priority").GetString());
         Assert.Equal(JsonValueKind.Null, ambiguous.GetProperty("supersededBy").ValueKind);
         Assert.Contains("\"goalId\":null,\"ownerAmbiguous\":true", output);
         Assert.Equal("2026-10-06T00:00:00.0000000Z", ambiguous.GetProperty("createdAt").GetString());
@@ -137,12 +139,50 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
         var closed = Items(document)[1];
         Assert.Equal("closed", closed.GetProperty("status").GetString());
         Assert.Equal("linked", closed.GetProperty("goalId").GetString());
-        Assert.Equal("P1", closed.GetProperty("priority").GetString());
+        Assert.Equal("normal", closed.GetProperty("priority").GetString());
         Assert.Equal("replacement", closed.GetProperty("supersededBy").GetString());
         var emptyOutput = BacklogListAgentReadView.Serialize([], clock);
         using var empty = JsonDocument.Parse(emptyOutput);
         Assert.Equal(0, Items(empty).GetArrayLength());
         Assert.Contains("\"items\":[]", emptyOutput);
+    }
+
+    [Theory]
+    [InlineData(null, "normal")]
+    [InlineData("Low", "low")]
+    public async Task Stored_priorities_are_normalized_in_text_and_json_on_both_routes(string? stored, string expected)
+    {
+        var seed = await CliBacklogReadOnlyRouteTests.CreateSeedAsync(root);
+        var store = new BacklogStore(seed.Workspace.BacklogStorePath);
+        if (stored is not null)
+            await store.UpdateAsync(seed.Dependent.Id, new BacklogItemUpdate(Priority: stored));
+        Assert.Equal(stored, (await store.GetByExactIdAsync(seed.Dependent.Id))!.Priority);
+        var probe = new ProbeStateRepository(seed.Kernel) { ThrowOnOutbox = true };
+        var repository = new SqliteOrchestratorStateRepository(seed.Workspace.SqliteStatePath);
+        foreach (var output in new[]
+        {
+            ExecuteRead(["backlog-list", "--json"], seed.Workspace, probe),
+            ExecutePersistent(["backlog-list", "--json"], seed.Workspace, repository)
+        })
+        {
+            using var document = AssertEnvelope(output);
+            var row = Assert.Single(Items(document).EnumerateArray(),
+                row => row.GetProperty("id").GetString() == seed.Dependent.Id);
+            Assert.Equal(expected, row.GetProperty("priority").GetString());
+        }
+        foreach (var output in new[]
+        {
+            ExecuteRead(["backlog-list"], seed.Workspace, probe),
+            ExecutePersistent(["backlog-list"], seed.Workspace, repository)
+        })
+        {
+            var line = Assert.Single(output.Split(Environment.NewLine),
+                line => line.Contains(seed.Dependent.Id, StringComparison.Ordinal));
+            Assert.Contains($" [priority={expected}]", line);
+        }
+        Assert.Equal($" [priority={expected}]", BacklogListAgentReadView.FormatPriority(stored));
+        Assert.Equal(stored, (await store.GetByExactIdAsync(seed.Dependent.Id))!.Priority);
+        AssertNoWriterAccess(probe);
     }
 
     [Theory]

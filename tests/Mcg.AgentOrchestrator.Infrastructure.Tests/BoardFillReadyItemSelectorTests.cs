@@ -165,7 +165,7 @@ public sealed class BoardFillReadyItemSelectorTests
         var noPriority = landed with { Id = new string('e', 32), Priority = null, UpdatedAt = Now.AddDays(2) };
         var blankPriority = noPriority with { Id = new string('f', 32), Priority = " " };
         var remaining = new List<BacklogItem> { blankPriority, noPriority, noDependency, older, landed, tie };
-        foreach (var expected in new[] { tie, landed, older, noDependency, noPriority, blankPriority })
+        foreach (var expected in new[] { noDependency, noPriority, blankPriority, tie, landed, older })
         {
             var selected = BoardFillReadyItemSelector.Select(remaining, [goal], None,
                 item => BacklogDependencyReadiness.Evaluate(item, _ => goal, _ => null, _ => new(null), _ => "Recorded"));
@@ -173,6 +173,42 @@ public sealed class BoardFillReadyItemSelectorTests
             remaining.Remove(expected);
         }
         Assert.Null(Select([]));
+    }
+
+    [Fact]
+    public void Priority_levels_order_critical_high_unset_normal_then_low()
+    {
+        var low = Item('a') with { Priority = "low" };
+        var normal = Item('b');
+        var high = Item('c') with { Priority = "high" };
+        var critical = Item('d') with { Priority = "critical" };
+        var remaining = new List<BacklogItem> { low, normal, high, critical };
+        foreach (var expected in new[] { critical, high, normal, low })
+        {
+            Assert.Same(expected, Select(remaining));
+            remaining.Remove(expected);
+        }
+    }
+
+    [Theory]
+    [InlineData("Critical", "critical")]
+    [InlineData("critical", "Critical")]
+    public void Mixed_case_critical_ties_are_broken_by_ordinal_id(string first, string second)
+    {
+        var earlierId = Item('a') with { Priority = first };
+        var laterId = Item('b') with { Priority = second };
+        var high = Item('c') with { Priority = "high", UpdatedAt = Now.AddDays(1) };
+        Assert.Same(earlierId, Select([high, laterId, earlierId]));
+        Assert.Same(laterId, Select([high, laterId]));
+    }
+
+    [Fact]
+    public void Epic_plan_rank_beats_critical_priority()
+    {
+        var low = Item('b') with { Priority = "low" };
+        var critical = Item('a') with { Priority = "critical" };
+        Assert.Same(low, BoardFillReadyItemSelector.Select([critical, low], [], None, Ready,
+            preferredOrder: [low.Id, critical.Id]));
     }
 
     [Fact]
