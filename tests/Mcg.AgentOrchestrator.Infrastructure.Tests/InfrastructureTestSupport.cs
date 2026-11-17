@@ -100,7 +100,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     Action<OwnedProcessGroup.SuspendedProcessStart>? beforeOwnedExitObservation = null,
     IReadOnlyDictionary<string, string?>? verificationEnvironment = null)
 {
-    var hasSeamOverrideOrHook = GitProbeSeamScope.Value is not null || startProcess is not null ||
+    var hasSeamOverrideOrHook = InProcessGitFunnel.RealGitOnly || GitProbeSeamScope.Value is not null || startProcess is not null ||
             commandEnvironment is not null || verificationEnvironment is not null ||
             inheritedEnvironment is not null || beforeOwnedCaptureRead is not null ||
             beforeOwnedExitObservation is not null;
@@ -116,6 +116,15 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     else if (GitProbeRefFileFastPath.TryAnswer(workingDirectory, arguments, hasSeamOverrideOrHook, out var answer))
         return answer;
 
+    if (InProcessGitFunnel.Eligible(
+            GitProbeSeamScope.Value is not null || startProcess is not null || inheritedEnvironment is not null ||
+            verificationEnvironment is not null || beforeOwnedCaptureRead is not null || beforeOwnedExitObservation is not null,
+            GitProbeLaunchCounterScope.Value is not null, commandEnvironment) &&
+        InProcessGitFunnel.TryServe(workingDirectory, arguments, commandEnvironment,
+            () => ResolveNativeGitExecutable(null), out var fixtureAnswer))
+        return fixtureAnswer;
+
+    InProcessGitFunnel.RecordLaunch(arguments);
     RecordGitProbeLaunch();
     var seam = GitProbeSeamScope.Value;
     inheritedEnvironment ??= seam?.InheritedEnvironment;

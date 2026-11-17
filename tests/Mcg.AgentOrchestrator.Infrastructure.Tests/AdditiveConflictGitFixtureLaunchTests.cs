@@ -79,6 +79,8 @@ public sealed class AdditiveConflictGitFixtureLaunchTests
         // Optimized ceiling: 4 (log, rev-list, status, restore). Acceptance executes
         // the before/after measurements. Product rebase launches are unchanged;
         // the combined baseline is the observed rebase count + 6, excluding construction.
+        // The funnel now serves fixture shapes in process: the base commit is served;
+        // the linked-worktree commit and the large registry rewrite still launch git.
         const int maximumHelperLaunches = 4;
         using var warm = new AdditiveConflictGitFixture();
         var construction = new GitLaunches();
@@ -96,7 +98,8 @@ public sealed class AdditiveConflictGitFixtureLaunchTests
             using (helpers)
                 AssertAdditionsAndRemoval(fixture, result, events);
 
-            AssertLaunchBudget(construction.Commands, rebase.Commands, helpers.Commands, maximumHelperLaunches);
+            AssertLaunchBudget(construction.Commands, rebase.Commands, helpers.Commands, maximumHelperLaunches,
+                expectedConstructionCommitLaunches: 2);
             var commands = helpers.Commands;
             Assert.Equal(1, commands.Count(command => command == "log"));
             Assert.Equal(1, commands.Count(command => command == "rev-list"));
@@ -114,6 +117,8 @@ public sealed class AdditiveConflictGitFixtureLaunchTests
         // Optimized ceiling: 1 (status). Acceptance executes the before/after
         // measurements. Product rebase launches are unchanged; the combined baseline
         // is the observed rebase count + 5, excluding construction.
+        // The base commit is served in process. The linked-worktree commit and the
+        // main commit's two-line registry replacement fall through to real git.
         const int maximumHelperLaunches = 1;
         using var warm = new AdditiveConflictGitFixture();
         var construction = new GitLaunches();
@@ -131,7 +136,8 @@ public sealed class AdditiveConflictGitFixtureLaunchTests
             using (helpers)
                 AssertRefusal(fixture, result, events, "registry-ceiling-below-measured");
 
-            AssertLaunchBudget(construction.Commands, rebase.Commands, helpers.Commands, maximumHelperLaunches);
+            AssertLaunchBudget(construction.Commands, rebase.Commands, helpers.Commands, maximumHelperLaunches,
+                expectedConstructionCommitLaunches: 2);
             var commands = helpers.Commands;
             Assert.Equal(1, commands.Count(command => command == "status"));
             Assert.Equal(0, commands.Count(command => command == "rev-parse"));
@@ -141,7 +147,8 @@ public sealed class AdditiveConflictGitFixtureLaunchTests
     }
 
     private static void AssertLaunchBudget(
-        string[] construction, string[] rebase, string[] helpers, int maximumHelperLaunches)
+        string[] construction, string[] rebase, string[] helpers, int maximumHelperLaunches,
+        int expectedConstructionCommitLaunches)
     {
         var combined = rebase.Length + helpers.Length;
         var maximumCombined = rebase.Length + maximumHelperLaunches;
@@ -151,7 +158,7 @@ public sealed class AdditiveConflictGitFixtureLaunchTests
         Xunit.TestContext.Current.TestOutputHelper!.WriteLine(phases);
         Assert.True(combined <= maximumCombined,
             $"Expected at most {maximumCombined} rebase + assertion git launches; got {combined}; {phases}");
-        Assert.Equal(3, construction.Count(command => command == "commit"));
+        Assert.Equal(expectedConstructionCommitLaunches, construction.Count(command => command == "commit"));
         Assert.Contains("rebase", rebase);
     }
 }
