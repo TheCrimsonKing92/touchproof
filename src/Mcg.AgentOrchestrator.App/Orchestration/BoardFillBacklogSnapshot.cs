@@ -41,10 +41,13 @@ internal static class BoardFillBacklogSnapshot
         CancellationToken cancellationToken = default)
     {
         var items = new Dictionary<string, BacklogItem>(StringComparer.Ordinal);
+        using var probe = connection.CreateCommand();
+        probe.CommandText = "SELECT COUNT(*) FROM pragma_table_info('backlog') WHERE name = 'pinned_at'";
+        var pinColumn = Convert.ToInt32(probe.ExecuteScalar(), CultureInfo.InvariantCulture) != 0 ? "pinned_at" : "NULL";
         using (var command = connection.CreateCommand())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            command.CommandText = "SELECT id, title, body, status, created_at, updated_at, source_goal_id, priority, tags FROM backlog";
+            command.CommandText = $"SELECT id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, {pinColumn} FROM backlog";
             if (ids is not null) command.CommandText += $" WHERE id IN ({SqliteReadSession.BindIds(command, ids)})";
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -53,7 +56,8 @@ internal static class BoardFillBacklogSnapshot
                 var item = new BacklogItem(reader.GetString(0), reader.GetString(1), reader.GetString(2),
                     Enum.Parse<BacklogItemStatus>(reader.GetString(3)), Parse(reader.GetString(4)),
                     Parse(reader.GetString(5)), reader.IsDBNull(6) ? null : reader.GetString(6),
-                    reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetString(8));
+                    reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetString(8),
+                    PinnedAt: reader.IsDBNull(9) ? null : Parse(reader.GetString(9)));
                 items.Add(item.Id, item);
             }
         }

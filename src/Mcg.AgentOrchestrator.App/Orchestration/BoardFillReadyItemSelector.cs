@@ -68,7 +68,9 @@ internal static class BoardFillReadyItemSelector
             nearDuplicateSkipped?.Invoke(candidate.Item, reference);
             return false;
         })
-        .OrderBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
+        .OrderBy(candidate => candidate.Item.PinnedAt is null)
+        .ThenBy(candidate => candidate.Item.PinnedAt)
+        .ThenBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
         .ThenBy(candidate => BacklogPriorityLevels.Rank(candidate.Item.Priority))
         .ThenByDescending(candidate => candidate.Ready.HasLandedDependency)
         .ThenByDescending(candidate => candidate.Item.UpdatedAt)

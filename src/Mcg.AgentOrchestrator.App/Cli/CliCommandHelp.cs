@@ -52,7 +52,7 @@ internal static class CliCommandHelp
     public const string BacklogPremiseCheckUsage = "Usage: backlog-premise-check [--min-age-days <n>]";
     public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
-    public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <" + BacklogPriorityLevels.UsageLevels + ">] [--tags <csv>] [--status <open|done|superseded>]";
+    public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <" + BacklogPriorityLevels.UsageLevels + ">] [--tags <csv>] [--status <open|done|superseded>] [--next | --no-next]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix> [--summary] [--json]";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
@@ -472,7 +472,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
         "Update user-settable backlog item fields by id prefix.",
-        ["--title", "--description", "--text-file", "--body-file", "--priority", "--tags", "--status", "--help", "-h"]);
+        ["--title", "--description", "--text-file", "--body-file", "--priority", "--tags", "--status", "--next", "--no-next", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogShow = new(
         BacklogShowUsage,

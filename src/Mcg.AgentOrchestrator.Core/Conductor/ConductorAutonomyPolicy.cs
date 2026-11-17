@@ -46,7 +46,7 @@ public sealed record ConductorAutonomyPolicy(
     bool AcceptanceAttemptBelowNormalPriority = true,
     ConductorBoardFillMode BoardFillMode = ConductorBoardFillMode.Shadow,
     int BoardFillTargetActiveGoals = 10,
-    int BoardFillMaxDraftsPerDay = 3,
+    int? BoardFillMaxDraftsPerDay = null,
     bool CascadeTesterCheapFirst = true,
     string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias,
     bool CascadeMechanicalReworkCheap = true,
@@ -258,7 +258,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"buildRootRetentionDays\": {BuildRootRetentionDays},");
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
-        sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
+        sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null"},");
         sb.AppendLine($"  \"cascadeTesterCheapFirst\": {CascadeTesterCheapFirst.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeMechanicalReworkCheap\": {CascadeMechanicalReworkCheap.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"adoptedBuildPushEnabled\": {AdoptedBuildPushEnabled.ToString().ToLowerInvariant()},");
@@ -459,8 +459,14 @@ public sealed record ConductorAutonomyPolicy(
             }
             var boardFillTarget = root.TryGetProperty("boardFillTargetActiveGoals", out _)
                 ? RequireInt(root, "boardFillTargetActiveGoals", src) : 10;
-            var boardFillCap = root.TryGetProperty("boardFillMaxDraftsPerDay", out _)
-                ? RequireInt(root, "boardFillMaxDraftsPerDay", src) : 3;
+            int? boardFillCap = null;
+            if (root.TryGetProperty("boardFillMaxDraftsPerDay", out var capElement) &&
+                capElement.ValueKind != JsonValueKind.Null)
+            {
+                if (capElement.ValueKind != JsonValueKind.Number || !capElement.TryGetInt32(out var cap))
+                    throw new FormatException($"conductor-policy.json{src}: boardFillMaxDraftsPerDay must be an integer or null.");
+                boardFillCap = cap;
+            }
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
                 && thresholdEl.ValueKind != JsonValueKind.Null)

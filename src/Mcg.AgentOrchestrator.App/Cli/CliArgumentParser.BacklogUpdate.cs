@@ -11,10 +11,39 @@ internal static partial class CliArgumentParser
 
     internal static bool IsBacklogUpdateValueFlag(string token) => BacklogUpdateValueFlags.Contains(token);
 
+    internal static bool IsBacklogUpdateSwitchFlag(string token) =>
+        token.Equals("--next", StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("--no-next", StringComparison.OrdinalIgnoreCase);
+
     internal static bool IsBacklogUpdateTerminator(string token) =>
         IsBacklogUpdateValueFlag(token) ||
+        IsBacklogUpdateSwitchFlag(token) ||
         token.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
         token.Equals("-h", StringComparison.OrdinalIgnoreCase);
+
+    internal static Dictionary<string, string> ReadBacklogUpdateValues(IReadOnlyList<string> parts)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 2; index < parts.Count;)
+        {
+            var flag = parts[index];
+            if (IsBacklogUpdateSwitchFlag(flag))
+            {
+                values.TryAdd(flag, "");
+                index++;
+                continue;
+            }
+            if (!IsBacklogUpdateValueFlag(flag))
+                throw new ArgumentException($"Unexpected backlog-update argument '{flag}'. {CliCommandHelp.BacklogUpdateUsage}");
+            if (values.ContainsKey(flag))
+                throw new ArgumentException($"Provide {flag} only once.");
+            if (index + 1 >= parts.Count || IsBacklogUpdateTerminator(parts[index + 1]))
+                throw new ArgumentException($"{flag} requires a value. Use --text-file for descriptions containing literal option names.");
+            values.Add(flag, parts[index + 1]);
+            index += 2;
+        }
+        return values;
+    }
 
     private static IReadOnlyList<string> SplitBacklogUpdateCommand(string command, string remainder)
     {

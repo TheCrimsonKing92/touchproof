@@ -34,6 +34,7 @@ internal sealed partial class ConductorBoardFillHost
     private string? _lastPlanReadFailure;
     private readonly HashSet<string> _reportedStoppedItems = new(StringComparer.Ordinal);
     private DateTime _stoppedReportDay;
+    private string? _reportedBackoffRound;
     internal Task? CurrentRound => _round;
 
     // Drafting is read-only; optional filing delegates all goal mutations to the CLI intake seam.
@@ -117,7 +118,7 @@ internal sealed partial class ConductorBoardFillHost
         // Admission refreshes membership on the filing thread; wait for that observation before spending another draft.
         if (held || _round is not null || _filing is not null ||
             kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals) return null;
-        if (_store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay)
+        if (policy.BoardFillMaxDraftsPerDay is { } cap && _store.StartedOnUtcDay(now) >= cap)
             return policy.BoardFillMode == ConductorBoardFillMode.Shadow
                 ? BoardBelowTargetMonitor.ModeNotFile : BoardBelowTargetMonitor.DailyCapReached;
         if (_heldMainHead is not null)
@@ -138,6 +139,16 @@ internal sealed partial class ConductorBoardFillHost
         var rounds = _store.ReadAll(newestFirst: true).Reverse().ToArray();
         var stopped = BoardFillConsecutiveNonDraftRounds.StoppedItems(rounds, now);
         ReportStoppedItems(items, stopped, now);
+        if (BoardFillFailureBreaker.Evaluate(rounds, now) is { } backoff)
+        {
+            var detail = $"BOARD_FILL_BACKOFF consecutive={backoff.ConsecutiveCount} " +
+                $"delay={backoff.Delay.TotalSeconds}s retry={backoff.RetryAt:O} round={backoff.RoundId}";
+            if (_reportedBackoffRound != backoff.RoundId &&
+                _events.AppendRequired("board-fill-draft", null, detail, now, "board-fill-backoff-" + backoff.RoundId))
+                _reportedBackoffRound = backoff.RoundId;
+            return policy.BoardFillMode == ConductorBoardFillMode.Shadow
+                ? BoardBelowTargetMonitor.ModeNotFile : BoardBelowTargetMonitor.AuthorRefusalStreak;
+        }
         var excluded = _store.AlreadyDrafted(items, observedMain).ToHashSet(StringComparer.Ordinal);
         excluded.UnionWith(stopped.Keys);
         var goals = kernel.Goals.ToArray();

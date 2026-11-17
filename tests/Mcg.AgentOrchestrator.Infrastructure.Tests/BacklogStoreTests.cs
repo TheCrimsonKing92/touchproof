@@ -8,6 +8,64 @@ using System.Collections.Concurrent;
 public sealed class BacklogStoreTests
 {
     [Xunit.Fact]
+    public async Task Update_pin_preserves_age_until_explicit_clear()
+    {
+        var path = TempDb();
+        var store = new BacklogStore(path);
+        var item = await store.AddAsync("Pin lifecycle", "Body");
+        var other = await store.AddAsync("Independent pin");
+        Assert.Null(item.PinnedAt);
+        var first = new DateTimeOffset(2030, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        var second = first.AddDays(1);
+        Assert.Equal(first, (await store.UpdateAsync(item.Id, new(PinnedAt: first, PinnedAtSpecified: true))).PinnedAt);
+        Assert.Equal(first, (await store.UpdateAsync(item.Id, new(PinnedAt: second, PinnedAtSpecified: true))).PinnedAt);
+        Assert.Equal(first, (await store.UpdateAsync(item.Id, new(Title: "Renamed"))).PinnedAt);
+        await store.UpdateAsync(other.Id, new(PinnedAt: second, PinnedAtSpecified: true));
+        Assert.Equal(first, (await store.GetByExactIdAsync(item.Id))!.PinnedAt);
+        Assert.Null((await store.UpdateAsync(item.Id, new(PinnedAtSpecified: true))).PinnedAt);
+        Assert.Null((await store.UpdateAsync(item.Id, new(PinnedAtSpecified: true))).PinnedAt);
+        Assert.Equal(second, (await store.UpdateAsync(item.Id, new(PinnedAt: second, PinnedAtSpecified: true))).PinnedAt);
+        Assert.Equal(second, (await BacklogStore.OpenReadOnly(path).GetByExactIdAsync(item.Id))!.PinnedAt);
+        Assert.Equal(second, (await store.GetByExactIdAsync(other.Id))!.PinnedAt);
+
+        using var connection = OpenSetupDatabase(path);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT details FROM backlog_history WHERE backlog_item_id = $id AND action = 'update' ORDER BY id LIMIT 1";
+        command.Parameters.AddWithValue("$id", item.Id);
+        using var history = System.Text.Json.JsonDocument.Parse((string)command.ExecuteScalar()!);
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, history.RootElement.GetProperty("before").GetProperty("PinnedAt").ValueKind);
+        Assert.Equal(first.ToString("O"), history.RootElement.GetProperty("after").GetProperty("PinnedAt").GetString());
+    }
+
+    [Xunit.Fact]
+    public async Task Setup_v1_adds_pin_column_without_changing_items()
+    {
+        var path = TempDb();
+        var store = new BacklogStore(path);
+        var item = await store.AddAsync("Existing item", "Original body", "source-goal");
+        item = await store.UpdateAsync(item.Id, new(Priority: "Critical", Tags: "original"));
+        await store.AppendNoteAsync(item.Id, "Original note");
+        var expected = ItemSnapshot((await store.GetByExactIdAsync(item.Id))!);
+        using (var connection = OpenSetupDatabase(path))
+            RunSetupSql(connection, "ALTER TABLE backlog DROP COLUMN pinned_at; UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog'");
+        const string oldColumns = "id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at";
+        var rows = ReadSetupRows(path, $"SELECT {oldColumns} FROM backlog ORDER BY id");
+        var history = ReadSetupRows(path, "SELECT * FROM backlog_history ORDER BY id");
+
+        BacklogStore.Setup(path);
+
+        using (var current = OpenSetupDatabase(path))
+            Assert.Equal(StoreSchemaRegistry.Backlog.CurrentVersion, StoreSchemaVersions.Read(current, "backlog"));
+        Assert.Single(ReadSetupRows(path, "SELECT name FROM pragma_table_info('backlog') WHERE name = 'pinned_at'"));
+        Assert.Equal(rows, ReadSetupRows(path, $"SELECT {oldColumns} FROM backlog ORDER BY id"));
+        Assert.Equal(history, ReadSetupRows(path, "SELECT * FROM backlog_history ORDER BY id"));
+        Assert.Equal(expected, ItemSnapshot((await BacklogStore.OpenReadOnly(path).GetByExactIdAsync(item.Id))!));
+        var bytes = File.ReadAllBytes(path);
+        BacklogStore.Setup(path);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Xunit.Fact]
     public void PolicyStrictAppliesWritablePragmas()
     {
         using var connection = SqliteStoreConnectionPolicy.Open(
@@ -752,7 +810,7 @@ public sealed class BacklogStoreTests
     }
 
     [Xunit.Fact]
-    public void Setup_MissingPath_CreatesDatabaseAndRecordsVersion1()
+    public void Setup_MissingPath_CreatesDatabaseAndRecordsCurrentVersion()
     {
         var path = Path.Combine(TempDb(), "nested", "backlog.db");
         Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
@@ -761,7 +819,7 @@ public sealed class BacklogStoreTests
 
         Assert.True(File.Exists(path));
         using var connection = OpenSetupDatabase(path);
-        Assert.Equal(1, StoreSchemaVersions.Read(connection, "backlog"));
+        Assert.Equal(StoreSchemaRegistry.Backlog.CurrentVersion, StoreSchemaVersions.Read(connection, "backlog"));
     }
 
     [Xunit.Fact]
@@ -783,13 +841,14 @@ public sealed class BacklogStoreTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(1)]
-    [Xunit.InlineData(2)]
-    public async Task WritableConstructor_CurrentOrNewerSchema_OpensWhileItemLeaseIsHeld(int version)
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task WritableConstructor_CurrentOrNewerSchema_OpensWhileItemLeaseIsHeld(bool newer)
     {
         var path = TempDb();
         var store = new BacklogStore(path);
         var item = await store.AddAsync("Replacement source");
+        var version = StoreSchemaRegistry.Backlog.CurrentVersion!.Value + (newer ? 1 : 0);
         using (var connection = OpenSetupDatabase(path))
             RunSetupSql(connection, $"UPDATE store_schema_versions SET version = {version}, applied_at = 'original' WHERE store_name = 'backlog'");
         var versions = ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name");
@@ -822,14 +881,14 @@ public sealed class BacklogStoreTests
                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
                 """);
         }
-        var schema = ReadSetupRows(path, "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name");
+        var schema = ReadSetupRows(path, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name <> 'backlog' ORDER BY type, name");
 
         BacklogStore.Setup(path);
 
         using var current = OpenSetupDatabase(path);
-        Assert.Equal(1, StoreSchemaVersions.Read(current, "backlog"));
+        Assert.Equal(StoreSchemaRegistry.Backlog.CurrentVersion, StoreSchemaVersions.Read(current, "backlog"));
         Assert.Equal(schema, ReadSetupRows(path,
-            "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name <> 'store_schema_versions' ORDER BY type, name"));
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT IN ('backlog', 'store_schema_versions') ORDER BY type, name"));
         var item = Assert.Single(await BacklogStore.OpenReadOnly(path).ListAsync());
         Assert.Equal("legacy", item.Id);
         Assert.Equal("Existing item", item.Title);
@@ -854,13 +913,13 @@ public sealed class BacklogStoreTests
             using var connection = OpenSetupDatabase(path);
             RunSetupSql(connection, scenario == "missing-record"
                 ? "DELETE FROM store_schema_versions WHERE store_name = 'backlog'"
-                : $"UPDATE store_schema_versions SET version = {(scenario == "older" ? 0 : 2)} WHERE store_name = 'backlog'");
+                : $"UPDATE store_schema_versions SET version = {(scenario == "older" ? 0 : StoreSchemaRegistry.Backlog.CurrentVersion!.Value + 1)} WHERE store_name = 'backlog'");
         }
         var bytes = File.Exists(path) ? File.ReadAllBytes(path) : null;
 
         var error = Assert.Throws<InvalidOperationException>(() => BacklogStore.OpenReadOnly(path));
 
-        Assert.Equal($"Backlog store '{path}' schema is {state} (expected version 1); run setup.", error.Message);
+        Assert.Equal($"Backlog store '{path}' schema is {state} (expected version {StoreSchemaRegistry.Backlog.CurrentVersion}); run setup.", error.Message);
         if (scenario == "missing-file")
         {
             Assert.False(File.Exists(path));
