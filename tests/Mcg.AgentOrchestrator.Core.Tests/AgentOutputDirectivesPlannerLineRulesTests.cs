@@ -36,8 +36,8 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
         var directive = PlannerDirective();
         string[] requiredFragments =
         [
-            "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; stdout is authoritative, and a summary or private model-home file path alone is invalid. ",
-            "A referenced plan artifact is only a fallback when stdout parsing fails; writing a separate artifact is not required. ",
+            "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; stdout is authoritative. ",
+            "Artifacts are optional fallbacks if stdout parsing fails; a summary or private model-home file path alone is invalid. ",
             "Use these exact substantive headings: ## Premise validity; ## Acceptance criteria mapping; ## Target seams and symbols; ",
             "## Ownership and lifecycle; ## External and edge contracts; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. ",
             "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, ",
