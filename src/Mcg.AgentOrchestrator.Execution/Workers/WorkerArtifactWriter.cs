@@ -194,7 +194,7 @@ internal sealed partial class WorkerArtifactWriter
                 preserveCompleteArtifacts,
                 repositoryDiffs));
 
-        var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory, preserveCompleteArtifacts, selectedSkills);
+        var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory, preserveCompleteArtifacts, selectedSkills, task.RequiredRole);
         var storeSources = new[] { goal.AuthoritativeBrief.Text }
             .Concat(durablePlannerPlans.Values.Where(plan => plan.Succeeded).Select(plan => plan.Plan!))
             .Concat(answeredEvidenceTexts ?? []);
@@ -1088,7 +1088,8 @@ internal sealed partial class WorkerArtifactWriter
         string workingDirectory,
         string contextDirectory,
         bool preserveCompleteArtifacts,
-        IReadOnlyList<WorkerSkillRequirement> selectedSkills)
+        IReadOnlyList<WorkerSkillRequirement> selectedSkills,
+        AgentRole role)
     {
         var copied = new List<string>();
         foreach (var fileName in new[] { "AGENTS.md" })
@@ -1100,7 +1101,7 @@ internal sealed partial class WorkerArtifactWriter
             }
 
             var targetPath = Path.Combine(contextDirectory, fileName);
-            WriteText(targetPath, File.ReadAllText(sourcePath));
+            WriteText(targetPath, WorkerGuidanceScope.Project(File.ReadAllText(sourcePath), role));
             copied.Add(fileName);
         }
 

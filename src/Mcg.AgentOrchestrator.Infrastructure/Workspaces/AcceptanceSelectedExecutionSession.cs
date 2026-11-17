@@ -36,6 +36,21 @@ internal sealed class AcceptanceSelectedExecutionSession(
         mode == AcceptanceSelectedExecutionMode.Off ? null : Transform;
     internal Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceWholeProjectCheck>, IReadOnlyList<AcceptanceTestLane>>? GateTransform =>
         mode == AcceptanceSelectedExecutionMode.Off ? null : Transform;
+    internal Func<IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck>, IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck>>? ProjectCheckTransform =>
+        mode == AcceptanceSelectedExecutionMode.Off ? null : TransformProjectChecks;
+    internal IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks => _plan?.ProjectChecks ?? [];
+
+    internal IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> TransformProjectChecks(
+        IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> checks)
+    {
+        if (!Applied) return checks;
+        return checks.SelectMany(check =>
+        {
+            var entry = ProjectChecks.FirstOrDefault(item => item.Matches(check));
+            return entry?.Lane.Disposition == "skipped" ? Array.Empty<GoalAcceptanceVerifier.AcceptanceManifestCheck>() :
+                new[] { entry?.Apply(check) ?? check };
+        }).ToArray();
+    }
 
     internal IReadOnlyList<AcceptanceTestLane> Transform(IReadOnlyList<AcceptanceTestLane> lanes) => Transform(lanes, []);
 
@@ -55,11 +70,57 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 var input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changedFiles, engineSettings)
                     : read(worktreePath, changedFiles);
                 _classes = input.Classes;
+                var targets = wholeProjectChecks.Where(check => check.SupportsSelectedExecution).ToArray();
+                var inventories = new Dictionary<AcceptanceWholeProjectCheck, AcceptanceWholeProjectCheckInventory>();
+                AcceptanceWholeProjectCheckInventory Inventory(AcceptanceWholeProjectCheck check)
+                {
+                    if (!inventories.TryGetValue(check, out var inventory))
+                        inventories.Add(check, inventory = new(check.Name, check.Project, ReadProject(check.Project)));
+                    return inventory;
+                }
+                IReadOnlyList<AcceptanceWholeProjectCheckInventory> Inventories() => wholeProjectChecks.Select(Inventory).ToArray();
+                IReadOnlyList<AcceptanceWholeProjectCheckInventory> SelectableInventories() => targets.Select(Inventory).ToArray();
+                var projectReachAvailable = true;
+                var changedTestProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (read is null && input.Selection.Outcome == ReverseDependencySelectionOutcome.Resolved && targets.Length > 0)
+                {
+                    var routing = new ImpactReplayChangedSourceRouting(worktreePath);
+                    var changedPaths = changedFiles.Select(path => Path.GetFullPath(path, worktreePath)).ToArray();
+                    foreach (var check in targets)
+                    {
+                        var project = routing.TestProjects.FirstOrDefault(item => item.Path.Equals(
+                            Path.GetFullPath(check.Project, worktreePath), StringComparison.OrdinalIgnoreCase));
+                        if (project is null) continue;
+                        var directory = Path.GetDirectoryName(project.Path)! + Path.DirectorySeparatorChar;
+                        // Support selection currently reports non-infrastructure readers as files, not classes.
+                        // Until those classes are available, changes to project files or linked sources require it whole.
+                        if (changedPaths.Any(path => path.StartsWith(directory, StringComparison.OrdinalIgnoreCase) ||
+                            project.Sources.Contains(path, StringComparer.OrdinalIgnoreCase)))
+                            changedTestProjects.Add(check.Project);
+                    }
+                    var productionSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
+                        !routing.IsTestSource(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                    if (productionSources.Length > 0)
+                    {
+                        var reach = ReverseDependencyTestImpactReader.Read(worktreePath, productionSources,
+                            propagateShippingSourceReach: true, additionalTargetTestProjects: targets.Select(check => check.Project)
+                                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+                        projectReachAvailable = reach.Outcome == ReverseDependencySelectionOutcome.Resolved;
+                        if (projectReachAvailable)
+                        {
+                            var projectClasses = SelectableInventories().SelectMany(check => check.Classes).ToArray();
+                            var reached = reach.TestClassNames.Where(name => projectClasses.Any(item =>
+                                name.Contains('.') || name.Contains('+') ? item.FullName == name : item.FullName.Split('.', '+').Last() == name));
+                            input = input with { Selection = input.Selection with { TestClassNames = input.Selection.TestClassNames
+                                .Concat(reached).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() } };
+                        }
+                    }
+                }
                 _plan = AcceptanceSelectedExecutionPlan.Create(changedFiles, input.Selection, lanes, input.Classes,
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
                         .Select(lane => lane.Name).ToArray(), input.GuardClasses,
-                    obligationSelectors ?? input.ObligationSelectors, () => wholeProjectChecks.Select(check =>
-                        new AcceptanceWholeProjectCheckInventory(check.Name, check.Project, ReadProject(check.Project))).ToArray());
+                    obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable, SelectableInventories,
+                    changedTestProjects);
                 IReadOnlyList<AcceptanceTestClassDescriptor> ReadProject(string project)
                 {
                     try { return input.ProjectClasses?.Invoke(project) ?? []; }
@@ -95,7 +156,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
         var record = new AcceptanceSelectedExecutionRecord(_effectiveMode.ToString(), _plan?.HasPlan == true ? "plan" : "full-gate",
             _plan?.Outcome.ToString(), _plan?.FullGateReason, _plan?.FloorLanes ?? [], _plan?.GuardClasses ?? [],
             _plan?.ObligationClasses ?? [],
-            proposed.Select(lane => lane with
+            proposed.Concat(ProjectChecks.Select(entry => entry.Lane)).Select(lane => lane with
             {
                 LaneSkipReason = lane.Disposition == "skipped" ? shadow
                     ? AcceptanceGateLaneSkip.ShadowLaneNotSelected : AcceptanceGateLaneSkip.LaneNotSelected : null,

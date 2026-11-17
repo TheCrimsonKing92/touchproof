@@ -6,6 +6,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Coverage is restricted to project checks retained by the gate's scheduling predicates.
 internal sealed record AcceptanceWholeProjectCheck(string Name, string Project)
 {
+    internal bool SupportsSelectedExecution => ProjectMatches(Project, CliTestsProject) ||
+        ProjectMatches(Project, OwnerConsoleTestsProject);
+
     internal static IReadOnlyList<AcceptanceWholeProjectCheck> Scheduled(
         IReadOnlyList<Check> manifestChecks, IReadOnlyList<Check> requiredChecks,
         PolicyShardPlan policy, DotnetShardDisposition disposition, IReadOnlyList<string>? changedFiles)
