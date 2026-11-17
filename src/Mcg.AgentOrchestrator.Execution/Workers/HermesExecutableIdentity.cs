@@ -25,7 +25,8 @@ internal sealed record HermesExecutableIdentityReceipt(
     string VersionStandardOutput,
     string VersionStandardError,
     int VersionExitCode,
-    bool VersionJobExitConfirmed);
+    bool VersionJobExitConfirmed,
+    HermesLaunchContext? LaunchContext = null);
 
 internal enum HermesIdentityRefusal
 {
@@ -75,7 +76,8 @@ internal interface IHermesExecutableIdentityVerifier
         string versionStandardError,
         int versionExitCode,
         bool versionJobExitConfirmed,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        HermesLaunchContext? launchContext = null);
 }
 
 internal sealed class GitHermesExecutableIdentityVerifier : IHermesExecutableIdentityVerifier
@@ -98,7 +100,8 @@ internal sealed class GitHermesExecutableIdentityVerifier : IHermesExecutableIde
         string versionStandardError,
         int versionExitCode,
         bool versionJobExitConfirmed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HermesLaunchContext? launchContext = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(Verify(
@@ -107,7 +110,8 @@ internal sealed class GitHermesExecutableIdentityVerifier : IHermesExecutableIde
             versionStandardError,
             versionExitCode,
             versionJobExitConfirmed,
-            cancellationToken));
+            cancellationToken,
+            launchContext));
     }
 
     internal static void ValidateReceipt(
@@ -164,7 +168,8 @@ internal sealed class GitHermesExecutableIdentityVerifier : IHermesExecutableIde
         string versionStandardError,
         int versionExitCode,
         bool versionJobExitConfirmed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HermesLaunchContext? launchContext)
     {
         if (string.IsNullOrWhiteSpace(launchedImagePath))
             throw Refuse(HermesIdentityRefusal.ImagePathUnavailable, "the operating system did not report the launched image path");
@@ -254,7 +259,8 @@ internal sealed class GitHermesExecutableIdentityVerifier : IHermesExecutableIde
             versionStandardOutput,
             versionStandardError,
             versionExitCode,
-            versionJobExitConfirmed);
+            versionJobExitConfirmed,
+            launchContext);
     }
 
     private static GitCli.GitResult RunGit(string workingDirectory, CancellationToken cancellationToken, params string[] arguments)

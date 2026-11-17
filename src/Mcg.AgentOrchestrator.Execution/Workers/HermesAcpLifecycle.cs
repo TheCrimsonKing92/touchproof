@@ -16,6 +16,7 @@ internal interface IHermesAcpProcess : IDisposable
     int ExitCode { get; }
     int ProcessId => 0;
     DateTimeOffset? ProcessStartedAt => null;
+    HermesLaunchContext? LaunchContext => null;
     bool JobExitConfirmed { get; }
     string DescribeJobExitObservation() => "job-exit-observation=unavailable";
     bool SurvivorInventoryEmpty { get; }
@@ -57,6 +58,7 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
         private readonly SafeFileHandle _processHandle;
         private readonly OwnedProcessGroup _processGroup;
         private readonly DateTimeOffset? _processStartedAt;
+        private readonly HermesLaunchContext _launchContext;
         private SpawnProcessIdentity? _launchedIdentity;
         private readonly HashSet<SpawnProcessIdentity> _observedIdentities = [];
         private bool? _terminatedJobExitConfirmed;
@@ -74,6 +76,7 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
             StandardOutput = launched.StandardOutput;
             StandardError = launched.StandardError;
             ObserveOwnedProcesses();
+            _launchContext = HermesLaunchContextReader.Capture(_processHandle, _processGroup, _process.Id);
         }
 
         public TextWriter StandardInput { get; }
@@ -82,6 +85,7 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
         public int ExitCode => OwnedProcessGroup.ReadProcessExitCode(_processHandle);
         public int ProcessId => _process.Id;
         public DateTimeOffset? ProcessStartedAt => _processStartedAt;
+        public HermesLaunchContext? LaunchContext => _launchContext;
         public bool JobExitConfirmed
         {
             get
@@ -683,7 +687,8 @@ internal sealed class HermesAcpLifecycle
                 stderr.Text,
                 process.ExitCode,
                 process.JobExitConfirmed,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                launchContext: process.LaunchContext).ConfigureAwait(false);
             GitHermesExecutableIdentityVerifier.ValidateReceipt(identity, pin: _identityVerifier.Pin);
             return identity;
         }
