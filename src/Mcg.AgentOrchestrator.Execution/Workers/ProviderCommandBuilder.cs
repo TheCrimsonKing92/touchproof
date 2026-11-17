@@ -20,7 +20,8 @@ public static class ProviderCommandBuilder
         string? openaiBaseUrl = null,
         string? openaiApiKey = null,
         string? approvalMode = null,
-        int repositoryPolicyMaxBytes = 0)
+        int repositoryPolicyMaxBytes = 0,
+        ClaudeBashAvailability claudeBashAvailability = ClaudeBashAvailability.Available)
     {
         return providerKind switch
         {
@@ -44,7 +45,8 @@ public static class ProviderCommandBuilder
                 modelAlias,
                 reasoningEffort,
                 resolvedPermissionMode,
-                sessionId),
+                sessionId,
+                claudeBashAvailability),
             ProviderKind.OllamaQwenCodeCli => BuildQwen(modelAlias, workingDirectory, openaiBaseUrl, openaiApiKey, approvalMode),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(providerKind),
@@ -115,7 +117,8 @@ public static class ProviderCommandBuilder
         string modelAlias,
         string? reasoningEffort,
         string resolvedPermissionMode,
-        string? sessionId)
+        string? sessionId,
+        ClaudeBashAvailability claudeBashAvailability = ClaudeBashAvailability.Available)
     {
         var isReadOnly = string.Equals(resolvedPermissionMode, "plan", StringComparison.Ordinal);
         var command = new List<string>
@@ -135,15 +138,25 @@ public static class ProviderCommandBuilder
             command.Add(Expand(reasoningEffort));
         }
 
+        var toolLists = ClaudeBashToolLists.Apply(
+            claudeBashAvailability,
+            isReadOnly ? ClaudeReadOnlyTools : string.Empty,
+            isReadOnly ? ClaudeReadOnlyAllowedTools : string.Empty,
+            isReadOnly ? ClaudeReadOnlyDisallowedTools : string.Empty);
         if (isReadOnly)
         {
             command.Add("--restricted");
             command.Add("--tools");
-            command.Add(Expand(ClaudeReadOnlyTools));
+            command.Add(Expand(toolLists.Tools));
             command.Add("--allowed-tools");
-            command.Add(Expand(ClaudeReadOnlyAllowedTools));
+            command.Add(Expand(toolLists.AllowedTools));
             command.Add("--disallowed-tools");
-            command.Add(Expand(ClaudeReadOnlyDisallowedTools));
+            command.Add(Expand(toolLists.DisallowedTools));
+        }
+        else if (!string.IsNullOrEmpty(toolLists.DisallowedTools))
+        {
+            command.Add("--disallowed-tools");
+            command.Add(Expand(toolLists.DisallowedTools));
         }
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
