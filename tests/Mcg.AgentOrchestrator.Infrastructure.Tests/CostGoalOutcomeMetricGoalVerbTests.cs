@@ -43,7 +43,7 @@ public sealed class CostGoalOutcomeMetricGoalVerbTests : CliCommandTestBase
 
         Assert.Null(result.Error);
         Assert.NotNull(result.Goal);
-        Assert.Equal(brief, Assert.Single((await repository.LoadAsync()).Goals).Objective);
+        Assert.Equal(brief.Trim(), Assert.Single((await repository.LoadAsync()).Goals).Objective);
         Assert.DoesNotContain("cost-goal-outcome-metric-override", ReadLog(workspace));
     }
 

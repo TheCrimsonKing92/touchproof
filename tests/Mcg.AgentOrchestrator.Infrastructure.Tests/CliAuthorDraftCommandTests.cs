@@ -78,7 +78,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(16, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(17, receipt.RootElement.GetProperty("checks").GetArrayLength());
         var failed = Assert.Single(receipt.RootElement.GetProperty("checks").EnumerateArray()
             .Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal(checkName, failed.GetProperty("name").GetString());
@@ -193,7 +193,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(16, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(17, receipt.RootElement.GetProperty("checks").GetArrayLength());
         var failed = Assert.Single(receipt.RootElement.GetProperty("checks").EnumerateArray()
             .Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal("premise-citations", failed.GetProperty("name").GetString());
@@ -217,7 +217,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(16, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(17, receipt.RootElement.GetProperty("checks").GetArrayLength());
         Assert.All(receipt.RootElement.GetProperty("checks").EnumerateArray(),
             check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Empty(fixture.Error.ToString());

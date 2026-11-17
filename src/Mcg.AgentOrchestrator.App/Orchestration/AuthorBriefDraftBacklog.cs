@@ -21,7 +21,7 @@ internal static class AuthorBriefDraftBacklog
         {
             command.Transaction = transaction;
             command.CommandText = """
-                SELECT id, title, body, status, created_at, updated_at, source_goal_id
+                SELECT id, title, body, status, created_at, updated_at, source_goal_id, tags
                 FROM backlog WHERE substr(id, 1, length($prefix)) = $prefix COLLATE NOCASE LIMIT 2
                 """;
             command.Parameters.AddWithValue("$prefix", prefix);
@@ -31,7 +31,7 @@ internal static class AuthorBriefDraftBacklog
                     Enum.Parse<BacklogItemStatus>(reader.GetString(3)),
                     DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
                     DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
-                    reader.IsDBNull(6) ? null : reader.GetString(6));
+                    reader.IsDBNull(6) ? null : reader.GetString(6), Tags: reader.GetString(7));
             if (reader.Read()) throw new ArgumentException($"Backlog prefix '{prefix}' is ambiguous.");
         }
         if (item is null) throw new ArgumentException($"No backlog item matches '{prefix}'.");

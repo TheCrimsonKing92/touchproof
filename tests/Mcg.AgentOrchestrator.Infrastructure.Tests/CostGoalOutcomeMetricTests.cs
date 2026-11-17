@@ -132,6 +132,8 @@ public sealed class CostGoalOutcomeMetricTests
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
         await fixture.Store.UpdateAsync(fixture.Item.Id, new BacklogItemUpdate(Tags: "cost"));
+        var databaseBefore = File.ReadAllBytes(fixture.Workspace.BacklogStorePath);
+        Assert.Equal("cost", AuthorBriefDraftBacklog.Read(fixture.Workspace.BacklogStorePath, fixture.Item.Id).Tags);
         WorkerProcessRunResult Draft() => new(0, JsonSerializer.Serialize(new
         {
             kind = "draft", markdown = CliAuthorDraftCommandTests.ValidMarkdown
@@ -156,5 +158,6 @@ public sealed class CostGoalOutcomeMetricTests
         Assert.False(check.Passed);
         Assert.Contains("no well-formed ## Outcome metric line", check.Detail);
         Assert.All(checks.Where(check => check.Name != CostGoalOutcomeMetric.CheckName), check => Assert.True(check.Passed, check.Detail));
+        Assert.Equal(databaseBefore, File.ReadAllBytes(fixture.Workspace.BacklogStorePath));
     }
 }

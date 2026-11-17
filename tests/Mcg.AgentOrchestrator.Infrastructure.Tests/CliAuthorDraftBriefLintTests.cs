@@ -21,8 +21,8 @@ public sealed class CliAuthorDraftBriefLintTests
         Assert.Equal(markdown, File.ReadAllText(draft));
         using var receipt = fixture.Receipt();
         var checks = receipt.RootElement.GetProperty("checks").EnumerateArray().ToArray();
-        Assert.Equal(17, checks.Length);
-        Assert.All(checks.Take(16), check => Assert.True(check.GetProperty("passed").GetBoolean()));
+        Assert.Equal(18, checks.Length);
+        Assert.All(checks.Take(17), check => Assert.True(check.GetProperty("passed").GetBoolean()));
         var failed = Assert.Single(checks.Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal($"brief-lint:{kind}", failed.GetProperty("name").GetString());
         Assert.Equal(detail, failed.GetProperty("detail").GetString());
