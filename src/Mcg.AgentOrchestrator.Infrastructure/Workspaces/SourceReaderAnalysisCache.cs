@@ -10,7 +10,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
 {
     // Bump for serialized shape OR analysis semantics changes in SourceReadingGuardTestClasses
     // or WholeTreeSourceReaderDetector.
-    internal const int FormatVersion = 7;
+    internal const int FormatVersion = 8;
     private static readonly Lazy<SourceReaderAnalysisCache> Shared = new(() => new(DefaultDirectory()));
     private static readonly AsyncLocal<SourceReaderAnalysisCache?> Scoped = new();
     private long _analysisCount;

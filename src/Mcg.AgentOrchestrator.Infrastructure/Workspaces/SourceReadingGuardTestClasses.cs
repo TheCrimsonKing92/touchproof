@@ -18,6 +18,7 @@ internal static class SourceReadingGuardTestClasses
             references: [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var files = new List<SourceReaderFileFacts>();
+        var pathsByTree = sources.Trees.Distinct().ToDictionary(tree => tree, tree => SourceReaderFileFacts.RelativePath(sources, tree));
         foreach (var tree in sources.Trees)
         {
             var description = SourceReaderFileFacts.Describe(sources, tree);
@@ -57,17 +58,21 @@ internal static class SourceReadingGuardTestClasses
                         var canonical = target.OriginalDefinition;
                         snapshot |= IsSnapshotRead(canonical);
                         // Metadata and untracked local-function/accessor symbols cannot seed this graph.
-                        if (!canonical.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is { } node &&
-                            (node is BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax ||
-                             node is VariableDeclaratorSyntax { Parent: { Parent: BaseFieldDeclarationSyntax } }) &&
-                            node.Ancestors().OfType<ClassDeclarationSyntax>().Any())) continue;
-                        var id = Id(canonical);
-                        calls.Add(id);
-                        targets.Add(id);
+                        foreach (var reference in canonical.DeclaringSyntaxReferences)
+                        {
+                            if (!pathsByTree.TryGetValue(reference.SyntaxTree, out var path) ||
+                                reference.GetSyntax() is not { } node ||
+                                !(node is BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax ||
+                                  node is VariableDeclaratorSyntax { Parent: { Parent: BaseFieldDeclarationSyntax } }) ||
+                                !node.Ancestors().OfType<ClassDeclarationSyntax>().Any()) continue;
+                            var id = Qualify(Id(canonical), path);
+                            calls.Add(id);
+                            targets.Add(id);
+                        }
                     }
                     if (expression is InvocationExpressionSyntax) invocations.Add(targets.Distinct(StringComparer.Ordinal).ToArray());
                 }
-                members.Add(new(Id(symbol), symbol.Name, name, Id(symbol.ContainingType!), position,
+                members.Add(new(Qualify(Id(symbol), description.Path), symbol.Name, name, Id(symbol.ContainingType!), position,
                     symbol is IFieldSymbol { IsStatic: false } or IMethodSymbol { MethodKind: MethodKind.Constructor } ||
                     declaration is MethodDeclarationSyntax method && method.AttributeLists.SelectMany(list => list.Attributes)
                         .Any(attribute => attribute.Name.ToString().Split('.').Last() is "Fact" or "FactAttribute" or "Theory" or "TheoryAttribute"),
@@ -82,6 +87,9 @@ internal static class SourceReadingGuardTestClasses
         }
         return files.ToArray();
     }
+
+    // Documentation ids contain no spaces; preserve their prefix and use the declaration's path.
+    private static string Qualify(string id, string path) => id + " " + path;
 
     private static string Id(ISymbol symbol)
     {
