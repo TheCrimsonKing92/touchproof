@@ -634,6 +634,163 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
     }
 
+    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void ScopedMaxDurationWaitsForWorkerReconciliation(bool recordExitBeforeRefresh)
+    {
+        var root = CreateTempDirectory("mcg-scoped-worker-deferral");
+        try
+        {
+            var time = new ManualConductorTimeProviderForTests(
+                new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+            var (kernel, goal, planner, exitPath, _, rootPid, _) = CreateDetachedPlannerDispatch(
+                root, startedAt: time.GetUtcNow(), detachAtStart: false);
+            var exited = false;
+            var sleeps = 0;
+            var starts = 0;
+            var detachCount = 0;
+            var deferralSeen = false;
+            var runner = new BackgroundDispatchRunner(
+                clock: new MaxDurationClock(time.GetUtcNow),
+                isStillRunning: _ => !exited,
+                tryKillOwnedProcess: _ => throw new InvalidOperationException("Worker must not be killed."));
+            BatchLoopSummary? summary = null;
+
+            var text = CaptureConsole(() => summary = new ConductorBatchLoop(
+                sweep: loopKernel => runner.SweepExitedProcesses(loopKernel, goal.Id),
+                utcNow: time.GetUtcNow,
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner),
+                detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+                    detachCount += runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
+                    kernel,
+                    MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                        dispatchAndStart: _ => { starts++; return DispatchStartOutcome.Started(); }),
+                    ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                    onlyGoalId: goal.Id.Value, maxDuration: TimeSpan.FromSeconds(1),
+                    maxDurationDeferralCeiling: TimeSpan.FromSeconds(30),
+                    onMaxDurationDeferralStateChanged: deferred => deferralSeen |= deferred,
+                    watchInterval: TimeSpan.FromSeconds(1), keepAliveWhenIdle: true,
+                    sleepFunc: _ =>
+                    {
+                        sleeps++;
+                        if (sleeps == 1)
+                        {
+                            time.AdvanceForTests(TimeSpan.FromSeconds(2));
+                        }
+                        else if (sleeps == 2)
+                        {
+                            Assert.True(deferralSeen);
+                            Assert.True(planner.LastProcess!.IsRunning);
+                            Assert.False(planner.LastProcess.WasGracefullyDetachedByConductor);
+                            Assert.Equal(0, detachCount);
+                            DispatchExitArtifacts.Write(exitPath,
+                                DispatchExitArtifacts.Native(0, "worker finished", time.GetUtcNow()));
+                            exited = true;
+                            if (recordExitBeforeRefresh)
+                            {
+                                kernel.RecordTaskProcessRefreshed(goal.Id, planner.Id,
+                                    planner.LastProcess with { CompletedAt = time.GetUtcNow(), ExitCode = 0 }, null);
+                                Assert.True(DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(
+                                    planner, planner.LastProcess!));
+                            }
+                            time.AdvanceForTests(TimeSpan.FromSeconds(1));
+                        }
+                        else if (sleeps == 3)
+                        {
+                            Assert.Equal(WorkTaskStatus.Completed, planner.Status);
+                            Assert.True(DispatchProcessCompletionState.HasAlreadyBeenApplied(
+                                planner, planner.LastProcess!));
+                            time.AdvanceForTests(TimeSpan.FromSeconds(1));
+                        }
+                        else
+                            throw new InvalidOperationException("Worker reconciliation did not reach max-duration stop.");
+                        return false;
+                    }));
+
+            Assert.Equal(3, sleeps);
+            Assert.Equal("max-duration", summary!.StopReason);
+            Assert.Equal(0, starts);
+            Assert.Equal(0, detachCount);
+            Assert.Equal(WorkTaskStatus.Completed, planner.Status);
+            Assert.False(planner.LastProcess!.IsRunning);
+            Assert.False(planner.LastProcess.WasGracefullyDetachedByConductor);
+            Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == planner.Id &&
+                evt.Kind == ProgressKind.TaskNote && evt.Message.StartsWith("Gracefully detached process ", StringComparison.Ordinal));
+            var lines = text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            var deferred = Assert.Single(lines, line => line.StartsWith("LOOP_STOP_DEFERRED ", StringComparison.Ordinal));
+            Assert.Contains($"workers=worker:{planner.Id.Value}:{rootPid}", deferred, StringComparison.Ordinal);
+            var stopped = Assert.Single(lines, line => line.StartsWith("LOOP_STOP ", StringComparison.Ordinal));
+            Assert.Contains("reason=max-duration", stopped, StringComparison.Ordinal);
+            Assert.DoesNotContain("deferralExpired=true", stopped, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void ScopedWorkerCeilingExpiryRecordsNeedForConductor()
+    {
+        var root = CreateTempDirectory("mcg-scoped-worker-ceiling");
+        try
+        {
+            var time = new ManualConductorTimeProviderForTests(
+                new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+            var (kernel, goal, planner, _, _, rootPid, _) = CreateDetachedPlannerDispatch(
+                root, startedAt: time.GetUtcNow(), detachAtStart: false);
+            var sleeps = 0;
+            var detached = 0;
+            BatchLoopSummary? summary = null;
+            var text = CaptureConsole(() => summary = new ConductorBatchLoop(
+                utcNow: time.GetUtcNow,
+                detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+                {
+                    Assert.Equal(goal.Id, loopGoal.Id);
+                    Assert.Equal(2, sleeps);
+                    Assert.True(planner.LastProcess!.IsRunning);
+                    loopKernel.RecordTaskProcessGracefullyDetached(loopGoal.Id, planner.Id,
+                        planner.LastProcess with { WasGracefullyDetachedByConductor = true });
+                    detached++;
+                }).Run(kernel, MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                    ConductorAutonomyPolicy.Conservative, NoStopPath(), onlyGoalId: goal.Id.Value,
+                    maxDuration: TimeSpan.FromSeconds(1), maxDurationDeferralCeiling: TimeSpan.FromSeconds(3),
+                    watchInterval: TimeSpan.FromSeconds(1), keepAliveWhenIdle: true,
+                    sleepFunc: _ =>
+                    {
+                        sleeps++;
+                        Assert.False(planner.LastProcess!.WasGracefullyDetachedByConductor);
+                        if (sleeps > 2)
+                            throw new InvalidOperationException("Live worker outlasted the deferral ceiling.");
+                        time.AdvanceForTests(TimeSpan.FromSeconds(sleeps == 1 ? 2 : 4));
+                        return false;
+                    }));
+
+            Assert.Equal("max-duration", summary!.StopReason);
+            Assert.Equal(1, detached);
+            Assert.True(planner.LastProcess!.IsRunning);
+            Assert.True(planner.LastProcess.WasGracefullyDetachedByConductor);
+            var note = Assert.Single(goal.Timeline, evt => evt.TaskId == planner.Id &&
+                evt.Kind == ProgressKind.TaskNote && evt.Message.StartsWith("Gracefully detached process ", StringComparison.Ordinal));
+            Assert.Contains("needs a conductor to be started to reconcile it", note.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("successor", note.Message, StringComparison.OrdinalIgnoreCase);
+            var lines = text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Single(lines, line => line.StartsWith("LOOP_STOP_DEFERRED ", StringComparison.Ordinal));
+            var stopped = Assert.Single(lines, line => line.StartsWith("LOOP_STOP ", StringComparison.Ordinal));
+            Assert.Contains("reason=max-duration", stopped, StringComparison.Ordinal);
+            Assert.Contains("deferralExpired=true", stopped, StringComparison.Ordinal);
+            Assert.Contains($"workers=worker:{planner.Id.Value}:{rootPid}", stopped, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_SuccessorTick_CompletesTask()
@@ -1367,6 +1524,11 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRequeueSkipped);
     }
 
+    private sealed class MaxDurationClock(Func<DateTimeOffset> utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow => utcNow();
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner, string ExitPath, string ChildExitPath, int RootPid, int ChildPid)
         CreateDetachedPlannerDispatch(
             string root,
@@ -1376,7 +1538,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             int childPid = 26_084,
             IReadOnlyList<int>? heartbeatOwnedPids = null,
             IReadOnlyList<SpawnProcessIdentity>? heartbeatIdentities = null,
-            DateTimeOffset? startedAt = null)
+            DateTimeOffset? startedAt = null,
+            bool detachAtStart = true)
     {
         var kernel = new AgentOrchestratorKernel();
         var planner = new TaskSpec(TaskId.New(), "Plan detached reconciliation.", AgentRole.Planner);
@@ -1481,10 +1644,13 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 null,
                 OwnedProcessIds: [rootPid],
                 ChildExitRecordPath: childExitPath));
-        Assert.Equal(
-            1,
-            new BackgroundDispatchRunner(isStillRunning: _ => false)
-                .DetachRunningProcessesForGoal(kernel, goal.Id));
+        if (detachAtStart)
+        {
+            Assert.Equal(
+                1,
+                new BackgroundDispatchRunner(isStillRunning: _ => false)
+                    .DetachRunningProcessesForGoal(kernel, goal.Id));
+        }
         return (kernel, goal, planner, exitPath, childExitPath, rootPid, childPid);
     }
 }

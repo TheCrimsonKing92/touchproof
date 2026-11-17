@@ -310,6 +310,77 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ScopedIdleWatchStopsOnFirstCheck(bool otherGoalHasLiveWorker)
+    {
+        var (kernel, scopedGoal) = SimpleGoal();
+        Goal? other = null;
+        if (otherGoalHasLiveWorker)
+        {
+            other = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel, DefaultAgents(), "Unrelated live worker");
+            RecordLiveWorker(kernel, other);
+        }
+        var detached = new List<string>();
+        BatchLoopSummary? summary = null;
+
+        var text = CaptureConsole(() => summary = new ConductorBatchLoop(
+            detachGoalRunningDispatches: (_, goal) => detached.Add(goal.Id.Value)).Run(
+                kernel, MakeDriver(), ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                maxDuration: TimeSpan.Zero, onlyGoalId: scopedGoal.Id.Value,
+                sleepFunc: _ => throw new InvalidOperationException("Idle watch must stop before sleeping.")));
+
+        Assert.Equal(0, summary!.Ticks);
+        Assert.Equal("max-duration", summary.StopReason);
+        Assert.DoesNotContain("LOOP_STOP_DEFERRED ", text, StringComparison.Ordinal);
+        Assert.Single(text.Split(Environment.NewLine), line =>
+            line.StartsWith("LOOP_STOP ", StringComparison.Ordinal) &&
+            line.Contains("reason=max-duration", StringComparison.Ordinal));
+        Assert.DoesNotContain(detached, id => id != scopedGoal.Id.Value);
+        if (other is not null)
+            Assert.True(other.Tasks.Single().LastProcess!.IsRunning);
+    }
+
+    [Xunit.Fact]
+    public void UnscopedLoopWithLiveWorkerStopsOnFirstCheck()
+    {
+        var (kernel, goal) = SimpleGoal();
+        RecordLiveWorker(kernel, goal);
+        var detached = new List<string>();
+        BatchLoopSummary? summary = null;
+
+        var text = CaptureConsole(() => summary = new ConductorBatchLoop(
+            handoffOnMaxDuration: _ => ConductorLoopHandoffResult.StartedProcess(1234, "out.log", "err.log"),
+            detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+            {
+                detached.Add(loopGoal.Id.Value);
+                var task = loopGoal.Tasks.Single();
+                loopKernel.RecordTaskProcessGracefullyDetached(loopGoal.Id, task.Id,
+                    task.LastProcess! with { WasGracefullyDetachedByConductor = true });
+            }).Run(kernel, MakeDriver(), ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                maxDuration: TimeSpan.Zero,
+                sleepFunc: _ => throw new InvalidOperationException("Unscoped loop must stop before sleeping.")));
+
+        Assert.Equal(0, summary!.Ticks);
+        Assert.Equal("max-duration", summary.StopReason);
+        Assert.DoesNotContain("LOOP_STOP_DEFERRED ", text, StringComparison.Ordinal);
+        Assert.Equal([goal.Id.Value], detached);
+        Assert.True(goal.Tasks.Single().LastProcess!.WasGracefullyDetachedByConductor);
+    }
+
+    private static void RecordLiveWorker(AgentOrchestratorKernel kernel, Goal goal)
+    {
+        var task = goal.Tasks.Single();
+        var started = new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero);
+        kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new TaskDispatchRecord("test-worker", "worker.exe", "C:\\goal", started));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(555, "worker.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+                started, null, null, OwnedProcessIds: [555]));
+    }
+
     private static ConductorDriver MakeAcceptanceDriver(
         HoldingAcceptanceAttemptsAcrossTicksFixture fixture,
         Action paidWorkerStart) =>
