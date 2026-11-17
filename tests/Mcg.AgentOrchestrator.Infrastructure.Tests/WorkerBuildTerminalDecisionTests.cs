@@ -85,6 +85,27 @@ public sealed class WorkerBuildTerminalDecisionTests
             result.Diagnostic);
     }
 
+    [Fact]
+    public void PartlyStartedScope_CompileDeadline_MarksUnstartedProjects()
+    {
+        string[] projects = ["src/P1.csproj", "src/P2.csproj", "src/P3.csproj", "src/P4.csproj", "src/P5.csproj"];
+
+        var result = Decide(Building, projects, [0, null], StopCause.CompileDeadline, Budget, Now);
+
+        Assert.Equal(WorkerBuildOutcome.TimeoutAfterStart, result.Outcome);
+        Assert.Null(result.CompilerExitCode);
+        Assert.EndsWith(" Per-project timing: project 1 [src/P1.csproj]: 1m00s; project 2 [src/P2.csproj]: 5m00s (still running at the deadline); project 3 [src/P3.csproj]: not started; project 4 [src/P4.csproj]: not started; project 5 [src/P5.csproj]: not started.",
+            result.Diagnostic);
+
+        var entries = result.Diagnostic.Split(" Per-project timing: ")[1].TrimEnd('.').Split("; ");
+        Assert.Equal(projects.Length, entries.Length);
+        Assert.All(entries[2..], entry =>
+        {
+            Assert.EndsWith(": not started", entry);
+            Assert.DoesNotMatch(@"\d+m\d\ds", entry);
+        });
+    }
+
     [Theory]
     [InlineData(5, false, WorkerBuildOutcome.Interrupted)]
     [InlineData(4, true, WorkerBuildOutcome.CapacityBeforeStart)]
