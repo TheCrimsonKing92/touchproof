@@ -358,6 +358,144 @@ function Test-PublishedRunDirectory {
     }
 }
 
+function Write-PublishedRunDirectoryInventory {
+    param(
+        [string]$Path,
+        [string]$BasePath,
+        $SourceSnapshot
+    )
+
+    $temporaryPath = $null
+    try {
+        $capturedAt = [DateTimeOffset]::UtcNow
+        $errors = [Collections.Generic.List[string]]::new()
+        $missing = [Collections.Generic.List[string]]::new()
+        $mismatched = [Collections.Generic.List[string]]::new()
+        $extra = [Collections.Generic.List[string]]::new()
+        $publishedFiles = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $hashesAvailable = $true
+        try {
+            $publishedFiles = (Get-OutputContentSnapshot -Path $Path -ExcludeRunCacheMarker).Files
+        }
+        catch {
+            $hashesAvailable = $false
+            $errors.Add("Published file hashes unavailable: $($_.Exception.Message)")
+            # Keep path evidence even when one unreadable file prevents a content snapshot.
+            $root = [IO.Path]::GetFullPath($Path).TrimEnd([char[]]'\/') + [IO.Path]::DirectorySeparatorChar
+            foreach ($file in (Get-ChildItem -LiteralPath $Path -Force -Recurse -File)) {
+                $relative = $file.FullName.Substring($root.Length).Replace('\', '/')
+                if (-not $relative.Equals($script:RunCacheMarkerName, [StringComparison]::Ordinal)) {
+                    $publishedFiles[$relative] = $null
+                }
+            }
+        }
+        foreach ($entry in $SourceSnapshot.Files.GetEnumerator()) {
+            if (-not $publishedFiles.ContainsKey($entry.Key)) {
+                $missing.Add($entry.Key)
+            }
+            elseif ($hashesAvailable -and -not $entry.Value.Equals($publishedFiles[$entry.Key], [StringComparison]::Ordinal)) {
+                $mismatched.Add($entry.Key)
+            }
+        }
+        foreach ($relative in $publishedFiles.Keys) {
+            if (-not $SourceSnapshot.Files.ContainsKey($relative)) { $extra.Add($relative) }
+        }
+        $missing.Sort([StringComparer]::Ordinal)
+        $mismatched.Sort([StringComparer]::Ordinal)
+        $extra.Sort([StringComparer]::Ordinal)
+
+        $markerMetadata = [ordered]@{ digest = $null; fileCount = $null; sealedAtUtc = $null }
+        try {
+            $marker = Get-Content -LiteralPath (Join-Path $Path $script:RunCacheMarkerName) -Raw | ConvertFrom-Json
+            if ($marker.digest -is [string] -and $marker.digest -match '^[0-9A-Fa-f]{64}$') {
+                $markerMetadata.digest = $marker.digest
+            }
+            else { $errors.Add('Marker digest is unavailable or invalid.') }
+            $markerCount = 0
+            if ($null -ne $marker.fileCount -and [int]::TryParse([string]$marker.fileCount, [ref]$markerCount) -and $markerCount -ge 0) {
+                $markerMetadata.fileCount = $markerCount
+            }
+            else { $errors.Add('Marker fileCount is unavailable or invalid.') }
+            $sealedAt = [DateTimeOffset]::MinValue
+            if ($marker.sealedAtUtc -is [DateTime]) {
+                $markerMetadata.sealedAtUtc = $marker.sealedAtUtc.ToUniversalTime().ToString('o')
+            }
+            elseif ([DateTimeOffset]::TryParse([string]$marker.sealedAtUtc, [ref]$sealedAt)) {
+                $markerMetadata.sealedAtUtc = $sealedAt.ToUniversalTime().ToString('o')
+            }
+            else { $errors.Add('Marker sealedAtUtc is unavailable or invalid.') }
+        }
+        catch { $errors.Add("Marker metadata unavailable: $($_.Exception.Message)") }
+
+        $processes = [Collections.Generic.List[object]]::new()
+        $runRoot = [IO.Path]::GetFullPath($Path).TrimEnd([char[]]'\/')
+        $runPrefix = $runRoot + [IO.Path]::DirectorySeparatorChar
+        $unreadableProcesses = 0
+        try {
+            foreach ($process in [Diagnostics.Process]::GetProcesses()) {
+                try {
+                    $executablePath = $process.MainModule.FileName
+                    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+                        $unreadableProcesses++
+                        continue
+                    }
+                    $executablePath = [IO.Path]::GetFullPath($executablePath)
+                    if (-not $executablePath.Equals($runRoot, [StringComparison]::OrdinalIgnoreCase) -and
+                        -not $executablePath.StartsWith($runPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                        continue
+                    }
+                    $processId = $process.Id
+                    $startTime = $null
+                    try { $startTime = $process.StartTime.ToUniversalTime().ToString('o') }
+                    catch { $errors.Add("Process $processId start time unavailable: $($_.Exception.Message)") }
+                    $processes.Add([ordered]@{
+                        processId = $processId
+                        startTimeUtc = $startTime
+                        executablePath = $executablePath
+                        commandLine = $null
+                    })
+                }
+                catch { $unreadableProcesses++ }
+                finally { $process.Dispose() }
+            }
+        }
+        catch { $errors.Add("Process enumeration unavailable: $($_.Exception.Message)") }
+        if ($unreadableProcesses -gt 0) { $errors.Add("Executable paths unavailable for $unreadableProcesses processes.") }
+        $errors.Add('Process command lines are unavailable through System.Diagnostics.Process on this runtime.')
+
+        $mismatchPaths = $null
+        if ($hashesAvailable) { $mismatchPaths = [string[]]$mismatched.ToArray() }
+        $inventory = [ordered]@{
+            schemaVersion = 1
+            capturedAtUtc = $capturedAt.ToString('o')
+            runDirectory = $runRoot
+            expected = [ordered]@{ digest = $SourceSnapshot.Digest; fileCount = $SourceSnapshot.FileCount }
+            marker = $markerMetadata
+            missingPaths = [string[]]$missing.ToArray()
+            hashMismatchPaths = $mismatchPaths
+            extraPaths = [string[]]$extra.ToArray()
+            processes = [object[]]$processes.ToArray()
+            captureErrors = [string[]]$errors.ToArray()
+        }
+        $prefix = $SourceSnapshot.Digest.Substring(0, [Math]::Min(12, $SourceSnapshot.Digest.Length))
+        $suffix = [Guid]::NewGuid().ToString('N')
+        $name = "run-dir-inventory-$prefix-$($capturedAt.ToString('yyyyMMddTHHmmssfffffffZ'))-$suffix.json"
+        $temporaryPath = Join-Path $BasePath ".run-dir-inventory-$PID-$suffix.tmp"
+        [IO.File]::WriteAllText($temporaryPath, ($inventory | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+        [IO.File]::Move($temporaryPath, (Join-Path $BasePath $name))
+        $temporaryPath = $null
+    }
+    catch {
+        # Diagnostics must never affect repair, refusal, or the resolver's stdout contract.
+    }
+    finally {
+        if ($null -ne $temporaryPath) {
+            try { [IO.File]::Delete($temporaryPath) }
+            catch { }
+        }
+    }
+}
+
 $resolvedDll = [System.IO.Path]::GetFullPath($Dll)
 if (-not (Test-Path -LiteralPath $resolvedDll -PathType Leaf)) {
     throw "Orchestrator application assembly does not exist: $resolvedDll"
@@ -378,6 +516,7 @@ catch {
 
 $resolvedRun = $null
 $lastSnapshotFailure = $null
+$inventoryAttempted = $false
 for ($attempt = 1; $attempt -le $script:SourceSnapshotAttempts; $attempt++) {
     $staging = $null
     try {
@@ -389,6 +528,10 @@ for ($attempt = 1; $attempt -le $script:SourceSnapshotAttempts; $attempt++) {
             if (Test-PublishedRunDirectory -Path $run -ExpectedDigest $before.Digest -AppLeaf $leaf) {
                 $resolvedRun = $run
                 break
+            }
+            if (-not $inventoryAttempted) {
+                $inventoryAttempted = $true
+                $null = Write-PublishedRunDirectoryInventory -Path $run -BasePath $base -SourceSnapshot $before
             }
             if (Repair-PublishedRunDirectory -Path $run -SourcePath $out -SourceSnapshot $before -AppLeaf $leaf) {
                 $resolvedRun = $run
