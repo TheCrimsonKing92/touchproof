@@ -634,7 +634,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
     }
 
-    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
     [Xunit.Trait("Category", "CrossTick")]
@@ -732,7 +732,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void ScopedWorkerCeilingExpiryRecordsNeedForConductor()
     {
