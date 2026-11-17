@@ -215,6 +215,96 @@ public sealed class OperatorIntentStoreTests
         }
     }
 
+    // Each store test uses its own database and wake directory, so it is parallel-safe.
+    [Xunit.Fact]
+    public async Task RecordWait_CurrentOwner_PreservesClaimUntilCompletion()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var wakeDirectory = Path.Combine(root, "wakes");
+            var claimedAt = DateTimeOffset.Parse("2026-11-16T11:00:00Z");
+            var store = new SqliteOperatorIntentStore(Path.Combine(root, "operator-intents.db"), wakeDirectory,
+                utcNow: () => claimedAt);
+            await store.EnqueueAsync(CreateRetryIntent("goal", "task", "intent", "key"));
+            var claimed = await store.ClaimNextAsync("goal", "owner");
+            Xunit.Assert.NotNull(claimed);
+            Xunit.Assert.NotNull(claimed.ClaimedAt);
+            var wakeFile = Xunit.Assert.Single(Directory.GetFiles(wakeDirectory));
+
+            await store.RecordWaitAsync(claimed.Id, "owner", " Held: answer request-one <cause>. ");
+            var held = await store.GetAsync(claimed.Id);
+
+            Xunit.Assert.NotNull(held);
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, held.Status);
+            Xunit.Assert.Equal("owner", held.ClaimOwner);
+            Xunit.Assert.Equal(claimed.ClaimedAt, held.ClaimedAt);
+            Xunit.Assert.Null(held.CompletedAt);
+            Xunit.Assert.Equal("Held: answer request-one <cause>.", held.Outcome);
+            Xunit.Assert.True(File.Exists(wakeFile));
+
+            await store.RecordWaitAsync(claimed.Id, "owner", "Held: answer request-two <cause>.");
+            var reclaimed = await store.ClaimNextAsync("goal", "owner");
+            Xunit.Assert.NotNull(reclaimed);
+            Xunit.Assert.Equal("Held: answer request-two <cause>.", reclaimed.Outcome);
+            Xunit.Assert.Equal(claimed.ClaimedAt, reclaimed.ClaimedAt);
+
+            var completedAt = DateTimeOffset.Parse("2026-11-16T12:00:00Z");
+            await store.CompleteAsync(claimed.Id, "owner", OperatorIntentStatus.Applied, "Applied retry.", completedAt);
+            var completed = await store.GetAsync(claimed.Id);
+
+            Xunit.Assert.NotNull(completed);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, completed.Status);
+            Xunit.Assert.Equal(completedAt, completed.CompletedAt);
+            Xunit.Assert.Equal("Applied retry.", completed.Outcome);
+            Xunit.Assert.False(File.Exists(wakeFile));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("wrong-owner")]
+    [Xunit.InlineData("pending")]
+    [Xunit.InlineData("applied")]
+    [Xunit.InlineData("rejected")]
+    [Xunit.InlineData("missing")]
+    public async Task RecordWait_InvalidClaim_ThrowsWithoutChangingRecord(string scenario)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var store = new SqliteOperatorIntentStore(Path.Combine(root, "operator-intents.db"), Path.Combine(root, "wakes"));
+            if (scenario != "missing")
+            {
+                await store.EnqueueAsync(CreateRetryIntent("goal", "task", "intent", "key"));
+                if (scenario != "pending")
+                {
+                    Xunit.Assert.NotNull(await store.ClaimNextAsync("goal", "owner"));
+                    await store.RecordWaitAsync("intent", "owner", "Held: original blocker.");
+                    if (scenario is "applied" or "rejected")
+                    {
+                        await store.CompleteAsync("intent", "owner",
+                            scenario == "applied" ? OperatorIntentStatus.Applied : OperatorIntentStatus.Rejected,
+                            "Final outcome.", DateTimeOffset.Parse("2026-11-16T12:00:00Z"));
+                    }
+                }
+            }
+            var before = await store.GetAsync("intent");
+
+            await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordWaitAsync(
+                "intent", scenario == "wrong-owner" ? "other-owner" : "owner", "Held: replacement blocker."));
+
+            Xunit.Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(await store.GetAsync("intent")));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_applies_manual_verification_with_full_evidence")]
     public async Task OperatorIntentCoordinatorAppliesManualVerificationWithFullEvidence()
     {
@@ -685,6 +775,7 @@ public sealed class OperatorIntentStoreTests
                 CreateRetryIntent("goal", "task", "intent", "key")));
             await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => reader.ClaimNextAsync("goal", "owner"));
             await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => reader.ClaimNextByVerbAsync("goal", "retry", "owner"));
+            await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => reader.RecordWaitAsync("intent", "owner", "Held."));
             await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => reader.CompleteAsync(
                 "intent", "owner", OperatorIntentStatus.Applied, "done", DateTimeOffset.UtcNow));
             Xunit.Assert.Throws<InvalidOperationException>(() => reader.AcknowledgeWake("intent"));

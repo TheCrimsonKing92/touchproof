@@ -85,6 +85,13 @@ public interface IOperatorIntentStore
         string claimOwner,
         CancellationToken cancellationToken = default);
 
+    Task RecordWaitAsync(
+        string intentId,
+        string claimOwner,
+        string waitNote,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This store does not support claimed-intent wait notes.");
+
     Task CompleteAsync(
         string intentId,
         string claimOwner,
@@ -306,6 +313,35 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
         await tx.CommitAsync(cancellationToken);
         return (await GetAsync(intent.Id, cancellationToken))
             ?? throw new InvalidOperationException($"Claimed operator intent '{intent.Id}' disappeared.");
+    }
+
+    public async Task RecordWaitAsync(
+        string intentId,
+        string claimOwner,
+        string waitNote,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureWritable();
+        ArgumentException.ThrowIfNullOrWhiteSpace(intentId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(waitNote);
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE operator_intents
+            SET outcome = $outcome
+            WHERE id = $id AND status = $claimed AND claim_owner = $claim_owner
+            """;
+        cmd.Parameters.AddWithValue("$outcome", waitNote.Trim());
+        cmd.Parameters.AddWithValue("$id", intentId);
+        cmd.Parameters.AddWithValue("$claimed", OperatorIntentStatus.Claimed.ToString());
+        cmd.Parameters.AddWithValue("$claim_owner", claimOwner);
+        var updated = await cmd.ExecuteNonQueryAsync(cancellationToken);
+        if (updated != 1)
+        {
+            throw new InvalidOperationException(
+                $"Operator intent '{intentId}' wait note expected one claimed row for owner '{claimOwner}', updated rows={updated}.");
+        }
     }
 
     public async Task CompleteAsync(

@@ -245,6 +245,7 @@ internal sealed partial class OperatorIntentCoordinator
         var rejectedAdjudication = false;
         var lines = new List<string>();
         var appliedVerbs = new List<string>();
+        (string IntentId, string Note)? pendingWait = null;
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
             var intent = (intentIds is not null
@@ -308,10 +309,11 @@ internal sealed partial class OperatorIntentCoordinator
             try
             {
                 ValidateCompletedDutyIntent(goal, intent);
-                var retryClarification = HandleRetryClarification(kernel, goal, intent);
+                var retryClarification = HandleRetryClarification(kernel, goal, intent, out var blockers);
                 if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or
                     RetryClarificationHandling.AwaitingNewAnswer or RetryClarificationHandling.AwaitingOtherHumanInput)
                 {
+                    pendingWait = (intent.Id, BuildRetryWaitNote(retryClarification, blockers));
                     if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated, intentIds))
                     {
                         mutated |= answerMutated || retryClarification == RetryClarificationHandling.AwaitingNewAnswer;
@@ -375,6 +377,7 @@ internal sealed partial class OperatorIntentCoordinator
             }
             catch (Exception ex)
             {
+                pendingWait = null;
                 goal = kernel.GetGoal(goal.Id);
                 var outcome = $"Rejected {intent.Verb}: {Sanitize(ex.Message)}";
                 _store.CompleteAsync(
@@ -391,6 +394,10 @@ internal sealed partial class OperatorIntentCoordinator
                 }
             }
         }
+
+        // A failed note write must propagate, rather than reject the held retry.
+        if (pendingWait is { } wait)
+            _store.RecordWaitAsync(wait.IntentId, ClaimOwner, wait.Note).GetAwaiter().GetResult();
 
         return new OperatorIntentExecutionResult(mutated, lines)
         {
@@ -698,8 +705,10 @@ internal sealed partial class OperatorIntentCoordinator
     private static RetryClarificationHandling HandleRetryClarification(
         AgentOrchestratorKernel kernel,
         Goal goal,
-        OperatorIntentRecord intent)
+        OperatorIntentRecord intent,
+        out IReadOnlyList<HumanInputRequest> blockers)
     {
+        blockers = [];
         if (intent.Verb != OperatorIntentVerbs.Retry)
             return RetryClarificationHandling.NotRequired;
 
@@ -715,7 +724,7 @@ internal sealed partial class OperatorIntentCoordinator
         var clarification = FindRetryCauseClarification(kernel, goal.Id, taskId, blockerFingerprint);
         if (clarification is null)
         {
-            kernel.RequestHumanInputDeduplicated(
+            var created = kernel.RequestHumanInputDeduplicated(
                 goal.Id,
                 taskId,
                 "The operator retry request has an Unknown retry cause. Classify the cause as " +
@@ -728,29 +737,37 @@ internal sealed partial class OperatorIntentCoordinator
                 isAnswerRequired: true,
                 isExternallyBlocked: false,
                 blockerFingerprint: blockerFingerprint);
+            blockers = [created.Request];
             return RetryClarificationHandling.AwaitingNewAnswer;
         }
 
         if (!clarification.IsCompleted)
+        {
+            blockers = [clarification];
             return RetryClarificationHandling.AwaitingExistingAnswer;
+        }
 
         if (string.IsNullOrWhiteSpace(clarification.Answer) ||
             !Enum.TryParse<RetryCause>(clarification.Answer.Trim(), ignoreCase: true, out var cause) ||
             !Enum.IsDefined(cause) ||
             cause == RetryCause.Unknown)
         {
-            return RequestRetryCauseCorrection(kernel, goal, taskId, blockerFingerprint, clarification.Id);
+            return RequestRetryCauseCorrection(kernel, goal, taskId, blockerFingerprint, clarification.Id, out blockers);
         }
 
         // The retry intent is already durably claimed.  Preserve it until unrelated required
         // answers are complete, rather than asking the caller to race a second retry against
         // the lifecycle guard in RetryTaskCore.
-        if (kernel.HumanInputRequests.Any(request =>
+        blockers = kernel.HumanInputRequests.Where(request =>
                 request.GoalId == goal.Id &&
                 request.TaskId == taskId &&
                 !request.IsCompleted &&
                 HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind) &&
-                !IsRetryCauseClarification(request, blockerFingerprint)))
+                !IsRetryCauseClarification(request, blockerFingerprint))
+            .OrderBy(request => request.RequestedAt)
+            .ThenBy(request => request.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        if (blockers.Count > 0)
         {
             return RetryClarificationHandling.AwaitingOtherHumanInput;
         }
@@ -769,6 +786,24 @@ internal sealed partial class OperatorIntentCoordinator
             goal.Id,
             GoalObjectivePlanner.BuildCapabilityWarnings(retry.Message));
         return RetryClarificationHandling.Resumed;
+    }
+
+    private static string BuildRetryWaitNote(
+        RetryClarificationHandling handling,
+        IReadOnlyList<HumanInputRequest> blockers)
+    {
+        var needsCause = handling != RetryClarificationHandling.AwaitingOtherHumanInput;
+        var reason = needsCause ? "awaiting-retry-cause" : "awaiting-task-human-input";
+        var requests = blockers.Select(request =>
+        {
+            var command = needsCause
+                ? $"answer {request.Id.Value} <cause>"
+                : request.ResumeCommand == HumanInputRequest.BuildDefaultResumeCommand(request.Id)
+                    ? $"answer {request.Id.Value} <answer>"
+                    : request.ResumeCommand;
+            return $"{request.Kind} request {request.Id.Value}: clear with {Sanitize(command)}";
+        });
+        return $"Held: {reason}; {string.Join("; ", requests)}.";
     }
 
     private static HumanInputRequest? FindRetryCauseClarification(
@@ -804,7 +839,8 @@ internal sealed partial class OperatorIntentCoordinator
         Goal goal,
         TaskId taskId,
         string blockerFingerprint,
-        HumanInputRequestId answeredRequestId)
+        HumanInputRequestId answeredRequestId,
+        out IReadOnlyList<HumanInputRequest> blockers)
     {
         var correctionFingerprint = $"{blockerFingerprint}:correction:{answeredRequestId.Value}";
         var correction = kernel.RequestHumanInputDeduplicated(
@@ -822,6 +858,7 @@ internal sealed partial class OperatorIntentCoordinator
             blockerFingerprint: correctionFingerprint,
             questionFingerprint: correctionFingerprint,
             recordDuplicateSuppression: false);
+        blockers = [correction.Request];
         return correction.WasReused
             ? RetryClarificationHandling.AwaitingExistingAnswer
             : RetryClarificationHandling.AwaitingNewAnswer;
