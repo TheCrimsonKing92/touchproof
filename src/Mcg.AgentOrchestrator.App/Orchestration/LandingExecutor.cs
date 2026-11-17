@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -556,6 +557,37 @@ internal static partial class LandingExecutor
             Message: reason);
     }
 
+    private static bool HasAdmittedGoalLandedEvent(OrchestratorWorkspace workspace, GoalId goalId, string candidateSha)
+    {
+        var path = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goalId.Value}.jsonl");
+        if (!File.Exists(path)) return false;
+
+        foreach (var line in File.ReadLines(path))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("eventType", out var eventType) &&
+                    eventType.ValueKind == JsonValueKind.String &&
+                    string.Equals(eventType.GetString(), "GoalLanded", StringComparison.OrdinalIgnoreCase) &&
+                    root.TryGetProperty("admissionCandidateSha", out var recordedSha) &&
+                    recordedSha.ValueKind == JsonValueKind.String &&
+                    string.Equals(recordedSha.GetString(), candidateSha, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // A malformed historical event cannot prove that these effects already ran.
+            }
+        }
+
+        return false;
+    }
+
     private static LandingResult? TryRecoverInterruptedLanding(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -612,6 +644,15 @@ internal static partial class LandingExecutor
                 workspace.ExecutionDirectory,
                 intent.BoundMainRevision,
                 intent.MergeCommitSha);
+            // A landing is this goal plus the intent's candidate commit, recorded by the first
+            // attempt as admissionCandidateSha. Only a GoalLanded matching that commit proves
+            // these effects already ran; another landing of the same goal must not suppress them.
+            if (!HasAdmittedGoalLandedEvent(workspace, goal.Id, intent.MergeCommitSha))
+            {
+                eventWriter?.AppendGoalLanded(goal.Id, intent.IntegrationBranch, intent.GoalBranch,
+                    LandingAdmissionReceipt.Recovered(intent.MergeCommitSha));
+                OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
+            }
             GoalOperationJournal.Completed(
                 workspace.ExecutionDirectory,
                 goal,
