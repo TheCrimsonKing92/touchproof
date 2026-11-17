@@ -20,6 +20,7 @@ internal static class OwnerActivityNarrator
         var result = new List<OwnerConsoleActivityItem>();
         var held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var landings = new OwnerLandingNarration(ordered, Name);
+        var drains = new OwnerRelaunchDrainNarration(ordered, Name);
         var lifecycle = new OwnerConductorLifecycleNarration();
         var escalations = new OwnerEscalationNarration(ordered, new OwnerQuestionRoutes(ordered), attention, Name);
         for (var index = 0; index < ordered.Length; index++)
@@ -40,6 +41,7 @@ internal static class OwnerActivityNarrator
             }
             var narrated = item.EventKind switch
             {
+                "loop-relaunch" when Head(item) == "LOOP_RELAUNCH_DRAIN" => drains.NarrateItem(index),
                 "goal-lifecycle" => OwnerLifecycleStageNarration.NarrateItem(ordered, index, name, Name, finding?.Invoke(item)),
                 "owner-question-resolved" => null, // Only removal from the live read model resolves owner attention.
                 "author" or "goal-escalation" => escalations.NarrateItem(index, held),
