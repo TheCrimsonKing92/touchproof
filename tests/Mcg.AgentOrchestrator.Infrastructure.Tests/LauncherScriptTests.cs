@@ -2476,6 +2476,13 @@ public sealed class LauncherScriptTests
     [Xunit.InlineData("Start-OrchestratorCommand.ps1", "explicit-batch", true)]
     public void ChildNameFlag_RealWrapper_PreservesArgumentsAndBatch(
         string wrapper, string? batchName, bool throughRepoScript)
+        => AssertChildArguments(wrapper, batchName, throughRepoScript, _ =>
+            ["probe", "--name", "foo", "--name", "bar", "--pipeline", "five-role",
+                "--progress", "value \"quoted\" with spaces"]);
+
+    internal static void AssertChildArguments(
+        string wrapper, string? batchName, bool throughRepoScript,
+        Func<string, string[]> createArguments, bool explicitBinding = false)
     {
         using var sandbox = CreateDoubleDashLauncherSandbox();
         var capturePath = Path.Combine(sandbox.RepositoryRoot, "capture.json");
@@ -2484,6 +2491,22 @@ public sealed class LauncherScriptTests
             $offset = [Array]::IndexOf($raw, $PSCommandPath) + 1
             if ($offset -le 0) { throw 'Capture script missing from process argv.' }
             $captured = @($raw | Select-Object -Skip $offset)
+            # The real Start wrapper asks its child for a binding receipt before
+            # launching. Keep that protocol separate from the final argv capture.
+            if ($captured[0] -eq '__workspace-binding-check') {
+                $root = '{{EscapePowerShellSingleQuoted(sandbox.RepositoryRoot)}}'
+                $state = Join-Path $root '.orchestrator'
+                for ($i = 0; $i -lt $captured.Count - 1; $i++) {
+                    if ($captured[$i] -eq '--repository-root') { $root = $captured[$i + 1] }
+                    if ($captured[$i] -eq '--expected-state-directory') { $state = $captured[$i + 1] }
+                }
+                [pscustomobject]@{
+                    repositoryRoot = $root; stateDirectory = $state
+                    executionDirectory = '{{EscapePowerShellSingleQuoted(sandbox.RepositoryRoot)}}'
+                    stopFile = Join-Path $root '.conduct-stop'
+                } | ConvertTo-Json -Compress
+                exit 0
+            }
             [pscustomobject]@{
                 args = $captured
                 batch = [Environment]::GetEnvironmentVariable('MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME')
@@ -2516,10 +2539,18 @@ public sealed class LauncherScriptTests
         if (wrapper != "Invoke-RepoScript.ps1")
             startInfo.ArgumentList.Add("-AppDll");
         startInfo.ArgumentList.Add(sandbox.EchoScriptPath);
-        string[] expected = ["probe", "--name", "foo", "--name", "bar", "--pipeline", "five-role",
-            "--progress", "value \"quoted\" with spaces"];
+        var expected = createArguments(sandbox.RepositoryRoot);
         foreach (var argument in expected)
             startInfo.ArgumentList.Add(argument);
+        if (explicitBinding)
+        {
+            var stateDirectory = Path.Combine(sandbox.RepositoryRoot, ".orchestrator");
+            foreach (var argument in new[] { "-RepositoryRoot", sandbox.RepositoryRoot,
+                         "-ExpectedStateDirectory", stateDirectory, "-DisposableFixture" })
+                startInfo.ArgumentList.Add(argument);
+            expected = [..expected, "--repository-root", sandbox.RepositoryRoot,
+                "--expected-state-directory", stateDirectory, "--disposable-fixture"];
+        }
 
         var result = RunProcess(startInfo, wrapper);
         Assert.True(result.ExitCode == 0, result.Stderr);
