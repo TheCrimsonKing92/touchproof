@@ -34,6 +34,9 @@ internal static class BacklogListAgentReadView
     internal static string FormatEpic(EpicMembershipIndex.Membership? membership) =>
         membership is null ? "none" : $"{membership.ShortId} {membership.EpicTitle}";
 
+    internal static string FormatPriority(string? priority) =>
+        $" [priority={BacklogPriorityLevels.Read(priority)}]";
+
     internal static string Serialize(IReadOnlyList<Row> rows, TimeProvider? time = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.BacklogListSchema, AgentReadEnvelope.BacklogListSchemaVersion,
             new
@@ -48,7 +51,7 @@ internal static class BacklogListAgentReadView
                     title = row.Title,
                     createdAt = row.CreatedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
                     updatedAt = row.UpdatedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
-                    priority = string.IsNullOrEmpty(row.Priority) ? null : row.Priority,
+                    priority = BacklogPriorityLevels.Read(row.Priority),
                     tags = row.Tags,
                     supersededBy = string.IsNullOrEmpty(row.SupersededBy) ? null : row.SupersededBy,
                     epicId = row.EpicId

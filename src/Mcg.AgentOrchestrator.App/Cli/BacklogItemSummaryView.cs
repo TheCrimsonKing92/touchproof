@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -18,7 +19,7 @@ internal static class BacklogItemSummaryView
         row.Id, row.Title, row.Status,
         row.CreatedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
         row.UpdatedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
-        Optional(row.SourceGoalId), Optional(row.Priority), row.Tags, Optional(row.SupersededBy),
+        Optional(row.SourceGoalId), BacklogPriorityLevels.Read(row.Priority), row.Tags, Optional(row.SupersededBy),
         row.OwnerAmbiguous ? null : row.OwnerGoalId, row.OwnerAmbiguous,
         row.OwnerAmbiguous ? "legacy-owner-ambiguous" : null,
         row.OwnerAmbiguous ? row.AmbiguousLinkedGoalIds.Count : 0,
@@ -46,6 +47,7 @@ internal static class BacklogItemSummaryView
         $"Id:      {summary.Id}",
         $"Title:   {summary.Title}",
         $"Status:  {summary.Status}",
+        $"Priority: {summary.Priority}",
         $"Created: {summary.CreatedAt}",
         $"Updated: {summary.UpdatedAt}",
         $"Goal:    {summary.SourceGoalId ?? "-"}",
