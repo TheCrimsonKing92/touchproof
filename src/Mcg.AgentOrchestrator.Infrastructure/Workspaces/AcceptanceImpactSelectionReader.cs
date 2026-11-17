@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class AcceptanceImpactSelectionReader
 {
     internal static AcceptanceSelectedExecutionInput ReadLive(string checkout, IReadOnlyList<string> changedFiles,
-        AcceptanceGateEngineSettings? engineSettings = null)
+        AcceptanceGateEngineSettings? engineSettings = null, string? integrationBranch = null)
     {
         var settings = engineSettings ?? AcceptanceGateEngineSettings.Load(checkout);
         var classes = AcceptanceTestClassSourceScanner.Scan(checkout);
@@ -15,7 +15,8 @@ internal static class AcceptanceImpactSelectionReader
             LaneTestSourceRootResolver.Resolve(checkout)), routing.TestProjects, checkout);
         var guards = SourceReadingGuardTestClasses.Read(sources, classes);
         var impact = Read(checkout, changedFiles, routing, sources, classes, guards,
-            ChangedFileTestClassPathMapper.TestProjectDirectories(settings), bypassCache: false);
+            ChangedFileTestClassPathMapper.TestProjectDirectories(settings), bypassCache: false,
+            changedLineRanges: ReadChangedLineRanges(checkout, integrationBranch));
         var selection = impact.ChangedTests.AbandonReason is { } reason
             ? ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.ChangedFileUnmapped, reason)
             : impact.Selection;
@@ -31,7 +32,8 @@ internal static class AcceptanceImpactSelectionReader
             IReadOnlyList<string> QualifiedClasses) ChangedTests) Read(
         string checkout, IReadOnlyList<string> changedFiles, ImpactReplayChangedSourceRouting routing,
         ImpactReplayTestSourceIndex sources, IReadOnlyList<AcceptanceTestClassDescriptor> classes,
-        ImpactReplaySourceGuardReport? guards, IReadOnlyList<string> testProjectDirectories, bool bypassCache)
+        ImpactReplaySourceGuardReport? guards, IReadOnlyList<string> testProjectDirectories, bool bypassCache,
+        IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges = null)
     {
         var changedSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -40,10 +42,30 @@ internal static class AcceptanceImpactSelectionReader
         var selection = productionSources.Length == 0 && changedTests.Length > 0
             ? ReverseDependencyTestSelection.Resolved([])
             : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: bypassCache,
-                propagateShippingSourceReach: true);
+                propagateShippingSourceReach: true, changedLineRanges: changedLineRanges);
         var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
         selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, sources, classes, guards,
             out var declaredGuards, augmented.QualifiedClasses, testProjectDirectories);
         return (selection, declaredGuards, augmented);
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? ReadChangedLineRanges(
+        string checkout, string? integrationBranch)
+    {
+        if (string.IsNullOrWhiteSpace(integrationBranch)) return null;
+        var mergeBase = GoalAcceptanceVerifier.ResolveGitScalar(checkout, "merge-base", "HEAD", integrationBranch);
+        if (mergeBase is null) return null;
+        try
+        {
+            var diff = GitCli.Run(checkout, GitCli.DefaultTimeoutMilliseconds, "-c", "core.quotePath=false",
+                "diff", "--unified=0", "--inter-hunk-context=0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
+                "--src-prefix=a/", "--dst-prefix=b/", mergeBase, "--", "*.cs");
+            return diff.ExitCode == 0 && !diff.DrainTimedOut ? ZeroContextDiffLineRangeParser.Parse(diff.Output) : null;
+        }
+        catch (Exception)
+        {
+            // Precision is optional; missing or unparseable Git output preserves path-only selection.
+            return null;
+        }
     }
 }

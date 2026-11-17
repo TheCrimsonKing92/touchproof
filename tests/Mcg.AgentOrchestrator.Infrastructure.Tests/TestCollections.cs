@@ -1,16 +1,17 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Pins MCG_DOTNET_ISOLATED_ROOT to an ephemeral per-run root for the dotnet
-// build-slot collection. Per-test EnvVarScope overrides nest cleanly on top of
-// this baseline and the collection root is deleted only after the slot tests finish.
+// Shared collection fixtures borrow the assembly baseline without changing its
+// environment value or ownership. Direct fixtures own their root and restore the
+// previous override when disposed.
 public sealed class IsolatedDotnetRootFixture : IDisposable
 {
     internal static readonly TimeSpan LockLessRootStaleAge = TimeSpan.FromHours(24);
     internal const string OwnerLockSuffix = ".owner.lock";
 
     private static readonly SharedIsolatedDotnetRoot ProcessShared =
-        new(() => new IsolatedDotnetRootFixture(GetWindowsBasePath(), null));
+        new(CreateProcessSharedOwner);
     private readonly SharedIsolatedDotnetRoot? _shared;
+    private readonly bool _borrowed;
     private int _released;
     private readonly string? _originalValue;
     private readonly string _root;
@@ -29,6 +30,20 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
         _shared = shared;
         _diagnostic = Console.Error.WriteLine;
         _root = shared.Acquire();
+    }
+
+    internal static IsolatedDotnetRootFixture CreateProcessSharedOwner() =>
+        AssemblyDotnetBuildStorageRootIsolation.BaselineRoot is { } baseline
+            ? AdoptBaseline(baseline)
+            : new IsolatedDotnetRootFixture(GetWindowsBasePath(), null);
+
+    internal static IsolatedDotnetRootFixture AdoptBaseline(string root) => new(root);
+
+    private IsolatedDotnetRootFixture(string baselineRoot)
+    {
+        _root = baselineRoot;
+        _borrowed = true;
+        _diagnostic = Console.Error.WriteLine;
     }
 
     internal IsolatedDotnetRootFixture(string? basePath, Action<string>? diagnostic)
@@ -349,6 +364,10 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
                 _shared.Release();
             return;
         }
+
+        // The assembly initializer (or the gate) retains the baseline claim.
+        if (_borrowed)
+            return;
 
         try
         {
