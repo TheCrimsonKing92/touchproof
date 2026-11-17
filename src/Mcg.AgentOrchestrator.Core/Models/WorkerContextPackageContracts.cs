@@ -384,7 +384,9 @@ public sealed record WorkerContextPackageReceipt(
     int BaselineToolTranscriptCharacters = 0,
     int BaselineModelInputTokenEstimate = 0,
     WorkerRetryFeedbackPromptReceipt? RetryFeedbackPromptReceipt = null,
-    EarlyConvergenceEvidenceKind EarlyConvergenceEvidenceSource = EarlyConvergenceEvidenceKind.ReviewFindingReceipt)
+    EarlyConvergenceEvidenceKind EarlyConvergenceEvidenceSource = EarlyConvergenceEvidenceKind.ReviewFindingReceipt,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? SectionCount = null)
 {
     public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
     {

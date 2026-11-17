@@ -74,7 +74,8 @@ internal static partial class StorageRetentionMaintenance
     public static StorageRetentionResult Run(
         OrchestratorWorkspace workspace,
         IEnumerable<Goal> goals,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? mtpResultsRoot = null)
     {
         var retentionGoals = goals.Select(goal => new StorageRetentionGoal(
             goal.Id.Value,
@@ -89,13 +90,15 @@ internal static partial class StorageRetentionMaintenance
             TerminalAt: TerminalGoalEvidenceAging.ResolveTerminalAt(goal.Status,
                 goal.Timeline.Select(item => item.OccurredAt), goal.MetadataTerminatedAt)))
             .ToArray();
+        // An explicit root avoids process-wide LOCALAPPDATA steering; the retention-test
+        // hypothesis for the earlier temp-root losses remains unconfirmed.
         return Run(
             workspace.LogDirectory,
             workspace.OrchestratorDirectory,
             workspace.ExecutionDirectory,
             retentionGoals,
             now,
-            mtpResultsRoot: DefaultMtpResultsRoot());
+            mtpResultsRoot: mtpResultsRoot ?? DefaultMtpResultsRoot());
     }
 
     internal static StorageRetentionGoalLoadResult LoadPersistedGoals(

@@ -1485,11 +1485,12 @@ public sealed class Goal
                 TerminatedAt: MetadataTerminatedAt);
         }
 
+        var briefVersions = DispatchSnapshotShaping.BriefLookup(_briefVersions);
         return new GoalSnapshot(
             Id.Value,
             Objective,
             Status,
-            _tasks.Select(task => task.ToSnapshot()).ToList(),
+            _tasks.Select(task => task.ToSnapshot(briefVersions)).ToList(),
             _timeline.Select(evt => new ProgressEventSnapshot(
                 evt.GoalId.Value,
                 evt.TaskId?.Value,
@@ -1578,10 +1579,11 @@ public sealed class Goal
         var initialRecordedAt = snapshot.CreatedAt ??
             snapshot.Timeline.OrderBy(item => item.OccurredAt).FirstOrDefault()?.OccurredAt ??
             DateTimeOffset.MinValue;
+        var briefVersions = DispatchSnapshotShaping.BriefLookup(snapshot.BriefVersions);
         var goal = new Goal(
             new GoalId(snapshot.Id),
             snapshot.Objective,
-            snapshot.Tasks.Select(TaskSpec.FromSnapshot).ToList(),
+            snapshot.Tasks.Select(task => TaskSpec.FromSnapshot(task, briefVersions)).ToList(),
             initialRecordedAt,
             snapshot.SliceBatchParentId is null ? null : new GoalId(snapshot.SliceBatchParentId));
         goal.RestoreBriefVersions(snapshot.BriefVersions);
