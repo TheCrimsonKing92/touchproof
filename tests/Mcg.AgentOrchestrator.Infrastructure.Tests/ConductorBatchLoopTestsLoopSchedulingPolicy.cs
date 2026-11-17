@@ -961,8 +961,11 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
     {
         var (kernel, _) = SimpleGoal("sweep failure timing goal");
         BatchTickSummary? tickSummary = null;
+        var timestamp = 0L;
 
-        new ConductorBatchLoop(measuredSweep: _ => throw new InvalidOperationException("injected sweep failure")).Run(
+        new ConductorBatchLoop(measuredSweep: _ => throw new InvalidOperationException("injected sweep failure"),
+            janitorialPhaseProbe: phase => timestamp += phase == "sweep" ? Stopwatch.Frequency : 0,
+            janitorialTimestamp: () => timestamp).Run(
             kernel,
             MakeDriver(),
             ConductorAutonomyPolicy.Conservative,
@@ -973,6 +976,38 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         var sweepLine = Assert.Single(tickSummary!.ProgressLines!, line =>
             line.StartsWith("PHASE_TIMING tick=1 phase=sweep ", StringComparison.Ordinal));
         Assert.Contains("sweep_git_index_ms=0 sweep_evidence_ms=0 sweep_ephemeral_ms=0 sweep_attention_ms=0 sweep_merge_evidence_ms=0 sweep_goals_ms=0 sweep_git_spawns=0 sweep_goals_swept=0", sweepLine, StringComparison.Ordinal);
+        Assert.Contains("sweep_owned_root_ms=0 sweep_setup_ms=0 sweep_cache_flush_ms=0 sweep_goal_loop_remainder_ms=0 sweep_run_ms=0 sweep_slowest=none sweep_unattributed_ms=0 sweep_outside_run_ms=0 sweep_cache_consulted=0 terminal_sweep_ms=1000", sweepLine, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SweepTiming_NonNullResult_ReportsRunIntervalsAndSlowestGoals()
+    {
+        var (kernel, _) = SimpleGoal("sweep run timing goal");
+        BatchTickSummary? tickSummary = null;
+        var timestamp = 0L;
+        var result = new TerminalGoalSweepResult([])
+        {
+            OwnedRootDurationMs = 1, GitIndexDurationMs = 2, EvidenceDurationMs = 3,
+            EphemeralDurationMs = 4, AttentionDurationMs = 5, MergeEvidenceDurationMs = 6,
+            GoalsDurationMs = 7, CacheConsulted = true,
+            RunTiming = new(TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(8),
+                TimeSpan.FromMilliseconds(9), TimeSpan.FromMilliseconds(10)),
+            GoalDurations = [
+                (new("bbbbbbbb1"), 40, 2), (new("aaaaaaaa1"), 40, 1), (new("eeeeeeee1"), 10, 8),
+                (new("dddddddd1"), 20, 0), (new("cccccccc1"), 30, 3), (new("ffffffff1"), 5, 9)]
+        };
+        var sweepCalls = 0;
+
+        new ConductorBatchLoop(measuredSweep: _ => { sweepCalls++; return result; },
+            janitorialPhaseProbe: phase => timestamp += phase == "sweep" ? Stopwatch.Frequency : 0,
+            janitorialTimestamp: () => timestamp).Run(
+                kernel, MakeDriver(), ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                maxIterations: 1, onTick: tick => tickSummary = tick);
+
+        Assert.Equal(1, sweepCalls);
+        var sweepLine = Assert.Single(tickSummary!.ProgressLines!, line =>
+            line.StartsWith("PHASE_TIMING tick=1 phase=sweep ", StringComparison.Ordinal));
+        Assert.Contains("sweep_owned_root_ms=1 sweep_setup_ms=8 sweep_cache_flush_ms=9 sweep_goal_loop_remainder_ms=10 sweep_run_ms=100 sweep_slowest=aaaaaaaa:40:1,bbbbbbbb:40:2,cccccccc:30:3,dddddddd:20:0,eeeeeeee:10:8 sweep_unattributed_ms=55 sweep_outside_run_ms=900 sweep_cache_consulted=1 terminal_sweep_ms=1000", sweepLine, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Sweep_phase_timing_reports_every_attributed_operation")]
