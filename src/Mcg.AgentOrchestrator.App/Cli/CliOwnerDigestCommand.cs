@@ -149,7 +149,9 @@ internal static class CliOwnerDigestCommand
         var receipts = ReadCanaryReceipts(workspace.RunEventStorePath);
         var escapes = new SqliteOperatorEscapeStore(workspace.OperatorEscapesStorePath).List()
             .Select(r => new OwnerDigestEscapeRecord(r.GoalId, r.FoundByGoalId, r.RecordedAt, r.Reason)).ToArray();
-        return OwnerDigestReport.Build(inputs.Values.ToArray(), receipts, clock, start, end, malformed, escapes);
+        var goalInputs = inputs.Values.ToArray();
+        var reverts = OwnerDigestRevertReader.ReadAttribution(workspace, start, end, goalInputs);
+        return OwnerDigestReport.Build(goalInputs, receipts, clock, start, end, malformed, escapes, reverts);
     }
 
     private static Dictionary<string, OwnerDigestGoalInput> ReadLandings(string directory, out int malformed)
@@ -237,7 +239,11 @@ internal static class CliOwnerDigestCommand
         var receipts = ReadCanaryReceipts(workspace.RunEventStorePath);
         var escapes = new SqliteOperatorEscapeStore(workspace.OperatorEscapesStorePath).List()
             .Select(r => new OwnerDigestEscapeRecord(r.GoalId, r.FoundByGoalId, r.RecordedAt, r.Reason)).ToArray();
-        return OwnerDigestReport.Build(inputs.Values.ToArray(), receipts, clock, since, until, malformed, escapes);
+        var end = (until ?? clock.UtcNow).ToUniversalTime();
+        var start = (since ?? end.AddHours(-24)).ToUniversalTime();
+        var goalInputs = inputs.Values.ToArray();
+        var reverts = OwnerDigestRevertReader.ReadAttribution(workspace, start, end, goalInputs);
+        return OwnerDigestReport.Build(goalInputs, receipts, clock, start, end, malformed, escapes, reverts);
     }
 
     private static IReadOnlyList<OwnerDigestCanaryReceipt> ReadCanaryReceipts(string path)
