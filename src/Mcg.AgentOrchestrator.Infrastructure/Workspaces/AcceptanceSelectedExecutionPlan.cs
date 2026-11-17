@@ -11,6 +11,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
     IReadOnlyList<string> FloorLanes, IReadOnlyList<string> GuardClasses, IReadOnlyList<string> ObligationClasses)
 {
     public IReadOnlyList<AcceptanceSelectedExecutionMethodFormResolution> MethodFormResolutions { get; init; } = [];
+    public IReadOnlyList<AcceptanceUnresolvedObligationSelector> UnresolvedObligationSelectors { get; init; } = [];
     public IReadOnlyList<AcceptanceSelectedExecutionCheckCoverage> WholeProjectCoverage { get; init; } = [];
     public IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks { get; init; } = [];
 
@@ -47,7 +48,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         var laneClasses = classes.Select(item => item.FullName).ToHashSet(StringComparer.Ordinal);
         bool InLane(AcceptanceTestClassDescriptor item) => laneClasses.Contains(item.FullName) &&
             membership.Values.Any(includes => includes(item.FullName));
-        string? unresolved = null;
+        var unresolved = new List<(string Selector, bool WellFormed)>();
+        var unresolvedSelectors = new HashSet<string>(StringComparer.Ordinal);
         foreach (var selector in obligationSelectors ?? [])
         {
             // Validate shape before matching: filters and paths must never certify a partial gate.
@@ -77,7 +79,9 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             }
             if (matches.Length == 0 || matches.Any(item => !InLane(item) &&
                 !(projectInventories ?? []).Any(check => check.Classes.Any(candidate => candidate.FullName == item.FullName))))
-                unresolved ??= selector;
+            {
+                if (unresolvedSelectors.Add(selector)) unresolved.Add((selector, wellFormed));
+            }
             else
             {
                 obligations.UnionWith(matches.Select(item => item.FullName));
@@ -113,8 +117,6 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             if (guardClasses.Contains(selector, StringComparer.Ordinal))
                 guards.UnionWith(matches.Select(item => item.FullName));
         }
-        if (unresolved is not null)
-            return Full(ReverseDependencySelectionOutcome.Abandoned, "UnresolvedObligationSelector: " + unresolved);
         names.UnionWith(obligations);
 
         var execution = new List<AcceptanceTestLane>();
@@ -147,6 +149,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray())
         {
             MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray(),
+            UnresolvedObligationSelectors = unresolved.Select(item =>
+                AcceptanceUnresolvedObligationSelector.Create(item.Selector, classes, item.WellFormed)).ToArray(),
             ProjectChecks = selectableProjects.Select(check => AcceptanceSelectedExecutionProjectCheckEntry.Create(
                 check, names, floorLanes, projectReachAvailable,
                 hasChangedTestFiles: changedTestProjects?.Contains(check.Project) == true)).ToArray()
