@@ -19,6 +19,7 @@ internal sealed class AcceptanceGateEngineSettings
     public IReadOnlyList<string> LaneTestSourceRoots { get; init; } = [];
     public IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes { get; init; } = [];
     public AcceptanceBalancedLanePoolSettings? BalancedLanePool { get; init; }
+    public IReadOnlyDictionary<string, string?>? ExclusiveResourceDescriptions { get; init; }
     public IReadOnlyList<AcceptanceMtpInvocation> MtpInvocations { get; init; } = [];
     [JsonIgnore]
     public IReadOnlyList<AcceptanceManifestCheck> DeclaredDotnetTestChecks { get; private set; } = [];
@@ -218,6 +219,8 @@ internal sealed class AcceptanceGateEngineSettings
                 }
             }
         }
+
+        AcceptanceExclusiveResourceDescriptions.Validate(ExclusiveResourceDescriptions);
 
         foreach (var invocation in MtpInvocations)
         {
