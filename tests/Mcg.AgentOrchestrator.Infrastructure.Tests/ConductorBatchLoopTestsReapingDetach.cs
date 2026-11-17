@@ -500,7 +500,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
                 maxDuration: TimeSpan.Zero,
-                onlyGoalId: goal.Id.Value);
+                onlyGoalId: goal.Id.Value,
+                maxDurationDeferralCeiling: TimeSpan.Zero);
 
         Assert.Equal(0, summary.Ticks);
         Assert.Empty(reapedGoals);
@@ -557,7 +558,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
                 maxDuration: TimeSpan.Zero,
-                onlyGoalId: goal.Id.Value);
+                onlyGoalId: goal.Id.Value,
+                maxDurationDeferralCeiling: TimeSpan.Zero);
 
         Assert.Equal(0, summary.Ticks);
         Assert.Empty(reapedGoals);

@@ -644,7 +644,7 @@ internal sealed partial class ConductorBatchLoop
             {
                 var now = _utcNow();
                 maxDurationDeferralStartedAt ??= now;
-                var snapshot = BuildMaxDurationAcceptanceSnapshot(kernel, driver, maxDurationDeferredAttemptIds);
+                var snapshot = ConductorMaxDurationSnapshotBuilder.Build(kernel, driver, onlyGoalId, maxDurationDeferredAttemptIds);
                 var verdict = ConductorMaxDurationStopDeferral.Decide(
                     now,
                     maxDurationDeferralStartedAt.Value,
@@ -898,7 +898,7 @@ internal sealed partial class ConductorBatchLoop
             var admissionCpuStart = ReadProcessCpu();
             var admissionHold = new ConductorAcceptanceAdmissionHold(_workspace?.OrchestratorDirectory ?? leaseDirectory,
                 _utcNow, line => EmitProgress(line), () =>
-                { var active = BuildMaxDurationAcceptanceSnapshot(kernel, driver, null); return active.Failure is null ? active.Attempts.Count : -1; }, nextTick);
+                { var active = ConductorMaxDurationSnapshotBuilder.Build(kernel, driver, null, null); return active.Failure is null ? active.Attempts.Count : -1; }, nextTick);
             var hasParkedAcceptanceToReconcile = ConductorTickStepLedger.Measure("admission-pre-batch", () => scopedGoals.Any(goal => goal.IsExplicitlyParked &&
                 driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count > 0));
             if (eligible.Length == 0 && !hasParkedAcceptanceToReconcile)
