@@ -646,7 +646,7 @@ public sealed class LauncherScriptTests
         var root = document.RootElement;
         var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
         var launcherPath = Path.Combine(sandbox.RepositoryRoot, "mcg-orchestrator.cmd");
-        Assert.Equal(new[] { launcherPath, "goal", "placeholder", "--pipeline", "five-role" }, args);
+        Assert.Equal(new[] { launcherPath, "goal", "--pipeline", "five-role", "placeholder" }, args);
 
         var stdoutPath = root.GetProperty("stdoutPath").GetString()
             ?? throw new InvalidOperationException("Start command did not emit stdoutPath.");
@@ -657,7 +657,7 @@ public sealed class LauncherScriptTests
             Thread.Sleep(100);
         }
 
-        Assert.Equal("launcher goal placeholder --pipeline five-role", File.ReadAllText(sandbox.InvocationPath).Trim());
+        Assert.Equal("launcher goal --pipeline five-role placeholder", File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_writes_last_drive_journal_for_conduct_loop")]
@@ -2466,17 +2466,88 @@ public sealed class LauncherScriptTests
             observeArtifacts, logsRequired: false);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("Invoke-RepoScript.ps1", null, false)]
+    [Xunit.InlineData("Invoke-OrchestratorCommand.ps1", null, false)]
+    [Xunit.InlineData("Invoke-OrchestratorCommand.ps1", null, true)]
+    [Xunit.InlineData("Start-OrchestratorCommand.ps1", null, false)]
+    [Xunit.InlineData("Start-OrchestratorCommand.ps1", null, true)]
+    [Xunit.InlineData("Start-OrchestratorCommand.ps1", "explicit-batch", false)]
+    [Xunit.InlineData("Start-OrchestratorCommand.ps1", "explicit-batch", true)]
+    public void ChildNameFlag_RealWrapper_PreservesArgumentsAndBatch(
+        string wrapper, string? batchName, bool throughRepoScript)
+    {
+        using var sandbox = CreateDoubleDashLauncherSandbox();
+        var capturePath = Path.Combine(sandbox.RepositoryRoot, "capture.json");
+        File.WriteAllText(sandbox.EchoScriptPath, $$"""
+            $raw = [Environment]::GetCommandLineArgs()
+            $offset = [Array]::IndexOf($raw, $PSCommandPath) + 1
+            if ($offset -le 0) { throw 'Capture script missing from process argv.' }
+            $captured = @($raw | Select-Object -Skip $offset)
+            [pscustomobject]@{
+                args = $captured
+                batch = [Environment]::GetEnvironmentVariable('MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME')
+            } | ConvertTo-Json -Compress | Set-Content -LiteralPath '{{EscapePowerShellSingleQuoted(capturePath)}}.tmp'
+            [IO.File]::Move('{{EscapePowerShellSingleQuoted(capturePath)}}.tmp', '{{EscapePowerShellSingleQuoted(capturePath)}}')
+            """);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = sandbox.RepositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        ConfigureLauncherScenarioEnvironment(startInfo, sandbox.RepositoryRoot);
+        startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath;
+        startInfo.Environment["MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME"] = "parent-batch";
+        foreach (var argument in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File" })
+            startInfo.ArgumentList.Add(argument);
+        if (throughRepoScript)
+            startInfo.ArgumentList.Add(Path.Combine(sandbox.RepositoryRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add(Path.Combine(sandbox.RepositoryRoot, "scripts", wrapper));
+        if (batchName is not null)
+        {
+            startInfo.ArgumentList.Add("-Name");
+            startInfo.ArgumentList.Add(batchName);
+        }
+        if (wrapper != "Invoke-RepoScript.ps1")
+            startInfo.ArgumentList.Add("-AppDll");
+        startInfo.ArgumentList.Add(sandbox.EchoScriptPath);
+        string[] expected = ["probe", "--name", "foo", "--name", "bar", "--pipeline", "five-role",
+            "--progress", "value \"quoted\" with spaces"];
+        foreach (var argument in expected)
+            startInfo.ArgumentList.Add(argument);
+
+        var result = RunProcess(startInfo, wrapper);
+        Assert.True(result.ExitCode == 0, result.Stderr);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        WaitForFile(capturePath, RealProcessFileHangGuard);
+        using var capture = JsonDocument.Parse(File.ReadAllText(capturePath));
+        Assert.Equal(expected, capture.RootElement.GetProperty("args").EnumerateArray()
+            .Select(value => value.GetString()).ToArray());
+        var isStart = wrapper == "Start-OrchestratorCommand.ps1";
+        var expectedBatch = isStart ? batchName ?? "command" : "parent-batch";
+        Assert.Equal(expectedBatch, capture.RootElement.GetProperty("batch").GetString());
+        if (isStart)
+        {
+            using var launch = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(new[] { sandbox.EchoScriptPath }.Concat(expected),
+                launch.RootElement.GetProperty("args").EnumerateArray().Select(value => value.GetString()));
+            Assert.StartsWith($"operator-{expectedBatch}-",
+                Path.GetFileName(launch.RootElement.GetProperty("stdoutPath").GetString()!));
+        }
+    }
+
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_keeps_AppDll_named_only_and_forwards_remaining_arguments")]
     public void StartOrchestratorCommandKeepsAppDllNamedOnlyAndForwardsRemainingArguments()
     {
         var repoRoot = FindLauncherSourceRoot();
         var script = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Start-OrchestratorCommand.ps1"));
 
-        Assert.True(script.Contains("[CmdletBinding(PositionalBinding = $false)]", StringComparison.Ordinal));
-        Assert.True(script.Contains("[Parameter(ValueFromRemainingArguments = $true)]", StringComparison.Ordinal));
-        Assert.True(script.Contains("[string[]]$Arguments", StringComparison.Ordinal));
         Assert.True(script.Contains("$processArguments = @($targetExecutable) + $Arguments", StringComparison.Ordinal));
-        Assert.False(script.Contains("Position =", StringComparison.OrdinalIgnoreCase));
 
         var startInfo = new ProcessStartInfo
         {
@@ -2490,22 +2561,28 @@ public sealed class LauncherScriptTests
         startInfo.ArgumentList.Add("-ExecutionPolicy");
         startInfo.ArgumentList.Add("Bypass");
         startInfo.ArgumentList.Add("-Command");
-        startInfo.ArgumentList.Add("""
+        startInfo.ArgumentList.Add($$"""
             $ErrorActionPreference = 'Stop'
-            function Test-Binding {
-                [CmdletBinding(PositionalBinding = $false)]
-                param(
-                    [string]$Name = 'command',
-                    [string]$AppDll,
-                    [Parameter(ValueFromRemainingArguments = $true)]
-                    [string[]]$Arguments
-                )
-                [pscustomobject]@{
-                    appDll = $AppDll
-                    args = @($Arguments)
-                } | ConvertTo-Json -Compress
+            $tokens = $null
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                '{{EscapePowerShellSingleQuoted(Path.Combine(repoRoot, "scripts", "Start-OrchestratorCommand.ps1"))}}',
+                [ref]$tokens, [ref]$errors)
+            if ($errors.Count -or $null -ne $ast.ParamBlock) { throw 'Expected an unbound wrapper boundary.' }
+            $boundary = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Name -eq 'Read-WrapperArguments'
+            }, $false)
+            if ($null -eq $boundary) { throw 'Missing wrapper tokenizer.' }
+            Invoke-Expression $boundary.Extent.Text
+            $parsed = Read-WrapperArguments -Tokens @('-Name', 'smoke', 'acceptance', 'goal') -Controls @{
+                Name = 'Value'; AppDll = 'Value'; Arguments = 'Arguments'
             }
-            Test-Binding -Name smoke acceptance goal
+            [pscustomobject]@{
+                appDll = [string]$parsed.Controls['AppDll']
+                args = @($parsed.Arguments)
+            } | ConvertTo-Json -Compress
             """);
 
         using var bindingProbe = Process.Start(startInfo)
