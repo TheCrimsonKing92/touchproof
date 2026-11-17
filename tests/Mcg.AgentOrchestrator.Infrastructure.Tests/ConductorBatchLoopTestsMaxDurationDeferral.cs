@@ -229,7 +229,7 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task ScopedUnreadableSnapshotRetainsAcceptanceAfterWorkerCompletes()
     {
