@@ -56,7 +56,7 @@ public sealed class GuidanceTextBudgetTests
         // Developer standing rules are loaded inline or through rule.md in every Developer brief.
         // Defining test classes adds the required 76-character sentence and one separating space (638 -> 715).
         new("Developer standing rules", 715, () => string.Join("\n", WorkerStandingRules.RenderBriefSection(AgentRole.Developer))),
-        // AGENTS.md is copied into every worker's context as repository guidance.
+        // AGENTS.md is projected by WorkerGuidanceScope into role-scoped worker context guidance.
         // -1833 chars: removed duplicated header pointer lines (subtraction slot).
         // +1755 chars: value-home classification bullet (goal 9037236a).
         // +1189 chars: cheap-before-rare bullet (goal eb6d54e8).
