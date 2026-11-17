@@ -510,7 +510,13 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
             var deleteAttempts = 0;
             var shutdownCalls = 0;
             var lockHolderProbes = 0;
+            var removalPhase = 1;
+            var probes = new List<(int Index, int Phase, string Path, int HolderCount)>();
             var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktreeRemoveResult? first = null;
+            GoalWorktreeRemoveResult? second = null;
+            string Diagnose(string stage) => FormatCleanupRetryDiagnostics(
+                stage, first, second, warnings, deleteAttempts, shutdownCalls, lockHolderProbes, probes);
 
             CleanupHooks.DeleteDirectory = cleanupPath =>
             {
@@ -528,22 +534,42 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
             CleanupHooks.CleanupWarningSink = warnings.Add;
             CleanupHooks.CleanupUtcNow = () => now;
             CleanupHooks.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
-            CleanupHooks.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
-                ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")]
-                : [];
+            // Retain the single-use reply so an earlier probe cannot silently consume it.
+            CleanupHooks.FindLockHoldersForCleanup = cleanupPath =>
+            {
+                var index = lockHolderProbes++;
+                IReadOnlyList<WorktreeLockHolder> holders = index == 0
+                    ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")]
+                    : [];
+                probes.Add((index, removalPhase, cleanupPath, holders.Count));
+                return holders;
+            };
 
-            var first = RemoveWorktree(repo, goalId);
-            var second = RemoveWorktree(repo, goalId);
+            first = RemoveWorktree(repo, goalId);
+            const string firstReasonFailure = "Expected first-call lock-held reason; holder reply consumed before the leftover-directory probe or first call took an earlier exit.";
+            Assert.True(first.CleanupBackoff?.Reason == "remove:leftover-directory:lock-held",
+                firstReasonFailure + Environment.NewLine + Diagnose("before second removal"));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"),
+                firstReasonFailure + Environment.NewLine + Diagnose("before second removal"));
+            Assert.True(probes.Count > 0 && probes[0].Index == 0 && probes[0].Phase == 1 && probes[0].Path == path,
+                Diagnose("expected first probe at the worktree in removal phase 1"));
 
-            Assert.False(first.IsComplete);
-            Assert.True(second.IsComplete);
-            Assert.Null(second.LeftoverPath);
-            Assert.Equal(2, deleteAttempts);
-            Assert.Equal(2, shutdownCalls);
-            Assert.False(Directory.Exists(path));
-            Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
-            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
-            Assert.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
+            removalPhase = 2;
+            second = RemoveWorktree(repo, goalId);
+            var diagnostics = Diagnose("after second removal");
+
+            Assert.False(first.IsComplete, diagnostics);
+            Assert.True(second.IsComplete, diagnostics);
+            Assert.True(second.LeftoverPath is null, diagnostics);
+            Assert.True(deleteAttempts == 2, diagnostics);
+            Assert.True(shutdownCalls == 2, diagnostics);
+            Assert.False(Directory.Exists(path), diagnostics);
+            Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"), diagnostics);
+            Assert.True(warnings.Any(warning => warning.Operation == "remove:cleanup-needed"), diagnostics);
+            Assert.False(warnings.Any(warning => warning.Operation == "remove:skip-backoff"), diagnostics);
+            Assert.True(probes.Select(probe => probe.Index).SequenceEqual(Enumerable.Range(0, lockHolderProbes)), diagnostics);
+            Assert.True(probes.All(probe => probe.Path == path), diagnostics);
+            Assert.True(probes.Any(probe => probe.Phase == 2 && probe.Path == path && probe.HolderCount == 0), diagnostics);
         }
         finally
         {
@@ -556,6 +582,132 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
             CleanupHooks.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_defers_cleanup_needed_retry_while_lock_holder_persists")]
+    public void GoalWorktreesRemoveDefersCleanupNeededRetryWhileLockHolderPersists()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = CleanupHooks.DeleteDirectory;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalShutdown = CleanupHooks.BuildServerShutdown;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
+        var originalNow = CleanupHooks.CleanupUtcNow;
+        var originalBackoff = CleanupHooks.CleanupBackoffDuration;
+        var originalLockHolders = CleanupHooks.FindLockHoldersForCleanup;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var deleteAttempts = 0;
+            var shutdownCalls = 0;
+            var lockHolderProbes = 0;
+            var removalPhase = 1;
+            var holder = new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test");
+            var probes = new List<(int Index, int Phase, string Path, int HolderCount)>();
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktreeRemoveResult? first = null;
+            GoalWorktreeRemoveResult? second = null;
+            string Diagnose(string stage) => FormatCleanupRetryDiagnostics(
+                stage, first, second, warnings, deleteAttempts, shutdownCalls, lockHolderProbes, probes);
+
+            CleanupHooks.DeleteDirectory = cleanupPath =>
+            {
+                deleteAttempts++;
+                if (deleteAttempts == 1)
+                {
+                    return false;
+                }
+
+                Directory.Delete(cleanupPath, recursive: true);
+                return true;
+            };
+            CleanupHooks.SandboxAclHelper = new RecordingSandboxAclHelper();
+            CleanupHooks.BuildServerShutdown = (_, _) => shutdownCalls++;
+            CleanupHooks.CleanupWarningSink = warnings.Add;
+            CleanupHooks.CleanupUtcNow = () => now;
+            CleanupHooks.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            CleanupHooks.FindLockHoldersForCleanup = cleanupPath =>
+            {
+                probes.Add((lockHolderProbes++, removalPhase, cleanupPath, 1));
+                return [holder];
+            };
+
+            first = RemoveWorktree(repo, goalId);
+            Assert.False(first.IsComplete, Diagnose("before second removal"));
+            Assert.True(first.CleanupBackoff?.Reason == "remove:leftover-directory:lock-held",
+                Diagnose("expected first-call lock-held reason"));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"),
+                Diagnose("expected recorded lock-held reason"));
+            var attemptsBeforeRetry = deleteAttempts;
+            var shutdownsBeforeRetry = shutdownCalls;
+            var warningsBeforeRetry = warnings.Count;
+
+            removalPhase = 2;
+            second = RemoveWorktree(repo, goalId);
+            var diagnostics = Diagnose("after second removal with holder still present");
+
+            Assert.False(second.IsComplete, diagnostics);
+            Assert.True(second.LeftoverPath == path, diagnostics);
+            Assert.True(deleteAttempts == attemptsBeforeRetry, diagnostics);
+            Assert.True(shutdownCalls == shutdownsBeforeRetry, diagnostics);
+            Assert.True(warnings.Skip(warningsBeforeRetry).Any(warning => warning.Operation == "remove:skip-backoff"), diagnostics);
+            Assert.True(second.LockHolders.Contains(holder), diagnostics);
+            Assert.True(second.CleanupBackoff is not null, diagnostics);
+            Assert.True(Directory.Exists(path), diagnostics);
+            Assert.True(probes.Any(probe => probe.Phase == 2 && probe.Path == path && probe.HolderCount == 1), diagnostics);
+        }
+        finally
+        {
+            CleanupHooks.DeleteDirectory = originalDelete;
+            CleanupHooks.SandboxAclHelper = originalAcl;
+            CleanupHooks.BuildServerShutdown = originalShutdown;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
+            CleanupHooks.CleanupUtcNow = originalNow;
+            CleanupHooks.CleanupBackoffDuration = originalBackoff;
+            CleanupHooks.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static string FormatCleanupRetryDiagnostics(
+        string stage,
+        GoalWorktreeRemoveResult? first,
+        GoalWorktreeRemoveResult? second,
+        IReadOnlyList<GoalWorktreeCleanupWarning> warnings,
+        int deleteAttempts,
+        int shutdownCalls,
+        int probeCount,
+        IReadOnlyList<(int Index, int Phase, string Path, int HolderCount)> probes)
+    {
+        static string Text(string? value) => value is null ? "<null>" : JsonSerializer.Serialize(value);
+        static string Result(string name, GoalWorktreeRemoveResult? result)
+        {
+            if (result is null)
+            {
+                return $"{name} result: <not yet available>";
+            }
+
+            var holders = result.LockHolders.Count == 0 ? "<none>" : string.Join("; ", result.LockHolders.Select(
+                holder => $"pid={holder.ProcessId}, name={Text(holder.ProcessName)}, command={Text(holder.CommandLine)}"));
+            var backoff = result.CleanupBackoff is { } detail
+                ? $"reason={Text(detail.Reason)}, skip_until_utc={detail.SkipUntilUtc:O}, remaining_wait={detail.RemainingWait}"
+                : "<null>";
+            return $"{name} result: message={Text(result.Message)}, leftover={Text(result.LeftoverPath)}, holders=[{holders}], backoff=[{backoff}]";
+        }
+
+        var warningTrace = warnings.Count == 0 ? "<none>" : string.Join(Environment.NewLine, warnings.Select(
+            (warning, index) => $"#{index} operation={Text(warning.Operation)}, path={Text(warning.Path)}, exception={Text(warning.Exception.Message)}"));
+        var probeTrace = probes.Count == 0 ? "<none>" : string.Join(Environment.NewLine, probes.Select(
+            probe => $"#{probe.Index} phase={probe.Phase}, path={Text(probe.Path)}, returned_holders={probe.HolderCount}"));
+        return string.Join(Environment.NewLine,
+            stage, Result("first", first), Result("second", second),
+            $"deleteAttempts={deleteAttempts}, shutdownCalls={shutdownCalls}, probeCount={probeCount}",
+            $"warnings (capture order):{Environment.NewLine}{warningTrace}",
+            $"probes (capture order):{Environment.NewLine}{probeTrace}");
     }
 
     private sealed class AccessDeniedSandboxAclHelper : ISandboxAclHelper
