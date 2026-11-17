@@ -161,11 +161,11 @@ public sealed class BoardFillReadyItemSelectorTests
             BacklogDependencyTargetKind.Goal, Now)] };
         var tie = landed with { Id = new string('b', 32) };
         var older = landed with { Id = new string('a', 32), UpdatedAt = Now.AddDays(-1) };
-        var noDependency = Item('d') with { Priority = "high", UpdatedAt = Now.AddDays(1) };
+        var noDependency = Item('d') with { Priority = "normal", UpdatedAt = Now.AddDays(1) };
         var noPriority = landed with { Id = new string('e', 32), Priority = null, UpdatedAt = Now.AddDays(2) };
         var blankPriority = noPriority with { Id = new string('f', 32), Priority = " " };
         var remaining = new List<BacklogItem> { blankPriority, noPriority, noDependency, older, landed, tie };
-        foreach (var expected in new[] { noDependency, noPriority, blankPriority, tie, landed, older })
+        foreach (var expected in new[] { noPriority, blankPriority, tie, landed, older, noDependency })
         {
             var selected = BoardFillReadyItemSelector.Select(remaining, [goal], None,
                 item => BacklogDependencyReadiness.Evaluate(item, _ => goal, _ => null, _ => new(null), _ => "Recorded"));
