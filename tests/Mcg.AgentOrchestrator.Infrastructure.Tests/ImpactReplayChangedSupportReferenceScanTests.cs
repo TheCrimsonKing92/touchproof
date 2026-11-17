@@ -73,6 +73,155 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
     }
 
     [Theory]
+    [InlineData("class")]
+    [InlineData("base")]
+    [InlineData("struct")]
+    [InlineData("record")]
+    [InlineData("record-struct")]
+    [InlineData("interface")]
+    [InlineData("delegate-return")]
+    [InlineData("delegate-parameter")]
+    [InlineData("abstract-base")]
+    [InlineData("two-hop")]
+    [InlineData("alias")]
+    [InlineData("generic")]
+    [InlineData("partial")]
+    [InlineData("nested")]
+    public void SupportChain_SelectsRunnableClassThroughNonRunnableFixture(string shape)
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Support.cs", shape == "generic"
+            ? "namespace Support; public class Helpers<T> { }"
+            : "namespace Support; public class Helpers { }");
+        var fixture = shape switch
+        {
+            "base" => "public class HelperFixture : Support.Helpers { }",
+            "struct" => "public struct HelperFixture { Support.Helpers value; }",
+            "record" => "public record HelperFixture { Support.Helpers value; }",
+            "record-struct" => "public record struct HelperFixture { Support.Helpers value; }",
+            "interface" => "public interface HelperFixture { Support.Helpers Make(); }",
+            "delegate-return" => "public delegate Support.Helpers HelperFixture();",
+            "delegate-parameter" => "public delegate void HelperFixture(Support.Helpers value);",
+            "abstract-base" => "public abstract class HelperFixture { Support.Helpers value; }",
+            "two-hop" => "public class HelperFixture { Bridge value; } public class Bridge { Support.Helpers value; }",
+            "alias" => "public class HelperFixture { H value; }",
+            "generic" => "public class HelperFixture<T> { Support.Helpers<T> value; }",
+            "partial" => "public partial class HelperFixture { Support.Helpers value; }",
+            "nested" => "public class Outer { public class HelperFixture { Support.Helpers value; } }",
+            _ => "public class HelperFixture { Support.Helpers value; }"
+        };
+        sources.Add("Fixture.cs", (shape == "alias" ? "using H = Support.Helpers; " : "") + "namespace Fixtures; " + fixture);
+        if (shape == "partial") sources.Add("FixturePart.cs", "namespace Fixtures; public partial class HelperFixture { }");
+        var beta = shape switch
+        {
+            "abstract-base" => "namespace SampleTests; public class BetaTests : Fixtures.HelperFixture { }",
+            "alias" => "using F = Fixtures.HelperFixture; namespace SampleTests; public class BetaTests { F value; }",
+            "generic" => "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture<int> value; }",
+            "nested" => "namespace SampleTests; public class BetaTests { Fixtures.Outer.HelperFixture value; }",
+            _ => "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }"
+        };
+        sources.Add("BetaTests.cs", beta);
+        sources.Add("elsewhere/OtherTests.cs", beta.Replace("BetaTests", "OtherTests", StringComparison.Ordinal), infrastructure: false);
+
+        var actual = sources.Select(["Support.cs"]);
+
+        Assert.Null(actual.AbandonReason);
+        Assert.Equal(new[] { "SampleTests.BetaTests" }, actual.Classes);
+        Assert.Equal(new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
+    }
+
+    [Theory]
+    [InlineData("unreferenced")]
+    [InlineData("collision")]
+    [InlineData("comment-and-string")]
+    [InlineData("constraint")]
+    [InlineData("attribute")]
+    [InlineData("enum")]
+    public void UnreferencedSupport_StillAbandonsWithExactReason(string shape)
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Support.cs", shape == "attribute"
+            ? "namespace Support; public class HelpersAttribute : System.Attribute { }"
+            : "namespace Support; public class Helpers { public const int Value = 1; }");
+        sources.Add("Other.cs", "namespace Other; public class Helpers { }");
+        sources.Add("Fixture.cs", "namespace Fixtures; " + (shape switch
+        {
+            "collision" => "public class HelperFixture { Other.Helpers value; }",
+            "comment-and-string" => "public class HelperFixture { /* Support.Helpers */ string value = \"Support.Helpers\"; }",
+            "constraint" => "public class HelperFixture<T> where T : Support.Helpers { }",
+            "attribute" => "[Support.Helpers] public class HelperFixture { }",
+            "enum" => "public enum HelperFixture { Value = Support.Helpers.Value }",
+            _ => "public class HelperFixture { int value; }"
+        }));
+        sources.Add("BetaTests.cs", shape == "constraint"
+            ? "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture<int> value; }"
+            : "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }");
+
+        var actual = sources.Select(["Support.cs"]);
+
+        Assert.Empty(actual.Classes);
+        Assert.Equal("Changed test support has no resolvable test class: Support.cs", actual.AbandonReason);
+        Assert.Empty(actual.OtherFiles);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SupportCycle_TerminatesWithAndWithoutRunnableReferrer(bool referenced)
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Support.cs", "namespace Support; public class A { B value; }");
+        sources.Add("Partner.cs", "namespace Support; public class B { A value; }");
+        sources.Add("BetaTests.cs", referenced
+            ? "namespace SampleTests; public class BetaTests { Support.B value; }"
+            : "namespace SampleTests; public class BetaTests { int value; }");
+
+        var actual = sources.Select(["Support.cs"]);
+
+        Assert.Equal(referenced ? new[] { "SampleTests.BetaTests" } : [], actual.Classes);
+        Assert.Equal(referenced ? null : "Changed test support has no resolvable test class: Support.cs", actual.AbandonReason);
+        Assert.Empty(actual.OtherFiles);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DirectMatch_DoesNotSupplementWithSupportChainMatches(bool unresolvedCompanion)
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Support.cs", "namespace Support; public class Helpers { }");
+        sources.Add("Unused.cs", "namespace Support; public class Unused { }");
+        sources.Add("Fixture.cs", "namespace Fixtures; public class HelperFixture { Support.Helpers value; }");
+        sources.Add("AlphaTests.cs", "namespace SampleTests; public class AlphaTests { Support.Helpers value; }");
+        sources.Add("BetaTests.cs", "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }");
+        sources.Add("elsewhere/OtherTests.cs", "namespace SampleTests; public class OtherTests { Fixtures.HelperFixture value; }", infrastructure: false);
+
+        var actual = sources.Select(unresolvedCompanion ? ["Support.cs", "Unused.cs"] : ["Support.cs"]);
+
+        Assert.Equal(unresolvedCompanion ? "Changed test support has no resolvable test class: Unused.cs" : null, actual.AbandonReason);
+        Assert.Equal(unresolvedCompanion ? [] : new[] { "SampleTests.AlphaTests" }, actual.Classes);
+        Assert.Empty(actual.OtherFiles);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FallbackMatch_PreservesPerFileResultsAndAbandonOrder(bool unusedFirst)
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Support.cs", "namespace Support; public class Helpers { }");
+        sources.Add("Unused.cs", "namespace Support; public class Unused { }");
+        sources.Add("Fixture.cs", "namespace Fixtures; public class HelperFixture { Support.Helpers value; }");
+        sources.Add("elsewhere/OtherTests.cs", "namespace SampleTests; public class OtherTests { Fixtures.HelperFixture value; }", infrastructure: false);
+
+        var actual = sources.Select(unusedFirst ? ["Unused.cs", "Support.cs"] : ["Support.cs", "Unused.cs"]);
+
+        Assert.Empty(actual.Classes);
+        Assert.Equal("Changed test support has no resolvable test class: Unused.cs", actual.AbandonReason);
+        Assert.Equal(unusedFirst ? [] : new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
+    }
+
+    [Theory]
     [InlineData("short")]
     [InlineData("alias")]
     [InlineData("attribute")]
