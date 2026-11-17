@@ -108,6 +108,7 @@ internal sealed class OwnerConsolePolicySettingsTab : IOwnerConsoleSettingsTab
             return name is not null ? JsonSerializer.Serialize(name) : throw new FormatException(
                 $"{key}: valid values are {string.Join(", ", Enum.GetNames<ConductorBoardFillMode>())}.");
         }
+        if (key == "boardFillMaxDraftsPerDay" && input == "null") return input;
         if (key == "autoPromoteRiskThreshold")
         {
             if (input == "null") return input;
