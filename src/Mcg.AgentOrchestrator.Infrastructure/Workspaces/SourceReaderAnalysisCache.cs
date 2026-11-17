@@ -10,8 +10,9 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
 {
     // Bump for serialized shape OR analysis semantics changes in SourceReadingGuardTestClasses
     // or WholeTreeSourceReaderDetector.
-    internal const int FormatVersion = 8;
-    private static readonly Lazy<SourceReaderAnalysisCache> Shared = new(() => new(DefaultDirectory()));
+    internal const int FormatVersion = 9;
+    private static string? _defaultDirectoryOverride;
+    private static readonly Lazy<SourceReaderAnalysisCache> Shared = new(() => new(_defaultDirectoryOverride ?? DefaultDirectory()));
     private static readonly AsyncLocal<SourceReaderAnalysisCache?> Scoped = new();
     private long _analysisCount;
     private long _semanticFileCount;
@@ -21,6 +22,15 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
     internal static SourceReaderAnalysisCache Current => Scoped.Value ?? Shared.Value;
     internal long AnalysisCount => Interlocked.Read(ref _analysisCount);
     internal long SemanticFileCount => Interlocked.Read(ref _semanticFileCount);
+
+    // Test assemblies install this once during module initialization, before shared-cache access.
+    internal static bool OverrideDefaultDirectory(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        if (Shared.IsValueCreated) return false;
+        _defaultDirectoryOverride = directory;
+        return true;
+    }
 
     internal static IDisposable Use(SourceReaderAnalysisCache cache)
     {
@@ -121,12 +131,12 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
 
     private SourceReaderFileFacts[]? FindBaseline(SourceReaderFileFacts[] candidate)
     {
-        if (directory is null || !SourceReaderFileFacts.HasUniquePaths(candidate)) return null;
+        if (directory is null || candidate.Length == 0 || !SourceReaderFileFacts.HasUniquePaths(candidate)) return null;
         try
         {
             var hashes = candidate.ToDictionary(file => file.Path, file => file.ContentHash, StringComparer.Ordinal);
             SourceReaderFileFacts[]? best = null;
-            var bestOverlap = -1;
+            var bestOverlap = 0;
             // Bound JSON reads; newest wins ties. No store or caller changes are needed for baseline discovery.
             foreach (var path in new DirectoryInfo(directory).EnumerateFiles("*.json")
                          .OrderByDescending(file => file.LastWriteTimeUtc).ThenBy(file => file.Name, StringComparer.Ordinal).Take(8))
@@ -139,7 +149,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
                         entry.Files is null || entry.FilesDigest != Digest(entry.Key, entry.Files) ||
                         !SourceReaderFileFacts.Valid(entry.Files)) continue;
                     var overlap = entry.Files.Count(file => hashes.GetValueOrDefault(file.Path) == file.ContentHash);
-                    if (overlap <= bestOverlap) continue;
+                    if (overlap <= bestOverlap || (long)overlap * 2 < candidate.Length) continue;
                     best = entry.Files;
                     bestOverlap = overlap;
                 }

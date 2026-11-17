@@ -55,7 +55,8 @@ internal static class SourceReadingGuardTestClasses
                     var targets = new List<string>();
                     foreach (var target in info.Symbol is { } resolved ? new[] { resolved } : info.CandidateSymbols.ToArray())
                     {
-                        var canonical = target.OriginalDefinition;
+                        var canonical = (target is IMethodSymbol { ReducedFrom: { } unreduced }
+                            ? unreduced : target).OriginalDefinition;
                         snapshot |= IsSnapshotRead(canonical);
                         // Metadata and untracked local-function/accessor symbols cannot seed this graph.
                         foreach (var reference in canonical.DeclaringSyntaxReferences)
@@ -94,8 +95,7 @@ internal static class SourceReadingGuardTestClasses
     private static string Id(ISymbol symbol)
     {
         // Keep the distinctions made by SymbolEqualityComparer on OriginalDefinition.
-        var prefix = symbol is IMethodSymbol { ReducedFrom: not null } ? "reduced:" :
-            symbol is IMethodSymbol { PartialDefinitionPart: not null } ? "implementation:" : "";
+        var prefix = symbol is IMethodSymbol { PartialDefinitionPart: not null } ? "implementation:" : "";
         return symbol.GetDocumentationCommentId() is { } id ? prefix + id : "untracked:" + symbol.ToDisplayString();
     }
 
