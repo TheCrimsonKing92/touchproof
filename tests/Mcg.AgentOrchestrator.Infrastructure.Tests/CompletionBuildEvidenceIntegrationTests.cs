@@ -71,10 +71,10 @@ public sealed class CompletionBuildEvidenceIntegrationTests(ITestOutputHelper ou
             // Child exit is the event gate. The timeout only detects a hung real invocation.
             using (var guard = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
                 await child.WaitForExitAsync(guard.Token);
-            Assert.Equal(invalidSource ? 1 : 0, child.ExitCode);
             var result = JsonSerializer.Deserialize<CompletionBuildEvidenceOperation>(File.ReadAllText(pending.ResultPath))!;
             output.WriteLine($"operation={pending.Id}; dispatch={pending.DispatchId}; candidate={pending.TreeDigest}; child={pending.ChildPid}; phase={result.Phase}");
             output.WriteLine(result.Diagnostic);
+            Assert.Equal(invalidSource ? 1 : 0, child.ExitCode);
             Assert.True(CompletionBuildEvidenceCoordinator.MatchesResult(pending, result));
             Assert.Equal(expectedPhase, result.Phase);
             Assert.Equal(invalidSource ? 1 : 0, result.BuildExitCode);
@@ -164,6 +164,8 @@ public sealed class CompletionBuildEvidenceIntegrationTests(ITestOutputHelper ou
             info.Environment.Clear();
             foreach (var name in new[] { "SystemRoot", "WINDIR", "PATH", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432" })
                 if (Environment.GetEnvironmentVariable(name) is { } value) info.Environment[name] = value;
+            // PowerShell needs PATHEXT to resolve the helper's extensionless dotnet invocation.
+            if (OperatingSystem.IsWindows()) info.Environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
             var profile = Path.Combine(storage.RootPath, "profile");
             Directory.CreateDirectory(profile);
             info.Environment["USERPROFILE"] = profile;
