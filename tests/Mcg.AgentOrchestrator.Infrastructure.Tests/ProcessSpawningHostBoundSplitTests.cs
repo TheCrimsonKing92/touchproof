@@ -19,6 +19,7 @@ public sealed class ProcessSpawningHostBoundSplitTests
         typeof(ConductorSuccessorSelfCheckTests),
         typeof(DisposableTrialRootTests),
         typeof(DisposableTrialRootNegativeControlTests),
+        typeof(DisposableTrialRootProtectedPathTests),
         typeof(PostLandingCanaryCaptureAvailabilityTests),
         typeof(MtpTestRunnerScriptTestsTimeoutPolicy)
     ];

@@ -84,7 +84,7 @@ internal sealed partial class TrialRootLease
         {
             try
             {
-                var after = DisposableTrialRoot.CaptureProtectedPath(before.RootPath);
+                var after = DisposableTrialRoot.CaptureProtectedPath(before.RootPath, before.CaptureMode);
                 foreach (var path in before.Files.Keys.Union(after.Files.Keys, StringComparer.OrdinalIgnoreCase))
                 {
                     if (!before.Files.TryGetValue(path, out var oldValue) ||
