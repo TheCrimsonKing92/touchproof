@@ -82,6 +82,7 @@ internal sealed partial class ConductorBoardFillHost
             ModelFunctionPurposes.ConductorAuthor);
         var item = AuthorBriefDraftBacklog.Read(workspace.BacklogStorePath, request.BacklogItemId);
         var measureTagged = AuthorBriefDraftMeasurementOnlyCheck.IsMeasureTagged(workspace.BacklogStorePath, item.Id);
+        var costGoal = CostGoalOutcomeMetric.IsCostBacklogItem(item, workspace);
         var stack = GoalIntakeTargetStack.For(workspace);
         var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
             .Select(ConductorLessonSelector.AuthorTags("brief"));
@@ -95,7 +96,7 @@ internal sealed partial class ConductorBoardFillHost
         if (parsed.Kind != "draft") return new(parsed.Kind, 0, null, null, [], parsed.Reason);
 
         var markdown = parsed.Markdown!;
-        var checks = AuthorBriefDraftChecks.Run(markdown, request.MainHead, draftRepository, stack, measureTagged: measureTagged);
+        var checks = AuthorBriefDraftChecks.Run(markdown, request.MainHead, draftRepository, stack, measureTagged: measureTagged, costGoal: costGoal);
         var findings = BriefLint.Lint(markdown, workspace.ExecutionDirectory);
         IReadOnlyList<AuthorBriefDraftCheck> refreshed = [.. checks, .. findings
             .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)

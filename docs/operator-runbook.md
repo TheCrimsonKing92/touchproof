@@ -191,6 +191,27 @@ mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 1
 mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspection
 ```
 
+### Cost goals: outcome metric
+
+A brief is a cost brief when its source backlog item directly belongs to an epic whose id begins with `79801150`, has the complete tag `cost` (case-insensitive), or the brief has a case-sensitive line beginning `Expected effect` with no indentation or markup. Cost briefs must declare at least one metric in an `## Outcome metric` section:
+
+```text
+## Outcome metric
+metric: selection-milliseconds; direction: decrease; target: 20%; window: 5 gates
+```
+
+The line format is `metric: <name>; direction: decrease|increase; target: <value or percent>; window: <N gates>`. Targets are signed or unsigned decimal numbers, optionally followed by `%`; the window is a positive integer, optionally followed by `gate` or `gates`. Multiple metric lines are allowed and every line must be valid. Fenced examples do not count as declarations.
+
+The closed metric names are:
+
+- `selection-milliseconds`: selection duration recorded in the selected-execution record.
+- `executed-class-count`: executed classes recorded in the selected-execution record.
+- `gate-test-cpu-seconds`: test CPU recorded in the launch-lock class CPU ledger.
+- `full-gate-rate`: rate derived from full-gate reasons in selected-execution records.
+- `process-launches`: launches recorded in the launch-lock summary.
+
+Author draft validation and plain `goal --brief-file` / `goal --text-file` filings apply `cost-goal-outcome-metric`. A failure prints the defect and creates no goal. Supply `--override-draft-checks <reason>` with a nonblank reason to file despite that check's failure; the `cost-goal-outcome-metric-override` conduct event records the reason, failed check and source before creation. If the audit write fails, filing stops. Passing briefs produce no override event. Baseline storage and judging the declared outcome after landing are follow-up slices.
+
 For ordinary implementation goals, use `goal`: the normal dogfood pipeline is the Scout flow through Planner, Developer, Tester, and Reviewer; Scout is the only multi-role intake, and goals created earlier with a Researcher task still run. `simple-goal` is an explicit exception for genuinely mechanical, low-risk work or direct operator instruction. It is not a throughput shortcut, and narrow backlog items still use `goal` unless they meet that exception.
 
 Supply a fresh `--request-key` for each intended creation. If the foreground caller times out, do not invent a new key: run `goal-intake-status <request-key>` or repeat the exact original command with the same key. The receipt state distinguishes `still-committing`, `created`, and `failed`; a terminal `created` replay returns the original goal, while reuse with different effectful inputs fails with `GOAL_INTAKE_PAYLOAD_CONFLICT`. Identical unkeyed objectives remain separate goals by design.

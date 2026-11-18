@@ -145,6 +145,20 @@ private static void RejectPipelineForSimpleGoal(GoalIntakePipelineRequest? pipel
     }
 }
 
+private static (string? Source, string? OverrideReason) ResolveGoalDraftCheckArguments(IReadOnlyList<string> parts)
+{
+    bool HasFlag(string flag) => parts.Skip(1).Any(part =>
+        part.Equals(flag, StringComparison.OrdinalIgnoreCase) || part.StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase));
+    var source = HasFlag("--brief-file") ? "--brief-file" : HasFlag("--text-file") ? "--text-file" : null;
+    if (!HasFlag(CostGoalOutcomeMetric.OverrideFlag)) return (source, null);
+    var reason = GetFlagValue(parts, CostGoalOutcomeMetric.OverrideFlag);
+    if (string.IsNullOrWhiteSpace(reason) || reason.StartsWith("--", StringComparison.Ordinal))
+        throw new ArgumentException($"{CostGoalOutcomeMetric.OverrideFlag} requires a nonblank reason.");
+    if (source is null || new[] { "--simple", "--run", "--from-backlog" }.Any(HasFlag))
+        throw new ArgumentException($"{CostGoalOutcomeMetric.OverrideFlag} requires plain goal --brief-file or goal --text-file.");
+    return (source, reason);
+}
+
 private static void PrintBriefLintAdvisory(string briefText, string repositoryRoot)
 {
     try
@@ -264,6 +278,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal":
+            var goalDraftCheckArguments = ResolveGoalDraftCheckArguments(parts);
             if (EpicAtCreation.HasArgument(parts) &&
                 (HasCliConfirmation(parts, "--simple") || HasCliConfirmation(parts, "--run") || HasCliConfirmation(parts, "--from-backlog")))
             {
@@ -346,6 +361,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
+            CostGoalOutcomeMetric.EnforceAtFiling(goalDraftCheckArguments.Source, goalObjective,
+                goalSourceBacklogLink?.Item, context.Workspace, goalDraftCheckArguments.OverrideReason);
             var goalEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, requestedEpic, goalSourceBacklogLink?.Item.Id);
             context.ReportGoalCreationProgress();
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
@@ -1665,7 +1682,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         measuredSweepWithCheckpointHolds: reconcileSweep,
                         reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                         detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                        recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(
+                        recoverInterruptedDispatches: loopKernel => new SupersededBriefRoundCanceller(loopReaper).CancelAndRequeueInterruptedDispatches(
                             loopKernel,
                             (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                                 context.ReloadKernel(),
@@ -1816,12 +1833,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchSweep,
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
-                    wk => watchReaper.RequeueInterruptedDispatches(
+                    wk => new SupersededBriefRoundCanceller(watchReaper).CancelAndRequeueInterruptedDispatches(
                         wk,
                         (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                             context.ReloadKernel(),
                             goalId,
-                            taskId)),
+                            taskId), onlyGoalId: context.CurrentGoal.Id),
                     (wk, goal) => new GoalDispatchOperations().RefreshDispatches(wk, goal, watchReaper),
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     providerHoldProbe: ProviderHoldStandaloneProbe.CreateDefault(context.Workspace, context.Agents,
