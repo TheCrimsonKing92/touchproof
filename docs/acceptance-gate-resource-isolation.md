@@ -244,6 +244,14 @@ limits comparability. Delivery requires a demonstrable reduction in the affected
 focused receipt at 4a96f18f (121/121 over the caller-correction, host-capacity and landing-lock classes)
 is focused evidence of those classes only and contributes nothing to this criterion.
 
+## Process-spawning isolation by class trait
+
+Declare `[Xunit.Trait("Isolation", "ProcessSpawning")]` on a class that belongs in the
+process-spawning constraint. The gate groups tagged members of each xUnit collection and uses
+class duration history to assign work to up to three `ProcessSpawning` lanes. Those lanes have no
+exclusive resource keys so they can run concurrently. Keep the trait and its manifest definition
+together when rolling back this configuration.
+
 ## 2026-11-04: Remainder joins the balanced pool
 
 The shipped pool now has eight lanes and explicitly lists `Remainder` in

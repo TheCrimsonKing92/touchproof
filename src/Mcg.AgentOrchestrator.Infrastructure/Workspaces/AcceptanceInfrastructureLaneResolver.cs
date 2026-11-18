@@ -27,21 +27,23 @@ internal static class AcceptanceInfrastructureLaneResolver
                     : AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes,
                         AcceptanceTestClassSourceScanner.Scan(worktreePath, sourceTexts)), null);
 
-        // Identity describes the coverage contract, not the measured scheduling layout.
-        // Reuse constrained membership and the scanner complement, but flatten the pool
-        // so neither duration history nor the number of occupied lanes can change it.
-        var expansion = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes,
-            sourceTexts is null ? AcceptanceTestClassSourceScanner.Scan(worktreePath)
-                : AcceptanceTestClassSourceScanner.Scan(worktreePath, sourceTexts), new Dictionary<string, double>(), pool);
-        var members = expansion.Layout!.Lanes.SelectMany(lane => lane.Members)
-            .Order(StringComparer.Ordinal).ToArray();
-        AcceptanceTestLane[] identityPool = members.Length == 0 ? [] :
-            [AcceptanceBalancedLaneExpander.CreatePoolLane($"{pool.LaneNamePrefix} 1",
-                string.Join('|', members.Select(name => "FullyQualifiedName=" + name)), pool)];
-        // Expansion orders hand-written constraints first, then generated lanes and residual.
-        // Generated pool keys/traits must not turn the measured layout into identity inputs.
-        var constrainedCount = expansion.Lanes.Count - expansion.Layout.Lanes.Count - 1;
-        return new([.. expansion.Lanes.Take(constrainedCount),
-            .. identityPool, expansion.Lanes[^1]], null);
+        // Identity binds each group's coverage before history can affect scheduling.
+        var classes = sourceTexts is null ? AcceptanceTestClassSourceScanner.Scan(worktreePath) :
+            AcceptanceTestClassSourceScanner.Scan(worktreePath, sourceTexts);
+        var (handLanes, members, constraints) = AcceptanceBalancedLaneExpander.Partition(
+            settings.InfrastructureTestLanes, classes, pool);
+        var lanes = handLanes.ToList();
+        foreach (var constraint in pool.IsolationConstraints ?? [])
+        {
+            var group = constraints[constraint.Name];
+            if (group.Count > 0)
+                lanes.Add(AcceptanceBalancedLaneExpander.CreateMemberLane($"{constraint.Name} 1",
+                    group.Select(item => item.FullName), pool, constraint.ExclusiveResourceKeys));
+        }
+        if (members.Count > 0)
+            lanes.Add(AcceptanceBalancedLaneExpander.CreateMemberLane($"{pool.LaneNamePrefix} 1",
+                members.Select(item => item.FullName), pool, pool.ExclusiveResourceKeys));
+        lanes.Add(AcceptanceBalancedLaneExpander.CreateResidualLane(classes, pool));
+        return new(lanes, null);
     }
 }

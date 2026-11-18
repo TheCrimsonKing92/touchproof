@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Each scenario owns a temporary git repository and its executor occupancy root.
 [Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class RemoteFirstFocusedEvidenceExecutorWaitTests : RemoteFirstFocusedEvidenceFixture
 {
     [Fact]

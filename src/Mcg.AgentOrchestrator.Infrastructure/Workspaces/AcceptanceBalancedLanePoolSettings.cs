@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class AcceptanceBalancedLanePoolSettings
@@ -11,6 +13,8 @@ internal sealed class AcceptanceBalancedLanePoolSettings
     public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
     // Named lanes may share the pool's trait guards without losing their raw filter contract.
     public IReadOnlyList<string> PoolEligibleLaneNames { get; init; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AcceptanceIsolationConstraintLaneSettings>? IsolationConstraints { get; init; }
 
     internal void Validate(IReadOnlyList<AcceptanceTestLane> lanes)
     {
@@ -42,13 +46,29 @@ internal sealed class AcceptanceBalancedLanePoolSettings
                     !AcceptanceCheckCommandBuilder.HasMtpTraitExclusion(poolArguments, pair[1])))
                 throw new InvalidDataException($"Balanced lane pool eligible lane '{name}' has a trait exclusion missing from the pool.");
         }
-        if (ExclusiveResourceKeys is null || ExclusiveResourceKeys.Any(string.IsNullOrWhiteSpace) ||
-            ExclusiveResourceKeys.Select(key => key.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != ExclusiveResourceKeys.Count)
+        if (!HasValidResourceKeys(ExclusiveResourceKeys))
             throw new InvalidDataException("Balanced lane pool exclusive resource keys must be non-empty and unique.");
+        var constraints = IsolationConstraints ?? [];
+        foreach (var constraint in constraints)
+        {
+            if (constraint is null || string.IsNullOrWhiteSpace(constraint.Name) ||
+                constraint.Name != constraint.Name.Trim() || constraint.LaneCount < 1)
+                throw new InvalidDataException("Isolation constraints require trimmed non-empty names and positive lane counts.");
+            if (!HasValidResourceKeys(constraint.ExclusiveResourceKeys))
+                throw new InvalidDataException($"Isolation constraint '{constraint.Name}' exclusive resource keys must be non-empty and unique.");
+        }
+        if (constraints.Select(constraint => constraint.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != constraints.Count)
+            throw new InvalidDataException("Isolation constraint names must be unique.");
         var names = Enumerable.Range(1, LaneCount).Select(index => $"{LaneNamePrefix} {index}")
+            .Concat(constraints.SelectMany(constraint => Enumerable.Range(1, constraint.LaneCount)
+                .Select(index => $"{constraint.Name} {index}")))
             .Append(ResidualLaneName).ToArray();
         if (names.Distinct(StringComparer.OrdinalIgnoreCase).Count() != names.Length ||
             lanes.Any(lane => names.Contains(lane.Name, StringComparer.OrdinalIgnoreCase)))
             throw new InvalidDataException("Balanced lane names collide with another acceptance lane.");
     }
+
+    private static bool HasValidResourceKeys(IReadOnlyList<string>? keys) =>
+        keys is not null && !keys.Any(string.IsNullOrWhiteSpace) &&
+        keys.Select(key => key.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == keys.Count;
 }

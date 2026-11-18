@@ -4,6 +4,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class WorkerBuildCheckGoalLeaseOwnerTests
 {
     private const string GoalId = "f15194077b1a4b06b776cf6f5fdab678";

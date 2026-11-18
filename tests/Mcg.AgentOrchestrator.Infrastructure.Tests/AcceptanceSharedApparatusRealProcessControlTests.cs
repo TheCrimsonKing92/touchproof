@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("IsolatedProcessSpawningRemainderB")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class AcceptanceSharedApparatusRealProcessControlTests
 {
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]

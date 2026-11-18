@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 
 [Xunit.Collection("IsolatedProcessSpawningRemainderB")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class ConfirmLegacyAcceptanceHolderSettlementScriptTests : IDisposable
 {
     private static readonly DateTimeOffset Started = new(2026, 10, 1, 0, 0, 0, TimeSpan.Zero);
