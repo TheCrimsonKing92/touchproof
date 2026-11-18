@@ -34,14 +34,23 @@ if ($first.Contains('TooOld', [StringComparison]::Ordinal) -or
 }
 
 $invalidRoot = Join-Path $PSScriptRoot 'fixtures\test-cost-ranking-invalid'
+$diagnostics = [System.IO.StringWriter]::new()
+$originalError = [Console]::Error
 try {
-    & $scriptPath -InputRoot $invalidRoot | Out-Null
-    throw 'Malformed TRX input was silently accepted.'
+    [Console]::SetError($diagnostics)
+    $invalidOutput = @(& $scriptPath -InputRoot $invalidRoot)
 }
-catch {
-    if (-not $_.Exception.Message.Contains('missing TestRun/Times@finish', [StringComparison]::Ordinal)) {
-        throw
-    }
+finally {
+    [Console]::SetError($originalError)
+}
+# Missing finish is deliberately a counted exclusion, replacing the old throw contract.
+$invalidDiagnostics = $diagnostics.ToString()
+$diagnostics.Dispose()
+if ($invalidOutput.Count -ne 0 -or
+    -not $invalidDiagnostics.Contains('Receipts: examined=1 out-of-window=0 malformed=1 qualified=0', [StringComparison]::Ordinal) -or
+    -not $invalidDiagnostics.Contains('missingFinish=1', [StringComparison]::Ordinal) -or
+    -not $invalidDiagnostics.Contains('No qualified TRX receipts.', [StringComparison]::Ordinal)) {
+    throw "Missing-finish receipt was not explicitly excluded: $invalidDiagnostics"
 }
 
 Write-Output 'PASS: recursive TRX cost/failure ranking is windowed and byte-stable.'

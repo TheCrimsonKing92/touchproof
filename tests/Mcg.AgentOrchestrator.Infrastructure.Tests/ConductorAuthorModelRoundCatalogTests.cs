@@ -49,7 +49,7 @@ public sealed class ConductorAuthorModelRoundCatalogTests
             if (requests.Count == 1) return Task.FromResult(new WorkerProcessRunResult(1, Exhausted, ""));
             Assert.True(reserved, "The durable allowance must be reserved before the alternate starts.");
             Assert.Contains("--sandbox 'read-only'", request.Command);
-            Assert.Contains("--model 'gpt-6.1-sol'", request.Command);
+            Assert.Contains("--model 'gpt-6.2-sol'", request.Command);
             Assert.Contains("model_reasoning_effort='high'", request.Command);
             Assert.DoesNotContain("workspace-write", request.Command);
             Assert.Equal(requests[0].StandardInput, request.StandardInput);
@@ -68,7 +68,7 @@ public sealed class ConductorAuthorModelRoundCatalogTests
         Assert.Equal(Exhausted, primary.RootElement.GetProperty("stdout").GetString());
         Assert.Equal("claude-cli", primary.RootElement.GetProperty("launcher").GetString());
         Assert.Equal("codex-cli", chosen.RootElement.GetProperty("launcher").GetString());
-        Assert.Equal("gpt-6.1-sol", chosen.RootElement.GetProperty("model").GetString());
+        Assert.Equal("gpt-6.2-sol", chosen.RootElement.GetProperty("model").GetString());
         Assert.Equal("high", chosen.RootElement.GetProperty("reasoningEffort").GetString());
         Assert.Equal(primary.RootElement.GetProperty("roundId").GetString(), chosen.RootElement.GetProperty("roundId").GetString());
         Assert.True(File.Exists(chosen.RootElement.GetProperty("primaryReceipt").GetString()));
@@ -184,7 +184,7 @@ public sealed class ConductorAuthorModelRoundCatalogTests
         else await Assert.ThrowsAsync<ConductorModelRoundException>(() => round.DispatchAsync(Input(), fixture.Root, CancellationToken.None));
         using var receipt = fixture.Receipt();
         Assert.Equal("codex-cli", receipt.RootElement.GetProperty("launcher").GetString());
-        Assert.Equal("gpt-6.1-sol", receipt.RootElement.GetProperty("model").GetString());
+        Assert.Equal("gpt-6.2-sol", receipt.RootElement.GetProperty("model").GetString());
         Assert.Equal("medium", receipt.RootElement.GetProperty("reasoningEffort").GetString());
     }
 

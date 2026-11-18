@@ -51,7 +51,7 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
             launches++;
             var parameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
             Assert.Equal(kernel.GetTask(goal.Id, task.Id).LastDispatch!.Command, parameters.Command);
-            Assert.Contains("--model 'gpt-6.1-sol'", parameters.Command, StringComparison.Ordinal);
+            Assert.Contains("--model 'gpt-6.2-sol'", parameters.Command, StringComparison.Ordinal);
             Assert.DoesNotContain("--model gpt-6-sol", parameters.Command, StringComparison.Ordinal);
             throw new InvalidOperationException("fake-launch-boundary");
         });
@@ -63,7 +63,7 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
                 kernel, workspace, goal, [agent], profiles, runner: runner, sandboxOptions: DisabledSandbox));
             Assert.Equal("fake-launch-boundary", exception.Message);
             Assert.Equal(1, launches);
-            Assert.Equal("gpt-6.1-sol", kernel.GetTask(goal.Id, task.Id).LastDispatch!.ModelName);
+            Assert.Equal("gpt-6.2-sol", kernel.GetTask(goal.Id, task.Id).LastDispatch!.ModelName);
         }
         else
         {

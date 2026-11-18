@@ -143,8 +143,8 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
 
     [Theory]
     [InlineData(false, "gpt-6-luna", "gpt-6.1-sol")]
-    [InlineData(true, "gpt-6-sol", "gpt-6.1-sol")]
-    [InlineData(true, "GPT-6-SOL", "gpt-6.1-sol")]
+    [InlineData(true, "gpt-6-sol", "gpt-6.2-sol")]
+    [InlineData(true, "GPT-6-SOL", "gpt-6.2-sol")]
     [InlineData(true, "gpt-6-luna", "gpt-6-luna")]
     [InlineData(true, "gpt-6-astra", "gpt-6-astra")]
     [InlineData(true, "custom-sol", "custom-sol")]
@@ -183,8 +183,8 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
         var operations = new GoalDispatchOperations();
         operations.SubscriptionDispatchTask(f.Kernel, f.Workspace, f.Goal, f.Task, f.Agents,
             WorkerProfileCatalog.Default(), conductorPolicy: on);
-        AssertRoute(f.Task, "cheap", "tester-cheap-first", "gpt-6.1-sol");
-        Assert.Contains("--model 'gpt-6.1-sol'", f.Task.LastDispatch!.Command, StringComparison.Ordinal);
+        AssertRoute(f.Task, "cheap", "tester-cheap-first", "gpt-6.2-sol");
+        Assert.Contains("--model 'gpt-6.2-sol'", f.Task.LastDispatch!.Command, StringComparison.Ordinal);
         Assert.Equal("gpt-6-sol", on.CascadeCheapModelAlias);
         operations.RefreshPreparedDispatchBeforeStart(f.Kernel, f.Workspace, f.Goal, f.Task, f.Agents,
             WorkerProfileCatalog.Default(), sandboxOptions: Sandbox, conductorPolicy: on,
