@@ -7,12 +7,45 @@ internal static class AttentionReadGoalSelection
 {
     internal sealed record Result(bool Decline, IReadOnlyList<GoalId> GoalIds);
 
+    private static bool IsAttentionAllFlag(string value) =>
+        value.Equals("--all", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--include-parked", StringComparison.OrdinalIgnoreCase);
+
+    internal static (bool IncludeHistory, string? GoalPrefix) ParseShowArgs(IReadOnlyList<string> parts)
+    {
+        var args = parts.Skip(2).Where(part => !string.IsNullOrWhiteSpace(part)).ToList();
+        var includeHistory = args.RemoveAll(IsAttentionAllFlag) > 0;
+        if (args.Count == 0)
+        {
+            return (includeHistory, null);
+        }
+
+        if (args[0].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Count < 2)
+            {
+                throw new ArgumentException("Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix>");
+            }
+
+            return (includeHistory, args[1]);
+        }
+
+        return (includeHistory, args[0]);
+    }
+
     internal static IReadOnlyList<GoalId>? ReadPostLandingDutyGoalIds(
         IOrchestratorStateQueries queries, IReadOnlyList<GoalSummary> metadata, AttentionReadProjection? projection)
     {
         if (projection is not null)
+        {
+            var ownerQuestionGoals = projection.Goals
+                .Where(goal => goal.Status is not (GoalStatus.Parked or GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
+                .Select(goal => goal.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
             return (projection.PostLandingDuties ?? []).Select(row => new GoalId(row.GoalId))
-                .Concat((projection.EnvironmentHolds ?? []).Select(row => new GoalId(row.GoalId))).Distinct().ToArray();
+                .Concat((projection.EnvironmentHolds ?? []).Select(row => new GoalId(row.GoalId)))
+                .Concat(projection.OwnerQuestions.Where(row => ownerQuestionGoals.Contains(row.GoalId))
+                    .Select(row => new GoalId(row.GoalId))).Distinct().ToArray();
+        }
 
         // Null means unsupported, not empty. Explicit IDs hydrate archived snapshots too.
         var ids = metadata.Select(goal => new GoalId(goal.Id)).ToArray();
@@ -20,7 +53,9 @@ internal static class AttentionReadGoalSelection
         var kernel = queries.LoadGoalsAsync(ids).GetAwaiter().GetResult();
         if (kernel.Goals.Count != ids.Length || !ids.ToHashSet().SetEquals(kernel.Goals.Select(goal => goal.Id)))
             return null;
-        return kernel.Goals.Where(goal => goal.OutstandingPostLandingDuties.Count > 0 || goal.CurrentHold?.State == EnvironmentHold.State)
+        return kernel.Goals.Where(goal => goal.OutstandingPostLandingDuties.Count > 0 || goal.CurrentHold?.State == EnvironmentHold.State ||
+                (goal.Status is not (GoalStatus.Parked or GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded) &&
+                 OwnerQuestionHoldBlocker.TryRead(goal) is not null))
             .Select(goal => goal.Id).ToArray();
     }
 
