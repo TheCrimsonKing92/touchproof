@@ -31,6 +31,8 @@ public sealed class CostGoalOutcomeMetricTests
     [InlineData("process-launches")]
     [InlineData("replay-selected-classes")]
     [InlineData("replay-missed-failures")]
+    [InlineData("worker-turns-per-session")]
+    [InlineData("worker-input-volume-per-session")]
     public void Check_ClosedMetricName_ParsesAndPasses(string name)
     {
         var markdown = "## Outcome metric\n" + ValidLine.Replace("selection-milliseconds", name);
@@ -38,6 +40,20 @@ public sealed class CostGoalOutcomeMetricTests
         var parsed = CostGoalOutcomeMetric.Parse(markdown);
         Assert.Empty(parsed.Defects);
         Assert.Equal(new OutcomeMetricLine(name, "decrease", "20%", 5), Assert.Single(parsed.Metrics));
+    }
+
+    [Theory]
+    [InlineData("worker-input-tokens-per-session")]
+    [InlineData("worker-turns")]
+    [InlineData("Worker-Turns-Per-Session")]
+    public void Check_UnlistedWorkerMetric_RejectsAndListsAllowedNames(string name)
+    {
+        var markdown = "## Outcome metric\n" + ValidLine.Replace("selection-milliseconds", name);
+        var check = CostGoalOutcomeMetric.Check(markdown, true);
+
+        Assert.False(check.Passed);
+        Assert.Contains($"unknown metric '{name}'", check.Detail);
+        Assert.Contains("worker-turns-per-session, worker-input-volume-per-session", check.Detail);
     }
 
     [Theory]

@@ -61,7 +61,7 @@ internal static partial class ProcessTreeGuiSuppression
         try
         {
             if (access.Diagnostic is { } diagnostic) diagnostic(message);
-            else Console.Error.WriteLine(message);
+            else ProcessErrorModeRepairLog.Record(message);
         }
         catch (Exception) { }
     }
