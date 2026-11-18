@@ -15,6 +15,8 @@ internal sealed record CompletionBuildOperatorRepository(
     internal string Storage => Path.Combine(Root, "build-storage");
     internal string Stop => Path.Combine(Root, "conductor.stop");
     internal string Receipts => Path.Combine(Root, "receipts.jsonl");
+    internal string WorkerBuildReceiptPath(GoalId goal) =>
+        Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goal, new(Storage)), WorkerBuildReceipt.FileName);
     internal GoalId GoalId => new(Goal);
     internal TaskId TaskId => new(Task);
     internal static CompletionBuildOperatorRepository Load(string root) =>
@@ -28,6 +30,9 @@ internal sealed record CompletionBuildOperatorRepository(
         var repository = Path.Combine(root, "repository");
         Directory.CreateDirectory(repository);
         Git(repository, "init", "-b", "main");
+        var excludes = Git(repository, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude");
+        // Scope metadata binds each dispatch and is outside the candidate identity.
+        File.AppendAllText(excludes, $"\n/{WorkerBuildProjectScope.MetadataRelativePath}\n");
         Git(repository, "config", "user.name", "Completion build operator fixture");
         Git(repository, "config", "user.email", "completion-build-fixture@example.invalid");
         File.WriteAllText(Path.Combine(repository, "seed.txt"), "Disposable completion-build operator scenario\n");

@@ -32,6 +32,7 @@ internal static class CompletionBuildOperatorProbe
         using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-ready");
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-release");
         using var renewed = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-renewed");
+        using var renewalVerifierReady = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-renewal-verifier-ready");
         using var successorReady = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-successor-ready");
         using var successorRelease = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-successor-release");
         var f = Create(root, source, token);
@@ -67,7 +68,6 @@ internal static class CompletionBuildOperatorProbe
             {
                 case "stop":
                     await Host(f, "stop");
-                    Require(File.Exists(f.Stop), "Production stop file was not observed.");
                     Pending(f, original); // Graceful conductor stop preserves the authorized child.
                     File.Delete(f.Stop);
                     await Host(f, "cancel"); // Explicit operator cancellation is a separate contract.
@@ -132,16 +132,23 @@ internal static class CompletionBuildOperatorProbe
                     Require(Operation(f) is { Phase: CompletionBuildEvidencePhase.Success, Applied: false, CustodyReleased: true },
                         "Historical compiler fact was applied to the reset worker.");
                     NoCommit(f);
+                    File.Move(f.WorkerBuildReceiptPath(f.GoalId), Path.Combine(root, "obsolete-worker-build-receipt.json"));
                     ready.Reset();
                     release.Reset();
                     await Host(f, "replace");
                     Require(ready.WaitOne(Guard), "New dispatch did not start its own real build.");
                     var next = Operation(f);
+                    Require(next.Id != original.Id && next.DispatchId != original.DispatchId,
+                        "Stale-dispatch control did not attach a distinct dispatch and build attempt.");
+                    Require(next.TreeDigest == original.TreeDigest && next.Projects.SequenceEqual(original.Projects),
+                        "Stale-dispatch control changed the candidate or required projects.");
                     Pending(f, next);
                     await ReleaseAndWait(f, next, release);
                     // Present the actual old child's receipt to the new attempt. A current
                     // successful worker-build receipt must not rescue its obsolete authority.
                     File.Copy(Path.Combine(root, "obsolete-result.json"), next.ResultPath, overwrite: true);
+                    f.Record("stale-dispatch-replay", new { obsoleteAttemptId = original.Id, obsoleteDispatchId = original.DispatchId,
+                        currentAttemptId = next.Id, currentDispatchId = next.DispatchId, next.TreeDigest, next.Projects });
                     await Host(f, "observe");
                     Require(Operation(f).Phase == CompletionBuildEvidencePhase.ApparatusFailure,
                         "Obsolete dispatch receipt authorized the new attempt.");

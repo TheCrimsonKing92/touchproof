@@ -13,15 +13,19 @@ internal static class CompletionBuildOperatorHost
     {
         var f = Load(root);
         Require(f.Source == source, "Source repository changed across hosts.");
-        if (action == "successor") ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
+        if (action == "successor")
+        {
+            Require(ConductorLoopHandoff.WaitForAuthorityTransferIfRequested(), "Successor did not receive conductor authority.");
+            using var verifierReady = EventWaitHandle.OpenExisting(f.GateToken + "-renewal-verifier-ready");
+            Require(verifierReady.WaitOne(TimeSpan.FromSeconds(60)), "Renewal verifier did not open the successor process.");
+        }
         using var lease = ConductorLoopLeaseController.Acquire(root);
         var kernel = f.LoadKernel();
         var task = kernel.GetTask(f.GoalId, f.TaskId);
         var coordinator = new CompletionBuildEvidenceCoordinator(f.State, root,
             remoteBuildBudget: _ => TimeSpan.Zero, storageRoot: new(f.Storage));
         var runner = new BackgroundDispatchRunner(completionBuildEvidence: coordinator,
-            resolveWorkerBuildReceiptPath: goal => Path.Combine(
-                DotnetBuildStorageLayout.GoalArtifactsPath(goal, new(f.Storage)), "worker-build-receipt.json"));
+            resolveWorkerBuildReceiptPath: f.WorkerBuildReceiptPath);
         var store = new SqliteOperatorIntentStore(Path.Combine(root, "operator-intents.db"), root);
         var intents = new OperatorIntentCoordinator(store) { CancelLatestProcess = runner.CancelLatestProcess };
 
@@ -130,17 +134,21 @@ internal static class CompletionBuildOperatorHost
             VerificationTimeout: TimeSpan.FromSeconds(60), VerificationHardTimeout: TimeSpan.FromSeconds(90),
             ReacquireCurrentLease: lease.Reacquire,
             SuccessorCommandPrefix: [Environment.ProcessPath!, typeof(CompletionBuildOperatorHost).Assembly.Location]),
-            verify: (successor, _) =>
+            verify: (successor, eventCursor) =>
             {
                 using var successorProcess = Process.GetProcessById(successor.ProcessId);
+                _ = successorProcess.Handle;
                 Require(new DateTimeOffset(successorProcess.StartTime.ToUniversalTime()) == successor.StartedAt,
                     "Renewal successor process identity changed.");
+                using var verifierReady = EventWaitHandle.OpenExisting(f.GateToken + "-renewal-verifier-ready");
                 using var signal = EventWaitHandle.OpenExisting(f.GateToken + "-renewed");
-                var observed = signal.WaitOne(TimeSpan.FromSeconds(60));
+                verifierReady.Set();
                 var exited = successorProcess.WaitForExit(60000);
-                var passed = observed && exited && successorProcess.ExitCode == 0;
+                var passed = exited && successorProcess.ExitCode == 0 && signal.WaitOne(0) &&
+                    HasPersistedSuccessorTick(f, successor.ProcessId);
                 return new(!exited, File.Exists(successor.StdoutPath), passed,
-                    "real successor completed production tick and settled its conductor lease after authority transfer");
+                    passed ? "real successor persisted a production tick and exited after authority transfer"
+                        : "successor did not exit successfully with a persisted production tick receipt");
             }) : null;
         var started = Stopwatch.GetTimestamp();
         var summary = new ConductorBatchLoop(operatorIntents: intents,
@@ -152,18 +160,40 @@ internal static class CompletionBuildOperatorHost
                 maxDuration: action == "renewal" ? TimeSpan.Zero : null,
                 onlyGoalId: action == "start" ? f.Goal : null,
                 persistGoalTick: (k, _) => f.Save(k), quiet: true,
-                onTick: tick => f.Record("tick", new { action, tick.Tick, elapsedMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds }));
+                onTick: tick =>
+                {
+                    f.Record("tick", new { action, tick.Tick, elapsedMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds });
+                    if (action != "successor") return;
+
+                    Require(tick.Tick > 0, "Renewal successor did not complete a production tick.");
+                    f.Save(kernel);
+                    f.Record("successor-tick-persisted", new { tick.Tick });
+                    using var renewed = EventWaitHandle.OpenExisting(f.GateToken + "-renewed");
+                    renewed.Set();
+                });
         // A renewed successor has checkpointed newer state; the predecessor must not overwrite it.
         if (action != "renewal") f.Save(kernel);
         f.Record("loop-exit", new { action, elapsedMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds, summary });
+        if (action == "stop")
+            Require(summary is { StopRequested: true, StopReason: "stop-file" } && File.Exists(f.Stop),
+                "Production loop did not stop on the stop file and leave the stop request in place.");
         if (action == "renewal") Require(summary.Handoff?.Started == true, "Production renewal failed to transfer authority.");
         else Record(f, kernel, action);
-        if (action == "successor")
-        {
-            using var renewed = EventWaitHandle.OpenExisting(f.GateToken + "-renewed");
-            renewed.Set();
-        }
         return 0;
+    }
+
+    private static bool HasPersistedSuccessorTick(CompletionBuildOperatorRepository f, int successorPid)
+    {
+        foreach (var line in File.ReadLines(f.Receipts))
+        {
+            using var document = JsonDocument.Parse(line);
+            var receipt = document.RootElement;
+            if (receipt.GetProperty("kind").GetString() == "successor-tick-persisted" &&
+                receipt.GetProperty("pid").GetInt32() == successorPid &&
+                receipt.GetProperty("payload").GetProperty("Tick").GetInt32() > 0)
+                return true;
+        }
+        return false;
     }
 
     private static Exception Forbidden() => new InvalidOperationException("Scenario tried to dispatch a worker, gate, rebase or landing.");
