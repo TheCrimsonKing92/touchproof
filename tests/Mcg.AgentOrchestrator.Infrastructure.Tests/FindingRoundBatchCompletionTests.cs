@@ -9,7 +9,9 @@ using static ConductorDriverTests;
 // Parallel-safe: synthetic workers, goal-local state and unique temporary roots. No worker is launched.
 public sealed class FindingRoundBatchCompletionTests
 {
-    [Theory(Timeout = 30_000)]
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(false)]
     [InlineData(true)]
@@ -53,7 +55,7 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.DoesNotContain(scenario.Goal.Tasks, task => task.LastProcess is { IsRunning: true });
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void TerminalFailure_SettlesUnavailableAndDrainsLaterRequests()
     {
@@ -77,7 +79,7 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Equal(0, scenario.ProcessStarts);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task ConcurrentClose_AdmitsOneRetryAndSurvivesSnapshot()
     {
@@ -188,7 +190,7 @@ public sealed class FindingRoundBatchCompletionTests
                     sourceBlocker ? FindingCategory.Correctness : FindingCategory.TestCoverage, classes: ["AlphaTests"]),
                 EvidenceFindingWithRequest("Second request", "second", project: "Core.Tests", classes: ["BetaTests"]) with { Severity = FindingSeverity.Advisory },
                 EvidenceFindingWithRequest("Third request", "third", classes: ["FullyQualifiedName~GammaTests.Case&Category!=Slow"]) with { Severity = FindingSeverity.Advisory }];
-            DispatchTask(Kernel, Goal, Tester, baseCommit: Candidate);
+            DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: _root, baseCommit: Candidate);
             var stdout = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
                 "tests: deferred - acceptance owns execution", "commit: none", "blockers: none",
                 $"findings: {JsonSerializer.Serialize(Findings)}", "touched_anchors: []", "verdict: needs-work",

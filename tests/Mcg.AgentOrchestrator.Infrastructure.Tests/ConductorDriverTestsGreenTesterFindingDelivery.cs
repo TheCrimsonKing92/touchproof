@@ -8,7 +8,9 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsGreenTesterFindingDelivery
 {
-    [Fact(Timeout = 30_000)]
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void GreenDeveloperFindingRunsQueuedRequestAndRoutesTester()
     {

@@ -23,8 +23,14 @@ internal static class FindingRoundBatchCoordinator
         return true;
     }
 
-    internal static ConductorAdvanceOutcome.Held ClosedHold(GoalLifecycleState state) =>
-        new(state, "Finding batch closure was already applied or its identity changed.");
+    internal static ConductorAdvanceOutcome.Held ClosedHold(GoalLifecycleState state, FailedGoalRecoveryIdentity identity)
+    {
+        const string reason = "Finding batch closure was already applied or its identity changed.";
+        return new(state, reason)
+        {
+            Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(identity, reason)
+        };
+    }
 
     private static bool PolicySelects(ConductorDriver driver, Goal goal, ConductorAutonomyPolicy policy,
         FailedGoalFindingObservation selection)

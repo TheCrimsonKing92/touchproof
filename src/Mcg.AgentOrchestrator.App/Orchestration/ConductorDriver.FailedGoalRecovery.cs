@@ -121,7 +121,7 @@ internal sealed partial class ConductorDriver
             var escalated = FindingRoundBatchCoordinator.ApplyEffect(this, goal, verifyingFindingObservation?.BatchClosure,
                 () => IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _),
                 () => Escalate(goal, goalPrefix, policy, state, SandboxPreparationStartStatus.EscalationReason(goal, decision.Reason, _recordTaskNote)));
-            if (escalated is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state));
+            if (escalated is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state, decision.Identity));
             return escalated with
             {
                 Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
@@ -149,7 +149,7 @@ internal sealed partial class ConductorDriver
             () => FailedGoalRetryApplicationExecutor.Apply(goal.Id, targetTaskId, decision,
                 () => BuildCriterionRetryFeedback(goal, targetTaskId, decision),
                 _recordTaskNote, _recordCriterionRetryFeedback, _retryTask));
-        if (!application.Applied && application.Conflict is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state));
+        if (!application.Applied && application.Conflict is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state, decision.Identity));
         if (application.Conflict is { } conflictMessage)
         {
             var conflictReason = $"ACTIONABLE_CANDIDATE_RED_LIFECYCLE_CONFLICT: {decision.Reason} " +
