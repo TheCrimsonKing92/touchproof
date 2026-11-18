@@ -111,13 +111,21 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.Throws<InvalidOperationException>(() => driver.ResolveAttemptEvidenceTarget(fixture.Goal, replay));
     }
 
-    [Fact]
-    public void Request_MixedRepositories_ClosesHomeBatchWithRepositoryExecutionProvenance()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Request_MixedRepositories_ClosesHomeBatchWithRepositoryExecutionProvenance(bool cappedSibling)
     {
         using var fixture = new Fixture();
         FailReviewerNeedsWork(fixture.Kernel, fixture.Goal, fixture.Reviewer, "Need repository evidence", findings:
             [Finding("home", new([new("Sample.Tests", "HomeTests")])),
              Finding("keyed", new([new("./record", "TestReadInvalidFixtures")], Repository: "crosswalk"))]);
+        if (cappedSibling)
+        {
+            for (var retry = 0; retry < 2; retry++)
+                fixture.Goal.Append(new(fixture.Goal.Id, fixture.Reviewer.Id, ProgressKind.TaskRetried,
+                    $"finding evidence-on-demand: candidate_sha={fixture.HomeHead}; finding_ids=keyed;", DateTimeOffset.UtcNow));
+        }
         var homeCalls = new List<string>();
         var receipts = new List<FindingEvidenceReceipt>();
         var driver = fixture.Driver(receipts, homeCalls, recordBatchAccounting: true);
@@ -137,7 +145,10 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
 
         Assert.True(driver.TryBuildFindingEvidenceRequest(fixture.Goal, fixture.Reviewer, ConductorAutonomyPolicy.Permissive, out var drained));
         Assert.NotEqual(FailedGoalFindingObservationKind.FindingEvidencePending, drained.Kind);
-        Assert.NotNull(drained.TargetTaskId);
+        if (cappedSibling)
+            Assert.Equal(FailedGoalFindingObservationKind.FindingRetryCapReached, drained.Kind);
+        else
+            Assert.NotNull(drained.TargetTaskId);
         var closure = Assert.IsType<FindingEvidenceBatchClosure>(drained.BatchClosure);
         Assert.Equal(identity, closure.Identity);
         Assert.Equal(fixture.HomeHead, closure.Identity.CandidateSha);
@@ -158,6 +169,8 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.All(keyed.Arms!, arm => Assert.Equal(fixture.SecondaryHead, arm.Sha));
         Assert.All(FindingRoundBatchAccounting.Read(fixture.Goal, identity), item => Assert.Equal(identity.Key, item.BatchKey));
         Assert.Empty(FindingRoundBatchAccounting.Read(fixture.Goal, identity with { CandidateSha = fixture.SecondaryHead }));
+
+        if (cappedSibling) return;
 
         var retries = 0;
         string? Retry()
@@ -440,6 +453,33 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.True(FindingRoundBatchAccounting.IsClosed(restored, identity));
         Assert.Equal(1, FindingRoundBatchAccounting.Summarize(restored, restored.Tasks.Single(task => task.Id == fixture.Reviewer.Id),
             identity, "restored").Deferred);
+    }
+
+    [Fact]
+    public void Reviewer_DeferredMembersAtRetryCap_AdmitOneClosureAcrossReplay()
+    {
+        using var fixture = new Fixture();
+        var source = new ReviewFinding("source", ReviewFindingState.Open, new("src/Record.cs", "Read"),
+            "Repair source before running repository evidence", Category: FindingCategory.Correctness);
+        FailReviewerNeedsWork(fixture.Kernel, fixture.Goal, fixture.Reviewer, "Repair source", findings:
+            [source, Finding("deferred", new([new("./record", "TestReadInvalidFixtures")], Repository: "crosswalk"))],
+            reviewedCommit: fixture.HomeHead);
+        var driver = fixture.Driver([], [], recordBatchAccounting: true);
+        var policy = ConductorAutonomyPolicy.Permissive with { ReviewAutoRetryStopRound = 1 };
+        Assert.True(ReviewRetryCapReceipt.Create(fixture.Goal, policy.ReviewAutoRetryStopRound).IsAtConsecutiveCap);
+        Assert.True(driver.TryObserveVerifyingFindingRecovery(fixture.Goal, policy, [], out var capped));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingRetryCapReached, capped.Kind);
+        Assert.Null(capped.TargetTaskId);
+        var closure = Assert.IsType<FindingEvidenceBatchClosure>(capped.BatchClosure);
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closure.Accounting)!;
+        Assert.Equal(1, summary.BatchSize);
+        Assert.Equal(1, summary.Deferred);
+        Assert.Contains("FindingRetryCapReached", summary.RoutingReason);
+        Assert.True(FindingRoundBatchCoordinator.TryApply(driver, fixture.Goal, closure, () => true, () => true));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot()).GetGoal(fixture.Goal.Id);
+        Assert.False(FindingEvidenceBatchClosureAdmission.TryApply(restored, closure, () => true,
+            () => throw new InvalidOperationException("The capped batch was admitted twice.")));
     }
 
     [Fact]

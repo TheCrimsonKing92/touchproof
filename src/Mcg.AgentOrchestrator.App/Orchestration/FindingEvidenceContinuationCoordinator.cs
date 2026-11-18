@@ -54,7 +54,8 @@ internal static class FindingEvidenceContinuationCoordinator
         {
             if (goal.Tasks.Any(task => DispatchReadinessRules.IsEarlierSdlcStageOf(task.RequiredRole, reviewer.RequiredRole) &&
                     task.Status != WorkTaskStatus.Completed)) continue;
-            if (!TrySelectFindingEvidenceContinuation(driver, goal, reviewer, out var continuation, out _)) continue;
+            if (!TrySelectFindingEvidenceContinuation(driver, goal, reviewer, out var continuation, out _) ||
+                !CanOfferBeforeBatchObservation(driver, goal, reviewer, continuation!)) continue;
             var cap = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
             if (cap.Round >= policy.ReviewAutoRetryStopRound || cap.LifetimeRound >= cap.LifetimeBackstop)
                 return false;
@@ -65,6 +66,19 @@ internal static class FindingEvidenceContinuationCoordinator
             return true;
         }
         return false;
+    }
+
+    private static bool CanOfferBeforeBatchObservation(ConductorDriver driver, Goal goal, TaskSpec reviewer,
+        FindingEvidenceReviewContinuation continuation)
+    {
+        var identity = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer);
+        // An existing batch must close through its own observation and admission path.
+        if (identity is not null && (FindingRoundBatchAccounting.HasOpenBatch(goal, identity) ||
+            FindingRoundBatchAccounting.IsClosed(goal, identity))) return false;
+        var selectedIds = continuation.Selections.Select(selection => selection.FindingId).ToHashSet(StringComparer.Ordinal);
+        return FindingRoundBatchAccounting.Members((reviewer.LastVerification?.MergedReviewFindings ?? [])
+                .Where(finding => finding.State == ReviewFindingState.Open))
+            .All(member => member.FindingIds.Any(selectedIds.Contains));
     }
 
     internal static bool FindingEvidenceContinuationInvalid(ConductorDriver driver, Goal goal, TaskSpec task) =>
@@ -116,6 +130,7 @@ internal static class FindingEvidenceContinuationCoordinator
         foreach (var task in ReadyCandidateTasks(goal).Where(task => task.RequiredRole == AgentRole.Reviewer))
         {
             if (!TrySelectFindingEvidenceContinuation(driver, goal, task, out var continuation, out _) ||
+                !CanOfferBeforeBatchObservation(driver, goal, task, continuation!) ||
                 task.FindingEvidenceReviewContinuation?.DecisionKey == continuation!.DecisionKey &&
                     task.PendingRetryCause == RetryCause.NewTestFinding ||
                 task.DispatchHistory.Any(dispatch => dispatch.FindingEvidenceReviewContinuation?.DecisionKey == continuation.DecisionKey)) continue;

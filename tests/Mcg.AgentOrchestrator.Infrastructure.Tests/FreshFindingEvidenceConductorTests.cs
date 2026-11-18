@@ -4,6 +4,36 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 
 public sealed class FreshFindingEvidenceConductorTests
 {
+    [Fact]
+    public void QualifiedContinuation_WaitsForDistinctAdvisoryRequests()
+    {
+        using var fixture = new FreshFindingEvidenceFixture(retryReview: false, advisoryReviewSiblings: true);
+        fixture.Attach(fixture.Receipt());
+        Assert.True(fixture.Select(out var continuation, out var diagnostic), diagnostic);
+        Assert.Equal(FreshFindingEvidenceFixture.FindingId, Assert.Single(continuation!.Selections).FindingId);
+        var executions = new List<string>();
+        void Run(string request)
+        {
+            Assert.Equal(0, fixture.Launches);
+            Assert.Null(fixture.Reviewer.FindingEvidenceReviewContinuation);
+            executions.Add(request);
+        }
+
+        var first = fixture.Driver(Run).AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome);
+        Assert.Contains("OtherTests", Assert.Single(executions));
+        Assert.Empty(fixture.Causes);
+        Assert.Equal(0, fixture.Launches);
+
+        fixture.Reload();
+        fixture.Driver(Run).AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(2, executions.Count);
+        Assert.Contains("ThirdTests", executions[1]);
+        Assert.Equal(1, fixture.Launches);
+        Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.Causes));
+        Assert.Single(fixture.Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;")));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

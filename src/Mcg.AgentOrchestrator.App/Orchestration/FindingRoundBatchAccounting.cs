@@ -48,12 +48,21 @@ internal static class FindingRoundBatchAccounting
             Record(goal, identity, new(identity.Key, "member", member.RequestIdentity, member.FindingIds), record);
     }
 
-    internal static bool HasOpenBatch(Goal goal, FindingEvidenceBatchIdentity identity) =>
-        Read(goal, identity).Any(item => item.Kind == "member") && !IsClosed(goal, identity);
+    internal static bool HasOpenBatch(Goal goal, FindingEvidenceBatchIdentity identity)
+    {
+        lock (goal)
+            return Read(goal, identity).Any(item => item.Kind == "member") && !IsClosed(goal, identity);
+    }
 
-    internal static bool IsClosed(Goal goal, FindingEvidenceBatchIdentity identity) => goal.Timeline.Any(item =>
-            item.TaskId == identity.RequestingTaskId && item.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
-            item.Message.StartsWith($"finding-evidence batch-closed; batch_key={identity.Key};", StringComparison.Ordinal));
+    internal static bool IsClosed(Goal goal, FindingEvidenceBatchIdentity identity)
+    {
+        // Admission stages a marker that can still be rolled back if its effect fails.
+        var marker = $"finding-evidence batch-closed; batch_key={identity.Key};";
+        lock (goal)
+            return goal.Timeline.Any(item =>
+                item.TaskId == identity.RequestingTaskId && item.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+                item.Message.StartsWith(marker, StringComparison.Ordinal));
+    }
 
     internal static Observation? RequiredUnavailable(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity)
     {

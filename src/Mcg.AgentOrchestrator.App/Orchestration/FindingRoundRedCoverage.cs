@@ -13,6 +13,8 @@ internal static class FindingRoundRedCoverage
 {
     internal const string Reason = "redundant-candidate-red";
 
+    internal sealed record Delivery(string CompletedReceiptId, IReadOnlyList<ReviewFinding> Findings, IReadOnlyList<string> ReceiptIds);
+
     // A completed request belongs to the round scheduler. Cross-round receipt reuse would
     // otherwise escalate its non-actionable red again before the next batch can run.
     internal static bool HasCompletedRedRequest(
@@ -33,7 +35,7 @@ internal static class FindingRoundRedCoverage
         Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
         Action<GoalId, TaskId, string> recordRequest, string batchCandidateSha, string batchBasis,
-        ConductorAutonomyPolicy? policy = null)
+        ConductorAutonomyPolicy? policy, FailedGoalFindingObservation? reusedRedDecision, Action<Delivery> observeDelivery)
     {
         var settled = FindingRoundBatchSchedule.Plan(
             plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
@@ -50,6 +52,10 @@ internal static class FindingRoundRedCoverage
         coverage.RecordSkips(goal, task, candidateSha, fingerprint, basis, recordDispositions, recordOutcome, recordRequest);
         foreach (var item in coverage.Skipped)
             FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "covered", item.Receipts[0].ReceiptId);
+        var delivery = new Delivery(receipt.ReceiptId,
+            runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
+            plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Append(receipt.ReceiptId).Distinct(StringComparer.Ordinal).ToArray());
+        if (reusedRedDecision is null) observeDelivery(delivery);
         if (coverage.Remaining.Count > 0)
             return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence completed; another distinct request from the same finding round remains pending: " +
@@ -57,9 +63,8 @@ internal static class FindingRoundRedCoverage
         if (settled.RequiredCap(goal, task) is { } unavailable)
             return FindingRoundBatchSchedule.BuildRunCapDecision(goal, task, unavailable.Batch, unavailable.Count,
                 unavailable.ReceiptId, candidateSha, fingerprint, recordRequest);
-        return driver.BuildReceiptClosureOrDeliveryRetry(goal, task, batchCandidateSha,
-                runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
-                plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Append(receipt.ReceiptId).Distinct(StringComparer.Ordinal).ToArray(),
+        return reusedRedDecision ?? driver.BuildReceiptClosureOrDeliveryRetry(goal, task, batchCandidateSha,
+                delivery.Findings, delivery.ReceiptIds,
                 "Focused evidence completed and its receipt was attached to the requesting finding." +
                 (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence) + "; " + coverage.Evidence, policy);
     }

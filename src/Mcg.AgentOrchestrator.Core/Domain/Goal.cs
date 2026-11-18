@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public enum SourceBacklogCoverage { Full, Slice }
@@ -14,7 +16,7 @@ public sealed class Goal
     public const int OperatorAcceptanceRegateCap = 3;
 
     private readonly List<TaskSpec> _tasks;
-    private readonly List<ProgressEvent> _timeline = [];
+    private ImmutableList<ProgressEvent> _timeline = [];
     private readonly List<GoalBriefVersion> _briefVersions = [];
     private readonly List<RefinedSpecVersion> _refinedSpecVersions = [];
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
@@ -138,7 +140,7 @@ public sealed class Goal
 
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
 
-    public IReadOnlyList<ProgressEvent> Timeline => _timeline;
+    public IReadOnlyList<ProgressEvent> Timeline => Volatile.Read(ref _timeline);
 
     public ProgressEvent? LatestTaskRetryAfterAcceptanceFailure(TaskId taskId)
     {
@@ -234,13 +236,13 @@ public sealed class Goal
         var progress = new ProgressEvent(Id, null, ProgressKind.GoalPolicyDecision, reason, delivery.DeliveredAt);
         DeliveredForReview = delivery;
         CurrentHold = new GoalHoldState(GoalHoldState.BuildIdentity("Verified", reason), "Verified", reason, delivery.DeliveredAt);
-        _timeline.Add(progress);
+        Append(progress);
         try { writeEvent(progress); }
         catch
         {
             DeliveredForReview = previousDelivery;
             CurrentHold = previousHold;
-            _timeline.RemoveAt(_timeline.Count - 1);
+            RemoveStagedProgress(progress);
             throw;
         }
     }
@@ -1362,8 +1364,12 @@ public sealed class Goal
                 snapshot.StalledAt);
     }
 
-    internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
-    internal void RemoveStagedProgress(ProgressEvent progressEvent) => _timeline.Remove(progressEvent);
+    internal void Append(ProgressEvent progressEvent) =>
+        ImmutableInterlocked.Update(ref _timeline, timeline => timeline.Add(progressEvent));
+
+    internal void RemoveStagedProgress(ProgressEvent progressEvent) =>
+        ImmutableInterlocked.Update(ref _timeline, timeline =>
+            timeline.Remove(progressEvent, ReferenceEqualityComparer.Instance));
 
     internal GoalBriefVersion ReviseBrief(string newBrief, string? reason, DateTimeOffset recordedAt)
     {

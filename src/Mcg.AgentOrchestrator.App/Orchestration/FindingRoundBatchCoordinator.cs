@@ -85,15 +85,6 @@ internal static class FindingRoundBatchCoordinator
         var decision = FailedGoalRecoveryPolicy.Evaluate(facts);
         return decision.Action == FailedGoalRecoveryAction.FindingRetry && decision.Identity.TaskId == selection.TargetTaskId;
     }
-    internal static T? ApplyEffect<T>(ConductorDriver driver, Goal goal, FindingEvidenceBatchClosure? closure,
-        Func<bool> isCurrent, Func<T> effect) where T : class
-    {
-        if (closure is null) return effect();
-        T? result = null;
-        TryApply(driver, goal, closure, isCurrent, () => { result = effect(); return true; });
-        return result;
-    }
-
     internal static (bool Applied, string? Conflict) ApplyRetry(ConductorDriver driver, Goal goal,
         FindingEvidenceBatchClosure? closure, Func<bool> isCurrent, Func<string?> retry)
     {
@@ -275,7 +266,9 @@ internal static class FindingRoundBatchCoordinator
             decision = FailedGoalFindingObservation.None;
             return false;
         }
-        var handled = driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, execution, out decision);
+        FindingRoundRedCoverage.Delivery? completedDelivery = null;
+        var handled = driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, execution,
+            delivery => completedDelivery = delivery, out decision);
         if (identity is null) return handled;
         // Deterministic receipt closure records its summary atomically with the kernel action.
         if (FindingRoundBatchAccounting.IsClosed(goal, identity))
@@ -312,6 +305,14 @@ internal static class FindingRoundBatchCoordinator
                 handled = true;
             }
         }
+        if (settlement.IsSettled &&
+            (decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending ||
+                decision is { EvidenceContinuation: not null }) &&
+            ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, task, policy, out var cap))
+        {
+            decision = cap;
+            handled = true;
+        }
         if (!handled) return false;
 
         if (!settlement.IsSettled)
@@ -328,8 +329,11 @@ internal static class FindingRoundBatchCoordinator
         {
             // A passing receipt plus the production interpretation route is an eligibility witness.
             // Cases needing closure, continuation or policy information we did not evaluate stay unknown.
+            var witnessed = FindingRoundBatchAccounting.Read(goal, identity).Where(item => item.Kind == "suppressed-selection")
+                .Select(item => item.ReceiptId).ToHashSet(StringComparer.Ordinal);
             var receipts = task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
-                .Where(receipt => execution.Matches(receipt, identity)).DistinctBy(receipt => receipt.ReceiptId);
+                .Where(receipt => !witnessed.Contains(receipt.ReceiptId) && execution.Matches(receipt, identity))
+                .DistinctBy(receipt => receipt.ReceiptId);
             foreach (var receipt in receipts)
             {
                 // These conditions prove ineligibility; they are zero, not unknown savings.
@@ -360,8 +364,9 @@ internal static class FindingRoundBatchCoordinator
                 var canDeliverToReviewer = task.RequiredRole == AgentRole.Reviewer &&
                     !ConductorDriver.UsesQualifiedReviewerContinuation(goal, task) &&
                     receipt is { Accepted: true, Passed: true } &&
+                    completedDelivery is { } delivery && delivery.CompletedReceiptId == receipt.ReceiptId &&
                     PolicySelects(driver, goal, policy, ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(
-                        goal, task, identity.CandidateSha, findings, [receipt.ReceiptId], "Focused evidence completed."));
+                        goal, task, identity.CandidateSha, delivery.Findings, delivery.ReceiptIds, "Focused evidence completed."));
                 var role = canInterpret ? AgentRole.Tester : canRepair ? AgentRole.Developer :
                     canDeliverToReviewer ? AgentRole.Reviewer : (AgentRole?)null;
                 var target = canRepair ? developer!.Id : task.Id;

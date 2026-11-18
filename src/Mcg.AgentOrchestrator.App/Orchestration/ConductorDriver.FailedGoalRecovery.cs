@@ -118,19 +118,27 @@ internal sealed partial class ConductorDriver
             if (decision.DiscriminatingEvidence == "failed-terminal-fallthrough" && goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed) is { } tester &&
                 _getPreReviewEvidenceContext(goal).CandidateSha is { } candidate && AttributedFailureDeveloperRoute.Decide(goal, AttributedFailureDeveloperRoute.ReadTesterReceipt(goal, tester, candidate), candidate) is { IsRoute: true } route)
                 return RouteAttributedFailure(goal, goalPrefix, policy, route);
-            var escalated = FindingRoundBatchCoordinator.ApplyEffect(this, goal, verifyingFindingObservation?.BatchClosure,
-                () => IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _),
-                () => Escalate(goal, goalPrefix, policy, state, SandboxPreparationStartStatus.EscalationReason(goal, decision.Reason, _recordTaskNote)));
-            if (escalated is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state, decision.Identity));
-            return escalated with
+            var reason = SandboxPreparationStartStatus.EscalationReason(goal, decision.Reason, _recordTaskNote);
+            if (verifyingFindingObservation?.BatchClosure is { } closure)
             {
-                Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
+                LandingEscalationWriteResult? delivery = null;
+                if (!FindingRoundBatchCoordinator.TryApply(this, goal, closure,
+                    () => IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _),
+                    () => (delivery = WriteEscalation(goal, state, reason)).Delivered))
                 {
-                    Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision),
-                    Failure = decision.Reason == facts.TerminalEscalationReason
-                        ? ConductorOutcomeText.TerminalFailure(goal, state) : null
+                    var hold = delivery is null ? FindingRoundBatchCoordinator.ClosedHold(state, decision.Identity)
+                        : new ConductorAdvanceOutcome.Held(state,
+                            $"Finding batch escalation delivery remains pending (JSON: {delivery.JsonOutcome}, collaboration: {delivery.CollaborationOutcome}).");
+                    return MakeResult(goal.Id.Value, goalPrefix, policy, hold);
                 }
-            };
+            }
+            else RecordEscalation(goal, state, reason);
+            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(state, reason)
+            {
+                Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision),
+                Failure = decision.Reason == facts.TerminalEscalationReason
+                    ? ConductorOutcomeText.TerminalFailure(goal, state) : null
+            });
         }
         if (decision.Backoff > TimeSpan.Zero)
             _emptyOutputBackoffDelay(decision.Backoff);
@@ -143,12 +151,15 @@ internal sealed partial class ConductorDriver
         }
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var targetTaskId = SandboxPreparationStartStatus.RecoveryTarget(goal, decision, _recordTaskNote);
-        FindingEvidenceContinuationCoordinator.RecordObservation(this, goal, targetTaskId, decision, verifyingFindingObservation);
         var application = FindingRoundBatchCoordinator.ApplyRetry(this, goal, verifyingFindingObservation?.BatchClosure,
             () => IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _),
-            () => FailedGoalRetryApplicationExecutor.Apply(goal.Id, targetTaskId, decision,
-                () => BuildCriterionRetryFeedback(goal, targetTaskId, decision),
-                _recordTaskNote, _recordCriterionRetryFeedback, _retryTask));
+            () =>
+            {
+                FindingEvidenceContinuationCoordinator.RecordObservation(this, goal, targetTaskId, decision, verifyingFindingObservation);
+                return FailedGoalRetryApplicationExecutor.Apply(goal.Id, targetTaskId, decision,
+                    () => BuildCriterionRetryFeedback(goal, targetTaskId, decision),
+                    _recordTaskNote, _recordCriterionRetryFeedback, _retryTask);
+            });
         if (!application.Applied && application.Conflict is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state, decision.Identity));
         if (application.Conflict is { } conflictMessage)
         {

@@ -139,6 +139,60 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Equal(0, scenario.ProcessStarts);
     }
 
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void FailedEscalationDelivery_LeavesBatchReplayable()
+    {
+        using var scenario = new Scenario(false, failure: "terminal");
+        scenario.EscalationResult = new(0, "lock-timeout", 0, "error");
+        for (var tick = 0; tick < 2; tick++)
+            scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+
+        var failed = scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(failed.Outcome);
+        Assert.Contains("escalation delivery remains pending", held.Reason);
+        Assert.Single(scenario.Escalations);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Message.StartsWith("finding-evidence batch-closed;"));
+
+        scenario.Restart();
+        scenario.EscalationResult = new(0, "lock-timeout", 0, "ok");
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Driver.AdvanceOnce(
+            scenario.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.Equal(2, scenario.Escalations.Count);
+        Assert.Equal(1, scenario.ClosingSummary().Unavailable);
+        scenario.Restart();
+        scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(2, scenario.Escalations.Count);
+        Assert.Equal(3, scenario.Runs.Count);
+        Assert.Empty(scenario.Retries);
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void FailedAttemptDispositionWrite_ReplaysBeforePublishingTaskReceipt()
+    {
+        using var scenario = new Scenario(false);
+        scenario.RefuseAttemptDispositionWrites = true;
+        Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester,
+            ConductorAutonomyPolicy.Permissive, out var failed));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed, failed.Kind);
+        Assert.True(scenario.RefusedDispositionWrites > 0);
+        Assert.Empty(scenario.Tester.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []));
+        Assert.Null(failed.BatchClosure);
+
+        scenario.Restart();
+        scenario.RefuseAttemptDispositionWrites = false;
+        Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester,
+            ConductorAutonomyPolicy.Permissive, out var replayed));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, replayed.Kind);
+        Assert.Single(scenario.Runs);
+        Assert.Single(scenario.Tester.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
+            .DistinctBy(receipt => receipt.ReceiptId));
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+    }
+
     [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
@@ -268,6 +322,8 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Empty(scenario.Escalations);
         var closure = Assert.IsType<FindingEvidenceBatchClosure>(observation.BatchClosure);
         Assert.Equal(scenario.Developer.Id, observation.TargetTaskId);
+        using var timeline = scenario.Goal.Timeline.GetEnumerator();
+        Assert.True(timeline.MoveNext());
         using var barrier = new Barrier(2);
         var applied = 0;
         async Task<bool> Close() => await Task.Run(() =>
@@ -284,9 +340,15 @@ public sealed class FindingRoundBatchCompletionTests
             });
         });
         var results = await Task.WhenAll(Close(), Close());
+        while (timeline.MoveNext())
+            Assert.NotEqual(ProgressKind.TaskRetried, timeline.Current.Kind);
         Assert.Single(results.Where(result => result));
         Assert.Equal(1, applied);
         Assert.Single(scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+        Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester,
+            ConductorAutonomyPolicy.Permissive, out var observedClosure));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, observedClosure.Kind);
+        Assert.Null(observedClosure.TargetTaskId);
         scenario.Restart();
         Assert.False(FindingEvidenceBatchClosureAdmission.TryApply(scenario.Goal, closure, () => true,
             () => throw new InvalidOperationException("A closed batch retried after restoration.")));
@@ -436,6 +498,9 @@ public sealed class FindingRoundBatchCompletionTests
         internal List<string> Runs { get; } = [];
         internal List<TaskId> Retries { get; } = [];
         internal List<string> Escalations { get; } = [];
+        internal LandingEscalationWriteResult EscalationResult { get; set; } = LandingEscalationWriteResult.CompletedWithoutExternalSinks;
+        internal bool RefuseAttemptDispositionWrites { get; set; }
+        internal int RefusedDispositionWrites { get; private set; }
         internal List<WorkerProfileDispatchResult> Prepared { get; } = [];
         internal int ProcessStarts { get; private set; }
         internal bool RecordBatchAccounting { get; set; } = true;
@@ -476,7 +541,9 @@ public sealed class FindingRoundBatchCompletionTests
             getLandingFileScopes: _ => [],
             getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),
             focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(_root,
-                TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
+                TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: new ConductEventLogWriter(Path.Combine(_root, "conduct.jsonl"),
+                    beforeRequiredEventDrain: RejectDispositionWrite)),
             runFocusedEvidence: (_, request) =>
             {
                 Runs.Add(request);
@@ -503,11 +570,25 @@ public sealed class FindingRoundBatchCompletionTests
                 return DispatchStartOutcome.Deferred("Preparation only; no process launcher configured.");
             },
             startRecordedDispatches: _ => { ProcessStarts++; throw new InvalidOperationException("Paid worker start prohibited."); },
-            writeEscalation: (_, _, message) => Escalations.Add(message),
+            writeEscalationWithResult: (_, _, message) =>
+            {
+                Escalations.Add(message);
+                return EscalationResult;
+            },
             recordFindingEvidenceRequest: Record,
             recordFindingEvidenceRun: (goal, task, message) => Kernel.RecordFindingEvidenceRun(goal, task, message),
             recordFindingEvidenceRequestDispositions: (goal, task, dispositions) => Kernel.RecordFindingEvidenceRequestDispositions(goal, task, dispositions),
             recordFindingEvidenceOutcome: (goal, task, id, outcome, receipt) => Kernel.RecordFindingEvidenceOutcome(goal, task, id, outcome, receipt));
+
+        private void RejectDispositionWrite()
+        {
+            var directory = Path.Combine(_root, Goal.Id.Value);
+            if (!RefuseAttemptDispositionWrites || !Directory.Exists(directory) ||
+                !Directory.EnumerateFiles(directory, "*.attempt.json").Any(path =>
+                    File.ReadAllText(path).Contains("\"focusedEvidenceReceiptId\": \"finding-evidence-", StringComparison.OrdinalIgnoreCase))) return;
+            RefusedDispositionWrites++;
+            throw new IOException("Injected failure writing the required disposition event.");
+        }
         internal FindingRoundBatchAccounting.Summary ClosingSummary()
         {
             var item = Assert.Single(Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));

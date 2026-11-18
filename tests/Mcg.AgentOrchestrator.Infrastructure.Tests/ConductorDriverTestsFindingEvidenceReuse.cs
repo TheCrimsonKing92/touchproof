@@ -285,8 +285,10 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         Assert.Equal(2, focusedRuns);
     }
 
-    [Xunit.Fact]
-    public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper(bool greenSibling)
     {
         const string candidateSha = "abc1234";
         const string failingTest =
@@ -306,14 +308,13 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         FocusedEvidenceRunResult RunEvidence(string request)
         {
             focusedRuns++;
-            return focusedRuns == 1
-                ? CandidateOnlyRedWithExecutedClasses(
-                    _artifactRoot,
-                    request,
-                    candidateSha,
-                    failingTest,
-                    ["ConductorDriverTestsFindingEvidenceReuse"])
-                : CandidateRedFindingEvidence(request, candidateSha, failingTest);
+            return focusedRuns switch
+            {
+                1 => CandidateOnlyRedWithExecutedClasses(_artifactRoot, request, candidateSha, failingTest,
+                    ["ConductorDriverTestsFindingEvidenceReuse"]),
+                2 => CandidateRedFindingEvidence(request, candidateSha, failingTest),
+                _ => RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha)
+            };
         }
 
         RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
@@ -333,7 +334,10 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
 
         PassVerification(kernel, goal, developer, hasCommittedChanges: false);
         kernel.RetryTask(goal.Id, tester.Id, "Replay the historical red receipt without changing the candidate.");
-        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        var sibling = EvidenceFindingWithRequest("An unrelated focused request is still pending.", id: "green-sibling",
+            category: FindingCategory.TestEvidence, project: "Core.Tests", classes: ["SiblingTests"])
+            with { Severity = FindingSeverity.Advisory };
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, greenSibling ? [finding, sibling] : [finding]);
         var replayDriver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
             runFocusedEvidence: (_, request) => RunEvidence(request),
@@ -352,7 +356,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
 
         replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(2, focusedRuns);
+        Assert.Equal(greenSibling ? 3 : 2, focusedRuns);
         Assert.Equal(developer.Id, retriedTaskId);
         Assert.Null(escalation);
     }
@@ -1398,7 +1402,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec tester,
-        ReviewFinding finding)
+        params ReviewFinding[] findings)
     {
         DispatchTask(kernel, goal, tester, "test");
         var output = string.Join(
@@ -1408,7 +1412,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             "commands: test",
             "tests: deferred - focused evidence requested",
             "blockers: exact-blocker - focused evidence requested",
-            $"findings: {System.Text.Json.JsonSerializer.Serialize(new[] { finding })}",
+            $"findings: {System.Text.Json.JsonSerializer.Serialize(findings)}",
             "touched_anchors: []",
             "model_fit: test/test - adequate - fixture - fixture",
             "skills: none",

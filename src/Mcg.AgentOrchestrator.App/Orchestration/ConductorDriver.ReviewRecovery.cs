@@ -239,7 +239,8 @@ internal sealed partial class ConductorDriver
                         outputArtifact,
                         triggeringTask.LastVerification?.MergedReviewFindings ?? [])
                     : BuildTesterReviewCapDecisionMessage(goal, triggeringTask, targetTask, receipt, trigger.Finding, outputArtifact));
-            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
+                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
             return true;
         }
 

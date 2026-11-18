@@ -1336,7 +1336,22 @@ internal sealed partial class ConductorDriver
         out FocusedEvidenceRunResult evidence,
         out ConductorParallelAcceptanceAttempt? evidenceAttempt,
         out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind,
-        ConductorParallelAcceptanceAttempt? existingAttempt = null)
+        ConductorParallelAcceptanceAttempt? existingAttempt = null) =>
+        TryReconcileFocusedEvidenceAttempt(goal, policy, request, candidateSha, source, requestContext,
+            out evidence, out evidenceAttempt, out decision, out attemptKind, existingAttempt, deferSuccessfulReconciliation: false);
+
+    private bool TryReconcileFocusedEvidenceAttempt(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        string request,
+        string? candidateSha,
+        string source,
+        ConductorFocusedEvidenceRequestContext? requestContext,
+        out FocusedEvidenceRunResult evidence,
+        out ConductorParallelAcceptanceAttempt? evidenceAttempt,
+        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind,
+        ConductorParallelAcceptanceAttempt? existingAttempt,
+        bool deferSuccessfulReconciliation)
     {
         evidence = null!;
         evidenceAttempt = null;
@@ -1390,9 +1405,9 @@ internal sealed partial class ConductorDriver
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"));
             return false;
         }
-        MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
         if (attemptDecision.Run?.Exception is { } backgroundFailure)
         {
+            MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
                 $"BACKGROUND_FOCUSED_EVIDENCE_FAILED: {source} focused evidence run failed. " +
@@ -1407,6 +1422,8 @@ internal sealed partial class ConductorDriver
             Summary: $"background {source} focused evidence {attemptDecision.Attempt.Outcome}: " +
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"),
             Checks: []);
+        if (!deferSuccessfulReconciliation || !CanDeferFindingEvidenceReconciliation(candidateSha!, evidence))
+            MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
         return true;
     }
 

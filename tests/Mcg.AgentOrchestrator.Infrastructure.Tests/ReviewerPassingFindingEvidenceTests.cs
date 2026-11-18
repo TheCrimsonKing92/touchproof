@@ -5,6 +5,29 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 // Parallel-safe: all I/O and state are scoped by the fixture; no child process is launched.
 public sealed class ReviewerPassingFindingEvidenceTests
 {
+    [Fact]
+    public void ConsumedBlockingReceipt_DrainsAdvisorySiblingBeforeCorrection()
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var consumed = ReviewerPassingFindingEvidenceFixture.CliFinding();
+        var advisory = ReviewerPassingFindingEvidenceFixture.CaptureFinding() with { Severity = FindingSeverity.Advisory };
+        fixture.Report([consumed]);
+        fixture.AdvanceToDecision();
+        Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
+        Assert.Single(fixture.Executions);
+
+        fixture.Report([consumed, advisory]);
+        fixture.Reload();
+        fixture.AdvanceToDecision();
+
+        Assert.Equal(2, fixture.Executions.Count);
+        Assert.Contains(advisory.EvidenceRequest!.Selections[0].TestClass, fixture.Executions[1]);
+        Assert.Equal(2, fixture.Retries.Count);
+        Assert.Equal(fixture.Developer.Id, fixture.Retries[1].Task);
+        Assert.Contains("REVIEWER_PASSING_EVIDENCE_CORRECTION", fixture.Retries[1].Feedback);
+        Assert.Equal(2, fixture.ReviewDispatches);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

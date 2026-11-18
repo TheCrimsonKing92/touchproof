@@ -292,7 +292,10 @@ internal sealed partial class ConductorDriver
             new ConductorAdvanceOutcome.Escalated(state, reason, kind));
     }
 
-    private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason)
+    private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason) =>
+        WriteEscalation(goal, state, reason);
+
+    private LandingEscalationWriteResult WriteEscalation(Goal goal, GoalLifecycleState state, string reason)
     {
         var escalationClock = Stopwatch.StartNew();
         var sinkResult = LandingEscalationWriteResult.Error;
@@ -310,6 +313,7 @@ internal sealed partial class ConductorDriver
                 $"json_ms={sinkResult.JsonElapsedMilliseconds} json={sinkResult.JsonOutcome} " +
                 $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome}");
         }
+        return sinkResult;
     }
 
     private static ConductorAdvanceResult MakeResult(
