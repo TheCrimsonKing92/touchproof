@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 
-// Parallel-safe: synthetic workers, goal-local state and unique temporary roots. No worker is launched.
+// Parallel-safe: synthetic workers, goal-local state and uniquely owned repository copies. No worker is launched.
 public sealed class FindingRoundBatchCompletionTests
 {
     private const int CrossTickHangFailsafeMilliseconds = 30_000;
@@ -18,12 +18,16 @@ public sealed class FindingRoundBatchCompletionTests
     public void StaggeredReceipts_DrainBeforeOneRoleSelection(bool sourceBlocker)
     {
         using var scenario = new Scenario(sourceBlocker);
+        Assert.Single(ReviewFindings.GetOpenBlockingFindings(scenario.Tester.LastVerification!.MergedReviewFindings!,
+            scenario.Goal.EffectiveAcceptanceCriteriaCorrections));
         for (var tick = 0; tick < 2; tick++)
         {
             var result = scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
             Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
             Assert.Equal(tick + 1, scenario.Runs.Count);
             Assert.Empty(scenario.Retries);
+            Assert.Empty(scenario.Prepared);
+            Assert.Equal(WorkTaskStatus.Failed, scenario.Tester.Status);
             Assert.Empty(DispatchReadinessRules.BuildReadyTaskParallelPlan(scenario.Goal).Batches);
             Assert.Empty(scenario.Prepare());
             scenario.Restart();
@@ -47,10 +51,11 @@ public sealed class FindingRoundBatchCompletionTests
                 Assert.NotNull(witness.ReceiptId);
                 Assert.Contains("interpretation route", witness.Eligibility!, StringComparison.Ordinal);
             });
-            var prepared = Assert.Single(scenario.Prepared);
-            Assert.Equal(scenario.Tester.Id, prepared.Task.Id);
-            Assert.True(File.Exists(prepared.PromptPath));
         }
+        var prepared = Assert.Single(scenario.Prepared);
+        Assert.Equal(sourceBlocker ? scenario.Developer.Id : scenario.Tester.Id, prepared.Task.Id);
+        Assert.True(File.Exists(prepared.PromptPath));
+        Assert.DoesNotContain(scenario.Prepared, item => item.Task.RequiredRole == AgentRole.Reviewer);
         Assert.Equal(0, scenario.ProcessStarts);
         Assert.DoesNotContain(scenario.Goal.Tasks, task => task.LastProcess is { IsRunning: true });
     }
@@ -169,12 +174,14 @@ public sealed class FindingRoundBatchCompletionTests
 
     private sealed class Scenario : IDisposable
     {
-        private const string Candidate = "abc1234";
-        private readonly string _root = ConductorDriverTests.CreateTempDirectory();
+        private readonly string _root = SeededGitRepositoryTemplate.CreateCopy();
+        private readonly string Candidate;
         private readonly bool _sourceBlocker;
         private readonly bool _rejectFirst;
         internal Scenario(bool sourceBlocker, bool rejectFirst = false)
         {
+            Assert.True(GitRevisionReader.Shared.TryResolve(_root, "HEAD", out var candidate));
+            Candidate = candidate;
             _sourceBlocker = sourceBlocker;
             _rejectFirst = rejectFirst;
             Kernel = new AgentOrchestratorKernel();
@@ -226,6 +233,8 @@ public sealed class FindingRoundBatchCompletionTests
                 _root, DateTimeOffset.UtcNow, sandboxOptions: new WorkerSandboxOptions(false, "fixture", "fixture"))).ToArray();
         }
         private ConductorDriver CreateDriver() => MakeDriver(
+            executionDirectory: _root,
+            getLandingFileScopes: _ => [],
             getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),
             focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(_root,
                 TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
@@ -233,7 +242,13 @@ public sealed class FindingRoundBatchCompletionTests
             {
                 Runs.Add(request);
                 if (_rejectFirst && Runs.Count == 1) return new(request, false, false, "Request unavailable", []);
-                if (_sourceBlocker) return CandidateRedFindingEvidence(request, Candidate, "Fixture.SharedSetupTests.SetupFails");
+                if (_sourceBlocker)
+                {
+                    // An unattributed failure leaves the source blocker open. A green baseline
+                    // would instead prove actionable RED and correctly supersede queued requests.
+                    var red = CandidateRedFindingEvidence(request, Candidate, "Fixture.SharedSetupTests.SetupFails");
+                    return red with { Arms = red.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray() };
+                }
                 var green = ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(_root, request, Candidate);
                 return green with { Arms = green.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray(), OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence };
             },
@@ -258,6 +273,6 @@ public sealed class FindingRoundBatchCompletionTests
             var item = Assert.Single(Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
             return JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(item.Message[(item.Message.IndexOf('{'))..])!;
         }
-        public void Dispose() => Directory.Delete(_root, recursive: true);
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
     }
 }

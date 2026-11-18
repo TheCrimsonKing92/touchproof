@@ -24,7 +24,7 @@ Collection: 2026-11-18T14:25:47.530470Z. Analysis source revision: `8d6408ac1f6f
 
 The `.scratch` paths are supplied evidence inputs, not a new durable store. The ledgers below preserve the resulting measurements and canonical metadata locators in this tracked report. Package identity: `ctxpkg-v1-sha256:2289278029e7392000e71491c5565777d80d00b06315d52eec9194ba13532c25`. Bound operator answers are readable in `.orchestrator-context/8c48b9ec5a3a40c5b32c6beffffe0b2d/authoritative/c20294d1c833450cbc2614429e732aa8/typed/goal/timeline.json` (`HumanInputReceived` records).
 
-**Fact:** All projected exit-code paths identify the Windows checkout `C:\Users\miles\vcs\mcg-agent-orchestrator`. This is environment **E1** in the ledgers. The machine name, executing binary/build revision, provider settings and execution topology are not supplied; a local coordinator path does not prove every child ran on that machine. Both populations are separate stores selected by [OwnedChildAttemptCoordinatorFactory.cs](../../src/Mcg.AgentOrchestrator.App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs), lines 23 and 36.
+**Fact:** All projected exit-code paths identify the same Windows checkout, recorded here as `${repository-root}`. This is environment **E1** in the ledgers. The machine name, executing binary/build revision, provider settings and execution topology are not supplied; a local coordinator path does not prove every child ran on that machine. Both populations are separate stores selected by [OwnedChildAttemptCoordinatorFactory.cs](../../src/Mcg.AgentOrchestrator.App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs), lines 23 and 36.
 
 | Coverage | Gate (G) | Focused (F) | Combined |
 | --- | ---: | ---: | ---: |
