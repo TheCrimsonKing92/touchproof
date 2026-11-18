@@ -44,9 +44,16 @@ internal sealed class SpecRefinerPrecedentStore
         string forkKind,
         CancellationToken cancellationToken = default)
     {
-        var all = await LoadAllAsync(cancellationToken);
-        return all.FirstOrDefault(p =>
-            string.Equals(p.ForkKind, forkKind, StringComparison.OrdinalIgnoreCase));
+        try
+        {
+            var all = await LoadAllAsync(cancellationToken);
+            return all.FirstOrDefault(p =>
+                string.Equals(p.ForkKind, forkKind, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (SpecRefinerPrecedentStoreReadException)
+        {
+            return null;
+        }
     }
 
     public async Task RecordPrecedentAsync(
@@ -75,16 +82,34 @@ internal sealed class SpecRefinerPrecedentStore
 
     private async Task<IReadOnlyList<SpecRefinerPrecedent>> LoadAllAsync(CancellationToken cancellationToken)
     {
-        if (!File.Exists(_filePath))
-            return [];
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             var json = await File.ReadAllTextAsync(_filePath, cancellationToken);
-            return JsonSerializer.Deserialize<List<SpecRefinerPrecedent>>(json, SerializerOptions) ?? [];
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(json))
+                return [];
+
+            var precedents = JsonSerializer.Deserialize<List<SpecRefinerPrecedent>>(json, SerializerOptions);
+            if (precedents is null || precedents.Any(p => p is null))
+                throw new JsonException("The precedent snapshot must contain a non-null array of entries.");
+            return precedents;
         }
-        catch (Exception)
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (FileNotFoundException)
         {
             return [];
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return [];
+        }
+        catch (Exception ex)
+        {
+            throw new SpecRefinerPrecedentStoreReadException(_filePath, ex);
         }
     }
 
@@ -96,6 +121,30 @@ internal sealed class SpecRefinerPrecedentStore
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
         var json = JsonSerializer.Serialize(precedents, SerializerOptions);
-        await File.WriteAllTextAsync(_filePath, json, cancellationToken);
+        var tmp = _filePath + ".tmp";
+        var bak = _filePath + ".bak";
+        try
+        {
+            await File.WriteAllTextAsync(tmp, json, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(_filePath))
+                File.Replace(tmp, _filePath, bak);
+            else
+                File.Move(tmp, _filePath);
+        }
+        catch
+        {
+            try
+            {
+                File.Delete(tmp);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+            throw;
+        }
     }
 }
