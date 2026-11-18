@@ -1682,7 +1682,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         measuredSweepWithCheckpointHolds: reconcileSweep,
                         reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                         detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                        recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(
+                        recoverInterruptedDispatches: loopKernel => new SupersededBriefRoundCanceller(loopReaper).CancelAndRequeueInterruptedDispatches(
                             loopKernel,
                             (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                                 context.ReloadKernel(),
@@ -1833,12 +1833,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchSweep,
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
-                    wk => watchReaper.RequeueInterruptedDispatches(
+                    wk => new SupersededBriefRoundCanceller(watchReaper).CancelAndRequeueInterruptedDispatches(
                         wk,
                         (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                             context.ReloadKernel(),
                             goalId,
-                            taskId)),
+                            taskId), onlyGoalId: context.CurrentGoal.Id),
                     (wk, goal) => new GoalDispatchOperations().RefreshDispatches(wk, goal, watchReaper),
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     providerHoldProbe: ProviderHoldStandaloneProbe.CreateDefault(context.Workspace, context.Agents,
