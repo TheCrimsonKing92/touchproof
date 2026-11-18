@@ -222,4 +222,4 @@ foreach ($ranking in @(@{ Kind = 'cost'; Values = $cost }, @{ Kind = 'failure'; 
     }
 }
 
-$rows | ConvertTo-Csv -NoTypeInformation
+$rows | ConvertTo-Csv
