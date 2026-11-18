@@ -12,7 +12,11 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
 
     public static IEnumerable<object[]> HistoryConsumers() =>
         new[] { AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer }
-            .SelectMany(role => new[] { new object[] { role, true }, new object[] { role, false } });
+            // Typed packages supply history to every role; legacy actionable retry feedback
+            // is delivered only to Developer, Tester and Reviewer.
+            .SelectMany(role => new[] { true, false }
+                .Where(typed => typed || role is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer)
+                .Select(typed => new object[] { role, typed }));
 
     [Xunit.Theory]
     [Xunit.MemberData(nameof(HistoryConsumers))]
@@ -106,6 +110,8 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
         var unproved = new ReviewFinding("history-unproved", ReviewFindingState.Resolved,
             new ReviewFindingLocation("src/Unproved.cs", "Unproved.Run"), "UNPROVED_DESCRIPTION: closure needs evidence.");
         RecordHistoryRound(fixture, fixture.Task, [reopened, unproved], 4, touched: [reopened.Location]);
+        fixture.Kernel.RetryTaskWithAuthoritativeFeedback(fixture.Goal.Id, fixture.Task.Id,
+            "Preserve every actionable finding and its evidence.", RetryCause.NewTestFinding, invalidateDownstream: false);
 
         var prepared = PrepareHistory(fixture, typed: true);
         var prompt = File.ReadAllText(prepared.PromptPath);
