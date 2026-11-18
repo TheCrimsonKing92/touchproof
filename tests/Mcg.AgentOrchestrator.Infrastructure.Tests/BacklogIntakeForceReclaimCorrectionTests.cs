@@ -32,7 +32,7 @@ public sealed class BacklogIntakeForceReclaimCorrectionTests : CliCommandTestBas
             Assert.Equal(recorded, facts.IsRecorded);
         });
         string[] command = ["backlog-intake", .. owners.Select(pair => pair.Item.Id),
-            "--force-reclaim", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"];
+            "--force-reclaim", "--create-goal", "--pipeline", "scout", "--backlog-coverage", "full"];
 
         var output = Execute(workspace, command);
 
@@ -91,7 +91,7 @@ public sealed class BacklogIntakeForceReclaimCorrectionTests : CliCommandTestBas
         var ids = correctionFirst ? new[] { item.Id, fresh.Id } : new[] { fresh.Id, item.Id };
 
         Execute(workspace, ["backlog-intake", .. ids, "--force-reclaim", "--create-goal",
-            "--pipeline", "five-role", "--backlog-coverage", "slice"]);
+            "--pipeline", "scout", "--backlog-coverage", "slice"]);
 
         var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
         Assert.Equal(3, restored.Goals.Count);
@@ -112,7 +112,7 @@ public sealed class BacklogIntakeForceReclaimCorrectionTests : CliCommandTestBas
         var (item, ownerId) = await PrepareOwner(workspace, "Keep ordinary mismatch refusal", false);
 
         var error = Assert.Throws<InvalidOperationException>(() => Execute(workspace,
-            ["backlog-intake", item.Id, "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "slice"]));
+            ["backlog-intake", item.Id, "--create-goal", "--pipeline", "scout", "--backlog-coverage", "slice"]));
 
         Assert.Contains("does not match the explicitly requested intake pipeline", error.Message, StringComparison.Ordinal);
         var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
