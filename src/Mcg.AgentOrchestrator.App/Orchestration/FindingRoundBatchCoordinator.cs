@@ -25,7 +25,8 @@ internal static class FindingRoundBatchCoordinator
         route = FailedGoalFindingObservation.Routed(FailedGoalFindingObservationKind.FindingRouteObserved,
             developer.Id, ConductorDriver.BuildFailedGoalAttemptIdentity(developer),
             $"FINDING_BATCH_DRAINED route=developer; candidate_sha={candidate}; receipt_ids={string.Join(',', receiptIds)}; " +
-            "An open source finding remains after the evidence batch settled.", null);
+            "An open source finding remains after the evidence batch settled.", null,
+            observedCause: RetryCause.NewSourceFinding);
         return true;
     }
 
@@ -187,7 +188,8 @@ internal static class FindingRoundBatchCoordinator
                         FindingCategory.SpecCompliance or FindingCategory.CodeQuality) &&
                     PolicySelects(driver, goal, policy, FailedGoalFindingObservation.Routed(
                         FailedGoalFindingObservationKind.FindingRouteObserved, developer!.Id,
-                        ConductorDriver.BuildFailedGoalAttemptIdentity(developer), "Open source finding after evidence receipt.", null));
+                        ConductorDriver.BuildFailedGoalAttemptIdentity(developer), "Open source finding after evidence receipt.", null,
+                        observedCause: RetryCause.NewSourceFinding));
                 var role = canInterpret ? AgentRole.Tester : canRepair ? AgentRole.Developer : (AgentRole?)null;
                 var target = canRepair ? developer!.Id : task.Id;
                 FindingRoundBatchAccounting.Record(goal, identity,
