@@ -296,14 +296,14 @@ internal sealed partial class ConductorDriver
         if (targetTask.RequiredRole == AgentRole.Developer)
             message = FindingStagnationRetryInstruction.Append(message,
                 FindingStagnationRecovery.ReadRoutedFindings(goal, triggeringTask));
-        observation = FailedGoalFindingObservation.Routed(
+        observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask, FailedGoalFindingObservation.Routed(
             FailedGoalFindingObservationKind.FindingRouteObserved,
             targetTask.Id,
             BuildFailedGoalAttemptIdentity(targetTask),
             InsertReviewBudgetResetMarker(message, ReviewRetryBudgetLedger.Evaluate(goal).ResetMarker),
             warning,
             route.RoundKind,
-            route.RetryCause);
+            route.RetryCause));
         observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
         return true;
     }

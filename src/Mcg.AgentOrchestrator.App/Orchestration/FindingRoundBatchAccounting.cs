@@ -13,9 +13,9 @@ internal static class FindingRoundBatchAccounting
     internal sealed record Summary(int BatchSize, int NewlyExecuted, int Covered, int Unavailable,
         int CoalescedSelectionCount, int TesterCallsAvoided, int ReviewerCallsAvoided,
         int UnknownSelections, int? PaidVerificationCallsAvoided, string RoutingReason, Observation[] EligibilityWitnesses,
-        int Superseded = 0)
+        int Superseded = 0, int Deferred = 0)
     {
-        internal bool IsSettled => NewlyExecuted + Covered + Unavailable + Superseded == BatchSize;
+        internal bool IsSettled => NewlyExecuted + Covered + Unavailable + Superseded + Deferred == BatchSize;
     }
     private const string Prefix = "finding-evidence batch-observation ";
 
@@ -63,6 +63,7 @@ internal static class FindingRoundBatchAccounting
         var covered = 0;
         var unavailable = 0;
         var superseded = 0;
+        var deferred = 0;
         foreach (var member in members)
         {
             var outcomes = observations.Where(item => item.FindingIds.Intersect(member.FindingIds).Any()).ToArray();
@@ -70,6 +71,7 @@ internal static class FindingRoundBatchAccounting
             else if (outcomes.Any(item => item.Kind == "executed")) executed++;
             else if (outcomes.Any(item => item.Kind == "covered")) covered++;
             else if (outcomes.Any(item => item.Kind == "superseded")) superseded++;
+            else if (outcomes.Any(item => item.Kind == "deferred")) deferred++;
         }
         var selections = observations.Where(item => item.Kind == "suppressed-selection").DistinctBy(item => item.Identity).ToArray();
         return new(members.Length, executed, covered, unavailable,
@@ -78,6 +80,6 @@ internal static class FindingRoundBatchAccounting
             selections.Count(item => item.Role == AgentRole.Reviewer),
             selections.Count(item => item.Role is null),
             selections.Any(item => item.Role is null) ? null : selections.Count(item => item.Role is AgentRole.Tester or AgentRole.Reviewer),
-            reason, selections, superseded);
+            reason, selections, superseded, deferred);
     }
 }

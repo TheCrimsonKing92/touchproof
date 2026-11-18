@@ -235,6 +235,11 @@ internal static class FindingRoundBatchCoordinator
                 "Finding batch closure was already applied; waiting for the routed owner.");
             return true;
         }
+        var deferredSummary = FindingRoundBatchAccounting.Summarize(goal, task, identity, "deferred-routing-check");
+        // Deferred requests require the existing review retry route, including its caps and owner selection.
+        // They settle current-candidate membership without claiming evidence coverage or unavailability.
+        if (deferredSummary is { IsSettled: true, Deferred: > 0, Unavailable: 0 } &&
+            (!handled || decision.TargetTaskId is not null)) return false;
         if (!handled && FindingRoundBatchAccounting.HasOpenBatch(goal, identity))
         {
             var summary = FindingRoundBatchAccounting.Summarize(goal, task, identity, "drain-check");
@@ -330,5 +335,34 @@ internal static class FindingRoundBatchCoordinator
                 decision = decision with { BatchClosure = new(identity, JsonSerializer.Serialize(summary)) };
         }
         return handled;
+    }
+
+    internal static void RecordDeferred(ConductorDriver driver,
+        Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions, Goal goal, TaskSpec task,
+        IReadOnlyList<ReviewFinding> findings, string? candidate, string round, string basis, string reason)
+    {
+        recordDispositions(goal.Id, task.Id,
+            findings.Select(finding => new FindingEvidenceRequestDisposition(finding.StableId,
+                ConductorDriver.BuildFindingEvidenceIdentity(finding.EvidenceRequest!), "deferred-next-candidate", reason,
+                candidate is not null ? FindingEvidenceRequestDecision.DeferredToNextCandidate
+                    : FindingEvidenceRequestDecision.CandidateUnavailable,
+                candidate, round, ExecutionBasisIdentity: basis)).ToArray());
+        var identity = new FindingEvidenceBatchIdentity(task.Id, candidate ?? "unavailable", round, basis);
+        foreach (var member in FindingRoundBatchAccounting.Members(findings))
+            FindingRoundBatchAccounting.Record(goal, identity,
+                new(identity.Key, "deferred", member.RequestIdentity, member.FindingIds), driver._recordFindingEvidenceRequest);
+    }
+
+    internal static FailedGoalFindingObservation AttachDeferredClosure(ConductorDriver driver, Goal goal,
+        TaskSpec task, FailedGoalFindingObservation decision)
+    {
+        var identity = Identity(driver, goal, task);
+        if (identity is null || decision.TargetTaskId is not { } target ||
+            !FindingRoundBatchAccounting.HasOpenBatch(goal, identity)) return decision;
+        var role = goal.Tasks.Single(candidate => candidate.Id == target).RequiredRole;
+        var summary = FindingRoundBatchAccounting.Summarize(goal, task, identity, role + ": " + decision.Evidence);
+        return summary is { IsSettled: true, Deferred: > 0, Unavailable: 0 }
+            ? decision with { BatchClosure = new(identity, JsonSerializer.Serialize(summary)) }
+            : decision;
     }
 }

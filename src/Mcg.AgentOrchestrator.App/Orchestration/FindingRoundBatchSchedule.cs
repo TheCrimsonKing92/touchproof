@@ -108,7 +108,7 @@ internal static class FindingRoundBatchSchedule
 
     internal static void RecordSuperseded(
         Goal goal, TaskSpec requestingTask, IEnumerable<FindingEvidenceBatch> batches,
-        string candidateSha, FindingEvidenceReceipt receipt,
+        string candidateSha, FindingEvidenceReceipt receipt, FindingEvidenceBatchIdentity batchIdentity,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
         Action<GoalId, TaskId, string> recordRequest)
     {
@@ -117,8 +117,6 @@ internal static class FindingRoundBatchSchedule
         foreach (var member in pending.Members)
         foreach (var finding in member.Findings)
         {
-            var batchIdentity = new FindingEvidenceBatchIdentity(requestingTask.Id, candidateSha,
-                receipt.FindingRoundFingerprint!, receipt.ExecutionBasisIdentity!);
             FindingRoundBatchAccounting.Record(goal, batchIdentity,
                 new(batchIdentity.Key, "superseded", member.Identity,
                     member.Findings.Select(item => item.StableId).ToArray(), receiptId), recordRequest);
