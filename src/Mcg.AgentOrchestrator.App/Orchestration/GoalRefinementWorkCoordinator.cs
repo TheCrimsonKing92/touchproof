@@ -26,6 +26,7 @@ internal static partial class GoalRefinementWorkCoordinator
 {
     internal const string OutboxKind = "goal-spec-refinement";
     internal const string CommandName = "goal-refinement-run";
+    internal const string RecoveryNextStep = "Next step: recover <goal> <note>";
     internal const string PendingPolicyReceipt =
         "spec_refinement outcome=pending owner=durable-outbox consumers_held=true researcher_allowed=true";
     private const int ReceiptVersion = 1;
@@ -84,6 +85,12 @@ internal static partial class GoalRefinementWorkCoordinator
 
     public static bool ResetFailedClaimEscalation(OrchestratorWorkspace workspace, GoalId goalId) =>
         SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Reset(goalId);
+
+    internal static (OrchestratorStateOutboxRequeueOutcome? Outcome, bool ClearedLaunchAttempt) RecoverFailedRefinement(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal) =>
+        SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal)
+            ? (ResetAfterBriefRevision(kernel, workspace, goal.Id), false)
+            : (null, ResetFailedClaimEscalation(workspace, goal.Id));
 
     public static OrchestratorStateOutboxRequeueOutcome ResetAfterBriefRevision(
         AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, GoalId goalId)
@@ -289,9 +296,12 @@ internal static partial class GoalRefinementWorkCoordinator
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    // The outbox stores this diagnostic on one line.
+                    var detail = SingleLine(ex.Message);
+                    if (!detail.EndsWith(RecoveryNextStep, StringComparison.Ordinal))
+                        detail += $" {RecoveryNextStep}";
                     throw new InvalidOperationException(
-                        $"SPEC_REFINEMENT_FAILED owner=durable-outbox phase={phase} " +
-                        $"detail={SingleLine(ex.Message)}",
+                        $"SPEC_REFINEMENT_FAILED owner=durable-outbox phase={phase} detail={detail}",
                         ex);
                 }
             },

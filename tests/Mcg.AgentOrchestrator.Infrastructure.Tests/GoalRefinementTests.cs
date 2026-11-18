@@ -33,6 +33,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains(CriterionEvidenceLifecycle.AtomicDeclarationRequired, failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Offending criterion: 'Unmatched model criterion'", failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("failed rule: criterion count.", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith("Next step: recover <goal> <note>", failure.Message, StringComparison.Ordinal);
         var failedState = await repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id));
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState!.Status);
         Xunit.Assert.Equal(failure.Message, failedState.Detail);
@@ -486,6 +487,43 @@ public sealed class GoalRefinementTests
             OrchestratorStateOutboxEnsureDisposition.Quarantined,
             (await repository.EnsureOutboxMessageAsync(replacement)).Disposition);
         Xunit.Assert.Equal(message.PayloadJson, (await repository.GetOutboxStateAsync(message.Id))!.Message.PayloadJson);
+    }
+
+    [Xunit.Fact]
+    public async Task RefinementFailureTextNamesRecover()
+    {
+        const string nextStep = "Next step: recover <goal> <note>";
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, ModelFunctionCatalog.Empty);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Fail refinement without a model-function binding");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        await repository.SaveAsync(kernel);
+        GoalRefinementWorkCoordinator.TryEnsurePendingOutbox(workspace, goal.Id);
+        var providers = new InMemoryModelProviderRegistry([]);
+
+        var failure = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GoalRefinementWorkCoordinator.ProcessAsync(repository, workspace, providers,
+                WorkerProfileCatalog.Default(), goal.Id));
+
+        var bindingFailure = Xunit.Assert.IsType<InvalidOperationException>(failure.InnerException);
+        Xunit.Assert.Contains("No model-function binding found", bindingFailure.Message, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith(Environment.NewLine + nextStep, bindingFailure.Message, StringComparison.Ordinal);
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_FAILED", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith(nextStep, failure.Message, StringComparison.Ordinal);
+        var failedState = await repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id));
+        Xunit.Assert.NotNull(failedState);
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState.Status);
+        Xunit.Assert.Equal(failure.Message, failedState.Detail);
+
+        kernel = await repository.LoadAsync();
+        goal = kernel.GetGoal(goal.Id);
+        Xunit.Assert.True(SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal));
+        var dispatchFailure = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_FAILED", dispatchFailure.Message, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith(Environment.NewLine + nextStep, dispatchFailure.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

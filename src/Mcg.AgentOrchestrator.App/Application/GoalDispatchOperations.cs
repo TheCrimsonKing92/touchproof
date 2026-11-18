@@ -795,8 +795,16 @@ internal sealed partial class GoalDispatchOperations
         static void ThrowFailed(GoalId goalId, string? detail)
         {
             var failure = string.IsNullOrWhiteSpace(detail) ? "last-executor-failed" : detail;
+            var hasFailurePrefix = failure.StartsWith("SPEC_REFINEMENT_FAILED", StringComparison.Ordinal);
+            const string inlineRecovery = " " + GoalRefinementWorkCoordinator.RecoveryNextStep;
+            var recoveryLine = Environment.NewLine + GoalRefinementWorkCoordinator.RecoveryNextStep;
+            if (failure.EndsWith(inlineRecovery, StringComparison.Ordinal))
+                failure = failure[..^inlineRecovery.Length] + recoveryLine;
+            else if (!hasFailurePrefix)
+                failure += recoveryLine;
+
             throw new InvalidOperationException(
-                failure.StartsWith("SPEC_REFINEMENT_FAILED", StringComparison.Ordinal)
+                hasFailurePrefix
                     ? $"SPEC_REFINEMENT_FAILED goal={goalId.Value} {failure["SPEC_REFINEMENT_FAILED".Length..].TrimStart()}"
                     : $"SPEC_REFINEMENT_FAILED goal={goalId.Value} owner=durable-outbox phase=executor detail={failure}");
         }
