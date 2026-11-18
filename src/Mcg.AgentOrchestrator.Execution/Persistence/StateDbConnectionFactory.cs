@@ -90,8 +90,10 @@ internal static class StateDbConnectionFactory
         }
     }
 
+    // Lowercase avoids the environment-variable prefix; SQLite collation names are case-insensitive,
+    // so databases whose indexes retain the uppercase spelling use the same registration.
     internal static void RegisterProfileIdentityCollation(SqliteConnection connection) =>
-        connection.CreateCollation("MCG_PROFILE_IDENTITY", StringComparer.OrdinalIgnoreCase.Compare);
+        connection.CreateCollation("mcg_profile_identity", StringComparer.OrdinalIgnoreCase.Compare);
 
     private static void NotifyConnectionOpenedForDiagnostics(SqliteConnection connection, string databasePath)
     {
