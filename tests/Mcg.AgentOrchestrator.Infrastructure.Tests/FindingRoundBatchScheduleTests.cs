@@ -24,7 +24,7 @@ public sealed class FindingRoundBatchScheduleTests
         Assert.Equal(new[] { union, subset }, plan.RedCovered.Select(pair => pair.Batch));
         Assert.All(plan.RedCovered, pair => Assert.Same(receipt, pair.Receipt));
         Assert.Equal(new[] { outside, otherProject }, plan.Executable);
-        Assert.Null(plan.Capped);
+        Assert.Empty(plan.Unavailable);
     }
 
     [Fact]
@@ -96,19 +96,17 @@ public sealed class FindingRoundBatchScheduleTests
 
         var before = Plan([batch, second], [], twoRuns);
         Assert.Equal(new[] { batch, second }, before.Executable);
-        Assert.Null(before.Capped);
+        Assert.Empty(before.Unavailable);
         var drained = Plan([batch, second], [], [.. twoRuns, Event(message)]);
         Assert.Equal(new[] { second }, drained.Executable);
-        Assert.Same(batch, Assert.Single(drained.Unavailable).Batch);
-        var capped = drained.Capped;
-        Assert.NotNull(capped);
-        Assert.Same(batch, capped.Value.Batch);
-        Assert.Equal(3, capped.Value.Count);
-        Assert.Equal(receiptId, capped.Value.ReceiptId);
+        var capped = Assert.Single(drained.Unavailable);
+        Assert.Same(batch, capped.Batch);
+        Assert.Equal(3, capped.Count);
+        Assert.Equal(receiptId, capped.ReceiptId);
 
         // Exhaustion settles only that request; unrelated work remains runnable.
-        var laterCapped = Plan([second, batch], [], [.. twoRuns, Event(message)]).Capped;
-        Assert.Same(batch, laterCapped!.Value.Batch);
+        var later = Plan([second, batch], [], [.. twoRuns, Event(message)]);
+        Assert.Same(batch, Assert.Single(later.Unavailable).Batch);
     }
 
     [Fact]
@@ -137,7 +135,7 @@ public sealed class FindingRoundBatchScheduleTests
         Assert.Same(first, Assert.Single(Plan([alpha], [first, second]).RedCovered).Receipt);
         var unavailable = FindingRoundBatchSchedule.Plan([alpha], RequestingTask, [first], "unavailable", Round, Basis, []);
         Assert.Equal(new[] { alpha }, unavailable.Executable);
-        Assert.Null(unavailable.Capped);
+        Assert.Empty(unavailable.Unavailable);
     }
 
     private static FindingRoundBatchPlan Plan(IReadOnlyList<FindingEvidenceBatch> batches,

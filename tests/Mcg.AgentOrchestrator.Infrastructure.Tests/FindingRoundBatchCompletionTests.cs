@@ -143,6 +143,34 @@ public sealed class FindingRoundBatchCompletionTests
     [InlineData(false)]
     [InlineData(true)]
     [Trait("Category", "CrossTick")]
+    public void UnavailableAdvisory_PreservesQualifiedClosingRetry(bool sourceBlocker)
+    {
+        using var scenario = new Scenario(sourceBlocker, failure: "terminal-advisory");
+        for (var tick = 0; tick < 2; tick++)
+        {
+            scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+            Assert.Empty(scenario.Prepared);
+            Assert.Empty(scenario.Retries);
+            Assert.Empty(scenario.Escalations);
+        }
+        scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(3, scenario.Runs.Count);
+        var target = sourceBlocker ? scenario.Developer : scenario.Tester;
+        Assert.Equal(target.Id, Assert.Single(scenario.Retries));
+        Assert.Equal(target.Id, Assert.Single(scenario.Prepared).Task.Id);
+        Assert.Empty(scenario.Escalations);
+        Assert.Equal(0, scenario.ProcessStarts);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(1, summary.Unavailable);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Contains(target.RequiredRole.ToString(), summary.RoutingReason, StringComparison.Ordinal);
+    }
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "CrossTick")]
     public void RefusedMember_SettlesUnavailableBeforeBatchCloses(bool previouslyRefused)
     {
         using var scenario = new Scenario(false, failure: previouslyRefused ? "prior-refusal" : "normalization");
@@ -261,9 +289,50 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Single(scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
         scenario.Restart();
         Assert.False(FindingEvidenceBatchClosureAdmission.TryApply(scenario.Goal, closure, () => true,
-            () => throw new InvalidOperationException("A closed batch retried after restoration."),
-            _ => throw new InvalidOperationException("A closed batch was recorded again.")));
+            () => throw new InvalidOperationException("A closed batch retried after restoration.")));
         Assert.Equal(3, scenario.ClosingSummary().BatchSize);
+    }
+
+    [Fact]
+    public void FailedSnapshotWrite_RestoresTheOpenRoundAndCommitsRetryWithAccounting()
+    {
+        using var scenario = new Scenario(false);
+        FindingEvidenceBatchClosure Drain()
+        {
+            FailedGoalFindingObservation observation;
+            do
+            {
+                Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester,
+                    ConductorAutonomyPolicy.Permissive, out observation));
+            } while (observation.BatchClosure is null && scenario.Runs.Count < 3);
+            Assert.Equal(scenario.Tester.Id, observation.TargetTaskId);
+            return Assert.IsType<FindingEvidenceBatchClosure>(observation.BatchClosure);
+        }
+        var closure = Drain();
+        var durable = scenario.Kernel.ExportSnapshot();
+        bool Apply(bool fail) => FindingRoundBatchCoordinator.TryApply(scenario.Driver, scenario.Goal, closure, () => true, () =>
+        {
+            scenario.Kernel.RetryTask(scenario.Goal.Id, scenario.Tester.Id, "Interpret the completed batch.");
+            Assert.Null(scenario.Tester.LastVerification);
+            var candidate = scenario.Kernel.ExportSnapshot();
+            var submitted = AgentOrchestratorKernel.FromSnapshot(candidate).GetGoal(scenario.Goal.Id);
+            Assert.True(FindingRoundBatchAccounting.IsClosed(submitted, closure.Identity));
+            Assert.Single(submitted.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+            if (fail) throw new IOException("Injected goal snapshot write failure");
+            durable = candidate;
+            return true;
+        });
+
+        Assert.Throws<IOException>(() => Apply(fail: true));
+        scenario.Restore(AgentOrchestratorKernel.FromSnapshot(durable));
+        Assert.NotNull(scenario.Tester.LastVerification);
+        Assert.False(FindingRoundBatchAccounting.IsClosed(scenario.Goal, closure.Identity));
+        closure = Drain();
+        Assert.True(Apply(fail: false));
+        scenario.Restore(AgentOrchestratorKernel.FromSnapshot(durable));
+        Assert.Null(scenario.Tester.LastVerification);
+        Assert.Equal(3, scenario.ClosingSummary().NewlyExecuted);
+        Assert.Equal(3, scenario.Runs.Count);
     }
 
     [Fact]
@@ -386,10 +455,12 @@ public sealed class FindingRoundBatchCompletionTests
             if (RecordBatchAccounting || !message.StartsWith("finding-evidence batch-", StringComparison.Ordinal))
                 Kernel.RecordFindingEvidenceRequest(goal, task, message);
         }
-        internal void Restart()
+        internal void Restart() => Restore(AgentOrchestratorKernel.FromSnapshot(Kernel.ExportSnapshot()));
+
+        internal void Restore(AgentOrchestratorKernel restored)
         {
             var id = Goal.Id;
-            Kernel = AgentOrchestratorKernel.FromSnapshot(Kernel.ExportSnapshot());
+            Kernel = restored;
             Goal = Kernel.GetGoal(id);
             Driver = CreateDriver();
         }
@@ -409,7 +480,8 @@ public sealed class FindingRoundBatchCompletionTests
             runFocusedEvidence: (_, request) =>
             {
                 Runs.Add(request);
-                if (_failure == "terminal" && Runs.Count == 1) return new(request, false, false, "Request unavailable", []);
+                if (_failure == "terminal" && Runs.Count == 1 || _failure == "terminal-advisory" && Runs.Count == 2)
+                    return new(request, false, false, "Request unavailable", []);
                 if ((_failure == "rejected" && Runs.Count == 1) ||
                     (_failure == "always-rejected" && request == Runs[0]))
                     return new(request, false, false, "Source discovery unavailable", [],

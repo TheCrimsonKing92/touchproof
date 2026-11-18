@@ -9,8 +9,13 @@ internal sealed record FindingRoundBatchPlan(
     IReadOnlyList<FindingEvidenceBatch> Executable,
     IReadOnlyList<(FindingEvidenceBatch Batch, int Count, string ReceiptId)> Unavailable)
 {
-    internal (FindingEvidenceBatch Batch, int Count, string ReceiptId)? Capped =>
-        Unavailable.Count == 0 ? null : Unavailable[0];
+    internal (FindingEvidenceBatch Batch, int Count, string ReceiptId)? RequiredCap(Goal goal, TaskSpec task)
+    {
+        var required = FindingRoundBatchAccounting.RequiredFindingIds(goal, task);
+        foreach (var unavailable in Unavailable)
+            if (unavailable.Batch.Findings.Any(finding => required.Contains(finding.StableId))) return unavailable;
+        return null;
+    }
     internal ReviewFinding[] CoveredFindings => RedCovered.SelectMany(pair => pair.Batch.Findings)
         .DistinctBy(finding => finding.StableId).ToArray();
 

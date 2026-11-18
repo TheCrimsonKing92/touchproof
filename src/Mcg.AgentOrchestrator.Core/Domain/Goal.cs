@@ -1363,6 +1363,7 @@ public sealed class Goal
     }
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
+    internal void RemoveStagedProgress(ProgressEvent progressEvent) => _timeline.Remove(progressEvent);
 
     internal GoalBriefVersion ReviseBrief(string newBrief, string? reason, DateTimeOffset recordedAt)
     {

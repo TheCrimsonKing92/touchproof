@@ -50,8 +50,7 @@ public sealed class FindingRoundRedFanOutScenarioTests
         Assert.Contains("Developer", summary.RoutingReason, StringComparison.Ordinal);
         var restored = scenario.RestoredGoal();
         Assert.False(FindingEvidenceBatchClosureAdmission.TryApply(restored, new(identity, "replayed"), () => true,
-            () => throw new InvalidOperationException("Actionable red retried twice after restoration."),
-            _ => throw new InvalidOperationException("Actionable red batch closed twice.")));
+            () => throw new InvalidOperationException("Actionable red retried twice after restoration.")));
     }
 
     [Fact]
@@ -81,6 +80,28 @@ public sealed class FindingRoundRedFanOutScenarioTests
         Assert.Empty(scenario.Escalations);
     }
 
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
+    public void InheritedBaselineRed_DrainsSiblingAfterRestartBeforeOneRecovery()
+    {
+        using var scenario = new Scenario(["Fixture.SharedSetupTests.SetupFails"], inheritBaseline: true);
+        var identity = scenario.BatchIdentity;
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Advance().Outcome);
+        Assert.Equal(new[] { UnionRequest }, scenario.Runs);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Escalations);
+
+        scenario.RestartDriver();
+        scenario.Advance();
+        scenario.Advance();
+
+        Assert.Equal(new[] { UnionRequest, CoreRequest }, scenario.Runs);
+        Assert.Contains("inherited from a RED Baseline arm", Assert.Single(scenario.Escalations), StringComparison.Ordinal);
+        Assert.Empty(scenario.Retries);
+        Assert.Equal(0, scenario.Dispatches);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(scenario.RestoredGoal(), identity));
+    }
+
     [Fact]
     public void ExhaustedRequestAllowsLaterRequestBeforeUnavailableRecovery()
     {
@@ -103,12 +124,14 @@ public sealed class FindingRoundRedFanOutScenarioTests
         private readonly string _root = ConductorDriverTests.CreateTempDirectory();
         private readonly string[] _failures;
         private readonly bool _armless;
+        private readonly bool _inheritBaseline;
         private ConductorDriver _driver = null!;
 
-        internal Scenario(string[] failures, bool armless = false)
+        internal Scenario(string[] failures, bool armless = false, bool inheritBaseline = false)
         {
             _failures = failures;
             _armless = armless;
+            _inheritBaseline = inheritBaseline;
             (_kernel, Goal) = SoftwareGoal();
             Developer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
             Reviewer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
@@ -158,11 +181,14 @@ public sealed class FindingRoundRedFanOutScenarioTests
                 var red = CandidateRedFindingEvidence(request, Candidate, _failures[0]);
                 var candidate = red.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
                 var check = candidate.Checks.Single() with { FailingTestIdentities = _failures, ExecutedTestCount = 2 };
+                var inherited = _inheritBaseline && request == UnionRequest;
                 return red with
                 {
                     Checks = [check],
                     Arms = red.Arms!.Select(arm => arm.Arm == FindingEvidenceArm.Candidate
-                        ? arm with { Checks = [check] } : arm).ToArray()
+                        ? arm with { Checks = [check] }
+                        : inherited ? arm with { Checks = [check], Passed = false, Disposition = FindingEvidenceArmDisposition.Red }
+                        : arm).ToArray()
                 };
             },
             dispatchAndStart: _ => { Dispatches++; return DispatchStartOutcome.Started(); },

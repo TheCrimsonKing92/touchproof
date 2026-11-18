@@ -55,6 +55,21 @@ internal static class FindingRoundBatchAccounting
             item.TaskId == identity.RequestingTaskId && item.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
             item.Message.StartsWith($"finding-evidence batch-closed; batch_key={identity.Key};", StringComparison.Ordinal));
 
+    internal static Observation? RequiredUnavailable(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity)
+    {
+        var blockingIds = RequiredFindingIds(goal, task);
+        var unavailable = Read(goal, identity).Where(item => item.Kind == "unavailable" && item.FindingIds.Any(blockingIds.Contains));
+        return unavailable.FirstOrDefault(item => item.Eligibility is not null) ?? unavailable.FirstOrDefault();
+    }
+
+    internal static HashSet<string> RequiredFindingIds(Goal goal, TaskSpec task) =>
+        ReviewFindings.GetOpenBlockingFindings(task.LastVerification?.MergedReviewFindings ?? [],
+            goal.EffectiveAcceptanceCriteriaCorrections).Select(finding => finding.StableId).ToHashSet(StringComparer.Ordinal);
+
+    internal static HashSet<string> NonExecutableFindingIds(Goal goal, FindingEvidenceBatchIdentity identity) =>
+        Read(goal, identity).Where(item => item.Kind is "unavailable" or "superseded")
+            .SelectMany(item => item.FindingIds).ToHashSet(StringComparer.Ordinal);
+
     internal static Summary Summarize(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity, string reason)
     {
         var observations = Read(goal, identity);

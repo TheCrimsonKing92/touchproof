@@ -113,9 +113,9 @@ internal static class FindingRoundBatchSchedule
         Action<GoalId, TaskId, string> recordRequest)
     {
         var receiptId = receipt.ReceiptId;
-        // Other repository partitions can still list requests already settled by a receipt.
+        // Other repository partitions can still list requests settled earlier this tick.
         var settledFindingIds = FindingRoundBatchAccounting.Read(goal, batchIdentity)
-            .Where(item => item.Kind is "executed" or "covered")
+            .Where(item => item.Kind is "executed" or "covered" or "unavailable" or "deferred" or "superseded")
             .SelectMany(item => item.FindingIds).ToHashSet(StringComparer.Ordinal);
         foreach (var pending in batches)
         foreach (var member in pending.Members)

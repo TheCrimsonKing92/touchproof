@@ -32,27 +32,29 @@ internal static class FindingRoundRedCoverage
         string candidateSha, string fingerprint, string basis,
         Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
-        Action<GoalId, TaskId, string> recordRequest, string batchCandidateSha, ConductorAutonomyPolicy? policy = null)
+        Action<GoalId, TaskId, string> recordRequest, string batchCandidateSha, string batchBasis,
+        ConductorAutonomyPolicy? policy = null)
     {
         var settled = FindingRoundBatchSchedule.Plan(
             plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
             task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
             candidateSha, fingerprint, basis, goal.Timeline);
         foreach (var item in settled.Passed)
-            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, basis, item, "executed", receipt.ReceiptId);
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item, "executed", receipt.ReceiptId);
         foreach (var item in settled.RedCovered)
-            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, basis, item.Batch, "executed", item.Receipt.ReceiptId);
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "executed", item.Receipt.ReceiptId);
         foreach (var item in settled.Unavailable)
-            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, basis, item.Batch, "unavailable", item.ReceiptId);
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "unavailable", item.ReceiptId,
+                $"Request {item.Batch.Identity} completed {item.Count} runs; last_receipt_id={item.ReceiptId}.");
         var coverage = Evaluate(settled.Executable, task, goal.Timeline, candidateSha, fingerprint, basis, receipt);
         coverage.RecordSkips(goal, task, candidateSha, fingerprint, basis, recordDispositions, recordOutcome, recordRequest);
         foreach (var item in coverage.Skipped)
-            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, basis, item.Batch, "covered", item.Receipts[0].ReceiptId);
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "covered", item.Receipts[0].ReceiptId);
         if (coverage.Remaining.Count > 0)
             return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence completed; another distinct request from the same finding round remains pending: " +
                 $"next_request={coverage.Remaining[0].Identity}; completed_receipt_id={receipt.ReceiptId}.");
-        if (settled.Capped is { } unavailable)
+        if (settled.RequiredCap(goal, task) is { } unavailable)
             return FindingRoundBatchSchedule.BuildRunCapDecision(goal, task, unavailable.Batch, unavailable.Count,
                 unavailable.ReceiptId, candidateSha, fingerprint, recordRequest);
         return driver.BuildReceiptClosureOrDeliveryRetry(goal, task, batchCandidateSha,

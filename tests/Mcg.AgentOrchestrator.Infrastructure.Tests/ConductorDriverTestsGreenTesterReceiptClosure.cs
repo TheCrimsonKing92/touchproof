@@ -263,20 +263,12 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
             fixture.Goal.Timeline, fixture.Requester.Id, CandidateSha, "receipt-first"));
         Assert.Equal(failure is "refused" or "executor-unavailable" ? 0 : 3, fixture.Requests.Count);
-        if (failure == "executor-unavailable")
-        {
-            Assert.Empty(fixture.Escalations);
-            Assert.DoesNotContain(fixture.Goal.Timeline, item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal));
-        }
-        else
-        {
-            Assert.Single(fixture.Escalations);
-            var closed = Assert.Single(fixture.Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
-            var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closed.Message[closed.Message.IndexOf('{')..])!;
-            Assert.Equal(1, summary.BatchSize);
-            Assert.Equal(1, summary.Unavailable);
-            Assert.Equal(0, summary.NewlyExecuted);
-        }
+        Assert.Single(fixture.Escalations);
+        var closed = Assert.Single(fixture.Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closed.Message[closed.Message.IndexOf('{')..])!;
+        Assert.Equal(1, summary.BatchSize);
+        Assert.Equal(1, summary.Unavailable);
+        Assert.Equal(0, summary.NewlyExecuted);
     }
 
     private static ReviewFinding FirstEvidenceFinding() => EvidenceFindingWithRequest(

@@ -200,7 +200,8 @@ internal sealed partial class ConductorDriver
                 FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
                 $"{triggeringTask.RequiredRole} blocker requires operator-owned evidence; auto-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
                 $"Route: {reviewerRoute?.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole} output: {outputArtifact}");
-            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
+                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
             return true;
         }
 
