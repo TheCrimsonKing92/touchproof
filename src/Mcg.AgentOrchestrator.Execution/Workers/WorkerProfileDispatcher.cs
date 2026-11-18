@@ -249,7 +249,7 @@ public static partial class WorkerProfileDispatcher
         if (!usesTypedContextPackage && linkedBacklogPointer is not null)
             brief = brief with { Content = brief.Content + "\n\n" + linkedBacklogPointer };
         if (!usesTypedContextPackage && preparationFindings.Count > 0)
-            brief = brief with { Content = brief.Content + "\n\n" + string.Join(Environment.NewLine, preparationFindings) };
+            brief = brief with { Content = brief.Content + "\n\n" + SubscriptionPreflightPromptProjection.ReadLegacyPromptSection(contextDirectory) };
         WorkerContextPackageReceipt? contextPackageReceipt = null;
         WorkerContextPackage? contextPackage = null;
         var packagedBrief = brief;
@@ -2124,19 +2124,19 @@ public static partial class WorkerProfileDispatcher
                     $"Registry expected {entry.Sha256}, found {actualHash}.");
             }
 
+            var (promptBytes, deliveryMode) = SubscriptionPreflightPromptProjection.Apply(entry.Path, path, bytes, source.DeliveryModeOverride);
+
             AddSource(
                 WorkerContextSemanticSource.RegistryArtifact,
                 $"context/{entry.Path.Replace('\\', '/')}",
                 source.Kind,
-                bytes,
+                promptBytes,
                 visibility,
                 entry.Path.Equals("AGENTS.md", StringComparison.OrdinalIgnoreCase) &&
                 codexPolicyAutoLoad &&
                 bytes.Length <= workerProfile!.RepositoryPolicyMaxBytes
                     ? ContextDeliveryMode.OnDemandFile
-                    : entry.Path.Equals("subscription-preflight.md", StringComparison.OrdinalIgnoreCase) &&
-                        Encoding.UTF8.GetString(bytes).Contains("GATE_TEST_SELECTOR_DIAGNOSTIC", StringComparison.Ordinal)
-                        ? ContextDeliveryMode.InlineFull : source.DeliveryModeOverride);
+                    : deliveryMode);
         }
 
         foreach (var recovered in WorkerCompatibilityHandoffSource.ResolveArtifacts(goal, task, workingDirectory, generatedHandoff))

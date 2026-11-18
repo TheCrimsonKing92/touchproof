@@ -15,7 +15,8 @@ public abstract class CliGoalStopAliasTestSupport : CliGoalParkTestSupport
         return parts;
     }
 
-    private protected static IDisposable RecordTerminations(List<int> calls) => GoalWorkerTermination.Push((snapshot, id) =>
+    private protected static IDisposable RecordTerminations(List<int> calls,
+        Func<int, GoalWorkerTerminationOutcome>? outcomeForPid = null) => GoalWorkerTermination.Push((snapshot, id) =>
     {
         var kernel = new AgentOrchestratorKernel();
         kernel.ReplaceGoalWithSnapshot(snapshot);
@@ -24,7 +25,8 @@ public abstract class CliGoalStopAliasTestSupport : CliGoalParkTestSupport
         return new GoalWorkerTerminationReceipt(id, process with
         {
             CompletedAt = process.StartedAt.AddSeconds(1), WasCancelled = true
-        }, CancellationCandidateEvidence.Indeterminate("recording seam"), ["RESOURCE recording seam"]);
+        }, CancellationCandidateEvidence.Indeterminate("recording seam"), ["RESOURCE recording seam"],
+            Outcome: outcomeForPid?.Invoke(process.ProcessId) ?? GoalWorkerTerminationOutcome.ConfirmedTerminated);
     });
 
     private protected static Task<long?> Version(ParkSeed seed) =>

@@ -33,7 +33,8 @@ internal sealed partial class ConductorBoardFillHost
                 board = _filingSeams.Board();
                 if (board.NonTerminalCount >= policy.BoardFillTargetActiveGoals) return Refuse("target-reached");
                 phase = "daily-cap";
-                if (_store.FiledOnUtcDay(_utcNow()) >= policy.BoardFillMaxDraftsPerDay) return Refuse("daily-cap-reached");
+                if (policy.BoardFillMaxDraftsPerDay is { } cap && _store.FiledOnUtcDay(_utcNow()) >= cap)
+                    return Refuse("daily-cap-reached");
             }
             phase = "fileability";
             if (draft.StaleHead) return Refuse("stale-head", true);

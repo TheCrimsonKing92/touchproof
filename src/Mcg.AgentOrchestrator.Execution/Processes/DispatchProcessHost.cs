@@ -1450,6 +1450,9 @@ public static void DropToLow() {
 
         startInfo.Environment["GROK_HOME"] = grokHome;
         startInfo.Environment["GROK_DISABLE_AUTOUPDATER"] = "1";
+        // Grok's documented compat.claude.hooks override wins over the copied user config.
+        // This disables Claude hook scanning; Claude permission settings still load separately.
+        startInfo.Environment["GROK_CLAUDE_HOOKS_ENABLED"] = "false";
     }
 
     internal static void SeedHermesEnvironment(ProcessStartInfo startInfo, string sandboxRoot)
@@ -2159,6 +2162,13 @@ public static void DropToLow() {
             }
             StopJobQos();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
+            if (parameters.Provider == WorkerSandboxProvider.Grok && parameters.SandboxLowIntegrity && OperatingSystem.IsWindows())
+            {
+                GrokSignInWriteBack.TryWriteBack(
+                    () => Path.Combine(ResolveSandboxRoot(parameters), "grok-home"),
+                    ResolveGrokHomeDirectory,
+                    line => AppendDispatchStderrDiagnostic(parameters.StderrPath, line));
+            }
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
             // only after every child/diagnostic artifact the completion path reads is durable.
             TryWriteDispatchExitArtifact(parameters.ExitCodePath, exitCode);

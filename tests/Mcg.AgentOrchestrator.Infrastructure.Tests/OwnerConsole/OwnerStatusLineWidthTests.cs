@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Terminal.Gui.Text;
 using Terminal.Gui.Views;
 
@@ -7,6 +8,33 @@ public sealed class OwnerStatusLineWidthTests
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 5, 13, 31, 0, TimeSpan.Zero);
     private static readonly OwnerConsoleStatus Status = new(ConductorLiveness.Running, 12, 0, 2, TimeSpan.FromSeconds(5), 5, 1);
+
+    [Theory]
+    [InlineData(ConductorBoardFillMode.Off, "board fill off")]
+    [InlineData(ConductorBoardFillMode.Shadow, "board fill shadow")]
+    [InlineData(ConductorBoardFillMode.File, null)]
+    [InlineData(null, null)]
+    public void BoardFillMode_ShowsSegmentOnlyWhenNotFiling(ConductorBoardFillMode? mode, string? expected)
+    {
+        var line = Compose(0, mode: mode);
+
+        if (expected is null) Assert.DoesNotContain("board fill", line);
+        else Assert.Contains(" | " + expected + " | ", line);
+    }
+
+    [Fact]
+    public void BoardFillOff_SurvivesAt80Columns()
+    {
+        var gate = Gate() with { Live = false, Participation = new string('x', 100) };
+
+        var line = Compose(80, gate, mode: ConductorBoardFillMode.Off);
+
+        Assert.True(line.GetColumns() <= 80, line);
+        Assert.Contains("board fill off", line);
+        Assert.Contains("gate:", line);
+        Assert.Contains("active: 12", line);
+        Assert.Contains("decisions: 0", line);
+    }
 
     [Theory]
     [InlineData(80)]
@@ -138,8 +166,9 @@ public sealed class OwnerStatusLineWidthTests
             field => field.Key == "execution").Value);
     }
 
-    private static string Compose(int width, OwnerConsoleGateProgress? gate = null, string working = "refresh, command") =>
-        new OwnerStatusPresenter().Compose(Status, gate ?? Gate(), "calm on, attention off, alarm on",
+    private static string Compose(int width, OwnerConsoleGateProgress? gate = null, string working = "refresh, command",
+        ConductorBoardFillMode? mode = null) =>
+        new OwnerStatusPresenter().Compose(Status with { BoardFillMode = mode }, gate ?? Gate(), "calm on, attention off, alarm on",
             Now.AddMinutes(-6), Now, TimeZoneInfo.Utc, TimeSpan.FromSeconds(10), [working], width);
 
     private static OwnerConsoleGateProgress Gate() => new(true, "solo", [new("41a09434", "Goal")],

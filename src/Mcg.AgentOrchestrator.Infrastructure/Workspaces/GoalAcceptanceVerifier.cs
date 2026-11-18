@@ -570,7 +570,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             engineSettings.MaxConcurrentShards,
             shardCoreBudget);
         var selectedExecution = await AcceptanceSelectedExecutionSession.CreateAsync(engineSettings, worktreePath, changedFiles,
-            executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory, executionOwner.GateTestObligationSelectors).ConfigureAwait(false);
+            executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory, executionOwner.GateTestObligationSelectors, IntegrationBranch).ConfigureAwait(false);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
             executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform, projectCheckTransform: selectedExecution.ProjectCheckTransform);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)

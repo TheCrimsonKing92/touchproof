@@ -226,6 +226,23 @@ public sealed class ConductorBoardFillHostTests
         Assert.Equal(cap, h.Store.ReadAll().Count);
     }
 
+    [Fact]
+    public async Task Uncapped_starts_after_many_rounds_on_the_same_day()
+    {
+        using var h = new BoardFillTestHarness();
+        h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = null };
+        var previous = BoardFillReadyItemSelectorTests.Item('b');
+        for (var i = 0; i < 101; i++)
+            h.Store.Finish(h.Store.Begin(previous, h.Clock.UtcNow), h.Draft(), h.Clock.UtcNow);
+
+        h.Host.ServiceTick(h.Kernel);
+        Assert.NotNull(h.Host.CurrentRound);
+        await PanelTestHarness.Signal(h.Host.CurrentRound, "uncapped draft finished");
+        Assert.Equal(1, h.Calls);
+        Assert.Equal(101, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
+        Assert.Equal(102, h.Store.ReadAll().Count);
+    }
+
     [Theory]
     [InlineData(ConductorBoardFillMode.Shadow)]
     [InlineData(ConductorBoardFillMode.File)]

@@ -63,7 +63,7 @@ public static class GoalBranchMainMerge
         if (conflictFiles.Length > 0)
             return new(GoalWorktreeRebaseStatus.Conflict, branch,
                 $"Merge of {baseBranch} into {branch} found conflicts; branch left unchanged.", conflictFiles,
-                $"Create an operator task to resolve conflicts in order: {string.Join(", ", conflictFiles)}");
+                PreLandingConflictRemedy.Build(prefix, conflictFiles));
 
         var stdErr = Collapse(merge.Error);
         var stdOut = Collapse(merge.Output);

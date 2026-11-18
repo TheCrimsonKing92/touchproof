@@ -283,7 +283,9 @@ internal static class CSharpTestClassScanner
     internal sealed record SourceTypeDeclaration(
         string Name,
         bool IsPartial,
-        IReadOnlySet<string> ReferencedIdentifiers);
+        IReadOnlySet<string> ReferencedIdentifiers,
+        int StartLine,
+        int EndLine);
 
     internal sealed record SourceSymbols(
         IReadOnlyList<SourceTypeDeclaration> DeclaredTypes,
@@ -328,7 +330,9 @@ internal static class CSharpTestClassScanner
             .Select(declaration => new SourceTypeDeclaration(
                 declaration.Name,
                 declaration.IsPartial,
-                ReadReferencedIdentifiers(tokens, declaration, declarationNameIndexes)))
+                ReadReferencedIdentifiers(tokens, declaration, declarationNameIndexes),
+                tokens[FindDeclarationStart(tokens, declaration.KeywordIndex)].Line,
+                tokens[declaration.CloseBraceIndex].Line))
             .OrderBy(declaration => declaration.Name, StringComparer.Ordinal)
             .ToArray();
         symbols = new SourceSymbols(
@@ -474,6 +478,31 @@ internal static class CSharpTestClassScanner
         return -1;
     }
 
+    private static int FindDeclarationStart(IReadOnlyList<Token> tokens, int keywordIndex)
+    {
+        var start = keywordIndex;
+        while (start > 0)
+        {
+            if (tokens[start - 1].Value is "public" or "internal" or "private" or "protected" or
+                "abstract" or "sealed" or "static" or "partial" or "readonly" or "ref" or "unsafe" or "new" or "file")
+            {
+                start--;
+                continue;
+            }
+            if (tokens[start - 1].Value != "]") break;
+            var depth = 1;
+            var index = start - 2;
+            for (; index >= 0; index--)
+            {
+                if (tokens[index].Value == "]") depth++;
+                if (tokens[index].Value == "[" && --depth == 0) break;
+            }
+            if (index < 0) break;
+            start = index;
+        }
+        return start;
+    }
+
     private static HashSet<string> ReadModifiers(IReadOnlyList<Token> tokens, int keywordIndex)
     {
         var modifiers = new HashSet<string>(StringComparer.Ordinal);
@@ -585,6 +614,15 @@ internal static class CSharpTestClassScanner
     private static bool TryTokenize(string source, out IReadOnlyList<Token> tokens)
     {
         var found = new List<Token>();
+        var line = 1;
+        var lineCursor = 0;
+        Token At(string value, bool isIdentifier, int position)
+        {
+            // Count skipped comments and literals as well as whitespace, once per character.
+            while (lineCursor < position)
+                if (source[lineCursor++] == '\n') line++;
+            return new Token(value, isIdentifier, line);
+        }
         for (var index = 0; index < source.Length;)
         {
             if (char.IsWhiteSpace(source[index]))
@@ -636,18 +674,18 @@ internal static class CSharpTestClassScanner
                     index++;
                 }
 
-                found.Add(new Token(source[start..index], IsIdentifier: true));
+                found.Add(At(source[start..index], true, start));
                 continue;
             }
 
             if (source[index] == '=' && index + 1 < source.Length && source[index + 1] == '>')
             {
-                found.Add(new Token("=>", IsIdentifier: false));
+                found.Add(At("=>", false, index));
                 index += 2;
                 continue;
             }
 
-            found.Add(new Token(source[index].ToString(), IsIdentifier: false));
+            found.Add(At(source[index].ToString(), false, index));
             index++;
         }
 
@@ -801,7 +839,7 @@ internal static class CSharpTestClassScanner
         return false;
     }
 
-    private sealed record Token(string Value, bool IsIdentifier);
+    private sealed record Token(string Value, bool IsIdentifier, int Line);
 
     private sealed record TypeDeclaration(
         int KeywordIndex,

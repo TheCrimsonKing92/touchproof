@@ -24,18 +24,21 @@ internal static class BacklogListAgentReadView
 
     internal sealed record Row(string Id, string Title, string Status, string? GoalId,
         bool OwnerAmbiguous, bool Eligible, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
-        string? Priority, string Tags, string? SupersededBy, string? EpicId = null);
+        string? Priority, string Tags, string? SupersededBy, string? EpicId = null,
+        DateTimeOffset? PinnedAt = null);
 
     internal static Row CreateRow(BacklogItem item, string status, string? goalId,
         bool ownerAmbiguous, bool eligible, string? epicId = null) =>
         new(item.Id, item.Title, status, goalId, ownerAmbiguous, eligible,
-            item.CreatedAt, item.UpdatedAt, item.Priority, item.Tags, item.SupersededBy, epicId);
+            item.CreatedAt, item.UpdatedAt, item.Priority, item.Tags, item.SupersededBy, epicId, item.PinnedAt);
 
     internal static string FormatEpic(EpicMembershipIndex.Membership? membership) =>
         membership is null ? "none" : $"{membership.ShortId} {membership.EpicTitle}";
 
     internal static string FormatPriority(string? priority) =>
         $" [priority={BacklogPriorityLevels.Read(priority)}]";
+
+    internal static string FormatPin(DateTimeOffset? pinnedAt) => pinnedAt is null ? "" : " [next]";
 
     internal static string Serialize(IReadOnlyList<Row> rows, TimeProvider? time = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.BacklogListSchema, AgentReadEnvelope.BacklogListSchemaVersion,
@@ -54,7 +57,8 @@ internal static class BacklogListAgentReadView
                     priority = BacklogPriorityLevels.Read(row.Priority),
                     tags = row.Tags,
                     supersededBy = string.IsNullOrEmpty(row.SupersededBy) ? null : row.SupersededBy,
-                    epicId = row.EpicId
+                    epicId = row.EpicId,
+                    pinnedAt = row.PinnedAt?.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
                 }).ToArray()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 }

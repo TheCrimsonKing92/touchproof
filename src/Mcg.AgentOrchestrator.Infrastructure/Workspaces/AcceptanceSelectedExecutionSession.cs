@@ -10,7 +10,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
     Func<string, IReadOnlyList<string>, AcceptanceSelectedExecutionInput>? read = null,
     AcceptanceGateEngineSettings? engineSettings = null,
     AcceptanceSelectedExecutionSessionSuspension? suspension = null,
-    IReadOnlyList<string>? obligationSelectors = null)
+    IReadOnlyList<string>? obligationSelectors = null,
+    string? integrationBranch = null)
 {
     private readonly AcceptanceSelectedExecutionMode _effectiveMode = mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null
         ? AcceptanceSelectedExecutionMode.Shadow : mode;
@@ -22,13 +23,13 @@ internal sealed class AcceptanceSelectedExecutionSession(
     internal static async Task<AcceptanceSelectedExecutionSession> CreateAsync(
         AcceptanceGateEngineSettings settings, string worktreePath, IReadOnlyList<string>? changedFiles,
         bool attributionScoped, GoalAcceptanceVerifierTestOverrides testOverrides,
-        string? projectHomeDirectory, IReadOnlyList<string>? obligationSelectors = null)
+        string? projectHomeDirectory, IReadOnlyList<string>? obligationSelectors = null, string? integrationBranch = null)
     {
         var suspension = settings.SelectedExecutionMode == AcceptanceSelectedExecutionMode.Enforce
             ? await AcceptanceSelectedExecutionSessionSuspension.ReadAsync(worktreePath, projectHomeDirectory).ConfigureAwait(false)
             : null;
         return new(settings.SelectedExecutionMode, worktreePath, changedFiles, attributionScoped,
-            testOverrides.ReadSelectedExecutionForTests, settings, suspension, obligationSelectors);
+            testOverrides.ReadSelectedExecutionForTests, settings, suspension, obligationSelectors, integrationBranch);
     }
 
     internal bool Applied => _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && _plan?.HasPlan == true;
@@ -67,7 +68,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                     attributionScoped ? "Attribution-scoped attempt." : "Candidate changes are unavailable.", lanes, [], [], [], []);
             else
             {
-                var input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changedFiles, engineSettings)
+                var input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changedFiles, engineSettings, integrationBranch)
                     : read(worktreePath, changedFiles);
                 _classes = input.Classes;
                 var targets = wholeProjectChecks.Where(check => check.SupportsSelectedExecution).ToArray();

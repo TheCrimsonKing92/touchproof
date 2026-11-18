@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -13,7 +14,8 @@ internal sealed record OwnerConsoleViewModel(
 
 internal sealed record OwnerConsoleStatus(ConductorLiveness ConductorRunning, int ActiveGoals, int LiveDecisions,
     int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday, int FailedToday = 0, DateTimeOffset? LatestTickAt = null,
-    string? PlannedStopReason = null, DateTimeOffset? PlannedStopAt = null);
+    string? PlannedStopReason = null, DateTimeOffset? PlannedStopAt = null,
+    ConductorBoardFillMode? BoardFillMode = null);
 
 internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId, string GoalPrefix,
     OwnerQuestionKind Kind, string Summary, string FullText, string? BlastRadius,

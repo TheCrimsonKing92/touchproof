@@ -5,6 +5,57 @@ using Xunit;
 public sealed class CliProviderRefusalRecordingTests
 {
     [Fact]
+    public void UnparsedLimitDefersFromRecordingClockWithoutAnotherFailure()
+    {
+        var clock = CompletionClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Defer unparsed limit",
+            [new TaskSpec(TaskId.New(), "Implement behavior", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = Assert.Single(goal.Tasks);
+        var assigned = task.AssignedAgentId;
+        kernel.RecordTaskDispatch(goal.Id, task.Id, ClaudeDispatch("claude implement", clock));
+        var completedAt = clock.UtcNow;
+        clock.Advance(TimeSpan.FromHours(1));
+
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "claude implement", "C:\\repo", 1, "You've hit your weekly limit · resets someday",
+            string.Empty, completedAt));
+
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(assigned, task.AssignedAgentId);
+        Assert.Equal(clock.UtcNow.AddMinutes(5), task.SubscriptionRetryAfter);
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.Equal(1, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
+        Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
+        Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
+    }
+
+    [Theory]
+    [InlineData("You've hit your weekly limit · resets Oct 7, 12pm (America/Chicago)", "2026-10-07T17:00:00Z")]
+    [InlineData("ERROR: You've hit your usage limit. Try again in 2 hours.", "2026-10-05T12:12:56Z")]
+    public void ParsedLimitPreservesResetEvenWhenRecordingIsDelayed(string refusal, string expectedReset)
+    {
+        var clock = CompletionClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Preserve parsed limit",
+            [new TaskSpec(TaskId.New(), "Implement behavior", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = Assert.Single(goal.Tasks);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, ClaudeDispatch("claude implement", clock));
+        var completedAt = clock.UtcNow;
+        clock.Advance(TimeSpan.FromDays(3));
+
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "claude implement", "C:\\repo", 1, refusal, string.Empty, completedAt));
+
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(DateTimeOffset.Parse(expectedReset, System.Globalization.CultureInfo.InvariantCulture),
+            task.SubscriptionRetryAfter);
+        Assert.False(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+    }
+
+    [Fact]
     public void WeeklyLimitReassignsOnlyReviewerWithAbsoluteReset()
     {
         var clock = CompletionClock();

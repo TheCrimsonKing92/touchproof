@@ -1080,6 +1080,7 @@ public sealed class DispatchProcessHostTests
             Directory.CreateDirectory(worktree);
             var startInfo = CreateSandboxStartInfo(worktree);
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Grok);
+            startInfo.Environment["GROK_CLAUDE_HOOKS_ENABLED"] = "true";
 
             DispatchProcessHost.ApplyWorkerSandbox(
                 startInfo,
@@ -1091,6 +1092,7 @@ public sealed class DispatchProcessHostTests
             var grokHome = Path.Combine(sandboxRoot, "grok-home");
             Assert.Equal(grokHome, startInfo.Environment["GROK_HOME"]);
             Assert.True(Directory.Exists(grokHome));
+            Assert.Equal("false", startInfo.Environment["GROK_CLAUDE_HOOKS_ENABLED"]);
             Assert.Equal(
                 worktree.Replace('\\', '/'),
                 startInfo.Environment[HarnessHookRootContract.EnvironmentVariableName]);

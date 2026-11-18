@@ -9,6 +9,82 @@ public sealed class AcceptanceGateEngineSettingsTests
     private GoalAcceptanceVerifierTestOverrides TestOverrides { get; } = new();
 
     [Xunit.Fact]
+    public void AcceptanceGateEngineParsesKeyedManifestWithoutResourceDescriptions()
+    {
+        foreach (var mapField in new[] { "", ", \"exclusiveResourceDescriptions\": null", ", \"exclusiveResourceDescriptions\": {}" })
+        {
+            var settings = AcceptanceGateEngineSettings.Parse($$"""
+                { "version": 1, "engine": {
+                  "infrastructureTestLanes": [
+                    { "name": "Candidate", "filter": "FullyQualifiedName~CandidateTests",
+                      "exclusiveResourceKeys": ["xunit:LaneResource"] }
+                  ],
+                  "balancedLanePool": { "exclusiveResourceKeys": ["xunit:PoolResource"] }
+                  {{mapField}}
+                } }
+                """);
+
+            Xunit.Assert.Equal("xunit:LaneResource",
+                Xunit.Assert.Single(Xunit.Assert.Single(settings.InfrastructureTestLanes).ExclusiveResourceKeys));
+            Xunit.Assert.NotNull(settings.BalancedLanePool);
+            Xunit.Assert.Equal("xunit:PoolResource", Xunit.Assert.Single(settings.BalancedLanePool.ExclusiveResourceKeys));
+            Xunit.Assert.True(settings.ExclusiveResourceDescriptions is null || settings.ExclusiveResourceDescriptions.Count == 0);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(" \t\r\n ")]
+    [Xunit.InlineData(null)]
+    public void AcceptanceGateEngineRejectsBlankExclusiveResourceDescription(string? description)
+    {
+        var manifest = $$"""
+            { "version": 1, "engine": {
+              "infrastructureTestLanes": [
+                { "name": "Candidate", "filter": "FullyQualifiedName~CandidateTests",
+                  "exclusiveResourceKeys": [" xunit:BlankDescribed "] }
+              ],
+              "exclusiveResourceDescriptions": {
+                " XUNIT:BlankDescribed ": {{System.Text.Json.JsonSerializer.Serialize(description)}}
+              }
+            } }
+            """;
+
+        var exception = Xunit.Assert.Throws<InvalidDataException>(() => AcceptanceGateEngineSettings.Parse(manifest));
+
+        Xunit.Assert.Contains("XUNIT:BlankDescribed", exception.Message);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceGateEngineMatchesResourceDescriptionsIgnoringCaseAndPadding()
+    {
+        var settings = AcceptanceGateEngineSettings.Parse("""
+            { "version": 1, "engine": {
+              "exclusiveResourceDescriptions": { " XUNIT:Candidate ": "Protects the candidate resource." }
+            } }
+            """);
+
+        Xunit.Assert.Equal("Protects the candidate resource.",
+            AcceptanceExclusiveResourceDescriptions.Find(settings.ExclusiveResourceDescriptions, " xunit:candidate "));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceGateEngineCheckedInManifestDescribesEveryExclusiveResourceKey()
+    {
+        var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
+        var keys = settings.InfrastructureTestLanes.SelectMany(lane => lane.ExclusiveResourceKeys)
+            .Concat(settings.BalancedLanePool?.ExclusiveResourceKeys ?? [])
+            .Select(key => key.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        Xunit.Assert.NotEmpty(keys);
+        Xunit.Assert.All(keys, key => Xunit.Assert.False(
+            string.IsNullOrWhiteSpace(AcceptanceExclusiveResourceDescriptions.Find(settings.ExclusiveResourceDescriptions, key)),
+            $"Checked-in exclusive resource key '{key}' must have a non-empty description."));
+    }
+
+    [Xunit.Fact]
     public void LegacyYieldKeysAreIgnoredAndHaveNoEngineMembers()
     {
         var members = typeof(AcceptanceGateEngineSettings)

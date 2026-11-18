@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Core.Tests;
 public sealed class ConductorAutonomyPolicyTestsBoardFill
 {
     [Fact]
-    public void Defaults_and_legacy_file_load_use_shadow_ten_and_three()
+    public void Defaults_and_legacy_file_load_use_shadow_ten_and_uncapped()
     {
         var original = ConductorAutonomyPolicy.Permissive with { Name = "Legacy board fill" };
         AssertDefaults(original);
@@ -30,12 +30,13 @@ public sealed class ConductorAutonomyPolicyTestsBoardFill
 
     [Theory]
     [InlineData(ConductorBoardFillMode.Off, 0, 0)]
+    [InlineData(ConductorBoardFillMode.Shadow, 10, null)]
     [InlineData(ConductorBoardFillMode.Shadow, 10, 3)]
     [InlineData(ConductorBoardFillMode.File, 30, 20)]
     [InlineData(ConductorBoardFillMode.File, 30, 30)]
     [InlineData(ConductorBoardFillMode.File, 30, 60)]
     [InlineData(ConductorBoardFillMode.File, 30, 100)]
-    public void Board_fill_values_round_trip(ConductorBoardFillMode mode, int target, int cap)
+    public void Board_fill_values_round_trip(ConductorBoardFillMode mode, int target, int? cap)
     {
         var policy = ConductorAutonomyPolicy.Permissive with
         {
@@ -86,6 +87,33 @@ public sealed class ConductorAutonomyPolicyTestsBoardFill
     {
         Assert.Equal(ConductorBoardFillMode.Shadow, policy.BoardFillMode);
         Assert.Equal(10, policy.BoardFillTargetActiveGoals);
-        Assert.Equal(3, policy.BoardFillMaxDraftsPerDay);
+        Assert.Null(policy.BoardFillMaxDraftsPerDay);
+    }
+
+    [Theory]
+    [InlineData("null", null)]
+    [InlineData("0", 0)]
+    [InlineData("100", 100)]
+    public void Explicit_cap_loads_and_validates(string token, int? expected)
+    {
+        var json = ConductorAutonomyPolicy.Permissive.ToJson()
+            .Replace("\"boardFillMaxDraftsPerDay\": null", "\"boardFillMaxDraftsPerDay\": " + token);
+        var policy = ConductorAutonomyPolicy.ParseJson(json);
+        Assert.Empty(policy.Validate());
+        Assert.Equal(expected, policy.BoardFillMaxDraftsPerDay);
+    }
+
+    [Theory]
+    [InlineData("\"3\"")]
+    [InlineData("1.5")]
+    [InlineData("true")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    public void Non_integer_caps_fail_with_the_key(string token)
+    {
+        var json = ConductorAutonomyPolicy.Permissive.ToJson()
+            .Replace("\"boardFillMaxDraftsPerDay\": null", "\"boardFillMaxDraftsPerDay\": " + token);
+        Assert.Contains("boardFillMaxDraftsPerDay",
+            Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json)).Message);
     }
 }

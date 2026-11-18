@@ -25,6 +25,50 @@ public sealed class SourceReadingGuardTestClassesTests
         }
         """;
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DuplicateGlobalTypes_KeepDistinctMembersAndResolvableTargets(bool firstReads)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Snapshot.cs", "public static class RepositorySourceSnapshotCache { public static object Get(string root) => null; }");
+        fixture.Add("First.cs", Provider(firstReads));
+        fixture.Add("Second.cs", Provider(!firstReads));
+        fixture.Add("Callers.cs", """
+            public class FirstTests { public void Act() { new FakeSmokeProvider().Run(); } }
+            public class SecondTests { public void Act() { new FakeSmokeProvider().Run(); } }
+            """);
+
+        var sources = fixture.Sources;
+        var facts = SourceReadingGuardTestClasses.Extract(sources, null);
+        var members = facts.SelectMany(file => file.Members).ToArray();
+        Assert.Equal(members.Length, members.Select(member => member.Id).Distinct(StringComparer.Ordinal).Count());
+        var providers = facts.Where(file => file.Members.Any(member => member.Owner == "FakeSmokeProvider")).ToArray();
+        Assert.Equal(2, providers.Length);
+        Assert.All(providers, file =>
+        {
+            Assert.Contains(file.Members, member => member.Name == "_text");
+            Assert.All(file.Members, member => Assert.EndsWith(" " + file.Path, member.Id));
+        });
+        Assert.True(SourceReaderFileFacts.Valid(facts));
+        var runs = providers.SelectMany(file => file.Members).Where(member => member.Name == "Run")
+            .Select(member => member.Id).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(2, runs.Length);
+        var callers = members.Where(member => member.Owner is "FirstTests" or "SecondTests").ToArray();
+        Assert.Equal(2, callers.Length);
+        Assert.All(callers, member =>
+        {
+            Assert.Equal(runs, member.Targets.Order(StringComparer.Ordinal));
+            Assert.Equal(runs, Assert.Single(member.InvocationTargets.Where(targets => targets.Length != 0))
+                .Order(StringComparer.Ordinal));
+        });
+        Assert.Equal(new[] { "FakeSmokeProvider", "FirstTests", "SecondTests" },
+            SourceReadingGuardTestClasses.Evaluate(sources, facts).ReaderOwners);
+
+        static string Provider(bool reads) => "public class FakeSmokeProvider { private object _text; " +
+            "public void Run() { this._text = " + (reads ? "RepositorySourceSnapshotCache.Get(\"root\")" : "null") + "; } }";
+    }
+
     [Fact]
     public void WholeTreeReaderThroughHelperIsAGuardWithoutSnapshotCache()
     {

@@ -11,18 +11,21 @@ internal sealed class TerminalBuildRootRetention(
     DotnetBuildStorageRoot storageRoot,
     IOwnedRunRootStore ownedRoots,
     Func<int, bool> isOwnerRunning,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    Func<string, TerminalBuildRootRetainedBytes.Measurement>? measureRoot = null)
 {
     public TerminalBuildRootRetentionResult Run(
-        IReadOnlyList<StoredGoalRetentionFact> goals, int retentionDays, int maxReclaims)
+        IReadOnlyList<StoredGoalRetentionFact> goals, int retentionDays, int maxReclaims, long? maxBytes = null)
     {
         var skipped = new Dictionary<TerminalBuildRootSkipReason, int>();
         var reclaimed = new List<string>();
+        var retained = new TerminalBuildRootRetainedBytes();
         long bytes = 0;
-        if (retentionDays == 0)
-            return new(0, 0, skipped, reclaimed, string.Empty);
         ArgumentOutOfRangeException.ThrowIfNegative(retentionDays);
         ArgumentOutOfRangeException.ThrowIfNegative(maxReclaims);
+        if (maxBytes is < 0) throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        if (retentionDays == 0 && maxBytes is null)
+            return new(0, 0, skipped, reclaimed, string.Empty, retained);
         ArgumentNullException.ThrowIfNull(isOwnerRunning);
         var now = timeProvider.GetUtcNow();
         var cutoff = now.AddDays(-retentionDays);
@@ -34,7 +37,7 @@ internal sealed class TerminalBuildRootRetention(
 
         void Skip(TerminalBuildRootSkipReason reason) => skipped[reason] = skipped.GetValueOrDefault(reason) + 1;
 
-        void Remove(string renamed, string original)
+        bool Remove(string renamed, string original)
         {
             try
             {
@@ -47,10 +50,12 @@ internal sealed class TerminalBuildRootRetention(
                 Directory.Delete(renamed, recursive: true);
                 bytes += size;
                 reclaimed.Add(original);
+                return true;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 Skip(TerminalBuildRootSkipReason.RemovalFailed);
+                return false;
             }
         }
 
@@ -58,6 +63,11 @@ internal sealed class TerminalBuildRootRetention(
         {
             try
             {
+                if (Directory.Exists(folder) && !IsContainedDirectory(folder))
+                {
+                    Skip(TerminalBuildRootSkipReason.NotContained);
+                    return [];
+                }
                 return Directory.Exists(folder)
                     ? Directory.GetDirectories(folder).OrderBy(path => path, StringComparer.Ordinal).ToArray()
                     : [];
@@ -82,7 +92,16 @@ internal sealed class TerminalBuildRootRetention(
             }
         }
 
-        foreach (var root in Children(Path.Combine(storageRoot.RootPath, "goals")))
+        var measure = measureRoot ?? TerminalBuildRootRetainedBytes.Measure;
+        var roots = Children(Path.Combine(storageRoot.RootPath, "goals"))
+            .Select(root => (Root: root, Size: measure(root))).ToArray();
+        var remainingBytes = roots.Sum(root => root.Size.Bytes ?? 0);
+        var categories = new Dictionary<string, TerminalBuildRootRetainedBytes.Category>();
+        var removed = new HashSet<string>(StringComparer.Ordinal);
+        var candidates = new List<(string Root, TerminalBuildRootRetainedBytes.Measurement Size,
+            DateTimeOffset LastUsed, bool WithinWindow, bool OwnerLive)>();
+
+        foreach (var (root, size) in roots)
         {
             var prefix = Path.GetFileName(root);
             // The first three decisions intentionally inspect only stored facts, not root contents.
@@ -91,24 +110,50 @@ internal sealed class TerminalBuildRootRetention(
             else if (facts.Select(fact => fact.GoalId).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
                 Skip(TerminalBuildRootSkipReason.GoalPrefixAmbiguous);
             else if (facts.Any(fact => fact.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded)))
+            {
                 Skip(TerminalBuildRootSkipReason.GoalNotTerminal);
+                categories[root] = TerminalBuildRootRetainedBytes.Category.NotTerminal;
+            }
             else if (!IsContainedDirectory(root) ||
                 (Directory.Exists(reclaimFolder) && !IsContainedDirectory(reclaimFolder)))
                 Skip(TerminalBuildRootSkipReason.NotContained);
             else if (!TryReadLease(root, facts[0].GoalId, out var owner, out var lastUsed))
                 Skip(TerminalBuildRootSkipReason.LeaseUnreadable);
             else if (ownedRoots.ReadRegisteredPaths([root]).Contains(root))
+            {
                 Skip(TerminalBuildRootSkipReason.RegisteredOwnedRoot);
-            else if (lastUsed > cutoff || facts.Any(fact => fact.UpdatedAt is null || fact.UpdatedAt > cutoff))
+                categories[root] = TerminalBuildRootRetainedBytes.Category.RegisteredOwner;
+            }
+            else
+            {
+                var withinWindow = retentionDays > 0 &&
+                    (lastUsed > cutoff || facts.Any(fact => fact.UpdatedAt is null || fact.UpdatedAt > cutoff));
+                var ownerLive = isOwnerRunning(owner);
+                if (ownerLive) categories[root] = TerminalBuildRootRetainedBytes.Category.LiveOwner;
+                else if (withinWindow) categories[root] = TerminalBuildRootRetainedBytes.Category.Window;
+                candidates.Add((root, size, lastUsed, withinWindow, ownerLive));
+            }
+        }
+
+        foreach (var candidate in candidates.OrderBy(value => value.LastUsed)
+                     .ThenBy(value => value.Root, StringComparer.Ordinal))
+        {
+            var (root, size, _, withinWindow, ownerLive) = candidate;
+            var sizeEligible = maxBytes is { } limit && remainingBytes > limit && size.Complete;
+            var ageEligible = retentionDays > 0 && !withinWindow;
+            // Keep skip-count precedence independent of retained-byte attribution.
+            if (withinWindow && !sizeEligible)
                 Skip(TerminalBuildRootSkipReason.WithinWindow);
-            else if (isOwnerRunning(owner))
+            else if (ownerLive)
                 Skip(TerminalBuildRootSkipReason.OwnerLive);
+            else if (!ageEligible && !sizeEligible)
+                continue;
             else if (attempts >= maxReclaims)
                 Skip(TerminalBuildRootSkipReason.BudgetExhausted);
             else
             {
                 attempts++;
-                var renamed = Path.Combine(reclaimFolder, $"{prefix}-{timeProvider.GetUtcNow().UtcTicks}");
+                var renamed = Path.Combine(reclaimFolder, $"{Path.GetFileName(root)}-{timeProvider.GetUtcNow().UtcTicks}");
                 try
                 {
                     Directory.CreateDirectory(reclaimFolder);
@@ -119,16 +164,25 @@ internal sealed class TerminalBuildRootRetention(
                     Skip(TerminalBuildRootSkipReason.Held);
                     continue;
                 }
-                Remove(renamed, root);
+                if (Remove(renamed, root))
+                {
+                    remainingBytes -= size.Bytes ?? 0;
+                    removed.Add(root);
+                }
             }
         }
+
+        foreach (var (root, size) in roots)
+            if (!removed.Contains(root))
+                retained.Add(size, categories.TryGetValue(root, out var category) ? category : null);
 
         var reasons = string.Join(",", Enum.GetValues<TerminalBuildRootSkipReason>()
             .Where(reason => skipped.GetValueOrDefault(reason) > 0)
             .Select(reason => $"{Regex.Replace(reason.ToString(), "([a-z])([A-Z])", "$1-$2").ToLowerInvariant()}:{skipped[reason]}"));
         var summary = FormattableString.Invariant(
             $"SWEEP_BUILD_ROOT_RETENTION window-days={retentionDays} reclaimed={reclaimed.Count} bytes={bytes} skipped={skipped.Values.Sum()} reasons={(reasons.Length == 0 ? "none" : reasons)}");
-        return new(reclaimed.Count, bytes, skipped, reclaimed, summary);
+        return new(reclaimed.Count, bytes, skipped, reclaimed,
+            summary + " " + retained.FormatReceiptFields(maxBytes), retained);
     }
 
     private bool IsContainedDirectory(string path)

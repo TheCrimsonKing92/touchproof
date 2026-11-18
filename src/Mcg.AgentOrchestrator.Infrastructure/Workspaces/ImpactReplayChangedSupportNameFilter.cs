@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// A conservative syntax-only candidate set; semantic identity remains the scan's decision.
+// Conservative type and static-member names; semantic identity remains the scan's decision.
 internal sealed class ImpactReplayChangedSupportNameFilter
 {
     private readonly HashSet<string> _names;
@@ -19,7 +19,12 @@ internal sealed class ImpactReplayChangedSupportNameFilter
 
     internal void Widen(IEnumerable<INamedTypeSymbol> types)
     {
-        foreach (var type in types) _names.Add(type.Name);
+        foreach (var type in types)
+        {
+            _names.Add(type.Name);
+            foreach (var member in type.GetMembers().Where(member => member.IsStatic))
+                _names.Add(member.Name);
+        }
         bool added;
         do
         {

@@ -28,7 +28,8 @@ internal static class ReverseDependencyTestImpactReader
         bool propagateShippingSourceReach = false,
         Action<string, string>? shippingReachDiagnostics = null,
         SelectionSourceTexts? sourceTexts = null,
-        IReadOnlyList<string>? additionalTargetTestProjects = null)
+        IReadOnlyList<string>? additionalTargetTestProjects = null,
+        IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges = null)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null,
@@ -104,7 +105,7 @@ internal static class ReverseDependencyTestImpactReader
                 index = cachedIndex;
                 disposition = ReverseDependencyCacheDisposition.Hit;
                 var hitReceipt = CreateReceipt(snapshot, disposition, reparsedFileCount, hitCount);
-                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt, headroom, propagateShippingSourceReach, shippingReachDiagnostics);
+                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt, headroom, propagateShippingSourceReach, shippingReachDiagnostics, changedLineRanges);
             }
 
             index = ParseSnapshot(snapshot, repositoryRoot, out var parseFailure, out reparsedFileCount)!;
@@ -122,7 +123,7 @@ internal static class ReverseDependencyTestImpactReader
                 ? RetainedSnapshotCount()
                 : RetainIndex(snapshot.Fingerprint, index);
             var receipt = CreateReceipt(snapshot, disposition, reparsedFileCount, retainedSnapshotCount);
-            return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom, propagateShippingSourceReach, shippingReachDiagnostics);
+            return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom, propagateShippingSourceReach, shippingReachDiagnostics, changedLineRanges);
         }
         catch (IOException exception)
         {
@@ -163,7 +164,8 @@ internal static class ReverseDependencyTestImpactReader
         ReverseDependencyCacheReceipt receipt,
         RepositoryTestImpactHeadroom headroom,
         bool propagateShippingSourceReach,
-        Action<string, string>? shippingReachDiagnostics)
+        Action<string, string>? shippingReachDiagnostics,
+        IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges)
     {
         var indexedFiles = index.Files;
         try
@@ -204,8 +206,24 @@ internal static class ReverseDependencyTestImpactReader
                 return ReverseDependencyTestSelection.Unavailable with { CacheReceipt = receipt, Headroom = headroom };
             }
 
+            var normalizedRanges = new Dictionary<string, List<(int StartLine, int EndLine)>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, ranges) in changedLineRanges ?? new Dictionary<string, IReadOnlyList<(int, int)>>())
+            {
+                var normalized = NormalizeRepositoryPath(path);
+                if (!normalizedRanges.TryGetValue(normalized, out var merged))
+                    normalizedRanges.Add(normalized, merged = []);
+                merged.AddRange(ranges.Where(range => range.StartLine >= 1 && range.EndLine >= range.StartLine));
+            }
             var frontier = changedPaths
-                .SelectMany(path => indexedFiles[path].Symbols!.DeclaredTypes)
+                .SelectMany(path =>
+                {
+                    var declarations = indexedFiles[path].Symbols!.DeclaredTypes;
+                    var key = NormalizeRepositoryPath(Path.GetRelativePath(repositoryRoot, path));
+                    if (!normalizedRanges.TryGetValue(key, out var ranges)) return declarations;
+                    var overlapping = declarations.Where(declaration => ranges.Any(range =>
+                        declaration.StartLine <= range.EndLine && range.StartLine <= declaration.EndLine)).ToArray();
+                    return overlapping.Length > 0 ? overlapping : declarations;
+                })
                 .Select(declaration => new FrontierSymbol(
                     declaration.Name,
                     TestSelectionMode.AllReferencingClasses))

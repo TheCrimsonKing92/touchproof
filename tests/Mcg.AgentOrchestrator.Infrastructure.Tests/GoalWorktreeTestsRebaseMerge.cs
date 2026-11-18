@@ -230,7 +230,10 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 $"{rebase.Status}: {rebase.Message}");
             Assert.Equal(1, rebase.ConflictFiles.Count);
             Assert.Equal("seed.txt", rebase.ConflictFiles[0]);
-            Assert.True(rebase.SuggestedCommand?.Contains("Create an operator task", StringComparison.Ordinal) == true);
+            Assert.Equal(
+                PreLandingConflictRemedy.Build(goalId.Value[..8].ToLowerInvariant(), rebase.ConflictFiles),
+                rebase.SuggestedCommand);
+            Assert.DoesNotContain("operator task", rebase.SuggestedCommand!, StringComparison.OrdinalIgnoreCase);
             Assert.Equal("goal edit", File.ReadAllText(Path.Combine(path, "seed.txt")));
             Assert.Equal("main edit", File.ReadAllText(Path.Combine(repo, "seed.txt")));
             Assert.Equal(0, RunGitExitCode(path, "rev-parse", "--verify", "--quiet", "HEAD"));

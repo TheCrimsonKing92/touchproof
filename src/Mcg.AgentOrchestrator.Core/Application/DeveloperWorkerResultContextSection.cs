@@ -58,6 +58,15 @@ internal static class DeveloperWorkerResultContextSection
         }
 
         var block = output[start..end];
+        if (task.RequiredRole == AgentRole.Tester)
+        {
+            var fullResultLine = string.IsNullOrWhiteSpace(selected.Verification.StandardOutputPath)
+                ? "Full result file unavailable."
+                : $"Full result file: {selected.Verification.StandardOutputPath}";
+            return [string.Join(Environment.NewLine,
+                new[] { framing }.Concat(DeveloperWorkerResultProjection.Project(block)).Append(fullResultLine)), string.Empty];
+        }
+
         var proseCount = Math.Min(start, ProseBudget);
         // Try the longest suffix first; all framing and omission text counts toward the budget.
         while (proseCount > 0 && Render(block, proseCount).Length > SectionBudget)

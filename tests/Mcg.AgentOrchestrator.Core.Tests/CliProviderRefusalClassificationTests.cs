@@ -23,9 +23,37 @@ public sealed class CliProviderRefusalClassificationTests
     }
 
     [Theory]
+    [InlineData("11am", "2026-11-17T16:30:00Z", "2026-11-17T17:00:00Z")]
+    [InlineData("11am", "2026-11-17T17:36:00Z", "2026-11-18T17:00:00Z")]
+    [InlineData("11am", "2026-11-17T17:00:00Z", "2026-11-18T17:00:00Z")]
+    [InlineData(" 11 AM ", "2026-11-17T16:30:00Z", "2026-11-17T17:00:00Z")]
+    [InlineData("12am", "2026-11-18T05:30:00Z", "2026-11-18T06:00:00Z")]
+    [InlineData("12Pm", "2026-11-17T17:30:00Z", "2026-11-17T18:00:00Z")]
+    [InlineData("2:30am", "2026-03-08T07:00:00Z", "2026-03-09T07:30:00Z")]
+    [InlineData("1:30am", "2026-11-01T06:00:00Z", "2026-11-01T06:30:00Z")]
+    [InlineData("1:30am", "2026-11-01T06:30:00Z", "2026-11-01T07:30:00Z")]
+    [InlineData("1:30am", "2026-11-01T06:45:00Z", "2026-11-01T07:30:00Z")]
+    [InlineData("1:30am", "2026-11-01T07:30:00Z", "2026-11-02T07:30:00Z")]
+    public void ClaudeLimitUsesNextDatelessReset(string clock, string completedAt, string expectedReset)
+    {
+        var verification = Verification($"You've hit your Fable limit · resets {clock} (America/Chicago)",
+            completedAt: completedAt);
+
+        Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit,
+            DispatchFailureClassifier.Classify(CliTask(), verification).Kind);
+        Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var reset));
+        Assert.Equal(ParseUtc(expectedReset), reset);
+    }
+
+    [Theory]
     [InlineData("You've hit your weekly limit \u00B7 resets someday")]
     [InlineData("You've hit your weekly limit \u00B7 resets Feb 30, 12pm (America/Chicago)")]
     [InlineData("You've hit your weekly limit \u00B7 resets Oct 7, 12pm (Unknown/Zone)")]
+    [InlineData("You've hit your Fable limit · resets 11am (Unknown/Zone)")]
+    [InlineData("You've hit your Fable limit · resets 11am (CST)")]
+    [InlineData("You've hit your Fable limit · resets 0am (America/Chicago)")]
+    [InlineData("You've hit your Fable limit · resets 13pm (America/Chicago)")]
+    [InlineData("You've hit your Fable limit · resets 11:60am (America/Chicago)")]
     [InlineData("You've hit your weekly limit \u00B7 resets Oct 7, 0pm (America/Chicago)")]
     [InlineData("You've hit your weekly limit \u00B7 resets Oct 7, 13pm (America/Chicago)")]
     [InlineData("You've hit your weekly limit \u00B7 resets Oct 7, 12:60pm (America/Chicago)")]

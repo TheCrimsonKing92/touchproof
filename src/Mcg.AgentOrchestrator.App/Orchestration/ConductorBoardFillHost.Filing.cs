@@ -23,7 +23,7 @@ internal sealed partial class ConductorBoardFillHost
         if (_filingSeams is null || _filing is not null || policy.BoardFillMode != ConductorBoardFillMode.File) return;
         var now = _utcNow();
         var admissionOpen = _kernel!.Goals.Count(goal => !goal.IsTerminal) < policy.BoardFillTargetActiveGoals &&
-            _store.FiledOnUtcDay(now) < policy.BoardFillMaxDraftsPerDay;
+            (policy.BoardFillMaxDraftsPerDay is not { } cap || _store.FiledOnUtcDay(now) < cap);
         var items = backlog.ToDictionary(item => item.Id, StringComparer.Ordinal);
         var candidate = _store.ReadAll().Where(round => round.Assessment?.Fileable == true && !round.StaleHead &&
             !(round.Filings ?? []).Any(attempt => attempt.Terminal) &&

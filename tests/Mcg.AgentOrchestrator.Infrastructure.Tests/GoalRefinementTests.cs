@@ -799,6 +799,166 @@ public sealed class GoalRefinementTests
     }
 
     [Xunit.Fact]
+    public async Task SpecConsumer_resolved_answers_repair_launches_within_cadence()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Apply the answered API version clarification.");
+        var correlationKey = $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:api-version";
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Integrate the selected API version.",
+            ["The API version is explicit."],
+            VerificationClass.TestVerifiable,
+            [],
+            [new RefinedSpecOpenQuestion(
+                correlationKey, "Which API version should be used?", "external-contract", "Open")]));
+        var clarifications = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var item = await clarifications.RaiseAsync(
+            CollaborationItemType.Clarification, goal.Id.Value, "api version",
+            "Question: Which API version should be used?", correlationKey);
+        Xunit.Assert.True(await clarifications.TryResolveAsync(item.CorrelationKey!, "Use v2."));
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        Xunit.Assert.Null(await repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id)));
+        var readiness = GoalRefinementGate.Evaluate(kernel.GetGoal(goal.Id), null,
+            new GoalRefinementClarificationFacts(await clarifications.ListAsync(goal.Id.Value)));
+        Xunit.Assert.Equal(GoalRefinementReadiness.RepairRequired, readiness.Readiness);
+        Xunit.Assert.Equal("resolved-answers-pending-sync", readiness.Detail);
+
+        var now = new DateTimeOffset(2026, 11, 17, 19, 0, 0, TimeSpan.Zero);
+        using var clock = GoalRefinementWorkCoordinator.UseClock(() => now);
+        var attempts = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace);
+        attempts.Save(goal.Id, new SpecRefinementLaunchAttempt(now.AddMinutes(-1), 0, null,
+            GoalRefinementWorkCoordinator.MessageId(goal.Id), workspace.SqliteStatePath));
+        var previousLaunchOverride = GoalRefinementWorkCoordinator.LaunchOverride;
+        var launches = 0;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, launchedGoalId) =>
+        {
+            Xunit.Assert.Equal(goal.Id, launchedGoalId);
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, 1, "test-launch");
+        };
+        try
+        {
+            var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
+                    kernel, workspace, new InMemoryModelProviderRegistry([]), kernel.GetGoal(goal.Id)));
+
+            Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("state=repair=acquired", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("repaired=true", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("executor_started=true", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, launches);
+            Xunit.Assert.Equal(now, attempts.Get(goal.Id)!.LastLaunchAt);
+            Xunit.Assert.Equal(GoalRefinementWorkCoordinator.MessageId(goal.Id),
+                Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind)).Id);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = previousLaunchOverride;
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task SpecConsumer_pending_outbox_within_cadence_still_defers()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Wait for pending refinement work.");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.TransactWithOutboxAsync((stored, _) =>
+        {
+            stored.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+            return Task.FromResult((true, true, (IReadOnlyList<OrchestratorStateOutboxMessage>)[
+                GoalRefinementWorkCoordinator.CreateMessage(goal.Id)]));
+        });
+        var outboxState = await repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id));
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Pending, outboxState!.Status);
+
+        var now = new DateTimeOffset(2026, 11, 17, 19, 0, 0, TimeSpan.Zero);
+        using var clock = GoalRefinementWorkCoordinator.UseClock(() => now);
+        var attempts = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace);
+        var previousAttempt = new SpecRefinementLaunchAttempt(now.AddMinutes(-1), 0, null,
+            GoalRefinementWorkCoordinator.MessageId(goal.Id), workspace.SqliteStatePath);
+        attempts.Save(goal.Id, previousAttempt);
+        var previousLaunchOverride = GoalRefinementWorkCoordinator.LaunchOverride;
+        var launches = 0;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, 1, "test-launch");
+        };
+        try
+        {
+            var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
+                    kernel, workspace, new InMemoryModelProviderRegistry([]), kernel.GetGoal(goal.Id)));
+
+            Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("state=pending", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("repaired=false", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("executor_started=false", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("detail=executor-launch-deferred-cadence", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(0, launches);
+            Xunit.Assert.Equal(previousAttempt, attempts.Get(goal.Id));
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = previousLaunchOverride;
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task SpecConsumer_missing_durable_work_repair_within_cadence_still_defers()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Repair missing durable refinement work.");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        var readiness = GoalRefinementGate.Evaluate(kernel.GetGoal(goal.Id), null,
+            new GoalRefinementClarificationFacts([]));
+        Xunit.Assert.Equal(GoalRefinementReadiness.RepairRequired, readiness.Readiness);
+        Xunit.Assert.Equal("missing-durable-work", readiness.Detail);
+
+        var now = new DateTimeOffset(2026, 11, 17, 19, 0, 0, TimeSpan.Zero);
+        using var clock = GoalRefinementWorkCoordinator.UseClock(() => now);
+        var attempts = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace);
+        var previousAttempt = new SpecRefinementLaunchAttempt(now.AddMinutes(-1), 0, null,
+            GoalRefinementWorkCoordinator.MessageId(goal.Id), workspace.SqliteStatePath);
+        attempts.Save(goal.Id, previousAttempt);
+        var previousLaunchOverride = GoalRefinementWorkCoordinator.LaunchOverride;
+        var launches = 0;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, 1, "test-launch");
+        };
+        try
+        {
+            var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
+                    kernel, workspace, new InMemoryModelProviderRegistry([]), kernel.GetGoal(goal.Id)));
+
+            Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("state=repair=acquired", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("repaired=true", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("executor_started=false", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("detail=executor-launch-deferred-cadence", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(0, launches);
+            Xunit.Assert.Equal(previousAttempt, attempts.Get(goal.Id));
+            Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = previousLaunchOverride;
+        }
+    }
+
+    [Xunit.Fact]
     public async Task SpecConsumer_hydrates_store_spec_instead_of_reliving_pending()
     {
         var root = CreateTempDirectory();

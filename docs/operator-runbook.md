@@ -191,6 +191,27 @@ mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 1
 mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspection
 ```
 
+### Cost goals: outcome metric
+
+A brief is a cost brief when its source backlog item directly belongs to an epic whose id begins with `79801150`, has the complete tag `cost` (case-insensitive), or the brief has a case-sensitive line beginning `Expected effect` with no indentation or markup. Cost briefs must declare at least one metric in an `## Outcome metric` section:
+
+```text
+## Outcome metric
+metric: selection-milliseconds; direction: decrease; target: 20%; window: 5 gates
+```
+
+The line format is `metric: <name>; direction: decrease|increase; target: <value or percent>; window: <N gates>`. Targets are signed or unsigned decimal numbers, optionally followed by `%`; the window is a positive integer, optionally followed by `gate` or `gates`. Multiple metric lines are allowed and every line must be valid. Fenced examples do not count as declarations.
+
+The closed metric names are:
+
+- `selection-milliseconds`: selection duration recorded in the selected-execution record.
+- `executed-class-count`: executed classes recorded in the selected-execution record.
+- `gate-test-cpu-seconds`: test CPU recorded in the launch-lock class CPU ledger.
+- `full-gate-rate`: rate derived from full-gate reasons in selected-execution records.
+- `process-launches`: launches recorded in the launch-lock summary.
+
+Author draft validation and plain `goal --brief-file` / `goal --text-file` filings apply `cost-goal-outcome-metric`. A failure prints the defect and creates no goal. Supply `--override-draft-checks <reason>` with a nonblank reason to file despite that check's failure; the `cost-goal-outcome-metric-override` conduct event records the reason, failed check and source before creation. If the audit write fails, filing stops. Passing briefs produce no override event. Baseline storage and judging the declared outcome after landing are follow-up slices.
+
 For ordinary implementation goals, use `goal`: the normal dogfood pipeline is the Scout flow through Planner, Developer, Tester, and Reviewer; Scout is the only multi-role intake, and goals created earlier with a Researcher task still run. `simple-goal` is an explicit exception for genuinely mechanical, low-risk work or direct operator instruction. It is not a throughput shortcut, and narrow backlog items still use `goal` unless they meet that exception.
 
 Supply a fresh `--request-key` for each intended creation. If the foreground caller times out, do not invent a new key: run `goal-intake-status <request-key>` or repeat the exact original command with the same key. The receipt state distinguishes `still-committing`, `created`, and `failed`; a terminal `created` replay returns the original goal, while reuse with different effectful inputs fails with `GOAL_INTAKE_PAYLOAD_CONFLICT`. Identical unkeyed objectives remain separate goals by design.
@@ -945,7 +966,7 @@ For an operator retry after resolving the hold, run `push-adopted <commit> [--re
 
 Build GC controls are off by default: `buildGcConserveMemory=false`, `buildGcConserveMemoryLevel=5`, and `buildGcHeapCount=0`. Conserve memory independently sets `DOTNET_GCConserveMemory` to the level when enabled; a positive heap count independently sets `DOTNET_GCHeapCount` in uppercase hexadecimal (16 becomes `10`), which acts only on Server GC processes such as csc. These keys reach worker build checks, completion and exit-reconcile builds, solo gates and focused-evidence attempts, and grouped gate attempts (cohorts and merge trains). Worker builds read the file once per invocation before the project loop, completion builds read it at each launch, and gate and focused-evidence attempts capture the adopted policy after the next tick's `POLICY_RELOAD`; existing attempts retain their snapshot and builds already running keep their environment. The conductor must run without `--policy` for file reloads. A/B three windows of similar load: **baseline** (conserve false, heap count 0), **heap count 4** (heap count 4, conserve off), and **conserve level 5** (conserve true at level 5, heap count 0). Confirm one `POLICY_RELOAD` at each switch and compare csc peak working set and build wall time per build kind (worker build check, completion build, gate lane). Revert by returning to baseline values. In the baseline, gates and completion builds still inherit whatever `DOTNET_GCConserveMemory` the conductor was launched with (`mcg-orchestrator.cmd` sets 7), while worker build checks get none; record that inheritance in each comparison. An explicit heap count may change DATAS behavior and raise memory, so measure rather than assume a reduction.
 
-Build-root retention is off at `buildRootRetentionDays=0`; the owner sets the window in days (1 to 365), at most 2 roots are reclaimed per sweep, and each enabled sweep writes one `SWEEP_BUILD_ROOT_RETENTION` line. Lease-less or foreign roots that no registered store knows are reclaimed after the same window by the `SWEEP_UNSTORED_BUILD_ROOT_RETENTION` pass, 25 inspections and 1 GiB per sweep.
+Build-root age retention is off at `buildRootRetentionDays=0`; the owner sets the window in days (1 to 365). The independent `terminalBuildRootMaxBytes` aggregate goal-root budget defaults to null (absent or null means no budget); 0 is a real zero-byte budget. Budget pressure permits reclaiming eligible terminal roots inside the window, oldest lease first, while non-terminal, registered and live-owner roots stay protected. At most 2 roots are reclaimed per sweep, and each enabled sweep writes one `SWEEP_BUILD_ROOT_RETENTION` line with `size-budget-bytes`, remaining `goal-root-bytes`, `retained-not-terminal-bytes`, `retained-window-bytes`, combined `retained-owner-bytes` and `incomplete-roots`. Links are excluded; incomplete measurements show lower bounds (`>=N`) or `unknown` and cannot trigger budget deletion of that root. Lease-less or foreign roots that no registered store knows are reclaimed after the age window by the `SWEEP_UNSTORED_BUILD_ROOT_RETENTION` pass, 25 inspections and 1 GiB per sweep.
 
 Three independent constraints bound useful parallelism:
 

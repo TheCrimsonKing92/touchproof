@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WorkerContextPackageBuilder
 {
     private const string PackageIdDomain = "mcg-worker-context-package";
+    private const string MandatoryReadInstruction = "The complete artifact remains readable at the path on demand. Normally report only this identity receipt and exact source locations; do not reproduce the artifact body on the happy path.";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static ContextDeliveryMode SelectDeliveryMode(ContextArtifactKind kind) => kind switch
@@ -130,6 +131,11 @@ public sealed class WorkerContextPackageBuilder
             $"Semantic package identity (attestation/cache only; not delivery proof): {package.SemanticPackageId}"
         };
 
+        if (package.Artifacts.Any(artifact => artifact.DeliveryMode == ContextDeliveryMode.MandatoryFile))
+        {
+            lines.Add(MandatoryReadInstruction);
+        }
+
         foreach (var artifact in package.Artifacts.Where(artifact => artifact.DeliveryMode != ContextDeliveryMode.HistoricalFile))
         {
             lines.Add(string.Empty);
@@ -245,8 +251,7 @@ public sealed class WorkerContextPackageBuilder
             var problemExcerpt = artifact.FallbackReason is null
                 ? string.Empty
                 : $"; problem_excerpt={BoundProblemExcerpt(artifact.FallbackReason)}";
-            return $"MANDATORY READ: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation={validation}{problemExcerpt}. " +
-                "The complete artifact remains readable at the path on demand. Normally report only this identity receipt and exact source locations; do not reproduce the artifact body on the happy path.";
+            return $"MANDATORY READ: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation={validation}{problemExcerpt}.";
         }
 
         if (artifact.DeliveryMode == ContextDeliveryMode.OnDemandFile)
