@@ -43,6 +43,13 @@ public sealed class CompletionBuildEvidenceIntegrationTests(ITestOutputHelper ou
                 : "public sealed class Feature { }");
             WorkerBuildProjectScope.Prepare(worktree, fixture.GoalId.Value, fixture.TaskId.Value, "main");
             var head = Head();
+            WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(
+                fixture.Kernel, fixture.GoalId, fixture.Task, worktree, head);
+            new SqliteOrchestratorStateRepository(fixture.StatePath).SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
+            fixture.Reload();
+            var scope = Assert.IsType<WorkerBuildScopeIdentity>(fixture.Task.LastDispatch!.WorkerBuildScope);
+            Assert.Equal(fixture.Task.LastDispatch.DispatchedAt, scope.CapturedDispatchAt);
+            Assert.NotNull(scope.RetainedMetadataBase64);
             var runner = new BackgroundDispatchRunner(fixture.Clock, isStillRunning: _ => false,
                 completionBuildEvidence: coordinator, resolveWorkerBuildReceiptPath: _ => receiptPath);
 
