@@ -139,7 +139,7 @@ internal sealed partial class ConductorDriver
                 }
             }
             trigger = goal.Tasks
-                .Select(task => BuildVerifyingFindingTrigger(goal, task))
+                .Select(task => VerifyingFindingTrigger.TryCreate(goal, task))
                 .FirstOrDefault(candidate => candidate is not null);
         }
 
@@ -308,70 +308,6 @@ internal sealed partial class ConductorDriver
         observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
         return true;
     }
-    private VerifyingFindingTrigger? BuildVerifyingFindingTrigger(Goal goal, TaskSpec task)
-    {
-        if (task.Status != WorkTaskStatus.Failed)
-        {
-            return null;
-        }
-
-        if (task.LastVerification is { } contractRecord &&
-            !WorkerResultBlockers.AssessSubscriptionVerification(task, contractRecord).AllowsCompletion)
-            return null;
-
-        if (task.LastVerification is { } latestVerification &&
-            !VerifyingFindingCurrency.IsCurrent(goal, task, latestVerification))
-        {
-            return null;
-        }
-
-        string blocker;
-        if (task.RequiredRole == AgentRole.Reviewer)
-        {
-            var hasNeedsWork = WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
-                task.LastVerification,
-                goal.EffectiveAcceptanceCriteriaCorrections,
-                out blocker,
-                out var suppressedFindings);
-            var hasBlockedAtCap = WorkerResultBlockers.TryFindUnsuppressedBlockedAtCapVerdict(
-                task.LastVerification,
-                goal.EffectiveAcceptanceCriteriaCorrections,
-                out var capBlocker,
-                out var capSuppressedFindings);
-            if (hasBlockedAtCap && task.LastDispatch?.ReviewRetryCap is not { IsAtCap: true })
-            {
-                return null;
-            }
-
-            if (hasNeedsWork || hasBlockedAtCap)
-            {
-                return new VerifyingFindingTrigger(
-                    task,
-                    hasBlockedAtCap ? capBlocker : blocker,
-                    hasBlockedAtCap ? capSuppressedFindings : suppressedFindings,
-                    null);
-            }
-        }
-
-        if (task.RequiredRole != AgentRole.Tester ||
-            !WorkerResultBlockers.TryGetTestsStatus(task.LastVerification, out var testsStatus) ||
-            testsStatus != WorkerResultBlockers.TestsStatus.Fail ||
-            !WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out blocker))
-        {
-            return null;
-        }
-
-        var upstreamDeveloper = goal.Tasks
-            .TakeWhile(t => t.Id != task.Id)
-            .LastOrDefault(t => t.RequiredRole == AgentRole.Developer && HasCommittedOutput(t));
-        if (upstreamDeveloper is null)
-        {
-            return null;
-        }
-
-        return new VerifyingFindingTrigger(task, blocker, [], upstreamDeveloper);
-    }
-
     private static IReadOnlyList<FailedGoalPendingNote> BuildSuppressedAutoReviewRetryFindingNotes(
         TaskSpec reviewerTask,
         IReadOnlyList<string> suppressedFindings)
@@ -387,9 +323,6 @@ internal sealed partial class ConductorDriver
         Goal goal,
         TaskSpec reviewerTask,
         string blockerProse) => ReviewFindingRetryRouteResolver.Resolve(goal, reviewerTask, blockerProse);
-    private static bool HasCommittedOutput(TaskSpec task) =>
-        VerifyingFindingCurrency.HasCommittedOutput(task);
-
     private static int CountReviewerContractRepairsInCurrentRound(Goal goal, TaskSpec reviewerTask)
     {
         var currentRoundStartedAt = GetCurrentReviewerRoundStart(goal, reviewerTask);

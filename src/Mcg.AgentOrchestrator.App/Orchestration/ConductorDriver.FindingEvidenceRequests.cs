@@ -66,43 +66,12 @@ internal sealed partial class ConductorDriver
 
         if (requestingTask.RequiredRole == AgentRole.Reviewer)
         {
-            var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+            requestingFindings = ReviewerFindingEvidenceSuppressionRouting.Apply(this, goal, requestingTask,
                 mergedFindings.Count > 0 ? mergedFindings : round.Findings,
-                goal.EffectiveAcceptanceCriteriaCorrections);
-            var suppressionRoute = ReviewerFindingEvidenceSuppressionRouting.Resolve(
-                requestingTask.LastVerification, goal.EffectiveAcceptanceCriteriaCorrections, openBlockingFindings);
-            if (suppressionRoute.DeferToReviewRetryRoute)
-            {
-                FindingRoundBatchCoordinator.RecordDeferred(this, _recordFindingEvidenceRequestDispositions, goal, requestingTask,
-                    requestingFindings, candidateShaAvailable ? candidateSha : null, findingRoundFingerprint, batchBasisIdentity,
-                    "legacy-review-retry-ownership");
-                return false;
-            }
-            var writableBlockerIds = suppressionRoute.WritableBlockerIds;
-            var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
-            var requestTargetsCurrentCandidate =
-                !candidateShaAvailable ||
-                !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
-                string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
-            if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
-            {
-                var reason = candidateShaAvailable ? "unresolved-writable-blockers-on-unchanged-candidate"
-                    : "candidate-sha-unavailable-with-unresolved-writable-blockers";
-                var preservedFindings = requestingFindings;
-                requestingFindings = ReviewerFindingEvidenceSuppressionRouting.SelectAndSuppress(
-                    writableBlockerIds, requestingFindings, requestingTask, candidateSha,
-                    BuildFindingEvidenceIdentity, requestIdentity => _recordFindingEvidenceSuppressed(
-                        goal.Id, requestingTask.Id, telemetryCandidateSha, writableBlockerIds,
-                        CreateFindingEvidenceRequestId(requestIdentity),
-                        suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
-                        reason,
-                        CreateFindingEvidenceSuppressionIdentity(telemetryCandidateSha,
-                            requestIdentity, writableBlockerIds)));
-                FindingRoundBatchCoordinator.RecordDeferred(this, _recordFindingEvidenceRequestDispositions, goal, requestingTask,
-                    preservedFindings.Except(requestingFindings).ToArray(), candidateShaAvailable ? candidateSha : null,
-                    findingRoundFingerprint, batchBasisIdentity, reason);
-                if (requestingFindings.Length == 0) return false;
-            }
+                requestingFindings, candidateSha,
+                new(requestingTask.Id, telemetryCandidateSha, findingRoundFingerprint, batchBasisIdentity),
+                _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceSuppressed);
+            if (requestingFindings.Length == 0) return false;
         }
 
         var preTesterCoverage = PreTesterCoverageComposition.ReadCoverage(this, goal, telemetryCandidateSha, executionBasisIdentity);
@@ -652,26 +621,6 @@ internal sealed partial class ConductorDriver
         "finding-evidence-" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{findingRoundFingerprint}:{identity}")))
             .ToLowerInvariant()[..24];
-
-    private static string CreateFindingEvidenceRequestId(string identity) =>
-        "evidence-request-" + Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
-            .ToLowerInvariant()[..20];
-
-    private static string CreateFindingEvidenceSuppressionIdentity(
-        string candidateSha,
-        string requestIdentity,
-        IReadOnlyList<string> writableBlockerIds)
-    {
-        var blockerIdentity = string.Join(
-            "\u001f",
-            writableBlockerIds
-                .OrderBy(id => id, StringComparer.Ordinal));
-        return "evidence-suppression-" + Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(
-                $"{candidateSha.Trim().ToLowerInvariant()}\u001e{requestIdentity}\u001e{blockerIdentity}")))
-            .ToLowerInvariant()[..24];
-    }
 
     internal static string CreateFindingEvidenceBatchId(
         string candidateSha,
