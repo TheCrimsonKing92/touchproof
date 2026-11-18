@@ -21,7 +21,7 @@ public sealed class OwnerQuestionHoldVisibilityTests
         var row = Xunit.Assert.Single(bare.RootElement.GetProperty("payload")
             .GetProperty("ownerQuestionHolds").EnumerateArray());
         Xunit.Assert.Equal(new[] { "goalId", "state", "identity", "question", "taskId", "taskNumber",
-            "startedAt", "resolvingVerb", "nextAction" }, row.EnumerateObject().Select(field => field.Name));
+            "startedAt", "resolvingVerb", "nextAction", "itemId", "recommendation" }, row.EnumerateObject().Select(field => field.Name));
         Xunit.Assert.Equal(goal.Id.Value, row.GetProperty("goalId").GetString());
         Xunit.Assert.Equal("steward-owner-question", row.GetProperty("state").GetString());
         Xunit.Assert.Equal(Identity, row.GetProperty("identity").GetString());
@@ -33,6 +33,11 @@ public sealed class OwnerQuestionHoldVisibilityTests
         Xunit.Assert.Equal("retry", row.GetProperty("resolvingVerb").GetString());
         var command = $"retry --goal {goal.Id.Value[..8]} 2 --cause <cause> --text-file <path>";
         Xunit.Assert.Equal(command, row.GetProperty("nextAction").GetString());
+        Xunit.Assert.Equal(JsonValueKind.Null, row.GetProperty("itemId").ValueKind);
+        Xunit.Assert.Equal(JsonValueKind.Null, row.GetProperty("recommendation").ValueKind);
+        using var show = JsonDocument.Parse(AttentionShowAgentReadView.Render(goal.Id.Value, [], [], _ => null, goals: [goal]));
+        var shown = Xunit.Assert.Single(show.RootElement.GetProperty("payload").GetProperty("ownerQuestionHolds").EnumerateArray());
+        Xunit.Assert.Equal(row.GetRawText(), shown.GetRawText());
 
         var disposition = new GoalOperatorDispositionSurface().Evaluate(goal, 0, false);
         Xunit.Assert.Equal(OperatorDispositionState.Blocked, disposition.State);
@@ -62,6 +67,9 @@ public sealed class OwnerQuestionHoldVisibilityTests
         var row = rows[1];
         Xunit.Assert.Equal("answer", row.GetProperty("resolvingVerb").GetString());
         Xunit.Assert.Equal(Question, row.GetProperty("question").GetString());
+        Xunit.Assert.Equal(target, row.GetProperty("itemId").GetString());
+        Xunit.Assert.Equal("Use the repair", row.GetProperty("recommendation").GetString());
+        Xunit.Assert.Equal(Started.UtcDateTime.ToString("O", CultureInfo.InvariantCulture), row.GetProperty("startedAt").GetString());
         Xunit.Assert.Equal(JsonValueKind.Null, row.GetProperty("taskId").ValueKind);
         Xunit.Assert.Equal(JsonValueKind.Null, row.GetProperty("taskNumber").ValueKind);
         Xunit.Assert.Equal(kind == "HumanInput" ? $"answer {target} --text-file <path>" :

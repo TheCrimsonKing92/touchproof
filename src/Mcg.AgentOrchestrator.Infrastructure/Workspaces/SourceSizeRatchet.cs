@@ -631,7 +631,7 @@ internal static class SourceSizeRatchet
             // Goal c5c510a1 keeps override argument parsing and filing wiring in the CLI handler to preserve
             // the Orchestration-to-Cli boundary; metric validation and auditing stay in CostGoalOutcomeMetric.
             // Measured 11024 lines across the existing 30 partials, with no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 11024, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11004, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
