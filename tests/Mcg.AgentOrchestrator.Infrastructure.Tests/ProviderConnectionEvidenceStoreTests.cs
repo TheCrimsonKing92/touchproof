@@ -85,6 +85,96 @@ public sealed class ProviderConnectionEvidenceStoreTests
         await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Repository.ReadProviderConnectionEvidenceAsync("grok-cli"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CaseOnlyCatalogRename_RetainsLatestHostObservation(bool newerFirst)
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var at = GoalTaskHistoryTestFixture.At;
+        var older = new ProviderConnectionObservation(ProviderConnectionContext.Host,
+            ProviderConnectionSource.CodexLoginStatus, ProviderConnectionResult.SignedIn,
+            ProviderConnectionAuthMode.OAuth, at);
+        var newer = older with { Result = ProviderConnectionResult.SignedOut, ObservedAt = at.AddMinutes(1) };
+        if (newerFirst)
+        {
+            await fixture.Repository.SaveProviderConnectionObservationAsync("CODEX-CLI", newer);
+            await fixture.Repository.SaveProviderConnectionObservationAsync("codex-cli", older);
+        }
+        else
+        {
+            await fixture.Repository.SaveProviderConnectionObservationAsync("codex-cli", older);
+            await fixture.Repository.SaveProviderConnectionObservationAsync("CODEX-CLI", newer);
+        }
+        var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli") with { Name = "CODEX-CLI" };
+        var service = new ProviderConnectionReadinessService(new([profile]),
+            SqliteOrchestratorStateRepository.OpenReadOnly(fixture.DatabasePath),
+            new("fixture", (_, _) => throw new Exception("Listing must not probe")), new FixedTime(at.AddMinutes(2)));
+
+        var report = Assert.Single((await service.ListAsync()).Profiles);
+        var observation = Assert.Single(report.Observations.Where(o => o.ExecutionContext == ProviderConnectionContext.Host));
+        Assert.Equal(ProviderConnectionResult.SignedOut, observation.Result);
+        Assert.Equal(newer.ObservedAt, observation.ObservedAt);
+        Assert.Equal(["1"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LegacyCaseDuplicates_ReadAndMigrateLatestPerContext(bool newerFirst)
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        fixture.Execute("""
+            DROP INDEX IF EXISTS ux_provider_connection_observations_identity;
+            DELETE FROM schema_migrations WHERE migration_number = 17;
+            """);
+        var at = GoalTaskHistoryTestFixture.At;
+        var older = new ProviderConnectionObservation(ProviderConnectionContext.Host,
+            ProviderConnectionSource.ClaudeAuthStatus, ProviderConnectionResult.SignedIn,
+            ProviderConnectionAuthMode.OAuth, at);
+        var newer = older with { Result = ProviderConnectionResult.SignedOut, ObservedAt = at.AddMinutes(1) };
+        var material = new ProviderConnectionObservation(ProviderConnectionContext.WorkerCredentialMaterial,
+            ProviderConnectionSource.ClaudePreflight, ProviderConnectionResult.MaterialPresent,
+            ProviderConnectionAuthMode.OAuth, at.AddMinutes(-1));
+        var entries = newerFirst
+            ? new[] { ("CLAUDE-CLI", newer), ("claude-cli", older), ("claude-cli", material) }
+            : new[] { ("claude-cli", older), ("CLAUDE-CLI", newer), ("claude-cli", material) };
+        using (var connection = fixture.Open())
+        {
+            foreach (var (profile, observation) in entries)
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO provider_connection_observations
+                        (profile_id, execution_context, evidence_source, result, authentication_mode, observed_at)
+                    VALUES ($profile, $context, $source, $result, $mode, $at)
+                    """;
+                command.Parameters.AddWithValue("$profile", profile);
+                command.Parameters.AddWithValue("$context", (int)observation.ExecutionContext);
+                command.Parameters.AddWithValue("$source", (int)observation.EvidenceSource);
+                command.Parameters.AddWithValue("$result", (int)observation.Result);
+                command.Parameters.AddWithValue("$mode", (int)observation.AuthenticationMode);
+                command.Parameters.AddWithValue("$at", observation.ObservedAt!.Value.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+                command.ExecuteNonQuery();
+            }
+        }
+        Assert.Equal(["3"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.DatabasePath);
+        var before = await readOnly.ReadProviderConnectionEvidenceAsync("ClAuDe-ClI");
+        Assert.Equal(2, before.Count);
+        Assert.Contains(newer, before);
+        Assert.Contains(material, before);
+        Assert.Equal(["3"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
+
+        StateDbMigrations.EnsureUpToDate(fixture.DatabasePath);
+        Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
+        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync("claude-cli"));
+        await fixture.Repository.SaveProviderConnectionObservationAsync("ClAuDe-ClI", older);
+        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync("CLAUDE-CLI"));
+        Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
+        Assert.True(StateDbMigrations.IsUpToDate(fixture.DatabasePath));
+    }
+
     [Fact]
     public async Task MissingOptionalObservationTable_RemainsReadableWithoutMigration()
     {

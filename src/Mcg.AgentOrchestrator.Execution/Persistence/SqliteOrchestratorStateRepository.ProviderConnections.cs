@@ -25,6 +25,27 @@ public sealed partial class SqliteOrchestratorStateRepository
         command.ExecuteNonQuery();
     }
 
+    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/SqliteOrchestratorStateRepository.ProviderConnections.cs")]
+    internal static void ApplyProviderConnectionIdentitySchema(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        // The migration runner owns the transaction. Equal timestamps keep the last inserted row,
+        // matching the upsert's replacement rule while preserving independent execution contexts.
+        command.CommandText = """
+            DELETE FROM provider_connection_observations WHERE rowid IN (
+                SELECT rowid FROM (
+                    SELECT rowid, ROW_NUMBER() OVER (
+                        PARTITION BY profile_id COLLATE NOCASE, execution_context
+                        ORDER BY observed_at DESC, rowid DESC) AS ordinal
+                    FROM provider_connection_observations
+                ) WHERE ordinal > 1
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_provider_connection_observations_identity
+                ON provider_connection_observations (profile_id COLLATE NOCASE, execution_context);
+            """;
+        command.ExecuteNonQuery();
+    }
+
     public async Task SaveProviderConnectionObservationAsync(string profileId, ProviderConnectionObservation observation,
         CancellationToken cancellationToken = default)
     {
@@ -38,7 +59,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                 INSERT INTO provider_connection_observations
                     (profile_id, execution_context, evidence_source, result, authentication_mode, observed_at)
                 VALUES ($profile, $context, $source, $result, $mode, $at)
-                ON CONFLICT(profile_id, execution_context) DO UPDATE SET
+                ON CONFLICT(profile_id COLLATE NOCASE, execution_context) DO UPDATE SET
+                    profile_id = excluded.profile_id,
                     evidence_source = excluded.evidence_source, result = excluded.result,
                     authentication_mode = excluded.authentication_mode, observed_at = excluded.observed_at
                 WHERE excluded.observed_at >= provider_connection_observations.observed_at
@@ -98,8 +120,13 @@ public sealed partial class SqliteOrchestratorStateRepository
             {
                 command.CommandText = """
                     SELECT execution_context, evidence_source, result, authentication_mode, observed_at, profile_id
-                    FROM provider_connection_observations
-                    WHERE profile_id COLLATE NOCASE IN (SELECT value FROM json_each($profiles)) ORDER BY execution_context
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY profile_id COLLATE NOCASE, execution_context
+                            ORDER BY observed_at DESC, rowid DESC) AS ordinal
+                        FROM provider_connection_observations
+                        WHERE profile_id COLLATE NOCASE IN (SELECT value FROM json_each($profiles))
+                    ) WHERE ordinal = 1 ORDER BY execution_context
                     """;
                 command.Parameters.AddWithValue("$profiles", JsonSerializer.Serialize(profileIds));
                 using var reader = await command.ExecuteReaderAsync(cancellationToken);
