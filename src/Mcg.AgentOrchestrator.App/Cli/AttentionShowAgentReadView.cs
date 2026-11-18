@@ -67,7 +67,9 @@ internal static class AttentionShowAgentReadView
                         taskNumber = hold.TaskNumber,
                         startedAt = hold.StartedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
                         resolvingVerb = hold.ResolvingVerb,
-                        nextAction = hold.NextAction
+                        nextAction = hold.NextAction,
+                        itemId = hold.ItemId,
+                        recommendation = hold.Recommendation
                     }).ToArray()
             }, amendmentHolds), decisions), AttentionAgentReadView.DutyRows(null,
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray())),
