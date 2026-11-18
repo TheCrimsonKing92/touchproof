@@ -17,6 +17,7 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
         var root = CreateTempDirectory();
         WriteSkill(root, "orchestrator-dogfood");
         var workspace = OrchestratorWorkspace.ForDirectory(root, root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Plan a small change.", AgentRole.Planner);
         var goal = kernel.CreateGoal("Plan a small change", [task]);
