@@ -361,8 +361,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
-            CostGoalOutcomeMetric.EnforceAtFiling(goalDraftCheckArguments.Source, goalObjective,
-                goalSourceBacklogLink?.Item, context.Workspace, goalDraftCheckArguments.OverrideReason);
+            var outcomeFiling = CostGoalOutcomeMetric.CaptureAtFiling(goalDraftCheckArguments.Source, goalObjective, goalSourceBacklogLink?.Item, context.Workspace, goalDraftCheckArguments.OverrideReason);
             var goalEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, requestedEpic, goalSourceBacklogLink?.Item.Id);
             context.ReportGoalCreationProgress();
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
@@ -373,6 +372,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Providers,
                 context.EventWriter,
                 context.RefinementCollaborationItemRaise);
+            if (outcomeFiling is not null) new CostGoalOutcomeStore(context.Workspace.OrchestratorDirectory).RecordFiling(context.CurrentGoal.Id, outcomeFiling);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
             var preparedSourceBacklogDependencies = CliGoalDependencyCommands.ApplyAtCreation(context.Kernel, context.CurrentGoal, goalDependsOn);
             if (goalRepositories is not null) context.Kernel.DeclareGoalRepositories(context.CurrentGoal.Id, goalRepositories);
