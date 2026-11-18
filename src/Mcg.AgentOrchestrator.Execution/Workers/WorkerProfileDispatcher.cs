@@ -252,7 +252,7 @@ public static partial class WorkerProfileDispatcher
             brief = brief with { Content = brief.Content + "\n\n" + SubscriptionPreflightPromptProjection.ReadLegacyPromptSection(contextDirectory) };
         WorkerContextPackageReceipt? contextPackageReceipt = null;
         WorkerContextPackage? contextPackage = null;
-        var packagedBrief = brief;
+        var packagedBrief = usesTypedContextPackage ? brief : brief with { Content = BriefSourceContextSection.Append(brief.Content, goal.Objective, workingDirectory, targetContext?.HeadCommit, task.RequiredRole) };
         if (usesTypedContextPackage)
         {
             contextPackage = BuildContextPackage(
@@ -286,11 +286,11 @@ public static partial class WorkerProfileDispatcher
                 : task.CriterionRetryFeedback.Count > 0
                     ? WorkerContextDeliveryPolicy.RetryFeedback
                     : WorkerContextDeliveryPolicy.Initial;
-            var renderedPrompt = WorkerContextRenderer.Render(
+            var renderedPrompt = BriefSourceContextSection.Append(WorkerContextRenderer.Render(
                 briefSource,
                 contextPackage,
                 workingDirectory,
-                deliveryPolicy);
+                deliveryPolicy), goal.Objective, workingDirectory, targetContext?.HeadCommit, task.RequiredRole);
             packagedBrief = briefSource.ToTaskBrief(renderedPrompt);
             contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(contextPackage, renderedPrompt);
         }
