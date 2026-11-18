@@ -1,0 +1,271 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using static CompletionBuildOperatorRepository;
+
+internal static class CompletionBuildOperatorProbe
+{
+    private static readonly TimeSpan Guard = TimeSpan.FromMinutes(5);
+
+    internal static int Gate(string root)
+    {
+        var f = Load(root);
+        using var ready = EventWaitHandle.OpenExisting(f.GateToken + "-ready");
+        using var release = EventWaitHandle.OpenExisting(f.GateToken + "-release");
+        f.Record("compiler-checkpoint", new { image = Environment.ProcessPath,
+            startedAt = Process.GetCurrentProcess().StartTime.ToUniversalTime() });
+        ready.Set();
+        Require(release.WaitOne(Guard), "Independent operator did not release the held compiler checkpoint.");
+        f.Record("compiler-released", new { });
+        return 0;
+    }
+
+    internal static async Task<int> Run(string root, string source, string control)
+    {
+        Require(new[] { "held", "stop", "renewal", "restart", "ownership-loss", "replacement", "stale-candidate", "stale-dispatch" }
+            .Contains(control), "Unknown operator control.");
+        source = Path.GetFullPath(source);
+        var token = "Local\\mcg-completion-" + Guid.NewGuid().ToString("N");
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-ready");
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-release");
+        using var renewed = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-renewed");
+        using var successorReady = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-successor-ready");
+        using var successorRelease = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-successor-release");
+        var f = Create(root, source, token);
+        Process? successor = null;
+        try
+        {
+            f.Record("candidate", new { control, sourceHead = Git(source, "rev-parse", "HEAD"),
+                sourceDirty = Git(source, "status", "--porcelain"), f.State, f.Storage,
+                application = typeof(ConductorBatchLoop).Assembly.Location,
+                applicationSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(ConductorBatchLoop).Assembly.Location))),
+                fixtureSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(CompletionBuildOperatorProbe).Assembly.Location))) });
+            await Host(f, "start");
+            Require(ready.WaitOne(Guard), "Real managed build did not reach the compiler checkpoint.");
+            var original = Operation(f);
+            File.WriteAllText(Path.Combine(root, "original-operation.json"), JsonSerializer.Serialize(original));
+            Pending(f, original);
+            Require(original.Projects.SequenceEqual(["src/Feature/Feature.csproj"]), "Unexpected required project identity.");
+            await Host(f, "progress");
+            var current = f.LoadKernel();
+            Require(current.GetTask(new(f.DisjointGoal), new(f.DisjointTask)).Status == WorkTaskStatus.Completed,
+                "Disjoint tracked goal did not progress while build was held.");
+            Require(current.GetGoal(new(f.DisjointGoal)).Priority == GoalPriority.Critical, "Operator intent did not mutate goal priority.");
+            var intent = await new SqliteOperatorIntentStore(Path.Combine(root, "operator-intents.db"), root)
+                .GetAsync(File.ReadAllText(Path.Combine(root, "intent-id.txt")));
+            Require(intent?.Status == OperatorIntentStatus.Applied, "Real operator intent was not durably applied.");
+            Pending(f, original);
+            Require(!release.WaitOne(0), "Held build was released before unrelated progress and intent application.");
+            f.Record("held-control-proven", new { original.Id, original.DispatchId, original.TreeDigest,
+                original.ChildPid, original.ChildStartedAt, original.ChildImagePath, intentId = intent!.Id, intent.CompletedAt,
+                releaseSignalled = false, disjointGoal = f.DisjointGoal });
+
+            switch (control)
+            {
+                case "stop":
+                    await Host(f, "stop");
+                    Require(File.Exists(f.Stop), "Production stop file was not observed.");
+                    Pending(f, original); // Graceful conductor stop preserves the authorized child.
+                    File.Delete(f.Stop);
+                    await Host(f, "cancel"); // Explicit operator cancellation is a separate contract.
+                    Require(Operation(f) is { Phase: CompletionBuildEvidencePhase.Cancelled, CustodyReleased: true }, "Explicit cancel did not settle custody.");
+                    Require(CompletionBuildEvidenceChildIdentity.Probe(original) == CompletionBuildChildLiveness.Dead, "Cancelled child is still alive.");
+                    NoCommit(f);
+                    break;
+                case "renewal":
+                    await Host(f, "renewal");
+                    Require(renewed.WaitOne(0), "Real handoff successor did not tick.");
+                    Pending(f, original);
+                    goto case "held";
+                case "restart":
+                    // Each Host call is a separate OS process loading SQLite. Original launch
+                    // owner has exited; a restarted host must adopt, never launch another child.
+                    Require(!new ConductLockPidProbe().IsSameProcess(original.LaunchOwnerPid, original.LaunchOwnerStartedAt), "Original launch owner did not exit.");
+                    await Host(f, "observe");
+                    Pending(f, original);
+                    goto case "held";
+                case "ownership-loss":
+                    successor = StartHost(f, "lease-successor");
+                    Require(successorReady.WaitOne(Guard), "Real successor lease owner did not become ready.");
+                    var successorOwner = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "successor.json")))
+                        .RootElement.GetProperty("owner").GetString();
+                    await Host(f, "cancel-attached");
+                    Require(!successor.HasExited, "Old operation terminated the valid successor.");
+                    Require(new ReconcileSweepRemediationStore(f.State).TryGetAcceptanceLeaseOwner(f.Goal) == successorOwner,
+                        "Old operation released the valid successor's lease.");
+                    Require(CompletionBuildEvidenceChildIdentity.Probe(original) == CompletionBuildChildLiveness.Dead, "Old child custody not settled.");
+                    NoCommit(f);
+                    f.Record("successor-preserved", new { successorOwner, successorPid = successor.Id, original.Id });
+                    successorRelease.Set();
+                    await Wait(successor);
+                    Require(successor.ExitCode == 0, "Successor failed to settle its own lease.");
+                    break;
+                case "replacement":
+                    await Host(f, "reset");
+                    await Host(f, "cancel-attached");
+                    ready.Reset();
+                    await Host(f, "replace");
+                    Require(ready.WaitOne(Guard), "Replacement child did not reach the real checkpoint.");
+                    var replacement = Operation(f);
+                    Require(replacement.Id != original.Id && replacement.DispatchId != original.DispatchId,
+                        "Replacement reused obsolete attempt authority.");
+                    await Host(f, "obsolete-cancel");
+                    Pending(f, replacement);
+                    await Host(f, "cancel-attached");
+                    NoCommit(f);
+                    break;
+                case "stale-candidate":
+                    await ReleaseAndWait(f, original, release);
+                    await Host(f, "stale-candidate");
+                    Require(Operation(f).Phase == CompletionBuildEvidencePhase.StaleCandidate,
+                        "Old compiler success was not rejected after source mutation.");
+                    NoCommit(f);
+                    break;
+                case "stale-dispatch":
+                    await ReleaseAndWait(f, original, release);
+                    File.Copy(original.ResultPath, Path.Combine(root, "obsolete-result.json"));
+                    await Host(f, "reset");
+                    await Host(f, "settle");
+                    Require(Operation(f) is { Phase: CompletionBuildEvidencePhase.Success, Applied: false, CustodyReleased: true },
+                        "Historical compiler fact was applied to the reset worker.");
+                    NoCommit(f);
+                    ready.Reset();
+                    release.Reset();
+                    await Host(f, "replace");
+                    Require(ready.WaitOne(Guard), "New dispatch did not start its own real build.");
+                    var next = Operation(f);
+                    Pending(f, next);
+                    await ReleaseAndWait(f, next, release);
+                    // Present the actual old child's receipt to the new attempt. A current
+                    // successful worker-build receipt must not rescue its obsolete authority.
+                    File.Copy(Path.Combine(root, "obsolete-result.json"), next.ResultPath, overwrite: true);
+                    await Host(f, "observe");
+                    Require(Operation(f).Phase == CompletionBuildEvidencePhase.ApparatusFailure,
+                        "Obsolete dispatch receipt authorized the new attempt.");
+                    NoCommit(f);
+                    break;
+                case "held":
+                    await ReleaseAndWait(f, original, release);
+                    await Host(f, "observe");
+                    var applied = f.LoadKernel().GetTask(f.GoalId, f.TaskId);
+                    Require(applied.Status == WorkTaskStatus.Completed && applied.LastVerification?.Succeeded == true &&
+                        applied.CompletionBuildEvidence is { Applied: true, CustodyReleased: true, Phase: CompletionBuildEvidencePhase.Success } &&
+                        applied.LastDispatch?.ResultCommit is not null, "Applicable compiler verdict did not authorize completion and commit.");
+                    var head = Git(original.WorktreeRoot, "rev-parse", "HEAD");
+                    await Host(f, "observe");
+                    Require(Git(original.WorktreeRoot, "rev-parse", "HEAD") == head &&
+                        f.LoadKernel().GetTask(f.GoalId, f.TaskId).VerificationHistory.Count == 1, "Terminal outcome was applied more than once.");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            f.Record("control-failed", new { control, error = ex.ToString() });
+            Console.Error.WriteLine($"control={control}; failed={ex.Message}; receipts={f.Receipts}");
+            return 1;
+        }
+        finally
+        {
+            successorRelease.Set();
+            if (successor is not null) { await Wait(successor); successor.Dispose(); }
+            // Never remove a fixture with unknown custody. Retain all artifacts for independent
+            // review, and settle only the exact attached operation through its real owner.
+            File.Delete(f.Stop);
+            if (OperationOrNull(f) is { IsPending: true }) await Host(f, "cancel-attached");
+            var terminal = OperationOrNull(f);
+            Require(terminal?.ChildPid is null || CompletionBuildEvidenceChildIdentity.Probe(terminal) == CompletionBuildChildLiveness.Dead,
+                "Scenario cleanup could not prove child death; retain the printed root for recovery.");
+            f.Record("custody-settled", new { terminal?.Id, terminal?.CustodyReleased });
+        }
+        f.Record("control-passed", new { control });
+        Console.WriteLine(JsonSerializer.Serialize(new { control, result = "passed", receipts = f.Receipts }));
+        return 0;
+    }
+
+    private static CompletionBuildEvidenceOperation? OperationOrNull(CompletionBuildOperatorRepository f) =>
+        f.LoadKernel().GetTask(f.GoalId, f.TaskId).CompletionBuildEvidence;
+    private static CompletionBuildEvidenceOperation Operation(CompletionBuildOperatorRepository f) =>
+        OperationOrNull(f) ?? throw new InvalidOperationException("No managed operation was attached.");
+    private static void Pending(CompletionBuildOperatorRepository f, CompletionBuildEvidenceOperation expected)
+    {
+        var task = f.LoadKernel().GetTask(f.GoalId, f.TaskId);
+        Require(task.CompletionBuildEvidence is { IsPending: true, Applied: false, CustodyReleased: false } actual &&
+            actual.HasSameOrigin(expected) && CompletionBuildEvidenceTarget.From(actual) == CompletionBuildEvidenceTarget.From(expected) &&
+            CompletionBuildEvidenceChildIdentity.Probe(actual) == CompletionBuildChildLiveness.Live,
+            "Pending attempt identity, authority or real child changed across ticks.");
+        Require(task.Status == WorkTaskStatus.Running && task.LastVerification is null, "Pending exited worker acquired a terminal verdict.");
+        NoCommit(f);
+    }
+    private static void NoCommit(CompletionBuildOperatorRepository f)
+    {
+        var task = f.LoadKernel().GetTask(f.GoalId, f.TaskId);
+        Require(task.Status != WorkTaskStatus.Completed && task.DispatchHistory.All(d => d.ResultCommit is null), "Unproven result authorized completion/commit.");
+        Require(Git(GoalWorktrees.WorktreePath(f.Repository, f.GoalId), "rev-parse", "HEAD") == f.InitialHead, "Unproven candidate was committed.");
+    }
+    private static async Task ReleaseAndWait(CompletionBuildOperatorRepository f, CompletionBuildEvidenceOperation op, EventWaitHandle release)
+    {
+        Require(CompletionBuildEvidenceChildIdentity.Probe(op) == CompletionBuildChildLiveness.Live, "Child identity unavailable at release.");
+        using var child = Process.GetProcessById(op.ChildPid!.Value);
+        _ = child.Handle;
+        Require(new DateTimeOffset(child.StartTime.ToUniversalTime()) == op.ChildStartedAt, "Child PID was reused.");
+        f.Record("operator-release", new { op.Id, op.DispatchId, op.TreeDigest, op.ChildPid });
+        release.Set();
+        await Wait(child);
+        var result = JsonSerializer.Deserialize<CompletionBuildEvidenceOperation>(File.ReadAllText(op.ResultPath))!;
+        Require(child.ExitCode == 0 && result.Phase == CompletionBuildEvidencePhase.Success &&
+            CompletionBuildEvidenceCoordinator.MatchesResult(op, result), "Real managed child did not emit applicable compiler success.");
+        f.Record("real-compiler-result", new { result.Id, result.Phase, result.BuildExitCode, result.ResultPath });
+    }
+    private static async Task Host(CompletionBuildOperatorRepository f, string action)
+    {
+        using var process = StartHost(f, action);
+        await Wait(process);
+        Require(process.ExitCode == 0, $"Host {action} exited {process.ExitCode}; inspect {f.Root}/host-{action}.err.log.");
+    }
+    private static Process StartHost(CompletionBuildOperatorRepository f, string action)
+    {
+        var info = new ProcessStartInfo(Environment.ProcessPath!) { WorkingDirectory = f.Root,
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { typeof(CompletionBuildOperatorProbe).Assembly.Location, "completion-build-host", f.Root, f.Source, action })
+            info.ArgumentList.Add(arg);
+        // Child handoff environment is explicit, with isolated profile, packages and artifacts.
+        info.Environment.Clear();
+        foreach (var key in new[] { "SystemRoot", "WINDIR", "PATH", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432" })
+            if (Environment.GetEnvironmentVariable(key) is { } value) info.Environment[key] = value;
+        info.Environment["PATH"] = Path.GetDirectoryName(WorkerShell.Executable) + Path.PathSeparator + info.Environment["PATH"];
+        info.Environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
+        var profile = Path.Combine(f.Root, "profile");
+        Directory.CreateDirectory(profile);
+        foreach (var key in new[] { "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "DOTNET_CLI_HOME" }) info.Environment[key] = profile;
+        info.Environment["NUGET_PACKAGES"] = Path.Combine(profile, "packages");
+        info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        info.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+        info.Environment["MCG_ORCHESTRATOR_HOME"] = f.Source;
+        info.Environment[DotnetBuildStorageLayout.IsolatedRootOverrideVariable] = f.Storage;
+        var process = Process.Start(info)!;
+        _ = process.Handle;
+        process.StandardInput.Close();
+        // Drain both pipes concurrently; never make the child depend on a tool collecting stdout.
+        Drains[process.Id] = Task.WhenAll(Copy(process.StandardOutput, Path.Combine(f.Root, $"host-{action}.out.log")),
+            Copy(process.StandardError, Path.Combine(f.Root, $"host-{action}.err.log")));
+        return process;
+    }
+    private static readonly Dictionary<int, Task> Drains = new();
+    private static async Task Copy(StreamReader reader, string path)
+    {
+        await using var output = File.CreateText(path);
+        var buffer = new char[4096];
+        int count;
+        while ((count = await reader.ReadAsync(buffer)) != 0) await output.WriteAsync(buffer.AsMemory(0, count));
+    }
+    private static async Task Wait(Process process)
+    {
+        using var guard = new CancellationTokenSource(Guard);
+        await process.WaitForExitAsync(guard.Token);
+        if (Drains.Remove(process.Id, out var drains)) await drains.WaitAsync(guard.Token);
+    }
+}
