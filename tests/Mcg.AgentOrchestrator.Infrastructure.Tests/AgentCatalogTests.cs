@@ -476,7 +476,7 @@ public sealed class AgentCatalogTests
         var path = Path.Combine(CreateTempDirectory(), "agents.json");
         (AgentRole Role, string Alias)[] subscriptions =
         [
-            (AgentRole.Planner, "gpt-5.3-codex"),
+            (AgentRole.Planner, AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias),
             (AgentRole.Developer, "gpt-6.1-sol"),
             (AgentRole.Tester, "gpt-6-sol")
         ];
