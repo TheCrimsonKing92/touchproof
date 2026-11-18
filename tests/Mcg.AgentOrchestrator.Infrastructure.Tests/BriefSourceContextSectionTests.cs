@@ -363,7 +363,8 @@ public sealed class BriefSourceContextSectionTests : WorkerDispatchTestSupport
     {
         var root = CreateTempDirectory();
         var workingDirectory = CreateSeededDispatchRepository();
-        CopyPreparedDispatchCommit(workingDirectory, SourcePath, Sentinel);
+        // Source context reads the working tree; no extra commit or linked-worktree metadata is needed.
+        Write(workingDirectory, SourcePath, Sentinel);
         Assert.True(InfrastructureTestSupport.TryReadGitHeadInProcess(workingDirectory, out var head));
         Assert.False(string.IsNullOrWhiteSpace(head));
         var kernel = new AgentOrchestratorKernel();
