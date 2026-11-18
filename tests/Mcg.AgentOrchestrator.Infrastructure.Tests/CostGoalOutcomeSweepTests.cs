@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -191,6 +192,69 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
         Assert.Equal(new(Landed, Landed, AdoptedAt), saved.Adoption);
         Assert.Equal(CostGoalOutcomeState.Pending, Assert.Single(saved.PendingResults).State);
         Assert.Empty(failures);
+    }
+
+    [Fact]
+    public async Task Run_DefaultSweepResolvesPromotionWithoutLandingIntent()
+    {
+        var registry = new OrchestratorProjectRegistry(Path.Combine(root, "registry"), root);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, root, null, registry);
+        var goal = GoalId.New();
+        var promoted = new string('c', 40);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.RecordPromotionFactsAsync([new(goal.Value, new string('b', 40), new string('a', 40),
+            promoted, AdoptedAt.AddHours(-1), GoalPromotionFact.SoloProvenance)]);
+        var outcomes = new CostGoalOutcomeStore(workspace.OrchestratorDirectory);
+        outcomes.RecordFiling(goal, new(AdoptedAt.AddDays(-1), null, [new(Selection, 100, 6, null)]));
+        new ConductEventLogWriter(workspace.ConductEventsLogPath).Append(
+            "loop-handoff", null, $"FLEET_BUILD_ADOPTED commit={promoted} adopted=home", AdoptedAt);
+
+        CostGoalOutcomeSweep.CreateDefault(workspace, failures.Add).Run(() => AdoptedAt.AddHours(2));
+
+        var saved = outcomes.Read(goal)!;
+        Assert.Equal(new(promoted, promoted, AdoptedAt), saved.Adoption);
+        Assert.Equal(CostGoalOutcomeState.Pending, Assert.Single(saved.PendingResults).State);
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void Run_DefaultSweepResolvesTombstonedIntentAfterCompletedRecovery()
+    {
+        var registry = new OrchestratorProjectRegistry(Path.Combine(root, "registry"), root);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, root, null, registry);
+        var goal = GoalId.New();
+        var unrelated = GoalId.New();
+        var outcomes = new CostGoalOutcomeStore(workspace.OrchestratorDirectory);
+        WriteJournal(goal, recoveryMinute: -3);
+        WriteJournal(unrelated, recoveryMinute: -5);
+        new ConductEventLogWriter(workspace.ConductEventsLogPath).Append(
+            "loop-handoff", null, $"FLEET_BUILD_ADOPTED commit={Landed} adopted=home", AdoptedAt);
+
+        CostGoalOutcomeSweep.CreateDefault(workspace, failures.Add).Run(() => AdoptedAt.AddHours(2));
+
+        Assert.Equal(new(Landed, Landed, AdoptedAt), outcomes.Read(goal)!.Adoption);
+        Assert.Null(outcomes.Read(unrelated)!.Adoption);
+        Assert.Empty(failures);
+
+        void WriteJournal(GoalId id, int recoveryMinute)
+        {
+            const string intent = GoalOperationJournal.LandingIntentOperation;
+            var entries = new[]
+            {
+                Entry(intent, GoalOperationStatus.Completed, -4, Landed),
+                Entry("conductor:landing-recovery", GoalOperationStatus.Completed, recoveryMinute),
+                Entry("conductor:land", GoalOperationStatus.Completed, -2),
+                Entry(intent, GoalOperationStatus.Failed, -1)
+            };
+            var path = GoalOperationJournal.PathFor(workspace.ExecutionDirectory, id);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var json = new JsonSerializerOptions(Json) { Converters = { new JsonStringEnumConverter() } };
+            File.WriteAllLines(path, entries.OrderBy(entry => entry.At).Select(entry => JsonSerializer.Serialize(entry, json)));
+            outcomes.RecordFiling(id, new(AdoptedAt.AddDays(-1), null, [new(Selection, 100, 6, null)]));
+
+            GoalOperationJournalEntry Entry(string operation, GoalOperationStatus status, int minute, string? commit = null) =>
+                new(GoalOperationJournal.Key(id, operation), id, operation, status, AdoptedAt.AddMinutes(minute), null, commit);
+        }
     }
 
     private CostGoalOutcomeSweep CreateSweep() => new(root, store, () => (backlog, events), landings.GetValueOrDefault,

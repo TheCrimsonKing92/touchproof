@@ -105,11 +105,21 @@ internal sealed class CostGoalOutcomeSweep(
             () => (new BacklogStore(workspace.BacklogStorePath), new ConductEventLogWriter(workspace.ConductEventsLogPath)),
             goalId =>
             {
-                if (landings.ReadLanding(goalId) is { } landing)
-                    return landing.LandedCommits.GetValueOrDefault("default");
+                if (landings.ReadLanding(goalId)?.LandedCommits.GetValueOrDefault("default") is { } homeCommit)
+                    return homeCommit;
+                if (File.Exists(workspace.SqliteStatePath) &&
+                    SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                        .ReadPromotionFactAsync(goalId).GetAwaiter().GetResult() is { } promotion)
+                    return promotion.PromotedMainRevision;
+
                 var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goalId);
-                return GoalOperationJournal.HasCompletedLandingEvidence(journal)
-                    ? GoalOperationJournal.TryGetLatestLandingIntent(journal)?.MergeCommitSha : null;
+                if (GoalOperationJournal.HasRetiredTerminalDisposition(journal)) return null;
+                var disposition = GoalOperationJournal.TryGetLatestTerminalDisposition(journal);
+                if (disposition is { Kind: GoalTerminalDispositionKind.Landed, IntegrateSha: { } integrateSha })
+                    return integrateSha;
+                if (!GoalOperationJournal.HasCompletedLandingEvidence(journal)) return null;
+                return GoalOperationJournal.TryGetLatestLandingIntent(journal)?.MergeCommitSha ??
+                    ReadRecoveredLandingCommit(journal);
             },
             () => ReadAdoptions(workspace.ConductEventsLogPath),
             (ancestor, commit) =>
@@ -118,6 +128,28 @@ internal sealed class CostGoalOutcomeSweep(
                 if (result.ExitCode is 0 or 1) return result.ExitCode == 0;
                 throw new InvalidOperationException($"Unable to check cost goal ancestry for {ancestor} in {commit}.");
             }, reportFailure);
+    }
+
+    private static string? ReadRecoveredLandingCommit(GoalOperationJournalSummary journal)
+    {
+        // Landing recovery records success before tombstoning its intent. Bind that success to the
+        // preceding intent, since a failed publication can also leave a tombstone.
+        var sawTombstone = false;
+        var sawRecovery = false;
+        for (var index = journal.Entries.Count - 1; index >= 0; index--)
+        {
+            var entry = journal.Entries[index];
+            if (entry.Operation == GoalOperationJournal.LandingIntentOperation)
+            {
+                if (sawTombstone)
+                    return sawRecovery && entry.Status == GoalOperationStatus.Completed ? entry.BranchHeadSha : null;
+                if (entry.Status != GoalOperationStatus.Failed) return null;
+                sawTombstone = true;
+            }
+            else if (sawTombstone && entry is { Operation: "conductor:landing-recovery", Status: GoalOperationStatus.Completed })
+                sawRecovery = true;
+        }
+        return null;
     }
 
     private static IEnumerable<(string Commit, DateTimeOffset At)> ReadAdoptions(string logPath)
