@@ -29,6 +29,8 @@ public sealed class CostGoalOutcomeMetricTests
     [InlineData("gate-test-cpu-seconds")]
     [InlineData("full-gate-rate")]
     [InlineData("process-launches")]
+    [InlineData("replay-selected-classes")]
+    [InlineData("replay-missed-failures")]
     public void Check_ClosedMetricName_ParsesAndPasses(string name)
     {
         var markdown = "## Outcome metric\n" + ValidLine.Replace("selection-milliseconds", name);
@@ -64,6 +66,32 @@ public sealed class CostGoalOutcomeMetricTests
         var check = CostGoalOutcomeMetric.Check("## Outcome metric\n" + ValidLine + suffix, true);
         Assert.False(check.Passed);
         Assert.Contains("malformed or unexpected fields", check.Detail);
+    }
+
+    [Theory]
+    [InlineData("must-not-increase")]
+    [InlineData("must-not-decrease")]
+    public void Parse_GuardAtEndOfMetricLine_PreservesNameAndRule(string rule)
+    {
+        var (metrics, defects) = CostGoalOutcomeMetric.Parse("## Outcome metric\n" + ValidLine +
+            $"; guard: replay-missed-failures; {rule}");
+
+        Assert.Empty(defects);
+        Assert.Equal(new OutcomeMetricGuard("replay-missed-failures", rule), Assert.Single(metrics).Guard);
+    }
+
+    [Theory]
+    [InlineData("; guard: unrecorded; must-not-increase", "unknown guard metric")]
+    [InlineData("; guard: full-gate-rate", "invalid guard rule")]
+    [InlineData("; guard: full-gate-rate; decrease", "invalid guard rule")]
+    [InlineData("; guard: full-gate-rate; must-not-increase; guard: full-gate-rate; must-not-decrease",
+        "malformed or unexpected fields")]
+    public void Parse_MalformedGuard_RejectsTheLine(string suffix, string defect)
+    {
+        var parsed = CostGoalOutcomeMetric.Parse("## Outcome metric\n" + ValidLine + suffix);
+
+        Assert.Empty(parsed.Metrics);
+        Assert.Contains(parsed.Defects, message => message.Contains(defect, StringComparison.Ordinal));
     }
 
     [Fact]
