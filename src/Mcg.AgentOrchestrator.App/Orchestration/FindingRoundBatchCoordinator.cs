@@ -94,6 +94,31 @@ internal static class FindingRoundBatchCoordinator
                 : "Focused evidence batch settled with unavailable required evidence. " + reason);
     }
 
+    internal static void RecordRefusal(ConductorDriver driver, Goal goal, TaskSpec task, ReviewFinding finding,
+        string candidate, string round, string basis, FindingEvidenceNotHonouredReason reason)
+    {
+        if (!FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))) return;
+        var identity = new FindingEvidenceBatchIdentity(task.Id, candidate, round, basis);
+        FindingRoundBatchAccounting.Record(goal, identity,
+            new(identity.Key, "unavailable", ConductorDriver.BuildFindingEvidenceIdentity(finding.EvidenceRequest!) + ":" + finding.StableId,
+                [finding.StableId]), driver._recordFindingEvidenceRequest);
+    }
+
+    internal static FailedGoalFindingObservation RecordExecutionFailure(ConductorDriver driver, Goal goal, TaskSpec task,
+        FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis,
+        FindingEvidenceNotHonouredReason reason, string detail)
+    {
+        // Rejected and failed executions consume the same existing allowance as completed runs.
+        var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity);
+        driver._recordFindingEvidenceRun(goal.Id, task.Id,
+            $"finding-evidence failed-attempt; finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
+            $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
+        return FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
+            ? SettleUnavailable(driver, goal, task, batch, morePending, candidate, round, basis, detail)
+            : FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
+    }
+
     internal static void RecordOutcome(ConductorDriver driver, Goal goal, TaskSpec task, string candidate, string round, string basis,
         FindingEvidenceBatch batch, string kind, string? receiptId)
     {
@@ -121,6 +146,52 @@ internal static class FindingRoundBatchCoordinator
             ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(driver._getFindingEvidenceEngineSettings(goal)));
     }
 
+    internal static bool TrySettleBeforeRouting(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
+        Func<DateTimeOffset> utcNow, out FindingReceiptClosureDiagnosis? diagnosis, out FailedGoalFindingObservation observation)
+    {
+        diagnosis = null;
+        observation = FailedGoalFindingObservation.None;
+        var identity = Identity(driver, goal, task);
+        bool AlreadyClosed() => identity is not null && FindingRoundBatchAccounting.IsClosed(goal, identity);
+        var summary = identity is not null && FindingRoundBatchAccounting.HasOpenBatch(goal, identity)
+            ? FindingRoundBatchAccounting.Summarize(goal, task, identity, "deterministic-receipt-closure: Tester completed; no worker dispatched")
+            : null;
+        if (AlreadyClosed())
+        {
+            observation = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                "Finding batch closure was already applied; waiting for the routed owner.");
+            return true;
+        }
+        if (summary is not null)
+        {
+            if (summary.NewlyExecuted + summary.Covered + summary.Unavailable != summary.BatchSize)
+            {
+                observation = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                    "Distinct requests in the finding batch remain unsettled; downstream routing is deferred.");
+                return true;
+            }
+            if (summary.Unavailable > 0)
+            {
+                observation = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
+                    "Focused evidence batch settled with unavailable required evidence. No worker was dispatched.");
+                return true;
+            }
+        }
+        if (task.RequiredRole != AgentRole.Tester || (driver._cohortKernel ?? driver._conductorTickKernel) is not { } kernel) return false;
+        FindingReceiptClosureDiagnosis? localDiagnosis = null;
+        var localObservation = FailedGoalFindingObservation.None;
+        bool Close() => FindingReceiptClosureCoordinator.TryClose(kernel, goal, task.Id, candidate, utcNow,
+            out localDiagnosis, out localObservation);
+        var closed = summary is null ? Close() : TryApply(driver, goal,
+            new(identity!, JsonSerializer.Serialize(summary)), () => true, Close);
+        diagnosis = localDiagnosis;
+        if (closed) observation = localObservation;
+        else if (AlreadyClosed())
+            observation = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                "Finding batch closure was already applied; waiting for the routed owner.");
+        return closed || AlreadyClosed();
+    }
+
     internal static bool Observe(ConductorDriver driver, Goal goal, TaskSpec task, ConductorAutonomyPolicy policy,
         out FailedGoalFindingObservation decision)
     {
@@ -137,6 +208,13 @@ internal static class FindingRoundBatchCoordinator
                 driver._recordFindingEvidenceRequest);
         var handled = driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, out decision);
         if (identity is null) return handled;
+        // Deterministic receipt closure records its summary atomically with the kernel action.
+        if (FindingRoundBatchAccounting.IsClosed(goal, identity))
+        {
+            decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                "Finding batch closure was already applied; waiting for the routed owner.");
+            return true;
+        }
         if (!handled && FindingRoundBatchAccounting.HasOpenBatch(goal, identity))
         {
             var summary = FindingRoundBatchAccounting.Summarize(goal, task, identity, "drain-check");
@@ -153,8 +231,25 @@ internal static class FindingRoundBatchCoordinator
                         "All distinct requests in the finding batch have settled.", policy);
                 handled = true;
             }
+            else if (summary.BatchSize > 0)
+            {
+                decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                    "Distinct requests in the finding batch remain unsettled; downstream routing is deferred.");
+                handled = true;
+            }
         }
         if (!handled) return false;
+
+        var settlement = FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check");
+        if (settlement.NewlyExecuted + settlement.Covered + settlement.Unavailable != settlement.BatchSize)
+        {
+            if (decision.TargetTaskId is not null || decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
+                decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                    "Distinct requests in the finding batch remain unsettled; downstream routing is deferred.");
+            // Persistence and other unsafe failures keep their existing loud recovery path,
+            // but cannot claim that an unsettled batch has closed.
+            else if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending) return handled;
+        }
 
         if (decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending)
         {
@@ -170,10 +265,11 @@ internal static class FindingRoundBatchCoordinator
                 if (task.Status != WorkTaskStatus.Failed || goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) ||
                     Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any()) continue;
                 var open = ReviewFindings.GetOpenBlockingFindings(findings, goal.EffectiveAcceptanceCriteriaCorrections);
+                var sourceRepair = TrySourceRepair(goal, task, identity.CandidateSha, [receipt.ReceiptId], open, out var sourceRoute);
                 var interpretation = PassingFindingEvidenceRouter.BuildDecision(goal, task, ConductorDriver.FindUpstreamDeveloperTask(goal, task),
                     identity.CandidateSha, [receipt.ReceiptId], open,
                     FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha), ConductorDriver.BuildFailedGoalAttemptIdentity);
-                var canInterpret = task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed &&
+                var canInterpret = !sourceRepair && task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed &&
                     !goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) &&
                     !Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any() &&
                     open.Count > 0 && !FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha).IsClosable &&
@@ -182,11 +278,11 @@ internal static class FindingRoundBatchCoordinator
                 var developer = ConductorDriver.FindUpstreamDeveloperTask(goal, task);
                 var canRepair = task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed &&
                     developer?.Status == WorkTaskStatus.Completed && !goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) &&
-                    receipt is { Accepted: true, Passed: false } && receipt.Arms?.Any(arm =>
-                        arm is { Arm: FindingEvidenceArm.Candidate, Accepted: true, Disposition: FindingEvidenceArmDisposition.Red, ExecutedTestCount: > 0 }) == true &&
+                    (sourceRepair || (receipt is { Accepted: true, Passed: false } && receipt.Arms?.Any(arm =>
+                        arm is { Arm: FindingEvidenceArm.Candidate, Accepted: true, Disposition: FindingEvidenceArmDisposition.Red, ExecutedTestCount: > 0 }) == true)) &&
                     open.Any(finding => finding.Category is FindingCategory.Correctness or FindingCategory.TestCoverage or
                         FindingCategory.SpecCompliance or FindingCategory.CodeQuality) &&
-                    PolicySelects(driver, goal, policy, FailedGoalFindingObservation.Routed(
+                    PolicySelects(driver, goal, policy, sourceRepair ? sourceRoute : FailedGoalFindingObservation.Routed(
                         FailedGoalFindingObservationKind.FindingRouteObserved, developer!.Id,
                         ConductorDriver.BuildFailedGoalAttemptIdentity(developer), "Open source finding after evidence receipt.", null,
                         observedCause: RetryCause.NewSourceFinding));
@@ -196,7 +292,7 @@ internal static class FindingRoundBatchCoordinator
                     new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + target.Value + ":" + (role?.ToString() ?? "unknown"),
                         [], receipt.ReceiptId, role,
                         canInterpret ? "passing-receipt; failed Tester; dependencies complete; interpretation route selects requesting Tester"
-                            : canRepair ? "candidate-red receipt; open Developer-owned source finding; completed upstream Developer; no running processes"
+                            : canRepair ? "source-repair route; open Developer-owned source finding; completed upstream Developer; no running processes"
                             : "unknown: no demonstrated eligible paid verification selection"), driver._recordFindingEvidenceRequest);
             }
         }

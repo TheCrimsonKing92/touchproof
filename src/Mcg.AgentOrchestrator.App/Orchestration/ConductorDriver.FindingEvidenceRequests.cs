@@ -132,6 +132,8 @@ internal sealed partial class ConductorDriver
                     goal.Id, requestingTask, finding, refusalReason, refusalDetail,
                     repositoryTarget?.CandidateHead ?? telemetryCandidateSha,
                     repositoryTarget?.EngineSettings ?? findingEvidenceEngineSettings);
+                FindingRoundBatchCoordinator.RecordRefusal(this, goal, requestingTask, finding, telemetryCandidateSha,
+                    findingRoundFingerprint, executionBasisIdentity, refusalReason);
                 continue;
             }
 
@@ -146,6 +148,8 @@ internal sealed partial class ConductorDriver
             var priorOutcome = mergedFinding?.EvidenceOutcome;
             if (priorOutcome is not null && IsPermanentFindingEvidenceRefusal(priorOutcome) && FocusedEvidenceInventoryIdentity.StillBinds(priorOutcome, requestSettings))
             {
+                FindingRoundBatchCoordinator.RecordRefusal(this, goal, requestingTask, finding, telemetryCandidateSha,
+                    findingRoundFingerprint, executionBasisIdentity, priorOutcome.Reason ?? FindingEvidenceNotHonouredReason.Unknown);
                 continue;
             }
 
@@ -386,8 +390,9 @@ internal sealed partial class ConductorDriver
                         goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed,
                         decision.Evidence, telemetryCandidateSha);
                 }
-                decision = FindingRoundBatchCoordinator.SettleUnavailable(this, goal, requestingTask, runnable,
+                decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
                     batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
+                    FindingEvidenceNotHonouredReason.RunFailed,
                     "The focused evidence executor failed; a typed refusal was attached.");
             }
             return true;
@@ -412,8 +417,9 @@ internal sealed partial class ConductorDriver
                     goal.Id, requestingTask, finding, reason,
                     detail, telemetryCandidateSha, findingEvidenceEngineSettings);
             }
-            decision = FindingRoundBatchCoordinator.SettleUnavailable(this, goal, requestingTask, runnable,
+            decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
                 batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
+                reason,
                 "The focused evidence executor did not accept the request.");
             return true;
         }
@@ -571,11 +577,6 @@ internal sealed partial class ConductorDriver
             _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, policy);
         return true;
     }
-
-    private void RecordNotHonoured(GoalId goalId, TaskSpec task, ReviewFinding finding,
-        FindingEvidenceNotHonouredReason reason, string detail, string candidate, AcceptanceGateEngineSettings? settings = null) =>
-        FindingEvidenceRefusalRecorder.Record(goalId, task, finding, reason, detail, candidate, settings,
-            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, TrimForConductorMessage);
 
     internal static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,

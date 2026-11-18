@@ -54,6 +54,14 @@ public sealed class FindingRoundBatchCompletionTests
                 Assert.Contains("interpretation route", witness.Eligibility!, StringComparison.Ordinal);
             });
         }
+        else
+        {
+            Assert.Equal(2, summary.CoalescedSelectionCount);
+            Assert.Equal(0, summary.TesterCallsAvoided);
+            Assert.Equal(0, summary.ReviewerCallsAvoided);
+            Assert.Equal(0, summary.PaidVerificationCallsAvoided);
+            Assert.All(summary.EligibilityWitnesses, witness => Assert.Equal(AgentRole.Developer, witness.Role));
+        }
         var prepared = Assert.Single(scenario.Prepared);
         Assert.Equal(sourceBlocker ? scenario.Developer.Id : scenario.Tester.Id, prepared.Task.Id);
         Assert.True(File.Exists(prepared.PromptPath));
@@ -66,7 +74,7 @@ public sealed class FindingRoundBatchCompletionTests
     [Trait("Category", "CrossTick")]
     public void TerminalFailure_SettlesUnavailableAndDrainsLaterRequests()
     {
-        using var scenario = new Scenario(false, rejectFirst: true);
+        using var scenario = new Scenario(false, failure: "terminal");
         for (var tick = 0; tick < 3; tick++)
         {
             scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
@@ -82,6 +90,79 @@ public sealed class FindingRoundBatchCompletionTests
         scenario.Restart();
         scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
         Assert.Equal(3, scenario.Runs.Count);
+        Assert.Single(scenario.Escalations);
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "CrossTick")]
+    public void RefusedMember_SettlesUnavailableBeforeBatchCloses(bool previouslyRefused)
+    {
+        using var scenario = new Scenario(false, failure: previouslyRefused ? "prior-refusal" : "normalization");
+        scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Single(scenario.Runs);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Escalations);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal));
+        scenario.Restart();
+        scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Unavailable);
+        Assert.Contains("FindingOperatorEvidenceRequired", summary.RoutingReason, StringComparison.Ordinal);
+        Assert.Single(scenario.Escalations);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [InlineData("rejected")]
+    [InlineData("run-failed")]
+    [Trait("Category", "CrossTick")]
+    public void TransientFailure_RecoversWithinAllowanceAfterRestart(string failure)
+    {
+        using var scenario = new Scenario(false, failure);
+        scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Single(scenario.Runs);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Escalations);
+        var identity = FindingRoundBatchCoordinator.Identity(scenario.Driver, scenario.Goal, scenario.Tester)!;
+        Assert.Contains(scenario.Tester.LastVerification!.MergedReviewFindings!, finding => finding.EvidenceOutcome?.Reason ==
+            (failure == "rejected" ? FindingEvidenceNotHonouredReason.SelectionApparatusFailure : FindingEvidenceNotHonouredReason.RunFailed));
+        Assert.Equal(0, FindingRoundBatchAccounting.Summarize(scenario.Goal, scenario.Tester, identity, "pending").Unavailable);
+        scenario.Restart();
+        for (var tick = 0; tick < 3; tick++)
+            scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(4, scenario.Runs.Count);
+        Assert.Equal(scenario.Runs[0], scenario.Runs[1]);
+        Assert.Equal(scenario.Tester.Id, Assert.Single(scenario.Retries));
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(3, summary.NewlyExecuted);
+        Assert.Equal(0, summary.Unavailable);
+        Assert.Empty(scenario.Escalations);
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void ExhaustedTransientFailure_DrainsLaterMembersWithoutRetry()
+    {
+        using var scenario = new Scenario(false, failure: "always-rejected");
+        for (var tick = 0; tick < 5; tick++)
+        {
+            scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+            Assert.Empty(scenario.Retries);
+        }
+        Assert.Equal(5, scenario.Runs.Count);
+        Assert.Equal(3, scenario.Runs.Count(request => request == scenario.Runs[0]));
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Unavailable);
         Assert.Single(scenario.Escalations);
         Assert.Equal(0, scenario.ProcessStarts);
     }
@@ -191,12 +272,12 @@ public sealed class FindingRoundBatchCompletionTests
     {
         private readonly string _root = SeededGitRepositoryTemplate.CreateCopy();
         private readonly string Candidate;
-        private readonly bool _rejectFirst;
-        internal Scenario(bool sourceBlocker, bool rejectFirst = false)
+        private readonly string? _failure;
+        internal Scenario(bool sourceBlocker, string? failure = null)
         {
             Assert.True(GitRevisionReader.Shared.TryResolve(_root, "HEAD", out var candidate));
             Candidate = candidate;
-            _rejectFirst = rejectFirst;
+            _failure = failure;
             Kernel = new AgentOrchestratorKernel();
             Goal = Kernel.CreateGoal("Drain finding evidence before verification", [
                 new TaskSpec(TaskId.New(), "Implement source", AgentRole.Developer),
@@ -214,6 +295,10 @@ public sealed class FindingRoundBatchCompletionTests
             if (sourceBlocker)
                 Findings = [.. Findings, EvidenceFindingWithRequest("Source repair remains required", "source-blocker",
                     FindingCategory.Correctness) with { EvidenceRequest = null }];
+            if (failure == "normalization")
+                Findings[0] = Findings[0] with { EvidenceRequest = new([new("Unknown.Tests", "MissingTests")]) };
+            if (failure == "prior-refusal")
+                Findings[0] = Findings[0] with { EvidenceOutcome = new(false, Reason: FindingEvidenceNotHonouredReason.UnparseableSelection) };
             DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: _root, baseCommit: Candidate);
             var stdout = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
                 "tests: deferred - acceptance owns execution", "commit: none", "blockers: none",
@@ -269,7 +354,13 @@ public sealed class FindingRoundBatchCompletionTests
             runFocusedEvidence: (_, request) =>
             {
                 Runs.Add(request);
-                if (_rejectFirst && Runs.Count == 1) return new(request, false, false, "Request unavailable", []);
+                if (_failure == "terminal" && Runs.Count == 1) return new(request, false, false, "Request unavailable", []);
+                if ((_failure == "rejected" && Runs.Count == 1) ||
+                    (_failure == "always-rejected" && request == Runs[0]))
+                    return new(request, false, false, "Source discovery unavailable", [],
+                        Rejection: new(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, request, "Source discovery unavailable"));
+                if (_failure == "run-failed" && Runs.Count == 1)
+                    throw new InvalidOperationException("Focused executor failed before producing evidence.");
                 // Passing requests can settle independently of a source finding that has no evidence request.
                 var green = ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(_root, request, Candidate);
                 return green with { Arms = green.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray(), OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence };
