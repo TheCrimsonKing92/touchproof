@@ -236,6 +236,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
             startInfo.ArgumentList.Add("-FocusedTest");
             startInfo.ArgumentList.Add("-TestFilter");
             startInfo.ArgumentList.Add("FullyQualifiedName~T");
+            startInfo.ArgumentList.Add("-FullOutput");
             startInfo.ArgumentList.Add("test");
             startInfo.ArgumentList.Add("Fake.Tests.csproj");
             startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
