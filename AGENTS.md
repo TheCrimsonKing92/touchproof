@@ -43,14 +43,14 @@ All commands must minimize output by default.
 
 Codex harness command guidance:
 
-- For checked-in PowerShell scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; it is repo-bounded and avoids repeated permission prompts from ad-hoc shell one-liners.
-- Run foreground orchestrator CLI commands through `.\mcg-orchestrator.cmd <orchestrator-args...>`; use `scripts\Invoke-OrchestratorCommand.ps1` only with an explicit `-AppDll`; keep free-form arguments shell-plain (avoid `;`, `|`, `&`) so PowerShell does not split the answer into extra command segments.
-- For operator monitoring, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>`; it combines active goals, conduct/dispatch processes, build locks, and selected statuses without ad-hoc CIM/SQLite/log snippets.
-- For direct SQLite utility access, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 <sqlite-tool-args...>` instead of `dotnet run --project ...`.
-- If direct `git` commands prompt, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 <git-args...>`; it runs git from the repository root through the same repo-bounded script prefix.
-- For exact source windows, use `.\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 <path> <start> <count>` instead of `Get-Content | Select-Object`.
+- For checked-in PowerShell scripts, prefer the repo-bounded `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...` to avoid repeated permission prompts.
+- Run foreground CLI commands through `.\mcg-orchestrator.cmd <orchestrator-args...>`; `scripts\Invoke-OrchestratorCommand.ps1` requires explicit `-AppDll`. Keep arguments shell-plain (avoid `;`, `|`, `&`) to prevent PowerShell splitting commands.
+- For operator monitoring, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>` for goals, processes, build locks and statuses.
+- For SQLite, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 <sqlite-tool-args...>` instead of `dotnet run --project ...`.
+- If direct `git` commands prompt, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 <git-args...>`.
+- Locate, then read: use `rg -n "<name-or-pattern>" <path>` to find the line, then `.\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 <path> <line> <count>` for a bounded window (default 80 lines, maximum 500). Use `-SymbolName <name>` to start at the first literal, case-sensitive match.
 - Avoid `rg -C` until match count is known. Prefer `rg -n --count PATTERN path`, then inspect exact files/symbols.
-- Do not dump full files unless known small. Prefer targeted search or narrow line windows.
+- Read a whole file only when it is already known to contain fewer than 80 lines. The helper reports truncation as `Truncated: last line shown N; total lines T.`; request the next window only when the task needs more context.
 - For `git diff`, use `git diff --stat` first, then inspect one file at a time.
 - For build/test commands, use minimal verbosity and expand only failing output.
 - If a command returns more than about 100 lines, stop, summarize the signal, and narrow the next command.

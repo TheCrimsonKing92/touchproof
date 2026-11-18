@@ -97,7 +97,7 @@ public sealed class PreTesterTestSourceGuardClassesTests(ITestOutputHelper outpu
         try
         {
             // Budget includes the required NonHomeShardGraphGuardTests and WorkerBuildRealCompilerUsageGuardTests; every guard remains selected.
-            Assert.InRange(selected.Count, 1, 52);
+            Assert.InRange(selected.Count, 1, 53);
         }
         catch
         {

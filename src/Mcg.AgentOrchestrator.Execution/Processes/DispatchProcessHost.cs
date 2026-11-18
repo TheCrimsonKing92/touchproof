@@ -1450,6 +1450,9 @@ public static void DropToLow() {
 
         startInfo.Environment["GROK_HOME"] = grokHome;
         startInfo.Environment["GROK_DISABLE_AUTOUPDATER"] = "1";
+        // Grok's documented compat.claude.hooks override wins over the copied user config.
+        // This disables Claude hook scanning; Claude permission settings still load separately.
+        startInfo.Environment["GROK_CLAUDE_HOOKS_ENABLED"] = "false";
     }
 
     internal static void SeedHermesEnvironment(ProcessStartInfo startInfo, string sandboxRoot)

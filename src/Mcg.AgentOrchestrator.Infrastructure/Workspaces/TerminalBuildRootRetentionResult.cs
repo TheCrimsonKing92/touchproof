@@ -5,4 +5,5 @@ internal sealed record TerminalBuildRootRetentionResult(
     long BytesReclaimed,
     IReadOnlyDictionary<TerminalBuildRootSkipReason, int> Skipped,
     IReadOnlyList<string> ReclaimedRoots,
-    string SummaryLine);
+    string SummaryLine,
+    TerminalBuildRootRetainedBytes RetainedBytes);

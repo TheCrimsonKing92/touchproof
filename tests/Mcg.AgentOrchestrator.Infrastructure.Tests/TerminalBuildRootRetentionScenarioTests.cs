@@ -108,6 +108,32 @@ public sealed class TerminalBuildRootRetentionScenarioTests : IDisposable
         for (var index = 2; index < _roots.Count; index++) Assert.Equal(snapshots[index], Snapshot(_roots[index]));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ZeroWindow_ZeroBudget_RunsOnlyStoredRetention(bool suppliedPolicy)
+    {
+        var policy = ConductorAutonomyPolicy.Conservative with
+        {
+            BuildRootRetentionDays = 0, TerminalBuildRootMaxBytes = 0
+        };
+        File.WriteAllText(PolicyFile, policy.ToJson());
+        var protectedSnapshots = _roots.Skip(4).Take(2).Select(Snapshot).ToArray();
+        var result = TerminalGoalSweep.ReapOwnedBuildRootsCore(Db, Storage, _state,
+            _ => false, usesSharedStorageRoot: true, canonicalRepoRoot: Repo, projectRegistry: _projects,
+            reclaimGoalRoots: false, policy: suppliedPolicy ? policy : null);
+
+        var summary = Summary(result);
+        Assert.Contains("window-days=0 reclaimed=2", summary);
+        Assert.Contains("size-budget-bytes=0", summary);
+        Assert.DoesNotContain(result.OperatorEvents,
+            line => line.StartsWith("SWEEP_UNSTORED_BUILD_ROOT_RETENTION", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(_roots[0]));
+        Assert.False(Directory.Exists(_roots[1]));
+        Assert.Equal(protectedSnapshots[0], Snapshot(_roots[4]));
+        Assert.Equal(protectedSnapshots[1], Snapshot(_roots[5]));
+    }
+
     private TerminalGoalSweepOwnedRootResult Sweep(string? db = null, bool reclaimGoalRoots = true) =>
         TerminalGoalSweep.ReapOwnedBuildRootsCore(db ?? Db, Storage, _state,
             _ => false, usesSharedStorageRoot: true, canonicalRepoRoot: Repo, projectRegistry: _projects,

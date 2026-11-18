@@ -20,6 +20,7 @@
     <ProjectReference Include="Fixtures\IsolatedDotnetProbe\Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\RealProcessShardProbe\Mcg.AgentOrchestrator.RealProcessShardProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\ConsoleIoProbe\Mcg.AgentOrchestrator.ConsoleIoProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Fixtures\NativeArgumentProbe\Mcg.AgentOrchestrator.NativeArgumentProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\SupervisorLaunchProbe\Mcg.AgentOrchestrator.SupervisorLaunchProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\WorktreeSerializationProbe\Mcg.AgentOrchestrator.WorktreeSerializationProbe.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
@@ -37,6 +38,7 @@
     <Compile Remove="ProviderEnvironment\**\*.cs" />
     <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />
     <Compile Remove="Fixtures\ConsoleIoProbe\**\*.cs" />
+    <Compile Remove="Fixtures\NativeArgumentProbe\**\*.cs" />
     <Compile Remove="Fixtures\SupervisorLaunchProbe\**\*.cs" />
     <Compile Remove="Fixtures\WorktreeSerializationProbe\**\*.cs" />
     <Compile Include="Fixtures\ConsoleIoProbe\ConsoleHostCensus.cs" />
