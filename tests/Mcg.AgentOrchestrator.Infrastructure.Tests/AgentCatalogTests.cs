@@ -7,6 +7,18 @@ using System.Net.Sockets;
 public sealed class AgentCatalogTests
 {
     [Xunit.Theory]
+    [Xunit.InlineData("OpenAI", "gpt-6-sol", "gpt-6.2-sol")]
+    [Xunit.InlineData("oPeNaI", "GPT-6-SOL", "gpt-6.2-sol")]
+    [Xunit.InlineData("OpenAI", "GpT-6-SoL", "gpt-6.2-sol")]
+    [Xunit.InlineData("OpenAI", "gpt-6.1-sol", "gpt-6.1-sol")]
+    [Xunit.InlineData("OpenAI", "gpt-6.2-sol", "gpt-6.2-sol")]
+    [Xunit.InlineData("Anthropic", "gpt-6-sol", "gpt-6-sol")]
+    public void NormalizeRetargetsOpenAiGpt6Sol(string provider, string model, string expected)
+    {
+        Assert.Equal(expected, EffectiveModelAssignment.Normalize(provider, model));
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("primary", false)]
     [Xunit.InlineData("backup", false)]
     [Xunit.InlineData("absent-fallback", false)]
@@ -42,9 +54,9 @@ public sealed class AgentCatalogTests
 
         Assert.Equal(agent with
         {
-            Model = agent.Model with { ModelName = "gpt-6.1-sol" },
-            ComplexModel = agent.ComplexModel! with { ModelName = "gpt-6.1-sol" },
-            Subscription = agent.Subscription! with { ModelAlias = "gpt-6.1-sol" }
+            Model = agent.Model with { ModelName = "gpt-6.2-sol" },
+            ComplexModel = agent.ComplexModel! with { ModelName = "gpt-6.2-sol" },
+            Subscription = agent.Subscription! with { ModelAlias = "gpt-6.2-sol" }
         }, restored);
         Assert.Equal(primaryText, File.Exists(path) ? File.ReadAllText(path) : null);
         Assert.Equal(backupText, File.Exists(path + ".bak") ? File.ReadAllText(path + ".bak") : null);
@@ -80,7 +92,7 @@ public sealed class AgentCatalogTests
             ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
             Subscription: new SubscriptionLaunchProfile("custom-profile", "gpt-6-sol"), IsProviderRoutingConstrained: true);
         var catalog = AgentCatalogStore.Load(Path.Combine(CreateTempDirectory(), "absent.json"), new AgentCatalog([agent]));
-        Assert.Equal(agent with { Subscription = agent.Subscription! with { ModelAlias = "gpt-6.1-sol" } }, Assert.Single(catalog.Agents));
+        Assert.Equal(agent with { Subscription = agent.Subscription! with { ModelAlias = "gpt-6.2-sol" } }, Assert.Single(catalog.Agents));
     }
 
     [Xunit.Theory(DisplayName = "AgentCatalog_subscription_reasoning_defaults_are_pinned_by_model")]
@@ -454,9 +466,36 @@ public sealed class AgentCatalogTests
     var restored = AgentCatalogStore.Load(path);
 
     Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
-    Assert.Equal(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiGpt62SolSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
     Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, restored.GetRequired(AgentRole.Reviewer).Subscription!.ModelAlias);
 }
+
+    [Xunit.Fact]
+    public void LoadRetargetsRetiredSubscriptionsAndPreservesExplicitGpt61Sol()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "agents.json");
+        (AgentRole Role, string Alias)[] subscriptions =
+        [
+            (AgentRole.Planner, "gpt-5.3-codex"),
+            (AgentRole.Developer, "gpt-6.1-sol"),
+            (AgentRole.Tester, "gpt-6-sol")
+        ];
+        var model = new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey);
+        var catalog = new AgentCatalog(subscriptions.Select(entry => new AgentDefinition(
+            new AgentId($"openai-{entry.Role.ToString().ToLowerInvariant()}"),
+            $"OpenAI {entry.Role}",
+            entry.Role,
+            model,
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", entry.Alias))).ToArray());
+        AgentCatalogStore.Save(path, catalog);
+
+        var restored = AgentCatalogStore.Load(path);
+
+        Assert.Equal(new SubscriptionLaunchProfile("codex-cli", "gpt-6.2-sol", "medium"), restored.GetRequired(AgentRole.Planner).Subscription);
+        Assert.Equal(new SubscriptionLaunchProfile("codex-cli", "gpt-6.1-sol", "medium"), restored.GetRequired(AgentRole.Developer).Subscription);
+        Assert.Equal(new SubscriptionLaunchProfile("codex-cli", "gpt-6.2-sol", "medium"), restored.GetRequired(AgentRole.Tester).Subscription);
+    }
 
     [Xunit.Fact]
     public void AgentCatalogStoreLoadPreservesPersistedFiveRoleGpt55Aliases()
