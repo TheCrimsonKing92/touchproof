@@ -379,10 +379,21 @@ public sealed record DispatchProviderUsage(
     ProviderUsageValue CachedInputTokens,
     ProviderUsageValue OutputTokens)
 {
+    private static readonly ProviderUsageValue UnrecordedTurns = ProviderUsageValue.Unknown("not-recorded");
+
+    public ProviderUsageValue Turns
+    {
+        get;
+        init => field = value ?? UnrecordedTurns;
+    } = UnrecordedTurns;
+
     public static DispatchProviderUsage From(ProviderReportedUsage? usage, string? unavailableReason) => new(
         Value(usage?.InputTokens, unavailableReason),
         Value(usage?.CachedInputTokens, unavailableReason),
-        Value(usage?.OutputTokens, unavailableReason));
+        Value(usage?.OutputTokens, unavailableReason))
+    {
+        Turns = Value(usage?.TurnCount, unavailableReason)
+    };
 
     private static ProviderUsageValue Value(long? count, string? reason) => count is { } value
         ? ProviderUsageValue.Reported(value)

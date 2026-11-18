@@ -386,7 +386,9 @@ public sealed record WorkerContextPackageReceipt(
     WorkerRetryFeedbackPromptReceipt? RetryFeedbackPromptReceipt = null,
     EarlyConvergenceEvidenceKind EarlyConvergenceEvidenceSource = EarlyConvergenceEvidenceKind.ReviewFindingReceipt,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    int? SectionCount = null)
+    int? SectionCount = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ProviderUsageValue? Turns = null)
 {
     public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
     {
@@ -419,7 +421,8 @@ public sealed record WorkerContextPackageReceipt(
     {
         InputTokens = MergeUsageValue(InputTokens, usage?.InputTokens, unavailableReason),
         CachedInputTokens = MergeUsageValue(CachedInputTokens, usage?.CachedInputTokens, unavailableReason),
-        OutputTokens = MergeUsageValue(OutputTokens, usage?.OutputTokens, unavailableReason)
+        OutputTokens = MergeUsageValue(OutputTokens, usage?.OutputTokens, unavailableReason),
+        Turns = MergeUsageValue(Turns, usage?.TurnCount, unavailableReason)
     };
 
     public WorkerContextPackageReceipt WithProviderUsage(ModelUsage? usage, string unavailableReason = "absent") => this with
@@ -460,11 +463,11 @@ public sealed record WorkerContextPackageReceipt(
         characterCount / 4 + (characterCount % 4 == 0 ? 0 : 1);
 
     private static ProviderUsageValue MergeUsageValue(
-        ProviderUsageValue current,
+        ProviderUsageValue? current,
         long? reportedValue,
         string unavailableReason)
     {
-        if (current.State == ProviderUsageState.Reported)
+        if (current is { State: ProviderUsageState.Reported })
         {
             return current;
         }
@@ -478,4 +481,5 @@ public sealed record WorkerContextPackageReceipt(
 public sealed record ProviderReportedUsage(
     long? InputTokens,
     long? OutputTokens,
-    long? CachedInputTokens = null);
+    long? CachedInputTokens = null,
+    long? TurnCount = null);

@@ -13,6 +13,7 @@ internal sealed record ContextUsageRow(
     ContextUsageStat Cached,
     ContextUsageStat Uncached,
     ContextUsageStat Output,
+    ContextUsageStat Turns,
     ContextUsageStat HarnessOverhead,
     int MissingUsageCount,
     IReadOnlyDictionary<string, int> MissingUsageReasons);
@@ -52,6 +53,7 @@ internal static class ContextUsageReport
                 Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.CachedInputTokens).Value)),
                 Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Uncached(value.InputTokens, value.CachedInputTokens).Value)),
                 Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.OutputTokens).Value)),
+                Stat(group.Select(item => RecordedTurns(item.Dispatch))),
                 Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.HarnessOverhead(receipt).Value)),
                 missing.Length,
                 reasons);
@@ -61,6 +63,12 @@ internal static class ContextUsageReport
         .ThenBy(row => row.Model, StringComparer.Ordinal)
         .ToArray();
         return new(since, role, rows);
+    }
+
+    private static long? RecordedTurns(TaskDispatchRecord dispatch)
+    {
+        var turns = dispatch.ContextPackageReceipt is { } receipt ? receipt.Turns : dispatch.ProviderUsage?.Turns;
+        return turns is null ? null : ContextUsageFigures.Provider(turns).Value;
     }
 
     private static ContextUsageStat Stat(IEnumerable<long?> values) => ContextUsageFigures.Stat(values);
