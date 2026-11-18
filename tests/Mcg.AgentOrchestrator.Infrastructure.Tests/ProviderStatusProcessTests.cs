@@ -74,6 +74,7 @@ public sealed class ProviderStatusProcessTests
             """;
         using var cancellation = new CancellationTokenSource();
         Process? descendant = null;
+        SpawnProcessIdentity? descendantIdentity = null;
         try
         {
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WorkerProcessRunner.RunBoundedDirectAsync(
@@ -83,6 +84,9 @@ public sealed class ProviderStatusProcessTests
                     await MarkerFileProbe.WaitAsync(marker, TestHangGuard.Bound);
                     descendant = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker)));
                     _ = descendant.SafeHandle;
+                    Assert.True(SpawnProcessIdentityReader.TryRead(descendant, out var identity),
+                        "Record the status probe descendant identity for cleanup.");
+                    descendantIdentity = identity;
                     await TestHangGuard.CompletesWithinAsync(root.WaitForExitAsync(), TestHangGuard.Bound, "status probe root exit");
                     Assert.Equal(0, root.ExitCode);
                     Assert.False(descendant.HasExited);
@@ -96,11 +100,8 @@ public sealed class ProviderStatusProcessTests
         {
             using (descendant)
             {
-                if (descendant is { HasExited: false })
-                {
-                    descendant.Kill();
-                    await TestHangGuard.CompletesWithinAsync(descendant.WaitForExitAsync(), TestHangGuard.Bound, "status probe test descendant cleanup");
-                }
+                if (descendant is not null && descendantIdentity is not null)
+                    TestOwnedProcessStop.StopRootIfSame(descendant, descendantIdentity, TestHangGuard.Bound);
             }
             SharedTestSupport.RemoveTempDirectory(directory.FullName);
         }
