@@ -29,6 +29,8 @@ public sealed record WorkerRoundRecord(
     ReworkCauseFamily ReworkCause)
 {
     public bool UsageReported => InputTokens.HasValue && CachedInputTokens.HasValue && OutputTokens.HasValue;
+    public bool? PlannerContractRejected { get; init; }
+    public bool? PlannerClarification { get; init; }
 }
 
 public static class WorkerRoundLedger
@@ -54,6 +56,7 @@ public static class WorkerRoundLedger
         var records = new List<WorkerRoundRecord>();
         foreach (var task in goal.Tasks)
         {
+            var diagnostics = PlannerRoundDiagnostics.FromTask(goal, task);
             var dispatches = task.DispatchHistory.OrderBy(dispatch => dispatch.DispatchedAt)
                 .DistinctBy(dispatch => dispatch.DispatchedAt).ToArray();
             var endings = goal.Timeline
@@ -85,7 +88,11 @@ public static class WorkerRoundLedger
                     Reported(input), Reported(cached), Reported(output),
                     ReworkCauseClassifier.Classify(goal, task, index + 1,
                         index == 0 ? dispatch.DispatchedAt : dispatches[index - 1].DispatchedAt,
-                        dispatch.DispatchedAt, intents)));
+                        dispatch.DispatchedAt, intents))
+                {
+                    PlannerContractRejected = diagnostics.GetValueOrDefault(dispatch.DispatchedAt).Rejected,
+                    PlannerClarification = diagnostics.GetValueOrDefault(dispatch.DispatchedAt).Clarification
+                });
             }
         }
         return records;

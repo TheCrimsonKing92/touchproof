@@ -122,6 +122,8 @@ public sealed class PlannerRoundMeasurementReproductionTests(ITestOutputHelper o
             Assert.Equal(100L, round.InputTokens);
             Assert.Equal(10L, round.CachedInputTokens);
             Assert.Equal(20L, round.OutputTokens);
+            Assert.Equal(contractRejected, round.PlannerContractRejected);
+            Assert.False(round.PlannerClarification);
 
             // Snapshot hydration and the public read-only route consume the actual runner evidence.
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
@@ -142,6 +144,9 @@ public sealed class PlannerRoundMeasurementReproductionTests(ITestOutputHelper o
                 text, StringComparison.Ordinal);
             var jsonText = Run([.. WindowArgs, "--json"]);
             using var json = JsonDocument.Parse(jsonText);
+            var diagnosticRow = Assert.Single(json.RootElement.GetProperty("plannerRounds").EnumerateArray());
+            Assert.Equal(contractRejected, diagnosticRow.GetProperty("contractRejected").GetBoolean());
+            Assert.False(diagnosticRow.GetProperty("clarification").GetBoolean());
             var window = json.RootElement.GetProperty("window");
             Assert.Equal(1, window.GetProperty("rounds").GetInt32());
             Assert.Equal(1, window.GetProperty("lostGoals").GetInt32());
