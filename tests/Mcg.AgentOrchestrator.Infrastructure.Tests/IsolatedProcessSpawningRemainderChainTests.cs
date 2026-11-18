@@ -1,374 +1,119 @@
 using System.Reflection;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel safe: reads metadata and the checked-in manifest; controls change only local copies.
+// Parallel-safe: immutable metadata and source reads, with an isolated history fixture.
 [TestAssemblyMembership]
 public sealed class IsolatedProcessSpawningRemainderChainTests
 {
+    private const string Constraint = "ProcessSpawning";
     private const string OriginalCollection = "IsolatedProcessSpawning";
     private const string SplitCollection = "IsolatedProcessSpawningRemainderB";
     private const string DeferredContextCollection = "IsolatedProcessSpawningRemainderC";
-    private const string Remainder = "Remainder";
-    private const double UnlistedSeconds = 5.0;
-    private const double BudgetSeconds = 240.0;
+    private const double BudgetSeconds = 240;
 
-    private static readonly Type[] MovedTypes =
-    [
-        typeof(LandingRebindEquivalenceTests),
-        typeof(DeveloperStructuredNoChangeDeclarationTests),
-        typeof(DeveloperAnsweredClarificationNoChangeDispatchTests),
-        typeof(DeveloperStaleFindingNoChangeDispatchTests),
-        typeof(OwnerPolicyApprovalRebaseTests),
-        typeof(WorkerBuildCheckRecoveryDecisionTests),
-        typeof(DeveloperUnusableEvidenceNoChangeDispatchTests),
-        typeof(DeveloperDeferredNoChangeDispatchTests),
-        typeof(GoDeveloperNoChangeDispatchTests),
-        typeof(ConfirmLegacyAcceptanceHolderSettlementScriptTests),
-        typeof(ExecutorBuildCheckScriptTests),
-        typeof(CandidateIdentityComputationTests),
-        typeof(CandidateIdentityProjectHomeTests),
-        typeof(AcceptanceSharedApparatusRealProcessControlTests),
-        typeof(AcceptanceMtpFilterResponseFileManagedTests),
-        typeof(RemoteFirstFocusedEvidenceNormalizedResultTests)
-    ];
-
-    private static readonly Type[] RemainderCTypes =
-    [
-        typeof(DeferredNoChangeContextAuthorityTestsIsolatedProcessSpawning),
-        typeof(DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning),
-        typeof(DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning),
-        typeof(RemoteFirstFocusedEvidenceExecutorWaitTests),
-        typeof(FocusedEvidenceTraitExcludedSelectionTests),
-        typeof(GateDeclaredTestSettingsTests),
-        typeof(WorkerBuildScopeToolCacheTests),
-        typeof(WorkerBuildScopeToolCacheDigestTests),
-        typeof(WorkerBuildCheckGoalLeaseOwnerTests),
-        typeof(WorkerBuildCheckQueueDeadlineTests),
-        typeof(StaleCheckpointTesterRoundHistoryTests)
-    ];
-
-    // Five-gate means: 9a0a3d15, a6926d29, c4014e44, 7dadc55c,
-    // and operator 20261019032750611. Each row is summed test seconds for one class.
-    private static readonly Dictionary<string, double> MeanSeconds = new(StringComparer.Ordinal)
-    {
-        [nameof(LandingRebindEquivalenceTests)] = 49.1,
-        [nameof(DeveloperStructuredNoChangeDeclarationTests)] = 39.9,
-        [nameof(DeveloperAnsweredClarificationNoChangeDispatchTests)] = 31.0,
-        [nameof(DeveloperStaleFindingNoChangeDispatchTests)] = 15.8,
-        [nameof(OwnerPolicyApprovalRebaseTests)] = 13.1,
-        [nameof(WorkerBuildCheckRecoveryDecisionTests)] = 10.6,
-        [nameof(DeveloperUnusableEvidenceNoChangeDispatchTests)] = 10.2,
-        [nameof(DeveloperDeferredNoChangeDispatchTests)] = 9.7,
-        [nameof(GoDeveloperNoChangeDispatchTests)] = 9.7,
-        [nameof(ConfirmLegacyAcceptanceHolderSettlementScriptTests)] = 8.2,
-        [nameof(ExecutorBuildCheckScriptTests)] = 7.8,
-        [nameof(CandidateIdentityComputationTests)] = 7.3,
-        // Gate attempt 0a5ab00c-gate-20261027095412364-12a5c9a700c84971acd65e32d637e0d0:
-        // 0a5ab00c-gate-20261027095412364-12a5c9a700c84971acd65e32d637e0d0.infrastructure-tests-remainder.trx (summed cases, rounded).
-        [nameof(CandidateIdentityProjectHomeTests)] = 1.4,
-        [nameof(AcceptanceSharedApparatusRealProcessControlTests)] = 6.3,
-        [nameof(AcceptanceMtpFilterResponseFileManagedTests)] = 5.2,
-        [nameof(PatchEquivalenceContextOnlyDriftTests)] = 123.7,
-        [nameof(RemoteFocusedEvidenceShadowTests)] = 24.1,
-        [nameof(RemoteFirstFocusedEvidenceScenarioTests)] = 22.7,
-        [nameof(GoalOwnedLinesPatchEquivalenceTests)] = 10.0,
-        [nameof(RemoteFocusedEvidenceShadowAgreementTests)] = 8.4,
-        [nameof(RemoteFocusedEvidenceShadowHostBoundTests)] = 8.4,
-        [nameof(RemoteFirstFocusedEvidenceHostBoundTests)] = 8.1,
-        [nameof(ExecutorToolsDigestScriptTests)] = 3.5,
-        [nameof(WorkerDispatchTestsReviewFindingFormatRepair)] = 3.3,
-        [nameof(JobAccountingRunIdentityEvidenceTests)] = 3.2,
-        [nameof(ManagedDiscoveryNonAsciiDiscoveryTests)] = 3.0,
-        [nameof(Mcg.AgentOrchestrator.Infrastructure.Tests.AcceptanceGateFlakeInventoryGeneratorTests)] = 2.7,
-        [nameof(CandidateIdentityConfiguredTrunkTests)] = 2.6,
-        [nameof(GoalAcceptanceLaneIsolatedRootGuardTests)] = 1.5,
-        [nameof(RemoteFocusedEvidenceShadowPhaseTests)] = 1.0,
-        [nameof(RepositorySourceInventoryTests)] = 0.8,
-        [nameof(DeferredNoChangeEvidenceClassSetChangeTests)] = 0.7,
-        [nameof(WorkerBuildDiagnosticDefaultsTests)] = 0.5,
-        [nameof(HumanInputResumeDispatchTests)] = 0.4,
-        [nameof(DeveloperCompletionStructuralPreflightTestGuardsTests)] = 0.2,
-        [nameof(ConductorDriverGoalEvidenceLeaseTests)] = 0.2,
-        [nameof(EvidenceOnlyNoChangeAcceptanceTests)] = 0.1,
-        [nameof(FailedGoalRetryApplicationDriverEquivalenceTests)] = 0.1,
-        [nameof(AnsweredTesterBlockerRequeueIsolatedProcessSpawningConductorTests)] = 0.1,
-        [nameof(AssemblyTempRedirectStartupCostTests)] = 0.1,
-        [nameof(DistinctPendingEvidenceOnlyFindingsTests)] = 0.0,
-        [nameof(DeveloperCompletionStructuralPreflightRetryFeedbackTests)] = 0.0,
-        [nameof(PreReviewEvidenceCoverageTests)] = 0.0,
-        [nameof(AutomaticRetryFeedbackControlTests)] = 0.0,
-        [nameof(ConductorDriverRetryOnlyRemediationTests)] = 0.0,
-        [nameof(DeveloperCompletionStructuralPreflightRetryFeedbackTestsClassCeiling)] = 0.0,
-        [nameof(DispatchStartDecisionCoverageTests)] = 0.0,
-        // Provisional estimate, 1bdf4ee5 correction; replace with the Tester's measured summed seconds.
-        [nameof(WorkerBuildScopeToolCacheTests)] = 14.0,
-        // Provisional estimate, 1bdf4ee5 correction; replace with the Tester's measured summed seconds.
-        [nameof(WorkerBuildScopeToolCacheDigestTests)] = 12.0,
-        // Gate attempt f1519407-gate-20261114100746341, lane infrastructure-tests-balanced-8:
-        // the two tests measured 7.65 s + 7.93 s = 15.58 s summed, rounded to 15.6 s; a single gate sample.
-        [nameof(WorkerBuildCheckGoalLeaseOwnerTests)] = 15.6,
-        // Provisional estimate, goal 99c66d31; replace after the first gate measurement.
-        [nameof(WorkerBuildCheckQueueDeadlineTests)] = 20.0,
-        // Provisional summed estimate for five cases, goal 0d6500c9; replace after the first gate measurement.
-        [nameof(StaleCheckpointTesterRoundHistoryTests)] = 10.0
-    };
-
-    // Operator-supplied samples for candidate 822ad7fbc9bd0e3020afecfb850fff6bdb7468c5.
-    // Focused attempt: 7a589bfd-0-20261020040313965-ca162fac03304a5fae8d57ec42e8b279;
-    // result SHA256 4E771721E88163AE3B31A37C11C9C066364FDF08FA208B05406FE7D83FA3BCA4,
-    // TRX SHA256 1D9E5F1613BCCFDF45864285A4DF7C56770A0B3D322F7274E7E8D79C5668FD10.
-    // Native gate: 7a589bfd-0-20261020053144365-f194d4986ac24b4b819a52bc2e708c9c;
-    // infrastructure-tests-remainder.trx SHA256
-    // 5BF2B083C890E158381EAD5E47CDF956D9DCC61BBF03AE48077923AF61946A74.
-    // Both executed the same 44 passing cases. These are summed per-test seconds from two
-    // different contexts, not five-gate means or collection wall durations. Plan with each
-    // class's larger observed sum; neither existing chain can absorb the resulting 129.5 s.
-    private static readonly Dictionary<string, (double Focused, double NativeGate)> DeferredContextSamples = new(StringComparer.Ordinal)
-    {
-        [nameof(DeferredNoChangeContextAuthorityTestsIsolatedProcessSpawning)] = (15.0496296, 78.2280556),
-        [nameof(DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning)] = (2.9622477, 6.2484266),
-        [nameof(DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning)] = (8.5897754, 45.0373822)
-    };
-
-    // Native Remainder gate on candidate f61d20bb4c3742c935285f18a6f542ee6f977f57:
-    // attempt 51bc61b5-0-20261025132444961-2f3e478074d44823bd20397513c36679,
-    // infrastructure-tests-remainder.trx SHA256
-    // 82D561D215EB42B7175A8DBF57E8D921F6199ECA276947F89EEE80CED2F42917.
-    // Sum of all seven passing scenario cases; a single gate sample, not a five-gate mean.
-    private const double PermitReleaseScenarioGateSeconds = 10.3534388;
-
-    // Native Remainder gate on candidate df82c71faab4ffdc49c3a9c515c7bce69c2c84a7:
-    // attempt a5412d04-0-20261025190505535-c3847e1809814c6daf56dcf29dd54012,
-    // infrastructure-tests-remainder.trx SHA256
-    // 99B648ECA7B376AD5311AA4F3CA8D507FDEB6A4EAFE38897E050938473DA993F.
-    // Sum of all nine passing classifier cases; a single gate sample, not a five-gate mean.
-    private const double FocusedEvidenceInterruptionGateSeconds = 0.0111781;
-
-    // Native Remainder gate on candidate bd9f72310ed9aaaee1894422de7fb1d297e7a3b4:
-    // attempt c5e54e91-0-20261027171340845-6ade9644b91c4488b2b87f6f2a9b0cc2,
-    // infrastructure-tests-remainder.trx SHA256
-    // 6BE4649034341AC57C8BFD06B3CB409077364F79C434A002F626FC237A041597.
-    // Sum of all 13 passing normalization cases; a single gate sample, not a five-gate mean.
-    private const double NormalizedResultGateSeconds = 12.4667215;
-
-    // Native Remainder gate on candidate 10a8b8ee3960683d693843275fd51d7d81f84240:
-    // attempt 6742c564-0-20261101053726688-6e14b0b5f5bb4e069a3186a6f53e1fd7,
-    // infrastructure-tests-remainder.trx SHA256
-    // 5E50B080F8F92340F8C1E5422CFDBC979C10050B5ABEC2F36124A35358892C3A.
-    // Sum of all four passing wait cases; a single gate sample, not a five-gate mean.
-    private const double ExecutorWaitGateSeconds = 4.3292729;
-
-    // Native Remainder gate on candidate d744f1b85c730e84be165ff2d6365548122353f4:
-    // attempt 005af028-0-20261101124700243-348dffeec9c84a3f9cb891f8c58f4703,
-    // infrastructure-tests-remainder.trx SHA256
-    // C34FFFEED14EE426D3D5138DF9BFA693C2B679E5916B371D77FF93A5A05E4CD5.
-    // Sum of all 16 passing cases; a single gate sample, not a five-gate mean.
-    private const double TraitExcludedSelectionGateSeconds = 3.326;
-
-    // Focused acceptance evidence on candidate 069be68599253c8b83c4c228724e9247d6f1e54f:
-    // attempt 94985898-0-20261105022935993-bfd7dfce9d144e87ba26ca0582191b98,
-    // 94985898-pre-review-20261105022939330-e80464c05a154c5890617b4c14e502e1-candidate.
-    // reviewer-focused-evidence-infrastructure-tests-fullyqualifiedname-acceptanceownerprotectedfingerpr-5f4bde8a9bcec04c.trx
-    // SHA256 2F0E33AB6A3FA3F9B304A0E5C9BE39596D20EFD8276C981BD549FC08807D466E.
-    // Sum of all 46 passing cases; the class is unchanged at 8a1c6718. The later native gate
-    // stopped before this class ran, so this is a focused sample, not a native-gate mean.
-    private const double DeclaredTestSettingsFocusedSeconds = 24.6910828;
-
-    private static readonly IReadOnlyDictionary<string, double> PlanningSeconds = MeanSeconds
-        .Concat(DeferredContextSamples.Select(sample => new KeyValuePair<string, double>(
-            sample.Key, Math.Max(sample.Value.Focused, sample.Value.NativeGate))))
-        .Append(new(nameof(RemoteFirstFocusedEvidencePermitReleaseScenarioTests), PermitReleaseScenarioGateSeconds))
-        .Append(new(nameof(FocusedEvidenceInterruptionTests), FocusedEvidenceInterruptionGateSeconds))
-        .Append(new(nameof(RemoteFirstFocusedEvidenceNormalizedResultTests), NormalizedResultGateSeconds))
-        .Append(new(nameof(RemoteFirstFocusedEvidenceExecutorWaitTests), ExecutorWaitGateSeconds))
-        .Append(new(nameof(FocusedEvidenceTraitExcludedSelectionTests), TraitExcludedSelectionGateSeconds))
-        .Append(new(nameof(GateDeclaredTestSettingsTests), DeclaredTestSettingsFocusedSeconds))
-        .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
-
-    [Xunit.Fact]
+    [Fact]
     public void SplitCollectionHasParallelSharedFixtureAndExactMembers()
     {
-        foreach (var type in MovedTypes)
-            Xunit.Assert.Equal(SplitCollection, DeclaredCollection(type));
-        var members = RunnableTypes().Where(type => DeclaredCollection(type) == SplitCollection).ToArray();
-        Xunit.Assert.Equal(16, members.Length);
-        Xunit.Assert.Equal(MovedTypes.Select(type => type.FullName).Order(StringComparer.Ordinal),
-            members.Select(type => type.FullName).Order(StringComparer.Ordinal));
+        AssertParallelSharedFixture(typeof(IsolatedProcessSpawningRemainderBCollection), SplitCollection);
+        AssertParallelSharedFixture(typeof(IsolatedProcessSpawningRemainderCCollection), DeferredContextCollection);
 
-        var definitionType = typeof(IsolatedProcessSpawningRemainderBCollection);
-        var definition = definitionType.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>();
-        Xunit.Assert.NotNull(definition);
-        Xunit.Assert.Equal(SplitCollection, definition.Name);
-        Xunit.Assert.True(definitionType.IsPublic && definitionType.IsSealed);
-        Xunit.Assert.False(definition.DisableParallelization);
-        Xunit.Assert.Null(definitionType.GetCustomAttribute<ProcessLocalTestCollectionAttribute>());
-        Xunit.Assert.True(typeof(Xunit.ICollectionFixture<IsolatedDotnetRootFixture>)
-            .IsAssignableFrom(definitionType));
-        var isolated = LaneIsolatedRootScanner.IsolatedCollections(definitionType.Assembly);
-        Xunit.Assert.Contains(OriginalCollection, isolated);
-        Xunit.Assert.Contains(SplitCollection, isolated);
-    }
-
-    [Xunit.Fact]
-    public void ThirdChainHasParallelSharedFixtureAndExactMembers()
-    {
-        foreach (var type in RemainderCTypes)
-            Xunit.Assert.Equal(DeferredContextCollection, DeclaredCollection(type));
-        var members = RunnableTypes().Where(type => DeclaredCollection(type) == DeferredContextCollection).ToArray();
-        Xunit.Assert.Equal(RemainderCTypes.Select(type => type.FullName).Order(StringComparer.Ordinal),
-            members.Select(type => type.FullName).Order(StringComparer.Ordinal));
-
-        var definitionType = typeof(IsolatedProcessSpawningRemainderCCollection);
-        var definition = definitionType.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>();
-        Xunit.Assert.NotNull(definition);
-        Xunit.Assert.Equal(DeferredContextCollection, definition.Name);
-        Xunit.Assert.True(definitionType.IsPublic && definitionType.IsSealed);
-        Xunit.Assert.False(definition.DisableParallelization);
-        Xunit.Assert.Null(definitionType.GetCustomAttribute<ProcessLocalTestCollectionAttribute>());
-        Xunit.Assert.True(typeof(Xunit.ICollectionFixture<IsolatedDotnetRootFixture>)
-            .IsAssignableFrom(definitionType));
-        Xunit.Assert.Contains(DeferredContextCollection, LaneIsolatedRootScanner.IsolatedCollections(definitionType.Assembly));
-    }
-
-    [Xunit.Fact]
-    public void SplitPreservesEveryClassLaneAndMovesOnlyRemainderMembers()
-    {
-        var types = RunnableTypes();
-        Xunit.Assert.NotEmpty(types);
-        var actual = Descriptors(types);
-        foreach (var type in MovedTypes)
-            Xunit.Assert.Equal(SplitCollection,
-                Xunit.Assert.Single(actual, member => member.FullName == type.FullName).Collection);
-        var baseline = actual.Select(member => member.Collection is SplitCollection or DeferredContextCollection
-            ? member with { Collection = OriginalCollection } : member).ToArray();
-        var lanes = LoadLanes();
-        var resolvedActual = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, actual);
-        var resolvedBaseline = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, baseline);
-        foreach (var type in types)
-        {
-            var actualNames = LaneNames(resolvedActual, type.FullName!);
-            var baselineNames = LaneNames(resolvedBaseline, type.FullName!);
-            Xunit.Assert.True(actualNames.SequenceEqual(baselineNames, StringComparer.Ordinal),
-                $"{type.FullName}: actual={{{string.Join(", ", actualNames)}}}, baseline={{{string.Join(", ", baselineNames)}}}");
-        }
-        foreach (var type in MovedTypes.Concat(RemainderCTypes))
-            Xunit.Assert.Equal(Remainder, Xunit.Assert.Single(LaneNames(resolvedActual, type.FullName!)));
-    }
-
-    [Xunit.Fact]
-    public void EachRemainderChainFitsBudgetAndEveryMemberHasAMeasurement()
-    {
-        var (sums, unlisted) = Score(RemainderMembers(), PlanningSeconds);
-        Xunit.Assert.Empty(unlisted);
-        Xunit.Assert.InRange(sums[SplitCollection],
-            225.3 + NormalizedResultGateSeconds - 0.05,
-            225.3 + NormalizedResultGateSeconds + 0.05);
-        Xunit.Assert.InRange(sums[OriginalCollection],
-            229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds - 0.05,
-            229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);
-        Xunit.Assert.InRange(sums[DeferredContextCollection],
-            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds +
-                MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] +
-                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] + MeanSeconds[nameof(WorkerBuildCheckQueueDeadlineTests)] + MeanSeconds[nameof(StaleCheckpointTesterRoundHistoryTests)] - 1e-7,
-            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds +
-                MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] +
-                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] + MeanSeconds[nameof(WorkerBuildCheckQueueDeadlineTests)] + MeanSeconds[nameof(StaleCheckpointTesterRoundHistoryTests)] + 1e-7);
-        foreach (var (collection, seconds) in sums)
-            Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");
-    }
-
-    [Xunit.Fact]
-    public void ControlsRejectMergedChainAndScoreEveryUnlistedMember()
-    {
-        var members = RemainderMembers();
-        var (baseline, _) = Score(members, PlanningSeconds);
-        var merged = Score(members.Select(member => member with { Collection = OriginalCollection }), PlanningSeconds);
-        Xunit.Assert.Single(merged.Sums);
-        Xunit.Assert.True(merged.Sums[OriginalCollection] > BudgetSeconds);
-
-        var removedName = nameof(LandingRebindEquivalenceTests);
-        var withoutRow = new Dictionary<string, double>(PlanningSeconds, StringComparer.Ordinal);
-        Xunit.Assert.True(withoutRow.Remove(removedName));
-        var missing = Score(members, withoutRow);
-        Xunit.Assert.Equal(removedName, Xunit.Assert.Single(missing.Unlisted));
-        var landing = Xunit.Assert.Single(members, member => member.FullName == typeof(LandingRebindEquivalenceTests).FullName);
-        var missingOnly = Score([landing], withoutRow);
-        Xunit.Assert.Equal(UnlistedSeconds, missingOnly.Sums[SplitCollection]);
-        Xunit.Assert.InRange(missing.Sums[SplitCollection] -
-            (baseline[SplitCollection] - PlanningSeconds[removedName] + UnlistedSeconds), -1e-9, 1e-9);
-
-        var synthetic = new AcceptanceTestClassDescriptor("UnlistedRemainderChainControl", SplitCollection);
-        var added = Score(members.Append(synthetic), PlanningSeconds);
-        Xunit.Assert.Equal(synthetic.FullName, Xunit.Assert.Single(added.Unlisted));
-        Xunit.Assert.InRange(added.Sums[SplitCollection] - baseline[SplitCollection], 5.0 - 1e-9, 5.0 + 1e-9);
-        Xunit.Assert.Equal(baseline[OriginalCollection], added.Sums[OriginalCollection]);
-    }
-
-    [Xunit.Fact]
-    public void ControlsRejectMergingThirdChainIntoEitherExistingChainAndMissingItsMeasurement()
-    {
-        var members = RemainderMembers();
-        foreach (var target in new[] { OriginalCollection, SplitCollection })
-        {
-            var merged = Score(members.Select(member => member.Collection == DeferredContextCollection
-                ? member with { Collection = target } : member), PlanningSeconds);
-            Xunit.Assert.True(merged.Sums[target] > BudgetSeconds);
-        }
-
-        foreach (var type in RemainderCTypes)
-        {
-            var withoutRow = new Dictionary<string, double>(PlanningSeconds, StringComparer.Ordinal);
-            Xunit.Assert.True(withoutRow.Remove(type.Name));
-            var missing = Score(members, withoutRow);
-            Xunit.Assert.Equal(type.Name, Xunit.Assert.Single(missing.Unlisted));
-        }
-    }
-
-    private static IReadOnlyList<AcceptanceTestLane> LoadLanes() =>
-        AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
-
-    private static Type[] RunnableTypes() =>
-        typeof(IsolatedProcessSpawningRemainderChainTests).Assembly.GetTypes()
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var tagged = AcceptanceTestClassSourceScanner.Scan(root).Where(item => item.Constraint == Constraint).ToArray();
+        var types = typeof(IsolatedProcessSpawningRemainderChainTests).Assembly.GetTypes()
             .Where(type => type is { IsClass: true, IsAbstract: false } &&
                 type.GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                    .Any(method => method.GetCustomAttributes(inherit: true)
-                        .Any(attribute => attribute is Xunit.FactAttribute)))
-            .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
+                    .Any(method => method.IsDefined(typeof(Xunit.FactAttribute), inherit: true)))
+            .ToArray();
+        var reflectedTags = types.Where(type => type.GetCustomAttributes<Xunit.TraitAttribute>(inherit: true)
+            .Any(trait => trait.Name == "Isolation" && trait.Value == Constraint)).Select(type => type.FullName!);
+        Assert.Equal(reflectedTags.Order(StringComparer.Ordinal), tagged.Select(item => item.FullName));
 
-    private static string? DeclaredCollection(Type type) =>
-        type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name;
-
-    private static AcceptanceTestClassDescriptor[] Descriptors(Type[] types) =>
-        types.Select(type => new AcceptanceTestClassDescriptor(type.FullName ?? type.Name, DeclaredCollection(type))).ToArray();
-
-    private static string[] LaneNames(IReadOnlyList<AcceptanceTestLane> lanes, string fullName) =>
-        AcceptanceLaneMembership.LanesIncluding(lanes, fullName).Select(lane => lane.Name)
-            .OrderBy(name => name, StringComparer.Ordinal).ToArray();
-
-    private static AcceptanceTestClassDescriptor[] RemainderMembers()
-    {
-        var descriptors = Descriptors(RunnableTypes());
-        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(LoadLanes(), descriptors);
-        return descriptors.Where(member => member.Collection is OriginalCollection or SplitCollection or DeferredContextCollection &&
-            AcceptanceLaneMembership.LanesIncluding(resolved, member.FullName).Any(lane => lane.Name == Remainder)).ToArray();
+        foreach (var collection in new[] { SplitCollection, DeferredContextCollection })
+        {
+            var members = types.Where(type => type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name == collection)
+                .Select(type => type.FullName!).Order(StringComparer.Ordinal).ToArray();
+            Assert.NotEmpty(members);
+            Assert.Equal(members, tagged.Where(item => item.Collection == collection).Select(item => item.FullName));
+        }
     }
 
-    private static (Dictionary<string, double> Sums, SortedSet<string> Unlisted) Score(
-        IEnumerable<AcceptanceTestClassDescriptor> members, IReadOnlyDictionary<string, double> table)
+    [Fact]
+    public void ShippedManifestSelectsEachChainClassExactlyOnce()
     {
-        var sums = new Dictionary<string, double>(StringComparer.Ordinal);
-        var unlisted = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var member in members)
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var manifest = AcceptanceGateEngineSettings.Load(root);
+        var pool = Assert.IsType<AcceptanceBalancedLanePoolSettings>(manifest.BalancedLanePool);
+        var constraint = Assert.Single(pool.IsolationConstraints!, item => item.Name == Constraint);
+        var scanned = AcceptanceTestClassSourceScanner.Scan(root);
+        var expanded = AcceptanceBalancedLaneExpander.Expand(manifest.InfrastructureTestLanes, scanned,
+            new Dictionary<string, double>(), pool);
+        var chain = scanned.Where(item => item.Collection is OriginalCollection or SplitCollection or DeferredContextCollection).ToArray();
+        Assert.NotEmpty(chain);
+        Assert.All(chain, item => Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, item.FullName)));
+        var tagged = scanned.Where(item => item.Constraint == Constraint).ToArray();
+        Assert.NotEmpty(tagged);
+        foreach (var item in tagged)
         {
-            var name = member.FullName[(Math.Max(member.FullName.LastIndexOf('.'), member.FullName.LastIndexOf('+')) + 1)..];
-            if (!table.TryGetValue(name, out var seconds))
-            {
-                seconds = UnlistedSeconds;
-                unlisted.Add(name);
-            }
-            var collection = member.Collection ?? throw new InvalidDataException($"Chain member {member.FullName} has no collection.");
-            sums[collection] = sums.GetValueOrDefault(collection) + seconds;
+            Assert.All(manifest.InfrastructureTestLanes, lane =>
+                Assert.Empty(AcceptanceLaneMembership.MatchingIncludePatterns(lane, item.FullName)));
+            var owner = Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, item.FullName));
+            Assert.StartsWith(Constraint + " ", owner.Name);
+            Assert.Equal(constraint.ExclusiveResourceKeys, owner.ExclusiveResourceKeys);
         }
-        return (sums, unlisted);
+    }
+
+    [Fact]
+    public void MeasuredPlacementFitsEachLaneBudgetAndRejectsSingleLaneControl()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var manifest = AcceptanceGateEngineSettings.Load(root);
+        var pool = Assert.IsType<AcceptanceBalancedLanePoolSettings>(manifest.BalancedLanePool);
+        var scanned = AcceptanceTestClassSourceScanner.Scan(root);
+        var temporaryRoot = Directory.CreateTempSubdirectory("constraint-class-history-");
+        try
+        {
+            var fixture = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures",
+                "AcceptanceLaneBaseline", "process-spawning-constraint-class-history.json");
+            var historyPath = AcceptanceClassDurationHistoryStore.ResolveStorePath(temporaryRoot.FullName);
+            Directory.CreateDirectory(Path.GetDirectoryName(historyPath)!);
+            File.Copy(fixture, historyPath);
+            var inputs = AcceptanceClassDurationHistoryStore.ReadModelInputs(temporaryRoot.FullName, pool.HistoryWindow, out var failure);
+            Assert.Null(failure);
+            Assert.NotEmpty(inputs);
+            Assert.All(inputs.Values, input => Assert.Null(input.SlotCount));
+            var medians = inputs.ToDictionary(pair => pair.Key, pair => pair.Value.Seconds, StringComparer.Ordinal);
+            var expanded = AcceptanceBalancedLaneExpander.Expand(manifest.InfrastructureTestLanes, scanned, medians, pool, inputs);
+            var isolated = expanded.Lanes.Where(lane => lane.Name.StartsWith(Constraint + " ", StringComparison.Ordinal)).ToArray();
+
+            // The fixture has one-slot measurements, so predicted wall equals predicted serial seconds.
+            Assert.True(isolated.Length > 1);
+            Assert.All(isolated, lane => Assert.InRange(lane.EstimatedSerialSeconds, double.Epsilon, BudgetSeconds));
+
+            var singleLane = AcceptanceBalancedLaneExpander.Expand([], scanned.Where(item => item.Constraint == Constraint).ToArray(),
+                medians, new AcceptanceBalancedLanePoolSettings
+                {
+                    HistoryWindow = pool.HistoryWindow,
+                    DefaultClassSecondsWhenNoHistory = pool.DefaultClassSecondsWhenNoHistory,
+                    IsolationConstraints = [new() { Name = Constraint, LaneCount = 1 }]
+                }, inputs);
+            var merged = Assert.Single(singleLane.Lanes, lane => lane.Name == Constraint + " 1");
+            Assert.True(merged.EstimatedSerialSeconds > BudgetSeconds);
+        }
+        finally
+        {
+            temporaryRoot.Delete(recursive: true);
+        }
+    }
+
+    private static void AssertParallelSharedFixture(Type definitionType, string collection)
+    {
+        var definition = definitionType.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>();
+        Assert.NotNull(definition);
+        Assert.Equal(collection, definition.Name);
+        Assert.True(definitionType.IsPublic && definitionType.IsSealed);
+        Assert.False(definition.DisableParallelization);
+        Assert.Null(definitionType.GetCustomAttribute<ProcessLocalTestCollectionAttribute>());
+        Assert.True(typeof(Xunit.ICollectionFixture<IsolatedDotnetRootFixture>).IsAssignableFrom(definitionType));
+        Assert.Contains(collection, LaneIsolatedRootScanner.IsolatedCollections(definitionType.Assembly));
     }
 }

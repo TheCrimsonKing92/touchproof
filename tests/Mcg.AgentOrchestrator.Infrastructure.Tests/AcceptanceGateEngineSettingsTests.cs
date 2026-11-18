@@ -74,6 +74,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
         var keys = settings.InfrastructureTestLanes.SelectMany(lane => lane.ExclusiveResourceKeys)
             .Concat(settings.BalancedLanePool?.ExclusiveResourceKeys ?? [])
+            .Concat((settings.BalancedLanePool?.IsolationConstraints ?? []).SelectMany(constraint => constraint.ExclusiveResourceKeys))
             .Select(key => key.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();

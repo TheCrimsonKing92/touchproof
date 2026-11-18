@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Real process contract. Every child environment, repository, worktree and artifact is fixture-owned.
 [Collection("IsolatedProcessSpawningRemainderB")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class ExecutorBuildCheckScriptTests : IDisposable
 {
     private readonly string _root = InfrastructureTestSupport.CreateTempDirectory();
