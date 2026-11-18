@@ -236,6 +236,8 @@ public void FinalizeGoalCreation(Goal goal, IReadOnlyCollection<string>? prepare
 
 public bool HasGoalCreationFinalizer => finalizeGoalCreation is not null;
 
+public bool HasGoalReplacementFinalizer => finalizeGoalReplacement is not null;
+
 public void ReportGoalCreationProgress() => reportGoalCreationProgress?.Invoke();
 
 public void FinalizeGoalReplacement(Goal goal, GoalReplacementCommand command) =>

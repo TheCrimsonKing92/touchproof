@@ -187,7 +187,7 @@ internal static partial class CliPersistentStateRunner
 
         if (IsBacklogIntakeCommand(args))
         {
-            return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+            return CliBacklogIntakeExecution.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsGoalCreateDeliveryRetryCommand(args))
@@ -1887,42 +1887,6 @@ internal static partial class CliPersistentStateRunner
 
         return stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
             .Any(goal => goal.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool ExecuteBacklogIntakeOutsideTransaction(
-        IReadOnlyList<string> args,
-        ITransactionalOrchestratorStateRepository stateRepository,
-        OrchestratorWorkspace workspace,
-        ref IReadOnlyList<AgentDefinition> agents,
-        IModelProviderRegistry providers,
-        ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
-    {
-        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-        var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
-        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
-
-        var persistCheckpoint = CreateCommandCheckpoint(stateRepository, workspace, kernel, initialGoalSnapshots);
-        void Persist(AgentOrchestratorKernel checkpoint) => persistCheckpoint(checkpoint);
-
-        var shouldSave = CliCommandDispatcher.ExecuteCommand(
-            args,
-            kernel,
-            workspace,
-            ref agents,
-            providers,
-            ref workerProfiles,
-            ref currentGoal,
-            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-            Persist);
-
-        if (shouldSave)
-        {
-            Persist(kernel);
-        }
-
-        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
-        return shouldSave;
     }
 
     private static bool ExecuteGoalCreateOutsideTransaction(

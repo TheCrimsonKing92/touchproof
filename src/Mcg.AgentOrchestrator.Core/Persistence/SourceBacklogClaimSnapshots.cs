@@ -48,7 +48,10 @@ public sealed record GoalReplacementEligibilityFacts(
     string EvidenceToken = "")
 {
     public bool HasWork => HasWorkspace || HasBranch || HasDispatch || HasRepositoryDelta;
-    public bool IsProtected => !IsGitEvidenceAvailable || IsRunning || IsLanded || IsMerged || IsRecorded;
+    // A completed record is audit evidence, not work, for an otherwise eligible cancelled owner.
+    private bool IsRecordedProtection => IsRecorded &&
+        !(Status == GoalStatus.Cancelled && !HasWork && IsGitEvidenceAvailable && !IsRunning && !IsLanded && !IsMerged);
+    public bool IsProtected => !IsGitEvidenceAvailable || IsRunning || IsLanded || IsMerged || IsRecordedProtection;
 
     public IReadOnlyList<string> ListProtections()
     {
@@ -56,9 +59,20 @@ public sealed record GoalReplacementEligibilityFacts(
         if (IsRunning) protections.Add("running");
         if (IsLanded) protections.Add("landed");
         if (IsMerged) protections.Add("merged");
-        if (IsRecorded) protections.Add("recorded");
+        if (IsRecordedProtection) protections.Add("recorded");
         if (!IsGitEvidenceAvailable) protections.Add("git-evidence-unavailable");
         return protections;
+    }
+
+    public IReadOnlyList<string> ListCorrectionBlockers()
+    {
+        var blockers = new List<string>(ListProtections());
+        if (HasWorkspace) blockers.Add("workspace");
+        if (HasBranch) blockers.Add("branch");
+        if (HasDispatch) blockers.Add("dispatch");
+        if (HasRepositoryDelta) blockers.Add("repository-delta");
+        if (Status != GoalStatus.Cancelled) blockers.Add($"status-{Status}");
+        return blockers;
     }
 }
 

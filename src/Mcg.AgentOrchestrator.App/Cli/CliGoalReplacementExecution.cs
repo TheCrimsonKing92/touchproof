@@ -18,165 +18,54 @@ internal sealed class GoalReplacementRetryableTimeoutException(
     public long ClaimVersion { get; } = claimVersion;
 }
 
-internal static class CliGoalReplacementExecution
+internal static partial class CliGoalReplacementExecution
 {
     internal static Action? AfterGoalReplacementLeaseAcquisitionFailed { get; set; }
     internal static Action? BeforeGoalReplacementFailureClaimObservation { get; set; }
 
-    internal static bool ExecuteGoalReplacementOutsideTransaction(
-        IReadOnlyList<string> args,
+    private static string CommitGoalReplacement(
         ITransactionalOrchestratorStateRepository stateRepository,
+        IOrchestratorStateOutboxRepository outboxRepository,
         OrchestratorWorkspace workspace,
-        ref IReadOnlyList<AgentDefinition> agents,
-        IModelProviderRegistry providers,
-        ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        AgentOrchestratorKernel kernel,
+        SourceBacklogClaimStore claimStore,
+        DeferredGoalLifecycleEventWriter deferredEventWriter,
+        DeferredGoalCreationCollaborationWriter deferredCollaborationWriter,
+        Goal preparedGoal,
+        GoalReplacementCommand command)
     {
-        if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
-            throw new InvalidOperationException("goal-replace requires a state repository with durable outbox support.");
-
-        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-        currentGoal = CliPersistentStateRunner.ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
-        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
-        if (TryReplayCommittedGoalReplacement(
-                args,
-                kernel,
-                claimStore,
-                ref currentGoal,
-                out var replayResult))
+        var predecessorForLease = OrchestratorEntityResolver.ResolveGoal(kernel, null, command.PredecessorGoalId.Value);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, preparedGoal.Id);
+        var preparedSnapshot = kernel.ExportGoalSnapshot(preparedGoal.Id);
+        var fingerprintInputs = BuildGoalReplacementFingerprint(command, preparedSnapshot);
+        var fingerprint = fingerprintInputs.Fingerprint;
+        GoalCreationSideEffectDelivery.BeforeStateCommit(preparedGoal.Id);
+        GoalReplacementTransferLeaseAcquisition replacementLeaseAcquisition;
+        try
         {
-            return replayResult;
-        }
-        var predecessorForLease = OrchestratorEntityResolver.ResolveGoal(
-            kernel,
-            currentGoal,
-            args.Count > 1 ? args[1] : null);
-        var deferredEventWriter = new DeferredGoalLifecycleEventWriter();
-        var deferredCollaborationWriter = new DeferredGoalCreationCollaborationWriter(
-            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
-        string? committedGoalId = null;
-
-        void FinalizeGoalReplacement(Goal preparedGoal, GoalReplacementCommand command)
-        {
-            GoalRefinementWorkCoordinator.RecordPending(kernel, preparedGoal.Id);
-            var preparedSnapshot = kernel.ExportGoalSnapshot(preparedGoal.Id);
-            var fingerprintInputs = BuildGoalReplacementFingerprint(command, preparedSnapshot);
-            var fingerprint = fingerprintInputs.Fingerprint;
-            GoalCreationSideEffectDelivery.BeforeStateCommit(preparedGoal.Id);
-            GoalReplacementTransferLeaseAcquisition replacementLeaseAcquisition;
-            try
-            {
-                replacementLeaseAcquisition = AcquireGoalReplacementTransferLease(
-                    workspace.SqliteStatePath,
-                    command.PredecessorGoalId.Value,
-                    () => ResolveObservedClaim(
-                        claimStore,
-                        stateRepository,
-                        preparedSnapshot.SourceBacklogItemId!));
-            }
-            catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
-            {
-                throw RecordLegacyOwnerAmbiguousFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    CreateUnavailableGoalReplacementFacts(predecessorForLease),
-                    ambiguous);
-            }
-            if (replacementLeaseAcquisition.Kind == GoalReplacementTransferLeaseAcquisitionKind.ProtectedEvidenceMutationOwner)
-            {
-                var failureCode = replacementLeaseAcquisition.FailureCode ?? "evidence-mutation-active";
-                var observedClaim = replacementLeaseAcquisition.ObservedClaim;
-                if (observedClaim is null)
-                {
-                    TryRecordGoalReplacementFailure(
-                        claimStore,
-                        command,
-                        preparedSnapshot,
-                        fingerprint,
-                        GoalReplacementOutcome.PersistenceFailed,
-                        observedOwner: null,
-                        observedVersion: null,
-                        "claim-observation-unavailable",
-                        CreateUnavailableGoalReplacementFacts(predecessorForLease));
-                    throw new InvalidOperationException(
-                        $"GOAL_REPLACE_PERSISTENCE_FAILED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} owner=unknown claimVersion=unknown reason=claim-observation-unavailable");
-                }
-                if (!string.Equals(observedClaim.OwnerGoalId, command.ExpectedOwnerGoalId, StringComparison.Ordinal) ||
-                    observedClaim.Version != command.ExpectedClaimVersion)
-                {
-                    TryRecordGoalReplacementFailure(
-                        claimStore,
-                        command,
-                        preparedSnapshot,
-                        fingerprint,
-                        GoalReplacementOutcome.CurrentOwnerConflict,
-                        observedClaim.OwnerGoalId,
-                        observedClaim.Version,
-                        "current-owner-conflict",
-                        CreateUnavailableGoalReplacementFacts(predecessorForLease));
-                    throw new SourceBacklogClaimConflictException(
-                        observedClaim.BacklogItemId,
-                        command.PredecessorGoalId.Value,
-                        observedClaim.OwnerGoalId,
-                        observedClaim.Version);
-                }
-                var unavailableFacts = CreateUnavailableGoalReplacementFacts(predecessorForLease);
-                failureCode = AppendGoalReplacementProtectedBy(failureCode, unavailableFacts);
-                TryRecordGoalReplacementFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    GoalReplacementOutcome.ProtectedOwner,
-                    observedClaim.OwnerGoalId,
-                    observedClaim.Version,
-                    failureCode,
-                    unavailableFacts);
-                throw new InvalidOperationException(
-                    $"GOAL_REPLACE_PROTECTED_OWNER predecessor={command.PredecessorGoalId.Value} reason={failureCode}" +
-                    RenderGoalReplacementProtectedNextLine(unavailableFacts));
-            }
-            if (replacementLeaseAcquisition.Kind == GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut)
-            {
-                ThrowGoalReplacementTransferLeaseTimeout(
-                    command,
-                    replacementLeaseAcquisition,
-                    (outcome, observedOwner, observedVersion, failureCode) =>
-                        TryRecordGoalReplacementFailure(
-                            claimStore,
-                            command,
-                            preparedSnapshot,
-                            fingerprint,
-                            outcome,
-                            observedOwner,
-                            observedVersion,
-                            failureCode,
-                            CreateUnavailableGoalReplacementFacts(predecessorForLease)));
-            }
-            using var replacementLeaseScope = replacementLeaseAcquisition.Lease
-                ?? throw new InvalidOperationException(
-                    "GOAL_REPLACE_STATE_INVALID reason=acquired-replacement-lease-missing");
-            SourceBacklogClaimSnapshot? observedClaimUnderLease;
-            try
-            {
-                observedClaimUnderLease = ResolveObservedClaim(
+            replacementLeaseAcquisition = AcquireGoalReplacementTransferLease(
+                workspace.SqliteStatePath,
+                command.PredecessorGoalId.Value,
+                () => ResolveObservedClaim(
                     claimStore,
                     stateRepository,
-                    preparedSnapshot.SourceBacklogItemId!);
-            }
-            catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
-            {
-                throw RecordLegacyOwnerAmbiguousFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    CreateUnavailableGoalReplacementFacts(predecessorForLease),
-                    ambiguous);
-            }
-            if (observedClaimUnderLease is null)
+                    preparedSnapshot.SourceBacklogItemId!));
+        }
+        catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
+        {
+            throw RecordLegacyOwnerAmbiguousFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                CreateUnavailableGoalReplacementFacts(predecessorForLease),
+                ambiguous);
+        }
+        if (replacementLeaseAcquisition.Kind == GoalReplacementTransferLeaseAcquisitionKind.ProtectedEvidenceMutationOwner)
+        {
+            var failureCode = replacementLeaseAcquisition.FailureCode ?? "evidence-mutation-active";
+            var observedClaim = replacementLeaseAcquisition.ObservedClaim;
+            if (observedClaim is null)
             {
                 TryRecordGoalReplacementFailure(
                     claimStore,
@@ -191,8 +80,8 @@ internal static class CliGoalReplacementExecution
                 throw new InvalidOperationException(
                     $"GOAL_REPLACE_PERSISTENCE_FAILED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} owner=unknown claimVersion=unknown reason=claim-observation-unavailable");
             }
-            if (!string.Equals(observedClaimUnderLease.OwnerGoalId, command.ExpectedOwnerGoalId, StringComparison.Ordinal) ||
-                observedClaimUnderLease.Version != command.ExpectedClaimVersion)
+            if (!string.Equals(observedClaim.OwnerGoalId, command.ExpectedOwnerGoalId, StringComparison.Ordinal) ||
+                observedClaim.Version != command.ExpectedClaimVersion)
             {
                 TryRecordGoalReplacementFailure(
                     claimStore,
@@ -200,388 +89,440 @@ internal static class CliGoalReplacementExecution
                     preparedSnapshot,
                     fingerprint,
                     GoalReplacementOutcome.CurrentOwnerConflict,
-                    observedClaimUnderLease.OwnerGoalId,
-                    observedClaimUnderLease.Version,
+                    observedClaim.OwnerGoalId,
+                    observedClaim.Version,
                     "current-owner-conflict",
                     CreateUnavailableGoalReplacementFacts(predecessorForLease));
                 throw new SourceBacklogClaimConflictException(
-                    observedClaimUnderLease.BacklogItemId,
+                    observedClaim.BacklogItemId,
                     command.PredecessorGoalId.Value,
-                    observedClaimUnderLease.OwnerGoalId,
-                    observedClaimUnderLease.Version);
+                    observedClaim.OwnerGoalId,
+                    observedClaim.Version);
             }
-            var eligibilityKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-            var eligibilityPredecessor = eligibilityKernel.Goals.SingleOrDefault(goal => goal.Id == command.PredecessorGoalId)
-                ?? throw new InvalidOperationException(
-                    $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={command.PredecessorGoalId.Value} reason=predecessor-missing");
-            var authorizedFacts = GoalReplacementEvidence.Capture(workspace, eligibilityPredecessor);
-            var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
-                preparedGoal.Id,
-                deferredCollaborationWriter.SnapshotEffects(),
-                deferredEventWriter.SnapshotEffects());
-            var refinementMessage = GoalRefinementWorkCoordinator.CreateMessage(preparedGoal.Id);
+            var unavailableFacts = CreateUnavailableGoalReplacementFacts(predecessorForLease);
+            failureCode = AppendGoalReplacementProtectedBy(failureCode, unavailableFacts);
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.ProtectedOwner,
+                observedClaim.OwnerGoalId,
+                observedClaim.Version,
+                failureCode,
+                unavailableFacts);
+            throw new InvalidOperationException(
+                $"GOAL_REPLACE_PROTECTED_OWNER predecessor={command.PredecessorGoalId.Value} reason={failureCode}" +
+                RenderGoalReplacementProtectedNextLine(unavailableFacts));
+        }
+        if (replacementLeaseAcquisition.Kind == GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut)
+        {
+            ThrowGoalReplacementTransferLeaseTimeout(
+                command,
+                replacementLeaseAcquisition,
+                (outcome, observedOwner, observedVersion, failureCode) =>
+                    TryRecordGoalReplacementFailure(
+                        claimStore,
+                        command,
+                        preparedSnapshot,
+                        fingerprint,
+                        outcome,
+                        observedOwner,
+                        observedVersion,
+                        failureCode,
+                        CreateUnavailableGoalReplacementFacts(predecessorForLease)));
+        }
+        using var replacementLeaseScope = replacementLeaseAcquisition.Lease
+            ?? throw new InvalidOperationException(
+                "GOAL_REPLACE_STATE_INVALID reason=acquired-replacement-lease-missing");
+        SourceBacklogClaimSnapshot? observedClaimUnderLease;
+        try
+        {
+            observedClaimUnderLease = ResolveObservedClaim(
+                claimStore,
+                stateRepository,
+                preparedSnapshot.SourceBacklogItemId!);
+        }
+        catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
+        {
+            throw RecordLegacyOwnerAmbiguousFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                CreateUnavailableGoalReplacementFacts(predecessorForLease),
+                ambiguous);
+        }
+        if (observedClaimUnderLease is null)
+        {
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.PersistenceFailed,
+                observedOwner: null,
+                observedVersion: null,
+                "claim-observation-unavailable",
+                CreateUnavailableGoalReplacementFacts(predecessorForLease));
+            throw new InvalidOperationException(
+                $"GOAL_REPLACE_PERSISTENCE_FAILED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} owner=unknown claimVersion=unknown reason=claim-observation-unavailable");
+        }
+        if (!string.Equals(observedClaimUnderLease.OwnerGoalId, command.ExpectedOwnerGoalId, StringComparison.Ordinal) ||
+            observedClaimUnderLease.Version != command.ExpectedClaimVersion)
+        {
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.CurrentOwnerConflict,
+                observedClaimUnderLease.OwnerGoalId,
+                observedClaimUnderLease.Version,
+                "current-owner-conflict",
+                CreateUnavailableGoalReplacementFacts(predecessorForLease));
+            throw new SourceBacklogClaimConflictException(
+                observedClaimUnderLease.BacklogItemId,
+                command.PredecessorGoalId.Value,
+                observedClaimUnderLease.OwnerGoalId,
+                observedClaimUnderLease.Version);
+        }
+        var eligibilityKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        var eligibilityPredecessor = eligibilityKernel.Goals.SingleOrDefault(goal => goal.Id == command.PredecessorGoalId)
+            ?? throw new InvalidOperationException(
+                $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={command.PredecessorGoalId.Value} reason=predecessor-missing");
+        var authorizedFacts = GoalReplacementEvidence.Capture(workspace, eligibilityPredecessor);
+        var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
+            preparedGoal.Id,
+            deferredCollaborationWriter.SnapshotEffects(),
+            deferredEventWriter.SnapshotEffects());
+        var refinementMessage = GoalRefinementWorkCoordinator.CreateMessage(preparedGoal.Id);
 
-            GoalReplacementReceipt receipt;
-            var refusalFacts = authorizedFacts;
-            try
+        GoalReplacementReceipt receipt;
+        var refusalFacts = authorizedFacts;
+        try
+        {
+            // The committed replacement lease serializes every supported mutation of the
+            // predecessor's eligibility evidence. Complete the Git/journal validation before
+            // opening the state write transaction so a competing replacement can continue
+            // polling the lease instead of escaping with SQLITE_BUSY while Git is running.
+            var transferAuthority = GoalReplacementEvidence.CreateTransferAuthority(
+                workspace,
+                eligibilityPredecessor,
+                observedClaimUnderLease.BacklogItemId,
+                observedClaimUnderLease.Version,
+                authorizedFacts);
+            var validatedFacts = transferAuthority.RevalidateForTransfer();
+
+            using var backlogLease = new BacklogStore(workspace.BacklogStorePath)
+                .TryAcquireOpenItemLease(preparedSnapshot.SourceBacklogItemId!, out var observedBacklogStatus);
+            if (backlogLease is null)
             {
-                // The committed replacement lease serializes every supported mutation of the
-                // predecessor's eligibility evidence. Complete the Git/journal validation before
-                // opening the state write transaction so a competing replacement can continue
-                // polling the lease instead of escaping with SQLITE_BUSY while Git is running.
-                var transferAuthority = GoalReplacementEvidence.CreateTransferAuthority(
-                    workspace,
-                    eligibilityPredecessor,
-                    observedClaimUnderLease.BacklogItemId,
-                    observedClaimUnderLease.Version,
-                    authorizedFacts);
-                var validatedFacts = transferAuthority.RevalidateForTransfer();
+                throw new GoalReplacementValidationException(
+                    $"GOAL_REPLACE_VALIDATION_REJECTED backlogItem={preparedSnapshot.SourceBacklogItemId} status={observedBacklogStatus?.ToString() ?? "missing"} reason=source-backlog-not-open",
+                    "source-backlog-not-open");
+            }
 
-                using var backlogLease = new BacklogStore(workspace.BacklogStorePath)
-                    .TryAcquireOpenItemLease(preparedSnapshot.SourceBacklogItemId!, out var observedBacklogStatus);
-                if (backlogLease is null)
-                {
-                    throw new GoalReplacementValidationException(
-                        $"GOAL_REPLACE_VALIDATION_REJECTED backlogItem={preparedSnapshot.SourceBacklogItemId} status={observedBacklogStatus?.ToString() ?? "missing"} reason=source-backlog-not-open",
-                        "source-backlog-not-open");
-                }
-
-                receipt = outboxRepository.TransactWithOutboxAsync(
-                        (currentKernel, _) =>
+            receipt = outboxRepository.TransactWithOutboxAsync(
+                    (currentKernel, _) =>
+                    {
+                        var existingAudit = claimStore.FindAuditInCurrentTransaction(command.RequestId);
+                        if (existingAudit is not null)
                         {
-                            var existingAudit = claimStore.FindAuditInCurrentTransaction(command.RequestId);
-                            if (existingAudit is not null)
+                            if (!string.Equals(existingAudit.Fingerprint, fingerprint, StringComparison.Ordinal))
+                                throw new GoalReplacementIdempotencyConflictException(command.RequestId);
+                            if (existingAudit.Outcome != GoalReplacementOutcome.Succeeded ||
+                                existingAudit.SuccessorGoalId is null)
                             {
-                                if (!string.Equals(existingAudit.Fingerprint, fingerprint, StringComparison.Ordinal))
-                                    throw new GoalReplacementIdempotencyConflictException(command.RequestId);
-                                if (existingAudit.Outcome != GoalReplacementOutcome.Succeeded ||
-                                    existingAudit.SuccessorGoalId is null)
-                                {
-                                    refusalFacts = existingAudit.EligibilityFacts;
-                                    return Task.FromResult((
-                                        ShouldSave: false,
-                                        Result: new GoalReplacementReceipt(
-                                            existingAudit.Outcome,
-                                            command.RequestId,
-                                            existingAudit.BacklogItemId,
-                                            existingAudit.PredecessorGoalId,
-                                            existingAudit.SuccessorGoalId,
-                                            existingAudit.ObservedOwnerGoalId,
-                                            existingAudit.ObservedClaimVersion,
-                                            existingAudit.FailureCode ?? "replayed-failure"),
-                                        OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
-                                }
-
-                                var replayClaim = claimStore.ResolveOrMaterializeClaim(currentKernel, existingAudit.BacklogItemId);
+                                refusalFacts = existingAudit.EligibilityFacts;
                                 return Task.FromResult((
                                     ShouldSave: false,
                                     Result: new GoalReplacementReceipt(
-                                        GoalReplacementOutcome.Replayed,
+                                        existingAudit.Outcome,
                                         command.RequestId,
                                         existingAudit.BacklogItemId,
                                         existingAudit.PredecessorGoalId,
                                         existingAudit.SuccessorGoalId,
-                                        replayClaim.OwnerGoalId,
-                                        replayClaim.Version,
-                                        "idempotent-replay"),
+                                        existingAudit.ObservedOwnerGoalId,
+                                        existingAudit.ObservedClaimVersion,
+                                        existingAudit.FailureCode ?? "replayed-failure"),
                                     OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
                             }
 
-                            var predecessor = currentKernel.Goals.FirstOrDefault(goal => goal.Id == command.PredecessorGoalId)
-                                ?? throw new GoalReplacementValidationException(
-                                    $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={command.PredecessorGoalId.Value} reason=predecessor-missing",
-                                    "predecessor-missing");
-                            var backlogItemId = predecessor.SourceBacklogItemId
-                                ?? throw new GoalReplacementValidationException(
-                                    $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={predecessor.Id.Value} reason=predecessor-has-no-source-backlog",
-                                    "predecessor-has-no-source-backlog");
-                            var claim = claimStore.ResolveOrMaterializeClaim(currentKernel, backlogItemId);
-                            if (!string.Equals(claim.OwnerGoalId, predecessor.Id.Value, StringComparison.Ordinal))
-                            {
-                                throw new SourceBacklogClaimConflictException(
-                                    backlogItemId,
-                                    predecessor.Id.Value,
-                                    claim.OwnerGoalId,
-                                    claim.Version);
-                            }
-                            GoalCreationPreconditionValidator.Validate(
-                                currentKernel,
-                                preparedSnapshot,
-                                workspace,
-                                predecessor.Id.Value,
-                                preparedSourceBacklogDependencies: preparedSnapshot.DependsOn ?? []);
-
-                            if (!GoalReplacementEvidence.MatchesStateFacts(predecessor, validatedFacts))
-                            {
-                                throw new GoalReplacementValidationException(
-                                    $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={predecessor.Id.Value} reason=eligibility-evidence-changed",
-                                    "eligibility-evidence-changed");
-                            }
-                            var eligibility = SourceBacklogClaimEligibility.Evaluate(command.Disposition, validatedFacts);
-                            if (eligibility != GoalReplacementOutcome.Succeeded)
-                            {
-                                refusalFacts = validatedFacts;
-                                var rejectedAudit = new GoalReplacementAuditSnapshot(
+                            var replayClaim = claimStore.ResolveOrMaterializeClaim(currentKernel, existingAudit.BacklogItemId);
+                            return Task.FromResult((
+                                ShouldSave: false,
+                                Result: new GoalReplacementReceipt(
+                                    GoalReplacementOutcome.Replayed,
                                     command.RequestId,
-                                    fingerprint,
-                                    eligibility,
-                                    backlogItemId,
-                                    predecessor.Id.Value,
-                                    null,
-                                    command.Disposition,
-                                    command.Reason,
-                                    predecessor.Status,
-                                    null,
-                                    claim.Coverage,
-                                    "operator",
-                                    "cli",
-                                    "local-process",
-                                    DateTimeOffset.UtcNow,
-                                    predecessor.Id.Value,
-                                    claim.Version,
-                                    claim.OwnerGoalId,
-                                    claim.Version,
-                                    validatedFacts,
-                                    eligibility == GoalReplacementOutcome.ProtectedOwner
-                                        ? AppendGoalReplacementProtectedBy(
-                                            validatedFacts.IsGitEvidenceAvailable ? "protected-owner" : "git-evidence-unavailable",
-                                            validatedFacts)
-                                        : "ineligible-disposition",
-                                    fingerprintInputs.ObjectiveHash,
-                                    fingerprintInputs.OrderedRoles,
-                                    fingerprintInputs.AssignedAgents);
-                                claimStore.CommitRejectedAttempt(rejectedAudit);
-                                return Task.FromResult((
-                                    ShouldSave: false,
-                                    Result: new GoalReplacementReceipt(
-                                        eligibility,
-                                        command.RequestId,
-                                        backlogItemId,
-                                        predecessor.Id.Value,
-                                        null,
-                                        claim.OwnerGoalId,
-                                        claim.Version,
-                                        rejectedAudit.FailureCode!),
-                                    OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
-                            }
+                                    existingAudit.BacklogItemId,
+                                    existingAudit.PredecessorGoalId,
+                                    existingAudit.SuccessorGoalId,
+                                    replayClaim.OwnerGoalId,
+                                    replayClaim.Version,
+                                    "idempotent-replay"),
+                                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
+                        }
 
-                            var now = DateTimeOffset.UtcNow;
-                            var audit = new GoalReplacementAuditSnapshot(
-                                command.RequestId,
-                                fingerprint,
-                                GoalReplacementOutcome.Succeeded,
+                        var predecessor = currentKernel.Goals.FirstOrDefault(goal => goal.Id == command.PredecessorGoalId)
+                            ?? throw new GoalReplacementValidationException(
+                                $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={command.PredecessorGoalId.Value} reason=predecessor-missing",
+                                "predecessor-missing");
+                        var backlogItemId = predecessor.SourceBacklogItemId
+                            ?? throw new GoalReplacementValidationException(
+                                $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={predecessor.Id.Value} reason=predecessor-has-no-source-backlog",
+                                "predecessor-has-no-source-backlog");
+                        var claim = claimStore.ResolveOrMaterializeClaim(currentKernel, backlogItemId);
+                        if (!string.Equals(claim.OwnerGoalId, predecessor.Id.Value, StringComparison.Ordinal))
+                        {
+                            throw new SourceBacklogClaimConflictException(
                                 backlogItemId,
                                 predecessor.Id.Value,
-                                preparedSnapshot.Id,
+                                claim.OwnerGoalId,
+                                claim.Version);
+                        }
+                        GoalCreationPreconditionValidator.Validate(
+                            currentKernel,
+                            preparedSnapshot,
+                            workspace,
+                            predecessor.Id.Value,
+                            preparedSourceBacklogDependencies: preparedSnapshot.DependsOn ?? []);
+
+                        if (!GoalReplacementEvidence.MatchesStateFacts(predecessor, validatedFacts))
+                        {
+                            throw new GoalReplacementValidationException(
+                                $"GOAL_REPLACE_VALIDATION_REJECTED predecessor={predecessor.Id.Value} reason=eligibility-evidence-changed",
+                                "eligibility-evidence-changed");
+                        }
+                        var eligibility = SourceBacklogClaimEligibility.Evaluate(command.Disposition, validatedFacts);
+                        if (eligibility != GoalReplacementOutcome.Succeeded)
+                        {
+                            refusalFacts = validatedFacts;
+                            var rejectedAudit = new GoalReplacementAuditSnapshot(
+                                command.RequestId,
+                                fingerprint,
+                                eligibility,
+                                backlogItemId,
+                                predecessor.Id.Value,
+                                null,
                                 command.Disposition,
                                 command.Reason,
                                 predecessor.Status,
-                                preparedSnapshot.Status,
+                                null,
                                 claim.Coverage,
                                 "operator",
                                 "cli",
                                 "local-process",
-                                now,
+                                DateTimeOffset.UtcNow,
                                 predecessor.Id.Value,
                                 claim.Version,
-                                predecessor.Id.Value,
+                                claim.OwnerGoalId,
                                 claim.Version,
                                 validatedFacts,
-                                FailureCode: null,
-                                ObjectiveHash: fingerprintInputs.ObjectiveHash,
-                                OrderedRoles: fingerprintInputs.OrderedRoles,
-                                AssignedAgents: fingerprintInputs.AssignedAgents);
-
-                            var transferred = claimStore.CommitReplacement(
-                                audit,
-                                transferAuthority,
-                                validatedFacts,
-                                replacementLeaseAcquisition.LeaseOwner
-                                    ?? throw new InvalidOperationException(
-                                        "GOAL_REPLACE_STATE_INVALID reason=acquired-replacement-lease-owner-missing"));
-                            currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
-                            currentKernel.RecordGoalPolicyDecision(
-                                predecessor.Id,
-                                $"Source backlog claim replaced by goal {preparedSnapshot.Id}; request={command.RequestId:D} disposition={command.Disposition}.");
-                            currentKernel.RecordGoalPolicyDecision(
-                                new GoalId(preparedSnapshot.Id),
-                                $"Source backlog claim inherited from goal {predecessor.Id.Value}; request={command.RequestId:D} disposition={command.Disposition}.");
+                                eligibility == GoalReplacementOutcome.ProtectedOwner
+                                    ? AppendGoalReplacementProtectedBy(
+                                        validatedFacts.IsGitEvidenceAvailable ? "protected-owner" : "git-evidence-unavailable",
+                                        validatedFacts)
+                                    : "ineligible-disposition",
+                                fingerprintInputs.ObjectiveHash,
+                                fingerprintInputs.OrderedRoles,
+                                fingerprintInputs.AssignedAgents);
+                            claimStore.CommitRejectedAttempt(rejectedAudit);
                             return Task.FromResult((
-                                ShouldSave: true,
+                                ShouldSave: false,
                                 Result: new GoalReplacementReceipt(
-                                    GoalReplacementOutcome.Succeeded,
+                                    eligibility,
                                     command.RequestId,
                                     backlogItemId,
                                     predecessor.Id.Value,
-                                    preparedSnapshot.Id,
-                                    transferred.OwnerGoalId,
-                                    transferred.Version,
-                                    "replaced"),
-                                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage, refinementMessage]));
-                        })
-                    .GetAwaiter()
-                    .GetResult();
-            }
-            catch (SourceBacklogClaimConflictException conflict)
-            {
-                TryRecordGoalReplacementFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    GoalReplacementOutcome.CurrentOwnerConflict,
-                    conflict.ObservedOwnerGoalId,
-                    conflict.ObservedVersion,
-                    "current-owner-conflict",
-                    authorizedFacts);
-                throw;
-            }
-            catch (GoalReplacementIdempotencyConflictException)
-            {
-                throw;
-            }
-            catch (GoalReplacementTransferAuthorityException authorityFailure)
-            {
-                TryRecordGoalReplacementFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    GoalReplacementOutcome.ValidationRejected,
-                    observedClaimUnderLease.OwnerGoalId,
-                    observedClaimUnderLease.Version,
-                    authorityFailure.ReasonCode,
-                    authorizedFacts,
-                    authorityFailure.ObservedFacts);
-                throw new InvalidOperationException(
-                    $"GOAL_REPLACE_VALIDATION_REJECTED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} reason={authorityFailure.ReasonCode}",
-                    authorityFailure);
-            }
-            catch (GoalReplacementValidationException validation)
-            {
-                TryRecordGoalReplacementFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    GoalReplacementOutcome.ValidationRejected,
-                    observedClaimUnderLease.OwnerGoalId,
-                    observedClaimUnderLease.Version,
-                    validation.ReasonCode,
-                    authorizedFacts);
-                throw;
-            }
-            catch (InvalidOperationException precondition)
-                when (GoalCreationPreconditionValidator.GetReason(precondition) is not null)
-            {
-                var reasonCode = GoalCreationPreconditionValidator.GetReason(precondition)!;
-                TryRecordGoalReplacementFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    GoalReplacementOutcome.ValidationRejected,
-                    observedClaimUnderLease.OwnerGoalId,
-                    observedClaimUnderLease.Version,
-                    reasonCode,
-                    authorizedFacts);
-                throw new InvalidOperationException(
-                    $"GOAL_REPLACE_VALIDATION_REJECTED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} reason={reasonCode} detail={precondition.Message}",
-                    precondition);
-            }
-            catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
-            {
-                throw RecordLegacyOwnerAmbiguousFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    authorizedFacts,
-                    ambiguous);
-            }
-            catch (Exception ex)
-            {
-                var observedClaim = ResolveObservedClaimAfterReplacementFailure(
-                    claimStore,
-                    stateRepository,
-                    preparedSnapshot.SourceBacklogItemId!);
-                var failureCode = observedClaim is null
-                    ? "transaction-failed-claim-observation-unavailable"
-                    : "transaction-failed";
-                TryRecordGoalReplacementFailure(
-                    claimStore,
-                    command,
-                    preparedSnapshot,
-                    fingerprint,
-                    GoalReplacementOutcome.PersistenceFailed,
-                    observedClaim?.OwnerGoalId,
-                    observedClaim?.Version,
-                    failureCode,
-                    authorizedFacts);
-                throw new InvalidOperationException(
-                    $"GOAL_REPLACE_PERSISTENCE_FAILED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} owner={observedClaim?.OwnerGoalId ?? "unknown"} claimVersion={observedClaim?.Version.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} reason={failureCode} detail={ex.Message}",
-                    ex);
-            }
+                                    null,
+                                    claim.OwnerGoalId,
+                                    claim.Version,
+                                    rejectedAudit.FailureCode!),
+                                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
+                        }
 
-            committedGoalId = receipt.SuccessorGoalId;
-            if (receipt.Outcome == GoalReplacementOutcome.Succeeded)
-            {
-                _ = CliPersistentStateRunner.DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, preparedGoal.Id);
-                deferredCollaborationWriter.CompleteDelivery();
-                deferredEventWriter.CompleteDeliveryTo(
-                    new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch));
-                _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, preparedGoal.Id);
-            }
-            var outcomeCode = RenderGoalReplacementOutcomeCode(receipt.Outcome);
-            var receiptOwner = receipt.OwnerGoalId ?? "unknown";
-            var receiptVersion = receipt.ClaimVersion?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
-            var receiptText = $"GOAL_REPLACE_{outcomeCode} requestId={receipt.RequestId:D} predecessor={receipt.PredecessorGoalId} successor={receipt.SuccessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion}";
-            Console.WriteLine(receipt.Outcome == GoalReplacementOutcome.ProtectedOwner
-                ? AppendGoalReplacementProtectedBy(receiptText, refusalFacts)
-                : receiptText);
-            if (receipt.Outcome is not (GoalReplacementOutcome.Succeeded or GoalReplacementOutcome.Replayed))
-            {
-                var refusalText = $"GOAL_REPLACE_{outcomeCode} predecessor={receipt.PredecessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion} reason={receipt.ReasonCode}";
-                throw new InvalidOperationException(receipt.Outcome == GoalReplacementOutcome.ProtectedOwner
-                    ? AppendGoalReplacementProtectedBy(refusalText, refusalFacts) + RenderGoalReplacementProtectedNextLine(refusalFacts)
-                    : refusalText);
-            }
+                        var now = DateTimeOffset.UtcNow;
+                        var audit = new GoalReplacementAuditSnapshot(
+                            command.RequestId,
+                            fingerprint,
+                            GoalReplacementOutcome.Succeeded,
+                            backlogItemId,
+                            predecessor.Id.Value,
+                            preparedSnapshot.Id,
+                            command.Disposition,
+                            command.Reason,
+                            predecessor.Status,
+                            preparedSnapshot.Status,
+                            claim.Coverage,
+                            "operator",
+                            "cli",
+                            "local-process",
+                            now,
+                            predecessor.Id.Value,
+                            claim.Version,
+                            predecessor.Id.Value,
+                            claim.Version,
+                            validatedFacts,
+                            FailureCode: null,
+                            ObjectiveHash: fingerprintInputs.ObjectiveHash,
+                            OrderedRoles: fingerprintInputs.OrderedRoles,
+                            AssignedAgents: fingerprintInputs.AssignedAgents);
+
+                        var transferred = claimStore.CommitReplacement(
+                            audit,
+                            transferAuthority,
+                            validatedFacts,
+                            replacementLeaseAcquisition.LeaseOwner
+                                ?? throw new InvalidOperationException(
+                                    "GOAL_REPLACE_STATE_INVALID reason=acquired-replacement-lease-owner-missing"));
+                        currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
+                        currentKernel.RecordGoalPolicyDecision(
+                            predecessor.Id,
+                            $"Source backlog claim replaced by goal {preparedSnapshot.Id}; request={command.RequestId:D} disposition={command.Disposition}.");
+                        currentKernel.RecordGoalPolicyDecision(
+                            new GoalId(preparedSnapshot.Id),
+                            $"Source backlog claim inherited from goal {predecessor.Id.Value}; request={command.RequestId:D} disposition={command.Disposition}.");
+                        return Task.FromResult((
+                            ShouldSave: true,
+                            Result: new GoalReplacementReceipt(
+                                GoalReplacementOutcome.Succeeded,
+                                command.RequestId,
+                                backlogItemId,
+                                predecessor.Id.Value,
+                                preparedSnapshot.Id,
+                                transferred.OwnerGoalId,
+                                transferred.Version,
+                                "replaced"),
+                            OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage, refinementMessage]));
+                    })
+                .GetAwaiter()
+                .GetResult();
         }
-
-        bool shouldSave;
-        try
+        catch (SourceBacklogClaimConflictException conflict)
         {
-            shouldSave = CliCommandDispatcher.ExecuteCommand(
-                args,
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref workerProfiles,
-                ref currentGoal,
-                () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-                eventWriter: deferredEventWriter,
-                refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync,
-                finalizeGoalReplacement: FinalizeGoalReplacement);
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.CurrentOwnerConflict,
+                conflict.ObservedOwnerGoalId,
+                conflict.ObservedVersion,
+                "current-owner-conflict",
+                authorizedFacts);
+            throw;
+        }
+        catch (GoalReplacementIdempotencyConflictException)
+        {
+            throw;
+        }
+        catch (GoalReplacementTransferAuthorityException authorityFailure)
+        {
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.ValidationRejected,
+                observedClaimUnderLease.OwnerGoalId,
+                observedClaimUnderLease.Version,
+                authorityFailure.ReasonCode,
+                authorizedFacts,
+                authorityFailure.ObservedFacts);
+            throw new InvalidOperationException(
+                $"GOAL_REPLACE_VALIDATION_REJECTED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} reason={authorityFailure.ReasonCode}",
+                authorityFailure);
+        }
+        catch (GoalReplacementValidationException validation)
+        {
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.ValidationRejected,
+                observedClaimUnderLease.OwnerGoalId,
+                observedClaimUnderLease.Version,
+                validation.ReasonCode,
+                authorizedFacts);
+            throw;
+        }
+        catch (InvalidOperationException precondition)
+            when (GoalCreationPreconditionValidator.GetReason(precondition) is not null)
+        {
+            var reasonCode = GoalCreationPreconditionValidator.GetReason(precondition)!;
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.ValidationRejected,
+                observedClaimUnderLease.OwnerGoalId,
+                observedClaimUnderLease.Version,
+                reasonCode,
+                authorizedFacts);
+            throw new InvalidOperationException(
+                $"GOAL_REPLACE_VALIDATION_REJECTED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} reason={reasonCode} detail={precondition.Message}",
+                precondition);
+        }
+        catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
+        {
+            throw RecordLegacyOwnerAmbiguousFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                authorizedFacts,
+                ambiguous);
         }
         catch (Exception ex)
         {
-            if (ex is not GoalReplacementRetryableTimeoutException &&
-                (!Guid.TryParse(TryGetGoalReplacementFlag(args, "--request-id"), out var failedRequestId) ||
-                 claimStore.FindAudit(failedRequestId) is null))
-            {
-                TryRecordGoalReplacementPreflightFailure(claimStore, args, kernel, workspace, ex);
-            }
-            throw;
+            var observedClaim = ResolveObservedClaimAfterReplacementFailure(
+                claimStore,
+                stateRepository,
+                preparedSnapshot.SourceBacklogItemId!);
+            var failureCode = observedClaim is null
+                ? "transaction-failed-claim-observation-unavailable"
+                : "transaction-failed";
+            TryRecordGoalReplacementFailure(
+                claimStore,
+                command,
+                preparedSnapshot,
+                fingerprint,
+                GoalReplacementOutcome.PersistenceFailed,
+                observedClaim?.OwnerGoalId,
+                observedClaim?.Version,
+                failureCode,
+                authorizedFacts);
+            throw new InvalidOperationException(
+                $"GOAL_REPLACE_PERSISTENCE_FAILED requestId={command.RequestId:D} predecessor={command.PredecessorGoalId.Value} owner={observedClaim?.OwnerGoalId ?? "unknown"} claimVersion={observedClaim?.Version.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} reason={failureCode} detail={ex.Message}",
+                ex);
         }
 
-        if (committedGoalId is null)
-            throw new InvalidOperationException("GOAL_REPLACE_COMMIT_MISSING reason=finalizer-not-invoked");
-
-        var committedKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-        currentGoal = committedKernel.Goals.Single(goal => goal.Id.Value == committedGoalId);
-        GoalTextView.PrintGoal(currentGoal);
-        return shouldSave;
+        if (receipt.Outcome == GoalReplacementOutcome.Succeeded)
+        {
+            _ = CliPersistentStateRunner.DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, preparedGoal.Id);
+            deferredCollaborationWriter.CompleteDelivery();
+            deferredEventWriter.CompleteDeliveryTo(
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch));
+            _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, preparedGoal.Id);
+        }
+        var outcomeCode = RenderGoalReplacementOutcomeCode(receipt.Outcome);
+        var receiptOwner = receipt.OwnerGoalId ?? "unknown";
+        var receiptVersion = receipt.ClaimVersion?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+        var receiptText = $"GOAL_REPLACE_{outcomeCode} requestId={receipt.RequestId:D} predecessor={receipt.PredecessorGoalId} successor={receipt.SuccessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion}";
+        Console.WriteLine(receipt.Outcome == GoalReplacementOutcome.ProtectedOwner
+            ? AppendGoalReplacementProtectedBy(receiptText, refusalFacts)
+            : receiptText);
+        if (receipt.Outcome is not (GoalReplacementOutcome.Succeeded or GoalReplacementOutcome.Replayed))
+        {
+            var refusalText = $"GOAL_REPLACE_{outcomeCode} predecessor={receipt.PredecessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion} reason={receipt.ReasonCode}";
+            throw new InvalidOperationException(receipt.Outcome == GoalReplacementOutcome.ProtectedOwner
+                ? AppendGoalReplacementProtectedBy(refusalText, refusalFacts) + RenderGoalReplacementProtectedNextLine(refusalFacts)
+                : refusalText);
+        }
+        return receipt.SuccessorGoalId!;
     }
 
     private sealed class GoalReplacementValidationException(string message, string reasonCode)

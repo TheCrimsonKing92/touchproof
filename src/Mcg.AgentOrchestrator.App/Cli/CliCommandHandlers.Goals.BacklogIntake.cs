@@ -365,19 +365,12 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             if (TryReuseBacklogIntakeGoal(context, batchItem, out var reusedBatchGoal) ||
                 TryReuseBacklogIntakeRecord(context, batchItem, out reusedBatchGoal))
             {
-                if (reusedBatchGoal is not null)
-                {
-                    if (batchGoalPlan is not null)
-                    {
-                        GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(batchGoalPlan, reusedBatchGoal);
-                    }
-                    context.CurrentGoal = reusedBatchGoal;
-                    Console.WriteLine($"Backlog slice '{batchItem.Heading}' already has goal {reusedBatchGoal.Id.Value[..8]}; no new goal created.");
-                    if (batchGoalPlan?.PipelineDecision.IsOverride == true)
-                    {
-                        GoalObjectivePlanTextView.PrintGoalObjectivePlan(batchGoalPlan);
-                    }
-                }
+                if (reusedBatchGoal is not null && BacklogIntakeGoalReuse.Execute(
+                        context, batchItem, batchBacklogItem, reusedBatchGoal, batchGoalPlan,
+                        pipelineRequest, forceReclaim, batch: true,
+                        backlog => ValidateBacklogPromotionPrerequisites(context, backlog),
+                        (goal, backlog) => ApplyBacklogPromotionDependencies(context, goal, backlog)))
+                    created++;
                 continue;
             }
             ValidateBacklogPromotionPrerequisites(context, batchBacklogItem);
@@ -473,20 +466,12 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     if (TryReuseBacklogIntakeGoal(context, item, out var existingGoal) ||
         TryReuseBacklogIntakeRecord(context, item, out existingGoal))
     {
-        if (existingGoal is not null)
-        {
-            if (goalObjectivePlan is not null)
-            {
-                GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(goalObjectivePlan, existingGoal);
-            }
-            context.CurrentGoal = existingGoal;
-            Console.WriteLine($"Backlog slice already has goal {existingGoal.Id.Value[..8]}; no new goal created.");
-            if (goalObjectivePlan?.PipelineDecision.IsOverride == true)
-            {
-                GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
-            }
-            GoalTextView.PrintGoal(existingGoal);
-        }
+        if (existingGoal is not null && BacklogIntakeGoalReuse.Execute(
+                context, item, sourceBacklogItem, existingGoal, goalObjectivePlan,
+                pipelineRequest, forceReclaim, batch: false,
+                backlog => ValidateBacklogPromotionPrerequisites(context, backlog),
+                (goal, backlog) => ApplyBacklogPromotionDependencies(context, goal, backlog)))
+            return false; // The replacement transaction already committed the correction.
         if (context.HasGoalCreationFinalizer)
         {
             throw new InvalidOperationException(

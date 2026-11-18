@@ -172,6 +172,42 @@ public sealed class SourceBacklogClaimTests
         Xunit.Assert.Equal(expected, SourceBacklogClaimEligibility.Evaluate(disposition, facts));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("none", false)]
+    [Xunit.InlineData("workspace", true)]
+    [Xunit.InlineData("branch", true)]
+    [Xunit.InlineData("dispatch", true)]
+    [Xunit.InlineData("repository-delta", true)]
+    [Xunit.InlineData("running", true)]
+    [Xunit.InlineData("landed", true)]
+    [Xunit.InlineData("merged", true)]
+    [Xunit.InlineData("git-evidence-unavailable", true)]
+    [Xunit.InlineData("status-Active", true)]
+    public void RecordedOwner_OnlyCancelledZeroWorkFactsRemoveProtection(string blocker, bool isProtected)
+    {
+        var facts = new GoalReplacementEligibilityFacts(
+            blocker == "status-Active" ? GoalStatus.Active : GoalStatus.Cancelled,
+            HasWorkspace: blocker == "workspace",
+            HasBranch: blocker == "branch",
+            HasDispatch: blocker == "dispatch",
+            HasRepositoryDelta: blocker == "repository-delta",
+            IsRunning: blocker == "running",
+            IsLanded: blocker == "landed",
+            IsMerged: blocker == "merged",
+            IsRecorded: true,
+            IsGitEvidenceAvailable: blocker != "git-evidence-unavailable");
+
+        Xunit.Assert.True(facts.IsRecorded);
+        Xunit.Assert.Equal(isProtected, facts.IsProtected);
+        Xunit.Assert.Equal(isProtected, facts.ListProtections().Contains("recorded"));
+        Xunit.Assert.Equal(isProtected ? GoalReplacementOutcome.ProtectedOwner : GoalReplacementOutcome.Succeeded,
+            SourceBacklogClaimEligibility.Evaluate(GoalReplacementDisposition.ZeroWorkCorrection, facts));
+        if (isProtected)
+            Xunit.Assert.Contains(blocker, facts.ListCorrectionBlockers());
+        else
+            Xunit.Assert.Empty(facts.ListCorrectionBlockers());
+    }
+
     [Xunit.Fact]
     public async Task LegacyMultipleLinksFailClosedWithoutInventingOwner()
     {
