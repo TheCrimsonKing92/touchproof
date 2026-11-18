@@ -22,8 +22,19 @@ function Invoke-WorkerBuildScopeGit {
     $info.RedirectStandardInput = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $info.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
-    $info.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    $info.StandardOutputEncoding = $utf8
+    $info.StandardErrorEncoding = $utf8
+    $savedInputEncoding = $null
+    if ($null -ne $info.PSObject.Properties['StandardInputEncoding']) {
+        $info.StandardInputEncoding = $utf8
+    }
+    else {
+        # .NET Framework uses Console.InputEncoding to initialize the stdin writer
+        # during Start(), which can emit a preamble before any BaseStream write.
+        $consoleInputEncoding = [Console]::InputEncoding
+        if ($consoleInputEncoding.GetPreamble().Length -gt 0) { $savedInputEncoding = $consoleInputEncoding }
+    }
     # Quote using the Windows argv convention, including trailing backslashes.
     $info.Arguments = (@('-c', 'core.fsmonitor=false', '-c', 'gc.auto=0') + $Arguments | ForEach-Object {
         '"' + [regex]::Replace([regex]::Replace($_, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
@@ -35,12 +46,16 @@ function Invoke-WorkerBuildScopeGit {
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
     try {
-        if (-not $process.Start()) { throw 'Could not start scope tool Git process.' }
+        try {
+            if ($null -ne $savedInputEncoding) { [Console]::InputEncoding = $utf8 }
+            if (-not $process.Start()) { throw 'Could not start scope tool Git process.' }
+        }
+        finally {
+            if ($null -ne $savedInputEncoding) { [Console]::InputEncoding = $savedInputEncoding }
+        }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        # Windows PowerShell 5.1 lacks ProcessStartInfo.StandardInputEncoding.
-        # Write bytes directly so Git receives BOM-free UTF-8 on every shell.
-        $inputBytes = [Text.UTF8Encoding]::new($false).GetBytes($InputText)
+        $inputBytes = $utf8.GetBytes($InputText)
         $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
         $process.StandardInput.BaseStream.Close()
         if (-not $process.WaitForExit(60000)) {
