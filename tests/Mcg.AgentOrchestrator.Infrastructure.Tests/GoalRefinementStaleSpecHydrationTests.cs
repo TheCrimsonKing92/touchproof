@@ -183,7 +183,9 @@ public sealed class GoalRefinementStaleSpecHydrationTests
     {
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = scenario.Workspace.SqliteStatePath
+            DataSource = scenario.Workspace.SqliteStatePath,
+            // Release the temporary database handle when this helper returns.
+            Pooling = false
         }.ToString());
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
