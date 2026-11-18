@@ -8,6 +8,7 @@ using static ConductorDriverTests;
 // Parallel-safe: each scenario owns its kernel and temporary attempt directory; runners and dispatch are fakes.
 public sealed class FindingRoundRedFanOutScenarioTests
 {
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
     private const string Candidate = "abc1234";
     private const string AlphaFailure = "Fixture.AlphaTests.FailsOnCandidate";
     private const string BetaFailure = "Fixture.BetaTests.FailsOnCandidate(outcome: Interrupted)";
@@ -80,7 +81,7 @@ public sealed class FindingRoundRedFanOutScenarioTests
         Assert.Empty(scenario.Escalations);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void InheritedBaselineRed_DrainsSiblingAfterRestartBeforeOneRecovery()
     {

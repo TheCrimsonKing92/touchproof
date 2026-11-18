@@ -10,6 +10,8 @@ using GitFixture = GoalRepositoryWorktreeProvisionerFixture;
 // Git is real; the acceptance verifier is a recording seam and launches no test processes.
 public sealed class KeyedRepositoryEvidenceExecutionTests
 {
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
+
     [Fact]
     public void Resolve_DeclaredRepository_BindsWorktreeHomeBranchAndHead()
     {
@@ -172,7 +174,7 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.True(FindingRoundBatchAccounting.IsClosed(restored, identity));
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(false)]
     [InlineData(true)]
@@ -240,7 +242,7 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
             () => throw new InvalidOperationException("Duplicate unavailable recovery")));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void KeyedRed_PreservesExhaustedHomeRefusal()
     {
