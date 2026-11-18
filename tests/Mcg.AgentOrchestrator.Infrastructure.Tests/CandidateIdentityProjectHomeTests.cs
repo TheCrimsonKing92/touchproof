@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Uses real git processes in an isolated repository per case.
 [Xunit.Collection("IsolatedProcessSpawningRemainderB")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class CandidateIdentityProjectHomeTests
 {
     private const string ChangedPath = "src/Example/Program.cs";

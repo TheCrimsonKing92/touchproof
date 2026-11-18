@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
 {
     [Fact]

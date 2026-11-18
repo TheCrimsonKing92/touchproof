@@ -51,6 +51,49 @@ public sealed class ExperimentReplayImportTests
         Assert.Equal(103, Directory.GetFiles(evidenceRoot).Length);
     }
 
+    [Fact]
+    public async Task ImportAsync_PrePlannerDiagnosticEvidence_ReimportsWithoutProvenanceConflict()
+    {
+        using var fixture = new ExperimentReplayTestData();
+        var (workspace, kernel) = await StateAsync(fixture, 1);
+        var goal = Assert.Single(kernel.Goals);
+        var task = Assert.Single(goal.Tasks);
+        var round = Assert.Single(WorkerRoundLedger.FromGoal(goal));
+        Assert.Equal(AgentRole.Developer, round.Role);
+
+        // Freeze the pre-change shape independently of WorkerRoundRecord's current serializer contract.
+        var legacyJson = JsonSerializer.Serialize(new
+        {
+            round = new
+            {
+                round.GoalId, round.TaskId, round.Role, round.WorkerName, round.RoundIndex,
+                round.DispatchedAt, round.EndedAt, round.StopCause, round.ProviderName,
+                round.ModelName, round.DispatchLane, round.InputTokens, round.CachedInputTokens,
+                round.OutputTokens, round.ReworkCause, round.UsageReported
+            },
+            dispatch = task.DispatchHistory.ToArray()
+        }, ExperimentReplayStore.Json);
+        var evidenceDirectory = Path.Combine(fixture.Root, "experiment-replay", "evidence");
+        var legacySource = ExperimentReplayEvidence.Write(evidenceDirectory, legacyJson, ".json");
+        var legacyCase = Assert.Single(ExperimentReplayCorpusImporter.Map(
+            [new(workspace.ProjectName, round.GoalId, round.TaskId, round.DispatchedAt,
+                round.EndedAt!.Value, Base, Candidate, Main, legacySource)], [], Now));
+        var store = fixture.Store();
+        Assert.True(store.Import(legacyCase));
+
+        var imported = await ExperimentReplayCorpusImporter.ImportAsync(workspace, store, Now, default);
+
+        Assert.Equal(1, imported.Considered);
+        Assert.Equal(0, imported.Added);
+        Assert.Empty(imported.Diagnostics);
+        var source = Assert.Single(Assert.Single(imported.Cases).Sources);
+        Assert.Equal(legacySource, source);
+        Assert.Equal(legacyJson, File.ReadAllText(source.Identity));
+        Assert.Single(Directory.GetFiles(evidenceDirectory));
+        Assert.Equal(JsonSerializer.Serialize(legacyCase, ExperimentReplayStore.Json),
+            JsonSerializer.Serialize(Assert.Single(store.Cases(workspace.ProjectName, Now)), ExperimentReplayStore.Json));
+    }
+
     [Theory]
     [InlineData("missing", "unsupported-history:")]
     [InlineData("task", "unsupported-provenance:")]

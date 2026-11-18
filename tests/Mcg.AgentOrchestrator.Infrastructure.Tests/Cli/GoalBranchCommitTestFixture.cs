@@ -89,11 +89,11 @@ internal sealed class GoalBranchCommitTestFixture : IDisposable
         string[] args = resume ? ["goal-branch-commit", GoalId.Value[..8], "--resume"]
             : ["goal-branch-commit", GoalId.Value[..8], "--message", "Operator test fix"];
         var exitCode = -1;
-        var output = "";
-        var error = AsyncLocalConsoleRouter.Error.CaptureLocal(() =>
-            output = AsyncLocalConsoleRouter.Capture(() =>
-                exitCode = CliGoalBranchCommitCommand.Run(args, Workspace, store ?? Store)));
-        return (exitCode, output, error);
+        // Capture command errors independently of process-launch diagnostics.
+        using var error = new StringWriter();
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            exitCode = CliGoalBranchCommitCommand.Run(args, Workspace, store ?? Store, error: error));
+        return (exitCode, output, error.ToString());
     }
 
     internal void Save() => Repository.SaveAsync(Kernel).GetAwaiter().GetResult();
