@@ -198,7 +198,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsSqliteResolution
         foreach (var argument in new[]
         {
             "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
-            "-FocusedTest", "-GoalPrefix", "aaaaaaaa", "-TestFilter",
+            "-FocusedTest", "-FullOutput", "-GoalPrefix", "aaaaaaaa", "-TestFilter",
             "FullyQualifiedName~AcceptanceCriterionFeasibilityTests", "-BudgetSeconds", "60",
             "-LeaseWaitSeconds", "5", "test", "Fake.Tests.csproj"
         })
