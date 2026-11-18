@@ -13,7 +13,8 @@ internal static class CliGoalBranchCommitCommand
         !CliCommandHelp.IsCommandSpecificHelp(args);
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
-        IOperatorIntentStore? store = null, Func<GoalId, bool>? hasLiveAcceptanceAttempt = null)
+        IOperatorIntentStore? store = null, Func<GoalId, bool>? hasLiveAcceptanceAttempt = null,
+        TextWriter? error = null)
     {
         string? newHead = null;
         string? resumeCommand = null;
@@ -90,11 +91,12 @@ internal static class CliGoalBranchCommitCommand
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
+            var commandError = error ?? Console.Error;
+            commandError.WriteLine($"Error: {ex.Message}");
             if (newHead is not null)
             {
                 GoalBranchCommitTextView.Print(newHead, plan, submitted, null);
-                Console.Error.WriteLine($"Resume: {resumeCommand}");
+                commandError.WriteLine($"Resume: {resumeCommand}");
                 return 2;
             }
             return 1;
