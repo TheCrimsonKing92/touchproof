@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -129,6 +130,59 @@ public sealed class PackageHelperHiddenLaunchTestsLauncherScriptTests
         }
     }
 
+    [Fact]
+    public void Probe_child_environment_uses_executing_runtime_dotnet_root()
+    {
+        var runtimeDirectory = RuntimeEnvironment.GetRuntimeDirectory();
+        var root = Path.GetFullPath(Path.Combine(runtimeDirectory, "..", "..", ".."));
+        var inherited = new ProcessStartInfo();
+        inherited.Environment.Clear();
+        foreach (var name in new[] { "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT(x86)" })
+            inherited.Environment[name] = "stale inherited runtime root";
+        SetProbeRuntimeEnvironment(inherited, runtimeDirectory);
+
+        using var run = new Invocation();
+        var launch = run.StartInfo("Invoke-PackageBootstrap.ps1", "probe.exe", "synthetic.sln");
+        foreach (var start in new[] { inherited, launch })
+        {
+            Assert.Equal(root, start.Environment["DOTNET_ROOT"]);
+            if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
+                Assert.Equal(root, start.Environment["DOTNET_ROOT_X64"]);
+            if (RuntimeInformation.ProcessArchitecture == Architecture.X86)
+                Assert.Equal(root, start.Environment["DOTNET_ROOT(x86)"]);
+        }
+        Assert.Null(run.Process);
+    }
+
+    [Fact]
+    public void Missing_runtime_host_fails_before_probe_launch_with_named_path()
+    {
+        using var run = new Invocation();
+        var runtimeDirectory = Path.Combine(run.Root, "shared", "Microsoft.NETCore.App", "0.0.0");
+        Directory.CreateDirectory(runtimeDirectory);
+        var host = Path.Combine(run.Root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+
+        var error = Assert.Throws<Xunit.Sdk.TrueException>(() =>
+            run.StartInfo("Invoke-PackageBootstrap.ps1", "probe.exe", "synthetic.sln", runtimeDirectory));
+
+        Assert.Contains(host, error.Message);
+        Assert.Contains("no runtime was found for the probe apphost", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(run.Process);
+    }
+
+    private static void SetProbeRuntimeEnvironment(ProcessStartInfo start, string runtimeDirectory)
+    {
+        var host = Path.GetFullPath(Path.Combine(runtimeDirectory, "..", "..", "..",
+            OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
+        Assert.True(File.Exists(host), "No runtime was found for the probe apphost: no dotnet host beside the executing runtime at " + host);
+        var root = Path.GetDirectoryName(host)!;
+        start.Environment["DOTNET_ROOT"] = root;
+        if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
+            start.Environment["DOTNET_ROOT_X64"] = root;
+        if (RuntimeInformation.ProcessArchitecture == Architecture.X86)
+            start.Environment["DOTNET_ROOT(x86)"] = root;
+    }
+
     private static bool HasLaunchContract(string helper, string module) =>
         helper.Contains("Import-Module (Join-Path $PSScriptRoot 'HiddenNativeProcess.psm1')", StringComparison.Ordinal) &&
         helper.Contains("Invoke-HiddenNativeProcess -FilePath $dotnetHost -ArgumentList", StringComparison.Ordinal) &&
@@ -189,7 +243,7 @@ public sealed class PackageHelperHiddenLaunchTestsLauncherScriptTests
 
         public Invocation() => Directory.CreateDirectory(Root);
 
-        public ProcessStartInfo StartInfo(string helper, string host, string target)
+        public ProcessStartInfo StartInfo(string helper, string host, string target, string? runtimeDirectory = null)
         {
             // Supply the target as a PowerShell string, isolating the native argv
             // contract from powershell.exe's own -File command-line parser.
@@ -207,6 +261,7 @@ public sealed class PackageHelperHiddenLaunchTestsLauncherScriptTests
             foreach (var name in new[] { "SystemRoot", "SystemDrive", "WINDIR", "PATH", "PATHEXT", "COMSPEC",
                 "TEMP", "TMP", "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT(x86)" })
                 if (Environment.GetEnvironmentVariable(name) is { } value) start.Environment[name] = value;
+            SetProbeRuntimeEnvironment(start, runtimeDirectory ?? RuntimeEnvironment.GetRuntimeDirectory());
             start.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = host;
             start.Environment["PACKAGE_HELPER_SCRIPT"] = Path.Combine(LauncherScriptTests.FindLauncherSourceRoot(), "scripts", helper);
             start.Environment["PACKAGE_HELPER_TARGET"] = target;
