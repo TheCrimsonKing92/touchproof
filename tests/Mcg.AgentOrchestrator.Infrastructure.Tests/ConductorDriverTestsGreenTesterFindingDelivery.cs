@@ -8,7 +8,8 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsGreenTesterFindingDelivery
 {
-    [Fact]
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
     public void GreenDeveloperFindingRunsQueuedRequestAndRoutesTester()
     {
         const string candidateSha = "abc1234";
@@ -27,7 +28,7 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
                 EvidenceFindingWithRequest("First focused request", "green-first",
                     FindingCategory.TestCoverage, classes: ["ConductorDriverTests"]),
                 EvidenceFindingWithRequest("Queued focused request", "green-second",
-                    FindingCategory.TestEvidence, project: "Core.Tests", classes: ["GoalLifecycleTests"])
+                    FindingCategory.TestEvidence, project: "Core.Tests", classes: ["GoalLifecycleTests"]) with { Severity = FindingSeverity.Advisory }
             };
             var stdout = string.Join(Environment.NewLine,
                 "WORKER_RESULT:", "files: none", "commands: inspect focused behavior",
@@ -69,8 +70,14 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                     kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
-            for (var tick = 0; tick < 5 && retried.Count == 0; tick++)
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            Assert.Single(ReviewFindings.GetOpenBlockingFindings(tester.LastVerification.MergedReviewFindings!, goal.EffectiveAcceptanceCriteriaCorrections));
+            var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome);
+            Assert.Single(requests);
+            Assert.Empty(retried);
+            Assert.DoesNotContain(Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules
+                .BuildReadyTaskParallelPlan(goal).Batches.SelectMany(batch => batch.IntentIds), id => id == tester.Id.Value);
+            for (var tick = 0; tick < 4 && retried.Count == 0; tick++) driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
             Assert.Equal(2, requests.Count);
             Assert.Contains(requests, request => request.Contains("Core.Tests:GoalLifecycleTests", StringComparison.Ordinal));
@@ -79,7 +86,7 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
             Assert.Contains(FindingReceiptClosureDiagnosis.FindingCategoryNotTestEvidence, Assert.Single(messages), StringComparison.Ordinal);
             Assert.Contains(candidateSha, Assert.Single(messages), StringComparison.Ordinal);
             Assert.Contains("green-first", Assert.Single(messages), StringComparison.Ordinal);
-            Assert.Contains("green-second", Assert.Single(messages), StringComparison.Ordinal);
+            Assert.Contains(goal.Timeline, item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal));
             Assert.DoesNotContain(developer.Id, retried);
             Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
                 goal.Timeline, tester.Id, candidateSha, "green-first"));

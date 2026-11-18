@@ -7,8 +7,10 @@ internal sealed record FindingRoundBatchPlan(
     IReadOnlyList<FindingEvidenceBatch> Passed,
     IReadOnlyList<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)> RedCovered,
     IReadOnlyList<FindingEvidenceBatch> Executable,
-    (FindingEvidenceBatch Batch, int Count, string ReceiptId)? Capped)
+    IReadOnlyList<(FindingEvidenceBatch Batch, int Count, string ReceiptId)> Unavailable)
 {
+    internal (FindingEvidenceBatch Batch, int Count, string ReceiptId)? Capped =>
+        Unavailable.Count == 0 ? null : Unavailable[0];
     internal ReviewFinding[] CoveredFindings => RedCovered.SelectMany(pair => pair.Batch.Findings)
         .DistinctBy(finding => finding.StableId).ToArray();
 

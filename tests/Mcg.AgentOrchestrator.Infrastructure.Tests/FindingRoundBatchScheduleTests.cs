@@ -97,15 +97,30 @@ public sealed class FindingRoundBatchScheduleTests
         var before = Plan([batch, second], [], twoRuns);
         Assert.Equal(new[] { batch, second }, before.Executable);
         Assert.Null(before.Capped);
-        var capped = Plan([batch, second], [], [.. twoRuns, Event(message)]).Capped;
+        var drained = Plan([batch, second], [], [.. twoRuns, Event(message)]);
+        Assert.Equal(new[] { second }, drained.Executable);
+        Assert.Same(batch, Assert.Single(drained.Unavailable).Batch);
+        var capped = drained.Capped;
         Assert.NotNull(capped);
         Assert.Same(batch, capped.Value.Batch);
         Assert.Equal(3, capped.Value.Count);
         Assert.Equal(receiptId, capped.Value.ReceiptId);
 
-        // The first capped batch blocks dispatch even if an earlier batch has no runs.
+        // Exhaustion settles only that request; unrelated work remains runnable.
         var laterCapped = Plan([second, batch], [], [.. twoRuns, Event(message)]).Capped;
         Assert.Same(batch, laterCapped!.Value.Batch);
+    }
+
+    [Fact]
+    public void ChangedBasisDoesNotReuseGreenOrExhaustion()
+    {
+        var batch = Batch("alpha", "Infrastructure.Tests", "AlphaTests");
+        var old = RedReceipt(batch) with { Passed = true, ExecutionBasisIdentity = "old-basis" };
+        var message = $"receipt_id={ReceiptId(batch)}; finding_id=alpha; execution_basis=old-basis;";
+        var plan = Plan([batch], [old], [Event(message), Event(message), Event(message)]);
+        Assert.Empty(plan.Passed);
+        Assert.Empty(plan.Unavailable);
+        Assert.Equal(new[] { batch }, plan.Executable);
     }
 
     [Fact]

@@ -124,7 +124,7 @@ internal sealed partial class ConductorDriver
         if (trigger is not null && FindingStagnationRecovery.TryObserve(goal, trigger.TriggeringTask,
                 _findingStagnationKernel ?? _conductorTickKernel, out observation))
             return true;
-        if (trigger is not null && (TryRouteTesterFindingToPendingEvidence(goal, policy, trigger, out observation) || OutsideDiffFindingRerun.TryRoute(this, goal, policy, trigger.TriggeringTask, trigger.TargetTask, trigger.DeveloperOwnedFindings, out observation) || TryDeliverGreenTesterFindingEvidence(goal, policy, trigger, out observation)))
+        if (trigger is not null && (FindingRoundBatchCoordinator.TryResume(this, goal, trigger.TriggeringTask, policy, out observation) || TryRouteTesterFindingToPendingEvidence(goal, policy, trigger, out observation) || OutsideDiffFindingRerun.TryRoute(this, goal, policy, trigger.TriggeringTask, trigger.TargetTask, trigger.DeveloperOwnedFindings, out observation) || TryDeliverGreenTesterFindingEvidence(goal, policy, trigger, out observation)))
         {
             return true;
         }

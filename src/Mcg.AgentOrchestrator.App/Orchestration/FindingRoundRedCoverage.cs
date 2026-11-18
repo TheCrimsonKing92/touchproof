@@ -34,13 +34,28 @@ internal static class FindingRoundRedCoverage
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
         Action<GoalId, TaskId, string> recordRequest, ConductorAutonomyPolicy? policy = null)
     {
-        var coverage = Evaluate(pending, task, goal.Timeline, candidateSha, fingerprint, basis, receipt);
+        var settled = FindingRoundBatchSchedule.Plan(
+            plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
+            task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
+            candidateSha, fingerprint, basis, goal.Timeline);
+        foreach (var item in settled.Passed)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, candidateSha, fingerprint, basis, item, "executed", receipt.ReceiptId);
+        foreach (var item in settled.RedCovered)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, candidateSha, fingerprint, basis, item.Batch, "executed", item.Receipt.ReceiptId);
+        foreach (var item in settled.Unavailable)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, candidateSha, fingerprint, basis, item.Batch, "unavailable", item.ReceiptId);
+        var coverage = Evaluate(settled.Executable, task, goal.Timeline, candidateSha, fingerprint, basis, receipt);
         coverage.RecordSkips(goal, task, candidateSha, fingerprint, basis, recordDispositions, recordOutcome, recordRequest);
-        return coverage.Remaining.Count > 0
-            ? FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+        foreach (var item in coverage.Skipped)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, candidateSha, fingerprint, basis, item.Batch, "covered", item.Receipts[0].ReceiptId);
+        if (coverage.Remaining.Count > 0)
+            return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence completed; another distinct request from the same finding round remains pending: " +
-                $"next_request={coverage.Remaining[0].Identity}; completed_receipt_id={receipt.ReceiptId}.")
-            : driver.BuildReceiptClosureOrDeliveryRetry(goal, task, candidateSha,
+                $"next_request={coverage.Remaining[0].Identity}; completed_receipt_id={receipt.ReceiptId}.");
+        if (settled.Capped is { } unavailable)
+            return FindingRoundBatchSchedule.BuildRunCapDecision(goal, task, unavailable.Batch, unavailable.Count,
+                unavailable.ReceiptId, candidateSha, fingerprint, recordRequest);
+        return driver.BuildReceiptClosureOrDeliveryRetry(goal, task, candidateSha,
                 runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
                 plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Append(receipt.ReceiptId).Distinct(StringComparer.Ordinal).ToArray(),
                 "Focused evidence completed and its receipt was attached to the requesting finding." +

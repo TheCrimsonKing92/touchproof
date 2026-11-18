@@ -624,7 +624,7 @@ internal sealed partial class ConductorDriver
                 null);
     }
 
-    private static TaskSpec? FindUpstreamDeveloperTask(Goal goal, TaskSpec requestingTask) =>
+    internal static TaskSpec? FindUpstreamDeveloperTask(Goal goal, TaskSpec requestingTask) =>
         goal.Tasks.TakeWhile(task => task.Id != requestingTask.Id)
             .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
 

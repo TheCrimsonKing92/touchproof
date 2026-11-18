@@ -16,20 +16,21 @@ internal static class FindingRoundBatchSchedule
         string executionBasisIdentity,
         IReadOnlyList<ProgressEvent> timeline)
     {
-        if (candidateSha == "unavailable") return new([], [], batches, null);
+        if (candidateSha == "unavailable") return new([], [], batches, []);
 
         // Completing a batch in this round does not require reattaching content-bound
         // evidence. Cross-round reuse keeps its stricter artifact and coverage checks.
         var passedReceiptIds = receipts
             .Where(receipt => receipt is { Accepted: true, Passed: true } &&
                 string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(receipt.FindingRoundFingerprint, findingRoundFingerprint, StringComparison.Ordinal))
+                string.Equals(receipt.FindingRoundFingerprint, findingRoundFingerprint, StringComparison.Ordinal) &&
+                string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal))
             .Select(receipt => receipt.ReceiptId)
             .ToHashSet(StringComparer.Ordinal);
         var passed = new List<FindingEvidenceBatch>();
         var covered = new List<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)>();
         var executable = new List<FindingEvidenceBatch>();
-        (FindingEvidenceBatch Batch, int Count, string ReceiptId)? capped = null;
+        var unavailable = new List<(FindingEvidenceBatch Batch, int Count, string ReceiptId)>();
         foreach (var batch in batches)
         {
             var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidateSha, findingRoundFingerprint, batch.Identity);
@@ -45,14 +46,17 @@ internal static class FindingRoundBatchSchedule
                 covered.Add((batch, covering));
                 continue;
             }
-            executable.Add(batch);
             var count = timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
                 item.TaskId == requestingTaskId &&
                 item.Message.Contains($"receipt_id={receiptId};", StringComparison.Ordinal) &&
+                (item.Message.Contains($"execution_basis={executionBasisIdentity};", StringComparison.Ordinal) ||
+                 (!item.Message.Contains("execution_basis=", StringComparison.Ordinal) &&
+                  !receipts.Any(receipt => receipt.ReceiptId == receiptId && receipt.ExecutionBasisIdentity != executionBasisIdentity))) &&
                 item.Message.Contains($"finding_id={batch.Findings[0].StableId};", StringComparison.Ordinal));
-            if (count >= MaximumCompletedRuns && capped is null) capped = (batch, count, receiptId);
+            if (count >= MaximumCompletedRuns) unavailable.Add((batch, count, receiptId));
+            else executable.Add(batch);
         }
-        return new(passed, covered, executable, capped);
+        return new(passed, covered, executable, unavailable);
     }
 
     private static bool CoversRed(

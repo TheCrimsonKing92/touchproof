@@ -30,6 +30,7 @@ internal sealed partial class ConductorDriver
         var openFindings = ReviewFindings.GetOpenBlockingFindings(
             receiptTask.LastVerification?.MergedReviewFindings ?? findings,
             goal.EffectiveAcceptanceCriteriaCorrections);
+        if (FindingRoundBatchCoordinator.TrySourceRepair(goal, receiptTask, candidateSha, receiptIds, openFindings, out var sourceRoute)) return sourceRoute;
         if (task.RequiredRole == AgentRole.Tester && openFindings.Count > 0 &&
             FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(receiptTask, candidateSha, receiptIds))
         {

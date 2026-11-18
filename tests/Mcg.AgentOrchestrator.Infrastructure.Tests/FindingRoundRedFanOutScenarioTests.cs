@@ -64,20 +64,17 @@ public sealed class FindingRoundRedFanOutScenarioTests
     }
 
     [Fact]
-    public void RepeatedFailureWithoutRedArmStopsAtRunCap()
+    public void ExhaustedRequestAllowsLaterRequestBeforeUnavailableRecovery()
     {
         using var scenario = new Scenario([], armless: true);
 
-        for (var tick = 0; tick < 5; tick++) scenario.Advance();
+        for (var tick = 0; tick < 8; tick++) scenario.Advance();
 
-        Assert.Equal(Enumerable.Repeat("Infrastructure.Tests:FullyQualifiedName~AlphaTests", 3), scenario.Runs);
-        Assert.DoesNotContain(CoreRequest, scenario.Runs);
+        Assert.Equal(Enumerable.Repeat("Infrastructure.Tests:FullyQualifiedName~AlphaTests", 3).Concat(Enumerable.Repeat(CoreRequest, 3)), scenario.Runs);
         var escalation = Assert.Single(scenario.Escalations);
-        Assert.Contains(scenario.FirstIdentity, escalation, StringComparison.Ordinal);
-        Assert.Contains("runs=3", escalation, StringComparison.Ordinal);
-        Assert.Contains("last_receipt_id=finding-evidence-", escalation, StringComparison.Ordinal);
+        Assert.Contains("unavailable", escalation, StringComparison.Ordinal);
         Assert.Contains("No worker was dispatched.", escalation, StringComparison.Ordinal);
-        Assert.Equal(3, scenario.Goal.Timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded));
+        Assert.Equal(6, scenario.Goal.Timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded));
         Assert.Empty(scenario.Retries);
         Assert.Equal(0, scenario.Dispatches);
     }

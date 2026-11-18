@@ -118,8 +118,10 @@ internal sealed partial class ConductorDriver
             if (decision.DiscriminatingEvidence == "failed-terminal-fallthrough" && goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed) is { } tester &&
                 _getPreReviewEvidenceContext(goal).CandidateSha is { } candidate && AttributedFailureDeveloperRoute.Decide(goal, AttributedFailureDeveloperRoute.ReadTesterReceipt(goal, tester, candidate), candidate) is { IsRoute: true } route)
                 return RouteAttributedFailure(goal, goalPrefix, policy, route);
-            var escalated = Escalate(goal, goalPrefix, policy, state,
-                SandboxPreparationStartStatus.EscalationReason(goal, decision.Reason, _recordTaskNote));
+            var escalated = FindingRoundBatchCoordinator.ApplyEffect(this, goal, verifyingFindingObservation?.BatchClosure,
+                () => IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _),
+                () => Escalate(goal, goalPrefix, policy, state, SandboxPreparationStartStatus.EscalationReason(goal, decision.Reason, _recordTaskNote)));
+            if (escalated is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state));
             return escalated with
             {
                 Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
@@ -142,15 +144,13 @@ internal sealed partial class ConductorDriver
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var targetTaskId = SandboxPreparationStartStatus.RecoveryTarget(goal, decision, _recordTaskNote);
         FindingEvidenceContinuationCoordinator.RecordObservation(this, goal, targetTaskId, decision, verifyingFindingObservation);
-        var conflictMessage = FailedGoalRetryApplicationExecutor.Apply(
-            goal.Id,
-            targetTaskId,
-            decision,
-            () => BuildCriterionRetryFeedback(goal, targetTaskId, decision),
-            _recordTaskNote,
-            _recordCriterionRetryFeedback,
-            _retryTask);
-        if (conflictMessage is not null)
+        var application = FindingRoundBatchCoordinator.ApplyRetry(this, goal, verifyingFindingObservation?.BatchClosure,
+            () => IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _),
+            () => FailedGoalRetryApplicationExecutor.Apply(goal.Id, targetTaskId, decision,
+                () => BuildCriterionRetryFeedback(goal, targetTaskId, decision),
+                _recordTaskNote, _recordCriterionRetryFeedback, _retryTask));
+        if (!application.Applied && application.Conflict is null) return MakeResult(goal.Id.Value, goalPrefix, policy, FindingRoundBatchCoordinator.ClosedHold(state));
+        if (application.Conflict is { } conflictMessage)
         {
             var conflictReason = $"ACTIONABLE_CANDIDATE_RED_LIFECYCLE_CONFLICT: {decision.Reason} " +
                 $"Developer retry was not applied because {conflictMessage} No additional downstream dispatch was started.";
