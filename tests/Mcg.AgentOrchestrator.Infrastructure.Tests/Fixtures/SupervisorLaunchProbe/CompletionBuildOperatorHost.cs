@@ -91,7 +91,16 @@ internal static class CompletionBuildOperatorHost
                 Record(f, kernel, action);
                 return 0;
             case "cancel-attached":
-                coordinator.CancelAttached(kernel, f.GoalId, f.TaskId, CompletionBuildEvidenceTarget.From(task.CompletionBuildEvidence!));
+            case "cancel-after-ownership-loss":
+                var cancelTarget = task.CompletionBuildEvidence!;
+                if (action == "cancel-after-ownership-loss")
+                {
+                    cancelTarget = JsonSerializer.Deserialize<CompletionBuildEvidenceOperation>(
+                        File.ReadAllText(Path.Combine(root, "original-operation.json")))!;
+                    Require(CompletionBuildEvidenceChildIdentity.Probe(cancelTarget) == CompletionBuildChildLiveness.Live,
+                        "Original managed child was not live at ownership-loss cancellation.");
+                }
+                coordinator.CancelAttached(kernel, f.GoalId, f.TaskId, CompletionBuildEvidenceTarget.From(cancelTarget));
                 f.Save(kernel);
                 Record(f, kernel, action);
                 return 0;
