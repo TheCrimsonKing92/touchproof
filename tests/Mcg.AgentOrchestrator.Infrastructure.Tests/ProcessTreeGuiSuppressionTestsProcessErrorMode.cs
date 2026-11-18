@@ -183,6 +183,108 @@ public sealed class ProcessTreeGuiSuppressionTestsProcessErrorMode
         finally { if (!child.HasExited) child.Kill(entireProcessTree: true); }
     }
 
+    [Xunit.Fact]
+    public void NullDiagnostic_Repair_RecordsNoticeWithEmptyStderr() => WithEmptyRepairLog(() =>
+    {
+        var access = new ProcessTreeGuiSuppression.ErrorModeAccess(() => 0, _ => 0);
+
+        Assert.Empty(AsyncLocalConsoleRouter.CaptureError(() =>
+            ProcessTreeGuiSuppression.EnsureLaunchSuppression(LaunchLockEntryPoint.Start, access)));
+        Assert.Equal($"PROCESS_ERROR_MODE_REPAIRED entry=Start before=0 after={ProcessTreeGuiSuppression.SuppressedErrorModeFlags}",
+            Assert.Single(ProcessErrorModeRepairLog.GetSnapshot()));
+    });
+
+    [Xunit.Fact]
+    public void NullDiagnostic_RepairFailure_RecordsNoticeWithEmptyStderr() => WithEmptyRepairLog(() =>
+    {
+        var access = new ProcessTreeGuiSuppression.ErrorModeAccess(() => 0,
+            _ => throw new InvalidOperationException("injected repair failure"));
+
+        Assert.Empty(AsyncLocalConsoleRouter.CaptureError(() =>
+            ProcessTreeGuiSuppression.EnsureLaunchSuppression(LaunchLockEntryPoint.Start, access)));
+        Assert.Equal("PROCESS_ERROR_MODE_REPAIR_FAILED entry=Start error=InvalidOperationException",
+            Assert.Single(ProcessErrorModeRepairLog.GetSnapshot()));
+    });
+
+    [Xunit.Fact]
+    public void ExplicitDiagnostic_ReceivesNoticeAndLeavesLogEmpty() => WithEmptyRepairLog(() =>
+    {
+        var diagnostics = new List<string>();
+        var access = new ProcessTreeGuiSuppression.ErrorModeAccess(() => 0, _ => 0, diagnostics.Add);
+
+        Assert.Empty(AsyncLocalConsoleRouter.CaptureError(() =>
+            ProcessTreeGuiSuppression.EnsureLaunchSuppression(LaunchLockEntryPoint.Start, access)));
+        Assert.StartsWith("PROCESS_ERROR_MODE_REPAIRED entry=Start", Assert.Single(diagnostics));
+        Assert.Empty(ProcessErrorModeRepairLog.GetSnapshot());
+    });
+
+    [Xunit.Fact]
+    public void ThrowingDiagnostic_DoesNotRecordOrThrow() => WithEmptyRepairLog(() =>
+    {
+        var calls = 0;
+        var access = new ProcessTreeGuiSuppression.ErrorModeAccess(() => 0, _ => 0, _ =>
+        {
+            calls++;
+            throw new InvalidOperationException("injected diagnostic failure");
+        });
+
+        Assert.Empty(AsyncLocalConsoleRouter.CaptureError(() =>
+            ProcessTreeGuiSuppression.EnsureLaunchSuppression(LaunchLockEntryPoint.Start, access)));
+        Assert.Equal(1, calls);
+        Assert.Empty(ProcessErrorModeRepairLog.GetSnapshot());
+    });
+
+    [Xunit.Fact]
+    public void RepairLog_Overflow_KeepsNewest256InOrder() => WithEmptyRepairLog(() =>
+    {
+        for (var index = 0; index <= 256; index++)
+            ProcessErrorModeRepairLog.Record($"notice {index}");
+
+        var snapshot = ProcessErrorModeRepairLog.GetSnapshot();
+        Assert.Equal(snapshot, ProcessErrorModeRepairLog.GetSnapshot());
+        ProcessErrorModeRepairLog.Clear();
+
+        Assert.Empty(ProcessErrorModeRepairLog.GetSnapshot());
+        Assert.Equal(Enumerable.Range(1, 256).Select(index => $"notice {index}"), snapshot);
+    });
+
+    [Xunit.Fact]
+    public void RepairLog_ThrowingObserver_IsSwallowedAfterRetention() => WithEmptyRepairLog(() =>
+    {
+        ProcessErrorModeRepairLog.Record("before attachment");
+        var observed = new List<(string Notice, string[] Snapshot)>();
+        ProcessErrorModeRepairLog.Observer = notice =>
+        {
+            observed.Add((notice, ProcessErrorModeRepairLog.GetSnapshot()));
+            throw new InvalidOperationException("injected observer failure");
+        };
+        Assert.Empty(observed);
+
+        ProcessErrorModeRepairLog.Clear();
+        ProcessErrorModeRepairLog.Record("after attachment");
+
+        var notification = Assert.Single(observed);
+        Assert.Equal("after attachment", notification.Notice);
+        Assert.Equal(notification.Notice, Assert.Single(notification.Snapshot));
+        Assert.Equal(notification.Notice, Assert.Single(ProcessErrorModeRepairLog.GetSnapshot()));
+    });
+
+    private static void WithEmptyRepairLog(Action test)
+    {
+        var previousObserver = ProcessErrorModeRepairLog.Observer;
+        try
+        {
+            ProcessErrorModeRepairLog.Observer = null;
+            ProcessErrorModeRepairLog.Clear();
+            test();
+        }
+        finally
+        {
+            ProcessErrorModeRepairLog.Clear();
+            ProcessErrorModeRepairLog.Observer = previousObserver;
+        }
+    }
+
     internal static string ProbeExecutable()
     {
         const string name = "Mcg.AgentOrchestrator.ConsoleIoProbe.exe";
