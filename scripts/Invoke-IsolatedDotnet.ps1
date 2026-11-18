@@ -42,6 +42,7 @@ $GoalPrefix = $null
 $AttemptName = "manual"
 $ReuseArtifacts = $false
 $FocusedTest = $false
+$FullOutput = $false
 $FocusedTestFilter = $null
 $FocusedReceiptPath = $null
 $FocusedBudgetSeconds = 300
@@ -71,6 +72,11 @@ for ($i = 0; $i -lt $Arguments.Count; $i++) {
 
     if ($Arguments[$i].Equals("-ReuseArtifacts", [System.StringComparison]::OrdinalIgnoreCase)) {
         $ReuseArtifacts = $true
+        continue
+    }
+
+    if ($Arguments[$i].Equals("-FullOutput", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $FullOutput = $true
         continue
     }
 
@@ -1416,7 +1422,8 @@ function Test-FocusedBuildIsCurrent {
 function Write-FocusedReceipt {
     param(
         [System.Collections.IDictionary]$Receipt,
-        [string]$Path
+        [string]$Path,
+        [AllowNull()][string]$FirstFailureLocation = $null
     )
 
     $directory = Split-Path -Parent $Path
@@ -1425,7 +1432,7 @@ function Write-FocusedReceipt {
     $json = $Receipt | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText($temporaryPath, $json)
     Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
-    [Console]::Out.WriteLine(($Receipt | ConvertTo-Json -Depth 8 -Compress))
+    Write-FocusedReceiptOutput -Receipt $Receipt -FirstFailureLocation $FirstFailureLocation
 }
 
 function Read-FocusedTrx {
@@ -1435,6 +1442,13 @@ function Read-FocusedTrx {
     $resultNodes = @($trx.SelectNodes("/*[local-name()='TestRun']/*[local-name()='Results']/*[local-name()='UnitTestResult']"))
     $counters = $trx.SelectSingleNode("/*[local-name()='TestRun']/*[local-name()='ResultSummary']/*[local-name()='Counters']")
     $failures = @($resultNodes | Where-Object { $_.GetAttribute('outcome') -eq 'Failed' })
+    $firstFailureLocation = $null
+    if ($failures.Count -gt 0) {
+        $stackTrace = $failures[0].SelectSingleNode("./*[local-name()='Output']/*[local-name()='ErrorInfo']/*[local-name()='StackTrace']")
+        if ($null -ne $stackTrace -and $stackTrace.InnerText -match '(?m)\bin (.+):line (\d+)') {
+            $firstFailureLocation = '{0}:{1}' -f $Matches[1].Trim(), $Matches[2]
+        }
+    }
     $maximumFailures = 8
     $failureSummaries = @($failures | Select-Object -First $maximumFailures | ForEach-Object {
         $messageNode = $_.SelectSingleNode("./*[local-name()='Output']/*[local-name()='ErrorInfo']/*[local-name()='Message']")
@@ -1457,7 +1471,51 @@ function Read-FocusedTrx {
         Skipped = $skipped
         Failures = $failureSummaries
         OmittedFailures = [Math]::Max(0, $failures.Count - $maximumFailures)
+        FirstFailureLocation = $firstFailureLocation
     }
+}
+
+function Write-FocusedReceiptOutput {
+    param(
+        [System.Collections.IDictionary]$Receipt,
+        [AllowNull()][string]$FirstFailureLocation = $null
+    )
+
+    if ($FullOutput) {
+        [Console]::Out.WriteLine(($Receipt | ConvertTo-Json -Depth 8 -Compress))
+        return
+    }
+
+    $failures = @($Receipt.failingTests)
+    $firstFailure = $null
+    if ($failures.Count -gt 0) {
+        $message = $failures[0].assertion
+        if ($null -ne $message -and $message.Length -gt 300) {
+            $message = $message.Substring(0, 300) + '...'
+        }
+        $firstFailure = [ordered]@{
+            test = $failures[0].name
+            message = $message
+            location = if ([string]::IsNullOrEmpty($FirstFailureLocation)) { $null } else { $FirstFailureLocation }
+        }
+    }
+    $compact = [ordered]@{
+        outcome = $Receipt.outcome
+        reason = $Receipt.reason
+        exitCode = $Receipt.exitCode
+        filter = $Receipt.filter
+        total = $Receipt.total
+        passed = $Receipt.passed
+        failed = $Receipt.failed
+        skipped = $Receipt.skipped
+        elapsedSeconds = $Receipt.elapsedSeconds
+        firstFailure = $firstFailure
+        omittedFailingTests = [Math]::Max(0, $failures.Count + $Receipt.omittedFailingTests - 1)
+        receiptPath = $Receipt.receiptPath
+        trxPath = $Receipt.trxPath
+        outputLogPath = $Receipt.outputLogPath
+    }
+    [Console]::Out.WriteLine(($compact | ConvertTo-Json -Depth 8 -Compress))
 }
 
 function Invoke-FocusedTestMode {
@@ -1469,6 +1527,7 @@ function Invoke-FocusedTestMode {
     $processDeadline = $runDeadline.AddSeconds(-$cleanupMarginSeconds)
     $slotLease = $null
     $processTempPath = $null
+    $firstFailureLocation = $null
     $isolatedRoot = Get-IsolatedRootBase
     $safeGoalPrefix = if ([string]::IsNullOrWhiteSpace($GoalPrefix)) { "focused-$PID" } else { ConvertTo-SafePathSegment -Value $GoalPrefix }
     $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
@@ -1696,6 +1755,7 @@ function Invoke-FocusedTestMode {
         }
 
         $summary = Read-FocusedTrx -Path $trxPath
+        $firstFailureLocation = $summary.FirstFailureLocation
         $receipt.trxPath = $trxPath
         $receipt.total = $summary.Total
         $receipt.passed = $summary.Passed
@@ -1778,15 +1838,15 @@ function Invoke-FocusedTestMode {
         }
         if (-not [string]::IsNullOrWhiteSpace($receiptPath)) {
             try {
-                Write-FocusedReceipt -Receipt $receipt -Path $receiptPath
+                Write-FocusedReceipt -Receipt $receipt -Path $receiptPath -FirstFailureLocation $firstFailureLocation
             }
             catch {
                 [Console]::Error.WriteLine("Focused receipt write failed: $($_.Exception.Message)")
-                [Console]::Out.WriteLine(($receipt | ConvertTo-Json -Depth 8 -Compress))
+                Write-FocusedReceiptOutput -Receipt $receipt -FirstFailureLocation $firstFailureLocation
             }
         }
         else {
-            [Console]::Out.WriteLine(($receipt | ConvertTo-Json -Depth 8 -Compress))
+            Write-FocusedReceiptOutput -Receipt $receipt -FirstFailureLocation $firstFailureLocation
         }
     }
 }

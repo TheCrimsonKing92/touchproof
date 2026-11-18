@@ -133,6 +133,8 @@ internal static class AttentionAgentReadView
                 taskNumber = hold.TaskNumber,
                 startedAt = hold.StartedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
                 resolvingVerb = hold.ResolvingVerb,
-                nextAction = hold.NextAction
+                nextAction = hold.NextAction,
+                itemId = hold.ItemId,
+                recommendation = hold.Recommendation
             }).ToArray();
 }

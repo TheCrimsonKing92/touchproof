@@ -271,6 +271,10 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalLifecycleDispositionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
+        if (args.Count > 0 && args[0].Equals("start-dispatches", StringComparison.OrdinalIgnoreCase))
+            return CliBatchDispatchStart.Execute(args, stateRepository, workspace, ref agents, providers,
+                ref workerProfiles, ref currentGoal, id => LoadSingleGoalKernel(stateRepository, id));
+
         if (IsGoalScopedWriteCommand(args) && stateRepository is IOrchestratorStateOutboxRepository scopedRepository &&
             TryExecuteGoalScopedWrite(args, scopedRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, out var scopedChanged))
             return scopedChanged;
@@ -2406,21 +2410,9 @@ internal static partial class CliPersistentStateRunner
 
         void PersistCriticalCurrentGoal(
             AgentOrchestratorKernel checkpoint,
-            IReadOnlyCollection<GoalId> changedGoalIds)
-        {
-            try
-            {
-                checkpoints.PersistCritical(checkpoint, changedGoalIds);
-            }
-            catch (DispatchCheckpointConflictException)
-            {
-                // The rejected checkpoint already rebased this kernel to the store's authoritative
-                // snapshot. A generic end-of-command write would reopen a second-writer window and
-                // could replace a newer operator update with that just-rebased snapshot.
-                criticalCheckpointRejected = true;
-                throw;
-            }
-        }
+            IReadOnlyCollection<GoalId> changedGoalIds) =>
+            CliBatchDispatchStart.PersistCriticalGoal(checkpoints, checkpoint, changedGoalIds,
+                () => criticalCheckpointRejected = true);
 
         AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(AcceptanceMergeGuardPreflightRequest request)
             => PrepareAcceptanceMergeGuardState(stateRepository, initialGoalSnapshot, kernel, request);
