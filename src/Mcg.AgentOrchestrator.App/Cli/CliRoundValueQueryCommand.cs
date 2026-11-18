@@ -99,7 +99,7 @@ internal static class CliRoundValueQueryCommand
         {
             if (report.Baseline is { } comparison)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new
+                WriteReportJson(report, new
                 {
                     report.Since, report.Until,
                     Days = report.Days.Select(d => new
@@ -117,10 +117,10 @@ internal static class CliRoundValueQueryCommand
                         Baseline = new { RoundsPerLanding = comparison.BaselineRoundsPerLanding },
                         comparison.Causes
                     }
-                }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+                });
                 return;
             }
-            Console.WriteLine(JsonSerializer.Serialize(new
+            WriteReportJson(report, new
             {
                 report.Since, report.Until,
                 Days = report.Days.Select(d => new
@@ -131,7 +131,7 @@ internal static class CliRoundValueQueryCommand
                     d.Totals.InputTokens, d.Totals.CachedInputTokens, d.Totals.OutputTokens, d.Totals.UsageUnreported
                 }),
                 report.Window, report.WasteByCause, report.CascadeRoutes, report.PendingGoals, report.PendingRounds
-            }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            });
             return;
         }
         Console.WriteLine(FormattableString.Invariant($"Round value [{report.Since:O}, {report.Until:O}) | cohort = landed or lost goals whose last round is in the window"));
@@ -148,6 +148,15 @@ internal static class CliRoundValueQueryCommand
                 Console.WriteLine(FormattableString.Invariant($"{route.Decision} | {route.Rounds} | {route.Productive} | {route.Overhead} | {route.Wasted}"));
         }
         Console.WriteLine(FormattableString.Invariant($"Pending goals | {report.PendingGoals} | rounds={report.PendingRounds}"));
+        if (HasPlannerEvidence(report))
+        {
+            Console.WriteLine(FormattableString.Invariant(
+                $"Planner rounds | rejections={report.PlannerRounds.Count(r => r.ContractRejected == true)} | clarifications={report.PlannerRounds.Count(r => r.Clarification == true)}"));
+            Console.WriteLine("Planner dispatch | Goal | Task | Round | Contract rejected | Clarification");
+            foreach (var row in report.PlannerRounds)
+                Console.WriteLine(FormattableString.Invariant(
+                    $"{row.DispatchedAt:O} | {row.GoalId} | {row.TaskId} | {row.RoundIndex} | {Evidence(row.ContractRejected)} | {Evidence(row.Clarification)}"));
+        }
         if (report.Baseline is { } baseline)
         {
             Console.WriteLine(FormattableString.Invariant($"Baseline [{baseline.Since:O}, {baseline.Until:O}) | deltas = current minus baseline"));
@@ -158,6 +167,21 @@ internal static class CliRoundValueQueryCommand
             var baselineRatio = baseline.BaselineRoundsPerLanding?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a";
             Console.WriteLine($"Rounds per landing | current={currentRatio} | baseline={baselineRatio}");
         }
+    }
+
+    private static bool HasPlannerEvidence(RoundValueReport report) =>
+        report.PlannerRounds.Any(r => r.ContractRejected.HasValue || r.Clarification.HasValue);
+
+    private static string Evidence(bool? value) => value is { } known ? known ? "yes" : "no" : "unavailable";
+
+    private static void WriteReportJson(RoundValueReport report, object value)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var root = JsonSerializer.SerializeToNode(value, options)!.AsObject();
+        // Keep historical CLI output byte-compatible when no diagnostic linkage survives.
+        if (HasPlannerEvidence(report))
+            root["plannerRounds"] = JsonSerializer.SerializeToNode(report.PlannerRounds, options);
+        Console.WriteLine(root.ToJsonString(options));
     }
 
     private static void WriteGoalUsage(RoundValueGoalUsageSlice slice, bool json)

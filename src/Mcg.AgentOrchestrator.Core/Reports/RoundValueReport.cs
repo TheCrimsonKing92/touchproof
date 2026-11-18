@@ -12,6 +12,8 @@ public sealed record RoundValueBaselineComparison(DateTimeOffset Since, DateTime
     double? CurrentRoundsPerLanding, double? BaselineRoundsPerLanding,
     IReadOnlyList<RoundValueCauseDelta> Causes);
 public sealed record RoundValueCascadeRoute(string Decision, int Rounds, int Productive, int Overhead, int Wasted);
+public sealed record PlannerRoundDiagnosticRow(string GoalId, string TaskId, int RoundIndex,
+    DateTimeOffset DispatchedAt, bool? ContractRejected, bool? Clarification);
 
 /// <summary>Attributes every terminal goal's full round history to its final dispatch date.</summary>
 public sealed record RoundValueReport(DateTimeOffset Since, DateTimeOffset Until,
@@ -20,6 +22,7 @@ public sealed record RoundValueReport(DateTimeOffset Since, DateTimeOffset Until
 {
     public IReadOnlyList<RoundValueCascadeRoute> CascadeRoutes { get; init; } = [];
     public RoundValueBaselineComparison? Baseline { get; init; }
+    public IReadOnlyList<PlannerRoundDiagnosticRow> PlannerRounds { get; init; } = [];
 
     public static RoundValueReport Build(IEnumerable<Goal> goals, DateTimeOffset since, DateTimeOffset until) =>
         Build(goals, since, until, []);
@@ -76,7 +79,11 @@ public sealed record RoundValueReport(DateTimeOffset Since, DateTimeOffset Until
         return new(since, until, days, Total(rounds), causes,
             pending.Select(r => r.Round.GoalId).Distinct(StringComparer.Ordinal).Count(), pending.Length)
         {
-            CascadeRoutes = CascadeTotals(materializedGoals, rounds)
+            CascadeRoutes = CascadeTotals(materializedGoals, rounds),
+            PlannerRounds = rounds.Where(r => r.Round.Role == AgentRole.Planner)
+                .Select(r => new PlannerRoundDiagnosticRow(r.Round.GoalId, r.Round.TaskId,
+                    r.Round.RoundIndex, r.Round.DispatchedAt, r.Round.PlannerContractRejected,
+                    r.Round.PlannerClarification)).ToArray()
         };
     }
 

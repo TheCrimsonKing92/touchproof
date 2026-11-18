@@ -9,20 +9,21 @@ public sealed class AcceptanceExecutedLaneCoverageTests
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var current = AcceptanceGateEngineSettings.Load(root);
-        // Snapshot of pool settings and all 30 lanes at 44e9b1c7e, before this cleanup.
-        // Retire this comparison when a later slice intentionally changes execution routing.
+        // Snapshot of the pool and 30 lanes before the first manifest cleanup.
         var baseline = LoadBaseline(root);
         var classes = AcceptanceTestClassSourceScanner.Scan(root);
         Assert.NotEmpty(classes);
 
-        var before = Expand(baseline, classes);
+        var before = Expand(baseline, classes.Select(item => item with { Constraint = null }).ToArray());
         var after = Expand(current, classes);
         Assert.Empty(CoverageErrors(before.Lanes, classes));
         Assert.Empty(CoverageErrors(after.Lanes, classes));
         var beforePool = before.Layout!.Lanes.SelectMany(lane => lane.Members).ToHashSet(StringComparer.Ordinal);
         var afterPool = after.Layout!.Lanes.SelectMany(lane => lane.Members).ToHashSet(StringComparer.Ordinal);
         Assert.NotEmpty(beforePool);
-        Assert.Equal(beforePool.Order(StringComparer.Ordinal), afterPool.Order(StringComparer.Ordinal));
+        var tagged = classes.Where(item => item.Constraint is not null).Select(item => item.FullName).ToHashSet(StringComparer.Ordinal);
+        Assert.All(tagged, name => Assert.Contains(name, beforePool));
+        Assert.Equal(beforePool.Except(tagged).Order(StringComparer.Ordinal), afterPool.Order(StringComparer.Ordinal));
         foreach (var item in classes.Where(item => !beforePool.Contains(item.FullName)))
             Assert.Equal(Assert.Single(AcceptanceLaneMembership.LanesIncluding(before.Lanes, item.FullName)).Name,
                 Assert.Single(AcceptanceLaneMembership.LanesIncluding(after.Lanes, item.FullName)).Name);

@@ -6,6 +6,7 @@ using static ConductorDriverTests;
 using static LandingExecutorTests;
 
 [Xunit.Collection("IsolatedProcessSpawningRemainderB")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
 {
     [Xunit.Fact]
