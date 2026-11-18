@@ -14,11 +14,11 @@ using System.Text.Json;
 public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSupport
 {
     [Xunit.Theory]
-    [Xunit.InlineData("OpenAI", "custom-profile", "GpT-6-SoL", "none", "gpt-6.1-sol")]
-    [Xunit.InlineData("OpenAI", "custom-profile", "gpt-6-sol", "model", "gpt-6.1-sol")]
-    [Xunit.InlineData("Anthropic", "codex-cli", "GPT-6-SOL", "model", "gpt-6.1-sol")]
+    [Xunit.InlineData("OpenAI", "custom-profile", "GpT-6-SoL", "none", "gpt-6.2-sol")]
+    [Xunit.InlineData("OpenAI", "custom-profile", "gpt-6-sol", "model", "gpt-6.2-sol")]
+    [Xunit.InlineData("Anthropic", "codex-cli", "GPT-6-SOL", "model", "gpt-6.2-sol")]
     [Xunit.InlineData("OpenAI", "claude-cli", "gpt-6-sol", "model", "gpt-6-sol")]
-    [Xunit.InlineData("Anthropic", "codex-cli", "gpt-6-sol", "profile", "gpt-6.1-sol")]
+    [Xunit.InlineData("Anthropic", "codex-cli", "gpt-6-sol", "profile", "gpt-6.2-sol")]
     [Xunit.InlineData("OpenAI", "claude-cli", "gpt-6-sol", "profile", "gpt-6-sol")]
     [Xunit.InlineData("Anthropic", "custom-profile", "gpt-6-sol", "none", "gpt-6-sol")]
     [Xunit.InlineData("OpenAI", "custom-profile", "gpt-6-luna", "none", "gpt-6-luna")]
@@ -53,7 +53,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         Assert.Equal("low", dispatch.ReasoningEffort);
         Assert.Contains($"model: {dispatch.ProviderName}/{expected}", preflight.Findings);
         Assert.Contains($"--model '{expected}'", dispatch.Command, StringComparison.Ordinal);
-        var apiModel = provider == "OpenAI" && alias.Equals("gpt-6-sol", StringComparison.OrdinalIgnoreCase) ? "gpt-6.1-sol" : alias;
+        var apiModel = provider == "OpenAI" && alias.Equals("gpt-6-sol", StringComparison.OrdinalIgnoreCase) ? "gpt-6.2-sol" : alias;
         Assert.Contains($"--api-model '{apiModel}'", dispatch.Command, StringComparison.Ordinal);
         Assert.Contains($"Model fit: {dispatch.ProviderName}/{expected}", File.ReadAllText(dispatch.PromptPath!), StringComparison.Ordinal);
         Assert.Equal(alias, agent.Model.ModelName);
@@ -62,7 +62,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
 
     [Xunit.Theory]
     [Xunit.InlineData("routine-alias", "routine-alias")]
-    [Xunit.InlineData(null, "gpt-6.1-sol")]
+    [Xunit.InlineData(null, "gpt-6.2-sol")]
     public void RetirementNormalizesComplexInMemorySelectionInReadyBatch(string? subscriptionAlias, string expectedSubscription)
     {
         var root = CreateTempDirectory();
@@ -84,7 +84,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
             commandExists: _ => true, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         Assert.True(task.LastDispatch!.UsesComplexModel);
         Assert.Equal(expectedSubscription, task.LastDispatch.ModelName);
-        Assert.Contains($"--model '{expectedSubscription}' --api-model 'gpt-6.1-sol'", task.LastDispatch.Command, StringComparison.Ordinal);
+        Assert.Contains($"--model '{expectedSubscription}' --api-model 'gpt-6.2-sol'", task.LastDispatch.Command, StringComparison.Ordinal);
         Assert.Equal("GPT-6-SOL", agent.ComplexModel!.ModelName);
     }
 

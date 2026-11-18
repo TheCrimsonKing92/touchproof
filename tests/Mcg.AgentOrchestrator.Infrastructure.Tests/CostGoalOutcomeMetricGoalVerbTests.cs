@@ -48,6 +48,71 @@ public sealed class CostGoalOutcomeMetricGoalVerbTests : CliCommandTestBase
     }
 
     [Fact]
+    public async Task Filing_GatesRecordedAfterFiling_DoNotChangeStoredBaseline()
+    {
+        var workspace = CreateWorkspace();
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(new AgentOrchestratorKernel());
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        var source = await backlog.AddAsync("Reduce cost", "Measure gate outcomes");
+        var past = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        WriteGate(workspace, past, 1, 40, 4, null);
+        WriteGate(workspace, past.AddDays(1), 2, 60, 6, "Full gate", passed: false);
+        WriteGate(workspace, past.AddDays(2), 3, 90, 9, null);
+        WriteGate(workspace, past.AddDays(3), 4, 30, 3, "Full gate");
+        WriteGate(workspace, past.AddDays(4), 5, 600, 60, null, completed: false);
+        WriteGate(workspace, past.AddYears(75), 6, 900, 90, null);
+        var brief = CostBrief + """
+
+            ## Outcome metric
+            metric: selection-milliseconds; direction: decrease; target: 20%; window: 3 gates; guard: full-gate-rate; must-not-increase
+            metric: executed-class-count; direction: increase; target: 6; window: 3 gates
+            metric: full-gate-rate; direction: decrease; target: .4; window: 3 gates
+            metric: gate-test-cpu-seconds; direction: decrease; target: 5%; window: 5 gates
+            metric: process-launches; direction: decrease; target: 5; window: 8 gates
+            metric: replay-selected-classes; direction: decrease; target: 20%; window: 3 gates; guard: replay-missed-failures; must-not-increase
+            """;
+
+        var result = Execute(workspace, repository, brief, "--brief-file",
+            "--backlog-item", source.Id, "--backlog-coverage", "full");
+
+        Assert.Null(result.Error);
+        var persistedGoal = Assert.Single((await repository.LoadAsync()).Goals);
+        var filing = new CostGoalOutcomeStore(workspace.OrchestratorDirectory).Read(persistedGoal.Id)!.Filing;
+        Assert.Equal(source.Id, filing.SourceBacklogItemId);
+        Assert.Collection(filing.Baselines,
+            row => Assert.Equal(new(new("selection-milliseconds", "decrease", "20%", 3,
+                new("full-gate-rate", "must-not-increase")), 60, 3, null, new(2d / 3, 3)), row),
+            row => Assert.Equal(new(new("executed-class-count", "increase", "6", 3), 6, 3, null), row),
+            row => Assert.Equal(new(new("full-gate-rate", "decrease", ".4", 3), 2d / 3, 3, null), row),
+            row => Assert.Equal(new(new("gate-test-cpu-seconds", "decrease", "5%", 5), null, 0, "no-gate-source"), row),
+            row => Assert.Equal(new(new("process-launches", "decrease", "5", 8), null, 0, "no-gate-source"), row),
+            row => Assert.Equal(new(new("replay-selected-classes", "decrease", "20%", 3,
+                new("replay-missed-failures", "must-not-increase")), null, 0, "replay-reports-unavailable"), row));
+    }
+
+    private static void WriteGate(OrchestratorWorkspace workspace, DateTimeOffset recordedAt, int serial,
+        double selectionMilliseconds, int classCount, string? fullGateReason, bool passed = true, bool completed = true)
+    {
+        var attemptId = FormattableString.Invariant($"fixture-gate-{recordedAt:yyyyMMddHHmmssfff}-{serial:x32}");
+        var directory = Directory.CreateDirectory(Path.Combine(workspace.OrchestratorDirectory,
+            "acceptance-gate-attempts", serial % 2 == 0 ? "solo" : "train"));
+        var prefix = Path.Combine(directory.FullName, attemptId);
+        var plan = new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, attemptId, ["test-lane"], [])
+        {
+            SelectedExecution = CostGoalOutcomeBaselineTests.Selection(selectionMilliseconds, classCount, fullGateReason)
+        };
+        File.WriteAllText(prefix + AcceptanceGateLanePlan.ArtifactSuffix, plan.ToJson());
+        if (completed)
+        {
+            var verification = new AcceptanceVerificationResult(passed, false, passed ? 0 : 1, null,
+                TestResultPaths: [prefix + ".test-lane.trx"]);
+            AcceptanceAttemptResultRecord.Write(prefix + ".result.json",
+                AcceptanceAttemptResultRecord.ForVerification(verification, null, null));
+        }
+    }
+
+    [Fact]
     public async Task Filing_CostTaggedSourceWithoutTextSignal_Refuses()
     {
         var workspace = CreateWorkspace();
