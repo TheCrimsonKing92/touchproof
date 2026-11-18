@@ -22,7 +22,6 @@ function Invoke-WorkerBuildScopeGit {
     $info.RedirectStandardInput = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $info.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
     $info.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
     $info.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
     # Quote using the Windows argv convention, including trailing backslashes.
@@ -39,8 +38,11 @@ function Invoke-WorkerBuildScopeGit {
         if (-not $process.Start()) { throw 'Could not start scope tool Git process.' }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        $process.StandardInput.Write($InputText)
-        $process.StandardInput.Close()
+        # Windows PowerShell 5.1 lacks ProcessStartInfo.StandardInputEncoding.
+        # Write bytes directly so Git receives BOM-free UTF-8 on every shell.
+        $inputBytes = [Text.UTF8Encoding]::new($false).GetBytes($InputText)
+        $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+        $process.StandardInput.BaseStream.Close()
         if (-not $process.WaitForExit(60000)) {
             $process.Kill()
             $process.WaitForExit()
