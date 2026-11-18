@@ -19,7 +19,7 @@ public sealed class ModelFunctionCatalogStoreTests
             File.WriteAllText(path, "{corrupt}");
         }
         var restored = Assert.Single(ModelFunctionCatalogStore.Load(path).Bindings);
-        Assert.Equal(binding with { SubscriptionFallback = new("codex-cli", "gpt-6.1-sol", "high") }, restored);
+        Assert.Equal(binding with { SubscriptionFallback = new("codex-cli", "gpt-6.2-sol", "high") }, restored);
         Assert.Equal(binding.Subscription, restored.Subscription);
     }
 
@@ -48,8 +48,8 @@ public sealed class ModelFunctionCatalogStoreTests
         var restored = ModelFunctionCatalogStore.Load(path);
         Assert.Equal(binding with
         {
-            Model = binding.Model with { ModelName = "gpt-6.1-sol" },
-            Subscription = binding.Subscription! with { ModelAlias = "gpt-6.1-sol" }
+            Model = binding.Model with { ModelName = "gpt-6.2-sol" },
+            Subscription = binding.Subscription! with { ModelAlias = "gpt-6.2-sol" }
         }, restored.Bindings[0]);
         Assert.Equal(control, restored.Bindings[1]);
         Assert.Equal(primaryText, File.ReadAllText(path));
