@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("IsolatedProcessSpawningRemainderB")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class OwnerPolicyApprovalRebaseTests : IDisposable
 {
     private const string ManifestPath = "config/acceptance-manifest.json";
