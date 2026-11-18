@@ -197,12 +197,18 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         }
         var driver = Driver(accounting: true);
         var identity = FindingRoundBatchCoordinator.Identity(driver, fixture.Goal, fixture.Reviewer)!;
+        FindingEvidenceOutcome HomeOutcome() => Assert.IsType<FindingEvidenceOutcome>(
+            fixture.Reviewer.LastVerification!.MergedReviewFindings!.Single(finding => finding.StableId == "home").EvidenceOutcome);
+        string? homeReceiptId = null;
         if (!homeRed)
         {
             Assert.True(driver.TryBuildFindingEvidenceRequest(fixture.Goal, fixture.Reviewer, ConductorAutonomyPolicy.Permissive, out var intermediate));
             Assert.Null(intermediate.TargetTaskId);
             Assert.Null(intermediate.BatchClosure);
             Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, intermediate.Kind);
+            homeReceiptId = Assert.Single(receipts.Where(receipt => receipt.Passed)).ReceiptId;
+            Assert.True(HomeOutcome().Honoured);
+            Assert.Equal(homeReceiptId, HomeOutcome().ReceiptId);
         }
         if (replay)
         {
@@ -226,6 +232,13 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.Equal(homeRed ? 0 : 1, keyedCalls);
         var red = Assert.Single(receipts.Where(receipt => !receipt.Passed).DistinctBy(receipt => receipt.ReceiptId));
         Assert.Equal(homeRed ? fixture.HomeHead : fixture.SecondaryHead, red.CandidateSha);
+        if (!homeRed)
+        {
+            Assert.True(HomeOutcome().Honoured);
+            Assert.Equal(homeReceiptId, HomeOutcome().ReceiptId);
+            Assert.DoesNotContain(FindingRoundBatchAccounting.Read(fixture.Goal, identity),
+                observation => observation.Kind == "superseded" && observation.FindingIds.Contains("home"));
+        }
         var control = fixture.Reviewer.LastVerification!.MergedReviewFindings!.Single(finding => finding.StableId == "control");
         Assert.Equal(FindingEvidenceNotHonouredReason.SupersededByActionableRed, control.EvidenceOutcome!.Reason);
         Assert.False(control.EvidenceOutcome.Honoured);

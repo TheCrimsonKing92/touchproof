@@ -113,30 +113,39 @@ internal static class FindingRoundBatchSchedule
         Action<GoalId, TaskId, string> recordRequest)
     {
         var receiptId = receipt.ReceiptId;
+        // Other repository partitions can still list requests already settled by a receipt.
+        var settledFindingIds = FindingRoundBatchAccounting.Read(goal, batchIdentity)
+            .Where(item => item.Kind is "executed" or "covered")
+            .SelectMany(item => item.FindingIds).ToHashSet(StringComparer.Ordinal);
         foreach (var pending in batches)
         foreach (var member in pending.Members)
-        foreach (var finding in member.Findings)
         {
+            var unsettledFindings = member.Findings.Where(finding => !settledFindingIds.Contains(finding.StableId)).ToArray();
+            if (unsettledFindings.Length == 0) continue;
+
             FindingRoundBatchAccounting.Record(goal, batchIdentity,
                 new(batchIdentity.Key, "superseded", member.Identity,
-                    member.Findings.Select(item => item.StableId).ToArray(), receiptId), recordRequest);
-            recordOutcome(
-                goal.Id,
-                requestingTask.Id,
-                finding.StableId,
-                new FindingEvidenceOutcome(
-                    Honoured: false,
-                    ReceiptId: receiptId,
-                    Reason: FindingEvidenceNotHonouredReason.SupersededByActionableRed,
-                    Detail: $"Superseded by actionable candidate RED receipt {receiptId} at {candidateSha}.",
-                    ResultReason: FindingEvidenceOutcomeReason.CandidateRed),
-                receipt);
-            recordRequest(
-                goal.Id,
-                requestingTask.Id,
-                $"finding-evidence disposition=superseded; role={requestingTask.RequiredRole}; " +
-                $"task_id={requestingTask.Id}; finding_id={finding.StableId}; candidate_sha={candidateSha}; " +
-                $"receipt_id={receiptId}; reason=superseded-by-actionable-red; request_identity={member.Identity}");
+                    unsettledFindings.Select(item => item.StableId).ToArray(), receiptId), recordRequest);
+            foreach (var finding in unsettledFindings)
+            {
+                recordOutcome(
+                    goal.Id,
+                    requestingTask.Id,
+                    finding.StableId,
+                    new FindingEvidenceOutcome(
+                        Honoured: false,
+                        ReceiptId: receiptId,
+                        Reason: FindingEvidenceNotHonouredReason.SupersededByActionableRed,
+                        Detail: $"Superseded by actionable candidate RED receipt {receiptId} at {candidateSha}.",
+                        ResultReason: FindingEvidenceOutcomeReason.CandidateRed),
+                    receipt);
+                recordRequest(
+                    goal.Id,
+                    requestingTask.Id,
+                    $"finding-evidence disposition=superseded; role={requestingTask.RequiredRole}; " +
+                    $"task_id={requestingTask.Id}; finding_id={finding.StableId}; candidate_sha={candidateSha}; " +
+                    $"receipt_id={receiptId}; reason=superseded-by-actionable-red; request_identity={member.Identity}");
+            }
         }
     }
 }
