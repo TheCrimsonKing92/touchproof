@@ -26,6 +26,7 @@ internal static partial class GoalRefinementWorkCoordinator
 {
     internal const string OutboxKind = "goal-spec-refinement";
     internal const string CommandName = "goal-refinement-run";
+    internal const string RecoveryNextStep = "Next step: recover <goal> <note>";
     internal const string PendingPolicyReceipt =
         "spec_refinement outcome=pending owner=durable-outbox consumers_held=true researcher_allowed=true";
     private const int ReceiptVersion = 1;
@@ -84,6 +85,27 @@ internal static partial class GoalRefinementWorkCoordinator
 
     public static bool ResetFailedClaimEscalation(OrchestratorWorkspace workspace, GoalId goalId) =>
         SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Reset(goalId);
+
+    internal static (OrchestratorStateOutboxRequeueOutcome? Outcome, bool ClearedLaunchAttempt) RecoverFailedRefinement(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal)
+    {
+        if (SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal))
+            return (ResetAfterBriefRevision(kernel, workspace, goal.Id), false);
+
+        if (File.Exists(workspace.SqliteStatePath))
+        {
+            var state = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                .GetOutboxStateAsync(MessageId(goal.Id)).GetAwaiter().GetResult();
+            // Keep the launch cadence while an executor can still claim or finish this work.
+            if (state?.Status == OrchestratorStateOutboxStatus.Pending)
+                return (null, false);
+            if (state is { Status: OrchestratorStateOutboxStatus.Processing, ProcessingStartedAt: { } startedAt } &&
+                DateTimeOffset.UtcNow - startedAt < SqliteOrchestratorStateRepository.OutboxProcessingLease)
+                return (OrchestratorStateOutboxRequeueOutcome.ProtectedByLiveLease, false);
+        }
+
+        return (null, ResetFailedClaimEscalation(workspace, goal.Id));
+    }
 
     public static OrchestratorStateOutboxRequeueOutcome ResetAfterBriefRevision(
         AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, GoalId goalId)
@@ -289,9 +311,9 @@ internal static partial class GoalRefinementWorkCoordinator
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    var detail = SingleLine(ex.Message);
                     throw new InvalidOperationException(
-                        $"SPEC_REFINEMENT_FAILED owner=durable-outbox phase={phase} " +
-                        $"detail={SingleLine(ex.Message)}",
+                        WithRecoveryNextStep($"SPEC_REFINEMENT_FAILED owner=durable-outbox phase={phase} detail={detail}"),
                         ex);
                 }
             },
@@ -524,6 +546,17 @@ internal static partial class GoalRefinementWorkCoordinator
             .GetAwaiter()
             .GetResult();
         return true;
+    }
+
+    internal static string WithRecoveryNextStep(string diagnostic)
+    {
+        // The outbox normalizes exception messages to one line, including the next step.
+        if (diagnostic.EndsWith(RecoveryNextStep, StringComparison.Ordinal) &&
+            diagnostic.Length > RecoveryNextStep.Length &&
+            char.IsWhiteSpace(diagnostic[^(RecoveryNextStep.Length + 1)]))
+            diagnostic = diagnostic[..^RecoveryNextStep.Length].TrimEnd();
+
+        return $"{diagnostic}{Environment.NewLine}{RecoveryNextStep}";
     }
 
     private static string SingleLine(string value) =>
