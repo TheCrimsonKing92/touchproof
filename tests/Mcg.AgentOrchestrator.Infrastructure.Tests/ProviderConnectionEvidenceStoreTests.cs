@@ -21,7 +21,12 @@ public sealed class ProviderConnectionEvidenceStoreTests
             await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
             fixture.MarkStoredLatest(goal.Id);
             if (representation == "archive")
+            {
                 Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(GoalTaskHistoryTestFixture.At.AddDays(1)));
+                using var stub = JsonDocument.Parse(fixture.RawGoal(goal.Id));
+                Assert.True(stub.RootElement.GetProperty("IsMetadataOnly").GetBoolean());
+                Assert.Equal([goal.Id], fixture.Rows("SELECT goal_id FROM goal_snapshot_archive"));
+            }
         }
         var rowsBefore = fixture.HistoryRows();
         var observations = await SqliteOrchestratorStateRepository.OpenReadOnly(fixture.DatabasePath)
@@ -119,7 +124,9 @@ public sealed class ProviderConnectionEvidenceStoreTests
             EvidenceSource = VerificationEvidenceSource.Dispatch, WorkerResultPresent = true,
             ExitCode = i, ProviderFailureKind = i == 1 ? ProviderFailureKind.AuthenticationRequired : ProviderFailureKind.Unknown
         }).ToArray();
-        return seed with { Tasks = [task with { LastDispatch = dispatches[^1], DispatchHistory = dispatches,
+        // A terminal goal with no build custody has an empty collection, as domain exports do.
+        // JSON null is a row to json_each and would make the archive's open-work guard hold it.
+        return seed with { Tasks = [task with { WorkerBuildInvocations = [], LastDispatch = dispatches[^1], DispatchHistory = dispatches,
             LastVerification = verifications[^1], VerificationHistory = verifications }] };
     }
 

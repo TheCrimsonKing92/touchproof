@@ -156,6 +156,13 @@ public sealed class CliProviderConnectionsContractTests
             Assert.Contains("Usage:", invalid.StandardError);
             Assert.DoesNotContain("SECRET", invalid.StandardError);
             Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(workspace.SqliteStatePath)));
+            var invalidCheck = await RunPublicAsync(root,
+                ["provider-connections", "check", "--profile", "codex-cli", "--SECRET-flag"]);
+            Assert.NotEqual(0, invalidCheck.ExitCode);
+            Assert.Empty(invalidCheck.StandardOutput);
+            Assert.Contains("Usage:", invalidCheck.StandardError);
+            Assert.DoesNotContain("SECRET", invalidCheck.StandardError);
+            Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(workspace.SqliteStatePath)));
         }
         finally { Directory.Delete(root, recursive: true); }
     }

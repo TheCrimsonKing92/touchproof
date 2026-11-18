@@ -280,11 +280,6 @@ if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcom
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();
 CrosswalkExecutableComposition.Install();
-if (CliProviderConnectionsCommand.IsCommand(startupArgs))
-{
-    return ExitCompletedStartupCommand(await CliProviderConnectionsCommand.ExecuteWorkspaceAsync(startupArgs, workspace,
-        () => ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace)));
-}
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
@@ -302,7 +297,9 @@ try
         return ExitCompletedStartupCommand(CliImpactReplayCommand.Run(startupArgs, workspace));
     }
 
-    CliCommandHelp.ThrowIfInvalidFlags(startupArgs);
+    // This command validates its own arguments without echoing possibly sensitive values.
+    if (!CliProviderConnectionsCommand.IsCommand(startupArgs))
+        CliCommandHelp.ThrowIfInvalidFlags(startupArgs);
 }
 catch (ArgumentException ex)
 {
@@ -399,6 +396,12 @@ if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArg
         registry: projectRegistry, repositoryRoot: repoRoot));
 if (CliOperatorIntentRoute.IsServed(startupArgs))
     return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
+
+if (CliProviderConnectionsCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliProviderConnectionsCommand.ExecuteWorkspaceAsync(startupArgs, workspace,
+        () => ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace)));
+}
 
 if (CliGoalBranchCommitCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliGoalBranchCommitCommand.Run(startupArgs, workspace));
