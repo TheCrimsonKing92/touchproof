@@ -416,7 +416,7 @@ internal sealed partial class ConductorDriver
                 decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
                     batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
                     FindingEvidenceNotHonouredReason.RunFailed,
-                    "The focused evidence executor failed; a typed refusal was attached.", batchCandidateSha, batchBasisIdentity);
+                    "The focused evidence executor failed; a typed refusal was attached.", batchCandidateSha, batchBasisIdentity, reusedRedDecision);
             }
             return true;
         }
@@ -443,7 +443,7 @@ internal sealed partial class ConductorDriver
             decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
                 batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
                 reason,
-                "The focused evidence executor did not accept the request.", batchCandidateSha, batchBasisIdentity);
+                "The focused evidence executor did not accept the request.", batchCandidateSha, batchBasisIdentity, reusedRedDecision);
             return true;
         }
 
@@ -492,17 +492,11 @@ internal sealed partial class ConductorDriver
         // Until the dispositions persist, the focused attempt can be reconciled again and
         // no task receipt can bypass that reconciliation on the next tick.
         requestDispositions = receipt.RequestDispositions!;
-        if (evidenceAttempt is null ||
-            !_focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(
-                evidenceAttempt, findingRoundFingerprint, receiptId, requestDispositions))
-        {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed,
-                $"Focused evidence receipt {receiptId} could not be published because its per-request apparatus dispositions could not be persisted; downstream routing stopped.");
+        if (!FindingEvidenceRequestCompletion.TryPersistDispositions(_focusedEvidenceAttemptCoordinator, evidenceAttempt,
+                findingRoundFingerprint, receiptId, requestDispositions, out decision))
             return true;
-        }
 
-        if (reconciliationDeferred) _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt);
+        if (reconciliationDeferred) _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt!);
         _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
         if (apparatusFailure)
         {

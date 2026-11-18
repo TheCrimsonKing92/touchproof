@@ -214,8 +214,10 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
         }
     }
 
-    [Fact]
-    public void GreenRerunReceiptRunsQueuedRequestBeforeDelivery()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GreenRerunReceiptRunsQueuedRequestBeforeDelivery(bool refuseDispositionWrite)
     {
         const string candidateSha = "abc1234";
         var root = ConductorDriverTests.CreateTempDirectory();
@@ -237,10 +239,24 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
 
             var requests = new List<string>();
             var retried = new List<TaskId>();
-            var driver = MakeDriver(
+            var refusedWrites = 0;
+            var refuseWrite = refuseDispositionWrite;
+            void RefuseRerunDispositionWrite()
+            {
+                if (!refuseWrite || requests.Count != 3 || !Directory.EnumerateFiles(Path.Combine(root, goal.Id.Value), "*.attempt.json")
+                    .Select(File.ReadAllText).Any(metadata =>
+                        metadata.Contains("candidate-rerun", StringComparison.Ordinal) &&
+                        metadata.Contains("\"focusedEvidenceReceiptId\": \"finding-evidence-", StringComparison.Ordinal))) return;
+                refusedWrites++;
+                throw new IOException("Injected failure writing the GREEN rerun disposition.");
+            }
+
+            ConductorDriver CreateDriver() => MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
+                    root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null,
+                    conductEventLogWriter: new ConductEventLogWriter(Path.Combine(root, "conduct.jsonl"),
+                        beforeRequiredEventDrain: RefuseRerunDispositionWrite)),
                 getLandingFileScopes: _ => [],
                 runFocusedEvidence: (_, request) =>
                 {
@@ -273,14 +289,40 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
                 },
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
                     kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+                recordFindingEvidenceRequestDispositions: (goalId, taskId, dispositions) =>
+                    kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions),
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                     kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
+            var driver = CreateDriver();
+            var policy = ConductorAutonomyPolicy.Permissive;
+            var observed = FailedGoalFindingObservation.None;
             for (var tick = 0; tick < 5 && requests.Count < 3; tick++)
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+                Assert.True(driver.TryBuildFindingEvidenceRequest(goal, reviewer, policy, out observed));
 
             Assert.Equal(3, requests.Count);
             Assert.Empty(retried);
+            if (refuseDispositionWrite)
+            {
+                Assert.True(refusedWrites > 0);
+                Assert.Equal(FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed, observed.Kind);
+                Assert.Null(observed.BatchClosure);
+                Assert.DoesNotContain(reviewer.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []),
+                    receipt => receipt.Passed);
+                Assert.DoesNotContain(goal.Timeline, item =>
+                    item.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal));
+                Assert.Single(driver.FocusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value])
+                    .Where(attempt => attempt.FocusedEvidenceBatchId?.EndsWith("-candidate-rerun", StringComparison.Ordinal) == true));
+                kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+                goal = kernel.GetGoal(goal.Id);
+                reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+                refuseWrite = false;
+                driver = CreateDriver();
+                Assert.True(driver.TryBuildFindingEvidenceRequest(goal, reviewer, policy, out observed));
+                Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, observed.Kind);
+                Assert.Equal(3, requests.Count);
+            }
+
             var first = reviewer.VerificationHistory.Last().MergedReviewFindings!
                 .Single(finding => finding.StableId == "rerun-green");
             var firstReceipt = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!
@@ -292,6 +334,8 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
             var rerunEvent = Assert.Single(goal.Timeline.Where(evt =>
                 evt.Message.Contains("disposition=candidate-rerun-green", StringComparison.Ordinal)));
             Assert.Contains($"receipt_id={firstReceipt.ReceiptId}", rerunEvent.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(driver.FocusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]),
+                attempt => attempt.FocusedEvidenceBatchId?.EndsWith("-candidate-rerun", StringComparison.Ordinal) == true);
 
             for (var tick = 0; tick < 4 && retried.Count == 0; tick++)
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);

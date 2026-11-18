@@ -187,8 +187,7 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
                 return green with { Arms = green.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray(),
                     OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence };
             },
-            recordFindingEvidenceRequest: focusedExecution is null ? null :
-                (goalId, taskId, message) => Kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceRequest: (goalId, taskId, message) => Kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceRun: focusedExecution is null ? null :
                 (goalId, taskId, message) => Kernel.RecordFindingEvidenceRun(goalId, taskId, message),
             recordFindingEvidenceRequestDispositions: focusedExecution is null ? null :

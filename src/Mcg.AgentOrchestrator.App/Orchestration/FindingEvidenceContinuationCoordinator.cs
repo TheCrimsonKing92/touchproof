@@ -55,11 +55,10 @@ internal static class FindingEvidenceContinuationCoordinator
             if (goal.Tasks.Any(task => DispatchReadinessRules.IsEarlierSdlcStageOf(task.RequiredRole, reviewer.RequiredRole) &&
                     task.Status != WorkTaskStatus.Completed)) continue;
             if (!TrySelectFindingEvidenceContinuation(driver, goal, reviewer, out var continuation, out _) ||
-                !CanOfferBeforeBatchObservation(driver, goal, reviewer, continuation!)) continue;
-            var cap = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
-            if (cap.Round >= policy.ReviewAutoRetryStopRound || cap.LifetimeRound >= cap.LifetimeBackstop)
-                return false;
-            observation = BuildObservation(reviewer, continuation!);
+                ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, reviewer, policy, out _) ||
+                !FindingRoundBatchCoordinator.TryAccountCoveredContinuation(driver, goal, reviewer, continuation!,
+                    useRetainedVerification: false, out var closure)) continue;
+            observation = BuildObservation(reviewer, continuation!) with { BatchClosure = closure };
             return true;
         }
         return false;
@@ -71,21 +70,6 @@ internal static class FindingEvidenceContinuationCoordinator
             FailedGoalFindingObservationKind.FindingRouteObserved, reviewer.Id,
             BuildFailedGoalAttemptIdentity(reviewer), continuation.Render(), null,
             observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
-
-    private static bool CanOfferBeforeBatchObservation(ConductorDriver driver, Goal goal, TaskSpec reviewer,
-        FindingEvidenceReviewContinuation continuation)
-    {
-        var identity = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer);
-        // An existing batch must close through its own observation and admission path.
-        if (identity is not null && (FindingRoundBatchAccounting.HasOpenBatch(goal, identity) ||
-            FindingRoundBatchAccounting.IsClosed(goal, identity))) return false;
-        var verification = reviewer.LastVerification ?? reviewer.VerificationHistory.LastOrDefault();
-        if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)) return false;
-        var selectedIds = continuation.Selections.Select(selection => selection.FindingId).ToHashSet(StringComparer.Ordinal);
-        return FindingRoundBatchAccounting.Members(round.Findings
-                .Where(finding => finding.State == ReviewFindingState.Open))
-            .All(member => member.FindingIds.Any(selectedIds.Contains));
-    }
 
     internal static bool FindingEvidenceContinuationInvalid(ConductorDriver driver, Goal goal, TaskSpec task) =>
         FindingEvidenceContinuationInvalid(driver, goal, task, out _);
@@ -136,14 +120,19 @@ internal static class FindingEvidenceContinuationCoordinator
         foreach (var task in ReadyCandidateTasks(goal).Where(task => task.RequiredRole == AgentRole.Reviewer))
         {
             if (!TrySelectFindingEvidenceContinuation(driver, goal, task, out var continuation, out _) ||
-                !CanOfferBeforeBatchObservation(driver, goal, task, continuation!) ||
                 task.FindingEvidenceReviewContinuation?.DecisionKey == continuation!.DecisionKey &&
                     task.PendingRetryCause == RetryCause.NewTestFinding ||
                 task.DispatchHistory.Any(dispatch => dispatch.FindingEvidenceReviewContinuation?.DecisionKey == continuation.DecisionKey)) continue;
             var cap = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
-            if (cap.Round >= policy.ReviewAutoRetryStopRound || cap.LifetimeRound >= cap.LifetimeBackstop) continue;
-            kernel.RecordFindingEvidenceReviewContinuation(goal.Id, task.Id, continuation);
-            driver._retryTask(goal.Id, task.Id, continuation.Render(), null, RetryCause.NewTestFinding);
+            if (cap.IsAtCap || !FindingRoundBatchCoordinator.TryAccountCoveredContinuation(driver, goal, task, continuation,
+                    useRetainedVerification: true, out var closure)) continue;
+            FindingRoundBatchCoordinator.TryApply(driver, goal, closure!, () => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Pending,
+                () =>
+                {
+                    kernel.RecordFindingEvidenceReviewContinuation(goal.Id, task.Id, continuation);
+                    return driver._retryTask(goal.Id, task.Id, continuation.Render(), null, RetryCause.NewTestFinding)
+                        .PendingRetryCause == RetryCause.NewTestFinding;
+                }, useRetainedVerification: true);
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -34,7 +35,13 @@ public sealed class FreshFindingEvidenceConductorTests
         Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.Causes));
         var delivered = Assert.IsType<FindingEvidenceReviewContinuation>(fixture.Reviewer.LastDispatch!.FindingEvidenceReviewContinuation);
         Assert.Equal(receipt.ReceiptId, Assert.Single(delivered.Selections).ReceiptId);
-        Assert.Single(fixture.Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;")));
+        var summary = ClosingSummary(fixture.Goal);
+        Assert.Equal(1, summary.CoalescedSelectionCount);
+        Assert.Equal(1, summary.ReviewerCallsAvoided);
+        Assert.Equal(1, summary.PaidVerificationCallsAvoided);
+        var witness = Assert.Single(summary.EligibilityWitnesses);
+        Assert.Equal(receipt.ReceiptId, witness.ReceiptId);
+        Assert.Equal(AgentRole.Reviewer, witness.Role);
     }
 
     [Theory]
@@ -68,9 +75,11 @@ public sealed class FreshFindingEvidenceConductorTests
         fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
         Assert.Equal(1, fixture.Launches);
         Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.Causes));
+        AssertCoveredContinuationAccounting(fixture.Goal);
         fixture.Reload();
         fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
         Assert.Equal(1, fixture.Launches);
+        AssertCoveredContinuationAccounting(fixture.Goal);
     }
 
     [Fact]
@@ -167,11 +176,29 @@ public sealed class FreshFindingEvidenceConductorTests
         Assert.Contains(fresh.ReceiptId, brief, StringComparison.Ordinal);
         Assert.Contains("evidence_receipt:", brief, StringComparison.Ordinal);
         Assert.Contains("normal acceptance remain required", brief, StringComparison.Ordinal);
+        AssertCoveredContinuationAccounting(fixture.Goal);
 
         fixture.Reload();
         fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
         Assert.Equal(1, fixture.Launches);
         Assert.Single(fixture.Causes);
+        AssertCoveredContinuationAccounting(fixture.Goal);
+    }
+
+    private static void AssertCoveredContinuationAccounting(Goal goal)
+    {
+        var summary = ClosingSummary(goal);
+        Assert.Equal(1, summary.BatchSize);
+        Assert.Equal(1, summary.Covered);
+        Assert.Equal(0, summary.NewlyExecuted);
+        Assert.Equal(0, summary.CoalescedSelectionCount);
+        Assert.StartsWith("Reviewer: FINDING_EVIDENCE_REVIEW_CONTINUATION", summary.RoutingReason);
+    }
+
+    private static FindingRoundBatchAccounting.Summary ClosingSummary(Goal goal)
+    {
+        var item = Assert.Single(goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
+        return JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(item.Message[item.Message.IndexOf('{')..])!;
     }
 
     [Theory]

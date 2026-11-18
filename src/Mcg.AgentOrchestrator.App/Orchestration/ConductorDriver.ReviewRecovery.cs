@@ -221,7 +221,8 @@ internal sealed partial class ConductorDriver
             var hold = new PreReviewRepeatedFailureHold(repeated.RepeatedTests, repeated.ConsecutiveRounds);
             observation = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingRepeatedFailingTestSet, hold.Reason);
-            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
+                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
             return true;
         }
 

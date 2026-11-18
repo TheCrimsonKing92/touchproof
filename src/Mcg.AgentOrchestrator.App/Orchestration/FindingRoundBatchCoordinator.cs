@@ -94,9 +94,11 @@ internal static class FindingRoundBatchCoordinator
         return (applied, conflict);
     }
 
-    internal static bool TryApply(ConductorDriver driver, Goal goal, FindingEvidenceBatchClosure closure, Func<bool> isCurrent, Func<bool> apply)
+    internal static bool TryApply(ConductorDriver driver, Goal goal, FindingEvidenceBatchClosure closure,
+        Func<bool> isCurrent, Func<bool> apply, bool useRetainedVerification = false)
     {
-        bool Validate() => Identity(driver, goal, goal.Tasks.Single(task => task.Id == closure.Identity.RequestingTaskId)) == closure.Identity && isCurrent();
+        bool Validate() => Identity(driver, goal, goal.Tasks.Single(task => task.Id == closure.Identity.RequestingTaskId),
+            out _, useRetainedVerification) == closure.Identity && isCurrent();
         return FindingEvidenceBatchClosureAdmission.TryApply(goal, closure, Validate, apply);
     }
 
@@ -138,17 +140,25 @@ internal static class FindingRoundBatchCoordinator
 
     internal static FailedGoalFindingObservation RecordExecutionFailure(ConductorDriver driver, Goal goal, TaskSpec task,
         FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis,
-        FindingEvidenceNotHonouredReason reason, string detail, string batchCandidate, string batchBasis)
+        FindingEvidenceNotHonouredReason reason, string detail, string batchCandidate, string batchBasis,
+        FailedGoalFindingObservation? reusedActionableRed)
     {
         // Rejected and failed executions consume the same existing allowance as completed runs.
         var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity);
         driver._recordFindingEvidenceRun(goal.Id, task.Id,
             $"finding-evidence failed-attempt; finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
             $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
-        return FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
-            ? SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, batchBasis, detail)
-            : FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+        if (!FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason)))
+            return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
+
+        var decision = SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, batchBasis, detail);
+        var identity = new FindingEvidenceBatchIdentity(task.Id, batchCandidate, round, batchBasis);
+        return reusedActionableRed is not null && !morePending &&
+            FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check").IsSettled &&
+            FindingRoundBatchAccounting.RequiredUnavailable(goal, task, identity) is null
+                ? reusedActionableRed
+                : decision;
     }
 
     internal static void RecordSettledPlan(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
@@ -173,6 +183,20 @@ internal static class FindingRoundBatchCoordinator
                 driver._recordFindingEvidenceRequest);
     }
 
+    internal static void RecordRerunOutcome(ConductorDriver driver, Goal goal, TaskSpec task,
+        FindingEvidenceBatch batch, FindingEvidenceReceipt receipt)
+    {
+        if (receipt.RequestDispositions is not { } dispositions || batch.Members.Any(member =>
+                !dispositions.Any(disposition => disposition.RequestIdentity == member.Identity &&
+                    disposition.Decision is (FindingEvidenceRequestDecision.Executed or FindingEvidenceRequestDecision.CoveredByReceipt) &&
+                    disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true)))
+            return;
+
+        if (Identity(driver, goal, task, out var execution) is { } identity && execution!.Matches(receipt, identity))
+            RecordOutcome(driver, goal, task, identity.CandidateSha, identity.RoundFingerprint,
+                identity.ExecutionBasisIdentity, batch, "executed", receipt.ReceiptId);
+    }
+
     internal static void RecordCurrentReceipt(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
         string round, string basis, string requestIdentity, string findingId, string receiptId)
     {
@@ -193,14 +217,39 @@ internal static class FindingRoundBatchCoordinator
         Identity(driver, goal, task, out _);
 
     private static FindingEvidenceBatchIdentity? Identity(ConductorDriver driver, Goal goal, TaskSpec task,
-        out ExecutionContext? execution)
+        out ExecutionContext? execution, bool useRetainedVerification = false)
     {
         execution = null;
-        if (!WorkerResultBlockers.TryFindReviewFindingRound(task.LastVerification, out var round, out _)) return null;
+        var verification = task.LastVerification ?? (useRetainedVerification ? task.VerificationHistory.LastOrDefault() : null);
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)) return null;
         execution = ResolveExecution(driver, goal, round);
         if (driver._getPreReviewEvidenceContext(goal).CandidateSha?.Trim() is not { } candidate ||
             !ConductorGitRevisionReader.IsValid(candidate)) return null;
-        return new(task.Id, candidate, ConductorDriver.BuildFindingRoundFingerprint(task, round), execution.BatchBasis);
+        return new(task.Id, candidate, ConductorDriver.BuildFindingRoundFingerprint(task.Id, verification!.CompletedAt, round),
+            execution.BatchBasis);
+    }
+
+    internal static bool TryAccountCoveredContinuation(ConductorDriver driver, Goal goal, TaskSpec task,
+        FindingEvidenceReviewContinuation continuation, bool useRetainedVerification, out FindingEvidenceBatchClosure? closure)
+    {
+        closure = null;
+        var identity = Identity(driver, goal, task, out var execution, useRetainedVerification);
+        if (identity is null || !string.Equals(identity.CandidateSha, continuation.CandidateSha, StringComparison.OrdinalIgnoreCase) ||
+            FindingRoundBatchAccounting.IsClosed(goal, identity) ||
+            (!useRetainedVerification && FindingRoundBatchAccounting.HasOpenBatch(goal, identity))) return false;
+        var findings = execution!.Round.Findings.Where(finding => finding.State == ReviewFindingState.Open).ToArray();
+        var selected = continuation.Selections.Select(selection => selection.FindingId).ToHashSet(StringComparer.Ordinal);
+        var members = FindingRoundBatchAccounting.Members(findings);
+        if (members.Length == 0 || members.Any(member => !member.FindingIds.Any(selected.Contains))) return false;
+
+        FindingRoundBatchAccounting.Begin(goal, identity, findings, driver._recordFindingEvidenceRequest);
+        foreach (var selection in continuation.Selections.DistinctBy(selection => selection.FindingId))
+            RecordCoverage(driver, goal, task, identity.CandidateSha, identity.RoundFingerprint,
+                identity.ExecutionBasisIdentity, selection.RequestIdentity, selection.FindingId, selection.ReceiptId);
+        var summary = FindingRoundBatchAccounting.Summarize(goal, task, identity, $"Reviewer: {continuation.Render()}");
+        if (!summary.IsSettled || summary.Unavailable > 0) return false;
+        closure = new(identity, JsonSerializer.Serialize(summary));
+        return true;
     }
 
     internal static bool TrySettleBeforeRouting(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
@@ -326,7 +375,8 @@ internal static class FindingRoundBatchCoordinator
             else if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending) return handled;
         }
 
-        if (!settlement.IsSettled && decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending)
+        if (!settlement.IsSettled && decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending &&
+            !TryObserveQualifiedReviewerSuppression(driver, goal, task, identity, policy))
         {
             // A passing receipt plus the production interpretation route is an eligibility witness.
             // Cases needing closure, continuation or policy information we did not evaluate stay unknown.
@@ -393,6 +443,32 @@ internal static class FindingRoundBatchCoordinator
                 decision = decision with { BatchClosure = new(identity, JsonSerializer.Serialize(summary)) };
         }
         return handled;
+    }
+
+    private static bool TryObserveQualifiedReviewerSuppression(ConductorDriver driver, Goal goal, TaskSpec reviewer,
+        FindingEvidenceBatchIdentity identity, ConductorAutonomyPolicy policy)
+    {
+        if (!ConductorDriver.UsesQualifiedReviewerContinuation(goal, reviewer) ||
+            (driver._cohortKernel ?? driver._conductorTickKernel) is not { } kernel ||
+            reviewer.Status != WorkTaskStatus.Failed ||
+            goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }) ||
+            Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, reviewer).Any() ||
+            !FindingEvidenceContinuationCoordinator.TrySelectFindingEvidenceContinuation(driver, goal, kernel.GetTask(goal.Id, reviewer.Id),
+                out var selected, out _)) return false;
+
+        var continuation = selected!;
+        var route = FindingEvidenceContinuationCoordinator.BuildObservation(reviewer, continuation);
+        if (!ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, reviewer, policy, out _) &&
+            PolicySelects(driver, goal, policy, route))
+        {
+            var receipt = continuation.Selections.First(selection =>
+                !continuation.PriorExecutionIdentities.Contains(selection.ExecutionIdentity, StringComparer.Ordinal));
+            FindingRoundBatchAccounting.Record(goal, identity,
+                new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + continuation.Key, [], receipt.ReceiptId,
+                    AgentRole.Reviewer, "qualified continuation; dependencies complete; recovery policy selects requesting Reviewer"),
+                driver._recordFindingEvidenceRequest);
+        }
+        return true;
     }
 
     private static bool TryObserveRequiredUnavailable(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity,

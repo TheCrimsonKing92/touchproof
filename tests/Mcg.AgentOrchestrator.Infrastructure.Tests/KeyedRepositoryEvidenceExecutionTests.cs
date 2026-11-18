@@ -483,6 +483,46 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
     }
 
     [Fact]
+    public void Reviewer_DeferredMembersWithRepeatedFailures_EscalateOnceAcrossReplay()
+    {
+        using var fixture = new Fixture();
+        var source = new ReviewFinding("source", ReviewFindingState.Open, new("src/Record.cs", "Read"),
+            "Repair source before running repository evidence", Category: FindingCategory.Correctness);
+        FailReviewerNeedsWork(fixture.Kernel, fixture.Goal, fixture.Reviewer, "Repair source", findings:
+            [source, Finding("deferred", new([new("./record", "TestReadInvalidFixtures")], Repository: "crosswalk"))],
+            reviewedCommit: fixture.HomeHead);
+        var recordedAt = DateTimeOffset.UtcNow;
+        foreach (var candidate in new[] { "abc1234", "def5678", fixture.HomeHead })
+            fixture.Kernel.RecordPreReviewEvidence(fixture.Goal.Id, fixture.Reviewer.Id,
+                new(fixture.Goal.Id.Value, 1, candidate, [], PreReviewEvidenceDisposition.Red, 0, 1,
+                    [new("focused tests", "test", false, 1)], ["RecordTests.Read"], "mapped", null, recordedAt));
+        Assert.True(PreReviewRepeatedFailureSet.Evaluate(fixture.Reviewer.PreReviewEvidenceHistory).HoldRequired);
+        var escalations = new List<string>();
+        var calls = new List<string>();
+        var driver = fixture.Driver([], calls, recordBatchAccounting: true, recordEscalation: escalations.Add);
+        driver.RunKeyedFocusedEvidence = (_, _, _, _, _, _, _, _, _, _) =>
+            throw new InvalidOperationException("Deferred request ran before source repair");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var identity = FindingRoundBatchCoordinator.Identity(driver, fixture.Goal, fixture.Reviewer)!;
+
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+        Assert.Contains("PRE_REVIEW_REPEATED_FAILING_SET", Assert.Single(escalations), StringComparison.Ordinal);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(fixture.Goal, identity));
+        var closed = Assert.Single(fixture.Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;")));
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closed.Message[closed.Message.IndexOf('{')..])!;
+        Assert.Equal(1, summary.BatchSize);
+        Assert.Equal(1, summary.Deferred);
+        Assert.StartsWith("FindingRepeatedFailingTestSet:", summary.RoutingReason);
+
+        fixture.Restart();
+        driver = fixture.Driver([], calls, recordBatchAccounting: true, recordEscalation: escalations.Add);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(fixture.Goal, identity));
+        Assert.Single(escalations);
+        Assert.Empty(calls);
+    }
+
+    [Fact]
     public void Request_MissingKeyedTarget_NeverInvokesHomeRunner()
     {
         using var fixture = new Fixture();
@@ -580,8 +620,8 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
     private sealed class Fixture : IDisposable
     {
         internal GoalRepositoriesTestFixture Repositories { get; } = new();
-        internal AgentOrchestratorKernel Kernel { get; }
-        internal Goal Goal { get; }
+        internal AgentOrchestratorKernel Kernel { get; private set; }
+        internal Goal Goal { get; private set; }
         internal TaskSpec Reviewer => Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         internal OrchestratorProjectRegistry Registry { get; }
         internal string HomeWorktree { get; }
@@ -626,10 +666,21 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
             return target;
         }
 
+        internal void Restart()
+        {
+            Kernel = AgentOrchestratorKernel.FromSnapshot(Kernel.ExportSnapshot());
+            Goal = Kernel.GetGoal(Goal.Id);
+        }
+
         internal ConductorDriver Driver(List<FindingEvidenceReceipt> receipts, List<string> homeCalls, bool recordBatchAccounting = false,
-            Func<string, FocusedEvidenceRunResult>? runHome = null, bool configureHomeRunner = true)
+            Func<string, FocusedEvidenceRunResult>? runHome = null, bool configureHomeRunner = true, Action<string>? recordEscalation = null)
         {
             var driver = MakeDriver(getPreReviewEvidenceContext: _ => NoPreReviewContext(HomeHead),
+                writeEscalationWithResult: recordEscalation is null ? null : (_, _, message) =>
+                {
+                    recordEscalation(message);
+                    return LandingEscalationWriteResult.CompletedWithoutExternalSinks;
+                },
                 getFindingEvidenceEngineSettings: _ => KeyedRepositoryEvidenceNormalizationTests.HomeSettings,
                 focusedEvidenceAttemptCoordinator: new(Path.Combine(Repositories.Home.Root, "evidence-attempts"), "main", runInline: true),
                 runFocusedEvidence: configureHomeRunner

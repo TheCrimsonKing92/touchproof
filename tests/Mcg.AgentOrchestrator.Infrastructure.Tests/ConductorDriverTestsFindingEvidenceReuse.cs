@@ -286,9 +286,10 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(false)]
-    [Xunit.InlineData(true)]
-    public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper(bool greenSibling)
+    [Xunit.InlineData("none")]
+    [Xunit.InlineData("green")]
+    [Xunit.InlineData("unsupported")]
+    public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper(string siblingOutcome)
     {
         const string candidateSha = "abc1234";
         const string failingTest =
@@ -313,6 +314,9 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                 1 => CandidateOnlyRedWithExecutedClasses(_artifactRoot, request, candidateSha, failingTest,
                     ["ConductorDriverTestsFindingEvidenceReuse"]),
                 2 => CandidateRedFindingEvidence(request, candidateSha, failingTest),
+                3 when siblingOutcome == "unsupported" => new FocusedEvidenceRunResult(
+                    request, Accepted: false, Passed: false, Summary: "Unsupported advisory project", Checks: [],
+                    Rejection: new(FocusedEvidenceRejectionCode.UnsupportedProject, request, "Unsupported advisory project")),
                 _ => RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha)
             };
         }
@@ -337,7 +341,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         var sibling = EvidenceFindingWithRequest("An unrelated focused request is still pending.", id: "green-sibling",
             category: FindingCategory.TestEvidence, project: "Core.Tests", classes: ["SiblingTests"])
             with { Severity = FindingSeverity.Advisory };
-        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, greenSibling ? [finding, sibling] : [finding]);
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, siblingOutcome == "none" ? [finding] : [finding, sibling]);
         var replayDriver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
             runFocusedEvidence: (_, request) => RunEvidence(request),
@@ -356,9 +360,16 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
 
         replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(greenSibling ? 3 : 2, focusedRuns);
+        Assert.Equal(siblingOutcome == "none" ? 2 : 3, focusedRuns);
         Assert.Equal(developer.Id, retriedTaskId);
         Assert.Null(escalation);
+        if (siblingOutcome == "unsupported")
+        {
+            var outcome = tester.VerificationHistory.Last().MergedReviewFindings!.Single(item => item.StableId == sibling.StableId);
+            Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, outcome.EvidenceOutcome?.Reason);
+            var closure = Assert.Single(goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
+            Assert.Contains("Developer:", closure.Message, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact]

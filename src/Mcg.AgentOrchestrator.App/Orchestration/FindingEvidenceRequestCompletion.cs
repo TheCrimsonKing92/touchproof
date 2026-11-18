@@ -1,10 +1,25 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Completed request decisions require candidate execution covering the member's remaining selections.
 internal static class FindingEvidenceRequestCompletion
 {
+    internal static bool TryPersistDispositions(
+        ConductorParallelAcceptanceAttemptCoordinator coordinator, ConductorParallelAcceptanceAttempt? attempt,
+        string round, string receiptId, IReadOnlyList<FindingEvidenceRequestDisposition> dispositions,
+        out FailedGoalFindingObservation decision)
+    {
+        decision = FailedGoalFindingObservation.None;
+        if (attempt is not null && coordinator.RecordFocusedEvidenceRequestDispositions(
+                attempt, round, receiptId, dispositions)) return true;
+        decision = FailedGoalFindingObservation.Observed(
+            FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed,
+            $"Focused evidence receipt {receiptId} could not be published because its per-request apparatus dispositions could not be persisted; downstream routing stopped.");
+        return false;
+    }
+
     internal static IReadOnlyList<FindingEvidenceRequestDisposition> BuildDispositions(
         IReadOnlyList<FindingEvidenceRequestDisposition> initialRequestDispositions,
         FindingEvidenceBatch batch,
