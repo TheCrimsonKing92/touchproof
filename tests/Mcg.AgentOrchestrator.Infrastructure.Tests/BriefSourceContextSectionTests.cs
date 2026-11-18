@@ -324,34 +324,49 @@ public sealed class BriefSourceContextSectionTests : WorkerDispatchTestSupport
     {
         var fixture = CreateFixture(role);
         var path = Path.Combine(fixture.WorkingDirectory, SourcePath);
-        var absent = Path.Combine(fixture.Root, "temporarily-absent.txt");
-        File.Move(path, absent);
+        // Keep the citation input out of the source survey and git-derived context artifacts.
+        // Otherwise changing its availability also changes the typed package before the appended section.
+        File.AppendAllText(Path.Combine(fixture.WorkingDirectory, ".git", "info", "exclude"), "\n/" + SourcePath + "\n");
+        var snapshot = fixture.Kernel.ExportSnapshot();
+
+        Fixture RestoreFixture()
+        {
+            var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot);
+            return fixture with
+            {
+                Kernel = kernel,
+                Goal = kernel.GetGoal(fixture.Goal.Id),
+                Task = kernel.GetTask(fixture.Goal.Id, fixture.Task.Id)
+            };
+        }
+
+        File.WriteAllText(path, string.Empty);
         try
         {
-            // Dispatch records change the typed timeline artifact and its package identity on every call.
-            // Compare the same pre-dispatch state so source availability is the only changed input.
-            var snapshot = fixture.Kernel.ExportSnapshot();
-            var without = File.ReadAllText(Prepare(fixture, typed).PromptPath);
+            // Restore both kernels so dispatch history and snapshot normalization are identical.
+            var withoutDispatch = Prepare(RestoreFixture(), typed);
+            var without = File.ReadAllText(withoutDispatch.PromptPath);
             Assert.DoesNotContain("## Source context", without);
-            File.Move(absent, path);
+            File.WriteAllText(path, Sentinel);
 
-            var restoredKernel = AgentOrchestratorKernel.FromSnapshot(snapshot);
-            fixture = fixture with
+            var withDispatch = Prepare(RestoreFixture(), typed);
+            var with = File.ReadAllText(withDispatch.PromptPath);
+
+            if (typed)
             {
-                Kernel = restoredKernel,
-                Goal = restoredKernel.GetGoal(fixture.Goal.Id),
-                Task = restoredKernel.GetTask(fixture.Goal.Id, fixture.Task.Id)
-            };
-            var with = File.ReadAllText(Prepare(fixture, typed).PromptPath);
-
+                var withoutReceipt = withoutDispatch.Task.LastDispatch?.ContextPackageReceipt;
+                var withReceipt = withDispatch.Task.LastDispatch?.ContextPackageReceipt;
+                Assert.NotNull(withoutReceipt);
+                Assert.NotNull(withReceipt);
+                Assert.Equal(withoutReceipt.SemanticPackageId, withReceipt.SemanticPackageId);
+            }
             Assert.StartsWith(without, with);
             Assert.StartsWith("\n\n## Source context\n", with[without.Length..]);
             Assert.Contains("1 | " + Sentinel, with[without.Length..]);
         }
         finally
         {
-            if (File.Exists(absent))
-                File.Move(absent, path);
+            File.WriteAllText(path, Sentinel);
         }
     }
 
