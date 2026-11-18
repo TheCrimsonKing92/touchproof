@@ -166,6 +166,10 @@ public sealed class CompletionBuildEvidenceIntegrationTests(ITestOutputHelper ou
             info.Environment.Clear();
             foreach (var name in new[] { "SystemRoot", "WINDIR", "PATH", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432" })
                 if (Environment.GetEnvironmentVariable(name) is { } value) info.Environment[name] = value;
+            // The isolated LOCALAPPDATA below hides per-user PowerShell installations.
+            // Keep the production-selected shell discoverable by the coordinator child.
+            info.Environment["PATH"] = Path.GetDirectoryName(WorkerShell.Executable) + Path.PathSeparator +
+                info.Environment["PATH"];
             // PowerShell needs PATHEXT to resolve the helper's extensionless dotnet invocation.
             if (OperatingSystem.IsWindows()) info.Environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
             var profile = Path.Combine(storage.RootPath, "profile");

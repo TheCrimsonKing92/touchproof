@@ -203,8 +203,8 @@ spread. No production cache, GC, or build-slot behavior changes accompany this r
 
 ## Evidence locations and receipts
 
-Durable operator bundle (absolute Windows path):
-`C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator\operator-evidence\1834ee27-matched-memory`.
+Durable operator bundle (relative to the repository root):
+`.orchestrator/operator-evidence/1834ee27-matched-memory`.
 The task's `.scratch/driver-memory-evidence` files are delivery copies, not the
 canonical store. Canonical backlog identity is `55a676fbafb74804a90155aa5ea8a443`;
 the driver supplied that association in retry feedback. This worker did not read or
