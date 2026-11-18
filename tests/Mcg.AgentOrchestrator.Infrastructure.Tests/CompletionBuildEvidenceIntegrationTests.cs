@@ -86,9 +86,11 @@ public sealed class CompletionBuildEvidenceIntegrationTests(ITestOutputHelper ou
                 Assert.Equal(pending.TreeDigest, payload.GetProperty("finalTreeDigest").GetString());
                 Assert.Equal(worktree, payload.GetProperty("worktreeRoot").GetString());
                 Assert.Equal(invalidSource ? "failure" : "success", payload.GetProperty("buildOutcome").GetString());
-                Assert.Equal(pending.Projects, payload.GetProperty("projects").EnumerateArray().Select(p => p.GetString()!));
+                // The build helper records native separators; operation project identities use '/'.
+                Assert.Equal(pending.Projects, payload.GetProperty("projects").EnumerateArray()
+                    .Select(p => p.GetString()!.Replace('\\', '/')));
                 var project = Assert.Single(payload.GetProperty("projectResults").EnumerateArray());
-                Assert.Equal(pending.Projects[0], project.GetProperty("project").GetString());
+                Assert.Equal(pending.Projects[0], project.GetProperty("project").GetString()!.Replace('\\', '/'));
                 Assert.Equal(invalidSource ? 1 : 0, project.GetProperty("exitCode").GetInt32());
                 var compilerLog = File.ReadAllText(project.GetProperty("logPath").GetString()!);
                 Assert.NotEmpty(compilerLog);
