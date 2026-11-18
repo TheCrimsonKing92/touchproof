@@ -10,7 +10,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class ProviderConnectionHistoryReader
 {
     private static readonly string[] VerificationFields = ["CompletedAt", "ExitCode", "ProviderFailureKind",
-        "DispatchAttemptAt", "EvidenceSource", "WorkerResultPresent"];
+        "DispatchAttemptAt", "DispatchStartedAt", "EvidenceSource", "WorkerResultPresent"];
     private static readonly string[] DispatchFields = ["WorkerName", "DispatchedAt", "SandboxLowIntegrity"];
 
     internal static async Task<IReadOnlyDictionary<string, IReadOnlyList<ProviderConnectionObservation>>> ReadAsync(SqliteConnection connection,
@@ -57,13 +57,10 @@ internal static class ProviderConnectionHistoryReader
                     .Where(d => d is not null).Cast<Dispatch>().Distinct().ToArray();
                 foreach (var verification in verifications)
                 {
-                    if (verification.CompletedAt is not { } completed || completed == default || verification.DispatchAttemptAt is not { } attempt ||
+                    if (verification.CompletedAt is not { } completed || completed == default ||
                         verification.EvidenceSource == VerificationEvidenceSource.Manual) continue;
-                    // Timestamp is the persisted attempt identity. Never zip lists or pair with an
-                    // unrelated LastDispatch. Conflicting attribution is unknown, not a guess.
-                    var matches = dispatches.Where(d => d.DispatchedAt == attempt).ToArray();
-                    if (matches.Length != 1 || attempt > completed) continue;
-                    var dispatch = matches[0];
+                    var dispatch = FindDispatch(verification, dispatches, completed);
+                    if (dispatch is null) continue;
                     if (string.IsNullOrWhiteSpace(dispatch.WorkerName) ||
                         !profiles.TryGetValue(LunaLaneNames.NormalizeProfileName(dispatch.WorkerName) ?? "", out var profileId)) continue;
                     var outcome = verification switch
@@ -87,6 +84,22 @@ internal static class ProviderConnectionHistoryReader
                 var candidates = group.Where(o => o.ObservedAt == latest).Distinct().ToArray();
                 return candidates.Length == 1 ? candidates[0] : candidates[0] with { Result = ProviderConnectionResult.Unknown };
             }).OrderBy(o => o.ExecutionContext).ToArray(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static Dispatch? FindDispatch(Verification verification, Dispatch[] dispatches, DateTimeOffset completed)
+    {
+        var attempt = verification.DispatchAttemptAt;
+        if (attempt is null && verification.EvidenceSource == VerificationEvidenceSource.Dispatch &&
+            verification.DispatchStartedAt is { } started && started != default && started <= completed)
+        {
+            // Match completion's attempt selection using its persisted process start time.
+            // A redispatch between process start and completion cannot claim this outcome.
+            attempt = dispatches.Where(d => d.DispatchedAt <= started).Max(d => d.DispatchedAt);
+        }
+
+        if (attempt is null || attempt.Value == default || attempt > completed) return null;
+        var matches = dispatches.Where(d => d.DispatchedAt == attempt).Take(2).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 
     private static string HotProjection()
@@ -124,7 +137,7 @@ internal static class ProviderConnectionHistoryReader
     private sealed record TaskFields(string Id, Verification? LastVerification, Dispatch? LastDispatch,
         IReadOnlyList<Verification>? VerificationHistory, IReadOnlyList<Dispatch>? DispatchHistory, JsonElement HistoryInTable);
     private sealed record Verification(DateTimeOffset? CompletedAt, int? ExitCode, ProviderFailureKind? ProviderFailureKind,
-        DateTimeOffset? DispatchAttemptAt, VerificationEvidenceSource? EvidenceSource, bool? WorkerResultPresent,
+        DateTimeOffset? DispatchAttemptAt, DateTimeOffset? DispatchStartedAt, VerificationEvidenceSource? EvidenceSource, bool? WorkerResultPresent,
         bool HasOrchestratorFailure)
     {
         // Archived snapshots stream the original JSON. Keep only the derived flag in the record.

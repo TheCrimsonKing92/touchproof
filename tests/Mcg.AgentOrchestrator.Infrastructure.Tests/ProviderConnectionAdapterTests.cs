@@ -34,6 +34,11 @@ public sealed class ProviderConnectionAdapterTests
     [InlineData("codex", 0, "quoted: Logged in using ChatGPT", "", ProviderConnectionResult.Unknown)]
     [InlineData("codex", 0, "Logged in using ChatGPT", "Token expired", ProviderConnectionResult.Unknown)]
     [InlineData("codex", 1, "", "error: unrecognized subcommand 'status'", ProviderConnectionResult.Unsupported)]
+    [InlineData("codex", 2, "", "error: unrecognized subcommand 'status'\r\n\r\nUsage: codex login [OPTIONS]\r\n", ProviderConnectionResult.Unsupported)]
+    [InlineData("claude", 1, "", "error: unknown command 'auth'", ProviderConnectionResult.Unsupported)]
+    [InlineData("codex", 1, "", "quoted: error: unknown command 'status'\nUsage: codex login", ProviderConnectionResult.Unknown)]
+    [InlineData("codex", 1, "", "error: unknown command 'auth'", ProviderConnectionResult.Unknown)]
+    [InlineData("codex", 0, "", "error: unknown command 'status'", ProviderConnectionResult.Unknown)]
     [InlineData("claude", 1, "{\"error\":\"token_expired\"}", "", ProviderConnectionResult.Expired)]
     [InlineData("claude", 1, "{\"loggedIn\":false}", "", ProviderConnectionResult.SignedOut)]
     [InlineData("claude", 1, "{\"loggedIn\":true}", "", ProviderConnectionResult.Unknown)]
@@ -52,6 +57,18 @@ public sealed class ProviderConnectionAdapterTests
     {
         Assert.Equal((ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.Unknown),
             ProviderConnectionStatusAdapters.Parse("codex", new(0, stdout, stderr)));
+    }
+
+    [Theory]
+    [InlineData("{\"loggedIn\":false,\"loggedIn\":true,\"authMethod\":\"oauth\"}", ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown)]
+    [InlineData("{\"loggedIn\":true,\"loggedIn\":false}", ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown)]
+    [InlineData("{\"loggedIn\":true,\"authMethod\":\"api_key\",\"authMethod\":\"oauth\"}", ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.Unknown)]
+    [InlineData("{\"loggedIn\":true,\"authMethod\":\"oauth\",\"authMethod\":\"api_key\"}", ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.Unknown)]
+    [InlineData("{\"loggedIn\":true,\"loggedIn\":true,\"authMethod\":\"oauth\",\"authMethod\":\"claude.ai\"}", ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.OAuth)]
+    [InlineData("{\"error\":\"access_denied\",\"error\":\"token_expired\"}", ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown)]
+    public void ClaudeStatus_DuplicateFieldsMustAgree(string output, ProviderConnectionResult result, ProviderConnectionAuthMode mode)
+    {
+        Assert.Equal((result, mode), ProviderConnectionStatusAdapters.Parse("claude", new(0, output, "")));
     }
 
     [Theory]
@@ -76,6 +93,10 @@ public sealed class ProviderConnectionAdapterTests
     [InlineData("codex-cli", "& 'C:\\configured tools\\codex.exe' exec")]
     [InlineData("claude-cli", "./configured/claude -p")]
     [InlineData("codex-cli", "codex.ps1 exec")]
+    [InlineData("codex-cli", "$env:PATH='C:\\alternate'; codex exec")]
+    [InlineData("claude-cli", "$env:CLAUDE_CONFIG_DIR='C:\\alternate'; claude -p")]
+    [InlineData("codex-cli", "Set-Location 'C:\\alternate'; codex exec")]
+    [InlineData("codex-cli", "codex exec -c cli_auth_credentials_store=file")]
     public async Task UnsupportedProfiles_NeverExecuteTemplates(string name, string command)
     {
         var adapter = new ProviderConnectionStatusAdapters("fixture", (_, _) => throw new Exception("must not launch"),

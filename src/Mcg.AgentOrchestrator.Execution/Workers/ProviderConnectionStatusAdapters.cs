@@ -30,12 +30,11 @@ public sealed class ProviderConnectionStatusAdapters(
             ProviderConnectionAuthMode mode = ProviderConnectionAuthMode.Unknown) =>
             new(ProviderConnectionContext.Host, source, result, mode, (time ?? TimeProvider.System).GetUtcNow());
 
-        // Status probes support unqualified native launchers. A path-qualified or custom
-        // launcher cannot be substituted with a different installation found on PATH.
         var executable = WorkerProfileDiagnostics.ExtractExecutable(profile.CommandTemplate);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (cli is null || !(executable.Equals(cli, comparison) || OperatingSystem.IsWindows() &&
-            (executable.Equals(cli + ".exe", comparison) || executable.Equals(cli + ".cmd", comparison))))
+            (executable.Equals(cli + ".exe", comparison) || executable.Equals(cli + ".cmd", comparison))) ||
+            !MatchesHostLauncher(profile.CommandTemplate, executable, cli, comparison))
             return Observation(ProviderConnectionResult.Unsupported);
         try
         {
@@ -53,6 +52,19 @@ public sealed class ProviderConnectionStatusAdapters(
         {
             return Observation(ProviderConnectionResult.ToolMissing);
         }
+    }
+
+    private static bool MatchesHostLauncher(string template, string executable, string cli, StringComparison comparison)
+    {
+        // Executable extraction skips shell setup. Only probe native commands whose full
+        // template establishes the same launcher and credential environment as the host.
+        var command = template.AsSpan().Trim();
+        if (!command.StartsWith(executable, comparison)) return false;
+        var arguments = command[executable.Length..].TrimStart(" \t");
+        var defaultTemplate = WorkerProfileCatalog.Default().GetRequired(cli + "-cli").CommandTemplate;
+        return arguments.IsEmpty ||
+            arguments.SequenceEqual(cli == "codex" ? "exec" : "-p") ||
+            arguments.SequenceEqual(defaultTemplate.AsSpan(cli.Length + 1));
     }
 
     private static Task<WorkerProcessRunResult> RunAsync(WorkerProcessDirectRunRequest request, CancellationToken token) =>
@@ -91,7 +103,7 @@ public sealed class ProviderConnectionStatusAdapters(
         var output = response.StandardOutput.Trim();
         var error = response.StandardError.Trim();
         bool Exact(string text) => output.Equals(text, StringComparison.OrdinalIgnoreCase) || error.Equals(text, StringComparison.OrdinalIgnoreCase);
-        if (Exact("error: unrecognized subcommand 'status'") || Exact("error: unknown command 'status'"))
+        if (response.ExitCode != 0 && (ReportsUnsupportedCommand(cli, error) || ReportsUnsupportedCommand(cli, output)))
             return (ProviderConnectionResult.Unsupported, ProviderConnectionAuthMode.Unknown);
         if (cli == "codex")
         {
@@ -115,30 +127,75 @@ public sealed class ProviderConnectionStatusAdapters(
             if (signedOut) return (ProviderConnectionResult.SignedOut, ProviderConnectionAuthMode.Unknown);
             if (expired) return (ProviderConnectionResult.Expired, ProviderConnectionAuthMode.Unknown);
         }
-        if (cli == "claude")
+        if (cli == "claude") return ParseClaude(output, response.ExitCode);
+        return (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
+    }
+
+    private static bool ReportsUnsupportedCommand(string cli, ReadOnlySpan<char> diagnostic)
+    {
+        var newline = diagnostic.IndexOf('\n');
+        var firstLine = newline < 0 ? diagnostic : diagnostic[..newline].TrimEnd();
+        var rejectsStatus = firstLine.Equals("error: unrecognized subcommand 'status'", StringComparison.OrdinalIgnoreCase) ||
+            firstLine.Equals("error: unknown command 'status'", StringComparison.OrdinalIgnoreCase);
+        var rejectsAuth = cli == "claude" &&
+            (firstLine.Equals("error: unknown command 'auth'", StringComparison.OrdinalIgnoreCase) ||
+             firstLine.Equals("error: unrecognized subcommand 'auth'", StringComparison.OrdinalIgnoreCase));
+        return (rejectsStatus || rejectsAuth) && (newline < 0 ||
+            diagnostic[(newline + 1)..].TrimStart().StartsWith("Usage:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static (ProviderConnectionResult Result, ProviderConnectionAuthMode Mode) ParseClaude(string output, int exitCode)
+    {
+        var unknown = (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
+        try
         {
-            try
+            using var doc = JsonDocument.Parse(output);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return unknown;
+
+            bool? signedIn = null;
+            string? failure = null;
+            var failureSeen = false;
+            ProviderConnectionAuthMode? mode = null;
+            foreach (var field in doc.RootElement.EnumerateObject())
             {
-                using var doc = JsonDocument.Parse(output);
-                var root = doc.RootElement;
-                if (root.ValueKind != JsonValueKind.Object) return (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
-                if (root.TryGetProperty("error", out var failure) && failure.ValueKind == JsonValueKind.String &&
-                    failure.GetString() is "token_expired" or "credentials_expired")
-                    return (root.TryGetProperty("loggedIn", out var conflicting) && conflicting.ValueKind == JsonValueKind.True
-                        ? ProviderConnectionResult.Unknown : ProviderConnectionResult.Expired, ProviderConnectionAuthMode.Unknown);
-                if (root.TryGetProperty("loggedIn", out var signedIn) && signedIn.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                switch (field.Name)
                 {
-                    var mode = root.TryGetProperty("authMethod", out var method) && method.ValueKind == JsonValueKind.String
-                        ? method.GetString() switch { "claude.ai" or "oauth" => ProviderConnectionAuthMode.OAuth,
-                            "api_key" or "apiKey" => ProviderConnectionAuthMode.ApiKey, _ => ProviderConnectionAuthMode.Unknown }
-                        : ProviderConnectionAuthMode.Unknown;
-                    if (!signedIn.GetBoolean()) return (ProviderConnectionResult.SignedOut, mode);
-                    if (response.ExitCode == 0) return (ProviderConnectionResult.SignedIn, mode);
+                    case "loggedIn":
+                        if (field.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return unknown;
+                        var reportedSignIn = field.Value.GetBoolean();
+                        if (signedIn is not null && signedIn != reportedSignIn) return unknown;
+                        signedIn = reportedSignIn;
+                        break;
+                    case "error":
+                        var reportedFailure = field.Value.ValueKind == JsonValueKind.String ? field.Value.GetString() : null;
+                        if (failureSeen && failure != reportedFailure) return unknown;
+                        failureSeen = true;
+                        failure = reportedFailure;
+                        break;
+                    case "authMethod":
+                        var reportedMode = field.Value.ValueKind == JsonValueKind.String ? field.Value.GetString() switch
+                        {
+                            "claude.ai" or "oauth" => ProviderConnectionAuthMode.OAuth,
+                            "api_key" or "apiKey" => ProviderConnectionAuthMode.ApiKey,
+                            _ => ProviderConnectionAuthMode.Unknown
+                        } : ProviderConnectionAuthMode.Unknown;
+                        mode = mode is null || mode == reportedMode ? reportedMode : ProviderConnectionAuthMode.Unknown;
+                        break;
                 }
             }
-            catch (JsonException) { }
+            if (failure is "token_expired" or "credentials_expired")
+                return signedIn == true ? unknown : (ProviderConnectionResult.Expired, ProviderConnectionAuthMode.Unknown);
+            return signedIn switch
+            {
+                false => (ProviderConnectionResult.SignedOut, mode ?? ProviderConnectionAuthMode.Unknown),
+                true when exitCode == 0 => (ProviderConnectionResult.SignedIn, mode ?? ProviderConnectionAuthMode.Unknown),
+                _ => unknown
+            };
         }
-        return (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
+        catch (JsonException)
+        {
+            return unknown;
+        }
     }
 
     private static bool ReportsCodexApiKeyConfiguration(ReadOnlySpan<char> status)

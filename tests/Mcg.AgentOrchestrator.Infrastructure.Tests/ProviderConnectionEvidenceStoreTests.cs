@@ -89,6 +89,70 @@ public sealed class ProviderConnectionEvidenceStoreTests
         Assert.Empty(await fixture.Repository.ReadProviderConnectionEvidenceAsync("grok-cli"));
     }
 
+    [Theory]
+    [InlineData("inline")]
+    [InlineData("table")]
+    [InlineData("archive")]
+    public async Task DeveloperOutcomeWithoutAttemptId_UsesRecordedProcessStart(string representation)
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var goal = Seed();
+        var task = Assert.Single(goal.Tasks);
+        var failed = task.LastVerification! with
+        {
+            DispatchAttemptAt = null,
+            DispatchStartedAt = task.LastDispatch!.DispatchedAt.AddSeconds(10)
+        };
+        var unrelated = task.LastDispatch with
+        {
+            WorkerName = "codex-cli", DispatchedAt = failed.CompletedAt.AddSeconds(-10)
+        };
+        goal = goal with { Tasks = [task with
+        {
+            LastVerification = failed, VerificationHistory = [task.VerificationHistory![0], failed],
+            LastDispatch = unrelated, DispatchHistory = [.. task.DispatchHistory!, unrelated]
+        }] };
+        if (representation == "inline") fixture.InsertLegacy(goal);
+        else
+        {
+            await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+            fixture.MarkStoredLatest(goal.Id);
+            if (representation == "archive")
+            {
+                Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(GoalTaskHistoryTestFixture.At.AddDays(1)));
+                using var stub = JsonDocument.Parse(fixture.RawGoal(goal.Id));
+                Assert.True(stub.RootElement.GetProperty("IsMetadataOnly").GetBoolean());
+            }
+        }
+
+        var observation = Assert.Single(await fixture.Repository.ReadProviderConnectionEvidenceAsync("grok-cli"));
+        Assert.Equal(ProviderConnectionResult.AuthenticationFailed, observation.Result);
+        Assert.Equal(ProviderConnectionContext.WorkerSandbox, observation.ExecutionContext);
+        Assert.Equal(failed.CompletedAt, observation.ObservedAt);
+        Assert.True(observation.IsHistorical);
+        Assert.Empty(await fixture.Repository.ReadProviderConnectionEvidenceAsync("codex-cli"));
+    }
+
+    [Fact]
+    public async Task DeveloperOutcomeWithConflictingDispatchesAtStart_RemainsUnattributed()
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var goal = Seed();
+        var task = Assert.Single(goal.Tasks);
+        var dispatch = task.LastDispatch!;
+        var failed = task.LastVerification! with
+        {
+            DispatchAttemptAt = null, DispatchStartedAt = dispatch.DispatchedAt.AddSeconds(10)
+        };
+        fixture.InsertLegacy(goal with { Tasks = [task with
+        {
+            LastVerification = failed, VerificationHistory = [failed],
+            DispatchHistory = [dispatch, dispatch with { WorkerName = "codex-cli" }]
+        }] });
+        Assert.Empty(await fixture.Repository.ReadProviderConnectionEvidenceAsync("grok-cli"));
+        Assert.Empty(await fixture.Repository.ReadProviderConnectionEvidenceAsync("codex-cli"));
+    }
+
     [Fact]
     public async Task CheckThenSeparateReadOnlyListing_RetainsHostAndNewerWorkerFailureWithoutProbing()
     {
