@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
@@ -38,7 +39,7 @@ public sealed class ProviderStatusProcessTests
         var started = false;
         bool? reaped = null;
         var result = await WorkerProcessRunner.RunBoundedDirectAsync(Request("Wait-Event"), 65536, default,
-            time, () => { started = true; time.Expire(); }, exited => reaped = exited);
+            time, _ => { started = true; time.Expire(); return Task.CompletedTask; }, exited => reaped = exited);
         Assert.True(started);
         Assert.Equal(TimeSpan.FromSeconds(10), time.DueTime);
         Assert.True(result.TimedOut);
@@ -53,8 +54,56 @@ public sealed class ProviderStatusProcessTests
         bool? reaped = null;
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WorkerProcessRunner.RunBoundedDirectAsync(
             Request("Wait-Event"), 65536, cancellation.Token, TimeProvider.System,
-            () => cancellation.Cancel(), exited => reaped = exited));
+            _ => { cancellation.Cancel(); return Task.CompletedTask; }, exited => reaped = exited));
         Assert.Equal(true, reaped);
+    }
+
+    [Fact]
+    public async Task CallerCancellation_ReapsDescendantAfterProbeRootExits()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var directory = Directory.CreateTempSubdirectory("mcg-status-probe-");
+        var marker = Path.Combine(directory.FullName, "descendant.pid");
+        var escapedMarker = marker.Replace("'", "''");
+        var shell = WorkerShell.Executable.Replace("'", "''");
+        var script = $"""
+            $ErrorActionPreference = 'Stop'
+            $child = Start-Process -FilePath '{shell}' -ArgumentList '-NoProfile -NonInteractive -Command Wait-Event' -NoNewWindow -PassThru
+            [IO.File]::WriteAllText('{escapedMarker}.tmp', [string]$child.Id)
+            [IO.File]::Move('{escapedMarker}.tmp', '{escapedMarker}')
+            """;
+        using var cancellation = new CancellationTokenSource();
+        Process? descendant = null;
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WorkerProcessRunner.RunBoundedDirectAsync(
+                Request(script), 65536, cancellation.Token, new DeadlineTime(), async root =>
+                {
+                    // Wait at the launch boundary so a late attachment cannot capture the descendant.
+                    await MarkerFileProbe.WaitAsync(marker, TestHangGuard.Bound);
+                    descendant = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker)));
+                    _ = descendant.SafeHandle;
+                    await TestHangGuard.CompletesWithinAsync(root.WaitForExitAsync(), TestHangGuard.Bound, "status probe root exit");
+                    Assert.Equal(0, root.ExitCode);
+                    Assert.False(descendant.HasExited);
+                    cancellation.Cancel();
+                }, null));
+            Assert.NotNull(descendant);
+            await TestHangGuard.CompletesWithinAsync(descendant.WaitForExitAsync(), TestHangGuard.Bound, "status probe descendant exit after cancellation");
+            Assert.True(descendant.HasExited);
+        }
+        finally
+        {
+            using (descendant)
+            {
+                if (descendant is { HasExited: false })
+                {
+                    descendant.Kill();
+                    await TestHangGuard.CompletesWithinAsync(descendant.WaitForExitAsync(), TestHangGuard.Bound, "status probe test descendant cleanup");
+                }
+            }
+            SharedTestSupport.RemoveTempDirectory(directory.FullName);
+        }
     }
 
     private static WorkerProcessDirectRunRequest Request(string script) => new(WorkerShell.Executable,

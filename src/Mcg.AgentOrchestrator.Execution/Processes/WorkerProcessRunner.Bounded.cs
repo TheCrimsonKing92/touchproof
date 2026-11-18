@@ -12,7 +12,7 @@ public static partial class WorkerProcessRunner
 
     internal static async Task<WorkerProcessRunResult> RunBoundedDirectAsync(
         WorkerProcessDirectRunRequest request, int maximumCaptureBytes, CancellationToken cancellationToken,
-        TimeProvider time, Action? started, Action<bool>? cleanedUp)
+        TimeProvider time, Func<HandleListLaunchedProcess, Task>? onLaunched, Action<bool>? cleanedUp)
     {
         if (maximumCaptureBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maximumCaptureBytes));
         if (request.Timeout is not { } timeout || timeout <= TimeSpan.Zero)
@@ -21,9 +21,13 @@ public static partial class WorkerProcessRunner
         using var deadline = new CancellationTokenSource(timeout, time);
         using var limit = new CancellationTokenSource();
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token, limit.Token);
-        using var process = HandleListProcessLauncher.Start(BuildDirectStartInfo(request.FileName,
-            request.Arguments, request.WorkingDirectory)) ?? throw new InvalidOperationException("Probe did not start.");
-        OwnedProcessGroup? group = null;
+        var startInfo = BuildDirectStartInfo(request.FileName, request.Arguments, request.WorkingDirectory);
+        // Windows assigns the contained job in CreateProcess, before the probe can spawn children.
+        using var windowsGroup = OperatingSystem.IsWindows() ? OwnedProcessGroup.CreateContained() : null;
+        using var process = windowsGroup is null
+            ? HandleListProcessLauncher.Start(startInfo)
+            : windowsGroup.StartRedirected(startInfo);
+        var group = windowsGroup;
         using var stdout = new MemoryStream();
         using var stderr = new MemoryStream();
         using var drain = new CancellationTokenSource();
@@ -52,15 +56,15 @@ public static partial class WorkerProcessRunner
         Task? output = null;
         try
         {
-            try { group = OwnedProcessGroup.Attach(process); }
-            catch
+            if (onLaunched is not null) await onLaunched(process).ConfigureAwait(false);
+            if (windowsGroup is null)
             {
-                if (request.RequireOwnedProcessGroup) throw;
+                try { group = OwnedProcessGroup.Attach(process); }
+                catch when (!request.RequireOwnedProcessGroup) { }
             }
             process.StandardInput.Close();
             output = Task.WhenAll(CaptureAsync(process.StandardOutput.BaseStream, stdout),
                 CaptureAsync(process.StandardError.BaseStream, stderr));
-            started?.Invoke();
             try
             {
                 await process.WaitForExitAsync(stop.Token).ConfigureAwait(false);

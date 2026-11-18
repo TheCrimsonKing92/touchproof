@@ -92,10 +92,13 @@ public sealed class ProviderConnectionStatusAdapters(
         if (cli == "codex")
         {
             var signedIn = Exact("Logged in using ChatGPT") || Exact("Logged in using an API key") || Exact("Logged in using API key");
+            var keyConfigured = ReportsCodexApiKeyConfiguration(output) || ReportsCodexApiKeyConfiguration(error);
             var signedOut = Exact("Not logged in");
             var expired = Exact("Credentials expired") || Exact("Token expired");
-            if ((signedIn ? 1 : 0) + (signedOut ? 1 : 0) + (expired ? 1 : 0) > 1)
+            if ((signedIn ? 1 : 0) + (keyConfigured ? 1 : 0) + (signedOut ? 1 : 0) + (expired ? 1 : 0) > 1)
                 return (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
+            if (response.ExitCode == 0 && keyConfigured)
+                return (ProviderConnectionResult.MaterialPresent, ProviderConnectionAuthMode.ApiKey);
             if (response.ExitCode == 0 && Exact("Logged in using ChatGPT"))
                 return (ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.OAuth);
             if (response.ExitCode == 0 && (Exact("Logged in using an API key") || Exact("Logged in using API key")))
@@ -128,5 +131,19 @@ public sealed class ProviderConnectionStatusAdapters(
             catch (JsonException) { }
         }
         return (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
+    }
+
+    private static bool ReportsCodexApiKeyConfiguration(ReadOnlySpan<char> status)
+    {
+        const string prefix = "API key configured - ";
+        var newline = status.IndexOf('\n');
+        if (newline < 0 || !status[(newline + 1)..].SequenceEqual("Authentication is checked when you send a request."))
+            return false;
+
+        var line = status[..newline].TrimEnd('\r');
+        // Match the released status format and discard the masked key.
+        if (!line.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var maskedKey = line[prefix.Length..];
+        return maskedKey.SequenceEqual("***") || (maskedKey.Length == 16 && maskedKey[8..11].SequenceEqual("***"));
     }
 }

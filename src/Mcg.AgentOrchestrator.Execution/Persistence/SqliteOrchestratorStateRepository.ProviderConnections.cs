@@ -114,9 +114,11 @@ public sealed partial class SqliteOrchestratorStateRepository
             observation.EvidenceSource == ProviderConnectionSource.None &&
             observation.Result is ProviderConnectionResult.Unknown or ProviderConnectionResult.Unsupported;
         var host = observation.ExecutionContext == ProviderConnectionContext.Host && hostSource &&
-            observation.Result is ProviderConnectionResult.Unknown or ProviderConnectionResult.SignedIn or ProviderConnectionResult.SignedOut or
+            (observation.Result is ProviderConnectionResult.Unknown or ProviderConnectionResult.SignedIn or ProviderConnectionResult.SignedOut or
                 ProviderConnectionResult.Expired or ProviderConnectionResult.ToolMissing or ProviderConnectionResult.TimedOut or
-                ProviderConnectionResult.Unsupported or ProviderConnectionResult.OutputLimited;
+                ProviderConnectionResult.Unsupported or ProviderConnectionResult.OutputLimited ||
+            observation is { EvidenceSource: ProviderConnectionSource.CodexLoginStatus,
+                Result: ProviderConnectionResult.MaterialPresent, AuthenticationMode: ProviderConnectionAuthMode.ApiKey });
         var material = observation.ExecutionContext == ProviderConnectionContext.WorkerCredentialMaterial &&
             observation.EvidenceSource == ProviderConnectionSource.ClaudePreflight &&
             observation.Result is ProviderConnectionResult.MaterialPresent or ProviderConnectionResult.MaterialUnavailable;

@@ -46,6 +46,21 @@ public sealed class ProviderConnectionAdapterTests
     }
 
     [Theory]
+    [InlineData(0, "", "API key configured - sk-proj-***ABCDE\r\nAuthentication is checked when you send a request.\r\n", true)]
+    [InlineData(0, "API key configured - ***\nAuthentication is checked when you send a request.", "", true)]
+    [InlineData(1, "", "API key configured - ***\nAuthentication is checked when you send a request.", false)]
+    [InlineData(0, "", "API key configured - ***", false)]
+    [InlineData(0, "", "API key configured - unexpected\nAuthentication is checked when you send a request.", false)]
+    [InlineData(0, "Token expired", "API key configured - ***\nAuthentication is checked when you send a request.", false)]
+    public void CodexApiKeyStatus_RequiresSuccessfulRecognizedResponse(int exit, string stdout, string stderr, bool configured)
+    {
+        var parsed = ProviderConnectionStatusAdapters.Parse("codex", new(exit, stdout, stderr));
+        Assert.Equal(configured
+            ? (ProviderConnectionResult.MaterialPresent, ProviderConnectionAuthMode.ApiKey)
+            : (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown), parsed);
+    }
+
+    [Theory]
     [InlineData("grok-cli", "grok")]
     [InlineData("custom", "codex exec")]
     [InlineData("codex-cli", "arbitrary-launcher")]

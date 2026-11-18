@@ -34,6 +34,40 @@ public sealed class ProviderConnectionRedactionTests
     }
 
     [Fact]
+    public async Task CodexMaskedApiKey_IsDiscardedBeforeRenderingAndPersistence()
+    {
+        const string maskedKey = "KEYPIECE***FRAGM";
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var adapter = new ProviderConnectionStatusAdapters("fixture", (_, _) => Task.FromResult(new WorkerProcessRunResult(0,
+            "", $"API key configured - {maskedKey}\r\nAuthentication is checked when you send a request.\r\n")), _ => "codex.exe");
+        var catalog = WorkerProfileCatalog.Default();
+        foreach (var args in new[] { new[] { "provider-connections", "check", "--profile", "codex-cli", "--json" },
+            new[] { "provider-connections" } })
+        {
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteAsync(
+                args, catalog, _ => fixture.Repository, adapter, stdout, stderr));
+            var report = stdout.ToString();
+            Assert.Contains("MaterialPresent", report);
+            Assert.Contains("ApiKey", report);
+            Assert.Contains("Service acceptance remains unverified.", report);
+            Assert.DoesNotContain("KEYPIECE", report);
+            Assert.DoesNotContain("FRAGM", report);
+            Assert.Empty(stderr.ToString());
+        }
+
+        var saved = Assert.Single(await fixture.Repository.ReadProviderConnectionEvidenceAsync("codex-cli"),
+            observation => observation.ExecutionContext == ProviderConnectionContext.Host);
+        Assert.Equal(ProviderConnectionSource.CodexLoginStatus, saved.EvidenceSource);
+        Assert.Equal(ProviderConnectionResult.MaterialPresent, saved.Result);
+        Assert.Equal(ProviderConnectionAuthMode.ApiKey, saved.AuthenticationMode);
+        var diagnostics = File.ReadAllText(fixture.DiagnosticsPath);
+        Assert.DoesNotContain("KEYPIECE", diagnostics);
+        Assert.DoesNotContain("FRAGM", diagnostics);
+    }
+
+    [Fact]
     public async Task RawLaunchException_IsNotRenderedOrRecordedAsUnknown()
     {
         const string secret = "SECRET-untrusted-launch-error";

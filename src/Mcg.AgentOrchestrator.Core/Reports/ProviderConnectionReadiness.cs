@@ -29,6 +29,8 @@ public sealed record ProviderConnectionObservation(
         ProviderConnectionResult.ToolMissing => "The supported provider CLI was not found.",
         ProviderConnectionResult.TimedOut => "Status command exceeded the ten-second deadline.",
         ProviderConnectionResult.Unsupported => "No reliable supported status probe is available for this profile.",
+        ProviderConnectionResult.MaterialPresent when ExecutionContext == ProviderConnectionContext.Host =>
+            "Host CLI reports a configured API key. Service acceptance remains unverified.",
         ProviderConnectionResult.MaterialPresent => "Selected Claude preflight material is present; expiry and service acceptance are unverified.",
         ProviderConnectionResult.MaterialUnavailable => "Selected Claude preflight material is unavailable; no alternative credential source was substituted.",
         ProviderConnectionResult.WorkerSucceeded => "An attributable completed worker invocation succeeded; this is historical evidence.",
