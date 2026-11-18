@@ -1,3 +1,10 @@
+<#
+Metadata eligibility uses LastWriteTimeUtc relative to the newest TRX mtime in the
+input corpus, before opening files. Fully valid candidates then retain the ranking
+window relative to the latest embedded finish. Copied/retimestamped historical files
+may therefore be opened and subsequently excluded. Missing finishes are never inferred.
+Receipt counts and exclusions go to stderr; stdout contains only ranking CSV.
+#>
 [CmdletBinding()]
 param(
     [string]$InputRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) '.orchestrator\acceptance-gate-attempts'),
@@ -25,26 +32,38 @@ if (-not (Test-Path -LiteralPath $InputRoot -PathType Container)) {
     throw "TRX input root does not exist: $InputRoot"
 }
 
-$receipts = [System.Collections.Generic.List[object]]::new()
-$files = @(Get-ChildItem -LiteralPath $InputRoot -Filter '*.trx' -File -Recurse)
-if ($files.Count -eq 0) {
-    throw "No TRX receipts found under: $InputRoot"
+$exclusions = [ordered]@{
+    metadataOutOfWindow = 0
+    finishOutOfWindow = 0
+    malformedXml = 0
+    missingFinish = 0
+    unparseableTimestamps = 0
+    missingResults = 0
+    missingTestName = 0
+    unknownOutcome = 0
+    invalidDuration = 0
 }
 
-foreach ($file in $files) {
-    try {
-        $document = [System.Xml.XmlDocument]::new()
-        $document.PreserveWhitespace = $false
-        $document.Load($file.FullName)
-    }
-    catch {
-        throw "Invalid TRX XML in '$($file.FullName)': $($_.Exception.Message)"
-    }
+function Read-Receipt {
+    param([System.IO.FileInfo]$File)
 
+    # Access failures are corpus failures, not malformed receipt exclusions.
+    $stream = [System.IO.File]::OpenRead($File.FullName)
+    $document = [System.Xml.XmlDocument]::new()
+    $document.PreserveWhitespace = $false
+    try {
+        $document.Load($stream)
+    }
+    catch [System.Xml.XmlException] {
+        return [pscustomobject]@{ Reason = 'malformedXml' }
+    }
+    finally {
+        $stream.Dispose()
+    }
     $testRun = $document.SelectSingleNode("/*[local-name()='TestRun']")
     $times = $document.SelectSingleNode("/*[local-name()='TestRun']/*[local-name()='Times']")
     if ($null -eq $testRun -or $null -eq $times -or [string]::IsNullOrWhiteSpace($times.GetAttribute('finish'))) {
-        throw "Invalid TRX receipt '$($file.FullName)': missing TestRun/Times@finish."
+        return [pscustomobject]@{ Reason = 'missingFinish' }
     }
 
     $finish = [DateTimeOffset]::MinValue
@@ -53,71 +72,105 @@ foreach ($file in $files) {
         $invariant,
         $dateStyles,
         [ref]$finish)) {
-        throw "Invalid TRX receipt '$($file.FullName)': malformed Times@finish."
+        return [pscustomobject]@{ Reason = 'unparseableTimestamps' }
     }
 
     $results = @($document.SelectNodes("/*[local-name()='TestRun']/*[local-name()='Results']/*[local-name()='UnitTestResult']"))
     if ($results.Count -eq 0) {
-        throw "Invalid TRX receipt '$($file.FullName)': no UnitTestResult entries."
+        return [pscustomobject]@{ Reason = 'missingResults' }
     }
 
-    $receipts.Add([pscustomobject]@{ File = $file; Finish = $finish; Results = $results })
-}
-
-$latestFinish = ($receipts | ForEach-Object Finish | Measure-Object -Maximum).Maximum
-$windowStart = $latestFinish.Subtract([TimeSpan]::FromHours($WindowHours))
-$aggregates = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
-
-foreach ($receipt in $receipts) {
-    if ($receipt.Finish -lt $windowStart -or $receipt.Finish -gt $latestFinish) {
-        continue
-    }
-
-    foreach ($result in $receipt.Results) {
+    $validatedResults = [System.Collections.Generic.List[object]]::new()
+    foreach ($result in $results) {
         $name = $result.GetAttribute('testName')
         $outcome = $result.GetAttribute('outcome')
         $durationText = $result.GetAttribute('duration')
         if ([string]::IsNullOrWhiteSpace($name)) {
-            throw "Invalid TRX receipt '$($receipt.File.FullName)': UnitTestResult is missing testName."
+            return [pscustomobject]@{ Reason = 'missingTestName' }
         }
         if (-not $knownOutcomes.Contains($outcome)) {
-            throw "Invalid TRX receipt '$($receipt.File.FullName)': unknown outcome '$outcome' for '$name'."
+            return [pscustomobject]@{ Reason = 'unknownOutcome' }
         }
 
         $duration = [TimeSpan]::Zero
         if ([string]::IsNullOrWhiteSpace($durationText) -or
             -not [TimeSpan]::TryParse($durationText, $invariant, [ref]$duration) -or
             $duration -lt [TimeSpan]::Zero) {
-            throw "Invalid TRX receipt '$($receipt.File.FullName)': malformed duration '$durationText' for '$name'."
+            return [pscustomobject]@{ Reason = 'invalidDuration' }
         }
+        $validatedResults.Add([pscustomobject]@{ Name = $name; Outcome = $outcome; Seconds = $duration.TotalSeconds })
+    }
+    return [pscustomobject]@{ Reason = $null; Finish = $finish; Results = $validatedResults }
+}
 
-        if (-not $aggregates.ContainsKey($name)) {
-            $aggregates[$name] = [pscustomobject]@{
-                TestName = $name
-                ExecutionCount = 0
-                FailureCount = 0
-                RateDenominator = 0
-                TotalSeconds = 0.0
-                MaximumSeconds = 0.0
+$receipts = [System.Collections.Generic.List[object]]::new()
+$files = @(Get-ChildItem -LiteralPath $InputRoot -Filter '*.trx' -File -Recurse)
+if ($files.Count -gt 0) {
+    $latestWrite = ($files | ForEach-Object LastWriteTimeUtc | Measure-Object -Maximum).Maximum
+    $metadataStart = $latestWrite.Subtract([TimeSpan]::FromHours($WindowHours))
+    foreach ($file in $files) {
+        if ($file.LastWriteTimeUtc -lt $metadataStart) {
+            $exclusions.metadataOutOfWindow++
+            continue
+        }
+        $receipt = Read-Receipt $file
+        if ($null -ne $receipt.Reason) {
+            $exclusions[$receipt.Reason]++
+            continue
+        }
+        $receipts.Add($receipt)
+    }
+}
+
+$qualified = 0
+$aggregates = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+if ($receipts.Count -gt 0) {
+    $latestFinish = ($receipts | ForEach-Object Finish | Measure-Object -Maximum).Maximum
+    $windowStart = $latestFinish.Subtract([TimeSpan]::FromHours($WindowHours))
+    foreach ($receipt in $receipts) {
+        if ($receipt.Finish -lt $windowStart) {
+            $exclusions.finishOutOfWindow++
+            continue
+        }
+        $qualified++
+        foreach ($result in $receipt.Results) {
+            $name = $result.Name
+            $outcome = $result.Outcome
+
+            if (-not $aggregates.ContainsKey($name)) {
+                $aggregates[$name] = [pscustomobject]@{
+                    TestName = $name
+                    ExecutionCount = 0
+                    FailureCount = 0
+                    RateDenominator = 0
+                    TotalSeconds = 0.0
+                    MaximumSeconds = 0.0
+                }
             }
-        }
 
-        $aggregate = $aggregates[$name]
-        $aggregate.ExecutionCount++
-        $seconds = $duration.TotalSeconds
-        $aggregate.TotalSeconds += $seconds
-        $aggregate.MaximumSeconds = [Math]::Max($aggregate.MaximumSeconds, $seconds)
-        if (-not $excludedRateOutcomes.Contains($outcome)) {
-            $aggregate.RateDenominator++
-            if ($failureOutcomes.Contains($outcome)) {
-                $aggregate.FailureCount++
+            $aggregate = $aggregates[$name]
+            $aggregate.ExecutionCount++
+            $seconds = $result.Seconds
+            $aggregate.TotalSeconds += $seconds
+            $aggregate.MaximumSeconds = [Math]::Max($aggregate.MaximumSeconds, $seconds)
+            if (-not $excludedRateOutcomes.Contains($outcome)) {
+                $aggregate.RateDenominator++
+                if ($failureOutcomes.Contains($outcome)) {
+                    $aggregate.FailureCount++
+                }
             }
         }
     }
 }
 
-if ($aggregates.Count -eq 0) {
-    throw "No TRX results fall within the $WindowHours-hour window ending at $($latestFinish.ToString('O', $invariant))."
+$outOfWindow = $exclusions.metadataOutOfWindow + $exclusions.finishOutOfWindow
+$malformed = $files.Count - $outOfWindow - $qualified
+[Console]::Error.WriteLine("Receipts: examined=$($files.Count) out-of-window=$outOfWindow malformed=$malformed qualified=$qualified")
+$reasonText = @($exclusions.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '
+[Console]::Error.WriteLine("Exclusions: $reasonText")
+if ($qualified -eq 0) {
+    [Console]::Error.WriteLine('No qualified TRX receipts.')
+    return
 }
 
 $cost = [System.Collections.Generic.List[object]]::new()
