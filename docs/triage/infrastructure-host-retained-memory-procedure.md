@@ -23,12 +23,39 @@ cache policy, GC settings, build admission, or the isolated runner.
    from the actual xUnit configuration/defaults and loaded runner version; build
    parallelism is not test parallelism. Name this experiment `matched-cache-consumers`,
    not the recovered historical lane.
-4. Build before sampling through each revision's existing isolated entry point.
+4. Install the identical temporary observation fixture below into each private
+   measurement worktree, then build through each revision's existing isolated entry point.
    Retain its artifact-owner receipt, assembly hash, assembly revision, and the full
    command. For repeated runs reuse only that revision's validated artifacts. Never
-   copy binaries from the other arm. Record the actual source corpus seen by guards:
+   copy binaries from the other arm. These are instrumented builds; record the fixture
+   hash and worktree diff alongside the base revision. Record the source corpus seen by guards:
    snapshots enumerate `src` and `tests` recursively, including any generated `.cs`
    present there. Retain relative-path/hash manifests and disclose corpus changes.
+
+### Establish the assembly teardown boundary
+
+The driver used `MatchedHostObservation.cs` from the report's durable bundle,
+SHA-256 `beb66eb7be0e597cc8c49b662c2407967753785840b00f1ee5d146e749ce0578`.
+Copy that file into `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/` in each
+disposable measurement worktree. Verify identical bytes before building. Keep it
+out of the landing diff. If using another fixture, record and justify the new
+instrumentation and use it identically in both arms; do not call it the same method.
+
+This xUnit assembly fixture implements `IAsyncDisposable`. Its constructor writes
+`start.json` with PID/start/image/loaded DLL/arguments/runtime/server-GC/processors
+and starts a nominal 250 ms process-memory timer. On assembly teardown, after all
+selected tests complete, it samples once, then atomically publishes `checkpoint.json`
+with UTC/PID/start/WS/OS peak/gen2 count. It waits for a per-run `release` file,
+with a three-minute safety limit, then writes `released.json` with UTC/gen2 count
+and disposes the timer. The release file is the event gate; elapsed time never
+establishes workload completion. The timer interval is sampling cadence only.
+
+The exact fixture source and `board9-memory.py` are retained with the report's
+receipts. The Python file documents the original command sequence; its `repo`/tool
+paths depend on its original location, so do not run a relocated copy unchanged.
+The PowerShell commands here use explicit evidence/worktree locations. The fixture
+is test-only diagnostic instrumentation, not a production environment setting or
+a proposed persistent test hook. Do not reuse a run directory or stale release file.
 
 Run the following from each worktree in its own PowerShell session. Set `$run` to a
 fresh absolute directory in durable operator evidence storage (outside the repo).
@@ -52,10 +79,18 @@ $project = 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrat
 .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 1834ee27 build $project --verbosity minimal
 if ($LASTEXITCODE -ne 0) { throw 'Build failed; retain output and do not measure' }
 # Fresh host, validated reuse of this arm's build. Keep TRX even on success.
-.\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 1834ee27 -ReuseArtifacts test $project --no-build --filter $filter --results-directory $run --report-trx --report-trx-filename lane.trx --output Detailed 2>&1 | Tee-Object (Join-Path $run 'lane.log')
-$LASTEXITCODE | Set-Content (Join-Path $run 'lane.exit.txt')
+$oldObservationDirectory = $env:HOST_MEMORY_OBSERVATION_DIRECTORY
+try {
+    $env:HOST_MEMORY_OBSERVATION_DIRECTORY = $run
+    .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 1834ee27 -ReuseArtifacts test $project --no-build --filter $filter --results-directory $run --report-trx --report-trx-filename lane.trx --output Detailed 2>&1 | Tee-Object (Join-Path $run 'lane.log')
+    $LASTEXITCODE | Set-Content (Join-Path $run 'lane.exit.txt')
+} finally {
+    $env:HOST_MEMORY_OBSERVATION_DIRECTORY = $oldObservationDirectory
+}
 ```
 
+Use a distinct goal prefix per measurement worktree (the recorded runs used
+`1834eea1` before and `1834eea2` after); keep it the same for that arm's build/reuse.
 The command uses managed MTP execution through the existing isolated entry point,
 not raw `dotnet test` or an apphost. Before collecting, check the pinned revision's
 runner help for `--output Detailed` and TRX options. Retain that help and the exact
@@ -92,7 +127,14 @@ Get-CimInstance Win32_Process -Filter "ProcessId = $hostId" |
     ConvertTo-Json | Set-Content (Join-Path $run 'host-command.json')
 ```
 
-In the working-set observer, append timestamped **individual-host** byte samples
+The fixture supplies `samples.csv` without an external attachment delay after its
+constructor runs. Its columns, without a header, are UTC, working-set bytes,
+OS peak-working-set bytes, private bytes. Retain its actual coverage and pauses;
+it stops on fixture release rather than host exit. The observed first sample is
+about 1.6 seconds after process start. Do not combine this file with the optional
+external sampler's different schema below. The latter can extend coverage to exit.
+
+In an optional working-set observer, append timestamped **individual-host** byte samples
 until exit. The interval is measurement cadence, not a test-completion condition.
 Record any late attachment: a run missing startup coverage yields only a partial
 peak. Do not relabel a sampled maximum as an exact continuous-time maximum.
@@ -124,8 +166,9 @@ In a second bound observer record installed tool versions/help and collect
 System.Runtime at one-second cadence before the cache-consumer interval. If the
 tool is absent, driver provisions a pinned version in operator tool storage and
 uses that same version in both arms; record the exact unavailable metric if any.
-The Developer inspection found gcdump `9.0.661903`, but no counters executable on
-PATH; that is a prerequisite observation, not a live capture receipt.
+The original driver used an explicitly located counters executable and the user's
+gcdump tool; the bundle lacks their version receipts. Future runs must capture them
+rather than infer their versions from a later installation.
 
 ```powershell
 Get-BoundHost | Out-Null
@@ -134,33 +177,46 @@ dotnet-counters collect --help > (Join-Path $run 'counters-help.txt')
 dotnet-counters collect --process-id $hostId --refresh-interval 1 --counters System.Runtime --format csv --output (Join-Path $run 'runtime.csv')
 ```
 
-Keep working-set and counters observers running. In a third bound observer capture
-at **cache-consumers-completed**: the first detailed runner/event-log evidence that
-all selected architecture and source-guard tests have completed, while the same
-host remains alive. Save those completion events, exact completed test set and UTC
-time as `checkpoint.txt` before invoking the block below. Check the TRX/event log
-afterward to establish the same completed-workload boundary in both arms.
+Keep working-set and counters observers running. In a third bound observer wait
+for **assembly-fixture-teardown**: the fixture's atomically published
+`checkpoint.json`. Verify its PID/start match the bound host; retain the TRX and
+completion events afterward to verify the exact completed test set in both arms.
+This is the actual driver checkpoint, replacing the earlier proposal to race host
+exit using runner output alone. No fixed delay or early heap substitutes for it.
 
-There is no added keepalive or checkpoint hook. A short host may exit before this
-boundary can be captured. In that case record **checkpoint unavailable**, preserve
-the timeline, and request a driver-controlled matched lane with an observable live
-boundary. Do not substitute a fixed delay, an early heap, or another process. Such
-a run can report a partial working-set timeline but cannot claim paired retained
-heap at the requested checkpoint. Establish the usable boundary in a pilot before
-spending the repeated runs; use the same accepted command/selection in both arms.
+Establish the gate in a pilot before repeats. If `released.json` appears before
+capture finishes, the three-minute safety limit may have expired: reject the
+checkpoint capture unless the receipt proves it completed before release. Preserve
+failed runs and rerun matched arms with the same method. Do not hold a host forever.
 
 ```powershell
 Get-BoundHost | Out-Null
-if (-not (Test-Path (Join-Path $run 'checkpoint.txt'))) { throw 'Missing workload evidence' }
+while (-not (Test-Path (Join-Path $run 'checkpoint.json'))) {
+    Get-BoundHost | Out-Null
+    Start-Sleep -Milliseconds 100
+}
+$checkpoint = Get-Content (Join-Path $run 'checkpoint.json') -Raw | ConvertFrom-Json
+if ($checkpoint.pid -ne $hostId -or [DateTime]::Parse($checkpoint.start).ToUniversalTime() -ne $started) {
+    throw 'Checkpoint belongs to another host'
+}
+if (Test-Path (Join-Path $run 'released.json')) { throw 'Checkpoint already released' }
 dotnet-gcdump --version > (Join-Path $run 'gcdump-version.txt')
 $captureStart = [DateTime]::UtcNow
-dotnet-gcdump collect --process-id $hostId --timeout 120 --output (Join-Path $run 'checkpoint.gcdump') > (Join-Path $run 'gcdump.log') 2>&1
-$captureExit = $LASTEXITCODE
-$captureEnd = [DateTime]::UtcNow
+try {
+    Get-BoundHost | Out-Null
+    dotnet-gcdump collect -v --process-id $hostId --timeout 120 --output (Join-Path $run 'heap.gcdump') > (Join-Path $run 'capture.log') 2>&1
+    $captureExit = $LASTEXITCODE
+    $captureEnd = [DateTime]::UtcNow
+    $releasedEarly = Test-Path (Join-Path $run 'released.json')
+} finally {
+    # Release this host even when diagnostics fail. Keep its failure receipts.
+    New-Item -ItemType File -Path (Join-Path $run 'release') -Force | Out-Null
+}
 [ordered]@{ startUtc = $captureStart.ToString('o'); endUtc = $captureEnd.ToString('o'); exit = $captureExit } |
     ConvertTo-Json | Set-Content (Join-Path $run 'capture.json')
+if ($releasedEarly) { throw 'Host released before capture completion' }
 if ($captureExit -ne 0) { throw 'Capture incomplete; retain logs' }
-dotnet-gcdump report (Join-Path $run 'checkpoint.gcdump') > (Join-Path $run 'heapstat.txt')
+dotnet-gcdump report (Join-Path $run 'heap.gcdump') > (Join-Path $run 'heapstat.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Heap report failed; retain dump' }
 ```
 
@@ -185,7 +241,7 @@ Retain the consumer list used for this revision (source inventory, not runtime p
 
 ```powershell
 rg -n 'SharedArchitectureCache\.Get\(|RepositorySourceSnapshotCache\.Get\(' tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g '*.cs' -g '!**/bin/**' -g '!**/obj/**' > (Join-Path $run 'consumers.txt')
-Get-FileHash (Join-Path $run 'checkpoint.gcdump'),(Join-Path $run 'lane.trx'),(Join-Path $run 'runtime.csv') |
+Get-FileHash (Join-Path $run 'heap.gcdump'),(Join-Path $run 'lane.trx'),(Join-Path $run 'runtime.csv') |
     Export-Csv (Join-Path $run 'artifact-hashes.csv') -NoTypeInformation
 ```
 
@@ -196,12 +252,22 @@ unavailable counters. Preserve raw units: convert decimal MB with 1,000,000 and 
 with 1,048,576; do not assume the historical MB convention.
 
 Compute sampled peak `max(workingSetBytes)` with its UTC time; report observation
-coverage and dump intervals alongside it. Get live object bytes from the validated
-gcdump, not a generic heap-size counter (which may include free space/fragmentation).
+coverage and dump intervals alongside it. Separate the OS peak recorded at teardown
+from subsequent capture-bearing sampled maxima. Get live object bytes only from a
+validated **complete** gcdump, not a generic heap-size counter. Check verbose logs
+for node/edge truncation even when collect/report exit zero. In this experiment all
+graphs hit the 10,000,000-node cap; graph totals cannot support complete live bytes
+or retained-owner analysis. Retain that limit rather than silently substituting them.
+For the available counter comparison, sum last-collection heap-size bytes over
+gen0/gen1/gen2/LOH/POH and subtract the corresponding fragmentation sum. Name this
+`last-GC occupied`, with counter timestamps and freshness limits; it is not a live
+object census. `board9-summary.py` records the original arithmetic and local-to-UTC
+conversion. Pre-checkpoint buckets precede the checkpoint's whole second; end
+buckets are the last available observations. Report GC committed bytes separately.
 Show checkpoint values and min/max spread for each arm, plus after-minus-before
 byte and percentage deltas only for comparable metrics/checkpoints.
 
-Open the dump in PerfView/Visual Studio and retain root-path/retained-union exports
+For a complete dump, open it in PerfView/Visual Studio and retain root-path/retained-union exports
 for the report's owners: architecture registry, separate runtime model, snapshot
 dictionary, text/line view/Roslyn trees, and caller-owned strings. Distinguish shallow
 type totals from retained graphs; deduplicate overlapping reachable objects. If
