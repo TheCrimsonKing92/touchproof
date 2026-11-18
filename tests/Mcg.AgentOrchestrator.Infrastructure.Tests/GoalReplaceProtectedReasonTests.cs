@@ -13,7 +13,6 @@ public sealed class GoalReplaceProtectedReasonTests : CliCommandTestBase
     [InlineData("running", "running", RetryNext)]
     [InlineData("landed", "landed", LandedNext)]
     [InlineData("merged", "landed,merged,recorded", LandedNext)]
-    [InlineData("recorded", "recorded", null)]
     [InlineData("running-recorded", "running,recorded", null)]
     [InlineData("running-landed", "running,landed", LandedNext)]
     [InlineData("unavailable", "git-evidence-unavailable", null)]
@@ -90,6 +89,45 @@ public sealed class GoalReplaceProtectedReasonTests : CliCommandTestBase
         Assert.Equal(successor.Id.Value, audit.SuccessorGoalId);
         Assert.Equal(successor.Id.Value,
             new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, audit.BacklogItemId)!.OwnerGoalId);
+    }
+
+    [Theory]
+    [InlineData("zero-work-correction", GoalReplacementOutcome.Succeeded)]
+    [InlineData("supersede-unlanded-attempt", GoalReplacementOutcome.IneligibleDisposition)]
+    public async Task RecordedCancelledZeroWorkOwner_UsesDispositionEligibility(
+        string disposition, GoalReplacementOutcome expected)
+    {
+        var (workspace, predecessor, command, requestId) = await PrepareReplacement("recorded");
+        command[Array.IndexOf(command, "--disposition") + 1] = disposition;
+        var facts = GoalReplacementEvidence.Capture(workspace, predecessor);
+        Assert.True(facts.IsRecorded);
+        Assert.False(facts.HasWork);
+        Assert.False(facts.IsProtected);
+
+        if (expected == GoalReplacementOutcome.Succeeded)
+            Assert.Contains("GOAL_REPLACE_SUCCEEDED", CaptureConsole(() => ExecuteReplacement(workspace, command)), StringComparison.Ordinal);
+        else
+            Assert.Contains("GOAL_REPLACE_INELIGIBLE_DISPOSITION",
+                Assert.Throws<InvalidOperationException>(() => ExecuteReplacement(workspace, command)).Message, StringComparison.Ordinal);
+
+        var claims = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var audit = claims.FindAudit(requestId);
+        Assert.NotNull(audit);
+        Assert.Equal(expected, audit.Outcome);
+        Assert.True(audit.EligibilityFacts.IsRecorded);
+        Assert.Empty(audit.EligibilityFacts.ListProtections());
+        var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
+        if (expected == GoalReplacementOutcome.Succeeded)
+        {
+            var successor = Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
+            Assert.Equal(successor.Id.Value, audit.SuccessorGoalId);
+            Assert.Equal(successor.Id.Value, claims.ResolveClaim(restored, audit.BacklogItemId)!.OwnerGoalId);
+        }
+        else
+        {
+            Assert.Single(restored.Goals);
+            Assert.Equal(predecessor.Id.Value, claims.ResolveClaim(restored, audit.BacklogItemId)!.OwnerGoalId);
+        }
     }
 
     private async Task<(OrchestratorWorkspace Workspace, Goal Predecessor, string[] Command, Guid RequestId)>
