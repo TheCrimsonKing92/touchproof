@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -94,32 +93,15 @@ internal static class CostGoalOutcomeMetric
             : string.Join(" | ", defects) + $". Format: {LineFormat}. Allowed: {string.Join(", ", MetricNames)}.");
     }
 
-    internal static void ValidateFilingArguments(IReadOnlyList<string> parts)
+    internal static void EnforceAtFiling(string? source, string markdown,
+        BacklogItem? item, OrchestratorWorkspace workspace, string? overrideReason)
     {
-        if (!HasFlag(parts, OverrideFlag)) return;
-        var reason = CliCommandHandlers.GetFlagValue(parts, OverrideFlag);
-        if (string.IsNullOrWhiteSpace(reason) || reason.StartsWith("--", StringComparison.Ordinal))
-            throw new ArgumentException($"{OverrideFlag} requires a nonblank reason.");
-        if ((!HasFlag(parts, "--brief-file") && !HasFlag(parts, "--text-file")) ||
-            new[] { "--simple", "--run", "--from-backlog" }.Any(flag => HasFlag(parts, flag)))
-            throw new ArgumentException($"{OverrideFlag} requires plain goal --brief-file or goal --text-file.");
-    }
-
-    internal static void EnforceAtFiling(IReadOnlyList<string> parts, string markdown,
-        BacklogItem? item, OrchestratorWorkspace workspace)
-    {
-        ValidateFilingArguments(parts);
-        var source = HasFlag(parts, "--brief-file") ? "--brief-file" : HasFlag(parts, "--text-file") ? "--text-file" : null;
         if (source is null) return;
         var check = Check(markdown, item is not null && IsCostBacklogItem(item, workspace));
         if (check.Passed) return;
-        var reason = CliCommandHandlers.GetFlagValue(parts, OverrideFlag);
-        if (reason is null)
+        if (overrideReason is null)
             throw new InvalidOperationException($"{check.Name} failed: {check.Detail} Use {OverrideFlag} <reason> to file anyway.");
         new ConductEventLogWriter(workspace.ConductEventsLogPath).Append("cost-goal-outcome-metric-override", null,
-            $"reason={reason}; failedChecks={check.Name}; detail={check.Detail}; backlogItem={item?.Id ?? "none"}; source={source}");
+            $"reason={overrideReason}; failedChecks={check.Name}; detail={check.Detail}; backlogItem={item?.Id ?? "none"}; source={source}");
     }
-
-    private static bool HasFlag(IReadOnlyList<string> parts, string flag) => parts.Skip(1).Any(part =>
-        part.Equals(flag, StringComparison.OrdinalIgnoreCase) || part.StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase));
 }

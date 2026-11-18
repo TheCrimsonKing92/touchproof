@@ -145,6 +145,20 @@ private static void RejectPipelineForSimpleGoal(GoalIntakePipelineRequest? pipel
     }
 }
 
+private static (string? Source, string? OverrideReason) ResolveGoalDraftCheckArguments(IReadOnlyList<string> parts)
+{
+    bool HasFlag(string flag) => parts.Skip(1).Any(part =>
+        part.Equals(flag, StringComparison.OrdinalIgnoreCase) || part.StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase));
+    var source = HasFlag("--brief-file") ? "--brief-file" : HasFlag("--text-file") ? "--text-file" : null;
+    if (!HasFlag(CostGoalOutcomeMetric.OverrideFlag)) return (source, null);
+    var reason = GetFlagValue(parts, CostGoalOutcomeMetric.OverrideFlag);
+    if (string.IsNullOrWhiteSpace(reason) || reason.StartsWith("--", StringComparison.Ordinal))
+        throw new ArgumentException($"{CostGoalOutcomeMetric.OverrideFlag} requires a nonblank reason.");
+    if (source is null || new[] { "--simple", "--run", "--from-backlog" }.Any(HasFlag))
+        throw new ArgumentException($"{CostGoalOutcomeMetric.OverrideFlag} requires plain goal --brief-file or goal --text-file.");
+    return (source, reason);
+}
+
 private static void PrintBriefLintAdvisory(string briefText, string repositoryRoot)
 {
     try
@@ -264,7 +278,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal":
-            CostGoalOutcomeMetric.ValidateFilingArguments(parts);
+            var goalDraftCheckArguments = ResolveGoalDraftCheckArguments(parts);
             if (EpicAtCreation.HasArgument(parts) &&
                 (HasCliConfirmation(parts, "--simple") || HasCliConfirmation(parts, "--run") || HasCliConfirmation(parts, "--from-backlog")))
             {
@@ -347,7 +361,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
-            CostGoalOutcomeMetric.EnforceAtFiling(parts, goalObjective, goalSourceBacklogLink?.Item, context.Workspace);
+            CostGoalOutcomeMetric.EnforceAtFiling(goalDraftCheckArguments.Source, goalObjective,
+                goalSourceBacklogLink?.Item, context.Workspace, goalDraftCheckArguments.OverrideReason);
             var goalEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, requestedEpic, goalSourceBacklogLink?.Item.Id);
             context.ReportGoalCreationProgress();
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(

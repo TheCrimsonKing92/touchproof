@@ -65,14 +65,20 @@ public sealed class CostGoalOutcomeMetricGoalVerbTests : CliCommandTestBase
         Assert.Empty((await repository.LoadAsync()).Goals);
     }
 
-    [Fact]
-    public async Task Filing_OverrideReason_CreatesGoalAndRecordsAudit()
+    [Theory]
+    [InlineData("--brief-file", false)]
+    [InlineData("--brief-file", true)]
+    [InlineData("--text-file", false)]
+    [InlineData("--text-file", true)]
+    public async Task Filing_OverrideReason_CreatesGoalAndRecordsAudit(string fileFlag, bool inlineReason)
     {
         var workspace = CreateWorkspace();
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         await repository.SaveAsync(new AgentOrchestratorKernel());
-        var result = Execute(workspace, repository, CostBrief, "--brief-file",
-            "--override-draft-checks", "reviewed measured exception");
+        string[] flags = inlineReason
+            ? ["--override-draft-checks=reviewed measured exception"]
+            : ["--override-draft-checks", "reviewed measured exception"];
+        var result = Execute(workspace, repository, CostBrief, fileFlag, flags);
 
         Assert.Null(result.Error);
         Assert.NotNull(result.Goal);
@@ -141,28 +147,40 @@ public sealed class CostGoalOutcomeMetricGoalVerbTests : CliCommandTestBase
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Arguments_OverrideOutsidePlainFileMode_Refuses(bool simple)
+    [InlineData(null)]
+    [InlineData("--simple")]
+    [InlineData("--run")]
+    [InlineData("--from-backlog")]
+    public async Task Arguments_OverrideOutsidePlainFileMode_Refuses(string? mode)
     {
-        string[] parts = simple
-            ? ["goal", "--brief-file", "unused.md", "--simple", "--override-draft-checks", "reason"]
-            : ["goal", "inline objective", "--override-draft-checks", "reason"];
-        Assert.Throws<ArgumentException>(() => CostGoalOutcomeMetric.ValidateFilingArguments(parts));
+        var workspace = CreateWorkspace();
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(new AgentOrchestratorKernel());
+        string[] flags = mode is null
+            ? ["--override-draft-checks", "reason"]
+            : [mode, "--override-draft-checks", "reason"];
+        var result = Execute(workspace, repository, CostBrief, mode is null ? null : "--brief-file", flags);
+
+        var error = Assert.IsType<ArgumentException>(result.Error);
+        Assert.Contains("--override-draft-checks requires plain goal --brief-file or goal --text-file", error.Message);
+        Assert.Null(result.Goal);
+        Assert.Empty((await repository.LoadAsync()).Goals);
+        Assert.DoesNotContain("cost-goal-outcome-metric-override", ReadLog(workspace));
     }
 
     private (Goal? Goal, Exception? Error) Execute(OrchestratorWorkspace workspace,
-        SqliteOrchestratorStateRepository repository, string brief, string fileFlag, params string[] flags)
+        SqliteOrchestratorStateRepository repository, string brief, string? fileFlag, params string[] flags)
     {
         var path = Path.Combine(workspace.ExecutionDirectory, "brief.md");
         File.WriteAllText(path, brief);
+        string[] parts = fileFlag is null ? ["goal", brief, .. flags] : ["goal", fileFlag, path, .. flags];
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         var providers = new InMemoryModelProviderRegistry([new FixtureRefinerProvider()]);
         Goal? goal = null;
         Exception? error = null;
         CaptureConsoleError(() => CaptureConsole(() => error = Record.Exception(() =>
-            CliPersistentStateRunner.ExecuteCommand(["goal", fileFlag, path, .. flags], repository, workspace,
+            CliPersistentStateRunner.ExecuteCommand(parts, repository, workspace,
                 ref agents, providers, ref profiles, ref goal))));
         return (goal, error);
     }
