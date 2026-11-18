@@ -224,10 +224,10 @@ public sealed partial class AgentOrchestratorKernel
             prerequisiteEvidence,
             goal.AuthoritativeBrief.Version);
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
-        var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
-            goal.Timeline.Where(evt => (evt.TaskId == taskId || evt.TaskId is null) && !IsRedundantBriefTimelineEvent(task, evt)),
-            maxEvents: TimelineEventBudget(complexity),
-            complexity);
+        var eligibleTimeline = goal.Timeline.Where(evt => (evt.TaskId == taskId || evt.TaskId is null) && !IsRedundantBriefTimelineEvent(task, evt));
+        var reviewerWindow = ReviewerTimelineWindow.ForTask(goal, task, eligibleTimeline, TimelineEventBudget(complexity), complexity);
+        var timeline = reviewerWindow?.Events ?? PromptContextFormatter.SelectPromptTimelineEvents(
+            eligibleTimeline, maxEvents: TimelineEventBudget(complexity), complexity);
 
         var usesFileAccessContext = !string.IsNullOrWhiteSpace(workingDirectory) && !string.IsNullOrWhiteSpace(contextDirectory);
         var hasDurableResearch = usesFileAccessContext &&
@@ -641,9 +641,9 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(priorEvidence));
         }
 
-        if (timeline.Count > 0)
+        if (timeline.Count > 0 || reviewerWindow is not null)
         {
-            var timelineLines = new List<string> { "## Recent Timeline" };
+            var timelineLines = reviewerWindow?.CreateSectionLines() ?? new List<string> { "## Recent Timeline" };
             foreach (var evt in timeline)
             {
                 timelineLines.Add(PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: true, complexity));
