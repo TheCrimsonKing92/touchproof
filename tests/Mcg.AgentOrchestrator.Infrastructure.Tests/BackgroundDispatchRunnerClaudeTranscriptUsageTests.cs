@@ -43,6 +43,7 @@ public sealed class BackgroundDispatchRunnerClaudeTranscriptUsageTests
             Assert.Equal(3330, attached.InputTokens.Value);
             Assert.Equal(3000, attached.CachedInputTokens.Value);
             Assert.Equal(12, attached.OutputTokens.Value);
+            Assert.Equal(ProviderUsageValue.Reported(2), attached.Turns);
         });
 
     [Fact]
@@ -70,6 +71,7 @@ public sealed class BackgroundDispatchRunnerClaudeTranscriptUsageTests
             Assert.Equal(23, result.Usage!.InputTokens);
             Assert.Equal(11, result.Usage.CachedInputTokens);
             Assert.Equal(7, result.Usage.OutputTokens);
+            Assert.Equal(1, result.Usage.TurnCount);
             Assert.Equal("WORKER_RESULT_OK", File.ReadAllText(stdout));
         });
 
@@ -99,6 +101,7 @@ public sealed class BackgroundDispatchRunnerClaudeTranscriptUsageTests
             Assert.Equal(ProviderUsageState.Unknown, attached.OutputTokens.State);
             Assert.Contains(caseName, attached.InputTokens.UnknownReason!);
             Assert.Contains(sessionId, attached.InputTokens.UnknownReason!);
+            Assert.Equal(ProviderUsageValue.Unknown(usage.UnavailableReason), attached.Turns);
         });
 
     private static WorkerContextPackageReceipt EmptyReceipt() => new(

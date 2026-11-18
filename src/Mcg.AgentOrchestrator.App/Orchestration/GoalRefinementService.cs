@@ -976,7 +976,8 @@ internal sealed partial class GoalRefinementService
         if (matches.Count == 0)
         {
             throw new InvalidOperationException(
-                $"No model-function binding found for '{identifier}'. Configured bindings: {configured}.");
+                $"No model-function binding found for '{identifier}'. Configured bindings: {configured}." +
+                $"{Environment.NewLine}{GoalRefinementWorkCoordinator.RecoveryNextStep}");
         }
 
         throw new InvalidOperationException(
