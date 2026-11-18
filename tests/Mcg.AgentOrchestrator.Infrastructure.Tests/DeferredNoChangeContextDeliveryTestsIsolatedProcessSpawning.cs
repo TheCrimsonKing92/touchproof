@@ -3,6 +3,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 [Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning
 {
     [Fact]

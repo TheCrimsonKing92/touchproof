@@ -11,7 +11,7 @@ internal sealed class AcceptanceTestClassSourceExtractStore(string directory)
     internal const string DirectoryName = "acceptance-test-class-source-extracts";
     // Bump on changes to serialized extract/ancestry records OR extraction semantics in
     // AcceptanceTestClassSourceScanner and AcceptanceTestClassSourceScannerFactAncestry.
-    internal const int ExtractorVersion = 1;
+    internal const int ExtractorVersion = 2;
 
     internal static AcceptanceTestClassSourceExtractStore? Resolve(string worktreePath)
     {
@@ -73,10 +73,8 @@ internal sealed class AcceptanceTestClassSourceExtractStore(string directory)
         if (extract?.Constants is null || extract.Classes is null ||
             extract.Constants.Any(item => item is null || item.Key is null || item.Value is null) ||
             extract.Classes.Any(item => item is null || item.FullName is null || item.ShortName is null ||
-                item.Collection is null || !Enum.IsDefined(item.Collection.Kind) ||
-                (item.Collection.Value is null && item.Collection.Kind is not
-                    (AcceptanceTestClassSourceScanner.CollectionExpressionKind.None or
-                     AcceptanceTestClassSourceScanner.CollectionExpressionKind.Unresolvable)))) return false;
+                !IsUsableExpression(item.Collection) || item.IsolationTraits is null ||
+                !item.IsolationTraits.All(IsUsableExpression))) return false;
         var ancestry = extract.Ancestry;
         return ancestry is not null && ancestry.Classes is not null && ancestry.GlobalUsings is not null &&
             ancestry.GlobalUsings.All(IsUsableUsing) && ancestry.Classes.All(item =>
@@ -85,6 +83,11 @@ internal sealed class AcceptanceTestClassSourceExtractStore(string directory)
                 item.Scopes is not null && item.Scopes.All(scope => scope is not null &&
                     scope.Prefix is not null && scope.Usings is not null && scope.Usings.All(IsUsableUsing)));
     }
+
+    private static bool IsUsableExpression(AcceptanceTestClassSourceScanner.CollectionExpression? item) =>
+        item is not null && Enum.IsDefined(item.Kind) &&
+        (item.Value is not null || item.Kind is AcceptanceTestClassSourceScanner.CollectionExpressionKind.None or
+            AcceptanceTestClassSourceScanner.CollectionExpressionKind.Unresolvable);
 
     private static bool IsUsableUsing(AcceptanceTestClassSourceScannerFactAncestry.AncestryUsing? item) =>
         item is not null && item.Target is not null;

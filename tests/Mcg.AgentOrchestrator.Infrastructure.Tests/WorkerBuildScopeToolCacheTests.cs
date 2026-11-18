@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 
 [Xunit.Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class WorkerBuildScopeToolCacheTests
 {
     private readonly Xunit.ITestOutputHelper _output;

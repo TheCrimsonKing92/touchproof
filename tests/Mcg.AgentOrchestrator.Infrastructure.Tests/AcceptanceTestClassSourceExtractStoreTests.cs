@@ -19,7 +19,8 @@ public sealed class AcceptanceTestClassSourceExtractStoreTests
             """
             namespace Outer { namespace Inner {
                 internal static class Names { public const string Lane = "Alpha"; }
-                [Xunit.Collection(Names.Lane)] public class Collected {
+                [Xunit.Collection(Names.Lane)]
+                [Xunit.Trait("Isolation", "ProcessSpawning")] public class Collected {
                     [Xunit.Fact] public void Runs() {}
                     public class Nested { [Xunit.Theory] public void Runs() {} }
                 }
@@ -58,6 +59,8 @@ public sealed class AcceptanceTestClassSourceExtractStoreTests
         var constants = fresh.ExtractForTests(tree.Root, paths[0]);
         Assert.Single(constants.Constants);
         Assert.Contains(constants.Classes, item => item.FullName == "Outer.Inner.Collected+Nested");
+        var collected = Assert.Single(constants.Classes, item => item.FullName == "Outer.Inner.Collected");
+        Assert.Equal("ProcessSpawning", Assert.Single(collected.IsolationTraits).Value);
         Assert.Contains(fresh.ExtractForTests(tree.Root, paths[2]).Ancestry!.Classes,
             item => item.BaseName == "Parent");
         Assert.Empty(Directory.GetFiles(tree.PathOf("store"), "*.tmp", SearchOption.AllDirectories));
@@ -195,7 +198,7 @@ public sealed class AcceptanceTestClassSourceExtractStoreTests
     private static AcceptanceTestClassSourceScanner.FileExtract ExampleExtract() => new(
         [new("Names.Lane", "Alpha")],
         [new("Example", "Example", false, null, true,
-            new(AcceptanceTestClassSourceScanner.CollectionExpressionKind.Literal, "Alpha"))],
+            new(AcceptanceTestClassSourceScanner.CollectionExpressionKind.Literal, "Alpha"), [])],
         new([new("Example", "Example", null, ["Fact"], [new("", [new("Xunit", null)])])], []));
 
     private static void AssertExtractEqual(AcceptanceTestClassSourceScanner.FileExtract expected,
@@ -207,6 +210,8 @@ public sealed class AcceptanceTestClassSourceExtractStoreTests
                 item.BaseName, item.HasFacts, item.Collection.Kind, item.Collection.Value)),
             actual.Classes.Select(item => (item.FullName, item.ShortName, item.Abstract,
                 item.BaseName, item.HasFacts, item.Collection.Kind, item.Collection.Value)));
+        foreach (var (left, right) in expected.Classes.Zip(actual.Classes))
+            Assert.Equal<AcceptanceTestClassSourceScanner.CollectionExpression>(left.IsolationTraits, right.IsolationTraits);
         if (expected.Ancestry is null) { Assert.Null(actual.Ancestry); return; }
         var ancestry = Assert.IsType<AcceptanceTestClassSourceScannerFactAncestry.AncestryFile>(actual.Ancestry);
         Assert.Equal(expected.Ancestry.GlobalUsings, ancestry.GlobalUsings);

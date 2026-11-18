@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Private repositories, slot files and child environments; no machine-wide slot observations.
 [Xunit.Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class WorkerBuildCheckQueueDeadlineTests
 {
     [Xunit.Fact]
