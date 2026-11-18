@@ -25,6 +25,8 @@ public sealed class FindingRoundBatchCompletionTests
             Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
             Assert.Equal(tick + 1, scenario.Runs.Count);
             Assert.Empty(scenario.Retries);
+            Assert.DoesNotContain(scenario.Goal.Timeline, item =>
+                item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal));
             Assert.Empty(scenario.Prepared);
             Assert.Equal(WorkTaskStatus.Failed, scenario.Tester.Status);
             Assert.Empty(DispatchReadinessRules.BuildReadyTaskParallelPlan(scenario.Goal).Batches);

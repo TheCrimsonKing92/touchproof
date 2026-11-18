@@ -52,12 +52,10 @@ internal sealed partial class ConductorDriver
     }
 
     /// <summary>
-    /// A Tester round whose Developer-owned findings are ALL still waiting on the focused execution
-    /// the conductor itself scheduled is pending verification, not a demonstrated writable defect.
-    /// Run that scheduled execution once for the exact candidate before spending a paid Developer
-    /// round on a candidate nobody has measured. A single writable finding in the round - no typed
-    /// request, a receipt already taken at this candidate, a permanent refusal, or an unknown
-    /// candidate - keeps today's immediate Developer dispatch with zero focused runs.
+    /// Drain pending requests from the whole Tester round before selecting its next paid worker.
+    /// Advisory requests remain batch members when a separate source blocker requires Developer
+    /// repair. The drained batch selects that repair once; without a pending request, the existing
+    /// immediate Developer route still applies.
     /// </summary>
     private bool TryRouteTesterFindingToPendingEvidence(
         Goal goal,
@@ -67,7 +65,7 @@ internal sealed partial class ConductorDriver
     {
         observation = FailedGoalFindingObservation.None;
         if (!_focusedEvidenceRunnerConfigured ||
-            trigger.DeveloperOwnedFindings is not { Count: > 0 } developerOwnedFindings ||
+            trigger.DeveloperOwnedFindings is not { Count: > 0 } ||
             // No feasible upstream Developer: today's escalation is the correct unchanged outcome.
             trigger.TargetTask is not { } upstreamDeveloper ||
             // An un-consumed Developer retry is already going to change the candidate, so evidence
@@ -78,9 +76,8 @@ internal sealed partial class ConductorDriver
         }
 
         var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
-        if (!ConductorGitRevisionReader.IsValid(candidateSha) ||
-            !FindingEvidenceExecutionClassifier.IsPendingExecutionOnly(
-                developerOwnedFindings, trigger.TriggeringTask, candidateSha))
+        var pendingFindings = FindingRoundBatchCoordinator.PendingFindings(trigger.TriggeringTask, candidateSha);
+        if (!ConductorGitRevisionReader.IsValid(candidateSha) || pendingFindings.Length == 0)
         {
             return false;
         }
@@ -99,7 +96,7 @@ internal sealed partial class ConductorDriver
         }
 
         var findingRound = BuildFindingRoundFingerprint(trigger.TriggeringTask, round);
-        var requestIdentity = BuildFindingEvidenceRequestIdentity(developerOwnedFindings);
+        var requestIdentity = BuildFindingEvidenceRequestIdentity(pendingFindings);
         var guard = $"candidate_sha={candidateSha}; finding_round={findingRound}; request_identity={requestIdentity}";
         if (!goal.Timeline.Any(evt =>
                 evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
@@ -112,7 +109,7 @@ internal sealed partial class ConductorDriver
                 trigger.TriggeringTask.Id,
                 $"finding-evidence disposition=pending-execution-gate; role={trigger.TriggeringTask.RequiredRole}; " +
                 $"task_id={trigger.TriggeringTask.Id}; " +
-                $"finding_ids={string.Join(",", developerOwnedFindings.Select(item => item.StableId))}; " +
+                $"finding_ids={string.Join(",", pendingFindings.Select(item => item.StableId))}; " +
                 $"{guard}; deferred_developer_task_id={upstreamDeveloper.Id}");
         }
         return true;

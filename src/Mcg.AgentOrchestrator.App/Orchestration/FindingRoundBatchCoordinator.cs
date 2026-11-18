@@ -6,6 +6,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class FindingRoundBatchCoordinator
 {
+    internal static ReviewFinding[] PendingFindings(TaskSpec task, string? candidate) =>
+        (task.LastVerification?.MergedReviewFindings ?? [])
+            .Where(finding => finding.State == ReviewFindingState.Open &&
+                FindingEvidenceExecutionClassifier.Classify(task, finding, candidate) == FindingEvidenceExecutionState.PendingExecution)
+            .ToArray();
+
     internal static bool TrySourceRepair(Goal goal, TaskSpec task, string candidate,
         IReadOnlyList<string> receiptIds, IReadOnlyList<ReviewFinding> findings, out FailedGoalFindingObservation route)
     {
