@@ -119,6 +119,18 @@ internal static class FindingRoundBatchCoordinator
                 "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
     }
 
+    internal static void RecordSettledPlan(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
+        string round, string basis, FindingRoundBatchPlan plan)
+    {
+        foreach (var unavailable in plan.Unavailable)
+            RecordOutcome(driver, goal, task, candidate, round, basis, unavailable.Batch, "unavailable", unavailable.ReceiptId);
+        foreach (var passed in plan.Passed)
+            RecordOutcome(driver, goal, task, candidate, round, basis, passed, "executed",
+                ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, passed.Identity));
+        foreach (var (covered, covering) in plan.RedCovered)
+            RecordOutcome(driver, goal, task, candidate, round, basis, covered, "executed", covering.ReceiptId);
+    }
+
     internal static void RecordOutcome(ConductorDriver driver, Goal goal, TaskSpec task, string candidate, string round, string basis,
         FindingEvidenceBatch batch, string kind, string? receiptId)
     {
@@ -164,7 +176,7 @@ internal static class FindingRoundBatchCoordinator
         }
         if (summary is not null)
         {
-            if (summary.NewlyExecuted + summary.Covered + summary.Unavailable != summary.BatchSize)
+            if (!summary.IsSettled)
             {
                 observation = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                     "Distinct requests in the finding batch remain unsettled; downstream routing is deferred.");
@@ -218,7 +230,7 @@ internal static class FindingRoundBatchCoordinator
         if (!handled && FindingRoundBatchAccounting.HasOpenBatch(goal, identity))
         {
             var summary = FindingRoundBatchAccounting.Summarize(goal, task, identity, "drain-check");
-            if (summary.BatchSize > 0 && summary.NewlyExecuted + summary.Covered + summary.Unavailable == summary.BatchSize)
+            if (summary.BatchSize > 0 && summary.IsSettled)
             {
                 var receiptIds = task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
                     .Where(receipt => receipt.CandidateSha.Equals(identity.CandidateSha, StringComparison.OrdinalIgnoreCase) &&
@@ -241,7 +253,7 @@ internal static class FindingRoundBatchCoordinator
         if (!handled) return false;
 
         var settlement = FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check");
-        if (settlement.NewlyExecuted + settlement.Covered + settlement.Unavailable != settlement.BatchSize)
+        if (!settlement.IsSettled)
         {
             if (decision.TargetTaskId is not null || decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
                 decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
@@ -299,7 +311,7 @@ internal static class FindingRoundBatchCoordinator
         else
         {
             var settled = FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check");
-            if (settled.Unavailable > 0 && settled.NewlyExecuted + settled.Covered + settled.Unavailable == settled.BatchSize)
+            if (settled.Unavailable > 0 && settled.IsSettled)
                 decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
                     "Focused evidence batch settled with unavailable required evidence. No worker was dispatched.");
             var route = decision.TargetTaskId is { } target

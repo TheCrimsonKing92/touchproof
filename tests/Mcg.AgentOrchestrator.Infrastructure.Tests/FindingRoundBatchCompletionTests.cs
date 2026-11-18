@@ -101,6 +101,10 @@ public sealed class FindingRoundBatchCompletionTests
     public void RefusedMember_SettlesUnavailableBeforeBatchCloses(bool previouslyRefused)
     {
         using var scenario = new Scenario(false, failure: previouslyRefused ? "prior-refusal" : "normalization");
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(scenario.Tester.LastVerification, out _, out _));
+        if (previouslyRefused)
+            Assert.Contains(scenario.Tester.LastVerification!.MergedReviewFindings!, finding =>
+                finding.StableId == "first" && finding.EvidenceOutcome?.Reason == FindingEvidenceNotHonouredReason.UnparseableSelection);
         scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
         Assert.Single(scenario.Runs);
         Assert.Empty(scenario.Retries);
@@ -297,8 +301,6 @@ public sealed class FindingRoundBatchCompletionTests
                     FindingCategory.Correctness) with { EvidenceRequest = null }];
             if (failure == "normalization")
                 Findings[0] = Findings[0] with { EvidenceRequest = new([new("Unknown.Tests", "MissingTests")]) };
-            if (failure == "prior-refusal")
-                Findings[0] = Findings[0] with { EvidenceOutcome = new(false, Reason: FindingEvidenceNotHonouredReason.UnparseableSelection) };
             DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: _root, baseCommit: Candidate);
             var stdout = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
                 "tests: deferred - acceptance owns execution", "commit: none", "blockers: none",
@@ -306,6 +308,9 @@ public sealed class FindingRoundBatchCompletionTests
                 "model_fit: fixture/model - adequate - source verification", "skills: none", "confidence: high", "END_WORKER_RESULT");
             Kernel.RecordDispatchExecutionResult(Goal.Id, Tester.Id, new("test", _root, 0, stdout, "",
                 DateTimeOffset.UtcNow, StandardOutputPath: Path.Combine(_root, "tester.log"), WorkerResultPresent: true));
+            if (failure == "prior-refusal")
+                Kernel.RecordFindingEvidenceOutcome(Goal.Id, Tester.Id, Findings[0].StableId,
+                    new(false, Reason: FindingEvidenceNotHonouredReason.UnparseableSelection));
             Driver = CreateDriver();
         }
         internal AgentOrchestratorKernel Kernel { get; private set; }

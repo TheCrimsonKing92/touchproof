@@ -117,6 +117,11 @@ internal static class FindingRoundBatchSchedule
         foreach (var member in pending.Members)
         foreach (var finding in member.Findings)
         {
+            var batchIdentity = new FindingEvidenceBatchIdentity(requestingTask.Id, candidateSha,
+                receipt.FindingRoundFingerprint!, receipt.ExecutionBasisIdentity!);
+            FindingRoundBatchAccounting.Record(goal, batchIdentity,
+                new(batchIdentity.Key, "superseded", member.Identity,
+                    member.Findings.Select(item => item.StableId).ToArray(), receiptId), recordRequest);
             recordOutcome(
                 goal.Id,
                 requestingTask.Id,

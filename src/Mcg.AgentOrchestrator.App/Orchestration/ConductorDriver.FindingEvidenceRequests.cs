@@ -274,6 +274,8 @@ internal sealed partial class ConductorDriver
                 FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches(groups)),
             requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
             telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline);
+        FindingRoundBatchCoordinator.RecordSettledPlan(this, goal, requestingTask, telemetryCandidateSha,
+            findingRoundFingerprint, executionBasisIdentity, plan);
         foreach (var (batch, covering) in plan.RedCovered)
         {
             var attribution = TryAttributeActionableCandidateRed(goal, telemetryCandidateSha, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, covering.ReceiptId, covering.Arms!, _recordTaskNote), batch);
@@ -292,15 +294,6 @@ internal sealed partial class ConductorDriver
                 return true;
             }
         }
-        foreach (var unavailable in plan.Unavailable)
-            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, telemetryCandidateSha, findingRoundFingerprint,
-                executionBasisIdentity, unavailable.Batch, "unavailable", unavailable.ReceiptId);
-        foreach (var passed in plan.Passed)
-            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, telemetryCandidateSha, findingRoundFingerprint,
-                executionBasisIdentity, passed, "executed", CreateFindingEvidenceReceiptId(telemetryCandidateSha, findingRoundFingerprint, passed.Identity));
-        foreach (var (covered, covering) in plan.RedCovered)
-            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, telemetryCandidateSha, findingRoundFingerprint,
-                executionBasisIdentity, covered, "executed", covering.ReceiptId);
         var redCoverage = FindingRoundRedCoverage.Evaluate(plan.Executable, requestingTask, goal.Timeline,
             telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity);
         redCoverage.RecordSkips(goal, requestingTask, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
@@ -556,6 +549,8 @@ internal sealed partial class ConductorDriver
 
         if (actionableCandidateRed is not null)
         {
+            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, candidateSha!, findingRoundFingerprint,
+                executionBasisIdentity, runnable, "executed", receiptId);
             decision = BuildActionableCandidateRedDecision(
                 goal, requestingTask, candidateSha!, receiptId, actionableCandidateRed);
             return true;

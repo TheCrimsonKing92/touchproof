@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -17,6 +18,7 @@ public sealed class FindingRoundRedFanOutScenarioTests
     public void PrefixedTwoMemberRedRoutesDeveloperAfterOneRun()
     {
         using var scenario = new Scenario([AlphaFailure, BetaFailure]);
+        var identity = scenario.BatchIdentity;
 
         var result = scenario.Advance();
 
@@ -34,6 +36,22 @@ public sealed class FindingRoundRedFanOutScenarioTests
             item.Message.Contains("reason=superseded-by-actionable-red;", StringComparison.Ordinal));
         Assert.Equal(1, scenario.Dispatches);
         Assert.Empty(scenario.Escalations);
+        var closing = Assert.Single(scenario.Goal.Timeline.Where(item =>
+            item.Message.StartsWith($"finding-evidence batch-closed; batch_key={identity.Key};", StringComparison.Ordinal)));
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(
+            closing.Message[closing.Message.IndexOf('{')..])!;
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Superseded);
+        Assert.Equal(0, summary.Covered);
+        Assert.Equal(0, summary.Unavailable);
+        Assert.True(summary.IsSettled);
+        Assert.Equal(0, summary.PaidVerificationCallsAvoided);
+        Assert.Contains("Developer", summary.RoutingReason, StringComparison.Ordinal);
+        var restored = scenario.RestoredGoal();
+        Assert.False(FindingEvidenceBatchClosureAdmission.TryApply(restored, new(identity, "replayed"), () => true,
+            () => throw new InvalidOperationException("Actionable red retried twice after restoration."),
+            _ => throw new InvalidOperationException("Actionable red batch closed twice.")));
     }
 
     [Fact]
@@ -122,6 +140,8 @@ public sealed class FindingRoundRedFanOutScenarioTests
         internal List<(TaskId Task, string Message)> Retries { get; } = [];
         internal List<string> Escalations { get; } = [];
         internal int Dispatches { get; private set; }
+        internal FindingEvidenceBatchIdentity BatchIdentity => FindingRoundBatchCoordinator.Identity(_driver, Goal, Reviewer)!;
+        internal Goal RestoredGoal() => AgentOrchestratorKernel.FromSnapshot(_kernel.ExportSnapshot()).GetGoal(Goal.Id);
 
         internal ConductorAdvanceResult Advance() => _driver.AdvanceOnce(Goal, ConductorAutonomyPolicy.Permissive);
 

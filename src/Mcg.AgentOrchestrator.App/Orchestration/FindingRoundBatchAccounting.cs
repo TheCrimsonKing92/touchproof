@@ -12,7 +12,11 @@ internal static class FindingRoundBatchAccounting
         string? ReceiptId = null, AgentRole? Role = null, string? Eligibility = null);
     internal sealed record Summary(int BatchSize, int NewlyExecuted, int Covered, int Unavailable,
         int CoalescedSelectionCount, int TesterCallsAvoided, int ReviewerCallsAvoided,
-        int UnknownSelections, int? PaidVerificationCallsAvoided, string RoutingReason, Observation[] EligibilityWitnesses);
+        int UnknownSelections, int? PaidVerificationCallsAvoided, string RoutingReason, Observation[] EligibilityWitnesses,
+        int Superseded = 0)
+    {
+        internal bool IsSettled => NewlyExecuted + Covered + Unavailable + Superseded == BatchSize;
+    }
     private const string Prefix = "finding-evidence batch-observation ";
 
     internal static Member[] Members(IEnumerable<ReviewFinding> findings) => findings
@@ -58,12 +62,14 @@ internal static class FindingRoundBatchAccounting
         var executed = 0;
         var covered = 0;
         var unavailable = 0;
+        var superseded = 0;
         foreach (var member in members)
         {
             var outcomes = observations.Where(item => item.FindingIds.Intersect(member.FindingIds).Any()).ToArray();
             if (outcomes.Any(item => item.Kind == "unavailable")) unavailable++;
             else if (outcomes.Any(item => item.Kind == "executed")) executed++;
             else if (outcomes.Any(item => item.Kind == "covered")) covered++;
+            else if (outcomes.Any(item => item.Kind == "superseded")) superseded++;
         }
         var selections = observations.Where(item => item.Kind == "suppressed-selection").DistinctBy(item => item.Identity).ToArray();
         return new(members.Length, executed, covered, unavailable,
@@ -72,6 +78,6 @@ internal static class FindingRoundBatchAccounting
             selections.Count(item => item.Role == AgentRole.Reviewer),
             selections.Count(item => item.Role is null),
             selections.Any(item => item.Role is null) ? null : selections.Count(item => item.Role is AgentRole.Tester or AgentRole.Reviewer),
-            reason, selections);
+            reason, selections, superseded);
     }
 }
