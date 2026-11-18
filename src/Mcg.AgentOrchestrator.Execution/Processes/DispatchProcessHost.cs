@@ -2162,6 +2162,13 @@ public static void DropToLow() {
             }
             StopJobQos();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
+            if (parameters.Provider == WorkerSandboxProvider.Grok && parameters.SandboxLowIntegrity && OperatingSystem.IsWindows())
+            {
+                GrokSignInWriteBack.TryWriteBack(
+                    () => Path.Combine(ResolveSandboxRoot(parameters), "grok-home"),
+                    ResolveGrokHomeDirectory,
+                    line => AppendDispatchStderrDiagnostic(parameters.StderrPath, line));
+            }
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
             // only after every child/diagnostic artifact the completion path reads is durable.
             TryWriteDispatchExitArtifact(parameters.ExitCodePath, exitCode);
