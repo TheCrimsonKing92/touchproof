@@ -9,9 +9,15 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record OutcomeMetricLine(string Name, string Direction, string Target, int Window);
+internal sealed record OutcomeMetricGuard(string Name, string Rule);
 
-internal sealed record OutcomeMetricBaseline(OutcomeMetricLine Line, double? Value, int SampleSize, string? Reason);
+internal sealed record OutcomeMetricLine(string Name, string Direction, string Target, int Window,
+    OutcomeMetricGuard? Guard = null);
+
+internal sealed record OutcomeMetricSample(double? Value, int SampleSize);
+
+internal sealed record OutcomeMetricBaseline(OutcomeMetricLine Line, double? Value, int SampleSize, string? Reason,
+    OutcomeMetricSample? Guard = null);
 
 internal sealed record CostGoalOutcomeFiling(DateTimeOffset FiledAt, string? SourceBacklogItemId,
     IReadOnlyList<OutcomeMetricBaseline> Baselines);
@@ -19,16 +25,54 @@ internal sealed record CostGoalOutcomeFiling(DateTimeOffset FiledAt, string? Sou
 internal sealed record OutcomeGateObservation(string Id, DateTimeOffset RecordedAt, DateTimeOffset StartedAt,
     string? LaunchMainCommit, AcceptanceSelectedExecutionRecord Selection);
 
+internal sealed class OutcomeGateWindow(OutcomeMetricLine line)
+{
+    private readonly string? primary = CostGoalOutcomeMetric.HasGateSource(line.Name) ? line.Name : null;
+    private readonly string? guard = CostGoalOutcomeMetric.HasGateSource(line.Guard?.Name) ? line.Guard!.Name : null;
+    private readonly List<double> values = [];
+    private readonly List<double> guardValues = [];
+
+    internal OutcomeMetricLine Line => line;
+    internal bool HasSource => primary is not null || guard is not null;
+    internal bool IsFull => (primary is null ? guardValues.Count : values.Count) == line.Window;
+
+    internal void Add(OutcomeGateObservation gate)
+    {
+        if (IsFull) return;
+        if (primary is not null)
+        {
+            if (CostGoalOutcomeMetric.Sample(primary, gate) is not { } value) return;
+            values.Add(value);
+        }
+        if (guard is not null && CostGoalOutcomeMetric.Sample(guard, gate) is { } guardValue)
+            guardValues.Add(guardValue);
+    }
+
+    internal (OutcomeMetricSample Metric, OutcomeMetricSample? Guard) Measure(int minimum)
+    {
+        // A live guard on a live metric must cover the exact same gates.
+        var guardMinimum = primary is null ? minimum : Math.Max(minimum, values.Count);
+        return (Measure(primary, values, minimum), guard is null ? null : Measure(guard, guardValues, guardMinimum));
+    }
+
+    private static OutcomeMetricSample Measure(string? metric, List<double> samples, int minimum) =>
+        new(metric is not null && samples.Count >= minimum ? CostGoalOutcomeMetric.Aggregate(metric, samples) : null,
+            samples.Count);
+}
+
 internal static class CostGoalOutcomeMetric
 {
     internal const string CheckName = "cost-goal-outcome-metric";
     internal const string OverrideFlag = "--override-draft-checks";
+    internal const string ReplaySelectedClasses = "replay-selected-classes";
+    internal const string ReplayMissedFailures = "replay-missed-failures";
     internal static IReadOnlyList<string> MetricNames { get; } = Array.AsReadOnly(new[]
     {
         "selection-milliseconds", "executed-class-count", "gate-test-cpu-seconds",
-        "full-gate-rate", "process-launches"
+        "full-gate-rate", "process-launches", ReplaySelectedClasses, ReplayMissedFailures
     });
-    private const string LineFormat = "metric: <name>; direction: decrease|increase; target: <value or percent>; window: <N gates>";
+    private const string LineFormat = "metric: <name>; direction: decrease|increase; target: <value or percent>; window: <N gates>" +
+        "; optional guard: <metric>; must-not-increase|must-not-decrease";
     private static readonly Regex Heading = new(@"^##[ \t]+([^\r\n]+)", RegexOptions.CultureInvariant);
     private static readonly Regex Number = new(@"^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)%?$", RegexOptions.CultureInvariant);
     private static readonly Regex Gates = new(@"^([0-9]+)(?:[ \t]+gates?)?$", RegexOptions.CultureInvariant);
@@ -74,15 +118,24 @@ internal static class CostGoalOutcomeMetric
             foundLine = true;
             var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var malformed = false;
-            foreach (var part in line.Split(';'))
+            string? guardRule = null;
+            var parts = line.Split(';');
+            for (var i = 0; i < parts.Length; i++)
             {
-                var pair = part.Split(':', 2);
-                if (pair.Length != 2 || !fields.TryAdd(pair[0].Trim(), pair[1].Trim())) malformed = true;
+                var pair = parts[i].Split(':', 2);
+                if (pair.Length != 2 || !fields.TryAdd(pair[0].Trim(), pair[1].Trim()))
+                {
+                    malformed = true;
+                    continue;
+                }
+                if (pair[0].Trim().Equals("guard", StringComparison.OrdinalIgnoreCase) && i + 1 < parts.Length)
+                    guardRule = parts[++i].Trim();
             }
             fields.TryGetValue("metric", out var name);
             fields.TryGetValue("direction", out var direction);
             fields.TryGetValue("target", out var target);
             fields.TryGetValue("window", out var window);
+            fields.TryGetValue("guard", out var guardName);
             var start = defects.Count;
             if (!MetricNames.Contains(name, StringComparer.Ordinal)) defects.Add($"unknown metric '{name}'");
             if (string.IsNullOrWhiteSpace(target)) defects.Add($"metric '{name}' has no target");
@@ -93,10 +146,15 @@ internal static class CostGoalOutcomeMetric
             var gateCount = 0;
             if (!gateMatch.Success || !int.TryParse(gateMatch.Groups[1].Value, out gateCount) || gateCount <= 0)
                 defects.Add($"metric '{name}' has an invalid window '{window}'");
-            if (malformed || fields.Count != 4 || fields.Keys.Any(key =>
-                !new[] { "metric", "direction", "target", "window" }.Contains(key, StringComparer.OrdinalIgnoreCase)))
+            if (guardName is not null && !MetricNames.Contains(guardName, StringComparer.Ordinal))
+                defects.Add($"metric '{name}' has an unknown guard metric '{guardName}'");
+            if (guardName is not null && guardRule is not ("must-not-increase" or "must-not-decrease"))
+                defects.Add($"metric '{name}' has an invalid guard rule '{guardRule}'");
+            if (malformed || fields.Count != (guardName is null ? 4 : 5) || fields.Keys.Any(key =>
+                !new[] { "metric", "direction", "target", "window", "guard" }.Contains(key, StringComparer.OrdinalIgnoreCase)))
                 defects.Add($"metric '{name}' has malformed or unexpected fields");
-            if (defects.Count == start) metrics.Add(new(name!, direction!, target!, gateCount));
+            if (defects.Count == start)
+                metrics.Add(new(name!, direction!, target!, gateCount, guardName is null ? null : new(guardName, guardRule!)));
         }
         if (!foundLine) defects.Add("no well-formed ## Outcome metric line");
         return (metrics, defects);
@@ -151,40 +209,42 @@ internal static class CostGoalOutcomeMetric
     private static IReadOnlyList<OutcomeMetricBaseline> CaptureBaselines(IReadOnlyList<OutcomeMetricLine> lines,
         IEnumerable<OutcomeGateObservation> newestFirst)
     {
-        var windows = lines.Select(line => (Line: line, Values: HasGateSource(line) ? new List<double>() : null)).ToArray();
-        var supported = windows.Where(window => window.Values is not null).ToArray();
+        var windows = lines.Select(line => new OutcomeGateWindow(line)).ToArray();
+        var supported = windows.Where(window => window.HasSource).ToArray();
 
         if (supported.Length > 0)
         {
             foreach (var gate in newestFirst.DistinctBy(gate => gate.Id, StringComparer.Ordinal))
             {
-                foreach (var (line, values) in supported)
-                    if (values!.Count < line.Window && Sample(line, gate) is { } value) values.Add(value);
-                if (supported.All(window => window.Values!.Count == window.Line.Window)) break;
+                foreach (var window in supported) window.Add(gate);
+                if (supported.All(window => window.IsFull)) break;
             }
         }
 
         return windows.Select(window =>
         {
-            var (line, values) = window;
-            if (values is null) return new OutcomeMetricBaseline(line, null, 0, "no-gate-source");
-            return values.Count == line.Window || values.Count >= 3
-                ? new OutcomeMetricBaseline(line, Aggregate(line, values), values.Count, null)
-                : new OutcomeMetricBaseline(line, null, values.Count, "baseline-unavailable");
+            var line = window.Line;
+            var (metric, guard) = window.Measure(Math.Min(line.Window, 3));
+            var reason = metric.Value is not null ? null : HasGateSource(line.Name) ? "baseline-unavailable" :
+                IsReplayMetric(line.Name) ? "replay-reports-unavailable" : "no-gate-source";
+            return new OutcomeMetricBaseline(line, metric.Value, metric.SampleSize, reason, guard);
         }).ToArray();
     }
 
-    private static bool HasGateSource(OutcomeMetricLine line) =>
-        line.Name is "selection-milliseconds" or "executed-class-count" or "full-gate-rate";
+    internal static bool HasGateSource(string? metric) =>
+        metric is "selection-milliseconds" or "executed-class-count" or "full-gate-rate";
 
-    internal static double? Sample(OutcomeMetricLine line, OutcomeGateObservation gate)
+    internal static bool IsReplayMetric(string? metric) =>
+        metric is ReplaySelectedClasses or ReplayMissedFailures;
+
+    internal static double? Sample(string metric, OutcomeGateObservation gate)
     {
         var selection = gate.Selection;
-        if (line.Name == "full-gate-rate") return selection.FullGateReason is null ? 0 : 1;
+        if (metric == "full-gate-rate") return selection.FullGateReason is null ? 0 : 1;
         if (selection.ExecutedClassCount is null or 0 && selection.FullGateReason is { } reason &&
             (reason.Contains("no changed source", StringComparison.OrdinalIgnoreCase) ||
              reason.Equals("Candidate changes are unavailable.", StringComparison.Ordinal))) return null;
-        return line.Name switch
+        return metric switch
         {
             "selection-milliseconds" when selection.Mode != "Off" && double.IsFinite(selection.SelectionMilliseconds)
                 => selection.SelectionMilliseconds,
@@ -193,9 +253,9 @@ internal static class CostGoalOutcomeMetric
         };
     }
 
-    internal static double Aggregate(OutcomeMetricLine line, List<double> values)
+    internal static double Aggregate(string metric, List<double> values)
     {
-        if (line.Name == "full-gate-rate") return values.Average();
+        if (metric == "full-gate-rate") return values.Average();
         values.Sort();
         var middle = values.Count / 2;
         return values.Count % 2 == 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;

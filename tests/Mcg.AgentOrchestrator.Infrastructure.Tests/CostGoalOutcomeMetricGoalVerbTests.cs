@@ -65,11 +65,12 @@ public sealed class CostGoalOutcomeMetricGoalVerbTests : CliCommandTestBase
         var brief = CostBrief + """
 
             ## Outcome metric
-            metric: selection-milliseconds; direction: decrease; target: 20%; window: 3 gates
+            metric: selection-milliseconds; direction: decrease; target: 20%; window: 3 gates; guard: full-gate-rate; must-not-increase
             metric: executed-class-count; direction: increase; target: 6; window: 3 gates
             metric: full-gate-rate; direction: decrease; target: .4; window: 3 gates
             metric: gate-test-cpu-seconds; direction: decrease; target: 5%; window: 5 gates
             metric: process-launches; direction: decrease; target: 5; window: 8 gates
+            metric: replay-selected-classes; direction: decrease; target: 20%; window: 3 gates; guard: replay-missed-failures; must-not-increase
             """;
 
         var result = Execute(workspace, repository, brief, "--brief-file",
@@ -80,11 +81,14 @@ public sealed class CostGoalOutcomeMetricGoalVerbTests : CliCommandTestBase
         var filing = new CostGoalOutcomeStore(workspace.OrchestratorDirectory).Read(persistedGoal.Id)!.Filing;
         Assert.Equal(source.Id, filing.SourceBacklogItemId);
         Assert.Collection(filing.Baselines,
-            row => Assert.Equal(new(new("selection-milliseconds", "decrease", "20%", 3), 60, 3, null), row),
+            row => Assert.Equal(new(new("selection-milliseconds", "decrease", "20%", 3,
+                new("full-gate-rate", "must-not-increase")), 60, 3, null, new(2d / 3, 3)), row),
             row => Assert.Equal(new(new("executed-class-count", "increase", "6", 3), 6, 3, null), row),
             row => Assert.Equal(new(new("full-gate-rate", "decrease", ".4", 3), 2d / 3, 3, null), row),
             row => Assert.Equal(new(new("gate-test-cpu-seconds", "decrease", "5%", 5), null, 0, "no-gate-source"), row),
-            row => Assert.Equal(new(new("process-launches", "decrease", "5", 8), null, 0, "no-gate-source"), row));
+            row => Assert.Equal(new(new("process-launches", "decrease", "5", 8), null, 0, "no-gate-source"), row),
+            row => Assert.Equal(new(new("replay-selected-classes", "decrease", "20%", 3,
+                new("replay-missed-failures", "must-not-increase")), null, 0, "replay-reports-unavailable"), row));
     }
 
     private static void WriteGate(OrchestratorWorkspace workspace, DateTimeOffset recordedAt, int serial,
