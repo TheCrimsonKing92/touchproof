@@ -40,6 +40,7 @@ internal static class OrchestratorArtifactRegistry
         Source("workers.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("spec-refiner-precedents.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("acceptance-gate-attempts", "Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"),
+        Source("cost-goal-outcomes", "App/Orchestration/CostGoalOutcomeMetric.cs"),
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs",
@@ -171,7 +172,7 @@ internal static class OrchestratorArtifactRegistry
         {
             "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "prompts" or "merge-train-evidence" or "cohort-acceptance.db.artifacts" => RetentionKind.ReclaimAfterGoalTerminalPlusDays,
             "logs" => RetentionKind.KeepDays,
-            "goal-events" or "goal-operations" or "experiment-replay" => RetentionKind.KeepForever,
+            "goal-events" or "goal-operations" or "experiment-replay" or "cost-goal-outcomes" => RetentionKind.KeepForever,
             _ when pattern.EndsWith(".db", StringComparison.Ordinal) || pattern.EndsWith(".json", StringComparison.Ordinal) => RetentionKind.KeepForever,
             _ => RetentionKind.Unmanaged
         };
