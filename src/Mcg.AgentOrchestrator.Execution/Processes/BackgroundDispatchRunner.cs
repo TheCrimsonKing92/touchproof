@@ -1432,8 +1432,8 @@ public sealed partial class BackgroundDispatchRunner
         kernel.RecordDispatchProviderSessionId(goalId, taskId, heartbeat.ProviderSessionId);
     }
 
-    public TaskProcessRecord CancelLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) =>
-        CancelLatestProcess(kernel, goalId, taskId, cancelledByConductor: false);
+    public TaskProcessRecord CancelLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) => CancelLatestProcess(kernel, goalId, taskId, cancelledByConductor: false);
+    internal TaskProcessRecord CancelLatestProcessByConductor(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) => CancelLatestProcess(kernel, goalId, taskId, cancelledByConductor: true);
 
     private TaskProcessRecord CancelLatestProcess(
         AgentOrchestratorKernel kernel,

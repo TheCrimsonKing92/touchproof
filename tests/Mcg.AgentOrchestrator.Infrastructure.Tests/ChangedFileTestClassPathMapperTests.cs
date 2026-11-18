@@ -31,6 +31,77 @@ public sealed class ChangedFileTestClassPathMapperTests
     }
 
     [Fact]
+    public void LiteralInNestedHelperClassSelectsEnclosingTestClass()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Tests.cs", """
+            namespace Sample;
+            public class ScriptTests
+            {
+                [Fact] public void Works() {}
+                private sealed class Fixture
+                {
+                    private string Path = "scripts/Example.ps1";
+                    private sealed class Inner { private string Name = "Example.ps1"; }
+                }
+            }
+            internal class Helper
+            {
+                private sealed class Inner { private string Path = "scripts/Example.ps1"; }
+            }
+            """);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["scripts/Example.ps1"], fixture.Sources, fixture.Classes, []);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(new[] { "Sample.ScriptTests" }, selection.TestClassNames);
+    }
+
+    [Fact]
+    public void InnermostKnownTestClassWinsOverKnownOuterTestClass()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Tests.cs", """
+            namespace Sample;
+            public class OuterTests
+            {
+                [Fact] public void Works() {}
+                public class InnerTests
+                {
+                    [Fact] public void Works() {}
+                    private sealed class Fixture { private string Path = "scripts/Example.ps1"; }
+                }
+            }
+            """);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["scripts/Example.ps1"], fixture.Sources, fixture.Classes, []);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(new[] { "Sample.OuterTests+InnerTests" }, selection.TestClassNames);
+    }
+
+    [Fact]
+    public void ScriptNamedByNoClassAbandonsWithNoNamingTestClassReason()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Tests.cs", """
+            namespace Sample;
+            public class ScriptTests
+            {
+                [Fact] public void Works() {}
+                private sealed class Fixture { private string Path = "scripts/Other.ps1"; }
+            }
+            """);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["scripts/Missing.ps1"], fixture.Sources, fixture.Classes, []);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
+        Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
+        Assert.Equal("Changed file has no naming test class: scripts/Missing.ps1", selection.Reason);
+    }
+
+    [Fact]
     public void UnreferencedScriptAbandonsWholeSelectionEvenWhenAnotherFileMaps()
     {
         using var fixture = new ImpactReplaySelectionFixture();

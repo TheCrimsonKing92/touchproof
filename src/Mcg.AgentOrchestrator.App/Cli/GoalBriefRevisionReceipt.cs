@@ -15,7 +15,7 @@ internal static class GoalBriefRevisionReceipt
         if (refinementResetOutcome == OrchestratorStateOutboxRequeueOutcome.ProtectedByLiveLease)
             Console.WriteLine("  refinement: refinement is in progress");
         Console.WriteLine($"  not-yet-started tasks: {FormatRevisionTaskIds(result.NotYetStartedTaskIds)}");
-        Console.WriteLine($"  in-flight tasks (continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
+        Console.WriteLine($"  in-flight tasks (running Planner/Researcher rounds on superseded briefs will be cancelled and re-queued during conductor/watch loop processing; other roles continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
         Console.WriteLine($"  completed tasks (unchanged): {FormatRevisionTaskIds(result.CompletedTaskIds)}");
         if (result.RefinedCriteriaReDerived)
         {

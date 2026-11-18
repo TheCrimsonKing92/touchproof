@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --text-file <path> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --brief-file <path> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] (--depends-on is repeatable, combines with --backlog-item and cannot be combined with --simple, --run or --from-backlog)";
+    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --text-file <path> [--override-draft-checks <reason>] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --brief-file <path> [--override-draft-checks <reason>] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] (--depends-on is repeatable, combines with --backlog-item and cannot be combined with --simple, --run or --from-backlog)";
     public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
     public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
@@ -160,7 +160,7 @@ internal static class CliCommandHelp
     private static readonly string[] GoalOwnFlags =
     [
         "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--summary",
-        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--epic", "--depends-on", "--repositories",
+        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--epic", "--depends-on", "--repositories", "--override-draft-checks",
         ..GoalRoleOverrideFlags,
         ..HelpFlags
     ];
@@ -951,7 +951,7 @@ internal static class CliCommandHelp
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
             "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by",
-            "--home-build-blocked-commit"
+            "--home-build-blocked-commit", "--override-draft-checks"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
