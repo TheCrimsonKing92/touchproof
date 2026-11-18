@@ -39,6 +39,41 @@ public sealed class ProviderConnectionEvidenceStoreTests
         Assert.Equal(rowsBefore, fixture.HistoryRows());
     }
 
+    [Theory]
+    [InlineData("inline")]
+    [InlineData("table")]
+    [InlineData("archive")]
+    public async Task RecordedOrchestratorFailure_WithZeroExitRemainsFailed(string representation)
+    {
+        const string diagnostic = "private-orchestrator-failure-detail";
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var goal = Seed();
+        var task = Assert.Single(goal.Tasks);
+        var failed = task.LastVerification! with
+        {
+            ExitCode = 0, ProviderFailureKind = ProviderFailureKind.Unknown, OrchestratorFailureReason = diagnostic
+        };
+        goal = goal with { Tasks = [task with { LastVerification = failed, VerificationHistory = [task.VerificationHistory![0], failed] }] };
+        if (representation == "inline") fixture.InsertLegacy(goal);
+        else
+        {
+            await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
+            if (representation == "table") fixture.MarkStoredLatest(goal.Id);
+            else
+            {
+                fixture.InlineStoredLatest(goal);
+                Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(GoalTaskHistoryTestFixture.At.AddDays(1)));
+                using var stub = JsonDocument.Parse(fixture.RawGoal(goal.Id));
+                Assert.True(stub.RootElement.GetProperty("IsMetadataOnly").GetBoolean());
+            }
+        }
+
+        var worker = Assert.Single(await fixture.Repository.ReadProviderConnectionEvidenceAsync("grok-cli"));
+        Assert.Equal(ProviderConnectionResult.WorkerFailed, worker.Result);
+        Assert.Equal(failed.CompletedAt, worker.ObservedAt);
+        Assert.DoesNotContain(diagnostic, JsonSerializer.Serialize(worker));
+    }
+
     [Fact]
     public async Task UnrelatedLatestDispatch_AndUnattributedVerificationNeverBecomeSuccess()
     {
@@ -74,6 +109,39 @@ public sealed class ProviderConnectionEvidenceStoreTests
         Assert.Contains(report.Observations, o => o.Result == ProviderConnectionResult.AuthenticationFailed && o.IsHistorical);
         Assert.Equal(before, fixture.RawGoal(Seed().Id));
         Assert.Equal(2, (await fixture.Repository.ReadProviderConnectionEvidenceAsync("codex-cli")).Count);
+    }
+
+    [Fact]
+    public async Task Check_ReturnsItsOwnSamplesWhenListingHasNewerObservations()
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        const string profile = "claude-cli";
+        await fixture.Repository.SaveGoalSnapshotsAsync([Seed(profile)]);
+        var at = GoalTaskHistoryTestFixture.At.AddDays(10);
+        var newerAt = at.AddMinutes(1);
+        var catalog = new WorkerProfileCatalog([WorkerProfileCatalog.Default().GetRequired(profile)]);
+        var newer = new ProviderConnectionReadinessService(catalog, fixture.Repository,
+            new("fixture", (_, _) => Task.FromResult(new WorkerProcessRunResult(0, "{\"loggedIn\":true}", "")),
+                _ => "claude.exe", new FixedTime(newerAt)), new FixedTime(newerAt),
+            claudeProbe: () => new(true, false, null, null, false));
+        await newer.CheckAsync(profile, fixture.Repository);
+
+        // A delayed write of an older sample must leave the newer listing rows intact.
+        var delayed = new ProviderConnectionReadinessService(catalog, fixture.Repository,
+            new("fixture", (_, _) => Task.FromResult(new WorkerProcessRunResult(1, "{\"loggedIn\":false}", "")),
+                _ => "claude.exe", new FixedTime(at)), new FixedTime(at),
+            claudeProbe: () => new(false, false, null, null, false));
+        var check = Assert.Single((await delayed.CheckAsync(profile, fixture.Repository)).Profiles);
+        Assert.Collection(check.Observations,
+            host => Assert.Equal((ProviderConnectionResult.SignedOut, (DateTimeOffset?)at), (host.Result, host.ObservedAt)),
+            material => Assert.Equal((ProviderConnectionResult.MaterialUnavailable, (DateTimeOffset?)at), (material.Result, material.ObservedAt)),
+            worker => Assert.Equal(ProviderConnectionResult.AuthenticationFailed, worker.Result));
+
+        var listing = Assert.Single((await newer.ListAsync()).Profiles);
+        Assert.Collection(listing.Observations,
+            host => Assert.Equal((ProviderConnectionResult.SignedIn, (DateTimeOffset?)newerAt), (host.Result, host.ObservedAt)),
+            material => Assert.Equal((ProviderConnectionResult.MaterialPresent, (DateTimeOffset?)newerAt), (material.Result, material.ObservedAt)),
+            worker => Assert.Equal(ProviderConnectionResult.AuthenticationFailed, worker.Result));
     }
 
     [Fact]

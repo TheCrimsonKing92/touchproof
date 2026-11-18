@@ -309,19 +309,19 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 
     private sealed record StoredEntry(long Sequence, string Json);
 
-    // Field lists are repository-owned identifiers, never CLI/provider input. Unmarked documents
+    // SQL projections are repository-owned, never CLI/provider input. Unmarked documents
     // already supply authoritative inline metadata; no table mirror can override it.
     internal async Task<TaskHistory> ReadMetadataAsync<TVerification, TDispatch>(SqliteConnection connection,
         string goalId, string taskId, JsonElement verification, JsonElement dispatch, JsonElement marker,
-        IReadOnlyList<string> verificationFields, IReadOnlyList<string> dispatchFields, CancellationToken token)
+        Func<string, string> projectVerification, Func<string, string> projectDispatch, CancellationToken token)
     {
         var counts = ReadMarker(marker, goalId, taskId);
         if (counts is null) return new(new(Elements(verification), false), new(Elements(dispatch), false));
         var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry>>();
         using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT kind, sequence, CASE kind WHEN 'verification' THEN {MetadataSql("entry_json", verificationFields)}
-                ELSE {MetadataSql("entry_json", dispatchFields)} END
+            SELECT kind, sequence, CASE kind WHEN 'verification' THEN {projectVerification("entry_json")}
+                ELSE {projectDispatch("entry_json")} END
                 , json_type(entry_json)
             FROM goal_task_history WHERE goal_id = $goal AND task_id = $task ORDER BY kind, sequence
             """;

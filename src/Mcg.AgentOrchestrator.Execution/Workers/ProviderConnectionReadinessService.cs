@@ -55,6 +55,7 @@ public sealed class ProviderConnectionReadinessService(
     {
         var profile = Select(profileId); // Validate before any observation or write.
         var host = await adapters.CheckAsync(profile, cancellationToken);
+        var observations = new List<ProviderConnectionObservation> { host };
         await store.SaveProviderConnectionObservationAsync(profile.Name, host, cancellationToken);
         if (ProviderConnectionStatusAdapters.Provider(profile) == "Anthropic")
         {
@@ -68,13 +69,12 @@ public sealed class ProviderConnectionReadinessService(
                     ? ProviderConnectionAuthMode.OAuth : ProviderConnectionAuthMode.Unknown,
                 _time.GetUtcNow());
             await store.SaveProviderConnectionObservationAsync(profile.Name, material, cancellationToken);
+            observations.Add(material);
         }
-        return new([await ReadAsync(profile, cancellationToken)]);
-    }
-
-    private async Task<ProviderConnectionProfileReport> ReadAsync(WorkerProfile profile, CancellationToken token)
-    {
-        return Compose(profile, await evidence.ReadProviderConnectionEvidenceAsync(profile.Name, token));
+        // Concurrent checks can advance the listing rows while this check is still running.
+        var recorded = await evidence.ReadProviderConnectionEvidenceAsync(profile.Name, cancellationToken);
+        observations.AddRange(recorded.Where(o => o.EvidenceSource == ProviderConnectionSource.RecordedInvocation));
+        return new([Compose(profile, observations)]);
     }
 
     private ProviderConnectionProfileReport Compose(WorkerProfile profile, IReadOnlyList<ProviderConnectionObservation> evidence)

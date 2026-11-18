@@ -46,6 +46,15 @@ public sealed class ProviderConnectionAdapterTests
     }
 
     [Theory]
+    [InlineData("Logged in using ChatGPT", "Logged in using an API key")]
+    [InlineData("Logged in using API key", "Logged in using ChatGPT")]
+    public void CodexSignIn_ConflictingModesRemainUnknown(string stdout, string stderr)
+    {
+        Assert.Equal((ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.Unknown),
+            ProviderConnectionStatusAdapters.Parse("codex", new(0, stdout, stderr)));
+    }
+
+    [Theory]
     [InlineData(0, "", "API key configured - sk-proj-***ABCDE\r\nAuthentication is checked when you send a request.\r\n", true)]
     [InlineData(0, "API key configured - ***\nAuthentication is checked when you send a request.", "", true)]
     [InlineData(1, "", "API key configured - ***\nAuthentication is checked when you send a request.", false)]
@@ -64,6 +73,9 @@ public sealed class ProviderConnectionAdapterTests
     [InlineData("grok-cli", "grok")]
     [InlineData("custom", "codex exec")]
     [InlineData("codex-cli", "arbitrary-launcher")]
+    [InlineData("codex-cli", "& 'C:\\configured tools\\codex.exe' exec")]
+    [InlineData("claude-cli", "./configured/claude -p")]
+    [InlineData("codex-cli", "codex.ps1 exec")]
     public async Task UnsupportedProfiles_NeverExecuteTemplates(string name, string command)
     {
         var adapter = new ProviderConnectionStatusAdapters("fixture", (_, _) => throw new Exception("must not launch"),

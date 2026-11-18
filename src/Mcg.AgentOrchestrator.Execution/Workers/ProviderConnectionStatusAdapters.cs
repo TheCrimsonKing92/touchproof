@@ -30,13 +30,16 @@ public sealed class ProviderConnectionStatusAdapters(
             ProviderConnectionAuthMode mode = ProviderConnectionAuthMode.Unknown) =>
             new(ProviderConnectionContext.Host, source, result, mode, (time ?? TimeProvider.System).GetUtcNow());
 
-        // A recognized name with a custom launcher is not permission to execute its template.
-        if (cli is null || !string.Equals(Path.GetFileNameWithoutExtension(
-            WorkerProfileDiagnostics.ExtractExecutable(profile.CommandTemplate)), cli, StringComparison.OrdinalIgnoreCase))
+        // Status probes support unqualified native launchers. A path-qualified or custom
+        // launcher cannot be substituted with a different installation found on PATH.
+        var executable = WorkerProfileDiagnostics.ExtractExecutable(profile.CommandTemplate);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (cli is null || !(executable.Equals(cli, comparison) || OperatingSystem.IsWindows() &&
+            (executable.Equals(cli + ".exe", comparison) || executable.Equals(cli + ".cmd", comparison))))
             return Observation(ProviderConnectionResult.Unsupported);
         try
         {
-            var path = (locate ?? Locate)(cli);
+            var path = (locate ?? Locate)(executable);
             if (path is null) return Observation(ProviderConnectionResult.ToolMissing);
             string[] arguments = cli == "codex" ? ["login", "status"] : ["auth", "status", "--json"];
             var request = CreateRequest(path, arguments, workingDirectory);
@@ -67,9 +70,10 @@ public sealed class ProviderConnectionStatusAdapters(
         return new(path, arguments, directory, Deadline, RequireOwnedProcessGroup: true);
     }
 
-    private static string? Locate(string cli)
+    private static string? Locate(string executable)
     {
-        var names = OperatingSystem.IsWindows() ? new[] { cli + ".exe", cli + ".cmd" } : [cli];
+        var names = OperatingSystem.IsWindows() && !Path.HasExtension(executable)
+            ? new[] { executable + ".exe", executable + ".cmd" } : [executable];
         foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator,
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -91,7 +95,9 @@ public sealed class ProviderConnectionStatusAdapters(
             return (ProviderConnectionResult.Unsupported, ProviderConnectionAuthMode.Unknown);
         if (cli == "codex")
         {
-            var signedIn = Exact("Logged in using ChatGPT") || Exact("Logged in using an API key") || Exact("Logged in using API key");
+            var oauth = Exact("Logged in using ChatGPT");
+            var apiKey = Exact("Logged in using an API key") || Exact("Logged in using API key");
+            var signedIn = oauth || apiKey;
             var keyConfigured = ReportsCodexApiKeyConfiguration(output) || ReportsCodexApiKeyConfiguration(error);
             var signedOut = Exact("Not logged in");
             var expired = Exact("Credentials expired") || Exact("Token expired");
@@ -99,13 +105,15 @@ public sealed class ProviderConnectionStatusAdapters(
                 return (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
             if (response.ExitCode == 0 && keyConfigured)
                 return (ProviderConnectionResult.MaterialPresent, ProviderConnectionAuthMode.ApiKey);
-            if (response.ExitCode == 0 && Exact("Logged in using ChatGPT"))
-                return (ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.OAuth);
-            if (response.ExitCode == 0 && (Exact("Logged in using an API key") || Exact("Logged in using API key")))
-                return (ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.ApiKey);
-            if (Exact("Not logged in")) return (ProviderConnectionResult.SignedOut, ProviderConnectionAuthMode.Unknown);
-            if (Exact("Credentials expired") || Exact("Token expired"))
-                return (ProviderConnectionResult.Expired, ProviderConnectionAuthMode.Unknown);
+            if (response.ExitCode == 0 && signedIn)
+                return (ProviderConnectionResult.SignedIn, (oauth, apiKey) switch
+                {
+                    (true, false) => ProviderConnectionAuthMode.OAuth,
+                    (false, true) => ProviderConnectionAuthMode.ApiKey,
+                    _ => ProviderConnectionAuthMode.Unknown
+                });
+            if (signedOut) return (ProviderConnectionResult.SignedOut, ProviderConnectionAuthMode.Unknown);
+            if (expired) return (ProviderConnectionResult.Expired, ProviderConnectionAuthMode.Unknown);
         }
         if (cli == "claude")
         {

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -45,7 +46,7 @@ internal static class ProviderConnectionHistoryReader
                 var history = await new GoalTaskHistoryStore(options).ReadMetadataAsync<Verification, Dispatch>(connection,
                     id, task.Id, JsonSerializer.SerializeToElement(task.VerificationHistory ?? [], options),
                     JsonSerializer.SerializeToElement(task.DispatchHistory ?? [], options), task.HistoryInTable,
-                    VerificationFields, DispatchFields, token);
+                    ProjectVerification, ProjectDispatch, token);
                 var verifications = history.Verification.Entries.Select(e => e.Deserialize<Verification>(options)!)
                     .Append(history.LatestVerification.ValueKind != JsonValueKind.Undefined
                         ? history.LatestVerification.Deserialize<Verification>(options) : task.LastVerification)
@@ -65,10 +66,13 @@ internal static class ProviderConnectionHistoryReader
                     var dispatch = matches[0];
                     if (string.IsNullOrWhiteSpace(dispatch.WorkerName) ||
                         !profiles.TryGetValue(LunaLaneNames.NormalizeProfileName(dispatch.WorkerName) ?? "", out var profileId)) continue;
-                    var outcome = verification.ProviderFailureKind == ProviderFailureKind.AuthenticationRequired
-                        ? ProviderConnectionResult.AuthenticationFailed
-                        : verification.ExitCode == 0 && verification.WorkerResultPresent == true ? ProviderConnectionResult.WorkerSucceeded
-                        : verification.ExitCode is not null and not 0 ? ProviderConnectionResult.WorkerFailed : ProviderConnectionResult.Unknown;
+                    var outcome = verification switch
+                    {
+                        { ProviderFailureKind: ProviderFailureKind.AuthenticationRequired } => ProviderConnectionResult.AuthenticationFailed,
+                        { HasOrchestratorFailure: true } or { ExitCode: not null and not 0 } => ProviderConnectionResult.WorkerFailed,
+                        { ExitCode: 0, WorkerResultPresent: true } => ProviderConnectionResult.WorkerSucceeded,
+                        _ => ProviderConnectionResult.Unknown
+                    };
                     observations[profileId].Add(new(dispatch.SandboxLowIntegrity == true ? ProviderConnectionContext.WorkerSandbox
                             : ProviderConnectionContext.WorkerUnspecified,
                         ProviderConnectionSource.RecordedInvocation, outcome, ObservedAt: completed.ToUniversalTime(),
@@ -87,8 +91,7 @@ internal static class ProviderConnectionHistoryReader
 
     private static string HotProjection()
     {
-        string Entry(string expression, bool verification) => GoalTaskHistoryStore.MetadataSql(expression,
-            verification ? VerificationFields : DispatchFields);
+        string Entry(string expression, bool verification) => verification ? ProjectVerification(expression) : ProjectDispatch(expression);
         string Latest(string property, bool verification) =>
             $"CASE WHEN json_type(task.value, '$.{property}') = 'object' THEN {Entry("json_extract(task.value, '$." + property + "')", verification)} ELSE NULL END";
         string History(string property, bool verification) =>
@@ -104,10 +107,29 @@ internal static class ProviderConnectionHistoryReader
             """;
     }
 
+    private static string ProjectVerification(string expression)
+    {
+        // SQLite trim defaults to spaces. Match .NET's whitespace set used by verification.Succeeded.
+        const string whitespace = "char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288)";
+        return $"""
+            json_set({GoalTaskHistoryStore.MetadataSql(expression, VerificationFields)}, '$.HasOrchestratorFailure',
+                json(CASE WHEN trim(json_extract(({expression}), '$.OrchestratorFailureReason'), {whitespace}) <> ''
+                    THEN 'true' ELSE 'false' END))
+            """;
+    }
+
+    private static string ProjectDispatch(string expression) => GoalTaskHistoryStore.MetadataSql(expression, DispatchFields);
+
     private sealed record GoalFields(string Id, bool IsMetadataOnly, IReadOnlyList<TaskFields>? Tasks);
     private sealed record TaskFields(string Id, Verification? LastVerification, Dispatch? LastDispatch,
         IReadOnlyList<Verification>? VerificationHistory, IReadOnlyList<Dispatch>? DispatchHistory, JsonElement HistoryInTable);
     private sealed record Verification(DateTimeOffset? CompletedAt, int? ExitCode, ProviderFailureKind? ProviderFailureKind,
-        DateTimeOffset? DispatchAttemptAt, VerificationEvidenceSource? EvidenceSource, bool? WorkerResultPresent);
+        DateTimeOffset? DispatchAttemptAt, VerificationEvidenceSource? EvidenceSource, bool? WorkerResultPresent,
+        bool HasOrchestratorFailure)
+    {
+        // Archived snapshots stream the original JSON. Keep only the derived flag in the record.
+        [JsonPropertyName("OrchestratorFailureReason")]
+        public string? ArchivedFailureReason { init => HasOrchestratorFailure = !string.IsNullOrWhiteSpace(value); }
+    }
     private sealed record Dispatch(string WorkerName, DateTimeOffset? DispatchedAt, bool? SandboxLowIntegrity);
 }
