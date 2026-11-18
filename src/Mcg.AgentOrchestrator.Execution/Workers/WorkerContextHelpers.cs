@@ -23,9 +23,11 @@ internal static class WorkerContextHelpers
         AgentCatalog.OpenAiTerraSubscriptionModelAlias,
         AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias,
         AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias,
+        AgentCatalog.OpenAiGpt62SolSubscriptionModelAlias,
         AgentCatalog.OpenAiGpt61TerraSubscriptionModelAlias,
         AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias,
-        AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias
+        AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias,
+        AgentCatalog.OpenAiGpt62AstraSubscriptionModelAlias
     };
 
     public static string TrimArtifactBlock(string value, int maxChars)
