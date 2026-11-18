@@ -45,8 +45,8 @@ public sealed class Gpt61SolCatalogParityTests
 
     [Theory]
     [InlineData(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
-    [InlineData(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
-    [InlineData("GpT-6-SoL", AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
+    [InlineData(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, AgentCatalog.OpenAiGpt62SolSubscriptionModelAlias, "medium")]
+    [InlineData("GpT-6-SoL", AgentCatalog.OpenAiGpt62SolSubscriptionModelAlias, "medium")]
     [InlineData("gpt-6-luna", "gpt-6-luna", "medium")]
     [InlineData("gpt-6-astra", "gpt-6-astra", "medium")]
     [InlineData("custom-gpt-6-sol", "custom-gpt-6-sol", "low")]

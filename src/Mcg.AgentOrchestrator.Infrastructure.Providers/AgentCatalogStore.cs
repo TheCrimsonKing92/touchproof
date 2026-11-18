@@ -370,7 +370,7 @@ public static class AgentCatalogStore
         if (IsOpenAiCodexSubscription(agent, subscription) &&
             string.Equals(subscription.ModelAlias, AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
         {
-            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias };
+            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiGpt62SolSubscriptionModelAlias };
         }
 
         return string.IsNullOrWhiteSpace(subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)

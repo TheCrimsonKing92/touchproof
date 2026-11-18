@@ -68,7 +68,7 @@ public sealed class ConductorRoundModelResolverTests
         var result = ConductorRoundModelResolver.Resolve(new([binding]), binding.Purpose);
         Assert.True(result.IsValid);
         Assert.Equal("codex-cli", result.WorkerProfileName);
-        Assert.Equal("gpt-6.1-sol", result.Alias);
+        Assert.Equal("gpt-6.2-sol", result.Alias);
         Assert.Equal(AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", "gpt-6.1-sol"), result.ReasoningEffort);
         var other = binding with { Purpose = ModelFunctionPurposes.ConductorSteward };
         Assert.True(ConductorRoundModelResolver.Resolve(new([other]), other.Purpose).IsValid);
@@ -83,7 +83,7 @@ public sealed class ConductorRoundModelResolverTests
         var result = ConductorRoundModelResolver.Resolve(new([binding]), binding.Purpose, fallback: true);
         Assert.True(result.IsValid);
         Assert.Equal("codex-cli", result.WorkerProfileName);
-        Assert.Equal("gpt-6.1-sol", result.Alias);
+        Assert.Equal("gpt-6.2-sol", result.Alias);
         Assert.Equal("high", result.ReasoningEffort);
     }
 
@@ -109,7 +109,7 @@ public sealed class ConductorRoundModelResolverTests
         var result = ConductorRoundModelResolver.Resolve(new([binding]), purpose.ToUpperInvariant(), fallback);
         Assert.True(result.IsValid, result.InvalidReason);
         Assert.Equal(profile, result.WorkerProfileName);
-        Assert.Equal(profile == "codex-cli" ? "gpt-6.1-sol" : alias, result.Alias);
+        Assert.Equal(profile == "codex-cli" ? "gpt-6.2-sol" : alias, result.Alias);
         Assert.Equal("high", result.ReasoningEffort);
         Assert.Equal("sonnet", ConductorRoundModelResolver.Resolve(ModelFunctionCatalog.Empty, purpose).Alias);
         Assert.False(ConductorRoundModelResolver.Resolve(ModelFunctionCatalog.Empty, purpose, true).IsValid);
