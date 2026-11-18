@@ -48,6 +48,11 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
         var resolvedReferenceCharacters = lines
             .Where(line => resolvedReferences.Any(id => line.Contains(id, StringComparison.Ordinal)))
             .Sum(line => line.Length);
+        if (role is AgentRole.Tester or AgentRole.Reviewer)
+        {
+            Assert.Contains("RESOLVED_CARRIED count=64", prompt, StringComparison.Ordinal);
+            Assert.True(resolvedReferenceCharacters > 0);
+        }
         var actionableCharacters = lines.Where(line =>
                 line.Contains(OpenHistoryId, StringComparison.Ordinal) ||
                 line.Contains(HistoryReceiptId, StringComparison.Ordinal))
@@ -242,6 +247,15 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
             receipts: [new FindingEvidenceReceipt(HistoryReceiptId, headCommit, request, true, true, "OPEN_EVIDENCE_BODY")]);
         kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, "Preserve every actionable finding and its evidence.",
             RetryCause.NewTestFinding, invalidateDownstream: false);
+
+        // Assert replayed state before measuring delivery or submitting a reopening round.
+        // The merged ledger alone cannot prove that the earlier worker rounds were replayed.
+        var source = kernel.BuildTaskBriefSource(goal.Id, historyTask.Id);
+        var convergence = Assert.Single(source.Segments, segment => segment.ConvergenceChangedFiles is not null);
+        Assert.Contains("RESOLVED_CARRIED count=64", convergence.Lines);
+        Assert.All(resolved, finding => Assert.Contains(
+            $"- {finding.StableId} | severity={finding.Severity.ToString().ToLowerInvariant()} | {finding.Location} | carry forward; do not re-review unless this exact anchor was touched.",
+            convergence.Lines));
         return fixture;
     }
 
@@ -268,9 +282,13 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
             "touched_anchors: []",
             $"verdict: {(findings.Any(finding => finding.State == ReviewFindingState.Open) ? "needs-work" : "pass")}",
             "END_WORKER_RESULT");
+        var outputDirectory = Path.Combine(fixture.Root, "history-output");
+        Directory.CreateDirectory(outputDirectory);
+        var outputPath = Path.Combine(outputDirectory, $"{owner.Id.Value}-{minute}.out.log");
+        File.WriteAllText(outputPath, workerOutput);
         fixture.Kernel.RecordTaskVerification(fixture.Goal.Id, owner.Id, new TaskVerificationRecord(
             "review", fixture.WorkingDirectory, 0, workerOutput, string.Empty,
-            HistoryFixtureTime.AddMinutes(minute), ReviewFindingTouchedAnchors: touched ?? [],
+            HistoryFixtureTime.AddMinutes(minute), StandardOutputPath: outputPath, ReviewFindingTouchedAnchors: touched ?? [],
             ReviewedCommit: fixture.HeadCommit, MergedReviewFindings: findings,
             FindingEvidenceReceipts: receipts ?? [], FullStandardOutput: workerOutput, FullStandardError: string.Empty));
     }
