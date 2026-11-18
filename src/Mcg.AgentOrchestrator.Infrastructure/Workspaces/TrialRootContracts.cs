@@ -9,6 +9,11 @@ internal enum TrialContainmentLevel
     WindowsLowIntegrityNoBreakawayJob
 }
 
+/// <param name="ProtectedPaths">
+/// Null protects the current contents of the source's git-tracked paths, frozen at creation.
+/// Explicit paths are protected recursively; an empty list protects nothing. Ignored and
+/// untracked runtime content is excluded from default protection.
+/// </param>
 internal sealed record TrialRootRequest(
     string SourceRepositoryPath,
     string BaseCommit,
@@ -19,9 +24,16 @@ internal sealed record TrialRootRequest(
 
 internal sealed record ProtectedFileFingerprint(long Length, string Sha256);
 
+internal enum ProtectedPathCaptureMode
+{
+    Recursive,
+    TrackedPath
+}
+
 internal sealed record ProtectedPathSnapshot(
     string RootPath,
-    IReadOnlyDictionary<string, ProtectedFileFingerprint> Files);
+    IReadOnlyDictionary<string, ProtectedFileFingerprint> Files,
+    ProtectedPathCaptureMode CaptureMode = ProtectedPathCaptureMode.Recursive);
 
 internal sealed record TrialTeardownReport(
     string RootPath,

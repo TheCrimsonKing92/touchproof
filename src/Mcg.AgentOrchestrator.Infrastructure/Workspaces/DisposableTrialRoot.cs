@@ -14,6 +14,7 @@ internal sealed class DisposableTrialRoot
     private readonly ITrialJobExitWaiter _jobExitWaiter;
     private readonly bool _useContainedJob;
     private readonly bool _useLowIntegrityProcess;
+    private readonly Action<string>? _beforeProtectedFingerprint;
 
     public DisposableTrialRoot()
         : this(
@@ -30,13 +31,15 @@ internal sealed class DisposableTrialRoot
         ITrialProcessInventory processInventory,
         bool useContainedJob = true,
         bool useLowIntegrityProcess = true,
-        ITrialJobExitWaiter? jobExitWaiter = null)
+        ITrialJobExitWaiter? jobExitWaiter = null,
+        Action<string>? beforeProtectedFingerprint = null)
     {
         _integrityLabeler = integrityLabeler;
         _processInventory = processInventory;
         _jobExitWaiter = jobExitWaiter ?? new SystemTrialJobExitWaiter();
         _useContainedJob = useContainedJob;
         _useLowIntegrityProcess = useLowIntegrityProcess;
+        _beforeProtectedFingerprint = beforeProtectedFingerprint;
     }
 
     public TrialRootLease Create(TrialRootRequest request)
@@ -48,6 +51,17 @@ internal sealed class DisposableTrialRoot
         {
             throw new DirectoryNotFoundException($"Trial clone source does not exist: '{source}'.");
         }
+
+        // Explicit capture needs no Git command. Refuse inaccessible content before any
+        // setup subprocess or filesystem artifact is created.
+        var captureMode = request.ProtectedPaths is null
+            ? ProtectedPathCaptureMode.TrackedPath
+            : ProtectedPathCaptureMode.Recursive;
+        var protectedPaths = (request.ProtectedPaths ?? DiscoverTrackedPaths(source))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => CaptureProtectedPath(path, captureMode, _beforeProtectedFingerprint))
+            .ToArray();
 
         var revision = RunGitRequired(source, "rev-parse", $"{request.BaseCommit}^{{commit}}").Output.Trim();
         var baseDirectory = Path.GetFullPath(request.BaseDirectory ?? DefaultBaseDirectory());
@@ -78,12 +92,6 @@ internal sealed class DisposableTrialRoot
                     ? TrialContainmentLevel.WindowsLowIntegrityNoBreakawayJob
                     : TrialContainmentLevel.None;
             }
-
-            var protectedPaths = (request.ProtectedPaths ?? [source])
-                .Select(Path.GetFullPath)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Select(CaptureProtectedPath)
-                .ToArray();
 
             started.Stop();
             return new TrialRootLease(
@@ -305,33 +313,131 @@ internal sealed class DisposableTrialRoot
         }
     }
 
-    internal static ProtectedPathSnapshot CaptureProtectedPath(string path)
+    private static IReadOnlyList<string> DiscoverTrackedPaths(string source)
+    {
+        string output;
+        try
+        {
+            output = RunGitRequired(source, "ls-files", "-z").Output;
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new InvalidOperationException(
+                $"Could not discover protected tracked paths at '{source}'. " +
+                "Point the trial at a clean exact-commit checkout. " + exception.Message, exception);
+        }
+        if (output.Length == 0)
+        {
+            return [];
+        }
+
+        if (output[^1] != '\0')
+        {
+            throw new InvalidOperationException(
+                $"Could not discover protected tracked paths at '{source}': git ls-files -z returned incomplete output. " +
+                "Point the trial at a clean exact-commit checkout.");
+        }
+
+        var paths = output[..^1].Split('\0');
+        if (paths.Any(path => path.Length == 0))
+        {
+            throw new InvalidOperationException(
+                $"Could not discover protected tracked paths at '{source}': git ls-files -z returned an empty path. " +
+                "Point the trial at a clean exact-commit checkout.");
+        }
+
+        return paths.Select(path => Path.GetFullPath(Path.Combine(source, path))).ToArray();
+    }
+
+    internal static ProtectedPathSnapshot CaptureProtectedPath(string path) =>
+        CaptureProtectedPath(path, ProtectedPathCaptureMode.Recursive);
+
+    internal static ProtectedPathSnapshot CaptureProtectedPath(
+        string path,
+        ProtectedPathCaptureMode captureMode,
+        Action<string>? beforeProtectedFingerprint = null)
     {
         var root = Path.GetFullPath(path);
         var entries = new Dictionary<string, ProtectedFileFingerprint>(StringComparer.OrdinalIgnoreCase);
-        if (File.Exists(root))
+        try
         {
-            entries[root] = Fingerprint(root);
-        }
-        else if (Directory.Exists(root))
-        {
-            entries[root] = new ProtectedFileFingerprint(-1, "<directory>");
-            foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+            if (File.Exists(root))
             {
-                entries[Path.GetFullPath(directory)] = new ProtectedFileFingerprint(-1, "<directory>");
+                entries[root] = CaptureFingerprint(root, beforeProtectedFingerprint);
+            }
+            else if (Directory.Exists(root))
+            {
+                entries[root] = CaptureDirectoryMarker(root);
+                if (captureMode == ProtectedPathCaptureMode.Recursive)
+                {
+                    foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+                    {
+                        entries[Path.GetFullPath(directory)] = CaptureDirectoryMarker(directory);
+                    }
+
+                    foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                    {
+                        entries[Path.GetFullPath(file)] = CaptureFingerprint(file, beforeProtectedFingerprint);
+                    }
+                }
+            }
+            else
+            {
+                // Exists suppresses access errors. Only a genuinely absent initial path
+                // (or the existing dangling-link disposition) may get the missing marker.
+                ConfirmInitiallyMissing(root);
+                entries[root] = new ProtectedFileFingerprint(-2, "<missing>");
+            }
+        }
+        catch (Exception exception) when (exception is not TrialProtectedPathException &&
+            exception is IOException or UnauthorizedAccessException)
+        {
+            throw new TrialProtectedPathException(root, exception);
+        }
+
+        return new ProtectedPathSnapshot(root, entries, captureMode);
+    }
+
+    private static void ConfirmInitiallyMissing(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // This check precedes discovery; absence is a recorded baseline, not skipped content.
+        }
+    }
+
+    private static ProtectedFileFingerprint CaptureDirectoryMarker(string path)
+    {
+        try
+        {
+            if ((File.GetAttributes(path) & FileAttributes.Directory) == 0)
+            {
+                throw new IOException("The discovered protected directory is no longer a directory.");
             }
 
-            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-            {
-                entries[Path.GetFullPath(file)] = Fingerprint(file);
-            }
+            return new ProtectedFileFingerprint(-1, "<directory>");
         }
-        else
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            entries[root] = new ProtectedFileFingerprint(-2, "<missing>");
+            throw new TrialProtectedPathException(path, exception);
         }
+    }
 
-        return new ProtectedPathSnapshot(root, entries);
+    private static ProtectedFileFingerprint CaptureFingerprint(string path, Action<string>? beforeProtectedFingerprint)
+    {
+        try
+        {
+            beforeProtectedFingerprint?.Invoke(path);
+            return Fingerprint(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new TrialProtectedPathException(path, exception);
+        }
     }
 
     private static ProtectedFileFingerprint Fingerprint(string path)
