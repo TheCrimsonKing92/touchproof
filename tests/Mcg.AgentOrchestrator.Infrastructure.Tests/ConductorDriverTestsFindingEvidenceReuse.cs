@@ -362,7 +362,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
     }
 
     [Xunit.Fact]
-    public void ThirdEvidenceDeliveryRetryEscalatesWithoutDispatchingWorker()
+    public void MissingExecutor_EscalatesOnceWithoutDispatchingWorker()
     {
         const string candidateSha = "abc1234";
         var (kernel, goal) = SoftwareGoal();
@@ -371,12 +371,18 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         PassVerification(kernel, goal, developer, hasCommittedChanges: true);
         var finding = EvidenceFindingWithRequest(
             "The executor is unavailable for the same request.",
-            id: "capped-delivery",
+            id: "missing-executor",
             category: FindingCategory.TestEvidence);
         var retries = 0;
-        string? escalation = null;
+        var starts = 0;
+        var escalations = new List<string>();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            dispatchAndStart: _ =>
+            {
+                starts++;
+                return DispatchStartOutcome.Started();
+            },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
                 retries++;
@@ -386,18 +392,17 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
-            writeEscalation: (_, _, message) => escalation = message);
+            writeEscalation: (_, _, message) => escalations.Add(message));
 
-        for (var occurrence = 0; occurrence < 3; occurrence++)
-        {
-            RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
-            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-        }
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        var identity = FindingRoundBatchCoordinator.Identity(driver, goal, tester)!;
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
 
-        Assert.Equal(2, retries);
-        Assert.Contains("retry cap reached", escalation, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("capped-delivery", escalation, StringComparison.Ordinal);
-        Assert.Contains(candidateSha, escalation, StringComparison.Ordinal);
+        Assert.Equal(0, retries);
+        Assert.Equal(0, starts);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(goal, identity));
+        Assert.Contains("No focused evidence executor was configured", Assert.Single(escalations), StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -764,7 +769,13 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         FailReviewerNeedsWork(kernel, goal, reviewer, "first constituent", findings: [first]);
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
         FailReviewerNeedsWork(kernel, goal, reviewer, "second constituent", findings: [second]);
+        Assert.Contains(reviewer.LastVerification!.MergedReviewFindings!, finding =>
+            finding.StableId == first.StableId && finding.State == ReviewFindingState.Open);
+        var secondBatch = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer)!;
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var member = Assert.Single(FindingRoundBatchAccounting.Read(goal, secondBatch).Where(item => item.Kind == "member"));
+        Assert.Equal(second.StableId, Assert.Single(member.FindingIds));
+        Assert.True(FindingRoundBatchAccounting.IsClosed(goal, secondBatch));
         FailReviewerNeedsWork(kernel, goal, reviewer, "union request", findings: [union]);
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -957,18 +968,13 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceRun: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRun(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-        FailReviewerNeedsWork(
-            kernel,
-            goal,
-            reviewer,
-            "same request after apparatus failure",
-            findings: [finding with { Description = "The unchanged request must be reissued." }]);
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
 
         Assert.Equal(2, focusedRuns);
         Assert.All(

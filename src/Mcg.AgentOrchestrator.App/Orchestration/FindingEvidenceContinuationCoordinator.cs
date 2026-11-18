@@ -75,8 +75,10 @@ internal static class FindingEvidenceContinuationCoordinator
         // An existing batch must close through its own observation and admission path.
         if (identity is not null && (FindingRoundBatchAccounting.HasOpenBatch(goal, identity) ||
             FindingRoundBatchAccounting.IsClosed(goal, identity))) return false;
+        var verification = reviewer.LastVerification ?? reviewer.VerificationHistory.LastOrDefault();
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)) return false;
         var selectedIds = continuation.Selections.Select(selection => selection.FindingId).ToHashSet(StringComparer.Ordinal);
-        return FindingRoundBatchAccounting.Members((reviewer.LastVerification?.MergedReviewFindings ?? [])
+        return FindingRoundBatchAccounting.Members(round.Findings
                 .Where(finding => finding.State == ReviewFindingState.Open))
             .All(member => member.FindingIds.Any(selectedIds.Contains));
     }

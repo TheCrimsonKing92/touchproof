@@ -64,15 +64,15 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
         if (advisoryReviewSiblings)
             reviewFindings = [.. reviewFindings,
                 Finding("advisory-one", "OtherTests") with { Severity = FindingSeverity.Advisory },
-                Finding("advisory-two", "ThirdTests") with { Severity = FindingSeverity.Advisory }];
+                Finding("advisory-two", "ThirdTests", "Core.Tests") with { Severity = FindingSeverity.Advisory }];
         Record(reviewer, reviewFindings, Now.AddMinutes(-1), Now, "needs-work");
         if (retryReview) Kernel.RetryTask(goal.Id, reviewer.Id, "No source or context change", RetryCause.UnchangedContextRepeat);
     }
 
-    private static ReviewFinding Finding(string id, string selection) => new(id, ReviewFindingState.Open,
+    private static ReviewFinding Finding(string id, string selection, string project = Project) => new(id, ReviewFindingState.Open,
         new ReviewFindingLocation("tests/LaneTests.cs", id), "Exact executed guard evidence is missing",
         FindingSeverity.Blocking, FindingCategory.TestEvidence,
-        new FindingEvidenceRequest([new(Project, selection)]));
+        new FindingEvidenceRequest([new(project, selection)]));
 
     private void Record(TaskSpec task, IReadOnlyList<ReviewFinding> findings, DateTimeOffset dispatchAt,
         DateTimeOffset completedAt, string verdict)

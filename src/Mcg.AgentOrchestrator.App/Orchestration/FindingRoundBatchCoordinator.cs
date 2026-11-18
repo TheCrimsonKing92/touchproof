@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class FindingRoundBatchCoordinator
 {
     internal sealed record ExecutionContext(
-        AcceptanceGateEngineSettings HomeSettings, string HomeBasis, string BatchBasis,
+        ReviewFindingRound Round, AcceptanceGateEngineSettings HomeSettings, string HomeBasis, string BatchBasis,
         IReadOnlyDictionary<string, (KeyedRepositoryEvidenceTarget? Target, string Failure)> Targets)
     {
         internal static string TargetBasis(KeyedRepositoryEvidenceTarget target) =>
@@ -40,7 +40,7 @@ internal static class FindingRoundBatchCoordinator
         var batch = targets.Count == 0 ? home : FindingEvidenceReviewContext.Hash(JsonSerializer.Serialize(
             new[] { home }.Concat(targets.Select(pair => pair.Key + ":" +
                 (pair.Value.Target is { } target ? ExecutionContext.TargetBasis(target) : "unavailable")))));
-        return new(settings, home, batch, targets);
+        return new(round, settings, home, batch, targets);
     }
 
     internal static ReviewFinding[] PendingFindings(TaskSpec task, string? candidate) =>
@@ -257,15 +257,16 @@ internal static class FindingRoundBatchCoordinator
                 "Finding batch closure was already applied; waiting for the routed owner.");
             return true;
         }
-        var findings = task.LastVerification?.MergedReviewFindings ?? [];
-        if (identity is not null)
-            FindingRoundBatchAccounting.Begin(goal, identity, findings.Where(finding => finding.State == ReviewFindingState.Open),
-                driver._recordFindingEvidenceRequest);
         if (execution is null)
         {
             decision = FailedGoalFindingObservation.None;
             return false;
         }
+        var findings = task.LastVerification?.MergedReviewFindings ?? [];
+        if (identity is not null)
+            FindingRoundBatchAccounting.Begin(goal, identity,
+                execution.Round.Findings.Where(finding => finding.State == ReviewFindingState.Open),
+                driver._recordFindingEvidenceRequest);
         FindingRoundRedCoverage.Delivery? completedDelivery = null;
         var handled = driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, execution,
             delivery => completedDelivery = delivery, out decision);

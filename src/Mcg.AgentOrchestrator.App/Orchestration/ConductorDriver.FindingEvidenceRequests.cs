@@ -20,11 +20,7 @@ internal sealed partial class ConductorDriver
         out FailedGoalFindingObservation decision)
     {
         decision = FailedGoalFindingObservation.None;
-        if (!WorkerResultBlockers.TryFindReviewFindingRound(requestingTask.LastVerification, out var round, out _))
-        {
-            return false;
-        }
-
+        var round = execution.Round;
         var mergedFindings = requestingTask.LastVerification?.MergedReviewFindings ?? [];
         var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
         var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
