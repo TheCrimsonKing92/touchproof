@@ -280,6 +280,11 @@ if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcom
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();
 CrosswalkExecutableComposition.Install();
+if (CliProviderConnectionsCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliProviderConnectionsCommand.ExecuteWorkspaceAsync(startupArgs, workspace,
+        () => ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace)));
+}
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
