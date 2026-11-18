@@ -9,6 +9,8 @@ public sealed record OwnerQuestionHoldBlocker(
     string? TaskId, int? TaskNumber, string ResolvingVerb, string NextAction)
 {
     public string? TriggerIdentity { get; private init; }
+    public string? ItemId { get; private init; }
+    public string? Recommendation { get; private init; }
 
     public static OwnerQuestionHoldBlocker? TryRead(Goal goal)
     {
@@ -72,6 +74,11 @@ public sealed record OwnerQuestionHoldBlocker(
         if (recommendationStart <= questionStart ||
             recommendationStart + recommendationMarker.Length == blocker.Length) return fallback;
         var targetId = item[(colon + 1)..];
+        var parsed = fallback with
+        {
+            ItemId = targetId,
+            Recommendation = blocker[(recommendationStart + recommendationMarker.Length)..]
+        };
         var command = item[..colon] switch
         {
             "HumanInput" => $"answer {targetId} --text-file <path>",
@@ -79,7 +86,7 @@ public sealed record OwnerQuestionHoldBlocker(
             "Clarification" => $"attention answer {goal8} {targetId} --text-file <path>",
             _ => null
         };
-        return command is null ? fallback : fallback with
+        return command is null ? parsed : parsed with
         {
             Question = blocker[questionStart..recommendationStart], NextAction = command
         };
