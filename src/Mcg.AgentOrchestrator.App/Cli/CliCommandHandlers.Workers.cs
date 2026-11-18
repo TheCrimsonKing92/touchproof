@@ -417,21 +417,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-            var started = new GoalDispatchOperations().StartDispatches(
-                context.Kernel,
-                context.Workspace,
-                context.CurrentGoal,
-                context.Agents,
-                context.WorkerProfiles,
-                context.Providers,
-                refreshBeforeStart: false);
-            DispatchResultTextView.PrintProcessBatchResult(context.CurrentGoal, started);
-            if (started.StartFailures?.FirstOrDefault() is { } batchStartFailure)
-            {
-                context.FailAfterCommit(batchStartFailure.Reason);
-            }
-
-            return started.Tasks.Count > 0 || started.StartFailures?.Count > 0;
+            return CliBatchDispatchStart.StartPrepared(context);
 
         case "refresh-dispatch":
             var refreshUsage = CliCommandHelp.RefreshDispatchSyntax;
