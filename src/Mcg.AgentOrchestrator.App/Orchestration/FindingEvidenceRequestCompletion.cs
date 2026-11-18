@@ -10,13 +10,13 @@ internal static class FindingEvidenceRequestCompletion
         FindingEvidenceBatch batch,
         FindingEvidenceReceipt receipt,
         Func<FindingEvidenceSelection, string> formatSelection,
-        bool actionableCandidateRed = false)
+        IEnumerable<FindingEvidenceBatch>? supersededByActionableRed = null)
     {
         var executedCoverage = FindingEvidenceExecutedCoverage.ExecutedSelections(receipt, formatSelection)
             .ToHashSet();
         var candidateExecuted = (receipt.Arms ?? []).Any(arm =>
             arm is { Arm: FindingEvidenceArm.Candidate, Accepted: true, ExecutedTestCount: > 0 });
-        return initialRequestDispositions.Select(disposition =>
+        var completedDispositions = initialRequestDispositions.Select(disposition =>
         {
             if (!disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal)) return disposition;
             var member = batch.Members.Single(member => member.Identity == disposition.RequestIdentity);
@@ -37,7 +37,7 @@ internal static class FindingEvidenceRequestCompletion
                 : disposition with
                 {
                     Disposition = "incomplete",
-                    Decision = actionableCandidateRed
+                    Decision = supersededByActionableRed is not null
                         ? FindingEvidenceRequestDecision.DeferredToNextCandidate
                         : FindingEvidenceRequestDecision.PendingExecution,
                     Reason = "candidate-selections-not-executed",
@@ -45,6 +45,16 @@ internal static class FindingEvidenceRequestCompletion
                     SourceReceiptIds = (disposition.SourceReceiptIds ?? []).Append(receipt.ReceiptId)
                         .Distinct(StringComparer.Ordinal).ToArray()
                 };
-        }).ToArray();
+        });
+        if (supersededByActionableRed is null) return completedDispositions.ToArray();
+
+        return completedDispositions.Where(disposition =>
+                batch.Members.Any(member => member.Identity == disposition.RequestIdentity))
+            .Concat(supersededByActionableRed.SelectMany(superseded => superseded.Members).SelectMany(member =>
+                member.Findings.Select(finding => new FindingEvidenceRequestDisposition(
+                    finding.StableId, member.Identity, "superseded", "superseded-by-actionable-red",
+                    FindingEvidenceRequestDecision.Superseded, receipt.CandidateSha, receipt.FindingRoundFingerprint,
+                    SourceReceiptIds: [receipt.ReceiptId], ExecutionBasisIdentity: receipt.ExecutionBasisIdentity))))
+            .ToArray();
     }
 }

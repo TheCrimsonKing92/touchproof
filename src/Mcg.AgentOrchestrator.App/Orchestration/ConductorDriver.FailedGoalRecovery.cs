@@ -118,27 +118,8 @@ internal sealed partial class ConductorDriver
             if (decision.DiscriminatingEvidence == "failed-terminal-fallthrough" && goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed) is { } tester &&
                 _getPreReviewEvidenceContext(goal).CandidateSha is { } candidate && AttributedFailureDeveloperRoute.Decide(goal, AttributedFailureDeveloperRoute.ReadTesterReceipt(goal, tester, candidate), candidate) is { IsRoute: true } route)
                 return RouteAttributedFailure(goal, goalPrefix, policy, route);
-            var reason = SandboxPreparationStartStatus.EscalationReason(goal, decision.Reason, _recordTaskNote);
-            if (verifyingFindingObservation?.BatchClosure is { } closure)
-            {
-                LandingEscalationWriteResult? delivery = null;
-                if (!FindingRoundBatchCoordinator.TryApply(this, goal, closure,
-                    () => IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _),
-                    () => (delivery = WriteEscalation(goal, state, reason)).Delivered))
-                {
-                    var hold = delivery is null ? FindingRoundBatchCoordinator.ClosedHold(state, decision.Identity)
-                        : new ConductorAdvanceOutcome.Held(state,
-                            $"Finding batch escalation delivery remains pending (JSON: {delivery.JsonOutcome}, collaboration: {delivery.CollaborationOutcome}).");
-                    return MakeResult(goal.Id.Value, goalPrefix, policy, hold);
-                }
-            }
-            else RecordEscalation(goal, state, reason);
-            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(state, reason)
-            {
-                Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision),
-                Failure = decision.Reason == facts.TerminalEscalationReason
-                    ? ConductorOutcomeText.TerminalFailure(goal, state) : null
-            });
+            return EscalateFailedGoalRecovery(goal, goalPrefix, policy, state, decision,
+                verifyingFindingObservation?.BatchClosure, decision.Reason == facts.TerminalEscalationReason);
         }
         if (decision.Backoff > TimeSpan.Zero)
             _emptyOutputBackoffDelay(decision.Backoff);

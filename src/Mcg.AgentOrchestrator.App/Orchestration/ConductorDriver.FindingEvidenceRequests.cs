@@ -474,21 +474,9 @@ internal sealed partial class ConductorDriver
             evidence.Summary, armReceipts, FindingRoundFingerprint: findingRoundFingerprint,
             ExecutionBasisIdentity: executionBasisIdentity, NegativeControlOutcome: evidence.NegativeControlOutcome,
             RevertPathsRejection: evidence.RevertPathsRejection);
-        var completedRequestDispositions = FindingEvidenceRequestCompletion.BuildDispositions(
-            initialRequestDispositions, runnable, receipt, FormatFindingEvidenceSelection, actionableCandidateRed is not null);
-        var requestDispositions = actionableCandidateRed is not null
-            ? completedRequestDispositions.Where(disposition =>
-                    runnable.Members.Any(member => member.Identity == disposition.RequestIdentity))
-                .Concat(batches.Skip(1).SelectMany(batch => batch.Members).SelectMany(member =>
-                    member.Findings.Select(finding => new FindingEvidenceRequestDisposition(
-                        finding.StableId,
-                        member.Identity,
-                        "superseded",
-                        "superseded-by-actionable-red", FindingEvidenceRequestDecision.Superseded,
-                        candidateSha, findingRoundFingerprint, SourceReceiptIds: [receiptId],
-                        ExecutionBasisIdentity: executionBasisIdentity))))
-                .ToArray()
-            : completedRequestDispositions;
+        var requestDispositions = FindingEvidenceRequestCompletion.BuildDispositions(
+            initialRequestDispositions, runnable, receipt, FormatFindingEvidenceSelection,
+            actionableCandidateRed is null ? null : batches.Skip(1));
         receipt = receipt with { RequestDispositions = requestDispositions };
         var apparatusFailure = evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure &&
             !armReceipts.Any(arm => arm is { Arm: FindingEvidenceArm.Candidate, Disposition: FindingEvidenceArmDisposition.Red });
@@ -608,10 +596,6 @@ internal sealed partial class ConductorDriver
             batchCandidateSha, batchBasisIdentity, policy, reusedRedDecision, observeDelivery);
         return true;
     }
-
-    private static bool CanDeferFindingEvidenceReconciliation(string candidateSha, FocusedEvidenceRunResult evidence) =>
-        evidence.Accepted && !IsCandidateOnlyRed(candidateSha,
-            (evidence.Arms ?? []).Select(CreateFindingEvidenceArmReceipt).ToArray(), out _);
 
     internal static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,

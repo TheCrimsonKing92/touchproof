@@ -151,6 +151,10 @@ public sealed class FindingRoundBatchCompletionTests
         var failed = scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(failed.Outcome);
         Assert.Contains("escalation delivery remains pending", held.Reason);
+        var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+        Assert.Equal("Hold", decision.Action);
+        Assert.Equal("finding-batch-escalation-delivery-pending", decision.DiscriminatingEvidence);
+        Assert.Contains("JSON: lock-timeout, collaboration: error", decision.Reason);
         Assert.Single(scenario.Escalations);
         Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Message.StartsWith("finding-evidence batch-closed;"));
 
