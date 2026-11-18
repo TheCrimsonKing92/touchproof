@@ -373,7 +373,7 @@ internal sealed partial class ConductorBatchLoop
             bound.Select(
                 state.ProductionCandidates,
                 driver.ReadSuppressedGroupedPairs(),
-                TrainIneligibleCriterionEvidenceGoalIds(state.CohortEligible), driver.ReadCohortAttributedMemberKeys(),
+                TrainIneligibleCriterionEvidenceGoalIds(state.CohortEligible, GateObligationSelectorPreAdmissionClassifier.HeldGoalIds(kernel, state.CohortEligible, state.ProductionCandidates, _workspace, line => RecordParallelAcceptanceProgress(line, changedGoalLines))), driver.ReadCohortAttributedMemberKeys(),
                 driver.ReadTrainImplicatedMemberKeys(), tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)) is { } trainSelection &&
             GoalSchedulingOrder.GroupKeepsHead(trainSelection.Members.Select(member => member.GoalId.Value), state.CohortEligible, state.LiveAttemptGoalIds) &&
             bound.AllowsTrain(state.OldestWaiterObservation.Waiter, trainSelection.Members.Select(member => member.GoalId).ToArray(),
