@@ -45,6 +45,32 @@ public sealed class ProviderUsageTurnCountTests
     }
 
     [Fact]
+    public void ClaudeTranscript_WithOnlyNullTokenCountsKeepsTurnsUnknown() => ClaudeTranscriptUsageReaderTests.WithRoot(root =>
+    {
+        ClaudeTranscriptUsageReaderTests.Write(root, ClaudeSession,
+            """{"type":"assistant","message":{"id":"a","usage":{"input_tokens":null}}}""");
+
+        var result = new ClaudeTranscriptUsageReader([root]).Read(ClaudeSession);
+
+        Assert.StartsWith("claude-transcript-no-usage:", result.UnavailableReason);
+        AssertUnavailable(result.Usage, result.UnavailableReason);
+    });
+
+    [Fact]
+    public void ClaudeTranscript_CountsReportedZeroAndSkipsNullOnlyDuplicateBeforeUsage() => ClaudeTranscriptUsageReaderTests.WithRoot(root =>
+    {
+        ClaudeTranscriptUsageReaderTests.Write(root, ClaudeSession, """
+            {"type":"assistant","message":{"id":"a","usage":{"input_tokens":null}}}
+            {"type":"assistant","message":{"id":"a","usage":{"input_tokens":5,"output_tokens":null}}}
+            {"type":"assistant","message":{"id":"b","usage":{"output_tokens":0}}}
+            """);
+
+        var result = new ClaudeTranscriptUsageReader([root]).Read(ClaudeSession);
+
+        Assert.Equal(new ProviderReportedUsage(5, 0, 0, TurnCount: 2), result.Usage);
+    });
+
+    [Fact]
     public void CodexFixture_UnreadableLogKeepsUnknownReason()
     {
         string? readPath = null;

@@ -120,23 +120,28 @@ public sealed class ClaudeTranscriptUsageReader(
     private static bool TryTokens(JsonElement usage, out long input, out long cached, out long output)
     {
         input = cached = output = 0;
-        return (usage.TryGetProperty("input_tokens", out _) ||
-                usage.TryGetProperty("cache_creation_input_tokens", out _) ||
-                usage.TryGetProperty("cache_read_input_tokens", out _) ||
-                usage.TryGetProperty("output_tokens", out _)) &&
-            TryToken(usage, "input_tokens", out var rawInput) &&
-            TryToken(usage, "cache_creation_input_tokens", out var created) &&
-            TryToken(usage, "cache_read_input_tokens", out cached) &&
-            TryToken(usage, "output_tokens", out output) &&
-            TryAdd(rawInput, created, cached, out input);
+        if (!TryToken(usage, "input_tokens", out var rawInput) ||
+            !TryToken(usage, "cache_creation_input_tokens", out var created) ||
+            !TryToken(usage, "cache_read_input_tokens", out var cachedInput) ||
+            !TryToken(usage, "output_tokens", out var rawOutput) ||
+            (rawInput is null && created is null && cachedInput is null && rawOutput is null))
+            return false;
+
+        cached = cachedInput ?? 0;
+        output = rawOutput ?? 0;
+        return TryAdd(rawInput ?? 0, created ?? 0, cached, out input);
     }
 
-    private static bool TryToken(JsonElement usage, string name, out long value)
+    private static bool TryToken(JsonElement usage, string name, out long? value)
     {
-        value = 0;
+        value = null;
         if (!usage.TryGetProperty(name, out var token) || token.ValueKind == JsonValueKind.Null)
             return true;
-        return token.ValueKind == JsonValueKind.Number && token.TryGetInt64(out value) && value >= 0;
+        if (token.ValueKind != JsonValueKind.Number || !token.TryGetInt64(out var count) || count < 0)
+            return false;
+
+        value = count;
+        return true;
     }
 
     private static bool TryAdd(long first, long second, long third, out long sum)
