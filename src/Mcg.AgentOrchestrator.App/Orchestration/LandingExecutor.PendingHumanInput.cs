@@ -63,11 +63,8 @@ internal static partial class LandingExecutor
                     GateTestObligationEvaluator.Outcome.Failed => "failed",
                     _ => throw new InvalidOperationException($"Unexpected obligation outcome: {result.Outcome}")
                 };
-                var selectors = result.Selectors.Count == 0 ? "none" : string.Join(", ", result.Selectors);
-                var closest = result.ClosestIdentities is { Count: > 0 }
-                    ? $"; closest: {string.Join(", ", result.ClosestIdentities)}" : "";
-                return $"gate test obligation {result.Obligation.Id[..Math.Min(8, result.Obligation.Id.Length)]} " +
-                    $"(brief v{result.Obligation.BriefVersion}) {outcome}: {selectors}; {result.PendingDetail ?? $"source {result.SourceId ?? "none"}"}{closest}";
+                return FormatObligationHoldLine(result.Obligation, outcome, result.Selectors,
+                    result.PendingDetail ?? $"source {result.SourceId ?? "none"}", result.ClosestIdentities);
             }).ToArray();
         var pending = PostLandingOperatorCheck.HoldingLanding(kernel.GetPendingHumanInput(goal.Id));
         if (pending.Count == 0)
@@ -88,6 +85,16 @@ internal static partial class LandingExecutor
         var hold = $"goal {goal.Id.Value} has pending human input: {string.Join("; ", requests)}";
         if (obligationLines.Length > 0) hold += "; " + string.Join("; ", obligationLines);
         return (resolution, hold, obligationLines);
+    }
+
+    internal static string FormatObligationHoldLine(GateTestObligation obligation, string outcome,
+        IReadOnlyList<string> selectors, string detail, IReadOnlyList<string>? closestIdentities = null)
+    {
+        var names = selectors.Count == 0 ? "none" : string.Join(", ", selectors);
+        var closest = closestIdentities is { Count: > 0 }
+            ? $"; closest: {string.Join(", ", closestIdentities)}" : "";
+        return $"gate test obligation {obligation.Id[..Math.Min(8, obligation.Id.Length)]} " +
+            $"(brief v{obligation.BriefVersion}) {outcome}: {names}; {detail}{closest}";
     }
 
     internal static string? DescribeGroupedPendingHumanInput(
