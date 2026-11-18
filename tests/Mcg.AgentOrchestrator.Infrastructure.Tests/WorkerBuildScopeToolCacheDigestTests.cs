@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 [Xunit.Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class WorkerBuildScopeToolCacheDigestTests
 {
     private readonly Xunit.ITestOutputHelper _output;

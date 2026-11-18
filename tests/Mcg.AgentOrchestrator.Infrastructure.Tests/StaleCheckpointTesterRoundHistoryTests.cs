@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 
 [Collection("IsolatedProcessSpawningRemainderC")]
+[Xunit.Trait("Isolation", "ProcessSpawning")]
 public sealed class StaleCheckpointTesterRoundHistoryTests(WorkerBuildScopeDispatchFixtureTemplate template)
     : IClassFixture<WorkerBuildScopeDispatchFixtureTemplate>
 {
