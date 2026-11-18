@@ -18,8 +18,7 @@ public sealed class FindingRoundBatchCompletionTests
     public void StaggeredReceipts_DrainBeforeOneRoleSelection(bool sourceBlocker)
     {
         using var scenario = new Scenario(sourceBlocker);
-        Assert.Single(ReviewFindings.GetOpenBlockingFindings(scenario.Tester.LastVerification!.MergedReviewFindings!,
-            scenario.Goal.EffectiveAcceptanceCriteriaCorrections));
+        scenario.AssertOnlyBlocker(sourceBlocker);
         for (var tick = 0; tick < 2; tick++)
         {
             var result = scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
@@ -31,6 +30,7 @@ public sealed class FindingRoundBatchCompletionTests
             Assert.Empty(DispatchReadinessRules.BuildReadyTaskParallelPlan(scenario.Goal).Batches);
             Assert.Empty(scenario.Prepare());
             scenario.Restart();
+            scenario.AssertOnlyBlocker(sourceBlocker);
         }
         scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
         Assert.Equal(3, scenario.Runs.Count);
@@ -89,10 +89,23 @@ public sealed class FindingRoundBatchCompletionTests
     public async Task ConcurrentClose_AdmitsOneRetryAndSurvivesSnapshot()
     {
         using var scenario = new Scenario(true);
+        scenario.AssertOnlyBlocker(sourceBlocker: true);
         FailedGoalFindingObservation observation = FailedGoalFindingObservation.None;
         for (var index = 0; index < 3; index++)
+        {
             Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester,
                 ConductorAutonomyPolicy.Permissive, out observation));
+            if (index < 2)
+            {
+                Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, observation.Kind);
+                Assert.Null(observation.TargetTaskId);
+                Assert.Null(observation.BatchClosure);
+            }
+            scenario.AssertOnlyBlocker(sourceBlocker: true);
+        }
+        Assert.Equal(3, scenario.Runs.Count);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Escalations);
         var closure = Assert.IsType<FindingEvidenceBatchClosure>(observation.BatchClosure);
         Assert.Equal(scenario.Developer.Id, observation.TargetTaskId);
         using var barrier = new Barrier(2);
@@ -176,13 +189,11 @@ public sealed class FindingRoundBatchCompletionTests
     {
         private readonly string _root = SeededGitRepositoryTemplate.CreateCopy();
         private readonly string Candidate;
-        private readonly bool _sourceBlocker;
         private readonly bool _rejectFirst;
         internal Scenario(bool sourceBlocker, bool rejectFirst = false)
         {
             Assert.True(GitRevisionReader.Shared.TryResolve(_root, "HEAD", out var candidate));
             Candidate = candidate;
-            _sourceBlocker = sourceBlocker;
             _rejectFirst = rejectFirst;
             Kernel = new AgentOrchestratorKernel();
             Goal = Kernel.CreateGoal("Drain finding evidence before verification", [
@@ -193,10 +204,14 @@ public sealed class FindingRoundBatchCompletionTests
             PassVerification(Kernel, Goal, Developer, hasCommittedChanges: true);
             Kernel.RecordDispatchResultCommit(Goal.Id, Developer.Id, Candidate);
             Findings = [
-                EvidenceFindingWithRequest("Only blocking finding requires interpretation", "first",
-                    sourceBlocker ? FindingCategory.Correctness : FindingCategory.TestCoverage, classes: ["AlphaTests"]),
+                EvidenceFindingWithRequest("First evidence request requires interpretation", "first",
+                    FindingCategory.TestCoverage, classes: ["AlphaTests"]) with
+                    { Severity = sourceBlocker ? FindingSeverity.Advisory : FindingSeverity.Blocking },
                 EvidenceFindingWithRequest("Second request", "second", project: "Core.Tests", classes: ["BetaTests"]) with { Severity = FindingSeverity.Advisory },
                 EvidenceFindingWithRequest("Third request", "third", classes: ["FullyQualifiedName~GammaTests.Case&Category!=Slow"]) with { Severity = FindingSeverity.Advisory }];
+            if (sourceBlocker)
+                Findings = [.. Findings, EvidenceFindingWithRequest("Source repair remains required", "source-blocker",
+                    FindingCategory.Correctness) with { EvidenceRequest = null }];
             DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: _root, baseCommit: Candidate);
             var stdout = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
                 "tests: deferred - acceptance owns execution", "commit: none", "blockers: none",
@@ -217,6 +232,17 @@ public sealed class FindingRoundBatchCompletionTests
         internal List<string> Escalations { get; } = [];
         internal List<WorkerProfileDispatchResult> Prepared { get; } = [];
         internal int ProcessStarts { get; private set; }
+        internal void AssertOnlyBlocker(bool sourceBlocker)
+        {
+            var blocker = Assert.Single(ReviewFindings.GetOpenBlockingFindings(Tester.LastVerification!.MergedReviewFindings!,
+                Goal.EffectiveAcceptanceCriteriaCorrections));
+            Assert.Equal(sourceBlocker ? "source-blocker" : "first", blocker.StableId);
+            if (sourceBlocker)
+            {
+                Assert.Equal(FindingCategory.Correctness, blocker.Category);
+                Assert.Null(blocker.EvidenceRequest);
+            }
+        }
         internal void Record(GoalId goal, TaskId task, string message) => Kernel.RecordFindingEvidenceRequest(goal, task, message);
         internal void Restart()
         {
@@ -242,13 +268,7 @@ public sealed class FindingRoundBatchCompletionTests
             {
                 Runs.Add(request);
                 if (_rejectFirst && Runs.Count == 1) return new(request, false, false, "Request unavailable", []);
-                if (_sourceBlocker)
-                {
-                    // An unattributed failure leaves the source blocker open. A green baseline
-                    // would instead prove actionable RED and correctly supersede queued requests.
-                    var red = CandidateRedFindingEvidence(request, Candidate, "Fixture.SharedSetupTests.SetupFails");
-                    return red with { Arms = red.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray() };
-                }
+                // Passing requests can settle independently of a source finding that has no evidence request.
                 var green = ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(_root, request, Candidate);
                 return green with { Arms = green.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray(), OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence };
             },
