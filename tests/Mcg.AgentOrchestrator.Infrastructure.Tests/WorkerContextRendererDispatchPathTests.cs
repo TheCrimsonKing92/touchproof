@@ -127,8 +127,13 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
         }
         AssertActionableHistory(prompt, OpenHistoryId, OpenHistoryDescription);
         AssertRoleInstructions(fixture, prompt);
-        Assert.Contains("ROUND_DIFF_TOUCHED_ANCHORS", prompt, StringComparison.Ordinal);
-        Assert.Contains("omission leaves the finding open", prompt, StringComparison.Ordinal);
+        var brief = RecoverInlineText(prompt, "brief/current.md");
+        var source = fixture.Kernel.BuildTaskBriefSource(fixture.Goal.Id, fixture.Task.Id);
+        var convergence = Assert.Single(source.Segments, segment => segment.ConvergenceChangedFiles is not null);
+        Assert.Contains("ROUND_DIFF_TOUCHED_ANCHORS", brief, StringComparison.Ordinal);
+        Assert.Contains("omission leaves the finding open", brief, StringComparison.Ordinal);
+        Assert.All(convergence.Lines.Where(line => !string.IsNullOrWhiteSpace(line)),
+            line => Assert.Contains(line, brief, StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
@@ -249,12 +254,26 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
     private static void RecordHistoryRound(DispatchFixture fixture, TaskSpec owner,
         IReadOnlyList<ReviewFinding> findings, int minute,
         IReadOnlyList<ReviewFindingLocation>? touched = null,
-        IReadOnlyList<FindingEvidenceReceipt>? receipts = null) =>
+        IReadOnlyList<FindingEvidenceReceipt>? receipts = null)
+    {
+        // Convergence replays the reported round, while the projector consumes the merged ledger.
+        // Supply both contracts so the fixture exercises the same delivery boundaries as a worker.
+        var workerOutput = string.Join(Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - deterministic fixture",
+            "blockers: none",
+            $"findings: {JsonSerializer.Serialize(findings)}",
+            "touched_anchors: []",
+            $"verdict: {(findings.Any(finding => finding.State == ReviewFindingState.Open) ? "needs-work" : "pass")}",
+            "END_WORKER_RESULT");
         fixture.Kernel.RecordTaskVerification(fixture.Goal.Id, owner.Id, new TaskVerificationRecord(
-            "review", ".", 0, "round recorded", string.Empty,
+            "review", fixture.WorkingDirectory, 0, workerOutput, string.Empty,
             HistoryFixtureTime.AddMinutes(minute), ReviewFindingTouchedAnchors: touched ?? [],
             ReviewedCommit: fixture.HeadCommit, MergedReviewFindings: findings,
-            FindingEvidenceReceipts: receipts ?? [], FullStandardOutput: "round recorded", FullStandardError: string.Empty));
+            FindingEvidenceReceipts: receipts ?? [], FullStandardOutput: workerOutput, FullStandardError: string.Empty));
+    }
 
     private static WorkerProfileDispatchResult PrepareHistory(
         DispatchFixture fixture, bool typed, DateTimeOffset? dispatchedAt = null) =>
