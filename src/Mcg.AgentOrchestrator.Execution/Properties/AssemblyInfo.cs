@@ -10,5 +10,6 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Execution.Tests")]
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.App")]
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.ConsoleIoProbe")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.SupervisorLaunchProbe")]
 
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure")]

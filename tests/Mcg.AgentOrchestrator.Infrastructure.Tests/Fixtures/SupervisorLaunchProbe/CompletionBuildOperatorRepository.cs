@@ -126,18 +126,9 @@ internal sealed record CompletionBuildOperatorRepository(
     }
     internal static string Git(string repository, params string[] args)
     {
-        var info = new ProcessStartInfo("git") { WorkingDirectory = repository, UseShellExecute = false,
-            CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        info.ArgumentList.Add("-C");
-        info.ArgumentList.Add(repository);
-        foreach (var arg in args) info.ArgumentList.Add(arg);
-        using var process = Process.Start(info)!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        process.WaitForExitAsync(guard.Token).GetAwaiter().GetResult();
-        Require(process.ExitCode == 0, stderr.GetAwaiter().GetResult());
-        return stdout.GetAwaiter().GetResult().Trim();
+        var result = GitCli.RunForRepository(repository, args);
+        Require(result.ProcessStarted && result.Succeeded && !result.DrainTimedOut, result.Error);
+        return result.Output.Trim();
     }
     internal static void CaptureScope(AgentOrchestratorKernel kernel, GoalId goal, TaskSpec task, string worktree, string head) =>
         kernel.RecordDispatchBaseCommit(goal, task.Id, head,
