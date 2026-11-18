@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed record AcceptanceTestClassDescriptor(string FullName, string? Collection);
+internal sealed record AcceptanceTestClassDescriptor(string FullName, string? Collection, string? Constraint = null);
 internal sealed record AcceptanceTestClassSource(string FullName, IReadOnlyList<string> SourcePaths, string SourceText);
 
 internal static class AcceptanceTestClassSourceScanner
@@ -176,20 +176,25 @@ internal static class AcceptanceTestClassSourceScanner
         var classes = extracts.SelectMany(extract => extract.Classes)
             .Select(item => new SourceClass(item.FullName, item.ShortName, item.Abstract, item.BaseName,
                 item.HasFacts || derivedFacts.Contains(item.FullName),
-                ResolveCollection(item.FullName, item.Collection, constants)))
+                ResolveCollection(item.FullName, item.Collection, constants),
+                item.IsolationTraits.Select(trait => ResolveIsolationTrait(item.FullName, trait, constants))
+                    .Aggregate((string?)null, (left, right) => MergeConstraints(item.FullName, left, right))))
             .GroupBy(item => item.FullName, StringComparer.Ordinal)
             .Select(group => group.Aggregate((left, right) => left with
             {
                 Abstract = left.Abstract || right.Abstract,
                 HasFacts = left.HasFacts || right.HasFacts,
                 Collection = left.Collection ?? right.Collection,
+                Constraint = MergeConstraints(left.FullName, left.Constraint, right.Constraint),
                 BaseName = left.BaseName ?? right.BaseName
             }))
             .ToArray();
         var byName = classes.GroupBy(item => item.ShortName, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         return classes.Where(item => !item.Abstract && HasRunnableFacts(item, byName, []))
-            .Select(item => new AcceptanceTestClassDescriptor(item.FullName, InheritedCollection(item, byName, [])))
+            .Select(item => new AcceptanceTestClassDescriptor(item.FullName,
+                InheritedValue(item, byName, source => source.Collection, []),
+                InheritedValue(item, byName, source => source.Constraint, [])))
             .OrderBy(item => item.FullName, StringComparer.Ordinal)
             .ToArray();
     }
@@ -219,7 +224,8 @@ internal static class AcceptanceTestClassSourceScanner
                 node.Modifiers.Any(SyntaxKind.AbstractKeyword),
                 node.BaseList?.Types.FirstOrDefault()?.Type.ToString().Split('.').Last(),
                 HasFacts(node),
-                ExtractCollection(node)))
+                ExtractCollection(node),
+                ExtractIsolationTraits(node)))
             .ToArray();
         return new FileExtract(constants, classes, AcceptanceTestClassSourceScannerFactAncestry.Extract(root));
     }
@@ -248,8 +254,19 @@ internal static class AcceptanceTestClassSourceScanner
         {
             return new(CollectionExpressionKind.None, null);
         }
-        var expression = attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression;
-        return expression switch
+        return ExtractExpression(attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression);
+    }
+
+    private static CollectionExpression[] ExtractIsolationTraits(ClassDeclarationSyntax node) =>
+        node.AttributeLists.SelectMany(list => list.Attributes)
+            .Where(item => item.Name.ToString().Split('.').Last() is "Trait" or "TraitAttribute")
+            .Where(item => item.ArgumentList?.Arguments.FirstOrDefault()?.Expression is LiteralExpressionSyntax key &&
+                key.IsKind(SyntaxKind.StringLiteralExpression) && key.Token.ValueText == "Isolation")
+            .Select(item => ExtractExpression(item.ArgumentList?.Arguments.ElementAtOrDefault(1)?.Expression))
+            .ToArray();
+
+    private static CollectionExpression ExtractExpression(ExpressionSyntax? expression) =>
+        expression switch
         {
             LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression) =>
                 new(CollectionExpressionKind.Literal, literal.Token.ValueText),
@@ -260,13 +277,25 @@ internal static class AcceptanceTestClassSourceScanner
             IdentifierNameSyntax identifier => new(CollectionExpressionKind.Identifier, identifier.Identifier.ValueText),
             _ => new(CollectionExpressionKind.Unresolvable, null)
         };
-    }
 
-    private static string? ResolveCollection(string fullName, CollectionExpression expression,
+    private static string ResolveIsolationTrait(string fullName, CollectionExpression expression,
         IReadOnlyDictionary<string, string[]> constants)
     {
-        if (expression.Kind == CollectionExpressionKind.None) return null;
-        var value = expression.Kind switch
+        var value = ResolveExpression(expression, constants);
+        return !string.IsNullOrWhiteSpace(value) ? value :
+            throw new InvalidDataException($"Cannot resolve Isolation trait on '{fullName}'.");
+    }
+
+    private static string? MergeConstraints(string fullName, string? left, string? right)
+    {
+        if (left is not null && right is not null && left != right)
+            throw new InvalidDataException($"Test class '{fullName}' declares conflicting Isolation traits '{left}' and '{right}'.");
+        return left ?? right;
+    }
+
+    private static string? ResolveExpression(CollectionExpression expression,
+        IReadOnlyDictionary<string, string[]> constants) =>
+        expression.Kind switch
         {
             CollectionExpressionKind.Literal or CollectionExpressionKind.NameOf => expression.Value,
             CollectionExpressionKind.Member when constants.TryGetValue(expression.Value!, out var resolved) &&
@@ -274,6 +303,12 @@ internal static class AcceptanceTestClassSourceScanner
             CollectionExpressionKind.Identifier => ResolveUnqualifiedConstant(expression.Value!, constants),
             _ => null
         };
+
+    private static string? ResolveCollection(string fullName, CollectionExpression expression,
+        IReadOnlyDictionary<string, string[]> constants)
+    {
+        if (expression.Kind == CollectionExpressionKind.None) return null;
+        var value = ResolveExpression(expression, constants);
         if (value is null && expression.Kind switch
             {
                 CollectionExpressionKind.Member => constants.TryGetValue(expression.Value!, out var values) &&
@@ -302,24 +337,25 @@ internal static class AcceptanceTestClassSourceScanner
             bases.Any(parent => HasRunnableFacts(parent, byName, visited));
     }
 
-    private static string? InheritedCollection(SourceClass item, IReadOnlyDictionary<string, SourceClass[]> byName,
-        HashSet<string> visited)
+    private static string? InheritedValue(SourceClass item, IReadOnlyDictionary<string, SourceClass[]> byName,
+        Func<SourceClass, string?> select, HashSet<string> visited)
     {
-        if (item.Collection is not null || !visited.Add(item.FullName)) return item.Collection;
+        var declared = select(item);
+        if (declared is not null || !visited.Add(item.FullName)) return declared;
         return item.BaseName is not null && byName.TryGetValue(item.BaseName, out var bases)
-            ? bases.Select(parent => InheritedCollection(parent, byName, visited)).FirstOrDefault(value => value is not null)
+            ? bases.Select(parent => InheritedValue(parent, byName, select, visited)).FirstOrDefault(value => value is not null)
             : null;
     }
 
     private sealed record SourceClass(string FullName, string ShortName, bool Abstract, string? BaseName,
-        bool HasFacts, string? Collection);
+        bool HasFacts, string? Collection, string? Constraint);
 
     // Only file-local syntax facts are cached; resolution against other files happens on every scan.
     internal sealed record FileExtract(IReadOnlyList<ConstantExtract> Constants, IReadOnlyList<ClassExtract> Classes,
         AcceptanceTestClassSourceScannerFactAncestry.AncestryFile? Ancestry = null);
     internal sealed record ConstantExtract(string Key, string Value);
     internal sealed record ClassExtract(string FullName, string ShortName, bool Abstract, string? BaseName,
-        bool HasFacts, CollectionExpression Collection);
+        bool HasFacts, CollectionExpression Collection, IReadOnlyList<CollectionExpression> IsolationTraits);
     internal sealed record CollectionExpression(CollectionExpressionKind Kind, string? Value);
     internal enum CollectionExpressionKind { None, Literal, NameOf, Member, Identifier, Unresolvable }
 }
