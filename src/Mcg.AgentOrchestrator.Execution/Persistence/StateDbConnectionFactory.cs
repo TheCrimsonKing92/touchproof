@@ -54,6 +54,7 @@ internal static class StateDbConnectionFactory
         try
         {
             connection.Open();
+            RegisterProfileIdentityCollation(connection);
             ExecuteNonQuery(
                 connection,
                 "PRAGMA busy_timeout=" + timeoutMilliseconds.ToString(CultureInfo.InvariantCulture),
@@ -88,6 +89,9 @@ internal static class StateDbConnectionFactory
             throw;
         }
     }
+
+    internal static void RegisterProfileIdentityCollation(SqliteConnection connection) =>
+        connection.CreateCollation("MCG_PROFILE_IDENTITY", StringComparer.OrdinalIgnoreCase.Compare);
 
     private static void NotifyConnectionOpenedForDiagnostics(SqliteConnection connection, string databasePath)
     {

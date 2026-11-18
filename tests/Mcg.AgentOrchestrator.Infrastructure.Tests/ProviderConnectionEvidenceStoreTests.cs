@@ -86,9 +86,14 @@ public sealed class ProviderConnectionEvidenceStoreTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CaseOnlyCatalogRename_RetainsLatestHostObservation(bool newerFirst)
+    [InlineData(false, "codex-cli", "CODEX-CLI")]
+    [InlineData(true, "codex-cli", "CODEX-CLI")]
+    [InlineData(false, "café-worker", "CAFÉ-WORKER")]
+    [InlineData(true, "café-worker", "CAFÉ-WORKER")]
+    [InlineData(false, "\U00010428-worker", "\U00010400-WORKER")]
+    [InlineData(true, "\U00010428-worker", "\U00010400-WORKER")]
+    public async Task CaseOnlyCatalogRename_RetainsLatestHostObservation(
+        bool newerFirst, string lowerProfile, string upperProfile)
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var at = GoalTaskHistoryTestFixture.At;
@@ -98,15 +103,16 @@ public sealed class ProviderConnectionEvidenceStoreTests
         var newer = older with { Result = ProviderConnectionResult.SignedOut, ObservedAt = at.AddMinutes(1) };
         if (newerFirst)
         {
-            await fixture.Repository.SaveProviderConnectionObservationAsync("CODEX-CLI", newer);
-            await fixture.Repository.SaveProviderConnectionObservationAsync("codex-cli", older);
+            await fixture.Repository.SaveProviderConnectionObservationAsync(upperProfile, newer);
+            await fixture.Repository.SaveProviderConnectionObservationAsync(lowerProfile, older);
         }
         else
         {
-            await fixture.Repository.SaveProviderConnectionObservationAsync("codex-cli", older);
-            await fixture.Repository.SaveProviderConnectionObservationAsync("CODEX-CLI", newer);
+            await fixture.Repository.SaveProviderConnectionObservationAsync(lowerProfile, older);
+            await fixture.Repository.SaveProviderConnectionObservationAsync(upperProfile, newer);
         }
-        var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli") with { Name = "CODEX-CLI" };
+        var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli") with { Name = upperProfile };
+        Assert.Equal(profile, new WorkerProfileCatalog([profile]).GetRequired(lowerProfile));
         var service = new ProviderConnectionReadinessService(new([profile]),
             SqliteOrchestratorStateRepository.OpenReadOnly(fixture.DatabasePath),
             new("fixture", (_, _) => throw new Exception("Listing must not probe")), new FixedTime(at.AddMinutes(2)));
@@ -115,19 +121,30 @@ public sealed class ProviderConnectionEvidenceStoreTests
         var observation = Assert.Single(report.Observations.Where(o => o.ExecutionContext == ProviderConnectionContext.Host));
         Assert.Equal(ProviderConnectionResult.SignedOut, observation.Result);
         Assert.Equal(newer.ObservedAt, observation.ObservedAt);
+        Assert.Equal(newer, Assert.Single(await fixture.Repository.ReadProviderConnectionEvidenceAsync(lowerProfile)));
         Assert.Equal(["1"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task LegacyCaseDuplicates_ReadAndMigrateLatestPerContext(bool newerFirst)
+    [InlineData(false, "claude-cli", "CLAUDE-CLI", 16)]
+    [InlineData(true, "claude-cli", "CLAUDE-CLI", 16)]
+    [InlineData(false, "café-worker", "CAFÉ-WORKER", 16)]
+    [InlineData(true, "café-worker", "CAFÉ-WORKER", 16)]
+    [InlineData(false, "café-worker", "CAFÉ-WORKER", 17)]
+    [InlineData(true, "café-worker", "CAFÉ-WORKER", 17)]
+    public async Task LegacyCaseDuplicates_ReadAndMigrateLatestPerContext(
+        bool newerFirst, string lowerProfile, string upperProfile, int legacyMigration)
     {
         using var fixture = new GoalTaskHistoryTestFixture();
-        fixture.Execute("""
+        fixture.Execute($"""
             DROP INDEX IF EXISTS ux_provider_connection_observations_identity;
-            DELETE FROM schema_migrations WHERE migration_number = 17;
+            DELETE FROM schema_migrations WHERE migration_number > {legacyMigration};
             """);
+        if (legacyMigration == 17)
+            fixture.Execute("""
+                CREATE UNIQUE INDEX ux_provider_connection_observations_identity
+                    ON provider_connection_observations (profile_id COLLATE NOCASE, execution_context);
+                """);
         var at = GoalTaskHistoryTestFixture.At;
         var older = new ProviderConnectionObservation(ProviderConnectionContext.Host,
             ProviderConnectionSource.ClaudeAuthStatus, ProviderConnectionResult.SignedIn,
@@ -137,8 +154,8 @@ public sealed class ProviderConnectionEvidenceStoreTests
             ProviderConnectionSource.ClaudePreflight, ProviderConnectionResult.MaterialPresent,
             ProviderConnectionAuthMode.OAuth, at.AddMinutes(-1));
         var entries = newerFirst
-            ? new[] { ("CLAUDE-CLI", newer), ("claude-cli", older), ("claude-cli", material) }
-            : new[] { ("claude-cli", older), ("CLAUDE-CLI", newer), ("claude-cli", material) };
+            ? new[] { (upperProfile, newer), (lowerProfile, older), (lowerProfile, material) }
+            : new[] { (lowerProfile, older), (upperProfile, newer), (lowerProfile, material) };
         using (var connection = fixture.Open())
         {
             foreach (var (profile, observation) in entries)
@@ -160,19 +177,38 @@ public sealed class ProviderConnectionEvidenceStoreTests
         }
         Assert.Equal(["3"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
         var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.DatabasePath);
-        var before = await readOnly.ReadProviderConnectionEvidenceAsync("ClAuDe-ClI");
+        var before = await readOnly.ReadProviderConnectionEvidenceAsync(upperProfile);
         Assert.Equal(2, before.Count);
         Assert.Contains(newer, before);
         Assert.Contains(material, before);
+        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync(lowerProfile));
         Assert.Equal(["3"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
 
         StateDbMigrations.EnsureUpToDate(fixture.DatabasePath);
         Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
-        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync("claude-cli"));
-        await fixture.Repository.SaveProviderConnectionObservationAsync("ClAuDe-ClI", older);
-        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync("CLAUDE-CLI"));
+        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync(lowerProfile));
+        await fixture.Repository.SaveProviderConnectionObservationAsync(lowerProfile, older);
+        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync(upperProfile));
         Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
         Assert.True(StateDbMigrations.IsUpToDate(fixture.DatabasePath));
+    }
+
+    [Fact]
+    public async Task DistinctUnicodeProfiles_KeepIndependentObservations()
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var at = GoalTaskHistoryTestFixture.At;
+        var signedIn = new ProviderConnectionObservation(ProviderConnectionContext.Host,
+            ProviderConnectionSource.CodexLoginStatus, ProviderConnectionResult.SignedIn,
+            ProviderConnectionAuthMode.OAuth, at);
+        var signedOut = signedIn with { Result = ProviderConnectionResult.SignedOut };
+        await fixture.Repository.SaveProviderConnectionObservationAsync("café-worker", signedIn);
+        await fixture.Repository.SaveProviderConnectionObservationAsync("cafe-worker", signedOut);
+
+        var observations = await fixture.Repository.ReadProviderConnectionEvidenceAsync(["CAFÉ-WORKER", "CAFE-WORKER"]);
+        Assert.Equal(signedIn, Assert.Single(observations["CAFÉ-WORKER"]));
+        Assert.Equal(signedOut, Assert.Single(observations["CAFE-WORKER"]));
+        Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
     }
 
     [Fact]
