@@ -27,40 +27,52 @@ internal static class FindingRoundBatchSchedule
                 string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal))
             .Select(receipt => receipt.ReceiptId)
             .ToHashSet(StringComparer.Ordinal);
-        var passed = new List<FindingEvidenceBatch>();
+        var passed = new List<(FindingEvidenceBatch Batch, string ReceiptId)>();
         var covered = new List<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)>();
         var executable = new List<FindingEvidenceBatch>();
         var unavailable = new List<(FindingEvidenceBatch Batch, int Count, string ReceiptId)>();
         foreach (var batch in batches)
         {
-            var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidateSha, findingRoundFingerprint, batch.Identity);
-            if (passedReceiptIds.Contains(receiptId))
+            var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(
+                candidateSha, findingRoundFingerprint, batch.Identity, executionBasisIdentity);
+            // Pre-upgrade receipts and run events still count when they bind to this basis.
+            var legacyId = ConductorDriver.CreateFindingEvidenceReceiptId(candidateSha, findingRoundFingerprint, batch.Identity);
+            if (passedReceiptIds.Contains(receiptId) || passedReceiptIds.Contains(legacyId))
             {
-                passed.Add(batch);
+                passed.Add((batch, passedReceiptIds.Contains(receiptId) ? receiptId : legacyId));
                 continue;
             }
             var covering = receipts.FirstOrDefault(receipt => CoversRed(
-                batch, receiptId, receipt, candidateSha, findingRoundFingerprint, executionBasisIdentity));
+                batch, receiptId, legacyId, receipt, candidateSha, findingRoundFingerprint, executionBasisIdentity));
             if (covering is not null)
             {
                 covered.Add((batch, covering));
                 continue;
             }
-            var count = timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+            var marker = $"receipt_id={receiptId};";
+            var legacyMarker = $"receipt_id={legacyId};";
+            var runs = timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
                 item.TaskId == requestingTaskId &&
-                item.Message.Contains($"receipt_id={receiptId};", StringComparison.Ordinal) &&
+                (item.Message.Contains(marker, StringComparison.Ordinal) ||
+                 item.Message.Contains(legacyMarker, StringComparison.Ordinal)) &&
+                item.Message.Contains($"finding_id={batch.Findings[0].StableId};", StringComparison.Ordinal) &&
                 (item.Message.Contains($"execution_basis={executionBasisIdentity};", StringComparison.Ordinal) ||
                  (!item.Message.Contains("execution_basis=", StringComparison.Ordinal) &&
-                  !receipts.Any(receipt => receipt.ReceiptId == receiptId && receipt.ExecutionBasisIdentity != executionBasisIdentity))) &&
-                item.Message.Contains($"finding_id={batch.Findings[0].StableId};", StringComparison.Ordinal));
-            if (count >= MaximumCompletedRuns) unavailable.Add((batch, count, receiptId));
+                  (item.Message.Contains(marker, StringComparison.Ordinal) ||
+                   !receipts.Any(receipt => receipt.ReceiptId == legacyId && receipt.ExecutionBasisIdentity != executionBasisIdentity)))))
+                .ToArray();
+            if (runs.Length >= MaximumCompletedRuns)
+            {
+                var lastReceiptId = runs[^1].Message.Contains(marker, StringComparison.Ordinal) ? receiptId : legacyId;
+                unavailable.Add((batch, runs.Length, lastReceiptId));
+            }
             else executable.Add(batch);
         }
         return new(passed, covered, executable, unavailable);
     }
 
     private static bool CoversRed(
-        FindingEvidenceBatch batch, string receiptId, FindingEvidenceReceipt receipt,
+        FindingEvidenceBatch batch, string receiptId, string legacyReceiptId, FindingEvidenceReceipt receipt,
         string candidateSha, string findingRoundFingerprint, string executionBasisIdentity)
     {
         if (receipt is not { Accepted: true, Passed: false } ||
@@ -82,7 +94,8 @@ internal static class FindingRoundBatchSchedule
                 disposition.FindingStableId == finding.StableId &&
                 disposition.Decision == FindingEvidenceRequestDecision.Executed))) return false;
 
-        if (!FindingEvidenceRoundPlanner.HasClassSet(batch.TypedRequest)) return receipt.ReceiptId == receiptId;
+        if (!FindingEvidenceRoundPlanner.HasClassSet(batch.TypedRequest))
+            return receipt.ReceiptId == receiptId || receipt.ReceiptId == legacyReceiptId;
         var executed = FindingEvidenceExecutedCoverage.ExecutedSelections(receipt,
             selection => selection.TestProject + ":" + selection.TestClass).ToHashSet();
         return executed.IsSupersetOf(FindingEvidenceRoundPlanner.ExpandSelections(batch.TypedRequest.Selections));

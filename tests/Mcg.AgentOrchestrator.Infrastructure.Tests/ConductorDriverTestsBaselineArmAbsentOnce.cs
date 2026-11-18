@@ -188,6 +188,9 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
 
             if (!changeBasisAfterRestart) return;
             var prior = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer)!;
+            var redReceipt = Assert.Single(reviewer.LastVerification!.FindingEvidenceReceipts!);
+            Assert.False(redReceipt.Passed);
+            Assert.Equal(prior.ExecutionBasisIdentity, redReceipt.ExecutionBasisIdentity);
             kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
             goal = kernel.GetGoal(goal.Id);
             reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
@@ -202,8 +205,16 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             Assert.True(driver.TryBuildFindingEvidenceRequest(goal, reviewer, ConductorAutonomyPolicy.Permissive, out var fresh));
 
             Assert.Equal(1, newBasisRuns);
-            var greenReceipt = Assert.Single(reviewer.LastVerification!.FindingEvidenceReceipts!.Where(receipt => receipt.Passed));
+            var verification = reviewer.LastVerification!;
+            var receipts = verification.FindingEvidenceReceipts!;
+            var greenReceipt = Assert.Single(receipts.Where(receipt => receipt.Passed));
             Assert.Equal(current.ExecutionBasisIdentity, greenReceipt.ExecutionBasisIdentity);
+            Assert.NotEqual(redReceipt.ReceiptId, greenReceipt.ReceiptId);
+            var retainedRed = Assert.Single(receipts.Where(receipt => receipt.ReceiptId == redReceipt.ReceiptId));
+            Assert.False(retainedRed.Passed);
+            Assert.Equal(prior.ExecutionBasisIdentity, retainedRed.ExecutionBasisIdentity);
+            Assert.Equal(greenReceipt.ReceiptId,
+                verification.MergedReviewFindings!.Single(item => item.StableId == finding.StableId).EvidenceOutcome?.ReceiptId);
             Assert.Equal(reviewer.Id, fresh.TargetTaskId);
             Assert.Equal(current, Assert.IsType<FindingEvidenceBatchClosure>(fresh.BatchClosure).Identity);
         }

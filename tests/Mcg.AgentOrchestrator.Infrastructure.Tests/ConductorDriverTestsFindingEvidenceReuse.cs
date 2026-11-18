@@ -334,6 +334,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             getLandingFileScopes: _ =>
                 ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidenceReuse.cs"],
             executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+        var seedBatch = FindingRoundBatchCoordinator.Identity(seedDriver, goal, tester)!;
         seedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         PassVerification(kernel, goal, developer, hasCommittedChanges: false);
@@ -357,6 +358,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"],
             writeEscalation: (_, _, message) => escalation = message,
             executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+        var replayBatch = FindingRoundBatchCoordinator.Identity(replayDriver, goal, tester)!;
 
         replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
@@ -367,8 +369,14 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         {
             var outcome = tester.VerificationHistory.Last().MergedReviewFindings!.Single(item => item.StableId == sibling.StableId);
             Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, outcome.EvidenceOutcome?.Reason);
-            var closure = Assert.Single(goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
+            Assert.NotEqual(seedBatch.RoundFingerprint, replayBatch.RoundFingerprint);
+            Assert.True(FindingRoundBatchAccounting.IsClosed(goal, seedBatch));
+            var closure = Assert.Single(goal.Timeline.Where(item => item.TaskId == tester.Id &&
+                item.Message.StartsWith($"finding-evidence batch-closed; batch_key={replayBatch.Key};", StringComparison.Ordinal)));
             Assert.Contains("Developer:", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"BatchSize\":2", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Covered\":1", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Unavailable\":1", closure.Message, StringComparison.Ordinal);
         }
     }
 

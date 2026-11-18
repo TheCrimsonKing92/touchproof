@@ -293,8 +293,8 @@ internal sealed partial class ConductorDriver
         var plan = FindingRoundBatchSchedule.Plan(plannedBatches,
             requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
             telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline);
-        FindingRoundBatchCoordinator.RecordSettledPlan(this, goal, requestingTask, telemetryCandidateSha,
-            findingRoundFingerprint, batchBasisIdentity, plan, batchCandidateSha);
+        FindingRoundBatchCoordinator.RecordSettledPlan(this, goal, requestingTask, batchCandidateSha,
+            findingRoundFingerprint, batchBasisIdentity, plan);
         FailedGoalFindingObservation? redRoute = null;
         FindingEvidenceReceipt? actionableReceipt = null;
         foreach (var (batch, covering) in plan.RedCovered)
@@ -462,7 +462,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
         var receiptId = CreateFindingEvidenceReceiptId(
-            candidateSha!, findingRoundFingerprint, receiptIdentity);
+            candidateSha!, findingRoundFingerprint, receiptIdentity, executionBasisIdentity);
         var actionableCandidateRed = TryAttributeActionableCandidateRed(
             goal, candidateSha!, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, receiptId, armReceipts, _recordTaskNote), runnable);
         var receipt = new FindingEvidenceReceipt(
@@ -616,9 +616,16 @@ internal sealed partial class ConductorDriver
         string candidateSha,
         string findingRoundFingerprint,
         string identity) =>
-        "finding-evidence-" + Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{findingRoundFingerprint}:{identity}")))
-            .ToLowerInvariant()[..24];
+        "finding-evidence-" + Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{findingRoundFingerprint}:{identity}")))[..24];
+
+    internal static string CreateFindingEvidenceReceiptId(
+        string candidateSha,
+        string findingRoundFingerprint,
+        string identity,
+        string? executionBasisIdentity) =>
+        CreateFindingEvidenceReceiptId(candidateSha, findingRoundFingerprint,
+            executionBasisIdentity is null ? identity : $"finding-evidence-basis-v1:{identity}:{executionBasisIdentity}");
 
     internal static string CreateFindingEvidenceBatchId(
         string candidateSha,

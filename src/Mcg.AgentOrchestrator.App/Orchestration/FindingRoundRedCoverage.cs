@@ -41,8 +41,8 @@ internal static class FindingRoundRedCoverage
             plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
             task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
             candidateSha, fingerprint, basis, goal.Timeline);
-        foreach (var item in settled.Passed)
-            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item, "executed", receipt.ReceiptId);
+        foreach (var (batch, receiptId) in settled.Passed)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, "executed", receiptId);
         foreach (var item in settled.RedCovered)
             FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "executed", item.Receipt.ReceiptId);
         foreach (var item in settled.Unavailable)

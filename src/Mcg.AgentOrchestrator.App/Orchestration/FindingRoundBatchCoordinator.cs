@@ -144,7 +144,7 @@ internal static class FindingRoundBatchCoordinator
         FailedGoalFindingObservation? reusedActionableRed)
     {
         // Rejected and failed executions consume the same existing allowance as completed runs.
-        var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity);
+        var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity, basis);
         driver._recordFindingEvidenceRun(goal.Id, task.Id,
             $"finding-evidence failed-attempt; finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
             $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
@@ -162,14 +162,13 @@ internal static class FindingRoundBatchCoordinator
     }
 
     internal static void RecordSettledPlan(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
-        string round, string basis, FindingRoundBatchPlan plan, string batchCandidate)
+        string round, string basis, FindingRoundBatchPlan plan)
     {
         foreach (var unavailable in plan.Unavailable)
-            RecordOutcome(driver, goal, task, batchCandidate, round, basis, unavailable.Batch, "unavailable", unavailable.ReceiptId,
+            RecordOutcome(driver, goal, task, candidate, round, basis, unavailable.Batch, "unavailable", unavailable.ReceiptId,
                 $"Request {unavailable.Batch.Identity} completed {unavailable.Count} runs; last_receipt_id={unavailable.ReceiptId}.");
-        foreach (var passed in plan.Passed)
-            RecordOutcome(driver, goal, task, batchCandidate, round, basis, passed, "executed",
-                ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, passed.Identity));
+        foreach (var (batch, receiptId) in plan.Passed)
+            RecordOutcome(driver, goal, task, candidate, round, basis, batch, "executed", receiptId);
     }
 
     internal static void RecordOutcome(ConductorDriver driver, Goal goal, TaskSpec task, string candidate, string round, string basis,

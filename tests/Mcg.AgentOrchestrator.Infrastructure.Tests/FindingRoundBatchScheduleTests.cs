@@ -70,7 +70,7 @@ public sealed class FindingRoundBatchScheduleTests
             Assert.Equal(new[] { subset }, plan.Executable);
         }
         var passed = Plan([subset], [green with { ReceiptId = ReceiptId(subset) }]);
-        Assert.Equal(new[] { subset }, passed.Passed);
+        Assert.Equal((subset, ReceiptId(subset)), Assert.Single(passed.Passed));
         Assert.Empty(passed.RedCovered);
         Assert.Empty(passed.Executable);
     }
@@ -107,6 +107,14 @@ public sealed class FindingRoundBatchScheduleTests
         // Exhaustion settles only that request; unrelated work remains runnable.
         var later = Plan([second, batch], [], [.. twoRuns, Event(message)]);
         Assert.Same(batch, Assert.Single(later.Unavailable).Batch);
+
+        var basisReceiptId = ConductorDriver.CreateFindingEvidenceReceiptId(Candidate, Round, batch.Identity, Basis);
+        var upgraded = Plan([batch, second], [],
+            [.. twoRuns, Event($"receipt_id={basisReceiptId}; finding_id=alpha; execution_basis={Basis};")]);
+        Assert.Equal(new[] { second }, upgraded.Executable);
+        var upgradedCap = Assert.Single(upgraded.Unavailable);
+        Assert.Equal(3, upgradedCap.Count);
+        Assert.Equal(basisReceiptId, upgradedCap.ReceiptId);
     }
 
     [Fact]
