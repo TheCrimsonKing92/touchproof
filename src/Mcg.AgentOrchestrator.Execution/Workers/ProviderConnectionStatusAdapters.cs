@@ -38,14 +38,23 @@ public sealed class ProviderConnectionStatusAdapters(
             return Observation(ProviderConnectionResult.Unsupported);
         try
         {
-            var path = (locate ?? Locate)(executable);
-            if (path is null) return Observation(ProviderConnectionResult.ToolMissing);
             string[] arguments = cli == "codex" ? ["login", "status"] : ["auth", "status", "--json"];
-            var request = CreateRequest(path, arguments, workingDirectory);
+            var resolveInShell = OperatingSystem.IsWindows() && locate is null;
+            WorkerProcessDirectRunRequest request;
+            if (resolveInShell)
+            {
+                request = CreateWindowsProbeRequest(executable, arguments, workingDirectory);
+            }
+            else
+            {
+                var path = (locate ?? LocateOnPath)(executable);
+                if (path is null) return Observation(ProviderConnectionResult.ToolMissing);
+                request = CreateRequest(path, arguments, workingDirectory);
+            }
             var result = await (run ?? RunAsync)(request, cancellationToken);
             if (result.TimedOut) return Observation(ProviderConnectionResult.TimedOut);
             if (result.CaptureLimited) return Observation(ProviderConnectionResult.OutputLimited);
-            var parsed = Parse(cli, result);
+            var parsed = resolveInShell ? ParseWindowsProbe(cli, result) : Parse(cli, result);
             return Observation(parsed.Result, parsed.Mode);
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode is 2 or 3)
@@ -82,18 +91,50 @@ public sealed class ProviderConnectionStatusAdapters(
         return new(path, arguments, directory, Deadline, RequireOwnedProcessGroup: true);
     }
 
-    private static string? Locate(string executable)
+    private static WorkerProcessDirectRunRequest CreateWindowsProbeRequest(string executable, string[] arguments, string directory)
     {
-        var names = OperatingSystem.IsWindows() && !Path.HasExtension(executable)
-            ? new[] { executable + ".exe", executable + ".cmd" } : [executable];
+        // Resolve as dispatch does, then invoke that exact application within the same bounded shell.
+        // Disable module autoload during discovery because it can execute module initialization code.
+        var command = $$"""
+            $PSModuleAutoLoadingPreference = 'None'
+            try { $launcher = Get-Command -Name '{{executable}}' -ErrorAction Stop }
+            catch [System.Management.Automation.CommandNotFoundException] {
+                [Console]::WriteLine('missing')
+                exit 0
+            }
+            if ($launcher.CommandType -ne 'Application' -or [IO.Path]::GetExtension($launcher.Path) -notin @('.exe', '.cmd')) {
+                [Console]::WriteLine('unsupported')
+                exit 0
+            }
+            [Console]::WriteLine('application')
+            & $launcher {{string.Join(' ', arguments)}}
+            exit $LASTEXITCODE
+            """;
+        return new(WorkerShell.Executable, [.. WorkerShell.BaseArguments(), command], directory, Deadline,
+            RequireOwnedProcessGroup: true);
+    }
+
+    private static (ProviderConnectionResult Result, ProviderConnectionAuthMode Mode) ParseWindowsProbe(string cli, WorkerProcessRunResult response)
+    {
+        // The shell writes the resolution header before any application output.
+        var newline = response.StandardOutput.IndexOf('\n');
+        if (newline < 0) return (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown);
+        return response.StandardOutput[..newline].TrimEnd('\r') switch
+        {
+            "missing" => (ProviderConnectionResult.ToolMissing, ProviderConnectionAuthMode.Unknown),
+            "unsupported" => (ProviderConnectionResult.Unsupported, ProviderConnectionAuthMode.Unknown),
+            "application" => Parse(cli, response with { StandardOutput = response.StandardOutput[(newline + 1)..] }),
+            _ => (ProviderConnectionResult.Unknown, ProviderConnectionAuthMode.Unknown)
+        };
+    }
+
+    private static string? LocateOnPath(string executable)
+    {
         foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator,
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            foreach (var name in names)
-            {
-                var path = Path.Combine(directory.Trim('"'), name);
-                if (File.Exists(path)) return Path.GetFullPath(path);
-            }
+            var path = Path.Combine(directory.Trim('"'), executable);
+            if (File.Exists(path)) return Path.GetFullPath(path);
         }
         return null;
     }

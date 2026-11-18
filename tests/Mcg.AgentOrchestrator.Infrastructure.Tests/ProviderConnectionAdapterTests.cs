@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Parallel-safe: all process, credential and clock boundaries are injected.
+// Parallel-safe: the launcher fixture changes PATH only in its own child process.
 public sealed class ProviderConnectionAdapterTests
 {
     [Theory]
@@ -102,6 +102,55 @@ public sealed class ProviderConnectionAdapterTests
         var adapter = new ProviderConnectionStatusAdapters("fixture", (_, _) => throw new Exception("must not launch"),
             _ => throw new Exception("must not locate"));
         Assert.Equal(ProviderConnectionResult.Unsupported, (await adapter.CheckAsync(new(name, command))).Result);
+    }
+
+    [Theory]
+    [InlineData(".bat", ProviderConnectionResult.Unsupported)]
+    [InlineData(".cmd", ProviderConnectionResult.SignedIn)]
+    public async Task WindowsHostProbe_UsesFirstLauncherResolvedByDispatchShell(string extension, ProviderConnectionResult expected)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = Directory.CreateTempSubdirectory("mcg-status-launcher-");
+        try
+        {
+            var earlier = root.CreateSubdirectory("earlier").FullName;
+            var later = root.CreateSubdirectory("later").FullName;
+            var launcher = Path.Combine(earlier, "codex" + extension);
+            const string script = "@echo %*>\"%~dp0invocation.txt\"\r\n@echo Logged in using ChatGPT\r\n@exit /b 0\r\n";
+            File.WriteAllText(launcher, script);
+            File.WriteAllText(Path.Combine(later, "codex.cmd"), script);
+
+            var childPath = (earlier + ";" + later).Replace("'", "''");
+            var expectedPath = launcher.Replace("'", "''");
+            var setup = $$"""
+                $env:PATH = '{{childPath}}'
+                $env:PATHEXT = '.EXE;.BAT;.CMD'
+                if ((Get-Command codex).Path -ne '{{expectedPath}}') { throw 'Fixture did not select the earlier launcher' }
+                """;
+            var adapter = new ProviderConnectionStatusAdapters(root.FullName, (request, token) =>
+            {
+                Assert.Equal(WorkerShell.Executable, request.FileName);
+                Assert.StartsWith("$PSModuleAutoLoadingPreference", request.Arguments[^1]);
+                return WorkerProcessRunner.RunBoundedDirectAsync(request with
+                {
+                    Arguments = [.. request.Arguments.SkipLast(1), setup + "\n" + request.Arguments[^1]],
+                    Timeout = TestHangGuard.Bound
+                }, ProviderConnectionStatusAdapters.MaximumCaptureBytes, token);
+            });
+
+            var observation = await adapter.CheckAsync(WorkerProfileCatalog.Default().GetRequired("codex-cli"));
+            Assert.Equal(expected, observation.Result);
+            var earlierInvocation = Path.Combine(earlier, "invocation.txt");
+            if (expected == ProviderConnectionResult.SignedIn)
+                Assert.Equal("login status", File.ReadAllText(earlierInvocation).Trim());
+            else
+                Assert.False(File.Exists(earlierInvocation));
+            Assert.False(File.Exists(Path.Combine(later, "invocation.txt")));
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root.FullName);
+        }
     }
 
     [Fact]
