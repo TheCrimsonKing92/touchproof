@@ -124,8 +124,8 @@ public sealed class PackageHelperHiddenLaunchTestsLauncherScriptTests
             Assert.True(HasLaunchContract(text, module), helper);
             Assert.False(HasLaunchContract(text.Replace("Invoke-HiddenNativeProcess -FilePath $dotnetHost", "& $dotnetHost"), module));
             Assert.False(HasLaunchContract(text + "\n" + "Start-Process" + " $dotnetHost", module));
-            Assert.False(HasLaunchContract(text, module.Replace("$start.CreateNoWindow = $true", "# CreateNoWindow = $true")));
             Assert.False(HasLaunchContract(text, module.Replace("$start.UseShellExecute = $false", "# UseShellExecute = $false")));
+            Assert.False(HasLaunchContract(text, module.Replace("$start.CreateNoWindow = $true", "# CreateNoWindow = $true")));
             Assert.False(HasLaunchContract(text, "& $FilePath @ArgumentList"));
         }
     }
@@ -135,7 +135,7 @@ public sealed class PackageHelperHiddenLaunchTestsLauncherScriptTests
     {
         var runtimeDirectory = RuntimeEnvironment.GetRuntimeDirectory();
         var root = Path.GetFullPath(Path.Combine(runtimeDirectory, "..", "..", ".."));
-        var inherited = new ProcessStartInfo();
+        var inherited = new ProcessStartInfo { CreateNoWindow = true };
         inherited.Environment.Clear();
         foreach (var name in new[] { "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT(x86)" })
             inherited.Environment[name] = "stale inherited runtime root";
