@@ -795,18 +795,10 @@ internal sealed partial class GoalDispatchOperations
         static void ThrowFailed(GoalId goalId, string? detail)
         {
             var failure = string.IsNullOrWhiteSpace(detail) ? "last-executor-failed" : detail;
-            var hasFailurePrefix = failure.StartsWith("SPEC_REFINEMENT_FAILED", StringComparison.Ordinal);
-            const string inlineRecovery = " " + GoalRefinementWorkCoordinator.RecoveryNextStep;
-            var recoveryLine = Environment.NewLine + GoalRefinementWorkCoordinator.RecoveryNextStep;
-            if (failure.EndsWith(inlineRecovery, StringComparison.Ordinal))
-                failure = failure[..^inlineRecovery.Length] + recoveryLine;
-            else if (!hasFailurePrefix)
-                failure += recoveryLine;
-
-            throw new InvalidOperationException(
-                hasFailurePrefix
-                    ? $"SPEC_REFINEMENT_FAILED goal={goalId.Value} {failure["SPEC_REFINEMENT_FAILED".Length..].TrimStart()}"
-                    : $"SPEC_REFINEMENT_FAILED goal={goalId.Value} owner=durable-outbox phase=executor detail={failure}");
+            var diagnostic = failure.StartsWith("SPEC_REFINEMENT_FAILED", StringComparison.Ordinal)
+                ? $"SPEC_REFINEMENT_FAILED goal={goalId.Value} {failure["SPEC_REFINEMENT_FAILED".Length..].TrimStart()}"
+                : $"SPEC_REFINEMENT_FAILED goal={goalId.Value} owner=durable-outbox phase=executor detail={failure}";
+            throw new InvalidOperationException(GoalRefinementWorkCoordinator.WithRecoveryNextStep(diagnostic));
         }
 
         static void ThrowQuarantined(GoalId goalId, string? detail) =>
