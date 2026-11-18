@@ -244,8 +244,8 @@ public sealed class TestCostRankingScriptTests
 
         public CommandResult Run(params string[] extra) => RunScript("Get-TestCostRanking.ps1",
             extra.Contains("-InputRoot", StringComparer.OrdinalIgnoreCase) ? extra : ["-InputRoot", InputRoot, .. extra]);
-        public CommandResult RunAt(string root) => Execute(root, "pwsh", ["-NoProfile", "-File", Path.Combine(root, "scripts", "Get-TestCostRanking.ps1"), "-InputRoot", Path.Combine(root, "receipts")]);
-        public CommandResult RunScript(string name, params string[] arguments) => Execute(Root, "pwsh", ["-NoProfile", "-File", Path.Combine(Root, "scripts", name), .. arguments]);
+        public CommandResult RunAt(string root) => Execute(root, TestPowerShell.Executable, ["-NoProfile", "-File", Path.Combine(root, "scripts", "Get-TestCostRanking.ps1"), "-InputRoot", Path.Combine(root, "receipts")]);
+        public CommandResult RunScript(string name, params string[] arguments) => Execute(Root, TestPowerShell.Executable, ["-NoProfile", "-File", Path.Combine(Root, "scripts", name), .. arguments]);
         public string Git(params string[] arguments) => GitAt(Root, arguments);
         public string GitAt(string root, params string[] arguments)
         {
