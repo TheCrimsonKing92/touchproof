@@ -59,14 +59,18 @@ internal static class FindingEvidenceContinuationCoordinator
             var cap = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
             if (cap.Round >= policy.ReviewAutoRetryStopRound || cap.LifetimeRound >= cap.LifetimeBackstop)
                 return false;
-            observation = FailedGoalFindingObservation.Routed(
-                FailedGoalFindingObservationKind.FindingRouteObserved, reviewer.Id,
-                BuildFailedGoalAttemptIdentity(reviewer), continuation!.Render(), null,
-                observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
+            observation = BuildObservation(reviewer, continuation!);
             return true;
         }
         return false;
     }
+
+    internal static FailedGoalFindingObservation BuildObservation(TaskSpec reviewer,
+        FindingEvidenceReviewContinuation continuation) =>
+        FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.FindingRouteObserved, reviewer.Id,
+            BuildFailedGoalAttemptIdentity(reviewer), continuation.Render(), null,
+            observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
 
     private static bool CanOfferBeforeBatchObservation(ConductorDriver driver, Goal goal, TaskSpec reviewer,
         FindingEvidenceReviewContinuation continuation)

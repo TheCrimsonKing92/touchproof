@@ -8,7 +8,8 @@ public sealed class FreshFindingEvidenceConductorTests
     public void QualifiedContinuation_WaitsForDistinctAdvisoryRequests()
     {
         using var fixture = new FreshFindingEvidenceFixture(retryReview: false, advisoryReviewSiblings: true);
-        fixture.Attach(fixture.Receipt());
+        var receipt = fixture.Receipt();
+        fixture.Attach(receipt);
         Assert.True(fixture.Select(out var continuation, out var diagnostic), diagnostic);
         Assert.Equal(FreshFindingEvidenceFixture.FindingId, Assert.Single(continuation!.Selections).FindingId);
         var executions = new List<string>();
@@ -31,6 +32,8 @@ public sealed class FreshFindingEvidenceConductorTests
         Assert.Contains("ThirdTests", executions[1]);
         Assert.Equal(1, fixture.Launches);
         Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.Causes));
+        var delivered = Assert.IsType<FindingEvidenceReviewContinuation>(fixture.Reviewer.LastDispatch!.FindingEvidenceReviewContinuation);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(delivered.Selections).ReceiptId);
         Assert.Single(fixture.Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;")));
     }
 

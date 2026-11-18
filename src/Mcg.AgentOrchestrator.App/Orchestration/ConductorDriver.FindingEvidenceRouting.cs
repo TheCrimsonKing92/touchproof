@@ -456,10 +456,7 @@ internal sealed partial class ConductorDriver
         {
             var currentTask = (_cohortKernel ?? _conductorTickKernel)?.GetTask(goal.Id, task.Id) ?? task;
             if (FindingEvidenceContinuationCoordinator.TrySelectFindingEvidenceContinuation(this, goal, currentTask, out var continuation, out var reason))
-                return FailedGoalFindingObservation.Routed(
-                    FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded, task.Id,
-                    BuildFailedGoalAttemptIdentity(task), continuation!.Render(), null,
-                    observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
+                return FindingEvidenceContinuationCoordinator.BuildObservation(task, continuation!);
             return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 $"Reviewer evidence continuation held: {reason}; candidate_sha={candidateSha}.");
         }
