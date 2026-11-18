@@ -171,6 +171,83 @@ public sealed class GoalRefinementStaleSpecHydrationTests
         Assert.Same(goal, kernel.GetGoal(goal.Id));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingGoalTableLeavesReadyInMemoryGoalUntouched(bool existingDatabase)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Dispatch before the durable goal store is initialized.");
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Keep this contract.", [Criterion],
+                VerificationClass.TestVerifiable, [], []));
+            Assert.False(File.Exists(workspace.SqliteStatePath));
+            if (existingDatabase)
+            {
+                Directory.CreateDirectory(workspace.OrchestratorDirectory);
+                await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                {
+                    DataSource = workspace.SqliteStatePath,
+                    Pooling = false
+                }.ToString());
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goals'";
+                Assert.Equal(0L, await command.ExecuteScalarAsync());
+            }
+            Assert.Equal(existingDatabase, File.Exists(workspace.SqliteStatePath));
+
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace,
+                new InMemoryModelProviderRegistry([]), goal);
+
+            Assert.Same(goal, kernel.GetGoal(goal.Id));
+            Assert.DoesNotContain(goal.Timeline, entry => entry.Message == GoalRefinementWorkCoordinator.PendingPolicyReceipt);
+            Assert.Null(await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                .GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id)));
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
+    [Fact]
+    public async Task InvalidGoalSchemaStillPropagatesStoreError()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Report invalid durable state.");
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Keep this contract.", [Criterion],
+                VerificationClass.TestVerifiable, [], []));
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = workspace.SqliteStatePath,
+                Pooling = false
+            }.ToString()))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE goals (id TEXT PRIMARY KEY)";
+                await command.ExecuteNonQueryAsync();
+                command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goals'";
+                Assert.Equal(1L, await command.ExecuteScalarAsync());
+            }
+
+            var error = Assert.Throws<SqliteException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace,
+                    new InMemoryModelProviderRegistry([]), goal));
+
+            Assert.Equal(1, error.SqliteErrorCode);
+            Assert.Equal("SQLite Error 1: 'no such column: snapshot_json'.", error.Message);
+            Assert.Same(goal, kernel.GetGoal(goal.Id));
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
     private static async Task AssertResolvedAnswerNeedsRepairAsync(Scenario scenario)
     {
         var readiness = GoalRefinementGate.Evaluate(scenario.Kernel.GetGoal(scenario.GoalId), null,

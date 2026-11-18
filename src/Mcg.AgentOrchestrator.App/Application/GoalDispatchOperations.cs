@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Application;
 
@@ -811,10 +812,20 @@ internal sealed partial class GoalDispatchOperations
         OrchestratorWorkspace workspace,
         Goal current)
     {
-        var stored = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
-            .LoadGoalAsync(current.Id)
-            .GetAwaiter()
-            .GetResult();
+        GoalSnapshot? stored;
+        try
+        {
+            stored = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                .LoadGoalAsync(current.Id)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
+            string.Equals(ex.Message, "SQLite Error 1: 'no such table: goals'.", StringComparison.Ordinal))
+        {
+            // In-memory dispatch can precede state-store initialization.
+            return false;
+        }
         if (stored is null)
             return false;
         if (stored.RefinedSpec is null &&
