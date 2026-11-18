@@ -34,9 +34,6 @@ internal sealed partial class ConductorContinuitySupervisor
     private FleetBuildAdoptionSummary? _fleetBuildAdoptionSummary;
     private FleetBuildRollingRestartTrigger? _fleetRollingRestartTrigger;
     private CostGoalOutcomeSweep? _costGoalOutcomeSweep;
-    private readonly object _costGoalOutcomeTickGate = new();
-    private bool _costGoalOutcomeTickRunning;
-    private bool _costGoalOutcomeTickPending;
     internal Func<FleetBuildRollingRestartTrigger>? FleetRollingRestartTriggerFactory { get; init; }
     internal Func<FleetBuildAdoptionSummary>? FleetAdoptionSummaryFactory { get; init; }
 
@@ -74,7 +71,6 @@ internal sealed partial class ConductorContinuitySupervisor
         private DateTimeOffset _lastLineAt;
         private DateTimeOffset? _loopReadyAt;
         private TaskCompletionSource _changed = NewSignal();
-        private Action? _onTickEnd;
 
         internal ActivationMonitor(Func<DateTimeOffset> utcNow, ActivationAdmissionProbeTracker? probe = null)
         {
@@ -85,7 +81,6 @@ internal sealed partial class ConductorContinuitySupervisor
 
         internal void OnLine(string line)
         {
-            Action? onTickEnd = null;
             lock (_gate)
             {
                 var nonBlank = !string.IsNullOrWhiteSpace(line);
@@ -116,7 +111,6 @@ internal sealed partial class ConductorContinuitySupervisor
                         CultureInfo.InvariantCulture, out var tick) ? tick : null;
                     _lastTickEndAt = _utcNow();
                     _admissionHealthyAtLastTick = _admissionHealth.Verdict.State == ActivationAdmissionHealthState.Healthy;
-                    onTickEnd = _onTickEnd;
                 }
                 else if (_started && line.StartsWith("LOOP_RELAUNCH_DRAIN ", StringComparison.Ordinal))
                 {
@@ -138,12 +132,6 @@ internal sealed partial class ConductorContinuitySupervisor
                 _changed = NewSignal();
                 changed.TrySetResult();
             }
-            onTickEnd?.Invoke();
-        }
-
-        internal void ObserveTickEnd(Action onTickEnd)
-        {
-            lock (_gate) _onTickEnd = onTickEnd;
         }
 
         internal (bool Started, int Ticks, Task Changed, ActivationAdmissionHealthVerdict AdmissionHealth,
@@ -243,7 +231,6 @@ internal sealed partial class ConductorContinuitySupervisor
                 (!checkAdmissionHealth || (health.State == ActivationAdmissionHealthState.Healthy &&
                     snapshot.AdmissionHealthyAtLastTick)))
             {
-                if (homeBuildPublisher is not null) monitor.ObserveTickEnd(QueueCostGoalOutcomeTick);
                 return new(true, null, $"healthyTicks={snapshot.Ticks}", null, true,
                     ProbeSkippedReason: snapshot.Probe?.SkipReason);
             }
@@ -406,41 +393,6 @@ internal sealed partial class ConductorContinuitySupervisor
         LazyInitializer.EnsureInitialized(ref _costGoalOutcomeSweep, () => CostGoalOutcomeSweep.CreateDefault(
             AdoptedBuildPushTrigger.ResolveHomeWorkspace(OrchestratorProjectRegistry.CreateDefault()),
             AppendAdoptedBuildEvent)).Run(_timeProvider.GetUtcNow);
-
-    private void QueueCostGoalOutcomeTick()
-    {
-        lock (_costGoalOutcomeTickGate)
-        {
-            _costGoalOutcomeTickPending = true;
-            if (_costGoalOutcomeTickRunning) return;
-            _costGoalOutcomeTickRunning = true;
-        }
-        // Keep the child output pump free even when a sweep reads gate history or waits for a goal lock.
-        _ = Task.Run(DrainCostGoalOutcomeTicks);
-    }
-
-    private void DrainCostGoalOutcomeTicks()
-    {
-        while (true)
-        {
-            lock (_costGoalOutcomeTickGate)
-            {
-                if (!_costGoalOutcomeTickPending)
-                {
-                    _costGoalOutcomeTickRunning = false;
-                    return;
-                }
-                _costGoalOutcomeTickPending = false;
-            }
-            try { SweepCostGoalOutcomes(); }
-            catch (Exception ex)
-            {
-                AdoptedBuildPublicationReporting.Try(
-                    () => AppendAdoptedBuildEvent($"COST_GOAL_OUTCOME_SWEEP_FAILED source=tick reason={ex.GetType().Name}"),
-                    "cost-outcome-tick-sweep");
-            }
-        }
-    }
 
     private void RaiseFailedBothAttention(
         string workingDirectory,

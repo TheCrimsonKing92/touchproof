@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -13,9 +14,30 @@ internal sealed class CostGoalOutcomeSweep(
     Func<string, string, bool> containsCommit,
     Action<string> reportFailure)
 {
+    private static readonly ConditionalWeakTable<ConductorBatchLoop, CostGoalOutcomeSweep> TickSweeps = new();
     private readonly object runGate = new();
     private readonly Dictionary<GoalId, string> reportedFailures = new();
     private (BacklogStore Backlog, ConductEventLogWriter Events)? stores;
+
+    internal static void ObserveTick(ConductorBatchLoop loop, OrchestratorWorkspace? workspace,
+        Func<DateTimeOffset> utcNow, ConductEventLogWriter? events)
+    {
+        if (workspace is null) return;
+
+        void ReportFailure(string detail) => (events ??= new ConductEventLogWriter(workspace.ConductEventsLogPath))
+            .Append("cost-goal-outcome-sweep", null, detail);
+
+        try
+        {
+            TickSweeps.GetValue(loop, _ => CreateDefault(workspace, ReportFailure)).Run(utcNow);
+        }
+        catch (Exception ex)
+        {
+            AdoptedBuildPublicationReporting.Try(
+                () => ReportFailure($"COST_GOAL_OUTCOME_SWEEP_FAILED source=tick reason={ex.GetType().Name}"),
+                "cost-outcome-tick-sweep");
+        }
+    }
 
     internal void Run(Func<DateTimeOffset> utcNow)
     {
