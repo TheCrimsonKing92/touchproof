@@ -194,6 +194,8 @@ public sealed class BacklogIntakeForceReclaimCorrectionTests : CliCommandTestBas
             var originalClaim = claims.ResolveClaim(before, item.Id)!;
             var facts = GoalReplacementEvidence.Capture(workspace, before.GetGoal(ownerId));
             Assert.True(facts.IsRecorded);
+            Assert.False(facts.IsRunning);
+            Assert.Equal(protection == "dispatch", facts.HasDispatch);
             Assert.True(facts.HasWork);
             Assert.True(facts.IsProtected);
             Assert.True(facts.IsGitEvidenceAvailable);
@@ -326,6 +328,9 @@ public sealed class BacklogIntakeForceReclaimCorrectionTests : CliCommandTestBas
                     Path.Combine(workspace.OrchestratorDirectory, "stdout.log"),
                     Path.Combine(workspace.OrchestratorDirectory, "stderr.log"),
                     Path.Combine(workspace.OrchestratorDirectory, "exit.json"), DateTimeOffset.UtcNow, null, null));
+            else
+                kernel.ReportTaskProgress(owner.Id, task.Id, WorkTaskStatus.Cancelled,
+                    "End fixture dispatch while retaining its history.");
         }
         kernel.CancelGoal(owner.Id, "Correct the zero-work intake pipeline.", allowLiveDispatches: true);
         await repository.SaveAsync(kernel);
