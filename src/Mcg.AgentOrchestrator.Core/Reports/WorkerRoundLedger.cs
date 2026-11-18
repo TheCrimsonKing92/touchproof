@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public enum WorkerRoundStopCause
@@ -29,7 +31,10 @@ public sealed record WorkerRoundRecord(
     ReworkCauseFamily ReworkCause)
 {
     public bool UsageReported => InputTokens.HasValue && CachedInputTokens.HasValue && OutputTokens.HasValue;
+    // Keep historical replay evidence byte-identical when Planner diagnostics do not apply.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? PlannerContractRejected { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? PlannerClarification { get; init; }
 }
 
