@@ -70,6 +70,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var workingDirectory = Path.Combine(root, "repo");
         Directory.CreateDirectory(workingDirectory);
         var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Rebind the acknowledged assignment before start.", AgentRole.Developer);
         var goal = MarkGoalRefined(kernel, kernel.CreateGoal("Honor dispatch reassignment", [task]));
@@ -1440,6 +1441,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         WriteSkill(root, "orchestrator-dogfood");
         var kernel = new AgentOrchestratorKernel();
         var first = new TaskSpec(TaskId.New(), "Inspect first recovery without file changes.", AgentRole.Planner);
