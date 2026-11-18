@@ -328,11 +328,20 @@ public sealed class BriefSourceContextSectionTests : WorkerDispatchTestSupport
         File.Move(path, absent);
         try
         {
-            Prepare(fixture, typed); // Warm the stable recorded-dispatch projection.
+            // Dispatch records change the typed timeline artifact and its package identity on every call.
+            // Compare the same pre-dispatch state so source availability is the only changed input.
+            var snapshot = fixture.Kernel.ExportSnapshot();
             var without = File.ReadAllText(Prepare(fixture, typed).PromptPath);
             Assert.DoesNotContain("## Source context", without);
             File.Move(absent, path);
 
+            var restoredKernel = AgentOrchestratorKernel.FromSnapshot(snapshot);
+            fixture = fixture with
+            {
+                Kernel = restoredKernel,
+                Goal = restoredKernel.GetGoal(fixture.Goal.Id),
+                Task = restoredKernel.GetTask(fixture.Goal.Id, fixture.Task.Id)
+            };
             var with = File.ReadAllText(Prepare(fixture, typed).PromptPath);
 
             Assert.StartsWith(without, with);
