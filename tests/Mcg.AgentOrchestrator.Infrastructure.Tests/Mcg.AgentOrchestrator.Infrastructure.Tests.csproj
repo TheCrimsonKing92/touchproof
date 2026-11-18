@@ -51,6 +51,7 @@
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\ReviewerFindingsParse\*.out.txt" CopyToOutputDirectory="Always" />
     <Content Include="Fixtures\CodexJsonl\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\ClaudeTranscript\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\WorkerOutput\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\config\trials\hermes-acp-v2026.8.27.json"
              Link="config\trials\hermes-acp-v2026.8.27.json"
