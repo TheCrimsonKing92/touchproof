@@ -7,7 +7,7 @@ public sealed class RemainderPoolPlacementTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ShippedManifest_RemainderClassesHaveOnePoolOrResidualLane(bool readHistory)
+    public void ShippedManifest_RemainderClassesHaveOneGeneratedLane(bool readHistory)
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var settings = AcceptanceGateEngineSettings.Load(root);
@@ -23,6 +23,9 @@ public sealed class RemainderPoolPlacementTests
 
         Assert.DoesNotContain(expansion.Lanes, lane => lane.Name == "Remainder");
         var poolNames = Enumerable.Range(1, 8).Select(index => $"{pool.LaneNamePrefix} {index}").ToArray();
+        var constraintNames = (pool.IsolationConstraints ?? []).SelectMany(constraint =>
+            Enumerable.Range(1, constraint.LaneCount).Select(index => $"{constraint.Name} {index}")).ToArray();
+        var constraintLanes = expansion.Lanes.Where(lane => constraintNames.Contains(lane.Name, StringComparer.Ordinal)).ToArray();
         Assert.Equal(poolNames, expansion.Layout!.Lanes.Select(lane => lane.Name));
         foreach (var name in poolNames.Append(pool.ResidualLaneName))
             AssertHostIntegrationExcluded(Assert.Single(expansion.Lanes, lane => lane.Name == name).Filter);
@@ -34,7 +37,10 @@ public sealed class RemainderPoolPlacementTests
         foreach (var item in members)
         {
             var owner = Assert.Single(AcceptanceLaneMembership.LanesIncluding(expansion.Lanes, item.FullName));
-            Assert.Contains(owner.Name, poolNames.Append(pool.ResidualLaneName));
+            if (item.Constraint is { } constraint)
+                Assert.StartsWith(constraint + " ", owner.Name);
+            else
+                Assert.Contains(owner.Name, poolNames.Append(pool.ResidualLaneName));
         }
         // A class absent from the scanner still belongs to the unchanged complement lane.
         const string missedClass = "Synthetic.ScannerMissedInfrastructureTests";
@@ -52,7 +58,7 @@ public sealed class RemainderPoolPlacementTests
         var otherConstraints = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, classes)
             .Where(lane => lane.Name != "Remainder" && AcceptanceBalancedLaneExpander.IsConstrained(lane)).ToArray();
         Assert.Equal(otherConstraints, expansion.Lanes.Take(otherConstraints.Length));
-        Assert.Equal(otherConstraints.Length + 8 + 1, expansion.Lanes.Count);
+        Assert.Equal(otherConstraints.Length + constraintLanes.Length + poolNames.Length + 1, expansion.Lanes.Count);
     }
 
     [Fact]

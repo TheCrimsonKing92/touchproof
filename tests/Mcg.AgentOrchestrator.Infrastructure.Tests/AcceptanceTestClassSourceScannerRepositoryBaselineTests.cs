@@ -26,7 +26,7 @@ public sealed class AcceptanceTestClassSourceScannerRepositoryBaselineTests(ITes
         foreach (var previous in baseline)
         {
             Assert.True(byName.TryGetValue(previous.FullName, out var retained), previous.FullName);
-            Assert.Equal(previous, retained);
+            Assert.Equal(previous, retained with { Constraint = null });
         }
 
         const string sshClass = "SshRemoteLaneExecutorRealTransportTests";
@@ -59,12 +59,15 @@ public sealed class AcceptanceTestClassSourceScannerRepositoryBaselineTests(ITes
         var beforePool = before.Layout!.Lanes.SelectMany(lane => lane.Members).ToHashSet(StringComparer.Ordinal);
         var afterPool = after.Layout!.Lanes.SelectMany(lane => lane.Members).ToHashSet(StringComparer.Ordinal);
         Assert.NotEmpty(beforePool);
-        Assert.Equal(beforePool.Append(sshClass).Order(StringComparer.Ordinal), afterPool.Order(StringComparer.Ordinal));
+        var tagged = actual.Where(item => item.Constraint is not null).Select(item => item.FullName).ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(beforePool.Except(tagged).Append(sshClass).Order(StringComparer.Ordinal), afterPool.Order(StringComparer.Ordinal));
         foreach (var previous in baseline)
         {
             // Pool packing can change lane numbers; membership is its stable ownership contract.
             var afterOwner = Owner(after.Lanes, previous.FullName);
-            if (beforePool.Contains(previous.FullName))
+            if (tagged.Contains(previous.FullName))
+                Assert.StartsWith(byName[previous.FullName].Constraint + " ", afterOwner, StringComparison.Ordinal);
+            else if (beforePool.Contains(previous.FullName))
                 Assert.StartsWith(poolSettings.LaneNamePrefix + " ", afterOwner, StringComparison.Ordinal);
             else
                 Assert.Equal(Owner(before.Lanes, previous.FullName), afterOwner);

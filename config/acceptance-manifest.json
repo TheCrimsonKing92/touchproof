@@ -33,7 +33,10 @@
       "residualLaneName": "Infrastructure residual",
       "defaultClassSecondsWhenNoHistory": 1,
       "traitExclusions": ["Category!=HostIntegration"],
-      "poolEligibleLaneNames": ["Remainder"]
+      "poolEligibleLaneNames": ["Remainder"],
+      "isolationConstraints": [
+        { "name": "ProcessSpawning", "laneCount": 3, "exclusiveResourceKeys": [] }
+      ]
     },
     "infrastructureTestLanes": [
       {
