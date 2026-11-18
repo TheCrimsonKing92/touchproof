@@ -27,10 +27,9 @@ internal static class ChangedFileTestClassPathMapper
         foreach (var literal in tree.GetRoot().DescendantNodes().OfType<LiteralExpressionSyntax>()
                      .Where(node => node.IsKind(SyntaxKind.StringLiteralExpression) || node.IsKind(SyntaxKind.Utf8StringLiteralExpression)))
         {
-            var owner = literal.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
-            if (owner is null) continue;
-            var name = ImpactReplayTestSourceIndex.ClassName(owner);
-            if (!known.Contains(name)) continue;
+            var name = literal.Ancestors().OfType<ClassDeclarationSyntax>()
+                .Select(ImpactReplayTestSourceIndex.ClassName).FirstOrDefault(known.Contains);
+            if (name is null) continue;
             var value = Normalize(literal.Token.ValueText);
             if (!literals.TryGetValue(value, out var matches)) literals[value] = matches = new(StringComparer.Ordinal);
             matches.Add(name);

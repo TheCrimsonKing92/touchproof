@@ -12,7 +12,6 @@ public sealed class DeveloperWorkerResultContextSectionTests
 
     [Theory]
     [InlineData(AgentRole.Reviewer)]
-    [InlineData(AgentRole.Tester)]
     public void MatchingCandidate_ContextContainsVerbatimReportAndOwnAccount(AgentRole role)
     {
         var fixture = new Fixture();

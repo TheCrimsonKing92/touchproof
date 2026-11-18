@@ -23,10 +23,10 @@ internal sealed partial class ConductorBatchLoop
     }
 
     internal static IReadOnlySet<string> TrainIneligibleCriterionEvidenceGoalIds(IReadOnlyList<Goal> eligibleGoals) =>
-        eligibleGoals
-            .Where(goal => AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal) is not null ||
-                goal.LandingPrerequisiteObligations.Any(obligation =>
-                    obligation.Owner != CriterionEvidenceOwner.Acceptance))
-            .Select(goal => goal.Id.Value)
-            .ToHashSet(StringComparer.Ordinal);
+        TrainIneligibleCriterionEvidenceGoalIds(eligibleGoals, new HashSet<string>(StringComparer.Ordinal));
+    internal static IReadOnlySet<string> TrainIneligibleCriterionEvidenceGoalIds(IReadOnlyList<Goal> eligibleGoals, IReadOnlySet<string> unresolvedSelectorGoalIds) =>
+        eligibleGoals.Where(goal => unresolvedSelectorGoalIds.Contains(goal.Id.Value) ||
+            AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal) is not null || goal.LandingPrerequisiteObligations.Any(
+                obligation => obligation.Owner != CriterionEvidenceOwner.Acceptance))
+            .Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal);
 }
