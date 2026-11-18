@@ -9,6 +9,8 @@
 
 .EXAMPLE
   .\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 src\Example.cs 40 25
+.EXAMPLE
+  .\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 src\Example.cs -SymbolName ExampleMethod -Count 25
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
@@ -20,7 +22,10 @@ param(
 
     [Parameter(Position = 2)]
     [ValidateRange(1, 500)]
-    [int]$Count = 80
+    [int]$Count = 80,
+
+    [Parameter()]
+    [string]$SymbolName
 )
 
 Set-StrictMode -Version Latest
@@ -47,17 +52,36 @@ if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
     throw "File not found: $resolved"
 }
 
+$symbolFound = -not $PSBoundParameters.ContainsKey('SymbolName')
+if (-not $symbolFound -and [string]::IsNullOrWhiteSpace($SymbolName)) {
+    throw 'SymbolName must not be empty or whitespace.'
+}
+
 $end = $Start + $Count - 1
 $lineNumber = 0
+$lastLineShown = 0
 foreach ($line in [System.IO.File]::ReadLines($resolved)) {
     $lineNumber++
-    if ($lineNumber -lt $Start) {
-        continue
+    if (-not $symbolFound) {
+        if ($line.IndexOf($SymbolName, [System.StringComparison]::Ordinal) -lt 0) {
+            continue
+        }
+
+        $symbolFound = $true
+        $Start = $lineNumber
+        $end = $Start + $Count - 1
     }
 
-    if ($lineNumber -gt $end) {
-        break
+    if ($lineNumber -ge $Start -and $lineNumber -le $end) {
+        "{0,5}: {1}" -f $lineNumber, $line
+        $lastLineShown = $lineNumber
     }
+}
 
-    "{0,5}: {1}" -f $lineNumber, $line
+if (-not $symbolFound) {
+    throw "Symbol not found: $SymbolName in $resolved"
+}
+
+if ($lastLineShown -gt 0 -and $lineNumber -gt $lastLineShown) {
+    "Truncated: last line shown {0}; total lines {1}." -f $lastLineShown, $lineNumber
 }
