@@ -96,32 +96,6 @@ internal static partial class CliCommandHandlers
         return resolved;
     }
 
-    private static bool IsAttentionAllFlag(string value) =>
-        value.Equals("--all", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--include-parked", StringComparison.OrdinalIgnoreCase);
-
-    private static (bool IncludeHistory, string? GoalPrefix) ParseAttentionShowArgs(IReadOnlyList<string> parts)
-    {
-        var args = parts.Skip(2).Where(part => !string.IsNullOrWhiteSpace(part)).ToList();
-        var includeHistory = args.RemoveAll(IsAttentionAllFlag) > 0;
-        if (args.Count == 0)
-        {
-            return (includeHistory, null);
-        }
-
-        if (args[0].Equals("--goal", StringComparison.OrdinalIgnoreCase))
-        {
-            if (args.Count < 2)
-            {
-                throw new ArgumentException("Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix>");
-            }
-
-            return (includeHistory, args[1]);
-        }
-
-        return (includeHistory, args[0]);
-    }
-
     private static CollaborationItem ResolveClarificationByShortId(
         IReadOnlyList<CollaborationItem> clarifications,
         IReadOnlyList<CollaborationItem> identityUniverse,
@@ -374,7 +348,8 @@ internal static partial class CliCommandHandlers
                 {
                     var showMigratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
                     var showMigratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
-                    var (includeHistory, goalPrefix) = ParseAttentionShowArgs(parts);
+                    var (includeHistory, goalPrefix) = AttentionReadGoalSelection.ParseShowArgs(parts);
+                    var showNow = DateTimeOffset.UtcNow;
                     var changed = showMigratedHumanWaits > 0 || showMigratedCollaborationItems > 0;
 
                     if (goalPrefix is null)
@@ -384,10 +359,11 @@ internal static partial class CliCommandHandlers
                         AttentionShowDecisionsTextView.PrintThenDuties(context.Workspace, context.Kernel.Goals);
                         var environmentHeld = EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
                         environmentHeld |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
+                        environmentHeld |= OwnerQuestionHoldAttentionView.Print(context.Kernel.Goals, showNow);
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
-                            HumanWaitsTextView.Print(showWaits, DateTimeOffset.UtcNow, includeHistory, context.Kernel.Goals);
+                            HumanWaitsTextView.Print(showWaits, showNow, includeHistory, context.Kernel.Goals);
                         }
                         if (showWaits.Count > 0)
                         {
@@ -418,12 +394,13 @@ internal static partial class CliCommandHandlers
                     PostLandingDutiesTextView.Print([goal]);
                     var environmentHeldForGoal = EnvironmentHoldAttentionView.Print([goal]);
                     environmentHeldForGoal |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, [goal]);
+                    environmentHeldForGoal |= OwnerQuestionHoldAttentionView.Print([goal], showNow);
                     var clarificationIdentityUniverse = AllClarifications(store)
                         .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                         .ToList();
                     var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
                     if (waitsForGoal.Count > 0 || goal.GateTestObligations.Count > 0)
-                        HumanWaitsTextView.Print(waitsForGoal, DateTimeOffset.UtcNow, includeHistory, [goal]);
+                        HumanWaitsTextView.Print(waitsForGoal, showNow, includeHistory, [goal]);
 
                     if (includeHistory)
                     {
@@ -440,7 +417,8 @@ internal static partial class CliCommandHandlers
 
                         if (historyItems.Count == 0)
                         {
-                            Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
+                            if (!environmentHeldForGoal)
+                                Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
                             return changed;
                         }
 
@@ -498,17 +476,19 @@ internal static partial class CliCommandHandlers
                 PostLandingDutiesTextView.Print(context.Kernel.Goals);
                 EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
                 PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
+                var listNow = DateTimeOffset.UtcNow;
+                var ownerQuestionHeld = OwnerQuestionHoldAttentionView.Print(context.Kernel.Goals, listNow);
                 if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
                         .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
                 {
-                    HumanWaitsTextView.Print(waits, DateTimeOffset.UtcNow, goals: context.Kernel.Goals);
+                    HumanWaitsTextView.Print(waits, listNow, goals: context.Kernel.Goals);
                 }
                 if (waits.Count > 0)
                 {
                     return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
                 }
 
-                if (!printedCrossGoal || queue.Count > 0) CollaborationItemsTextView.PrintAttentionQueue(queue);
+                if ((!printedCrossGoal && !ownerQuestionHeld) || queue.Count > 0) CollaborationItemsTextView.PrintAttentionQueue(queue);
                 return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
             }
 

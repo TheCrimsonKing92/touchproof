@@ -118,7 +118,7 @@ public sealed class SliceBatchWholeGoalReviewBriefTests
     }
 
     // Literal fixture transcribed from the pre-change brief path at 7a5529d6,
-    // deliberately updated for the shared delivered-evidence Reviewer rule.
+    // Updated for the shared delivered-evidence rule and first-Reviewer timeline contract.
     // Minimal Pending Reviewer inputs yield these same bytes for both goal shapes.
     private const string PreChangeBriefFixture = """
         # Agent Task Brief
@@ -187,5 +187,8 @@ public sealed class SliceBatchWholeGoalReviewBriefTests
         Reviewer is read-only; use these existing verification receipts before asking for reruns. Newest first; capped at 12 receipt line(s).
         No executed test evidence exists for this goal yet.
 
+        ## Recent Timeline
+        Range: all events (newest 40 maximum). Full timeline: goal/timeline.json
+        - 2026-10-08 12:00:00Z GoalCreated: Goal created.
         """;
 }

@@ -630,6 +630,227 @@ public sealed class TaskBriefTests
     Assert.Contains("complex-stdout-middle", brief, StringComparison.Ordinal);
     Assert.Contains("complex-stderr-middle", brief, StringComparison.Ordinal);
 }
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void BuildTaskBriefReviewerTimelineShowsOnlyEventsSincePreviousReviewerRound(bool sameTask)
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var reviewer = new TaskSpec(TaskId.New(), "Review the label.", AgentRole.Reviewer);
+    var previousReviewer = sameTask ? reviewer : new TaskSpec(TaskId.New(), "Review the earlier label.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Check label", sameTask ? [reviewer] : [previousReviewer, reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.RecordTaskDispatch(goal.Id, previousReviewer.Id, new TaskDispatchRecord("reviewer", "review", "C:\\repo", clock.UtcNow));
+    for (var index = 1; index <= 3; index++)
+    {
+        clock.Advance();
+        kernel.RecordTaskNote(goal.Id, reviewer.Id, $"pre-round-note-{index:00}");
+    }
+
+    clock.Advance();
+    kernel.RecordTaskVerification(goal.Id, previousReviewer.Id,
+        new TaskVerificationRecord("review", "C:\\repo", 1, "needs revision", string.Empty, clock.UtcNow));
+    kernel.RecordTaskNote(goal.Id, reviewer.Id, "equal-to-round-note");
+    clock.Advance();
+    if (sameTask)
+    {
+        // Recording failed verification alone does not end the running dispatch.
+        kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Failed, "Previous review needs revision.");
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        kernel.RetryTask(goal.Id, reviewer.Id, "Review the revised label.");
+        Assert.Null(reviewer.LastDispatch);
+    }
+    for (var index = 1; index <= 3; index++)
+    {
+        clock.Advance();
+        kernel.RecordTaskNote(goal.Id, reviewer.Id, $"post-round-note-{index:00}");
+    }
+    Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+
+    var timeline = SectionFrom(kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content, "## Recent Timeline");
+
+    Assert.StartsWith($"## Recent Timeline{Environment.NewLine}Range: since the previous Reviewer round. Full timeline: goal/timeline.json", timeline);
+    Assert.DoesNotContain("pre-round-note-", timeline, StringComparison.Ordinal);
+    Assert.DoesNotContain("equal-to-round-note", timeline, StringComparison.Ordinal);
+    for (var index = 1; index <= 3; index++)
+        Assert.Contains($"post-round-note-{index:00}", timeline, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact]
+    public void BuildTaskBriefFirstReviewerTimelineKeepsLifecycleOnlyEvents()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var reviewer = new TaskSpec(TaskId.New(), "Review feature.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Small feature.", [reviewer]);
+    Assert.Equal(TaskComplexity.Simple,
+        TaskComplexityEstimator.Estimate(reviewer.Description, goal.Objective, reviewer.RequiredRole));
+    Assert.Equal(ProgressKind.GoalCreated, Assert.Single(goal.Timeline).Kind);
+
+    var timeline = SectionFrom(kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content, "## Recent Timeline");
+    var eventLines = timeline.Split(Environment.NewLine).Where(line => line.StartsWith("- ", StringComparison.Ordinal)).ToArray();
+
+    Assert.StartsWith($"## Recent Timeline{Environment.NewLine}Range: all events (newest 40 maximum). Full timeline: goal/timeline.json", timeline);
+    Assert.Equal($"- {clock.UtcNow:u} GoalCreated: Goal created.", Assert.Single(eventLines));
+}
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true, 0)]
+    [Xunit.InlineData(false, 3)]
+    [Xunit.InlineData(true, 3)]
+    [Xunit.InlineData(false, 45)]
+    [Xunit.InlineData(true, 45)]
+    public void BuildTaskBriefFirstReviewerTimelineShowsNewestFortyEvents(bool complex, int eventCount)
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var description = complex
+        ? "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling."
+        : "Review the label.";
+    var reviewer = new TaskSpec(TaskId.New(), description, AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Check label", [reviewer]);
+    Assert.Equal(complex ? TaskComplexity.Complex : TaskComplexity.Simple,
+        TaskComplexityEstimator.Estimate(description, goal.Objective, reviewer.RequiredRole));
+    var expected = new List<string> { $"- {clock.UtcNow:u} GoalCreated: Goal created." };
+    for (var index = 1; index <= eventCount; index++)
+    {
+        clock.Advance();
+        var message = $"first-review-note-{index:00}";
+        // Include lifecycle data among the newest events to prove first reviews keep it alongside decisions.
+        var kind = index == eventCount ? ProgressKind.TaskCompleted : ProgressKind.TaskNote;
+        goal.Append(new ProgressEvent(goal.Id, reviewer.Id, kind, message, clock.UtcNow));
+        expected.Add($"- {clock.UtcNow:u} {kind}: {message}");
+    }
+
+    var timeline = SectionFrom(kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content, "## Recent Timeline");
+    var eventLines = timeline.Split(Environment.NewLine).Where(line => line.StartsWith("- ", StringComparison.Ordinal)).ToArray();
+
+    Assert.StartsWith($"## Recent Timeline{Environment.NewLine}Range: all events (newest 40 maximum). Full timeline: goal/timeline.json", timeline);
+    Assert.Equal(expected.TakeLast(40).ToArray(), eventLines);
+    Assert.Equal(Math.Min(40, eventCount + 1), eventLines.Length);
+}
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer, false)]
+    [Xunit.InlineData(AgentRole.Tester, false)]
+    [Xunit.InlineData(AgentRole.Planner, false)]
+    [Xunit.InlineData(AgentRole.Developer, true)]
+    [Xunit.InlineData(AgentRole.Tester, true)]
+    [Xunit.InlineData(AgentRole.Planner, true)]
+    public void BuildTaskBriefDeveloperTimelineKeepsExistingSelectionWithoutRangeLine(AgentRole role, bool complex)
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var description = complex
+        ? "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling."
+        : "Update a tooltip label.";
+    var task = new TaskSpec(TaskId.New(), description, role);
+    var reviewer = new TaskSpec(TaskId.New(), "Review the label.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Check label", [reviewer, task]);
+    Assert.Equal(complex ? TaskComplexity.Complex : TaskComplexity.Simple,
+        TaskComplexityEstimator.Estimate(description, goal.Objective, role));
+    var expected = new List<string>();
+    var count = complex ? 22 : 10;
+    for (var index = 1; index <= count; index++)
+    {
+        clock.Advance();
+        kernel.RecordTaskNote(goal.Id, task.Id, $"unchanged-note-{index:00}");
+        expected.Add($"- {clock.UtcNow:u} TaskNote: unchanged-note-{index:00}");
+        if (index == count / 2)
+        {
+            clock.Advance();
+            goal.Append(new ProgressEvent(goal.Id, reviewer.Id, ProgressKind.TaskVerificationRecorded, "Earlier review passed.", clock.UtcNow));
+        }
+    }
+
+    var timeline = SectionFrom(kernel.BuildTaskBrief(goal.Id, task.Id).Content, "## Recent Timeline");
+    var eventLines = timeline.Split(Environment.NewLine).Where(line => line.StartsWith("- ", StringComparison.Ordinal)).ToArray();
+
+    Assert.StartsWith($"## Recent Timeline{Environment.NewLine}- ", timeline);
+    Assert.DoesNotContain("Range:", timeline, StringComparison.Ordinal);
+    Assert.DoesNotContain("Full timeline:", timeline, StringComparison.Ordinal);
+    Assert.Equal(expected.TakeLast(complex ? 20 : 8).ToArray(), eventLines);
+}
+
+    [Xunit.Fact]
+    public void BuildTaskBriefReviewerTimelineIgnoresVerificationsAtOrAfterCurrentDispatch()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var prior = new TaskSpec(TaskId.New(), "Review the earlier label.", AgentRole.Reviewer);
+    var current = new TaskSpec(TaskId.New(), "Review the label.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Check label", [prior, current]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    clock.Advance();
+    goal.Append(new ProgressEvent(goal.Id, prior.Id, ProgressKind.TaskVerificationRecorded, "First round passed.", clock.UtcNow));
+    clock.Advance();
+    kernel.RecordTaskNote(goal.Id, current.Id, "before-latest-round");
+    clock.Advance();
+    goal.Append(new ProgressEvent(goal.Id, prior.Id, ProgressKind.TaskVerificationRecorded, "Latest round passed.", clock.UtcNow));
+    clock.Advance();
+    kernel.RecordTaskNote(goal.Id, current.Id, "after-latest-round-before-dispatch");
+    clock.Advance();
+    kernel.RecordTaskDispatch(goal.Id, current.Id, new TaskDispatchRecord("reviewer", "review", "C:\\repo", clock.UtcNow));
+    goal.Append(new ProgressEvent(goal.Id, prior.Id, ProgressKind.TaskVerificationRecorded, "At dispatch.", clock.UtcNow));
+    clock.Advance();
+    kernel.RecordTaskNote(goal.Id, current.Id, "after-dispatch-before-later-verification");
+    clock.Advance();
+    goal.Append(new ProgressEvent(goal.Id, prior.Id, ProgressKind.TaskVerificationRecorded, "After dispatch.", clock.UtcNow));
+    Assert.Equal(WorkTaskStatus.Running, current.Status);
+
+    var timeline = SectionFrom(kernel.BuildTaskBrief(goal.Id, current.Id).Content, "## Recent Timeline");
+
+    Assert.DoesNotContain("before-latest-round", timeline, StringComparison.Ordinal);
+    Assert.Contains("after-latest-round-before-dispatch", timeline, StringComparison.Ordinal);
+    Assert.Contains("after-dispatch-before-later-verification", timeline, StringComparison.Ordinal);
+    Assert.Contains("Range: since the previous Reviewer round. Full timeline: goal/timeline.json", timeline, StringComparison.Ordinal);
+}
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void BuildTaskBriefReviewerTimelineKeepsExistingBudgetAfterPreviousRound(bool complex)
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var description = complex
+        ? "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling."
+        : "Review the label.";
+    var reviewer = new TaskSpec(TaskId.New(), description, AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Check label", [reviewer]);
+    goal.Append(new ProgressEvent(goal.Id, reviewer.Id, ProgressKind.TaskVerificationRecorded, "Earlier round failed.", clock.UtcNow));
+    var expected = new List<string>();
+    for (var index = 1; index <= 25; index++)
+    {
+        clock.Advance();
+        kernel.RecordTaskNote(goal.Id, reviewer.Id, $"rereview-note-{index:00}");
+        expected.Add($"- {clock.UtcNow:u} TaskNote: rereview-note-{index:00}");
+    }
+    clock.Advance();
+    goal.Append(new ProgressEvent(goal.Id, reviewer.Id, ProgressKind.TaskCompleted, "Lifecycle noise.", clock.UtcNow));
+
+    var timeline = SectionFrom(kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content, "## Recent Timeline");
+    var eventLines = timeline.Split(Environment.NewLine).Where(line => line.StartsWith("- ", StringComparison.Ordinal)).ToArray();
+
+    Assert.Equal(expected.TakeLast(complex ? 20 : 8).ToArray(), eventLines);
+}
+
+    [Xunit.Fact]
+    public void BuildTaskBriefReviewerTimelineKeepsRangeWhenWindowIsEmpty()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var reviewer = new TaskSpec(TaskId.New(), "Review the label.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Check label", [reviewer]);
+    goal.Append(new ProgressEvent(goal.Id, reviewer.Id, ProgressKind.TaskVerificationRecorded, "Earlier round passed.", clock.UtcNow));
+
+    var timeline = SectionFrom(kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content, "## Recent Timeline");
+
+    Assert.StartsWith($"## Recent Timeline{Environment.NewLine}Range: since the previous Reviewer round. Full timeline: goal/timeline.json", timeline);
+    Assert.DoesNotContain(timeline.Split(Environment.NewLine), line => line.StartsWith("- ", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_timeline_messages")]
     public void BuildTaskBriefTrimsNoisyTimelineMessages()
 {
@@ -2013,4 +2234,3 @@ static IReadOnlyList<AgentDefinition> DefaultAgents()
     ];
 }
 }
-
