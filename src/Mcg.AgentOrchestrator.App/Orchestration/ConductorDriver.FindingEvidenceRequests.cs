@@ -162,6 +162,9 @@ internal sealed partial class ConductorDriver
                         findingRoundFingerprint,
                         executionBasisIdentity))
             {
+                // Reconcile qualified receipts that predate batch observations before skipping execution.
+                FindingRoundBatchCoordinator.RecordCurrentReceipt(this, goal, requestingTask, telemetryCandidateSha,
+                    findingRoundFingerprint, executionBasisIdentity, identity, finding.StableId, mergedFinding.EvidenceOutcome!.ReceiptId!);
                 continue;
             }
 
@@ -242,7 +245,7 @@ internal sealed partial class ConductorDriver
         var homeGroups = groups.Where(group => !repositoryTargets.ContainsKey(group.Identity)).ToArray();
         if (homeGroups.Length > 0 && TryExecuteFindingEvidenceGroups(goal, requestingTask, policy, homeGroups,
                 requestingFindings, candidateSha, findingRoundFingerprint, executionBasisIdentity, findingEvidenceEngineSettings,
-                null, out decision))
+                null, telemetryCandidateSha, out decision))
             return true;
         foreach (var partition in groups.Where(group => repositoryTargets.ContainsKey(group.Identity))
                      .GroupBy(group => repositoryTargets[group.Identity].Key).OrderBy(partition => partition.Key, StringComparer.Ordinal))
@@ -250,7 +253,7 @@ internal sealed partial class ConductorDriver
             var target = repositoryTargets[partition.First().Identity];
             if (TryExecuteFindingEvidenceGroups(goal, requestingTask, policy, partition.ToArray(),
                     partition.SelectMany(group => group.Findings).ToArray(), target.CandidateHead,
-                    findingRoundFingerprint, executionBasisIdentity, target.EngineSettings, target, out decision))
+                    findingRoundFingerprint, executionBasisIdentity, target.EngineSettings, target, telemetryCandidateSha, out decision))
                 return true;
         }
         return false;
@@ -261,12 +264,14 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<FindingEvidenceRequestGroup> groups, IReadOnlyList<ReviewFinding> requestingFindings,
         string? candidateSha, string findingRoundFingerprint, string executionBasisIdentity,
         AcceptanceGateEngineSettings findingEvidenceEngineSettings, KeyedRepositoryEvidenceTarget? repositoryTarget,
+        string batchCandidateSha,
         out FailedGoalFindingObservation decision)
     {
         decision = FailedGoalFindingObservation.None;
         var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
         var telemetryCandidateSha = candidateShaAvailable ? candidateSha! : "unavailable";
-        var unavailableIds = FindingRoundBatchAccounting.Read(goal, new(requestingTask.Id, telemetryCandidateSha,
+        // Execution provenance belongs to this repository; batch membership belongs to the home candidate.
+        var unavailableIds = FindingRoundBatchAccounting.Read(goal, new(requestingTask.Id, batchCandidateSha,
             findingRoundFingerprint, executionBasisIdentity)).Where(item => item.Kind == "unavailable")
             .SelectMany(item => item.FindingIds).ToHashSet(StringComparer.Ordinal);
         groups = groups.Where(group => !group.Findings.All(finding => unavailableIds.Contains(finding.StableId))).ToArray();
@@ -275,7 +280,7 @@ internal sealed partial class ConductorDriver
             requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
             telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline);
         FindingRoundBatchCoordinator.RecordSettledPlan(this, goal, requestingTask, telemetryCandidateSha,
-            findingRoundFingerprint, executionBasisIdentity, plan);
+            findingRoundFingerprint, executionBasisIdentity, plan, batchCandidateSha);
         foreach (var (batch, covering) in plan.RedCovered)
         {
             var attribution = TryAttributeActionableCandidateRed(goal, telemetryCandidateSha, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, covering.ReceiptId, covering.Arms!, _recordTaskNote), batch);
@@ -299,7 +304,7 @@ internal sealed partial class ConductorDriver
         redCoverage.RecordSkips(goal, requestingTask, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
             _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
         foreach (var item in redCoverage.Skipped)
-            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, telemetryCandidateSha,
+            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, batchCandidateSha,
                 findingRoundFingerprint, executionBasisIdentity, item.Batch, "covered", item.Receipts[0].ReceiptId);
         var batches = redCoverage.Remaining;
         var runnable = batches.FirstOrDefault();
@@ -386,7 +391,7 @@ internal sealed partial class ConductorDriver
                 decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
                     batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
                     FindingEvidenceNotHonouredReason.RunFailed,
-                    "The focused evidence executor failed; a typed refusal was attached.");
+                    "The focused evidence executor failed; a typed refusal was attached.", batchCandidateSha);
             }
             return true;
         }
@@ -413,7 +418,7 @@ internal sealed partial class ConductorDriver
             decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
                 batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
                 reason,
-                "The focused evidence executor did not accept the request.");
+                "The focused evidence executor did not accept the request.", batchCandidateSha);
             return true;
         }
 
@@ -498,7 +503,7 @@ internal sealed partial class ConductorDriver
 
             decision = FindingRoundRedCoverage.Complete(this, goal, requestingTask, batches.Skip(1).ToArray(),
                 runnable, plan, receipt, candidateSha!, findingRoundFingerprint, executionBasisIdentity,
-                _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, policy);
+                _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, batchCandidateSha, policy);
             return true;
         }
         var incompletePreTesterCoverage = false;
@@ -549,7 +554,7 @@ internal sealed partial class ConductorDriver
 
         if (actionableCandidateRed is not null)
         {
-            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, candidateSha!, findingRoundFingerprint,
+            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, batchCandidateSha, findingRoundFingerprint,
                 executionBasisIdentity, runnable, "executed", receiptId);
             decision = BuildActionableCandidateRedDecision(
                 goal, requestingTask, candidateSha!, receiptId, actionableCandidateRed);
@@ -569,7 +574,7 @@ internal sealed partial class ConductorDriver
 
         decision = FindingRoundRedCoverage.Complete(this, goal, requestingTask, batches.Skip(1).ToArray(),
             runnable, plan, receipt, candidateSha!, findingRoundFingerprint, executionBasisIdentity,
-            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, policy);
+            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, batchCandidateSha, policy);
         return true;
     }
 

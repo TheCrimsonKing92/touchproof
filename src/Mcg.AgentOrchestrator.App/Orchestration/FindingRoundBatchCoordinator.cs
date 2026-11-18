@@ -106,7 +106,7 @@ internal static class FindingRoundBatchCoordinator
 
     internal static FailedGoalFindingObservation RecordExecutionFailure(ConductorDriver driver, Goal goal, TaskSpec task,
         FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis,
-        FindingEvidenceNotHonouredReason reason, string detail)
+        FindingEvidenceNotHonouredReason reason, string detail, string batchCandidate)
     {
         // Rejected and failed executions consume the same existing allowance as completed runs.
         var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity);
@@ -114,21 +114,21 @@ internal static class FindingRoundBatchCoordinator
             $"finding-evidence failed-attempt; finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
             $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
         return FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
-            ? SettleUnavailable(driver, goal, task, batch, morePending, candidate, round, basis, detail)
+            ? SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, basis, detail)
             : FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
     }
 
     internal static void RecordSettledPlan(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
-        string round, string basis, FindingRoundBatchPlan plan)
+        string round, string basis, FindingRoundBatchPlan plan, string batchCandidate)
     {
         foreach (var unavailable in plan.Unavailable)
-            RecordOutcome(driver, goal, task, candidate, round, basis, unavailable.Batch, "unavailable", unavailable.ReceiptId);
+            RecordOutcome(driver, goal, task, batchCandidate, round, basis, unavailable.Batch, "unavailable", unavailable.ReceiptId);
         foreach (var passed in plan.Passed)
-            RecordOutcome(driver, goal, task, candidate, round, basis, passed, "executed",
+            RecordOutcome(driver, goal, task, batchCandidate, round, basis, passed, "executed",
                 ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, passed.Identity));
         foreach (var (covered, covering) in plan.RedCovered)
-            RecordOutcome(driver, goal, task, candidate, round, basis, covered, "executed", covering.ReceiptId);
+            RecordOutcome(driver, goal, task, batchCandidate, round, basis, covered, "executed", covering.ReceiptId);
     }
 
     internal static void RecordOutcome(ConductorDriver driver, Goal goal, TaskSpec task, string candidate, string round, string basis,
@@ -139,6 +139,14 @@ internal static class FindingRoundBatchCoordinator
             FindingRoundBatchAccounting.Record(goal, identity,
                 new(identity.Key, kind, member.Identity, member.Findings.Select(finding => finding.StableId).ToArray(), receiptId),
                 driver._recordFindingEvidenceRequest);
+    }
+
+    internal static void RecordCurrentReceipt(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
+        string round, string basis, string requestIdentity, string findingId, string receiptId)
+    {
+        var identity = new FindingEvidenceBatchIdentity(task.Id, candidate, round, basis);
+        FindingRoundBatchAccounting.Record(goal, identity,
+            new(identity.Key, "executed", requestIdentity + ":" + findingId, [findingId], receiptId), driver._recordFindingEvidenceRequest);
     }
 
     internal static void RecordCoverage(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,

@@ -70,6 +70,51 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.DoesNotContain(scenario.Goal.Tasks, task => task.LastProcess is { IsRunning: true });
     }
 
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RestoredCurrentReceipts_ReconcileBeforeOneClosingSelection(bool sourceBlocker)
+    {
+        using var scenario = new Scenario(sourceBlocker) { RecordBatchAccounting = false };
+        // Retain production receipts without batch observations, as on an upgrade or interrupted write.
+        for (var request = 0; request < 3; request++)
+            Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester,
+                ConductorAutonomyPolicy.Permissive, out _));
+        Assert.Equal(3, scenario.Runs.Count);
+        Assert.Equal(3, scenario.Tester.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
+            .DistinctBy(receipt => receipt.ReceiptId).Count());
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Message.StartsWith("finding-evidence batch-", StringComparison.Ordinal));
+        Assert.Empty(scenario.Retries);
+
+        scenario.RecordBatchAccounting = true;
+        scenario.Restart();
+        for (var observation = 0; observation < 2; observation++)
+        {
+            Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester,
+                ConductorAutonomyPolicy.Permissive, out var reconciled));
+            Assert.Equal(sourceBlocker ? scenario.Developer.Id : scenario.Tester.Id, reconciled.TargetTaskId);
+            Assert.NotNull(reconciled.BatchClosure);
+        }
+        scenario.Driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(3, scenario.Runs.Count);
+        Assert.Equal(sourceBlocker ? scenario.Developer.Id : scenario.Tester.Id, Assert.Single(scenario.Retries));
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(3, summary.NewlyExecuted);
+        Assert.Equal(0, summary.Covered);
+        Assert.Equal(0, summary.Unavailable);
+        Assert.Contains(sourceBlocker ? "Developer" : "Tester", summary.RoutingReason, StringComparison.Ordinal);
+        Assert.Equal(sourceBlocker ? scenario.Developer.Id : scenario.Tester.Id, Assert.Single(scenario.Prepared).Task.Id);
+        Assert.Equal(0, scenario.ProcessStarts);
+
+        scenario.Restart();
+        Assert.Single(scenario.Retries);
+        Assert.Equal(3, scenario.Runs.Count);
+        Assert.Equal(summary.BatchSize, scenario.ClosingSummary().BatchSize);
+    }
+
     [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void TerminalFailure_SettlesUnavailableAndDrainsLaterRequests()
@@ -324,6 +369,7 @@ public sealed class FindingRoundBatchCompletionTests
         internal List<string> Escalations { get; } = [];
         internal List<WorkerProfileDispatchResult> Prepared { get; } = [];
         internal int ProcessStarts { get; private set; }
+        internal bool RecordBatchAccounting { get; set; } = true;
         internal void AssertOnlyBlocker(bool sourceBlocker)
         {
             var blocker = Assert.Single(ReviewFindings.GetOpenBlockingFindings(Tester.LastVerification!.MergedReviewFindings!,
@@ -335,7 +381,11 @@ public sealed class FindingRoundBatchCompletionTests
                 Assert.Null(blocker.EvidenceRequest);
             }
         }
-        internal void Record(GoalId goal, TaskId task, string message) => Kernel.RecordFindingEvidenceRequest(goal, task, message);
+        internal void Record(GoalId goal, TaskId task, string message)
+        {
+            if (RecordBatchAccounting || !message.StartsWith("finding-evidence batch-", StringComparison.Ordinal))
+                Kernel.RecordFindingEvidenceRequest(goal, task, message);
+        }
         internal void Restart()
         {
             var id = Goal.Id;

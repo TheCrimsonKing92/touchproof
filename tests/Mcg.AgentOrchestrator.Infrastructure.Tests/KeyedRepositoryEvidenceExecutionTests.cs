@@ -110,6 +110,64 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
     }
 
     [Fact]
+    public void Request_MixedRepositories_ClosesHomeBatchWithRepositoryExecutionProvenance()
+    {
+        using var fixture = new Fixture();
+        FailReviewerNeedsWork(fixture.Kernel, fixture.Goal, fixture.Reviewer, "Need repository evidence", findings:
+            [Finding("home", new([new("Sample.Tests", "HomeTests")])),
+             Finding("keyed", new([new("./record", "TestReadInvalidFixtures")], Repository: "crosswalk"))]);
+        var homeCalls = new List<string>();
+        var receipts = new List<FindingEvidenceReceipt>();
+        var driver = fixture.Driver(receipts, homeCalls, recordBatchAccounting: true);
+        var keyedCalls = 0;
+        driver.RunKeyedFocusedEvidence = (_, target, request, _, _, _, _, _, _, _) =>
+        {
+            keyedCalls++;
+            return Green(request, target.CandidateHead);
+        };
+        var identity = FindingRoundBatchCoordinator.Identity(driver, fixture.Goal, fixture.Reviewer)!;
+
+        Assert.True(driver.TryBuildFindingEvidenceRequest(fixture.Goal, fixture.Reviewer, ConductorAutonomyPolicy.Permissive, out var intermediate));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, intermediate.Kind);
+        Assert.Null(intermediate.TargetTaskId);
+        Assert.Null(intermediate.BatchClosure);
+        Assert.Equal(0, keyedCalls);
+
+        Assert.True(driver.TryBuildFindingEvidenceRequest(fixture.Goal, fixture.Reviewer, ConductorAutonomyPolicy.Permissive, out var drained));
+        Assert.NotEqual(FailedGoalFindingObservationKind.FindingEvidencePending, drained.Kind);
+        Assert.NotNull(drained.TargetTaskId);
+        var closure = Assert.IsType<FindingEvidenceBatchClosure>(drained.BatchClosure);
+        Assert.Equal(identity, closure.Identity);
+        Assert.Equal(fixture.HomeHead, closure.Identity.CandidateSha);
+        var summary = FindingRoundBatchAccounting.Summarize(fixture.Goal, fixture.Reviewer, identity, "test-drain");
+        Assert.Equal(2, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.True(summary.IsSettled);
+        Assert.Single(homeCalls);
+        Assert.Equal(1, keyedCalls);
+        var keyed = Assert.Single(receipts.Where(receipt => receipt.Request.Repository == "crosswalk"));
+        Assert.Equal(fixture.SecondaryHead, keyed.CandidateSha);
+        Assert.All(keyed.RequestDispositions!, disposition => Assert.Equal(fixture.SecondaryHead, disposition.CandidateSha));
+        Assert.All(keyed.Arms!, arm => Assert.Equal(fixture.SecondaryHead, arm.Sha));
+        Assert.All(FindingRoundBatchAccounting.Read(fixture.Goal, identity), item => Assert.Equal(identity.Key, item.BatchKey));
+        Assert.Empty(FindingRoundBatchAccounting.Read(fixture.Goal, identity with { CandidateSha = fixture.SecondaryHead }));
+
+        var retries = 0;
+        string? Retry()
+        {
+            retries++;
+            fixture.Kernel.RetryTask(fixture.Goal.Id, drained.TargetTaskId!, drained.Evidence, RetryCause.NewTestFinding);
+            return null;
+        }
+        Assert.True(FindingRoundBatchCoordinator.ApplyRetry(driver, fixture.Goal, closure, () => true, Retry).Applied);
+        Assert.False(FindingRoundBatchCoordinator.ApplyRetry(driver, fixture.Goal, closure, () => true, Retry).Applied);
+        Assert.Equal(1, retries);
+        var restored = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot()).GetGoal(fixture.Goal.Id);
+        Assert.Single(restored.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
+        Assert.True(FindingRoundBatchAccounting.IsClosed(restored, identity));
+    }
+
+    [Fact]
     public void Request_MissingKeyedTarget_NeverInvokesHomeRunner()
     {
         using var fixture = new Fixture();
@@ -253,12 +311,16 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
             return target;
         }
 
-        internal ConductorDriver Driver(List<FindingEvidenceReceipt> receipts, List<string> homeCalls)
+        internal ConductorDriver Driver(List<FindingEvidenceReceipt> receipts, List<string> homeCalls, bool recordBatchAccounting = false)
         {
             var driver = MakeDriver(getPreReviewEvidenceContext: _ => NoPreReviewContext(HomeHead),
                 getFindingEvidenceEngineSettings: _ => KeyedRepositoryEvidenceNormalizationTests.HomeSettings,
                 focusedEvidenceAttemptCoordinator: new(Path.Combine(Repositories.Home.Root, "evidence-attempts"), "main", runInline: true),
                 runFocusedEvidence: (_, request) => { homeCalls.Add(request); return Green(request, HomeHead); },
+                recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                {
+                    if (recordBatchAccounting) Kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
+                },
                 recordFindingEvidenceOutcome: (goalId, taskId, id, outcome, receipt) =>
                 {
                     if (receipt is not null) receipts.Add(receipt);
