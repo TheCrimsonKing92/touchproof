@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 // Each test owns its journal directory; no shared store or process state is mutated.
 public sealed class RunEventMaintenanceCadenceRunnerTests : IDisposable
@@ -174,6 +175,60 @@ public sealed class RunEventMaintenanceCadenceRunnerTests : IDisposable
             if (invokeWait is not null)
                 await TestHangGuard.WaitAsync(invokeWait, "command exit wait invocation cleanup");
         }
+    }
+
+    [Xunit.Fact]
+    public void RetentionThrows_NewCadenceCall_KeepsSuccessfulStepsFresh()
+    {
+        Directory.CreateDirectory(_root);
+        var workspace = OrchestratorWorkspace.ForDirectory(_root);
+        InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var now = new DateTimeOffset(2020, 3, 1, 12, 0, 0, TimeSpan.Zero);
+        var retentionCalls = 0;
+        var archiveCalls = 0;
+        var compressionCalls = 0;
+        var completed = new RunEventMaintenanceResult(
+            Deferred: false, DeferredReason: null, ConductorTickRowsDeleted: 0,
+            AgedConductorTickRowsDeleted: 0, OversizedConductorTickRowsDeleted: 0,
+            DeletedPayloadBytesEstimate: 0, MaxRowsDeletedInTransaction: 0, Duration: TimeSpan.Zero,
+            BytesBefore: 0, BytesAfter: 0, VacuumRequested: false, VacuumCompleted: false, VacuumDeferred: false);
+
+        RunEventMaintenanceCadenceResult Run(DateTimeOffset at) => RunEventMaintenanceCadence.TryRunIfDue(
+            workspace.RunEventStorePath, workspace.ConductEventsLogPath, () => at,
+            maintenanceOperation: (_, _) => completed,
+            workspace: workspace,
+            artifactRetentionOperation: (_, _, _, _) =>
+            {
+                retentionCalls++;
+                throw new InvalidOperationException("fixture retention interruption");
+            },
+            goalSnapshotArchiveOperation: _ => { archiveCalls++; return 0; },
+            archivedSnapshotCompressionOperation: _ => { compressionCalls++; return new(0, 0, 0); },
+            archivedSnapshotCompressionEnabled: true);
+
+        Assert.True(Run(now).Failed);
+        var firstStore = new SqliteRunEventStore(workspace.RunEventStorePath);
+        var archive = firstStore.ReadLatestAsync(RunEventTypes.EvidenceRetention,
+            MaintenanceStepReceipts.GoalSnapshotArchiveOperation).GetAwaiter().GetResult();
+        var compression = firstStore.ReadLatestAsync(RunEventTypes.EvidenceRetention,
+            MaintenanceStepReceipts.ArchivedSnapshotCompressionOperation).GetAwaiter().GetResult();
+        Assert.NotNull(archive);
+        Assert.NotNull(compression);
+        Assert.Equal("Completed", archive.Status);
+        Assert.Equal("Completed", compression.Status);
+
+        // A fresh call reopens the same store after the exception retry deadline.
+        Assert.True(Run(now.AddHours(1)).Failed);
+        var reopened = new SqliteRunEventStore(workspace.RunEventStorePath);
+        Assert.Equal(2, retentionCalls);
+        Assert.Equal(1, archiveCalls);
+        Assert.Equal(1, compressionCalls);
+        Assert.Null(reopened.ReadLatestAsync(RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation).GetAwaiter().GetResult());
+        Assert.Equal(archive, reopened.ReadLatestAsync(RunEventTypes.EvidenceRetention,
+            MaintenanceStepReceipts.GoalSnapshotArchiveOperation).GetAwaiter().GetResult());
+        Assert.Equal(compression, reopened.ReadLatestAsync(RunEventTypes.EvidenceRetention,
+            MaintenanceStepReceipts.ArchivedSnapshotCompressionOperation).GetAwaiter().GetResult());
     }
 
     private JsonElement[] ReadEvents(string kind) => File.ReadAllLines(LogPath)

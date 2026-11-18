@@ -33,7 +33,8 @@ internal static class RunEventMaintenanceCadence
         Func<long, GoalSnapshotArchiveRecompressionResult>? archivedSnapshotCompressionOperation = null,
         bool archivedSnapshotCompressionEnabled = false)
     {
-        var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
+        var clock = utcNow ?? (() => DateTimeOffset.UtcNow);
+        var now = clock();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
         if (NextDueByStorePath.TryGetValue(cadenceKey, out var nextDue) && now < nextDue)
         {
@@ -58,15 +59,33 @@ internal static class RunEventMaintenanceCadence
                 null when workspace is not null => true,
                 _ => false
             };
+            var latestArchive = workspace is null ? null : MaintenanceStepReceipts.ReadLatest(
+                store, MaintenanceStepReceipts.GoalSnapshotArchiveOperation);
+            var latestCompression = workspace is null || !archivedSnapshotCompressionEnabled ? null
+                : MaintenanceStepReceipts.ReadLatest(store, MaintenanceStepReceipts.ArchivedSnapshotCompressionOperation);
+            var archiveDue = workspace is not null && MaintenanceStepReceipts.IsDue(latestArchive, now);
+            var compressionDue = workspace is not null && archivedSnapshotCompressionEnabled &&
+                MaintenanceStepReceipts.IsDue(latestCompression, now);
+
+            DateTimeOffset IncludeStepDeadlines(DateTimeOffset scheduledDue)
+            {
+                foreach (var step in new[] { latestArchive, latestCompression })
+                {
+                    if (MaintenanceStepReceipts.NextDue(step) is { } stepDue && stepDue < scheduledDue)
+                        scheduledDue = stepDue;
+                }
+                return scheduledDue;
+            }
+
             var latestState = LatestMaintenanceState(store);
             if (latestState?.Disposition is SqliteMaintenanceDisposition.Incomplete or SqliteMaintenanceDisposition.Deferred &&
                 latestState.NextAttemptAt is { } continuationDue &&
                 now < continuationDue &&
-                !artifactRetentionDue)
+                !artifactRetentionDue && !archiveDue && !compressionDue)
             {
-                NextDueByStorePath[cadenceKey] = artifactFailureRetryDue is { } retryDue && retryDue < continuationDue
+                NextDueByStorePath[cadenceKey] = IncludeStepDeadlines(artifactFailureRetryDue is { } retryDue && retryDue < continuationDue
                     ? retryDue
-                    : continuationDue;
+                    : continuationDue);
                 return SkippedResult();
             }
             var latest = LatestMaintenanceMarker(store, conductEventsLogPath);
@@ -76,14 +95,14 @@ internal static class RunEventMaintenanceCadence
             if (latest is not null &&
                 now - latest.Value < Interval &&
                 !continuationDueNow &&
-                !artifactRetentionDue)
+                !artifactRetentionDue && !archiveDue && !compressionDue)
             {
                 var scheduledDue = NextDue(latest.Value);
                 if (artifactFailureRetryDue is not null && artifactFailureRetryDue.Value < scheduledDue)
                 {
                     scheduledDue = artifactFailureRetryDue.Value;
                 }
-                NextDueByStorePath[cadenceKey] = scheduledDue;
+                NextDueByStorePath[cadenceKey] = IncludeStepDeadlines(scheduledDue);
                 return SkippedResult();
             }
 
@@ -109,18 +128,26 @@ internal static class RunEventMaintenanceCadence
                 ? store.MaintainAsync(options).GetAwaiter().GetResult()
                 : maintenanceOperation(store, options);
             result = BoundDeferredResult(result, options, now);
-            artifactRetention = workspace is null || retentionGoals is null || !artifactRetentionDue
-                ? null
-                : artifactRetentionOperation is null
-                    ? StorageRetentionMaintenance.Run(
-                        workspace.LogDirectory,
-                        workspace.OrchestratorDirectory,
-                        workspace.ExecutionDirectory,
-                        retentionGoals.Goals,
-                        now,
-                        mtpResultsRoot: mtpResultsRootOverride ?? StorageRetentionMaintenance.DefaultMtpResultsRoot(),
-                        goalLoad: retentionGoals)
-                    : artifactRetentionOperation(workspace, retentionGoals.Goals, now, mtpResultsRootOverride);
+            try
+            {
+                artifactRetention = workspace is null || retentionGoals is null || !artifactRetentionDue
+                    ? null
+                    : artifactRetentionOperation is null
+                        ? StorageRetentionMaintenance.Run(
+                            workspace.LogDirectory,
+                            workspace.OrchestratorDirectory,
+                            workspace.ExecutionDirectory,
+                            retentionGoals.Goals,
+                            now,
+                            mtpResultsRoot: mtpResultsRootOverride ?? StorageRetentionMaintenance.DefaultMtpResultsRoot(),
+                            goalLoad: retentionGoals)
+                        : artifactRetentionOperation(workspace, retentionGoals.Goals, now, mtpResultsRootOverride);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                RunDueSteps();
+                throw;
+            }
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);
@@ -145,23 +172,8 @@ internal static class RunEventMaintenanceCadence
                     journal.AppendRequired("storage-retention-sweep", null, failedReceipt, now);
                     throw;
                 }
-
-                var compressionEnabled = archivedSnapshotCompressionEnabled;
-                var archiveResult = GoalSnapshotArchiveCadence.Run(
-                    goalSnapshotArchiveOperation ?? (cutoff =>
-                        (goalSnapshotArchiveDrain ?? GoalSnapshotArchiveDrain.Default).Run(bytes =>
-                            stateRepository!.ArchiveTerminalGoalSnapshotsAsync(cutoff, bytes, compressSnapshots: compressionEnabled).GetAwaiter().GetResult())), now);
-                var archiveLine = GoalSnapshotArchiveCadence.Format(archiveResult);
-                Console.WriteLine(archiveLine);
-                TryAppendJournal(journal, "goal-snapshot-archive", archiveLine, now);
-                var compressionResult = compressionEnabled
-                    ? ArchivedSnapshotCompressionCadence.Run(archivedSnapshotCompressionOperation ?? (bytes =>
-                        stateRepository!.RecompressArchivedGoalSnapshotsAsync(bytes).GetAwaiter().GetResult()))
-                    : ArchivedSnapshotCompressionCadence.Disabled;
-                var compressionLine = ArchivedSnapshotCompressionCadence.Format(compressionResult);
-                Console.WriteLine(compressionLine);
-                TryAppendJournal(journal, "archived-snapshot-compression", compressionLine, now);
             }
+            RunDueSteps();
             if (result.Disposition != SqliteMaintenanceDisposition.Deferred)
             {
                 if (result.VacuumCompleted && result.Disposition == SqliteMaintenanceDisposition.Completed)
@@ -183,7 +195,7 @@ internal static class RunEventMaintenanceCadence
             {
                 scheduledNextDue = artifactDue;
             }
-            NextDueByStorePath[cadenceKey] = scheduledNextDue;
+            NextDueByStorePath[cadenceKey] = IncludeStepDeadlines(scheduledNextDue);
 
             return new RunEventMaintenanceCadenceResult(
                 Attempted: true,
@@ -199,8 +211,60 @@ internal static class RunEventMaintenanceCadence
                             : result.Reason.ToString(),
                 Maintenance: result,
                 ArtifactRetention: artifactRetention);
+
+            void RunDueSteps()
+            {
+                if (archiveDue)
+                {
+                    var archiveResult = GoalSnapshotArchiveCadence.Run(
+                        goalSnapshotArchiveOperation ?? (cutoff =>
+                            (goalSnapshotArchiveDrain ?? GoalSnapshotArchiveDrain.Default).Run(bytes =>
+                                stateRepository!.ArchiveTerminalGoalSnapshotsAsync(cutoff, bytes,
+                                    compressSnapshots: archivedSnapshotCompressionEnabled).GetAwaiter().GetResult())), now);
+                    var completedAt = clock();
+                    var archiveLine = GoalSnapshotArchiveCadence.Format(archiveResult);
+                    Console.WriteLine(archiveLine);
+                    TryAppendJournal(journal, "goal-snapshot-archive", archiveLine, completedAt);
+                    AppendStepReceipt("goal-snapshot-archive", archiveLine, completedAt,
+                        () => MaintenanceStepReceipts.AppendArchive(store, archiveResult, completedAt));
+                    latestArchive = new(completedAt, archiveResult.Status == "failed");
+                }
+
+                if (compressionDue || (archiveDue && !archivedSnapshotCompressionEnabled))
+                {
+                    var compressionResult = compressionDue
+                        ? ArchivedSnapshotCompressionCadence.Run(archivedSnapshotCompressionOperation ?? (bytes =>
+                            stateRepository!.RecompressArchivedGoalSnapshotsAsync(bytes).GetAwaiter().GetResult()))
+                        : ArchivedSnapshotCompressionCadence.Disabled;
+                    var completedAt = clock();
+                    var compressionLine = ArchivedSnapshotCompressionCadence.Format(compressionResult);
+                    Console.WriteLine(compressionLine);
+                    TryAppendJournal(journal, "archived-snapshot-compression", compressionLine, completedAt);
+                    if (compressionDue)
+                    {
+                        AppendStepReceipt("archived-snapshot-compression", compressionLine, completedAt,
+                            () => MaintenanceStepReceipts.AppendCompression(store, compressionResult, completedAt));
+                        latestCompression = new(completedAt, compressionResult.Status == "failed");
+                    }
+                }
+            }
+
+            void AppendStepReceipt(string eventKind, string line, DateTimeOffset completedAt, Action append)
+            {
+                try
+                {
+                    append();
+                }
+                catch (Exception ex)
+                {
+                    var failedLine = $"{line} receipt=failed receiptException={ex.GetType().Name} message={Sanitize(ex.Message)}";
+                    Console.WriteLine(failedLine);
+                    journal.AppendRequired(eventKind, null, failedLine, completedAt);
+                    throw;
+                }
+            }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             NextDueByStorePath[cadenceKey] = now.Add(ArtifactFailureRetryInterval);
             var line = $"RUN_EVENTS_MAINTENANCE_FAILED exception={ex.GetType().Name} message={Sanitize(ex.Message)}";
