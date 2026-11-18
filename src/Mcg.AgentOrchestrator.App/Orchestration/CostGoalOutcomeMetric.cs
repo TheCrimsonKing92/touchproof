@@ -12,7 +12,7 @@ internal static class CostGoalOutcomeMetric
     internal static IReadOnlyList<string> MetricNames { get; } = Array.AsReadOnly(new[]
     {
         "selection-milliseconds", "executed-class-count", "gate-test-cpu-seconds",
-        "full-gate-rate", "process-launches"
+        "full-gate-rate", "process-launches", "worker-turns-per-session", "worker-input-volume-per-session"
     });
     private const string LineFormat = "metric: <name>; direction: decrease|increase; target: <value or percent>; window: <N gates>";
     private static readonly Regex Heading = new(@"^##[ \t]+([^\r\n]+)", RegexOptions.CultureInvariant);

@@ -106,7 +106,7 @@ public sealed class ClaudeTranscriptUsageReader(
 
             return seenIds.Count == 0
                 ? new(null, $"claude-transcript-no-usage: {fileName} reported no assistant usage")
-                : new(new ProviderReportedUsage(input, output, cached), string.Empty);
+                : new(new ProviderReportedUsage(input, output, cached, seenIds.Count), string.Empty);
         }
         catch (Exception ex)
         {

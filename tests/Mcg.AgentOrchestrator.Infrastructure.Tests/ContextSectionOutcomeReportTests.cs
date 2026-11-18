@@ -257,6 +257,7 @@ public sealed class ContextSectionOutcomeReportTests
         Assert.Equal("Context usage: dispatches=1 rows=1" + Environment.NewLine +
             "Developer | test-model | dispatches=1 reported-input=1 | input=median=20000,p90=20000 " +
             "cached=median=0,p90=0 uncached=median=20000,p90=20000 output=median=0,p90=0 " +
+            "turns=median=unknown,p90=unknown " +
             "harness-overhead=median=unknown,p90=unknown | missing-usage=0 reasons=none" + Environment.NewLine,
             output.ToString());
         output.GetStringBuilder().Clear();
@@ -264,7 +265,8 @@ public sealed class ContextSectionOutcomeReportTests
         Assert.Equal("{\"since\":null,\"role\":null,\"rows\":[{\"role\":\"Developer\",\"model\":\"test-model\"," +
             "\"dispatchCount\":1,\"reportedInputCount\":1,\"input\":{\"median\":20000,\"p90\":20000}," +
             "\"cached\":{\"median\":0,\"p90\":0},\"uncached\":{\"median\":20000,\"p90\":20000}," +
-            "\"output\":{\"median\":0,\"p90\":0},\"harnessOverhead\":{\"median\":null,\"p90\":null}," +
+            "\"output\":{\"median\":0,\"p90\":0},\"turns\":{\"median\":null,\"p90\":null}," +
+            "\"harnessOverhead\":{\"median\":null,\"p90\":null}," +
             "\"missingUsageCount\":0,\"missingUsageReasons\":{}}]}" + Environment.NewLine, output.ToString());
         Assert.Empty(error.ToString());
     }
