@@ -637,8 +637,8 @@ internal sealed partial class GoalDispatchOperations
         Goal goal)
     {
         var current = kernel.GetGoal(goal.Id);
-        if (GoalRefinementWorkCoordinator.HasPendingWork(current) &&
-            TryHydrateStoreRefinedSpec(kernel, workspace, goal.Id))
+        if ((GoalRefinementWorkCoordinator.HasPendingWork(current) || current.RefinedSpec is not null) &&
+            TryHydrateStoreRefinedSpec(kernel, workspace, current))
         {
             current = kernel.GetGoal(goal.Id);
         }
@@ -809,10 +809,10 @@ internal sealed partial class GoalDispatchOperations
     private static bool TryHydrateStoreRefinedSpec(
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
-        GoalId goalId)
+        Goal current)
     {
         var stored = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
-            .LoadGoalAsync(goalId)
+            .LoadGoalAsync(current.Id)
             .GetAwaiter()
             .GetResult();
         if (stored is null)
@@ -820,6 +820,27 @@ internal sealed partial class GoalDispatchOperations
         if (stored.RefinedSpec is null &&
             (stored.RefinedSpecVersions is null || stored.RefinedSpecVersions.Count == 0))
             return false;
+
+        if (current.RefinedSpec is { } currentSpec)
+        {
+            if (stored.IsMetadataOnly)
+                return false;
+            var storedVersion = stored.RefinedSpecVersions?.LastOrDefault(version => version.SupersededByVersion is null);
+            var storedSpec = stored.RefinedSpecVersions is { Count: > 0 } ? storedVersion?.Spec : stored.RefinedSpec;
+            if (storedSpec is null)
+                return false;
+
+            // Compare the current versions, not historical entries or unrelated snapshot metadata.
+            var hasHigherVersion = (storedVersion?.Version ?? 1) > current.AuthoritativeRefinedSpecVersion!.Version;
+            var hasSynchronizedAnswer = currentSpec.OpenQuestions.Any(question =>
+                string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase) &&
+                storedSpec.OpenQuestions.Any(storedQuestion =>
+                    string.Equals(storedQuestion.Id, question.Id, StringComparison.Ordinal) &&
+                    !string.Equals(storedQuestion.Status, "Open", StringComparison.OrdinalIgnoreCase) &&
+                    storedQuestion.Answer is not null));
+            if (!hasHigherVersion && !hasSynchronizedAnswer)
+                return false;
+        }
 
         kernel.ReplaceGoalWithSnapshot(stored);
         return true;
