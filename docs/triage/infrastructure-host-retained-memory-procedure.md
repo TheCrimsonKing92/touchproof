@@ -184,7 +184,7 @@ and [counters documentation](https://learn.microsoft.com/en-us/dotnet/core/diagn
 Retain the consumer list used for this revision (source inventory, not runtime proof):
 
 ```powershell
-rg -n 'SharedArchitectureCache.Get\(|RepositorySourceSnapshotCache.Get\(' tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g '*.cs' -g '!**/bin/**' -g '!**/obj/**' > (Join-Path $run 'consumers.txt')
+rg -n 'SharedArchitectureCache\.Get\(|RepositorySourceSnapshotCache\.Get\(' tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g '*.cs' -g '!**/bin/**' -g '!**/obj/**' > (Join-Path $run 'consumers.txt')
 Get-FileHash (Join-Path $run 'checkpoint.gcdump'),(Join-Path $run 'lane.trx'),(Join-Path $run 'runtime.csv') |
     Export-Csv (Join-Path $run 'artifact-hashes.csv') -NoTypeInformation
 ```
