@@ -50,7 +50,7 @@ internal sealed partial class ConductorBatchLoop
             var line = lines[sweepIndex];
             var suffix = line.LastIndexOf(" cpu_ms=", StringComparison.Ordinal);
             lines[sweepIndex] = line.Insert(suffix,
-                $" sweep_steps={ledger.FormatSteps(ConductorTickStepLedger.SweepNames)} load_counters={ledger.FormatCounters()}");
+                $" sweep_steps={ledger.FormatSteps(ConductorTickStepLedger.SweepNames)} load_counters={ledger.FormatCounters()} kernel_reload_steps={ledger.FormatKernelReload()}");
         }
         lines.Add(FormatPhaseTiming(tick, phase, elapsed,
             $"{detail} prewalk_steps={ledger.FormatSteps(ConductorTickStepLedger.PrewalkNames)}", cpuMs));

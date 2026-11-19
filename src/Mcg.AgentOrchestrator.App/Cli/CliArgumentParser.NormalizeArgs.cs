@@ -141,10 +141,13 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
     {
         if (args.Any(arg => arg.Equals("--title", StringComparison.OrdinalIgnoreCase)))
         {
-            return NormalizeCommandWithValueFlags(args, "--title");
+            return NormalizeCommandWithValueFlags(args, "--title", "--bundled-reason");
         }
 
-        return NormalizeTargetTextCommandWithFileFlags(args, 1, "--body-file", "--text-file", "--epic");
+        return NormalizeCommandWithValueFlags(
+            [.. NormalizeTargetTextCommandWithFileFlags(args, 1, "--body-file", "--text-file", "--epic",
+                "--depends-on", "--no-similar", "--bundled-reason")],
+            "--bundled-reason");
     }
 
     if (command.Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
@@ -427,7 +430,10 @@ private static IReadOnlyList<string> NormalizeTargetTextCommandWithFileFlags(str
         return args;
     }
 
-    var flagIndex = Array.FindIndex(args, textStartIndex, arg => fileFlags.Any(flag => arg.Equals(flag, StringComparison.OrdinalIgnoreCase) || flag == "--epic" && arg.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase)));
+    var flagIndex = Array.FindIndex(args, textStartIndex, arg => fileFlags.Any(flag =>
+        arg.Equals(flag, StringComparison.OrdinalIgnoreCase) ||
+        flag == "--epic" && arg.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase) ||
+        flag == "--bundled-reason" && arg.StartsWith(InlineBundledReasonPrefix, StringComparison.OrdinalIgnoreCase)));
     if (flagIndex < 0)
     {
         return [.. args.Take(textStartIndex), string.Join(' ', args.Skip(textStartIndex))];
