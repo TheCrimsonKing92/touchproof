@@ -7,6 +7,7 @@ public sealed class WorkerBuildScopeToolCacheDigestTests
 {
     private readonly Xunit.ITestOutputHelper _output;
     public WorkerBuildScopeToolCacheDigestTests(Xunit.ITestOutputHelper output) => _output = output;
+    public static bool IsWindows => OperatingSystem.IsWindows();
 
     private sealed record Mutation(string Relative, string Operation, bool Invalidates = true);
 
@@ -32,6 +33,37 @@ public sealed class WorkerBuildScopeToolCacheDigestTests
         new("outside-closure.txt", "add", false),
         new("scripts/WorkerBuildScopeTool/bin/ignored.txt", "add", false)
     ];
+
+    [Xunit.Fact(Skip = "Requires Windows PowerShell 5.1.", SkipUnless = nameof(IsWindows))]
+    public void UntrackedScopeInput_WithUtf8ConsolePreamble_UsesSameDigest()
+    {
+        using var fixture = new WorkerBuildScopeToolCacheFixture();
+        File.WriteAllText(Path.Combine(fixture.Home, "scripts", "WorkerBuildScopeTool", "new source ü.cs"), "// Include this untracked input.");
+        var driver = Path.Combine(fixture.Parent, "digest.ps1");
+        File.WriteAllText(driver, """
+            Set-StrictMode -Version Latest
+            $ErrorActionPreference = 'Stop'
+            . $env:CACHE_STUB
+            . (Join-Path $env:CACHE_HOME 'scripts/WorkerBuildScopeToolCache.ps1')
+            $project = Join-Path $env:CACHE_HOME 'scripts/WorkerBuildScopeTool/WorkerBuildScopeTool.csproj'
+            [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+            Get-WorkerBuildScopeToolDigest -ToolProject $project -WorkingDirectory $env:CACHE_HOME
+            [Console]::InputEncoding = [Text.UTF8Encoding]::new($true)
+            if ([Console]::InputEncoding.GetPreamble().Length -eq 0) { throw 'The UTF-8 preamble was not enabled.' }
+            Get-WorkerBuildScopeToolDigest -ToolProject $project -WorkingDirectory $env:CACHE_HOME
+            if ([Console]::InputEncoding.GetPreamble().Length -eq 0) { throw 'Git launch did not restore the console encoding.' }
+            """);
+        var start = fixture.CacheShell(fixture.Home, "stub", Path.Combine(fixture.Parent, "vectors.txt"), "-File", driver);
+        start.FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+
+        var result = WorkerBuildScopeToolCacheFixture.Run(start);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        var digests = result.Stdout.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, digests.Length);
+        Assert.Matches("^[a-f0-9]{64}$", digests[0]);
+        Assert.Equal(digests[0], digests[1]);
+    }
 
     [Xunit.Fact]
     public void SourceInputMutations_ClosureAndAncestorBoundary_InvalidatesOnlyInputs()

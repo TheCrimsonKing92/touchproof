@@ -157,13 +157,13 @@ public sealed class CliCommandTestsPersistentRunnerCommandsStartupAndMetadata : 
                 Convert.ToString(columns.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
             using var migrationCount = unchanged.CreateCommand();
             migrationCount.CommandText = "SELECT COUNT(*) FROM schema_migrations";
-            Xunit.Assert.Equal(15L, migrationCount.ExecuteScalar());
+            Xunit.Assert.Equal((long)StateDbMigrations.Plan(workspace.SqliteStatePath).RequiredVersion,
+                migrationCount.ExecuteScalar());
             using var claimTable = unchanged.CreateCommand();
             claimTable.CommandText = "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'source_backlog_claims'";
             Xunit.Assert.Equal(1L, claimTable.ExecuteScalar());
         }
     }
-
 
     [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
     public void PrintGoalsRendersMetadataSummaries()

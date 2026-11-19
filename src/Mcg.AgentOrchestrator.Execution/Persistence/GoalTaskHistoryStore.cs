@@ -39,6 +39,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// Bypass readers and handling (all source entries under Persistence):
 /// - AttentionReads and ProviderHoldSeedEvidenceReader: ReadAsync supplies marked latest elements,
 ///   decoded with each reader's existing sparse shape; cached provider evidence stores resolved values.
+/// - ProviderConnections: ReadMetadataAsync shares marker validation and latest authority while
+///   projecting only attribution/status fields, excluding invocation output and command text.
 /// - ReadTerminalMetadata: ReadLatestDispatchAsync resolves commit evidence; metadata-only hot stubs
 ///   already carry ResultCommit. ListConductLoopGoalMetadataAsync and AcceptanceQueueReads use
 ///   LatestFieldSql for ResultCommit and CompletedAt respectively, with an inline-only legacy-table fallback.
@@ -119,6 +121,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 {
+    private readonly GoalTaskBuildHistoryStore _buildHistory = new(options);
+
     internal const string VerificationProperty = "VerificationHistory";
     internal const string DispatchProperty = "DispatchHistory";
     internal const string MarkerProperty = "HistoryInTable";
@@ -189,14 +193,16 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 
     internal string SerializeDocument(GoalSnapshot goal) => PrepareWrite(goal).Document;
 
-    // One per-save preparation supplies both the document decisions and the exact row payloads.
+    // One per-save preparation supplies the document decisions and all task history row payloads.
     // Options, resolver and task metadata are shared lazily per source options object. Reference-keyed
     // counts belong to this save, scoped to its synchronous document write on this thread. No output is kept.
     internal PreparedWrite PrepareWrite(GoalSnapshot goal, int? timelineInTable = null)
     {
+        var buildHistory = _buildHistory.PrepareWrite(goal);
+        var projectedGoal = buildHistory.ProjectedGoal;
         var rows = new List<HistoryWriteRow>();
         var counts = new Dictionary<TaskSnapshot, HistoryCounts>(ReferenceEqualityComparer.Instance);
-        foreach (var task in goal.Tasks)
+        foreach (var task in projectedGoal.Tasks)
         {
             string? AddRows<T>(IReadOnlyList<T>? entries, string kind)
             {
@@ -226,17 +232,18 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         _activeTimelineCount = timelineInTable;
         try
         {
-            document = JsonSerializer.Serialize(goal, documentOptions);
+            document = JsonSerializer.Serialize(projectedGoal, documentOptions);
         }
         finally
         {
             _activeCounts = previousCounts;
             _activeTimelineCount = previousTimelineCount;
         }
-        return new(goal.Id, document, JsonSerializer.Serialize(rows, options));
+        return new(goal.Id, document, JsonSerializer.Serialize(rows, options), buildHistory);
     }
 
-    internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson);
+    internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson,
+        GoalTaskBuildHistoryStore.PreparedWrite BuildHistory);
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTaskHistoryStore.cs")]
     internal static void CreateSchema(SqliteConnection connection)
@@ -282,7 +289,8 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                 )
             """;
         changed += await command.ExecuteNonQueryAsync(token);
-        return changed > 0;
+        var buildHistoryChanged = await _buildHistory.WriteAsync(connection, prepared.BuildHistory, token);
+        return changed > 0 || buildHistoryChanged;
     }
 
     private sealed record HistoryWriteRow(string TaskId, string Kind, int Sequence, string EntryJson);
@@ -313,6 +321,49 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     }
 
     private sealed record StoredEntry(long Sequence, string Json);
+
+    // SQL projections are repository-owned, never CLI/provider input. Unmarked documents
+    // already supply authoritative inline metadata; no table mirror can override it.
+    internal async Task<TaskHistory> ReadMetadataAsync<TVerification, TDispatch>(SqliteConnection connection,
+        string goalId, string taskId, JsonElement verification, JsonElement dispatch, JsonElement marker,
+        Func<string, string> projectVerification, Func<string, string> projectDispatch, CancellationToken token)
+    {
+        var counts = ReadMarker(marker, goalId, taskId);
+        if (counts is null) return new(new(Elements(verification), false), new(Elements(dispatch), false));
+        var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry>>();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT kind, sequence, CASE kind WHEN 'verification' THEN {projectVerification("entry_json")}
+                ELSE {projectDispatch("entry_json")} END
+                , json_type(entry_json)
+            FROM goal_task_history WHERE goal_id = $goal AND task_id = $task ORDER BY kind, sequence
+            """;
+        command.Parameters.AddWithValue("$goal", goalId);
+        command.Parameters.AddWithValue("$task", taskId);
+        using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            if (reader.IsDBNull(3) || reader.GetString(3) != "object")
+                throw HistoryError(goalId, taskId, reader.GetString(0), "history metadata entry must be an object");
+            var key = (taskId, reader.GetString(0));
+            if (!rows.TryGetValue(key, out var list)) rows.Add(key, list = []);
+            list.Add(new(reader.GetInt64(1), reader.GetString(2)));
+        }
+        var verifications = StrictEntries<TVerification>(rows.GetValueOrDefault((taskId, "verification")),
+            counts.Verification, goalId, taskId, "verification");
+        var dispatches = StrictEntries<TDispatch>(rows.GetValueOrDefault((taskId, "dispatch")),
+            counts.Dispatch, goalId, taskId, "dispatch");
+        return new(verifications, dispatches, counts.LatestVerificationInTable ? verifications.Entries[^1] : default,
+            counts.LatestDispatchInTable ? dispatches.Entries[^1] : default);
+    }
+
+    internal static string MetadataSql(string expression, IReadOnlyList<string> fields) =>
+        "json_object(" + string.Join(",", fields.Select(field =>
+        {
+            if (field.Length == 0 || field.Any(c => !char.IsAsciiLetterOrDigit(c)))
+                throw new ArgumentException("Metadata fields must be literal identifiers.");
+            return $"'{field}', json(({expression}) -> '$.{field}')";
+        })) + ")";
 
     private sealed record HistoryCounts(int? Verification, int? Dispatch,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool LatestVerificationInTable,
@@ -613,7 +664,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                     ? history.LatestDispatch.Deserialize<TaskDispatchSnapshot>(options) : task.LastDispatch
             });
         }
-        return snapshot with { Tasks = tasks };
+        return await _buildHistory.HydrateAsync(connection, snapshot with { Tasks = tasks }, token);
     }
 
     private sealed record HistoryDocument(bool IsMetadataOnly, IReadOnlyList<HistoryTask?>? Tasks,

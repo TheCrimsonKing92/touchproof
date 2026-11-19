@@ -717,6 +717,10 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RemoteExecutors = new(
         RemoteExecutorsUsage, "Read recent remote executor outcomes and advisory probes.",
         ["--since", "--last", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry ProviderConnections = new(
+        CliProviderConnectionsCommand.Usage,
+        "List prior provider observations, or run one bounded host status check without login or model requests.",
+        ["--profile", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry RemoteLaneSelfTest = new(
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
@@ -1393,6 +1397,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("remote-executors", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteExecutors;
+            return true;
+        }
+        if (args[0].Equals("provider-connections", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ProviderConnections;
             return true;
         }
         if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))
