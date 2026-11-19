@@ -13,7 +13,7 @@ internal static class WorktreeWriteProbe
     internal const string InsideWriteDenied = "inside-write-denied";
     internal const string OutsideWriteAllowed = "outside-write-allowed";
     internal const string SentinelNotCleaned = "sentinel-not-cleaned";
-    internal const string ResultPrefix = "MCG_WORKTREE_WRITE_PROBE ";
+    internal const string ResultPrefix = "worktree-write-probe: ";
 
     internal sealed record Launch(ProcessStartInfo StartInfo, string SentinelPath, string OutsidePath);
 
@@ -27,10 +27,12 @@ internal static class WorktreeWriteProbe
         var worktree = ResolveDirectoryPath(parameters.WorkingDirectory);
         var token = Guid.NewGuid().ToString("N");
         var sentinel = Path.Combine(worktree, $".mcg-write-probe-{token}.tmp");
-        // Use the host's temp root. The worker's TEMP belongs to the writable sandbox.
-        RequireOutsideWorktree(worktree, ResolveDirectoryPath(OrchestratorTempRoot.GetRoot()));
-        var scratchParent = ResolveDirectoryPath(OrchestratorTempRoot.GetPurposeDirectory("worktree-write-probe"));
+        var tempPath = ResolveDirectoryPath(GetHostTempPath());
+        RequireOutsideWorktree(worktree, ResolveDirectoryPath(OrchestratorTempRoot.GetRoot(tempPath)));
+        RequireNonLowDirectory(tempPath);
+        var scratchParent = ResolveDirectoryPath(OrchestratorTempRoot.GetPurposeDirectory("worktree-write-probe", tempPath));
         RequireOutsideWorktree(worktree, scratchParent);
+        RequireNonLowDirectory(scratchParent);
         var scratch = Path.Combine(scratchParent, token);
         var outside = Path.Combine(scratch, "outside.tmp");
         var startInfo = BuildStartInfo(worker, parameters, worktree, sentinel, outside, token);
@@ -133,6 +135,28 @@ internal static class WorktreeWriteProbe
         if (!Path.IsPathRooted(relative) && relative != ".." &&
             !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             throw new InvalidOperationException($"Worktree write probe scratch root '{scratch}' is within '{worktree}'.");
+    }
+
+    private static string GetHostTempPath()
+    {
+        if (!OperatingSystem.IsWindows())
+            return Path.GetTempPath();
+
+        // The process TEMP can point to a Low-integrity worker or test directory.
+        // Acceptance preserves the real LOCALAPPDATA even when it redirects USERPROFILE.
+        var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (localAppData is null || !Path.IsPathFullyQualified(localAppData))
+            localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!Path.IsPathFullyQualified(localAppData))
+            throw new InvalidOperationException("Worktree write probe could not resolve the host's Windows temp directory.");
+
+        return Path.Combine(localAppData, "Temp");
+    }
+
+    private static void RequireNonLowDirectory(string path)
+    {
+        if (new IcaclsIntegrityLabeler().Query(path).Low)
+            throw new InvalidOperationException($"Worktree write probe cannot use Low-integrity scratch directory '{path}'.");
     }
 
     private static string ResolveDirectoryPath(string path)

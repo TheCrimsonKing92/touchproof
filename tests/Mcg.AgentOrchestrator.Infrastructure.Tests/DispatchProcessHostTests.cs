@@ -1836,6 +1836,7 @@ public sealed class DispatchProcessHostTests
             "Requires a Medium integrity host to prepare a sandboxed linked worktree.");
 
         var root = Directory.CreateTempSubdirectory("write-probe-prep-").FullName;
+        TempRootJanitorDeleteResult cleanup;
         try
         {
             var worktree = Path.Combine(root, "worktree");
@@ -1855,6 +1856,8 @@ public sealed class DispatchProcessHostTests
                 LaunchWriteProbe = request =>
                 {
                     launched = request;
+                    var outsideDirectory = Path.GetDirectoryName(request.OutsidePath)!;
+                    Assert.False(new IcaclsIntegrityLabeler().Query(outsideDirectory).Low, outsideDirectory);
                     return SimulateWriteProbeChild(request, reason);
                 }
             });
@@ -1870,8 +1873,10 @@ public sealed class DispatchProcessHostTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            cleanup = TempRootJanitor.DeleteTree(root);
         }
+
+        Assert.NotEqual(TempRootJanitorDeleteStatus.Failed, cleanup.Status);
     }
 
     [Xunit.Fact]
@@ -2494,7 +2499,8 @@ public sealed class DispatchProcessHostTests
             var parametersPath = Path.Combine(root, "dispatch.json");
             DispatchProcessHost.WriteParameters(parametersPath, parameters with { Command = command });
 
-            Assert.Equal(0, DispatchProcessHost.Run(parametersPath));
+            var exitCode = DispatchProcessHost.Run(parametersPath);
+            Assert.True(exitCode == 0, File.ReadAllText(parameters.StderrPath));
 
             AssertNativeExitArtifact(parameters.ExitCodePath, 0);
             var output = File.ReadAllText(parameters.StdoutPath);
@@ -2577,7 +2583,7 @@ public sealed class DispatchProcessHostTests
 
             var exitCode = DispatchProcessHost.Run(parametersPath);
 
-            Assert.Equal(0, exitCode);
+            Assert.True(exitCode == 0, File.ReadAllText(stderrPath));
             Assert.Contains("outside-write-denied", File.ReadAllText(stdoutPath));
             Assert.Equal("outside-protected", File.ReadAllText(outsideWorkspaceFile));
             Assert.True(GetMandatoryIntegrityRid(outsideWorkspaceFile) >= MediumIntegrityRid);
@@ -2907,7 +2913,7 @@ public sealed class DispatchProcessHostTests
         var exitCode = DispatchProcessHost.Run(parametersPath);
         stopwatch.Stop();
 
-        Assert.Equal(0, exitCode);
+        Assert.True(exitCode == 0, File.ReadAllText(stderrPath));
         AssertNativeExitArtifact(exitPath, 0);
         Assert.Equal("0", File.ReadAllText(prepExitPath).Trim());
         Assert.True(File.Exists(markerPath), File.ReadAllText(stderrPath));
