@@ -5,10 +5,60 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
 {
     private const string Summary = "Find Provider connections in Settings.";
     private const string Navigation = "Type :settings and press Left/Right to select Provider connections.";
+    private const string SecondSummary = "Read recent changes in Console news.";
+    private const string SecondNavigation = "Type :news to see the details.";
     private const string Fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     private readonly string _root = SharedTestSupport.CreateTempDirectory();
     private string ChangelogPath => Path.Combine(_root, OwnerConsoleChangelog.FileName);
     private string RecordPath => Path.Combine(_root, OwnerConsoleNewsRecord.FileName);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartupWithoutRecordAnnouncesBothEntriesWithoutWriting(bool missingRecordDirectory)
+    {
+        var recordDirectory = missingRecordDirectory ? Path.Combine(_root, "workspace") : _root;
+        var recordPath = Path.Combine(recordDirectory, OwnerConsoleNewsRecord.FileName);
+        var strip = new OwnerConsoleNoticeStrip(new OwnerConsoleTestClock());
+        WriteFirstRunChangelog();
+        var session = StartSession(strip, recordPath);
+        await TestHangGuard.WaitAsync(session.Loaded, "first-run news load");
+
+        var announcement = Assert.Single(strip.Visible);
+        Assert.Equal(OwnerConsoleNoticeSource.Announcement, announcement.Source);
+        Assert.Equal($"Console news (:news): {Summary} {Navigation} | {SecondSummary} {SecondNavigation}",
+            announcement.Text);
+        Assert.Equal(new[] { 1, 2 }, session.Unseen.Select(entry => entry.Id));
+        Assert.False(File.Exists(recordPath));
+        Assert.Equal(!missingRecordDirectory, Directory.Exists(recordDirectory));
+    }
+
+    [Fact]
+    public async Task FirstRunNewsShowsBothEntriesAndAcknowledgesThemAcrossRestart()
+    {
+        var clock = new OwnerConsoleTestClock();
+        var strip = new OwnerConsoleNoticeStrip(clock);
+        WriteFirstRunChangelog();
+        var session = StartSession(strip);
+        await TestHangGuard.WaitAsync(session.Loaded, "first-run news load before acknowledgement");
+
+        var dialogs = new NewsDialogs();
+        using var controller = CreateController(session, dialogs, clock);
+        await TestHangGuard.WaitAsync(controller.RunCommandAsync(":news"), "first-run news acknowledgement");
+
+        var expectedDetails =
+            $"1 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {Navigation}\n\n" +
+            $"2 - {SecondSummary}\nSurface fingerprint: {Fingerprint}\n- {SecondNavigation}";
+        Assert.Equal(("Console news", expectedDetails), Assert.Single(dialogs.Shown));
+        Assert.Equal("2", File.ReadAllText(RecordPath));
+        Assert.Empty(strip.Visible);
+
+        var restartedStrip = new OwnerConsoleNoticeStrip(clock);
+        var restartedSession = StartSession(restartedStrip);
+        await TestHangGuard.WaitAsync(restartedSession.Loaded, "first-run news load after acknowledgement and restart");
+        Assert.Empty(restartedStrip.Visible);
+        Assert.Empty(restartedSession.Unseen);
+    }
 
     [Fact]
     public async Task UnseenNewsSurvivesSuccessExpiryAndStaysDismissedAfterRestart()
@@ -84,8 +134,13 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
         return session;
     }
 
-    private OwnerConsoleNewsRecord StartSession(OwnerConsoleNoticeStrip strip) =>
-        OwnerConsoleNewsRecord.Start(ChangelogPath, RecordPath,
+    private void WriteFirstRunChangelog() =>
+        File.WriteAllText(ChangelogPath,
+            $"## 1 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {Navigation}\n\n" +
+            $"## 2 - {SecondSummary}\nSurface fingerprint: {Fingerprint}\n- {SecondNavigation}");
+
+    private OwnerConsoleNewsRecord StartSession(OwnerConsoleNoticeStrip strip, string? recordPath = null) =>
+        OwnerConsoleNewsRecord.Start(ChangelogPath, recordPath ?? RecordPath,
             text => strip.Raise(text, OwnerConsoleNoticeSeverity.Announcement, OwnerConsoleNoticeSource.Announcement),
             strip.DismissAnnouncement,
             text => strip.Raise(text, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action));

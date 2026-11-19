@@ -37,7 +37,7 @@ internal sealed class OwnerConsoleNewsRecord
             var unseen = _unseen;
             if (!Loaded.IsCompletedSuccessfully || unseen.Count == 0 || cancellationToken.IsCancellationRequested) return;
             var highest = Math.Max(_highestSeen, unseen[^1].Id);
-            try { Write(highest, overwrite: true); }
+            try { Write(highest); }
             catch (Exception error) when (FileUnavailable(error))
             {
                 _failed("Could not save console news acknowledgement. Run :news to retry.");
@@ -58,9 +58,8 @@ internal sealed class OwnerConsoleNewsRecord
             try { seen = JsonSerializer.Deserialize<int>(File.ReadAllText(_recordPath)); }
             catch (Exception missing) when (missing is FileNotFoundException or DirectoryNotFoundException)
             {
-                // Establish a baseline for the next startup without replacing a record created concurrently.
-                Write(0, overwrite: false);
-                return;
+                // A missing record means no entries have been acknowledged.
+                seen = 0;
             }
             if (seen < 0) return;
             _highestSeen = seen;
@@ -71,14 +70,14 @@ internal sealed class OwnerConsoleNewsRecord
         if (_unseen.Count > 0) announce(OwnerConsoleChangelog.FormatAnnouncement(_unseen));
     }
 
-    private void Write(int id, bool overwrite)
+    private void Write(int id)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_recordPath)!);
         var temporaryPath = _recordPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             File.WriteAllText(temporaryPath, JsonSerializer.Serialize(id));
-            File.Move(temporaryPath, _recordPath, overwrite);
+            File.Move(temporaryPath, _recordPath, overwrite: true);
         }
         finally
         {

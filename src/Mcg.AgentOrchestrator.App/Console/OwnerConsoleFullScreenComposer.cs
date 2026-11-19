@@ -1,4 +1,5 @@
 using System.Data;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -64,7 +65,10 @@ internal static class OwnerConsoleFullScreenComposer
         OwnerConsoleProviderConnectionsTab? providerTab = null;
         if (controller.ProviderConnections is { } connections && controller.ProviderSignIn is { } signIn)
         {
-            providerTab = new(connections, signIn, view.Invoke, clock, lifetimeToken);
+            var catalogPath = controller.Workspace?.AgentCatalogPath;
+            providerTab = new(connections, signIn, () => catalogPath is not null
+                ? AgentCatalogStore.Load(catalogPath).Agents
+                : throw new InvalidOperationException("The agent catalog path is unavailable."), view.Invoke, clock, lifetimeToken);
             settingsTabs.Add(providerTab);
         }
         var settingsView = new OwnerConsoleSettingsView(settingsTabs);

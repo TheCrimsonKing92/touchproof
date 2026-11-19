@@ -24,6 +24,8 @@ internal sealed class OwnerConsoleProviderSignInFlow(
 
     internal bool CanReportReturn(OwnerConsoleProviderConnectionState profile) => AwaitingSignInReturn(profile) is not null;
 
+    internal bool HasActiveSignIn(OwnerConsoleProviderConnectionState profile) => _activeSignIns.ContainsKey(profile.Id);
+
     internal void ReportReturn(OwnerConsoleProviderConnectionState profile, bool stoppedWaiting)
     {
         if (AwaitingSignInReturn(profile) is not { } operation) return;

@@ -572,7 +572,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var selectedExecution = await AcceptanceSelectedExecutionSession.CreateAsync(engineSettings, worktreePath, changedFiles,
             executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory, executionOwner.GateTestObligationSelectors, IntegrationBranch).ConfigureAwait(false);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
-            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform, projectCheckTransform: selectedExecution.ProjectCheckTransform);
+            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform, projectCheckTransform: selectedExecution.ProjectCheckTransform,
+            balanceFocusedSelection: true);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
             var message = StructuralCoverageFailureMessage.Build(worktreePath, executionOwner.ProjectHomeDirectory,
@@ -633,27 +634,28 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
 
-        var scopedChecks = GoalAcceptanceVerifierHomeImpactScope.Applies(executionOwner.ProjectHomeDirectory) ? BuildChangeScopedChecks(worktreePath, solutionCheck, effectiveChecks, manifest.Checks, changedFiles, policyShardPlan, infrastructureTestLanes) : null;
+        var focusedExpansion = effectivePlan.FocusedReverseDependentExpansion;
+        var scopedChecks = GoalAcceptanceVerifierHomeImpactScope.Applies(executionOwner.ProjectHomeDirectory) ? BuildChangeScopedChecks(worktreePath, solutionCheck, effectiveChecks, manifest.Checks, changedFiles, policyShardPlan, infrastructureTestLanes, focusedExpansion) : null;
         var runSolutionCheck = solutionCheck is not null && scopedChecks is null;
         var deferredChecks = runSolutionCheck
-            ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
+            ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath, focusedExpansion?.FullGateReason is not null)
             : [];
 
-        phaseAccountant.BalancedPlan = AcceptanceBalancedLanePlanWriter.Publish(AcceptanceGateLanePlanPublisher.Classify(
+        var scopedNames = scopedChecks?.Select(check => check.Name).ToHashSet(StringComparer.Ordinal);
+        var dispatchedChecks = scopedNames is null ? effectiveChecks : effectiveChecks.Where(check =>
+            !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedNames.Contains(check.Name)).ToArray();
+        phaseAccountant.BalancedPlan = FocusedReverseDependentLaneSplitter.PublishLanePlan(focusedExpansion,
+            AcceptanceGateLanePlanPublisher.Classify(
             executionOwner.Identity.AttemptId, effectivePlan.CandidateLanes, infrastructureTestLanes,
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
-            scopedChecks is null ? effectiveChecks : effectiveChecks.Where(check =>
-                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray(), engineSettings.DeclaredTestSettings, selectedExecution),
+            dispatchedChecks, engineSettings.DeclaredTestSettings, selectedExecution), dispatchedChecks,
             AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)
         {
-            var scopedNames = scopedChecks.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
-
             var batch = await RunCheckBatchAsync(
-                effectiveChecks.Where(c =>
-                    !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedNames.Contains(c.Name)).ToArray(),
+                dispatchedChecks,
                 partitionVerdictCache,
                 worktreePath,
                 goalId,
@@ -1641,7 +1643,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static List<AcceptanceManifestCheck> BuildDeferredChecks(
         AcceptanceManifestCheck? solutionCheck,
         IReadOnlyList<AcceptanceManifestCheck> allChecks,
-        string worktreePath)
+        string worktreePath, bool runFullInfrastructureGate)
     {
         if (solutionCheck is null)
             return [];
@@ -1661,6 +1663,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 !c.Name.Equals(solutionCheck.Name, StringComparison.Ordinal) &&
                 !string.IsNullOrWhiteSpace(c.Project) &&
                 c.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
+                !(runFullInfrastructureGate && ProjectMatches(c.Project, InfrastructureTestsProject)) &&
                 IsProjectInSolution(c.Project, solutionCheck.Project, slnContent))
             .ToList();
     }
@@ -1672,12 +1675,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<string>? changedFiles,
         PolicyShardPlan policyShardPlan,
-        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes)
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes,
+        FocusedReverseDependentLaneSplitter.Expansion? focusedExpansion = null)
     {
         if (solutionCheck is null ||
             changedFiles is null ||
             changedFiles.Count == 0 ||
-            policyShardPlan.ForceFull ||
+            policyShardPlan.ForceFull || focusedExpansion?.FullGateReason is not null ||
             !ChangeScopedAcceptanceEnabled())
         {
             return null;
@@ -1703,7 +1707,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         foreach (var plannedCheck in plan.Checks)
         {
             var plannedManifestCheck = DotnetTestCheckTranslator.FromImpactCheck(worktreePath, plannedCheck);
-            foreach (var scopedCheck in ExpandBroadInfrastructureCheck(plannedManifestCheck, infrastructureTestLanes))
+            foreach (var scopedCheck in ExpandBroadInfrastructureCheck(plannedManifestCheck, infrastructureTestLanes, focusedExpansion))
             {
                 var existing = allChecks.FirstOrDefault(check =>
                     check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
@@ -1734,7 +1738,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles,
         IReadOnlyList<AcceptanceManifestCheck>? policyRequiredChecks = null,
         PolicyShardPlan? policyShardPlan = null,
-        IReadOnlyList<AcceptanceTestLane>? infrastructureTestLanes = null)
+        IReadOnlyList<AcceptanceTestLane>? infrastructureTestLanes = null,
+        FocusedReverseDependentLaneSplitter.Expansion? focusedExpansion = null)
     {
         policyShardPlan ??= BuildPolicyShardPlan(changedFiles, null,
             CandidateTreeProbe.ForRepositoryRoot(worktreePath), manifestChecks.Select(check => check.Project).OfType<string>());
@@ -1746,7 +1751,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Where(check => !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || !policyShardPlan.IsAbsentProject(check.Project))
             .Where(check => !policyShardPlan.ForceFull ||
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
-            .SelectMany(check => ExpandBroadInfrastructureCheck(check, infrastructureTestLanes))
+            .SelectMany(check => ExpandBroadInfrastructureCheck(check, infrastructureTestLanes, focusedExpansion))
             .ToArray();
         var focusedProjectChecks = plannedChecks
             .Where(IsFocusedProjectDotnetCheck)
@@ -1754,7 +1759,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var effective = manifestChecks
             .Where(check => !IsSkippedPolicyShardCheck(check, policyShardPlan))
-            .Where(check => !IsReplacedByFocusedProjectCheck(check, focusedProjectChecks))
+            .Where(check => !IsReplacedByFocusedProjectCheck(check, focusedProjectChecks) ||
+                (focusedExpansion?.FullGateReason is not null && IsBroadInfrastructureTestCheck(check)))
             .ToList();
         var injectedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1789,7 +1795,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? projectHomeDirectory = null,
         AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null,
         Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceWholeProjectCheck>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null,
-        SelectionSourceTexts? sourceTexts = null, Func<IReadOnlyList<AcceptanceManifestCheck>, IReadOnlyList<AcceptanceManifestCheck>>? projectCheckTransform = null)
+        SelectionSourceTexts? sourceTexts = null, Func<IReadOnlyList<AcceptanceManifestCheck>, IReadOnlyList<AcceptanceManifestCheck>>? projectCheckTransform = null,
+        bool balanceFocusedSelection = false)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
@@ -1817,17 +1824,20 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             candidateLanes,
             changedFiles,
             policyShardPlan);
-        // This owns environment and scope expansion for both execution and identity.
-        // Identity supplies a flattened pool; execution retains its measured lane layout.
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks, sourceTexts));
-        infrastructureTestLanes = laneTransform?.Invoke(infrastructureTestLanes, AcceptanceWholeProjectCheck.Scheduled(manifest.Checks, policyRequiredChecks, policyShardPlan, dotnetShardDisposition, changedFiles)) ?? infrastructureTestLanes;
+        var focusedExpansion = balanceFocusedSelection ? FocusedReverseDependentLaneSplitter.Resolve(
+            policyRequiredChecks, manifest.Checks, policyShardPlan,
+            laneExpansion with { Lanes = infrastructureTestLanes }, engineSettings, worktreePath, sourceTexts) : null;
+        var fullInfrastructureGate = focusedExpansion?.FullGateReason is not null;
+        infrastructureTestLanes = fullInfrastructureGate ? candidateLanes : laneTransform?.Invoke(infrastructureTestLanes,
+            AcceptanceWholeProjectCheck.Scheduled(manifest.Checks, policyRequiredChecks, policyShardPlan, dotnetShardDisposition, changedFiles)) ?? infrastructureTestLanes;
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
             manifest.Checks,
             changedFiles,
             policyRequiredChecks,
             policyShardPlan,
-            infrastructureTestLanes);
+            infrastructureTestLanes, focusedExpansion);
         var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
         var structuralCoverageDeclarations = structuralCoverageApplies
             ? EnsureTrustedStructuralCoverageDeclarations(
@@ -1837,8 +1847,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : new StructuralCoverageDeclarationPlan(policyEffectiveChecks, []);
         var semanticDeduplication = DeduplicateSemanticExecutionChecks(ApplyDotnetShardDisposition(
             ExpandBroadInfrastructureChecks(
-                projectCheckTransform?.Invoke(structuralCoverageDeclarations.Checks) ?? structuralCoverageDeclarations.Checks,
-                infrastructureTestLanes),
+                (fullInfrastructureGate ? null : projectCheckTransform?.Invoke(structuralCoverageDeclarations.Checks)) ?? structuralCoverageDeclarations.Checks,
+                infrastructureTestLanes, keepUnshardedInfrastructure: fullInfrastructureGate),
             dotnetShardDisposition));
         return new EffectiveGatePlan(
             manifest,
@@ -1850,7 +1860,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             structuralCoverageDeclarations.UndeclaredProjects,
             structuralCoverageApplies,
             dotnetShardDisposition,
-            semanticDeduplication.Receipts, laneExpansion.Layout);
+            semanticDeduplication.Receipts, laneExpansion.Layout, focusedExpansion);
     }
 
     internal static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
@@ -1878,24 +1888,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string ProjectLabel(string project) =>
         AcceptancePolicyShardPlanner.ProjectLabel(project);
 
-    private static List<AcceptanceManifestCheck> ExpandBroadInfrastructureChecks(
+    internal static List<AcceptanceManifestCheck> ExpandBroadInfrastructureChecks(
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
-        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes)
-    {
-        var effective = new List<AcceptanceManifestCheck>();
-        foreach (var check in manifestChecks)
-        {
-            if (!IsBroadInfrastructureTestCheck(check))
-            {
-                effective.Add(check);
-                continue;
-            }
-
-            effective.AddRange(ExpandBroadInfrastructureCheck(check, infrastructureTestLanes));
-        }
-
-        return effective;
-    }
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes, bool keepUnshardedInfrastructure = false) =>
+        keepUnshardedInfrastructure && infrastructureTestLanes.Count == 0 ? manifestChecks.ToList() :
+            manifestChecks.SelectMany(check => ExpandBroadInfrastructureCheck(check, infrastructureTestLanes)).ToList();
 
     private static SemanticExecutionDeduplicationPlan DeduplicateSemanticExecutionChecks(
         IReadOnlyList<AcceptanceManifestCheck> checks)
@@ -1932,19 +1929,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static IEnumerable<AcceptanceManifestCheck> ExpandBroadInfrastructureCheck(
         AcceptanceManifestCheck check,
-        IReadOnlyList<AcceptanceTestLane>? infrastructureTestLanes = null)
-    {
-        if (!IsBroadInfrastructureTestCheck(check))
-        {
-            yield return check;
-            yield break;
-        }
-
-        foreach (var lane in infrastructureTestLanes ?? new AcceptanceGateEngineSettings().InfrastructureTestLanes)
-        {
-            yield return BuildInfrastructureShardCheck(check, lane);
-        }
-    }
+        IReadOnlyList<AcceptanceTestLane>? infrastructureTestLanes = null,
+        FocusedReverseDependentLaneSplitter.Expansion? focusedExpansion = null) =>
+        IsBroadInfrastructureTestCheck(check)
+            ? (infrastructureTestLanes ?? []).Select(lane => BuildInfrastructureShardCheck(check, lane))
+            : focusedExpansion?.Expand(check) ?? [check];
 
     private static string ManifestCheckKey(AcceptanceManifestCheck check) =>
         $"{check.Type}:{check.Command}:{NormalizePath(check.Project)}:{string.Join('\u001f', check.Arguments)}";
@@ -2086,19 +2075,16 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        var standardPrefix = "infrastructure tests: ";
-        string? partitionName = null;
-        if (check.Name.StartsWith(standardPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            partitionName = check.Name[standardPrefix.Length..];
-        }
-
-        if (string.IsNullOrWhiteSpace(partitionName))
+        var prefix = check.IsResolvedInfrastructureLane &&
+                     check.Name.StartsWith(FocusedReverseDependentLaneSplitter.ShardNamePrefix, StringComparison.OrdinalIgnoreCase)
+            ? FocusedReverseDependentLaneSplitter.ShardNamePrefix : "infrastructure tests: ";
+        if (!check.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(check.Name[prefix.Length..]))
         {
             return false;
         }
 
-        partitionId = AcceptanceArtifactFileNames.Slug(partitionName);
+        partitionId = AcceptanceArtifactFileNames.Slug(check.Name[prefix.Length..]);
         return true;
     }
 
@@ -3784,7 +3770,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> UndeclaredTestProjects,
         bool StructuralCoverageApplies,
         DotnetShardDisposition DotnetShardDisposition,
-        IReadOnlyList<SemanticExecutionDeduplicationReceipt> SemanticDeduplications, AcceptanceBalancedLaneLayout? BalancedLayout);
+        IReadOnlyList<SemanticExecutionDeduplicationReceipt> SemanticDeduplications, AcceptanceBalancedLaneLayout? BalancedLayout,
+        FocusedReverseDependentLaneSplitter.Expansion? FocusedReverseDependentExpansion = null);
 
     internal sealed record SemanticExecutionDeduplicationReceipt(
         string PartitionId,
