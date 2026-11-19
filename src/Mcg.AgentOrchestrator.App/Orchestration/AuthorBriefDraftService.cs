@@ -46,7 +46,10 @@ internal static class AuthorBriefDraftService
             var stem = $"{item.Id[..8]}-{(utcNow ?? (() => DateTimeOffset.UtcNow))():yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
             Directory.CreateDirectory(directory);
             receiptPath = Path.Combine(directory, stem + ".receipt.json");
-            var measureTagged = AuthorBriefDraftMeasurementOnlyCheck.IsMeasureTagged(workspace.BacklogStorePath, item.Id);
+            var storedItem = BacklogStore.OpenReadOnly(workspace.BacklogStorePath)
+                .GetByExactIdAsync(item.Id, cancellationToken).GetAwaiter().GetResult();
+            var measureTagged = storedItem is not null && BoardFillReadyItemSelector.HasTag(storedItem, "measure");
+            item = storedItem ?? item;
             var costGoal = CostGoalOutcomeMetric.IsCostBacklogItem(item, workspace);
             var resolvedModel = ConductorRoundModelResolver.Resolve(seams.Catalog, ModelFunctionPurposes.ConductorAuthor);
             model = resolvedModel.Alias;
@@ -65,6 +68,14 @@ internal static class AuthorBriefDraftService
             var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
                 .Select(ConductorLessonSelector.AuthorTags("brief"));
             var initialPrompt = AuthorBriefDraftPrompt.Render(item, lessons, mainHead, stack, measureTagged: measureTagged);
+            var bundledParts = BacklogBundleDetector.FindParts(item.Body);
+            if (bundledParts.Count > 0 && string.IsNullOrWhiteSpace(item.BundledReason))
+            {
+                var partList = BacklogBundleDetector.RenderParts(bundledParts);
+                output.WriteLine($"The draft would be split into these Wanted parts: {partList}");
+                initialPrompt += $"\n\nDetected Wanted parts: {partList}\n" +
+                    "Draft only the first slice. Treat the remaining parts as deferred.";
+            }
             IReadOnlyList<string> roundDependencyGoals = [];
             IReadOnlyList<string> retainedDependencyGoals = [];
             var round = Dispatch(initialPrompt);

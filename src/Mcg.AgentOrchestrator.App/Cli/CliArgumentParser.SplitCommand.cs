@@ -179,10 +179,13 @@ public static IReadOnlyList<string> SplitCommand(string line)
         {
             return NormalizeCommandWithValueFlags(
                 [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)],
-                "--title");
+                "--title", "--bundled-reason");
         }
 
-        return SplitTargetTextCommandWithFileFlags(command, remainder, "--body-file", "--text-file");
+        return NormalizeCommandWithValueFlags(
+            [.. SplitTargetTextCommandWithFileFlags(command, remainder, "--body-file", "--text-file", "--epic",
+                "--depends-on", "--no-similar", "--bundled-reason")],
+            "--bundled-reason");
     }
 
     if (command.Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
