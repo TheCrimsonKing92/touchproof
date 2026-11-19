@@ -255,7 +255,7 @@ public static class ProviderBudgetHoldSchedules
             return true;
         var match = CalendarResetPattern.Match(line);
         if (!match.Success)
-            return ProviderLimitSignals.TryParseSubscriptionRetryAfter(line, completedAt, out resetAt);
+            return SubscriptionLimitEvidence.TryGetCliAbsoluteResetRetryAfter(line, completedAt, out resetAt);
         try
         {
             var zone = TimeZoneInfo.FindSystemTimeZoneById(match.Groups["zone"].Value);
@@ -293,9 +293,16 @@ public static class ProviderBudgetHoldSchedules
     internal static bool TryGetHoldByBindingKey(IReadOnlyCollection<Goal> all, string bindingKey,
         out ProviderBudgetExhaustionHold hold, ProviderBudgetHoldMemo memo)
     {
-        foreach (var binding in ProviderHoldBinding.Candidates(all))
+        foreach (var dispatch in all.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
+        {
+            var binding = ProviderHoldBinding.From(dispatch);
             if (SameBinding(binding.Key, bindingKey) && memo.TryGetExact(binding, out hold))
                 return true;
+            if (dispatch.ModelName is not { Length: > 0 } model) continue;
+            var modelBinding = binding with { Model = model };
+            if (SameBinding(modelBinding.Key, bindingKey) && memo.TryGetExact(modelBinding, out hold))
+                return true;
+        }
         hold = null!;
         return false;
     }

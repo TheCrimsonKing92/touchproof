@@ -33,8 +33,8 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule WorkerWriteIntegrityBlocked = new("worker-write-integrity-blocked", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderAuthentication = new("provider-authentication", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderConnectivity = new("provider-connectivity", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderHoldCheckInconclusive = new("provider-hold-check-inconclusive", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderInterruption = new("provider-interruption", TaskOutcomeClass.Environmental);
-    internal static readonly TaskOutcomeRule ProviderHoldCheckInconclusive = new("provider-hold-check-inconclusive", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule VerificationTerminalContractIncomplete = new("verification-terminal-contract-incomplete", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule DetachedWithoutWorkerResult = new("detached-without-worker-result", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ConductorGenerationInterrupted = new("conductor-generation-interrupted", TaskOutcomeClass.Environmental);
@@ -90,8 +90,8 @@ internal static class TaskOutcomeRules
         WorkerWriteIntegrityBlocked,
         ProviderAuthentication,
         ProviderConnectivity,
-        ProviderInterruption,
         ProviderHoldCheckInconclusive,
+        ProviderInterruption,
         VerificationTerminalContractIncomplete,
         DetachedWithoutWorkerResult,
         ConductorGenerationInterrupted,

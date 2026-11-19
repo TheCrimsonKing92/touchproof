@@ -167,6 +167,7 @@ public static class ProviderLimitSignals
     {
         ArgumentNullException.ThrowIfNull(goals);
         var goalList = goals.ToArray();
+        var requestedScope = requestedBinding.Base;
         var observations = new List<(
             Goal Goal,
             TaskSpec Task,
@@ -182,7 +183,8 @@ public static class ProviderLimitSignals
                 foreach (var verification in task.VerificationHistory)
                 {
                     var dispatch = ProviderHoldBinding.FindDispatch(task, verification);
-                    if (dispatch is null || !ProviderHoldBinding.Matches(dispatch, requestedBinding.Key))
+                    if (dispatch is null || ProviderHoldBinding.From(dispatch).Base != requestedScope ||
+                        (requestedBinding.Model is { } model && !string.Equals(dispatch.ModelName, model, StringComparison.OrdinalIgnoreCase)))
                     {
                         continue;
                     }
@@ -191,8 +193,7 @@ public static class ProviderLimitSignals
                             task, dispatch, verification.CompletedAt)) continue;
                     var evidence = ProviderHoldEvidence.Read(verification);
                     if (HasAvailabilityEvidence(verification) ||
-                        evidence.Confirmed && ProviderHoldBinding.From(dispatch, evidence.ScopedModel(dispatch)).Key
-                            .Equals(requestedBinding.Key, StringComparison.OrdinalIgnoreCase))
+                        evidence.Confirmed && string.Equals(evidence.ScopedModel(dispatch), requestedBinding.Model, StringComparison.OrdinalIgnoreCase))
                         observations.Add((goal, task, verification, dispatch, evidence));
                 }
             }
