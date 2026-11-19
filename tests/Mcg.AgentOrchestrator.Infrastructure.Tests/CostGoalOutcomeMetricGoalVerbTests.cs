@@ -48,6 +48,42 @@ public sealed class CostGoalOutcomeMetricGoalVerbTests : CliCommandTestBase
     }
 
     [Fact]
+    public async Task Filing_CostTaggedBriefDeclaresNone_CreatesGoalWithoutOutcomeRecord()
+    {
+        var workspace = CreateWorkspace();
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(new AgentOrchestratorKernel());
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Reduce tick step cost", "Reduce work per tick");
+        item = await store.UpdateAsync(item.Id, new BacklogItemUpdate(Tags: "cost"));
+        var past = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        WriteGate(workspace, past, 1, 40, 4, null);
+        WriteGate(workspace, past.AddDays(1), 2, 60, 6, null);
+        WriteGate(workspace, past.AddDays(2), 3, 90, 9, null);
+        const string noMetric = "Reduce tick step cost.";
+        const string brief = noMetric + "\n\n## Outcome metric\nmetric: none; reason: tick step cost is not a gate measure";
+        var isCost = CostGoalOutcomeMetric.IsCostBacklogItem(item, workspace);
+
+        var missingCheck = CostGoalOutcomeMetric.Check(noMetric, isCost);
+        Assert.False(missingCheck.Passed);
+        Assert.Contains("no well-formed ## Outcome metric line", missingCheck.Detail);
+        var noneCheck = CostGoalOutcomeMetric.Check(brief, isCost);
+        Assert.True(noneCheck.Passed, noneCheck.Detail);
+        Assert.Null(CostGoalOutcomeMetric.CaptureAtFiling("--brief-file", brief, item, workspace, overrideReason: null));
+
+        var result = Execute(workspace, repository, brief, "--brief-file",
+            "--backlog-item", item.Id, "--backlog-coverage", "full");
+
+        Assert.Null(result.Error);
+        Assert.NotNull(result.Goal);
+        var persistedGoal = Assert.Single((await repository.LoadAsync()).Goals);
+        Assert.Equal(brief, persistedGoal.Objective);
+        Assert.Null(new CostGoalOutcomeStore(workspace.OrchestratorDirectory).Read(persistedGoal.Id));
+        Assert.False(Directory.Exists(Path.Combine(workspace.OrchestratorDirectory, "cost-goal-outcomes")));
+        Assert.DoesNotContain("cost-goal-outcome-metric-override", ReadLog(workspace));
+    }
+
+    [Fact]
     public async Task Filing_GatesRecordedAfterFiling_DoNotChangeStoredBaseline()
     {
         var workspace = CreateWorkspace();
