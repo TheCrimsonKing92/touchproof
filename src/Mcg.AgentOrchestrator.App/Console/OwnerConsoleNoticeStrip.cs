@@ -1,7 +1,7 @@
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal enum OwnerConsoleNoticeSeverity { Success, Failure }
-internal enum OwnerConsoleNoticeSource { Refresh, Action, ProgramHealth }
+internal enum OwnerConsoleNoticeSeverity { Success, Failure, Announcement }
+internal enum OwnerConsoleNoticeSource { Refresh, Action, ProgramHealth, Announcement }
 
 internal sealed record OwnerConsoleNotice(string Text, DateTimeOffset RaisedAt,
     OwnerConsoleNoticeSeverity Severity, OwnerConsoleNoticeSource Source);
@@ -28,10 +28,20 @@ internal sealed class OwnerConsoleNoticeStrip(TimeProvider clock)
     internal void Raise(string text, OwnerConsoleNoticeSeverity severity, OwnerConsoleNoticeSource source)
     {
         _ = Visible;
+        if (severity == OwnerConsoleNoticeSeverity.Announcement) DismissAnnouncement();
         if (severity == OwnerConsoleNoticeSeverity.Failure)
             _entries.RemoveAll(entry => entry.Severity == severity && entry.Source == source && entry.Text == text);
         _entries.Insert(0, new(text, clock.GetLocalNow(), severity, source));
-        if (_entries.Count > MaxEntries) _entries.RemoveRange(MaxEntries, _entries.Count - MaxEntries);
+        Trim();
+    }
+
+    internal void DismissAnnouncement() =>
+        _entries.RemoveAll(entry => entry.Severity == OwnerConsoleNoticeSeverity.Announcement);
+
+    private void Trim()
+    {
+        while (_entries.Count > MaxEntries)
+            _entries.RemoveAt(_entries.FindLastIndex(entry => entry.Severity != OwnerConsoleNoticeSeverity.Announcement));
     }
 
     internal TimeSpan? UntilNextSuccessExpiry
@@ -56,6 +66,7 @@ internal sealed class OwnerConsoleNoticeStrip(TimeProvider clock)
         _entries.RemoveAll(entry => entry.Source == OwnerConsoleNoticeSource.ProgramHealth);
         if (text is not null)
             _entries.Insert(0, new(text, clock.GetLocalNow(), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.ProgramHealth));
+        Trim();
     }
 
     private void Recover(OwnerConsoleNoticeSource source) =>

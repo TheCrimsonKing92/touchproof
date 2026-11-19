@@ -7,7 +7,8 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
     Func<OwnerFleetViewModel>? fleet, Func<string, OwnerLandingsPage>? landings, OwnerConsoleSoundCommand? sound,
     OwnerGoalDetailQuery goalDetail, OwnerFleetViewKeys fleetKeys, object notificationGate, OwnerConsoleBellCommand bell,
     Func<bool> settingsRequested, Action requestSettings, Func<string?> requestedEpicId, Func<string?> requestedGateGoalId,
-    Func<string, OwnerConsoleScreenOperation?, CancellationToken, Task> showGoalDetail, Func<Action<string>?> commandNotice)
+    Func<string, OwnerConsoleScreenOperation?, CancellationToken, Task> showGoalDetail, Func<Action<string>?> commandNotice,
+    Func<OwnerConsoleNewsRecord?> news)
 {
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail;
     private readonly OwnerFleetViewKeys _fleetKeys = fleetKeys;
@@ -21,6 +22,11 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
         var line = raw.Trim().TrimStart(OwnerConsoleBindings.CommandLineKey).Trim();
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return;
+        if (parts[0].Equals(OwnerConsoleBindings.NewsCommand, StringComparison.OrdinalIgnoreCase))
+        {
+            await ShowNewsAsync(parts.Length, operation, cancellationToken);
+            return;
+        }
         var output = new OwnerConsoleCapturedOutput();
         string? goalId = null;
         OwnerFleetViewModel? fleetModel = null;
@@ -95,6 +101,21 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
                 break;
         }
         return (goalId, fleetModel, landingsPage);
+    }
+
+    private async Task ShowNewsAsync(int argumentCount, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
+    {
+        var session = news();
+        if (argumentCount != 1) await dialogs.ShowTextAsync("Command result", "usage: news");
+        else if (session is null) await dialogs.ShowTextAsync("Console news", "Console news is unavailable in this session.");
+        else if (!session.Loaded.IsCompleted) await dialogs.ShowTextAsync("Console news", "Console news is loading. Try :news again.");
+        else if (session.Unseen is not { Count: > 0 } unseen)
+            await dialogs.ShowTextAsync("Console news", "No unseen console changes.");
+        else
+        {
+            await dialogs.ShowTextAsync("Console news", OwnerConsoleChangelog.FormatDetails(unseen));
+            await RunDependencyAsync(OwnerConsoleBindings.NewsCommand, session.AcknowledgeAsync, operation, cancellationToken);
+        }
     }
 
     private async Task ShowLandingsAsync(OwnerLandingsPage page, OwnerConsoleScreenOperation? operation,
