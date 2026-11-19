@@ -72,6 +72,7 @@ internal sealed class ConductorTickStepLedger
     private readonly Stack<Frame> _frames = new();
     private bool _active;
     private long _goalsHydrated, _metadataRows, _terminalJournalStats, _backlogRows, _readinessEvaluations;
+    private long _goalsReloaded, _goalsReused;
     private long _projectionCount, _slowestProjectionTicks, _projectionCacheHits, _projectionCacheMisses;
     private long _mergeConflictCacheHits, _mergeConflictCacheMisses, _approvalHoldCacheHits, _approvalHoldCacheMisses;
     private string? _slowestProjectionGoalId;
@@ -214,10 +215,16 @@ internal sealed class ConductorTickStepLedger
         return rows;
     }
 
-    internal static AgentOrchestratorKernel CountGoalsHydrated(AgentOrchestratorKernel kernel)
+    internal static AgentOrchestratorKernel CountGoalReload(
+        (AgentOrchestratorKernel Kernel, int Reloaded, int Reused) loaded)
     {
-        AddCounter(ledger => Interlocked.Add(ref ledger._goalsHydrated, kernel.Goals.Count));
-        return kernel;
+        AddCounter(ledger =>
+        {
+            Interlocked.Add(ref ledger._goalsHydrated, loaded.Kernel.Goals.Count);
+            Interlocked.Add(ref ledger._goalsReloaded, loaded.Reloaded);
+            Interlocked.Add(ref ledger._goalsReused, loaded.Reused);
+        });
+        return loaded.Kernel;
     }
 
     internal static T CountTerminalJournalCheck<T>(Func<T> read)
@@ -344,7 +351,9 @@ internal sealed class ConductorTickStepLedger
         ("metadata_rows", Interlocked.Read(ref _metadataRows)),
         ("terminal_journal_stats", Interlocked.Read(ref _terminalJournalStats)),
         ("backlog_rows_read", Interlocked.Read(ref _backlogRows)),
-        ("readiness_evaluations", Interlocked.Read(ref _readinessEvaluations))
+        ("readiness_evaluations", Interlocked.Read(ref _readinessEvaluations)),
+        ("goals_reloaded", Interlocked.Read(ref _goalsReloaded)),
+        ("goals_reused", Interlocked.Read(ref _goalsReused))
     }.Select(pair => pair.Item1 + "=" + pair.Item2.ToString(CultureInfo.InvariantCulture)));
 
     private sealed class Frame(string name, TimeSpan start)

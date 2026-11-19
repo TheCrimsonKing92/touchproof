@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -129,13 +130,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         string dbPath,
         Action<string>? statementObserver,
         SqliteWriteTelemetryOptions? telemetryOptions,
-        Action? beforeOutboxCommit = null)
+        Action? beforeOutboxCommit = null,
+        Action<GoalSnapshotReadObservation>? readObserver = null)
         : this(
             dbPath,
             statementObserver,
             telemetryOptions,
             beforeOutboxCommit,
-            StateDbConnectionProfile.ReadWrite)
+            StateDbConnectionProfile.ReadWrite,
+            readObserver)
     {
     }
 
@@ -647,6 +650,68 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             await using var conn = OpenConnection();
             return await LoadFromConnectionAsync(conn, goalIds, cancellationToken, _readObserver, includePractices);
         }, cancellationToken);
+    }
+
+    internal async Task<(AgentOrchestratorKernel Kernel, int Reloaded, int Reused)> LoadGoalsReusingUnchangedAsync(
+        IReadOnlyCollection<GoalId> goalIds, GoalReloadMemory memory, CancellationToken cancellationToken = default)
+    {
+        foreach (var id in goalIds)
+            _readObserver?.Invoke(new("requested", id.Value));
+
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var connection = OpenConnection();
+            // The probe, documents and split rows must describe the same committed state.
+            using var transaction = connection.BeginTransaction(deferred: true);
+            var versions = await ReadSelectedGoalVersionsAsync(connection, goalIds, cancellationToken);
+            var previous = memory.Entries;
+            var next = ImmutableDictionary.CreateBuilder<string, GoalReloadMemory.Entry>(StringComparer.Ordinal);
+            var changed = new List<GoalId>();
+            foreach (var (id, version) in versions)
+            {
+                if (previous.TryGetValue(id, out var entry) && entry.Version == version)
+                {
+                    next.Add(id, entry);
+                    _readObserver?.Invoke(new("version-reused", id));
+                }
+                else
+                    changed.Add(new GoalId(id));
+            }
+
+            var reused = next.Count;
+            var reloaded = await ReadGoalSnapshotsAsync(connection, changed, cancellationToken, _readObserver);
+            var snapshots = new List<GoalSnapshot>(reused + reloaded.Count);
+            foreach (var (id, version) in versions)
+            {
+                if (next.TryGetValue(id, out var entry))
+                    snapshots.Add(entry.Snapshot);
+                else if (reloaded.TryGetValue(id, out var goal))
+                {
+                    snapshots.Add(goal.Snapshot);
+                    if (!goal.WasArchived)
+                        next.Add(id, new(version, goal.Snapshot));
+                }
+            }
+
+            var kernel = await LoadFromConnectionAsync(connection, goalIds, cancellationToken, _readObserver,
+                preloadedGoals: snapshots);
+            transaction.Commit();
+            memory.Replace(next.ToImmutable());
+            return (kernel, reloaded.Count, reused);
+        }, cancellationToken);
+    }
+
+    private static async Task<List<(string Id, long Version)>> ReadSelectedGoalVersionsAsync(
+        SqliteConnection connection, IReadOnlyCollection<GoalId> goalIds, CancellationToken token)
+    {
+        var versions = new List<(string, long)>();
+        if (goalIds.Count == 0) return versions;
+
+        await using var command = CreateGoalReadCommand(connection, "id, COALESCE(version, 0)", goalIds);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+            versions.Add((reader.GetString(0), reader.GetInt64(1)));
+        return versions;
     }
 
     public async Task<AgentOrchestratorKernel> LoadBoardSnapshotAsync(CancellationToken cancellationToken = default)
@@ -2273,50 +2338,12 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         SqliteConnection conn,
         IReadOnlyCollection<GoalId>? goalIds,
         CancellationToken cancellationToken,
-        Action<GoalSnapshotReadObservation>? readObserver = null, bool includePractices = true)
+        Action<GoalSnapshotReadObservation>? readObserver = null, bool includePractices = true,
+        IReadOnlyList<GoalSnapshot>? preloadedGoals = null)
     {
-        var goalSnapshots = new List<GoalSnapshot>();
+        var goalSnapshots = preloadedGoals ?? (await ReadGoalSnapshotsAsync(conn, goalIds, cancellationToken, readObserver))
+            .Values.Select(goal => goal.Snapshot).ToArray();
         var humanInputSnapshots = new List<HumanInputRequestSnapshot>();
-
-        if (goalIds is null || goalIds.Count > 0)
-        {
-            await using var cmd = conn.CreateCommand();
-            if (goalIds is null)
-            {
-                cmd.CommandText = "SELECT id, snapshot_json FROM goals";
-            }
-            else
-            {
-                var parameterNames = goalIds.Select((_, index) => $"$id{index}").ToArray();
-                cmd.CommandText = $"SELECT id, snapshot_json FROM goals WHERE id IN ({string.Join(", ", parameterNames)})";
-                var index = 0;
-                foreach (var goalId in goalIds)
-                {
-                    cmd.Parameters.AddWithValue(parameterNames[index], goalId.Value);
-                    index++;
-                }
-            }
-
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                var json = reader.GetString(1);
-                readObserver?.Invoke(new("hot-attempt", reader.GetString(0), json.Length));
-                if (TryReadGoalSnapshot(
-                    reader.GetString(0),
-                    json,
-                    null,
-                    logQuarantine: true,
-                    out var snap))
-                {
-                    readObserver?.Invoke(new("hot-deserialized", reader.GetString(0), json.Length));
-                    var complete = goalIds is null
-                        ? snap
-                        : (await SnapshotArchive.HydrateAsync(conn, snap, cancellationToken, readObserver))!;
-                    goalSnapshots.Add((await TaskHistoryStore.HydrateAsync(conn, complete, json, cancellationToken))!);
-                }
-            }
-        }
 
         if (goalIds is null || goalIds.Count > 0)
         {
@@ -2355,16 +2382,71 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return kernel;
     }
 
+    private static SqliteCommand CreateGoalReadCommand(
+        SqliteConnection connection, string columns, IReadOnlyCollection<GoalId>? goalIds)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {columns} FROM goals";
+        if (goalIds is null) return command;
+
+        var parameters = goalIds.Select((_, index) => $"$id{index}").ToArray();
+        command.CommandText += $" WHERE id IN ({string.Join(", ", parameters)})";
+        var parameterIndex = 0;
+        foreach (var goalId in goalIds)
+            command.Parameters.AddWithValue(parameters[parameterIndex++], goalId.Value);
+        return command;
+    }
+
+    private static async Task<Dictionary<string, (GoalSnapshot Snapshot, bool WasArchived)>> ReadGoalSnapshotsAsync(
+        SqliteConnection connection, IReadOnlyCollection<GoalId>? goalIds, CancellationToken token,
+        Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        var snapshots = new Dictionary<string, (GoalSnapshot, bool)>(StringComparer.Ordinal);
+        if (goalIds is { Count: 0 }) return snapshots;
+
+        await using var command = CreateGoalReadCommand(connection, "id, snapshot_json", goalIds);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetString(0);
+            var json = reader.GetString(1);
+            readObserver?.Invoke(new("hot-attempt", id, json.Length));
+            var markers = new GoalTaskHistoryStore.DocumentMarkers();
+            if (!TryReadGoalSnapshot(id, json, null, logQuarantine: true, out var snapshot, markers))
+                continue;
+
+            readObserver?.Invoke(new("hot-deserialized", id, json.Length));
+            var hydrated = await HydrateReadGoalAsync(connection, snapshot, markers, token, readObserver,
+                hydrateArchive: goalIds is not null);
+            snapshots.Add(id, (hydrated!, snapshot.IsMetadataOnly));
+        }
+
+        return snapshots;
+    }
+
+    private static async Task<GoalSnapshot?> HydrateReadGoalAsync(SqliteConnection connection, GoalSnapshot? snapshot,
+        GoalTaskHistoryStore.DocumentMarkers markers, CancellationToken token,
+        Action<GoalSnapshotReadObservation>? readObserver = null, bool hydrateArchive = true)
+    {
+        var wasStub = snapshot is { IsMetadataOnly: true };
+        if (wasStub && hydrateArchive)
+            snapshot = await SnapshotArchive.HydrateAsync(connection, snapshot, token, readObserver);
+        return await TaskHistoryStore.HydrateDecodedAsync(connection, snapshot, markers, wasStub, token, readObserver);
+    }
+
     private static bool TryReadGoalSnapshot(
         string goalId,
         string json,
         List<QuarantinedGoalSummary>? quarantined,
         bool logQuarantine,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out GoalSnapshot? snapshot)
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out GoalSnapshot? snapshot,
+        GoalTaskHistoryStore.DocumentMarkers? markers = null)
     {
         try
         {
-            snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
+            snapshot = markers is null
+                ? JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions)
+                : TaskHistoryStore.DecodeDocument(json, markers);
             if (snapshot is not null)
                 return true;
 
@@ -2971,10 +3053,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             cmd.Parameters.AddWithValue("$id", goalId.Value);
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken)) return (GoalSnapshot?)null;
-            var json = reader.GetString(0);
-            var snapshot = await SnapshotArchive.HydrateAsync(
-                conn, JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions), cancellationToken);
-            return await TaskHistoryStore.HydrateAsync(conn, snapshot, json, cancellationToken);
+            var markers = new GoalTaskHistoryStore.DocumentMarkers();
+            var snapshot = TaskHistoryStore.DecodeDocument(reader.GetString(0), markers);
+            return await HydrateReadGoalAsync(conn, snapshot, markers, cancellationToken);
         }, cancellationToken);
     }
 
@@ -2995,10 +3076,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions)
+                var markers = new GoalTaskHistoryStore.DocumentMarkers();
+                var snapshot = TaskHistoryStore.DecodeDocument(reader.GetString(0), markers)
                     ?? throw new InvalidOperationException("Stored goal snapshot could not be deserialized.");
-                snapshot = (await SnapshotArchive.HydrateAsync(conn, snapshot, cancellationToken))!;
-                matches.Add((await TaskHistoryStore.HydrateAsync(conn, snapshot, reader.GetString(0), cancellationToken))!);
+                matches.Add((await HydrateReadGoalAsync(conn, snapshot, markers, cancellationToken))!);
             }
 
             return (IReadOnlyList<GoalSnapshot>)matches;
@@ -3032,10 +3113,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                var goal = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions)
+                var markers = new GoalTaskHistoryStore.DocumentMarkers();
+                var goal = TaskHistoryStore.DecodeDocument(reader.GetString(0), markers)
                     ?? throw new InvalidOperationException("Stored goal snapshot could not be deserialized.");
-                goal = (await SnapshotArchive.HydrateAsync(conn, goal, cancellationToken))!;
-                goal = (await TaskHistoryStore.HydrateAsync(conn, goal, reader.GetString(0), cancellationToken))!;
+                goal = (await HydrateReadGoalAsync(conn, goal, markers, cancellationToken))!;
                 foreach (var task in goal.Tasks.Where(task => task.Id.StartsWith(idPrefix, StringComparison.OrdinalIgnoreCase)))
                 {
                     matches.Add(new CitedPriorTaskMatch(goal, task));
@@ -3254,11 +3335,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
                 return ((GoalSnapshot?)null, 0);
-            var json = reader.GetString(0);
             var version = reader.GetInt32(1);
-            var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
-            snapshot = await SnapshotArchive.HydrateAsync(conn, snapshot, cancellationToken);
-            snapshot = await TaskHistoryStore.HydrateAsync(conn, snapshot, json, cancellationToken);
+            var markers = new GoalTaskHistoryStore.DocumentMarkers();
+            var snapshot = TaskHistoryStore.DecodeDocument(reader.GetString(0), markers);
+            snapshot = await HydrateReadGoalAsync(conn, snapshot, markers, cancellationToken);
             return (snapshot, version);
         }, cancellationToken);
     }
@@ -3271,7 +3351,6 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             await using var conn = OpenConnection();
             GoalSnapshot? goalSnapshot;
-            string goalJson;
             int version;
             await using (var goalCommand = conn.CreateCommand())
             {
@@ -3281,11 +3360,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 if (!await reader.ReadAsync(cancellationToken))
                     return ((GoalStateSnapshot?)null, 0);
 
-                goalJson = reader.GetString(0);
-                goalSnapshot = JsonSerializer.Deserialize<GoalSnapshot>(goalJson, SerializerOptions);
+                var markers = new GoalTaskHistoryStore.DocumentMarkers();
+                goalSnapshot = TaskHistoryStore.DecodeDocument(reader.GetString(0), markers);
                 version = reader.GetInt32(1);
-                goalSnapshot = await SnapshotArchive.HydrateAsync(conn, goalSnapshot, cancellationToken);
-                goalSnapshot = await TaskHistoryStore.HydrateAsync(conn, goalSnapshot, goalJson, cancellationToken);
+                goalSnapshot = await HydrateReadGoalAsync(conn, goalSnapshot, markers, cancellationToken);
             }
 
             var humanInputRequests = new List<HumanInputRequestSnapshot>();
@@ -3538,6 +3616,29 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }
+}
+
+// The loop owns this memory. It holds snapshots from storage, before kernel repairs or tick mutations.
+internal sealed class GoalReloadMemory
+{
+    internal sealed record Entry(long Version, GoalSnapshot Snapshot);
+
+    private ImmutableDictionary<string, Entry> _entries =
+        ImmutableDictionary.Create<string, Entry>(StringComparer.Ordinal);
+
+    internal static async Task<(AgentOrchestratorKernel Kernel, int Reloaded, int Reused)> LoadAsync(
+        IOrchestratorStateQueries repository, IReadOnlyCollection<GoalId> goalIds, GoalReloadMemory? memory)
+    {
+        if (memory is not null && repository is SqliteOrchestratorStateRepository sqliteRepository)
+            return await sqliteRepository.LoadGoalsReusingUnchangedAsync(goalIds, memory);
+
+        var kernel = await repository.LoadGoalsAsync(goalIds);
+        return (kernel, kernel.Goals.Count, 0);
+    }
+
+    internal ImmutableDictionary<string, Entry> Entries => Volatile.Read(ref _entries);
+
+    internal void Replace(ImmutableDictionary<string, Entry> entries) => Volatile.Write(ref _entries, entries);
 }
 
 internal sealed record TerminalMetadataCacheKey(string Id, string UpdatedAt);
