@@ -6,6 +6,28 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleProviderConnectionRows
 {
+    internal const string BrowseKey = "Up/Down provider";
+    internal const string CheckKey = "c check";
+    internal const string SignInKey = "s sign in";
+    internal const string DeviceCodeKey = "d device code";
+    internal const string ReturnKey = "t return";
+    internal const string StopWaitingKey = "x stop waiting";
+    internal const string ReloadKey = "r reload";
+    private const string TabNavigation = "Left/Right tab  Esc/q back";
+
+    internal static string FormatKeyHint(string? action, bool deviceCodeAvailable)
+    {
+        if (action is null) return $"{ReloadKey}  {TabNavigation}";
+        var related = action switch
+        {
+            ReturnKey => "  " + StopWaitingKey,
+            SignInKey when deviceCodeAvailable => "  " + DeviceCodeKey,
+            _ => ""
+        };
+        var check = action == CheckKey ? "" : "  " + CheckKey;
+        return $"{action}{related}{check}  {ReloadKey}  {BrowseKey}  {TabNavigation}";
+    }
+
     internal static string ProfileId(string id) => JsonEncodedText.Encode(id).ToString();
 
     internal static bool HasHostApiKey(ProviderConnectionProfileReport report) => report.Observations.Any(o =>

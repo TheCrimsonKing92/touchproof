@@ -38,14 +38,6 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     internal Action? Invalidate { get; set; }
     private OwnerConsoleProviderRowModel? Selected => _rows.Length == 0 ? null : _rows[_selected];
     internal const string TabTitle = "Provider connections";
-    private const string BrowseKey = "Up/Down provider";
-    private const string CheckKey = "c check";
-    private const string SignInKey = "s sign in";
-    private const string DeviceCodeKey = "d device code";
-    private const string ReturnKey = "t return";
-    private const string StopWaitingKey = "x stop waiting";
-    private const string ReloadKey = "r reload";
-    // The help dialog lists these keys for the tab (OwnerConsoleBindings); KeyHint below uses the same constants.
     internal const string HelpKeys = BrowseKey + "  " + CheckKey + "  " + SignInKey + "  " + DeviceCodeKey + "  " +
         ReturnKey + "  " + StopWaitingKey + "  " + ReloadKey;
     public string Title => TabTitle;
@@ -59,16 +51,9 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     {
         get
         {
-            if (Selected is not { } row) return ReloadKey + "  Left/Right tab  Esc/q back";
+            if (Selected is not { } row) return FormatKeyHint(null, deviceCodeAvailable: false);
             var action = PrimaryAction(row);
-            var related = action switch
-            {
-                ReturnKey => "  " + StopWaitingKey,
-                SignInKey when _signIn.DeviceCodeAvailable(Representative(row)) => "  " + DeviceCodeKey,
-                _ => ""
-            };
-            var check = action == CheckKey ? "" : "  " + CheckKey;
-            return $"{action}{related}{check}  {ReloadKey}  {BrowseKey}  Left/Right tab  Esc/q back";
+            return FormatKeyHint(action, action == SignInKey && _signIn.DeviceCodeAvailable(Representative(row)));
         }
     }
 
@@ -122,7 +107,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
             var action = PrimaryAction(row);
             yield return Summary(row, _clock, action);
             if (index != _selected) continue;
-            foreach (var line in Details(row, action == "s sign in", action == "t return"))
+            foreach (var line in Details(row, action == SignInKey, action == ReturnKey))
                 yield return line;
             if (_signIn.StatusText(SignInProfile(row)) is { } interaction) yield return $"  Sign-in: {interaction}";
             if (CheckStatus(Representative(row)) is { } check) yield return $"  {check}";
@@ -132,8 +117,8 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     }
 
     private string PrimaryAction(OwnerConsoleProviderRowModel row) =>
-        _signIn.CanReportReturn(SignInProfile(row)) ? "t return" :
-        _signIn.CanSignIn(Representative(row)) ? "s sign in" : "c check";
+        _signIn.CanReportReturn(SignInProfile(row)) ? ReturnKey :
+        _signIn.CanSignIn(Representative(row)) ? SignInKey : CheckKey;
 
     private OwnerConsoleProviderConnectionState Representative(OwnerConsoleProviderRowModel row) =>
         FindProfile(row.Representative.Report.ProfileId)!;
