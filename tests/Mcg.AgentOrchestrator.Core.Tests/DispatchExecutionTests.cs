@@ -3234,7 +3234,7 @@ public sealed class DispatchExecutionTests
             "C:\\repo",
             clock.UtcNow,
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
-        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification(command, clock.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification(command, clock.UtcNow, quota: false));
 
         if (attempt < 3)
         {
@@ -3273,7 +3273,7 @@ public sealed class DispatchExecutionTests
         "C:\\repo",
         clock.UtcNow,
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
-    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 1", clock.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 1", clock.UtcNow, quota: false));
 
     Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
 
@@ -3285,7 +3285,7 @@ public sealed class DispatchExecutionTests
         "C:\\repo",
         clock.UtcNow,
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
-    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 2", clock.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 2", clock.UtcNow, quota: false));
 
     Assert.Equal(DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
     Assert.True(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
@@ -3356,14 +3356,15 @@ public sealed class DispatchExecutionTests
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
 }
 
-private static TaskVerificationRecord SubscriptionLimitVerification(string command, DateTimeOffset completedAt)
+private static TaskVerificationRecord SubscriptionLimitVerification(string command, DateTimeOffset completedAt, bool quota = true)
 {
     return new TaskVerificationRecord(
         command,
         "C:\\repo",
         1,
         string.Empty,
-        "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
+        quota ? "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM."
+            : "ERROR: rate limit exceeded; try again at 4:58 PM.",
         completedAt);
 }
 

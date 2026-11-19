@@ -1385,7 +1385,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash);
+        dispatch.PlannerEvidenceCriteriaVersionHash, ClaudeApiHoldIdentity: dispatch.ClaudeApiHoldIdentity);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1430,7 +1430,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash);
+        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.ClaudeApiHoldIdentity);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

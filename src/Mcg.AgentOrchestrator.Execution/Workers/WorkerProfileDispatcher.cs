@@ -353,6 +353,7 @@ public static partial class WorkerProfileDispatcher
             RetryContextFingerprint: retryContextFingerprint,
             PaidRoute: paidRoute,
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
+            ClaudeApiHoldIdentity: claudeCredentialSelection?.ApiHoldIdentity,
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
             FindingEvidenceReviewContext: reviewEvidenceContext,
             FindingEvidenceReviewContinuation: FindingEvidenceDispatchContext.Continuation(task),
@@ -699,19 +700,9 @@ public static partial class WorkerProfileDispatcher
                     $"blocked: subscription retry deferred until {retryAfter:u}; source: {ProviderLimitSignals.DescribeSubscriptionRetrySource(task)}");
             }
 
-            if (ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
-                goal,
-                task.Id,
-                roleSelection.Model.ProviderName, effectiveModelName,
-                now,
-                out var providerCooldown))
-            {
-                findings.Add(
-                    $"blocked: provider {providerCooldown.ProviderName} is cooling down after task {TaskDisplayNumber.Resolve(goal, providerCooldown.SourceTaskId)} until {providerCooldown.RetryAfter:u}");
-            }
-
-            WorkerSubscriptionPreflightFindings.AddProviderBudgetExhaustionFinding(
-                findings, providerHoldScope ?? [goal], dispatchProviderName, claudeCredentialSelection?.DirectoryPath, goal, task, now);
+            WorkerSubscriptionPreflightFindings.AddProviderHoldFindings(
+                findings, providerHoldScope ?? [goal], dispatchProviderName,
+                claudeCredentialSelection?.HoldBinding, effectiveModelName, goal, task, now);
 
             if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
             {

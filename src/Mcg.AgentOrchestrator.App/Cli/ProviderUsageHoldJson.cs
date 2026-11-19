@@ -8,6 +8,9 @@ internal static class ProviderUsageHoldJson
     {
         bindingKey = row.Hold.BindingKey,
         provider = row.Hold.ProviderName,
+        reason = row.Reason.ToString(),
+        scope = row.Hold.BindingScope,
+        model = row.Hold.ModelName,
         sourceGoalId = row.Hold.SourceGoalId.Value,
         sourceTaskId = row.Hold.SourceTaskId.Value,
         placedAt = ProviderBudgetHoldSchedules.FormatInstant(row.Hold.PlacedAt),
@@ -17,6 +20,7 @@ internal static class ProviderUsageHoldJson
         nextProbeAt = row.Schedule is { } schedule ? ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt) : null,
         resetSource = row.Schedule?.ResetSource,
         resetAt = row.Schedule?.ResetAt is { } reset ? ProviderBudgetHoldSchedules.FormatInstant(reset) : null,
+        providerResetAt = ProviderUsageHoldView.FormatProviderReset(row.ProviderResetAt),
         probeInFlight = row.Schedule?.ProbeInFlight,
         admittedGoalId = row.Schedule?.AdmittedGoalId?.Value,
         admittedTaskId = row.Schedule?.AdmittedTaskId?.Value,

@@ -24,12 +24,12 @@ internal static class ProviderBudgetProbeAdmission
                 .Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase)).ToArray();
             if (blocked.Length != 1 || !blocked[0].StartsWith("blocked: code=provider-budget-exhausted;", StringComparison.Ordinal)) continue;
             // The binding is derived from dispatch history; the diagnostic only identifies which hold blocked this task.
-            var bindings = kernel.ProviderHoldScope.SelectMany(item => item.Tasks).SelectMany(item => item.DispatchHistory)
-                .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName, Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
-            foreach (var binding in bindings)
+            var scope = kernel.ProviderHoldScope;
+            foreach (var binding in ProviderHoldBinding.Candidates(scope))
             {
-                if (!ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope, binding.Provider, binding.Credential, out var hold) ||
-                    !blocked[0].Contains($"binding {hold.BindingKey} (", StringComparison.OrdinalIgnoreCase) || admitted.Contains(hold.BindingKey)) continue;
+                if (admitted.Contains(binding.Key) || !blocked[0].Contains($"binding {binding.Key} (", StringComparison.OrdinalIgnoreCase) ||
+                    !ProviderLimitSignals.TryGetExactHold(scope, binding, out var hold) ||
+                    hold.Reason == ProviderFailureKind.AuthenticationRequired) continue;
                 var schedule = ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, hold, now);
                 if (now < schedule.NextProbeAt || schedule.ProbeInFlight || schedule.AdmittedTaskId is not null) break;
                 kernel.RecordTaskNote(goal.Id, task.Id, ProviderBudgetHoldSchedules.FormatProbe(

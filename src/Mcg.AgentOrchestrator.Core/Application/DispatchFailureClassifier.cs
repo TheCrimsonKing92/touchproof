@@ -76,7 +76,12 @@ public sealed record ProviderBudgetExhaustionHold(
     GoalId SourceGoalId,
     TaskId SourceTaskId,
     DateTimeOffset PlacedAt,
-    string EvidenceReceipt);
+    string EvidenceReceipt)
+{
+    public ProviderFailureKind Reason { get; init; } = ProviderFailureKind.BudgetExhausted;
+    public string? ModelName { get; init; }
+    public DateTimeOffset? ProviderResetAt { get; init; }
+}
 
 public enum DispatchRoleOutputCapability
 {

@@ -9,6 +9,9 @@ public sealed record ProviderBudgetHoldSchedule(
     string LastProbeOutcome)
 {
     public DateTimeOffset? LastProbeAt { get; init; }
+    public DateTimeOffset? ProviderResetAt { get; init; }
+    public ProviderFailureKind Reason => QuotaConfirmedByProbe ? ProviderFailureKind.BudgetExhausted : Hold.Reason;
+    internal bool QuotaConfirmedByProbe { get; init; }
     public string? ResetIntentId { get; init; }
     public ProviderFailureKind LastActionableFailure { get; init; }
     public DateTimeOffset? LastActionableFailureAt { get; init; }
@@ -31,6 +34,7 @@ public static class ProviderBudgetHoldSchedules
         int Attempt, DateTimeOffset StartedAt, string Outcome, string Reason)
     {
         public string? ResetIntentId { get; init; }
+        public DateTimeOffset? ProviderResetAt { get; init; }
         public ProviderFailureKind FailureKind => ClassifyOutcome(Outcome);
     }
 
@@ -71,11 +75,11 @@ public static class ProviderBudgetHoldSchedules
         // Timestamp ties are evaluated together, without inventing an ordering.
         DateTimeOffset? latestExhaustion = null;
         var observations = all.SelectMany(goal => goal.Tasks).SelectMany(owner => owner.VerificationHistory
-                .Where(verification => verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+                .Where(verification => ProviderHoldEvidence.Read(verification).Confirmed &&
                     (asOf is null || verification.CompletedAt <= asOf))
                 .Select(verification => (Task: owner, Verification: verification,
-                    Dispatch: SubscriptionLimitEvidence.FindDispatchForVerification(owner, verification))))
-            .Where(item => item.Dispatch is not null && IsBinding(item.Dispatch, bindingKey))
+                    Dispatch: ProviderHoldBinding.FindDispatch(owner, verification))))
+            .Where(item => item.Dispatch is not null && IsHoldObservation(item.Verification, item.Dispatch, bindingKey))
             .GroupBy(item => item.Verification.CompletedAt).OrderBy(group => group.Key);
         foreach (var group in observations)
         {
@@ -122,27 +126,43 @@ public static class ProviderBudgetHoldSchedules
             !IsCurrentDispatch(all, bindingKey, task, dispatch, completedAt);
     }
 
+    internal static bool IsAdmittedProbe(Goal goal, TaskSpec task, TaskDispatchRecord dispatch) =>
+        goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.OccurredAt <= dispatch.DispatchedAt &&
+            TryParseProbe(evt, out var marker) && dispatch.DispatchedAt >= marker.Due && IsBinding(dispatch, marker.BindingKey) &&
+            !task.DispatchHistory.Any(prior => prior.DispatchedAt >= evt.OccurredAt && prior.DispatchedAt < dispatch.DispatchedAt));
+
     public static string FormatStandaloneResult(StandaloneResult result) =>
         $"PROVIDER_BUDGET_CHECK binding={Uri.EscapeDataString(result.BindingKey)} placed_at={FormatInstant(result.PlacedAt)} due={FormatInstant(result.Due)} attempt={result.Attempt} started_at={FormatInstant(result.StartedAt)} outcome={result.Outcome} reason={Uri.EscapeDataString(result.Reason)}" +
-        (result.ResetIntentId is { } intent ? $" reset_intent={Uri.EscapeDataString(intent)}" : "");
+        (result.ResetIntentId is { } intent ? $" reset_intent={Uri.EscapeDataString(intent)}" : "") +
+        (result.Outcome == "exhausted" && result.ProviderResetAt is { } reset ? $" provider_reset_at={FormatInstant(reset)}" : "");
 
     public static bool TryParseStandaloneResult(ProgressEvent evt, out StandaloneResult result)
     {
         result = null!;
         if (evt.Kind != ProgressKind.TaskNote || !evt.Message.StartsWith("PROVIDER_BUDGET_CHECK ", StringComparison.Ordinal)) return false;
         var fields = evt.Message.Split(' ');
-        if (fields.Length is not (8 or 9)) return false;
+        if (fields.Length is < 8 or > 10) return false;
         string Value(int index, string key) => fields[index].StartsWith(key + "=", StringComparison.Ordinal)
             ? fields[index][(key.Length + 1)..] : "";
         if (!TryParseInstant(Value(2, "placed_at"), out var placed) || !TryParseInstant(Value(3, "due"), out var due) ||
             !int.TryParse(Value(4, "attempt"), out var attempt) || attempt < 1 ||
             !TryParseInstant(Value(5, "started_at"), out var started) || started < due || started < placed ||
             evt.OccurredAt < started || Value(6, "outcome") is not ("available" or "exhausted" or "failed" or "authentication-required") ||
-            fields.Length == 9 && Value(8, "reset_intent").Length == 0 ||
             Value(1, "binding").Length == 0) return false;
+        var next = 8;
+        var intent = next < fields.Length ? Value(next, "reset_intent") : "";
+        if (intent.Length > 0) next++;
+        DateTimeOffset? reset = null;
+        if (next < fields.Length && Value(6, "outcome") == "exhausted" &&
+            TryParseInstant(Value(next, "provider_reset_at"), out var parsedReset))
+        {
+            reset = parsedReset;
+            next++;
+        }
+        if (next != fields.Length) return false;
         result = new(Uri.UnescapeDataString(Value(1, "binding")), placed, due, attempt, started,
             Value(6, "outcome"), Uri.UnescapeDataString(Value(7, "reason")))
-            { ResetIntentId = fields.Length == 9 ? Uri.UnescapeDataString(Value(8, "reset_intent")) : null };
+            { ResetIntentId = intent.Length > 0 ? Uri.UnescapeDataString(intent) : null, ProviderResetAt = reset };
         return true;
     }
 
@@ -205,23 +225,30 @@ public static class ProviderBudgetHoldSchedules
 
     public static bool TryGetResetAt(TaskVerificationRecord exhaustion, out DateTimeOffset resetAt)
     {
+        var parsed = ProviderHoldEvidence.Read(exhaustion).ResetAt;
+        resetAt = parsed.GetValueOrDefault();
+        return parsed > exhaustion.CompletedAt;
+    }
+
+    internal static bool TryParseProviderReset(string line, DateTimeOffset completedAt, out DateTimeOffset resetAt)
+    {
         resetAt = default;
-        if (!ProviderLimitSignals.TryGetProviderBudgetExhaustionLine(exhaustion, out var line)) return false;
         if (ProviderLimitSignals.TryGetRelativeRetryAfter(line, out var delay))
         {
-            try { resetAt = exhaustion.CompletedAt.Add(delay).ToUniversalTime(); }
+            try { resetAt = completedAt.Add(delay).ToUniversalTime(); }
             catch (ArgumentOutOfRangeException) { return false; }
-            return resetAt > exhaustion.CompletedAt;
+            return true;
         }
         var iso = IsoResetPattern.Match(line);
         if (iso.Success && TryParseInstant(iso.Groups["at"].Value, out resetAt))
-            return resetAt > exhaustion.CompletedAt;
+            return true;
         var match = CalendarResetPattern.Match(line);
-        if (!match.Success) return false;
+        if (!match.Success)
+            return ProviderLimitSignals.TryParseSubscriptionRetryAfter(line, completedAt, out resetAt);
         try
         {
             var zone = TimeZoneInfo.FindSystemTimeZoneById(match.Groups["zone"].Value);
-            var year = TimeZoneInfo.ConvertTime(exhaustion.CompletedAt, zone).Year;
+            var year = TimeZoneInfo.ConvertTime(completedAt, zone).Year;
             var month = DateTime.ParseExact(match.Groups["month"].Value, "MMM", CultureInfo.InvariantCulture).Month;
             var hour = int.Parse(match.Groups["hour"].Value, CultureInfo.InvariantCulture);
             if (hour is < 1 or > 12) return false;
@@ -237,8 +264,8 @@ public static class ProviderBudgetHoldSchedules
                     candidates.Add(new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(local, zone)));
             }
             if (candidates.Count == 0) return false;
-            resetAt = candidates.MinBy(at => (at - exhaustion.CompletedAt).Duration());
-            return resetAt > exhaustion.CompletedAt;
+            resetAt = candidates.MinBy(at => (at - completedAt).Duration());
+            return true;
         }
         catch (Exception exception) when (exception is ArgumentException or TimeZoneNotFoundException or InvalidTimeZoneException or FormatException)
         {
@@ -255,9 +282,8 @@ public static class ProviderBudgetHoldSchedules
     internal static bool TryGetHoldByBindingKey(IReadOnlyCollection<Goal> all, string bindingKey,
         out ProviderBudgetExhaustionHold hold, ProviderBudgetHoldMemo memo)
     {
-        foreach (var dispatch in all.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
-            if (IsBinding(dispatch, bindingKey) && memo.TryGet(
-                    dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory, out hold))
+        foreach (var binding in ProviderHoldBinding.Candidates(all))
+            if (SameBinding(binding.Key, bindingKey) && memo.TryGetExact(binding, out hold))
                 return true;
         hold = null!;
         return false;
@@ -270,19 +296,19 @@ public static class ProviderBudgetHoldSchedules
         var dispatches = tasks.SelectMany(task => task.DispatchHistory.Where(dispatch => IsBinding(dispatch, hold.BindingKey))
             .Select(dispatch => (Task: task, Dispatch: dispatch))).ToArray();
         var observations = tasks.SelectMany(task => task.VerificationHistory.Select(verification =>
-            (Task: task, Verification: verification, Dispatch: SubscriptionLimitEvidence.FindDispatchForVerification(task, verification))))
+            (Task: task, Verification: verification, Dispatch: ProviderHoldBinding.FindDispatch(task, verification))))
             .Where(item => item.Dispatch is not null && IsBinding(item.Dispatch, hold.BindingKey) &&
                 !IsStaleProbeResult(all, hold.BindingKey, item.Task, item.Dispatch, item.Verification.CompletedAt)).ToArray();
-        var exhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted)
-            .MaxBy(item => item.Verification.CompletedAt).Verification
-            ?? throw new InvalidOperationException("A budget hold requires an exhaustion verification on its binding.");
+        var held = observations.Where(item => IsHoldObservation(item.Verification, item.Dispatch!, hold.BindingKey)).ToArray();
+        var exhaustion = held.FirstOrDefault(item => item.Task.Id == hold.SourceTaskId &&
+            item.Verification.CompletedAt == hold.PlacedAt).Verification
+            ?? throw new InvalidOperationException("A provider hold requires a confirmed verification on its binding.");
         var notes = all.SelectMany(goal => goal.Timeline.Select((evt, index) => (Goal: goal, Event: evt, Index: index))).ToArray();
         // Preserve historical recovery even after a later exhaustion or reset. Each
         // receipt must have been applicable when observed, on its original source.
         var standaloneHistory = notes.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
             SameBinding(result.BindingKey, hold.BindingKey) &&
-            observations.Any(observation => observation.Task.Id == item.Event.TaskId &&
-                observation.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+            held.Any(observation => observation.Task.Id == item.Event.TaskId &&
                 observation.Verification.CompletedAt == result.PlacedAt) &&
             IsApplicable(result, LatestReset(all, hold.BindingKey, item.Event.OccurredAt, item.Event)))
             .OrderBy(item => item.Event.OccurredAt).ToArray();
@@ -297,8 +323,7 @@ public static class ProviderBudgetHoldSchedules
             .Where(at => at <= exhaustion.CompletedAt)
             .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         var reset = LatestReset(all, hold.BindingKey);
-        var firstExhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-            item.Verification.CompletedAt >= recoveryAt).Min(item => item.Verification.CompletedAt);
+        var firstExhaustion = held.Where(item => item.Verification.CompletedAt >= recoveryAt).Min(item => item.Verification.CompletedAt);
         if (reset?.AppliedAt < firstExhaustion) reset = null;
         standaloneHistory = standaloneHistory.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
             result.PlacedAt >= firstExhaustion).ToArray();
@@ -318,13 +343,12 @@ public static class ProviderBudgetHoldSchedules
         bool InCurrentGeneration((TaskSpec Task, TaskVerificationRecord Verification, TaskDispatchRecord? Dispatch) item) =>
             IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!, item.Verification.CompletedAt) &&
             (reset is null || LatestReset(all, hold.BindingKey, item.Verification.CompletedAt)?.Marker.IntentId == reset.Marker.IntentId);
-        var completedProbes = probeResults.Where(InCurrentGeneration)
+        var completedProbes = probeResults.Where(item => InCurrentGeneration(item) &&
+                !IsHoldObservation(item.Verification, item.Dispatch!, hold.BindingKey))
             .Select(item => item.Verification)
-            .Where(verification => verification is not null && verification.CompletedAt >= firstExhaustion &&
-                verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted)
+            .Where(verification => verification is not null && verification.CompletedAt >= firstExhaustion)
             .Select(verification => verification!).Distinct().ToArray();
-        var k = observations.Count(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-            item.Verification.CompletedAt >= recoveryAt && (reset is null ||
+        var k = held.Count(item => item.Verification.CompletedAt >= recoveryAt && (reset is null ||
                 item.Dispatch!.DispatchedAt >= reset.AppliedAt && item.Dispatch.DispatchedAt >= reset.Marker.ResetAt &&
                 InCurrentGeneration(item)));
         var attempt = (reset is null ? Math.Max(1, k) : 1 + k) + completedProbes.Length + standalone.Length;
@@ -335,15 +359,23 @@ public static class ProviderBudgetHoldSchedules
             resetAt = reset.Marker.ResetAt;
             source = "operator";
         }
-        else if (TryGetResetAt(exhaustion, out var parsed))
+        var refreshed = standalone.Select(item =>
+        {
+            TryParseStandaloneResult(item.Event, out var check);
+            return check;
+        }).LastOrDefault(check => check.Outcome == "exhausted" && check.StartedAt >= hold.PlacedAt);
+        var providerReset = refreshed is null ? hold.ProviderResetAt : refreshed.ProviderResetAt;
+        if (reset is null && providerReset is { } parsed)
         {
             resetAt = parsed;
             source = "parsed";
         }
         var latestCompletion = completedProbes.Select(verification => verification.CompletedAt)
             .Concat(standalone.Select(item => item.Event.OccurredAt)).Append(exhaustion.CompletedAt).Max();
-        var next = completedProbes.Length == 0 && standalone.Length == 0 && (reset is null || k == 0) && resetAt is { } known ? known :
+        var next = completedProbes.Length == 0 && standalone.Length == 0 && (reset is null || k == 0) && resetAt is { } known
+            ? (known < hold.PlacedAt ? hold.PlacedAt : known) :
             latestCompletion.AddMinutes(Math.Min(30 * Math.Pow(2, Math.Min(attempt - 1, 4)), 360)).ToUniversalTime();
+        if (reset is null && providerReset is { } earliest && earliest > next) next = earliest;
         var inFlight = latestProbe.Event is not null && dispatches.Any(item => item.Dispatch.DispatchedAt >= latestProbe.Event.OccurredAt &&
             !item.Task.VerificationHistory.Any(verification =>
                 SubscriptionLimitEvidence.FindDispatchForVerification(item.Task, verification) == item.Dispatch));
@@ -362,7 +394,7 @@ public static class ProviderBudgetHoldSchedules
             admittedTask = probeEvent.TaskId;
         }
         var diagnosticChecks = probeResults.Select(item =>
-            (At: item.Verification.CompletedAt, Outcome: item.Verification.ProviderFailureKind switch
+            (At: item.Verification.CompletedAt, Outcome: ProviderHoldEvidence.Read(item.Verification).Kind switch
             {
                 ProviderFailureKind.BudgetExhausted => "exhausted",
                 ProviderFailureKind.AuthenticationRequired => "authentication-required",
@@ -373,9 +405,8 @@ public static class ProviderBudgetHoldSchedules
                 return (At: item.Event.OccurredAt, Outcome: check.Outcome == "failed" ? "inconclusive" : check.Outcome);
             })).OrderBy(item => item.At).ToArray();
         var lastOutcome = inFlight ? "running" : diagnosticChecks.LastOrDefault().Outcome ?? "none";
-        var actionable = observations.Where(item => item.Verification.ProviderFailureKind is
-                ProviderFailureKind.BudgetExhausted or ProviderFailureKind.AuthenticationRequired)
-            .Select(item => (At: item.Verification.CompletedAt, Kind: item.Verification.ProviderFailureKind))
+        var actionable = held
+            .Select(item => (At: item.Verification.CompletedAt, Kind: ProviderHoldEvidence.Read(item.Verification).Kind))
             .Concat(standaloneHistory.Select(item =>
             {
                 TryParseStandaloneResult(item.Event, out var result);
@@ -384,12 +415,20 @@ public static class ProviderBudgetHoldSchedules
         return new(hold, attempt, resetAt, source, next, inFlight, admittedGoal, admittedTask, lastOutcome)
         {
             LastProbeAt = diagnosticChecks.Length > 0 ? diagnosticChecks[^1].At : exhaustion.CompletedAt,
+            ProviderResetAt = providerReset,
+            QuotaConfirmedByProbe = standaloneHistory.Any(item =>
+                TryParseStandaloneResult(item.Event, out var check) && check.Outcome == "exhausted"),
             ResetIntentId = reset?.Marker.IntentId,
             LastActionableFailure = actionable.Kind, LastActionableFailureAt = actionable.At
         };
     }
 
     private static bool SameBinding(string left, string right) => left.Equals(right, StringComparison.OrdinalIgnoreCase);
-    private static bool IsBinding(TaskDispatchRecord dispatch, string bindingKey) => SameBinding(
-        SubscriptionLimitEvidence.BuildProviderBindingKey(dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory).Key, bindingKey);
+    private static bool IsBinding(TaskDispatchRecord dispatch, string bindingKey) => ProviderHoldBinding.Matches(dispatch, bindingKey);
+
+    internal static bool IsHoldObservation(TaskVerificationRecord verification, TaskDispatchRecord dispatch, string bindingKey)
+    {
+        var evidence = ProviderHoldEvidence.Read(verification);
+        return evidence.Confirmed && SameBinding(ProviderHoldBinding.From(dispatch, evidence.ScopedModel(dispatch)).Key, bindingKey);
+    }
 }

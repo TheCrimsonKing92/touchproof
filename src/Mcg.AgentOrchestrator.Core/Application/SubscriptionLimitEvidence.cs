@@ -47,10 +47,14 @@ public static class SubscriptionLimitEvidence
             IsRecoverableSubscriptionLimitFailure(latest);
     }
 
-    public static int CountRecoverableSubscriptionLimitFailures(TaskSpec task)
+    public static int CountRecoverableSubscriptionLimitFailures(TaskSpec task) =>
+        CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds: true);
+
+    internal static int CountRecoverableSubscriptionLimitFailures(TaskSpec task, bool includeProviderHolds)
     {
         return task.VerificationHistory.Count(verification =>
             !verification.Succeeded &&
+            (includeProviderHolds || !ProviderHoldRetry.IsHoldInterruption(verification)) &&
             IsRecoverableSubscriptionLimitFailure(verification));
     }
 
