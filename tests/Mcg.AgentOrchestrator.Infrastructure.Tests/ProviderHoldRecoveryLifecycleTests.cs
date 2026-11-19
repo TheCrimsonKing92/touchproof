@@ -111,6 +111,45 @@ public sealed class ProviderHoldRecoveryLifecycleTests
     }
 
     [Fact]
+    public void RedispatchAfterStandaloneRecoverySkipsAnEarlierInconclusiveTaskProbe()
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        var waiting = fixture.NewGoal();
+        var task = waiting.Tasks.Single();
+        fixture.WaitingTask = task.Id;
+        fixture.Watch.ObserveTick(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow);
+        fixture.Clock.UtcNow = fixture.Due;
+        ProviderBudgetProbeAdmission.Apply(fixture.Kernel, waiting, [task.Id], fixture.Preflight, fixture.Clock.UtcNow);
+        var dispatch = new TaskDispatchRecord("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory,
+            fixture.Clock.UtcNow, ProviderName: "xAI");
+        fixture.Kernel.RecordTaskDispatch(waiting.Id, task.Id, dispatch);
+        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch));
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
+        fixture.Kernel.RecordDispatchExecutionResult(waiting.Id, task.Id,
+            new(dispatch.Command, dispatch.WorkingDirectory, 1, "", "Provider process timed out", fixture.Clock.UtcNow,
+                DispatchStartedAt: dispatch.DispatchedAt));
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        var held = Assert.Single(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+        Assert.Equal("inconclusive", held.Schedule!.LastProbeOutcome);
+
+        fixture.WaitingTask = null;
+        fixture.Clock.UtcNow = held.Schedule.NextProbeAt;
+        fixture.Tick();
+        Assert.Equal(1, fixture.Calls);
+        Assert.Single(fixture.Events(), evt => evt.EventKind == "provider-hold-restored");
+        Assert.DoesNotContain(fixture.Events(), evt => evt.EventKind == "provider-hold-redispatched");
+
+        var restarted = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot(), fixture.Clock);
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
+        restarted.RecordTaskDispatch(waiting.Id, task.Id, dispatch with { DispatchedAt = fixture.Clock.UtcNow });
+        new ConductorProviderHoldWatch(fixture.Writer).ObserveTick(restarted.ProviderHoldScope, fixture.Clock.UtcNow);
+        new ConductorProviderHoldWatch(fixture.Writer).ObserveTick(restarted.ProviderHoldScope, fixture.Clock.UtcNow);
+        var redispatch = Assert.Single(fixture.Events(), evt => evt.EventKind == "provider-hold-redispatched");
+        Assert.Equal(task.Id.Value, OwnerEventFields.Field(redispatch, "task"));
+        Assert.Equal(ProviderBudgetHoldSchedules.FormatInstant(fixture.Clock.UtcNow), OwnerEventFields.Field(redispatch, "dispatched_at"));
+    }
+
+    [Fact]
     public void SignInCheckKeepsQuotaHeldAndRefusedRecheckRefreshesProviderReset()
     {
         using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("authentication-required");

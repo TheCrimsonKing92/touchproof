@@ -73,7 +73,10 @@ public static class ProviderBudgetHoldSchedules
         // Validate exhaustion observations in time order. A rejected old-generation
         // result cannot create a newer hold that poisons a subsequent current probe.
         // Timestamp ties are evaluated together, without inventing an ordering.
-        DateTimeOffset? latestExhaustion = null;
+        DateTimeOffset? latestHold = null;
+        DateTimeOffset? latestQuota = null;
+        var quotaPlacements = new HashSet<DateTimeOffset>();
+        DateTimeOffset? LatestCompetingHold(DateTimeOffset original) => quotaPlacements.Contains(original) ? latestQuota : latestHold;
         var observations = all.SelectMany(goal => goal.Tasks).SelectMany(owner => owner.VerificationHistory
                 .Where(verification => ProviderHoldEvidence.Read(verification).Confirmed &&
                     (asOf is null || verification.CompletedAt <= asOf))
@@ -86,10 +89,18 @@ public static class ProviderBudgetHoldSchedules
             var applicable = group.Where(item => MatchesGeneration(all, bindingKey, item.Task,
                     item.Dispatch!, item.Verification.CompletedAt) &&
                 (DispatchMarker(all, bindingKey, item.Task, item.Dispatch!)?.HoldPlacedAt is not { } original ||
-                    latestExhaustion is null || latestExhaustion <= original)).ToArray();
+                     !(LatestCompetingHold(original) > original))).ToArray();
             if (applicable.Length == 0) continue;
-            if (group.Key > placed && applicable.Any(item => item.Task != task || item.Dispatch != dispatch)) return false;
-            latestExhaustion = group.Key;
+            // Authentication evidence can diagnose a quota probe without replacing its quota generation.
+            if (group.Key > placed && applicable.Any(item => (item.Task != task || item.Dispatch != dispatch) &&
+                    (!quotaPlacements.Contains(placed) || ProviderHoldEvidence.Read(item.Verification).Kind == ProviderFailureKind.BudgetExhausted)))
+                return false;
+            latestHold = group.Key;
+            if (applicable.Any(item => ProviderHoldEvidence.Read(item.Verification).Kind == ProviderFailureKind.BudgetExhausted))
+            {
+                latestQuota = group.Key;
+                quotaPlacements.Add(group.Key);
+            }
         }
         return true;
     }
@@ -343,12 +354,13 @@ public static class ProviderBudgetHoldSchedules
         bool InCurrentGeneration((TaskSpec Task, TaskVerificationRecord Verification, TaskDispatchRecord? Dispatch) item) =>
             IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!, item.Verification.CompletedAt) &&
             (reset is null || LatestReset(all, hold.BindingKey, item.Verification.CompletedAt)?.Marker.IntentId == reset.Marker.IntentId);
-        var completedProbes = probeResults.Where(item => InCurrentGeneration(item) &&
-                !IsHoldObservation(item.Verification, item.Dispatch!, hold.BindingKey))
+        var scheduleHolds = held.Where(item => hold.Reason != ProviderFailureKind.BudgetExhausted ||
+            ProviderHoldEvidence.Read(item.Verification).Kind == ProviderFailureKind.BudgetExhausted).ToHashSet();
+        var completedProbes = probeResults.Where(item => InCurrentGeneration(item) && !scheduleHolds.Contains(item))
             .Select(item => item.Verification)
             .Where(verification => verification is not null && verification.CompletedAt >= firstExhaustion)
             .Select(verification => verification!).Distinct().ToArray();
-        var k = held.Count(item => item.Verification.CompletedAt >= recoveryAt && (reset is null ||
+        var k = scheduleHolds.Count(item => item.Verification.CompletedAt >= recoveryAt && (reset is null ||
                 item.Dispatch!.DispatchedAt >= reset.AppliedAt && item.Dispatch.DispatchedAt >= reset.Marker.ResetAt &&
                 InCurrentGeneration(item)));
         var attempt = (reset is null ? Math.Max(1, k) : 1 + k) + completedProbes.Length + standalone.Length;

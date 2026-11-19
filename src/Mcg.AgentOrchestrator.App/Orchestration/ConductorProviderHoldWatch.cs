@@ -76,18 +76,31 @@ internal sealed class ConductorProviderHoldWatch
             var next = scope.SelectMany(goal => goal.Tasks.SelectMany(task => task.DispatchHistory
                     .Select(dispatch => (Goal: goal, Task: task, Dispatch: dispatch))))
                 .Where(item => item.Dispatch.DispatchedAt > placed &&
-                    (EventBinding(ProviderHoldBinding.From(item.Dispatch).Key) == binding ||
-                     EventBinding(ProviderHoldBinding.From(item.Dispatch, item.Dispatch.ModelName).Key) == binding) &&
+                    Matches(item.Dispatch, binding) &&
                     (item.Task.DispatchHistory.Any(prior => prior.DispatchedAt <= placed && Matches(prior, binding)) ||
                      item.Goal.Timeline.Any(evt => evt.TaskId == item.Task.Id && evt.OccurredAt <= item.Dispatch.DispatchedAt &&
                          ProviderBudgetHoldSchedules.TryParseProbe(evt, out var probe) &&
-                         EventBinding(probe.BindingKey) == binding && (probe.HoldPlacedAt ?? probe.Due) >= placed)))
+                         EventBinding(probe.BindingKey) == binding && (probe.HoldPlacedAt ?? probe.Due) >= placed)) &&
+                    IsRecoveryDispatch(scope, item.Goal, item.Task, item.Dispatch, binding))
                 .MinBy(item => item.Dispatch.DispatchedAt);
             if (next.Dispatch is null) continue;
             _writer!.Append("provider-hold-redispatched", next.Goal.Id.Value,
                 $"PROVIDER_HOLD_REDISPATCHED task={next.Task.Id.Value} dispatched_at={Instant(next.Dispatch.DispatchedAt)} binding={binding}", timestamp: now);
             _restored.Remove(binding);
         }
+    }
+
+    private static bool IsRecoveryDispatch(IReadOnlyCollection<Goal> scope, Goal goal, TaskSpec task,
+        TaskDispatchRecord dispatch, string eventBinding)
+    {
+        if (!ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch)) return true;
+
+        // A task probe counts as resumed work only when its own result established availability.
+        var binding = ProviderHoldBinding.From(dispatch).Key;
+        if (EventBinding(binding) != eventBinding) binding = ProviderHoldBinding.From(dispatch, dispatch.ModelName).Key;
+        return task.VerificationHistory.Any(verification => ProviderLimitSignals.HasAvailabilityEvidence(verification) &&
+                   ProviderHoldBinding.FindDispatch(task, verification) == dispatch) &&
+               ProviderBudgetHoldSchedules.IsCurrentDispatch(scope, binding, task, dispatch);
     }
 
     private static bool Matches(TaskDispatchRecord dispatch, string eventBinding) =>

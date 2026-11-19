@@ -19,8 +19,7 @@ internal sealed class ProviderHoldFailedGoalRedispatch(
         Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> retry)
     {
         var failed = facts.Tasks.Where(task => task.Status == WorkTaskStatus.Failed).ToArray();
-        if (failed.Length == 0 || failed.Any(task => kernel.GetTask(goal.Id, task.TaskId).VerificationHistory.LastOrDefault()
-                is not { } verification || !ProviderHoldEvidence.Read(verification).Confirmed))
+        if (failed.Length == 0 || failed.Any(task => !CanRecover(goal, task.TaskId)))
             return false;
         var scratch = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
         scratch.ProviderHoldHistory.CopyFrom(kernel.ProviderHoldHistory);
@@ -56,6 +55,15 @@ internal sealed class ProviderHoldFailedGoalRedispatch(
         foreach (var (taskId, message) in heldRetries)
             retry(goal.Id, taskId, message, null, RetryCause.ProviderInterruption);
         return true;
+    }
+
+    private bool CanRecover(Goal goal, TaskId taskId)
+    {
+        if (kernel.GetTask(goal.Id, taskId).VerificationHistory.LastOrDefault() is not { } verification) return false;
+        var evidence = ProviderHoldEvidence.Read(verification);
+        // Keep the sign-in failover's exclusion of seats already tried on an authentication failure.
+        return evidence.Confirmed && (evidence.Kind != ProviderFailureKind.AuthenticationRequired ||
+            retryOnHeldBinding && !ProviderSignInFailover.PriorFailovers(goal, taskId).Any());
     }
 
     private static string? RecoveredAuthenticationRetry(TaskSpec task, IEnumerable<Goal> scope,
