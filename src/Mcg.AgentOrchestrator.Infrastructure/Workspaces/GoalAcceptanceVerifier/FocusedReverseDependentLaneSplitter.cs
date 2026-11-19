@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
@@ -74,8 +77,7 @@ internal static class FocusedReverseDependentLaneSplitter
             .Sum(check => IsUsable(check.EstimatedSerialSeconds) &&
                 !check.Name.Equals(ShardNamePrefix + lane.Name, StringComparison.OrdinalIgnoreCase)
                 ? check.EstimatedSerialSeconds : double.PositiveInfinity));
-        inventory ??= (sourceTexts is null ? AcceptanceTestClassSourceScanner.Scan(worktreePath) :
-            AcceptanceTestClassSourceScanner.Scan(worktreePath, sourceTexts)).Select(item => item.FullName).ToArray();
+        inventory ??= ReadProjectInventory(worktreePath, focused.Project!, sourceTexts);
         var resourceOwners = new Lazy<(Func<string, bool> Includes, IReadOnlyList<string> Keys)[]>(() =>
             lanes.Lanes.Where(lane => lane.ExclusiveResourceKeys.Count > 0)
                 .Select(lane => (AcceptanceLaneMembership.CreateClassMatcher(lane), lane.ExclusiveResourceKeys)).ToArray());
@@ -83,6 +85,79 @@ internal static class FocusedReverseDependentLaneSplitter
             history ?? AcceptanceClassDurationHistoryAdapter.Read(worktreePath), inventory, occupied, name =>
             resourceOwners.Value.Where(owner => owner.Includes(name)).SelectMany(owner => owner.Keys));
     }
+
+    private static string[] ReadProjectInventory(string worktreePath, string project, SelectionSourceTexts? sourceTexts)
+    {
+        var projectPath = Path.GetFullPath(Path.Combine(worktreePath, project.Replace('\\', '/')));
+        var projectDirectory = Path.GetDirectoryName(projectPath)!;
+        XDocument document;
+        try
+        {
+            document = XDocument.Parse(sourceTexts?.Read(projectPath) ?? SelectionFileReadProbe.ReadAllText(projectPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException)
+        {
+            return [];
+        }
+
+        // Inventory uses the target project's SDK defaults and unconditional, project-local Compile items.
+        // An indeterminate inventory leaves the selector unpriced and uses the existing full-gate path.
+        if (document.Root?.Name.LocalName != "Project" ||
+            document.Descendants().Any(item => item.Name.LocalName == "Import"))
+            return [];
+
+        var defaultItemProperties = document.Descendants().Where(item =>
+            item.Name.LocalName is "EnableDefaultItems" or "EnableDefaultCompileItems").ToArray();
+        if (defaultItemProperties.Any(item => IsConditional(item) ||
+            !bool.TryParse(item.Value, out _)))
+            return [];
+        var defaultItems = document.Root.Attribute("Sdk") is not null && !defaultItemProperties
+            .GroupBy(item => item.Name.LocalName).Any(group => !bool.Parse(group.Last().Value));
+
+        var rules = new List<(Regex Pattern, bool Include)>();
+        foreach (var item in document.Descendants().Where(item => item.Name.LocalName == "Compile"))
+        {
+            var include = (string?)item.Attribute("Include");
+            var remove = (string?)item.Attribute("Remove");
+            if (include is null && remove is null) continue;
+            if (item.Parent is not { } group || group.Parent != document.Root || group.Name.LocalName != "ItemGroup" ||
+                IsConditional(item) || item.Attribute("Exclude") is not null)
+                return [];
+
+            foreach (var entry in (include ?? remove!).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var pattern = entry.Replace('\\', '/');
+                while (pattern.StartsWith("./", StringComparison.Ordinal)) pattern = pattern[2..];
+                if (pattern.StartsWith('/') || pattern.Contains(':') || pattern.Split('/').Contains("..") ||
+                    pattern.Contains("$(", StringComparison.Ordinal) || pattern.Contains("@(", StringComparison.Ordinal) || pattern.Contains('%'))
+                    return [];
+                var expression = Regex.Escape(pattern)
+                    .Replace(@"\*\*/", "(?:.*/)?", StringComparison.Ordinal)
+                    .Replace(@"\*\*", ".*", StringComparison.Ordinal)
+                    .Replace(@"\*", "[^/]*", StringComparison.Ordinal)
+                    .Replace(@"\?", "[^/]", StringComparison.Ordinal);
+                rules.Add((new Regex($@"\A{expression}\z",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking),
+                    include is not null));
+            }
+        }
+
+        var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project)
+            .Where(file =>
+            {
+                var relative = Path.GetRelativePath(projectDirectory, file).Replace('\\', '/');
+                var rule = rules.LastOrDefault(rule => rule.Pattern.IsMatch(relative));
+                return rule.Pattern is not null ? rule.Include :
+                    defaultItems && !relative.Split('/').Any(part => part == "artifacts" || part.StartsWith('.'));
+            }).ToArray();
+        var classes = sourceTexts is null
+            ? AcceptanceTestClassSourceScanner.Scan(worktreePath, files)
+            : AcceptanceTestClassSourceScanner.ScanSourceTexts(files.Select(sourceTexts.Read));
+        return classes.Select(item => item.FullName).ToArray();
+    }
+
+    private static bool IsConditional(XElement item) => item.AncestorsAndSelf().Any(parent =>
+        parent.Name.LocalName is "Choose" or "When" or "Otherwise" || parent.Attribute("Condition") is not null);
 
     internal static Expansion Plan(
         Check focused, Check? broad, IReadOnlyList<AcceptanceTestLane> pool,

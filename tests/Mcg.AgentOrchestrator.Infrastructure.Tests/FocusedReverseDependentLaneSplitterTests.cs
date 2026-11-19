@@ -157,6 +157,79 @@ public sealed class FocusedReverseDependentLaneSplitterTests
         Assert.Equal("FullyQualifiedName~Beta|FullyQualifiedName~Alpha", check.Arguments[3]);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ProjectInventoryPricesOnlyClassesCompiledByTheTarget(bool shareSourceTexts, bool reinclude)
+    {
+        var root = Directory.CreateTempSubdirectory("focused-project-inventory-").FullName;
+        try
+        {
+            const string testSupport = "tests/Mcg.AgentOrchestrator.TestSupport";
+            const string excludedSource = "Cli/AlphaTestsCli.cs";
+            var projectPath = Path.Combine(root, InfrastructureTestsProject);
+            var projectDirectory = Path.GetDirectoryName(projectPath)!;
+            Directory.CreateDirectory(Path.Combine(projectDirectory, "Cli"));
+            Directory.CreateDirectory(Path.Combine(root, testSupport));
+            Directory.CreateDirectory(Path.Combine(root, "config"));
+            File.WriteAllText(Path.Combine(root, "config", "acceptance-manifest.json"), """
+                {
+                  "engine": {
+                    "laneTestSourceRoots": [
+                      "tests/Mcg.AgentOrchestrator.Infrastructure.Tests",
+                      "tests/Mcg.AgentOrchestrator.TestSupport"
+                    ]
+                  }
+                }
+                """);
+            var include = reinclude ? $"""<Compile Include="{excludedSource}" />""" : "";
+            File.WriteAllText(projectPath, $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <Compile Remove="Cli\**\*.cs" />
+                    {{include}}
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "AlphaTests.cs"),
+                "namespace Tests; public class AlphaTests { [Fact] public void Case() { } }");
+            File.WriteAllText(Path.Combine(projectDirectory, excludedSource),
+                "namespace Tests; public class AlphaTestsCli { [Fact] public void Case() { } }");
+            File.WriteAllText(Path.Combine(root, testSupport, "AlphaTestsOther.cs"),
+                "namespace Tests; public class AlphaTestsOther { [Fact] public void Case() { } }");
+
+            var focused = Focused("AlphaTests");
+            var history = new AcceptanceClassDurationHistoryAdapter(new Dictionary<string, double>
+            {
+                ["Tests.AlphaTests"] = 36
+            });
+            var settings = new AcceptanceGateEngineSettings { Timeouts = new() { DefaultMinutes = 1 } };
+            var expansion = FocusedReverseDependentLaneSplitter.Resolve([focused], [Broad], Policy,
+                new AcceptanceBalancedLaneExpansion(Pool, null), settings, root,
+                sourceTexts: shareSourceTexts ? new SelectionSourceTexts() : null, history: history);
+
+            Assert.NotNull(expansion);
+            if (reinclude)
+            {
+                var reason = Assert.IsType<string>(expansion.FullGateReason);
+                Assert.Contains("known subtotal 36 seconds", reason);
+                Assert.Contains("no usable estimate for Tests.AlphaTestsCli", reason);
+                Assert.DoesNotContain("AlphaTestsOther", reason);
+            }
+            else
+            {
+                Assert.Null(expansion.FullGateReason);
+                Assert.Same(focused, Assert.Single(Schedule(focused, expansion)));
+                Assert.Equal("FullyQualifiedName~AlphaTests", focused.Arguments[3]);
+            }
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
     [Fact]
     public void ExecutionUsesConfiguredDestinationBudgetAndAccountsForLaneWork()
     {
