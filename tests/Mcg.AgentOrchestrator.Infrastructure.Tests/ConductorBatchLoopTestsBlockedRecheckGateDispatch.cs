@@ -6,8 +6,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>
 /// An in-scope Verified goal survives the scoped-goal filter in ConductorBatchLoop.cs:867-875
-/// and the eligibility check at :888-891. ConductorWorkingSet.IsLoopEligibleGoal
-/// (ConductorWorkingSet.cs:53-58) keeps it eligible because its workspace exists.
+/// and the eligibility check at :888-891. The fixture has no merge, record, or cleanup
+/// evidence, so GoalLifecycle.ResolveState returns Verified (GoalLifecycle.cs:72-77)
+/// and ConductorWorkingSet.IsLoopEligibleGoal includes it (ConductorWorkingSet.cs:53-58).
 /// That keeps the empty-eligibility guard at ConductorBatchLoop.cs:904 false, so the
 /// tick reaches RunParallelAcceptanceBatch at :1159 even with another goal set aside.
 /// The August stall shape, where the gate goal is itself set aside or excluded by
