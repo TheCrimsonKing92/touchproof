@@ -543,15 +543,17 @@ internal static class FindingRoundBatchCoordinator
                     }
                     continue;
                 }
+                // The scheduler withholds delivery while a partial GREEN receipt leaves its request pending.
+                if (task.RequiredRole == AgentRole.Tester && receipt is { Accepted: true, Passed: true } &&
+                    (receipt.RequestDispositions ?? []).Any(disposition =>
+                        FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition))) continue;
+
                 var open = ReviewFindings.GetOpenBlockingFindings(findings, goal.EffectiveAcceptanceCriteriaCorrections);
                 var sourceRepair = TrySourceRepair(goal, task, identity.CandidateSha, [receipt.ReceiptId], open, out var sourceRoute);
+                var diagnosis = FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha);
                 var interpretation = PassingFindingEvidenceRouter.BuildDecision(goal, task, ConductorDriver.FindUpstreamDeveloperTask(goal, task),
-                    identity.CandidateSha, [receipt.ReceiptId], open,
-                    FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha), ConductorDriver.BuildFailedGoalAttemptIdentity);
-                var canInterpret = !sourceRepair && task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed &&
-                    !goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) &&
-                    !Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any() &&
-                    open.Count > 0 && !FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha).IsClosable &&
+                    identity.CandidateSha, [receipt.ReceiptId], open, diagnosis, ConductorDriver.BuildFailedGoalAttemptIdentity);
+                var canInterpret = !sourceRepair && task.RequiredRole == AgentRole.Tester && open.Count > 0 && !diagnosis.IsClosable &&
                     FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, identity.CandidateSha, [receipt.ReceiptId]) &&
                     interpretation.TargetTaskId == task.Id && PolicySelects(driver, goal, policy, interpretation);
                 var developer = ConductorDriver.FindUpstreamDeveloperTask(goal, task);
