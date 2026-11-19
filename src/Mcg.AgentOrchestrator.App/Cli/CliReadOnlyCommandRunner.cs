@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliReadOnlyCommandRunner
 {
     internal static bool IsReadOnlyCommand(IReadOnlyList<string> args) =>
+        CliProviderConnectionsCommand.IsListing(args) ||
         CliFleetAttentionQueryCommand.IsCommand(args) ||
         CliFleetCapacityQueryCommand.IsCommand(args) ||
         EpicOutcomeMigrationProposals.IsCommand(args) ||
@@ -69,6 +70,13 @@ internal static class CliReadOnlyCommandRunner
         out bool changed,
         IClock? diagnosticsClock = null)
     {
+        if (CliProviderConnectionsCommand.IsListing(args))
+        {
+            Environment.ExitCode = CliProviderConnectionsCommand.ExecuteListingAsync(args, workerProfiles, stateRepository,
+                new ProviderConnectionStatusAdapters(workspace.RootDirectory), Console.Out, Console.Error).GetAwaiter().GetResult();
+            changed = false;
+            return true;
+        }
         if (CliFleetCapacityQueryCommand.IsCommand(args))
         {
             Environment.ExitCode = CliFleetCapacityQueryCommand.ExecuteAsync(args, workspace.RootDirectory,

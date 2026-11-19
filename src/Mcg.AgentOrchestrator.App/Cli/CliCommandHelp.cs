@@ -112,7 +112,7 @@ internal static class CliCommandHelp
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
     public const string ImpactReplayStatusUsage = "Usage: impact-replay --status --checkpoint-file <path>";
-    public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] --out <directory> [--floor <name> ...]";
+    public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] [--attempts-file <path>] --out <directory> [--floor <name> ...]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string ExecutorSetEnabledUsage = "Usage: executor-set-enabled <executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow|remote-first] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -717,6 +717,10 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RemoteExecutors = new(
         RemoteExecutorsUsage, "Read recent remote executor outcomes and advisory probes.",
         ["--since", "--last", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry ProviderConnections = new(
+        CliProviderConnectionsCommand.Usage,
+        "List prior provider observations, or run one bounded host status check without login or model requests.",
+        ["--profile", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry RemoteLaneSelfTest = new(
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
@@ -724,8 +728,8 @@ internal static class CliCommandHelp
         ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
         ["--max-candidates", "--executor", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
-        ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
-        ["--since", "--limit", "--out", "--floor", "--status", "--checkpoint-file", "--help", "-h"]);
+        ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor. Use --attempts-file to select listed attempt ids. It cannot be combined with --since or --limit.",
+        ["--since", "--limit", "--attempts-file", "--out", "--floor", "--status", "--checkpoint-file", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentReplay = new(
         CliExperimentReplayCommand.Usage, "Operator-only fixed-sample paired replay of recorded Developer rounds.",
         ["--registration", "--run", "--seed", "--value-bound", "--spec", "--json", "--help", "-h"]);
@@ -1393,6 +1397,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("remote-executors", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteExecutors;
+            return true;
+        }
+        if (args[0].Equals("provider-connections", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ProviderConnections;
             return true;
         }
         if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))

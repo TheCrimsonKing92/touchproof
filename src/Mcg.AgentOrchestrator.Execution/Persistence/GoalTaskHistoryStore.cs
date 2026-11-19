@@ -39,6 +39,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// Bypass readers and handling (all source entries under Persistence):
 /// - AttentionReads and ProviderHoldSeedEvidenceReader: ReadAsync supplies marked latest elements,
 ///   decoded with each reader's existing sparse shape; cached provider evidence stores resolved values.
+/// - ProviderConnections: ReadMetadataAsync shares marker validation and latest authority while
+///   projecting only attribution/status fields, excluding invocation output and command text.
 /// - ReadTerminalMetadata: ReadLatestDispatchAsync resolves commit evidence; metadata-only hot stubs
 ///   already carry ResultCommit. ListConductLoopGoalMetadataAsync and AcceptanceQueueReads use
 ///   LatestFieldSql for ResultCommit and CompletedAt respectively, with an inline-only legacy-table fallback.
@@ -113,14 +115,23 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// loads flagged latest records as null and saves them inline as null.
 /// Writer search (src and scripts, excluding generated trees): UpsertGoalRowAsync, INSERT INTO goals,
 /// UPDATE goals, INSERT INTO goal_snapshot_archive, UPDATE goal_snapshot_archive, VACUUM INTO.
+/// A write that changes the goal document, history or Timeline content must bump the goal row's
+/// version in the same transaction. The conductor can reuse a hydrated goal while that version
+/// is unchanged. An archive swap may preserve the version because it preserves the content.
 /// </summary>
 internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 {
+    private readonly GoalTaskBuildHistoryStore _buildHistory = new(options);
+
     internal const string VerificationProperty = "VerificationHistory";
     internal const string DispatchProperty = "DispatchHistory";
     internal const string MarkerProperty = "HistoryInTable";
 
     private static readonly ConditionalWeakTable<JsonSerializerOptions, DocumentOptions> SharedDocumentOptions = new();
+    private static readonly ConditionalWeakTable<JsonSerializerOptions, JsonSerializerOptions> SharedReadOptions = new();
+
+    [ThreadStatic]
+    private static DocumentMarkers? _activeReadMarkers;
 
     [ThreadStatic]
     private static IReadOnlyDictionary<TaskSnapshot, HistoryCounts>? _activeCounts;
@@ -182,14 +193,16 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 
     internal string SerializeDocument(GoalSnapshot goal) => PrepareWrite(goal).Document;
 
-    // One per-save preparation supplies both the document decisions and the exact row payloads.
+    // One per-save preparation supplies the document decisions and all task history row payloads.
     // Options, resolver and task metadata are shared lazily per source options object. Reference-keyed
     // counts belong to this save, scoped to its synchronous document write on this thread. No output is kept.
     internal PreparedWrite PrepareWrite(GoalSnapshot goal, int? timelineInTable = null)
     {
+        var buildHistory = _buildHistory.PrepareWrite(goal);
+        var projectedGoal = buildHistory.ProjectedGoal;
         var rows = new List<HistoryWriteRow>();
         var counts = new Dictionary<TaskSnapshot, HistoryCounts>(ReferenceEqualityComparer.Instance);
-        foreach (var task in goal.Tasks)
+        foreach (var task in projectedGoal.Tasks)
         {
             string? AddRows<T>(IReadOnlyList<T>? entries, string kind)
             {
@@ -219,17 +232,18 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         _activeTimelineCount = timelineInTable;
         try
         {
-            document = JsonSerializer.Serialize(goal, documentOptions);
+            document = JsonSerializer.Serialize(projectedGoal, documentOptions);
         }
         finally
         {
             _activeCounts = previousCounts;
             _activeTimelineCount = previousTimelineCount;
         }
-        return new(goal.Id, document, JsonSerializer.Serialize(rows, options));
+        return new(goal.Id, document, JsonSerializer.Serialize(rows, options), buildHistory);
     }
 
-    internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson);
+    internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson,
+        GoalTaskBuildHistoryStore.PreparedWrite BuildHistory);
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTaskHistoryStore.cs")]
     internal static void CreateSchema(SqliteConnection connection)
@@ -275,7 +289,8 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                 )
             """;
         changed += await command.ExecuteNonQueryAsync(token);
-        return changed > 0;
+        var buildHistoryChanged = await _buildHistory.WriteAsync(connection, prepared.BuildHistory, token);
+        return changed > 0 || buildHistoryChanged;
     }
 
     private sealed record HistoryWriteRow(string TaskId, string Kind, int Sequence, string EntryJson);
@@ -306,6 +321,49 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     }
 
     private sealed record StoredEntry(long Sequence, string Json);
+
+    // SQL projections are repository-owned, never CLI/provider input. Unmarked documents
+    // already supply authoritative inline metadata; no table mirror can override it.
+    internal async Task<TaskHistory> ReadMetadataAsync<TVerification, TDispatch>(SqliteConnection connection,
+        string goalId, string taskId, JsonElement verification, JsonElement dispatch, JsonElement marker,
+        Func<string, string> projectVerification, Func<string, string> projectDispatch, CancellationToken token)
+    {
+        var counts = ReadMarker(marker, goalId, taskId);
+        if (counts is null) return new(new(Elements(verification), false), new(Elements(dispatch), false));
+        var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry>>();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT kind, sequence, CASE kind WHEN 'verification' THEN {projectVerification("entry_json")}
+                ELSE {projectDispatch("entry_json")} END
+                , json_type(entry_json)
+            FROM goal_task_history WHERE goal_id = $goal AND task_id = $task ORDER BY kind, sequence
+            """;
+        command.Parameters.AddWithValue("$goal", goalId);
+        command.Parameters.AddWithValue("$task", taskId);
+        using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            if (reader.IsDBNull(3) || reader.GetString(3) != "object")
+                throw HistoryError(goalId, taskId, reader.GetString(0), "history metadata entry must be an object");
+            var key = (taskId, reader.GetString(0));
+            if (!rows.TryGetValue(key, out var list)) rows.Add(key, list = []);
+            list.Add(new(reader.GetInt64(1), reader.GetString(2)));
+        }
+        var verifications = StrictEntries<TVerification>(rows.GetValueOrDefault((taskId, "verification")),
+            counts.Verification, goalId, taskId, "verification");
+        var dispatches = StrictEntries<TDispatch>(rows.GetValueOrDefault((taskId, "dispatch")),
+            counts.Dispatch, goalId, taskId, "dispatch");
+        return new(verifications, dispatches, counts.LatestVerificationInTable ? verifications.Entries[^1] : default,
+            counts.LatestDispatchInTable ? dispatches.Entries[^1] : default);
+    }
+
+    internal static string MetadataSql(string expression, IReadOnlyList<string> fields) =>
+        "json_object(" + string.Join(",", fields.Select(field =>
+        {
+            if (field.Length == 0 || field.Any(c => !char.IsAsciiLetterOrDigit(c)))
+                throw new ArgumentException("Metadata fields must be literal identifiers.");
+            return $"'{field}', json(({expression}) -> '$.{field}')";
+        })) + ")";
 
     private sealed record HistoryCounts(int? Verification, int? Dispatch,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool LatestVerificationInTable,
@@ -470,30 +528,117 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     private static JsonElement[] Elements(JsonElement value) =>
         value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? [] : value.EnumerateArray().ToArray();
 
+    internal GoalSnapshot? DecodeDocument(string documentText, DocumentMarkers markers)
+    {
+        var previous = _activeReadMarkers;
+        _activeReadMarkers = markers;
+        try
+        {
+            return JsonSerializer.Deserialize<GoalSnapshot>(documentText,
+                SharedReadOptions.GetValue(options, CreateReadOptions));
+        }
+        finally
+        {
+            _activeReadMarkers = previous;
+        }
+    }
+
+    private static JsonSerializerOptions CreateReadOptions(JsonSerializerOptions source)
+    {
+        var resolver = new DefaultJsonTypeInfoResolver();
+        resolver.Modifiers.Add(type =>
+        {
+            if (type.Type == typeof(GoalSnapshot))
+            {
+                var marker = type.CreateJsonPropertyInfo(typeof(JsonElement), GoalTimelineStore.MarkerProperty);
+                marker.Set = (_, value) => _activeReadMarkers!.Timeline = (JsonElement)value!;
+                type.Properties.Add(marker);
+            }
+            else if (type.Type == typeof(TaskSnapshot))
+            {
+                var marker = type.CreateJsonPropertyInfo(typeof(JsonElement), MarkerProperty);
+                marker.Set = (task, value) => _activeReadMarkers!.SetTask((TaskSnapshot)task, (JsonElement)value!);
+                type.Properties.Add(marker);
+            }
+        });
+        return new(source) { TypeInfoResolver = resolver };
+    }
+
+    internal sealed class DocumentMarkers
+    {
+        // Collect by object identity so a superseded Tasks property cannot contribute markers.
+        private Dictionary<TaskSnapshot, JsonElement>? _tasks;
+        internal JsonElement Timeline { get; set; }
+
+        internal void SetTask(TaskSnapshot task, JsonElement marker) =>
+            (_tasks ??= new(ReferenceEqualityComparer.Instance))[task] = marker;
+
+        internal IEnumerable<(string Id, JsonElement Marker)> ForTasks(IReadOnlyList<TaskSnapshot>? tasks)
+        {
+            if (_tasks is null || tasks is null) yield break;
+            foreach (var task in tasks)
+                if (task is not null && _tasks.TryGetValue(task, out var marker))
+                    yield return (task.Id, marker);
+        }
+    }
+
+    internal async Task<GoalSnapshot?> HydrateDecodedAsync(SqliteConnection connection, GoalSnapshot? snapshot,
+        DocumentMarkers markers, bool hotDocumentWasStub, CancellationToken token,
+        Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        if (snapshot is null || snapshot.IsMetadataOnly) return snapshot;
+        if (!hotDocumentWasStub)
+            return await ApplyMarkersAsync(connection, snapshot, markers.Timeline, markers.ForTasks(snapshot.Tasks), token);
+
+        var fields = await ReadArchiveMarkersAsync(connection, snapshot.Id, token, readObserver);
+        return await ApplyLegacyMarkersAsync(connection, snapshot, fields, token);
+    }
+
     internal async Task<GoalSnapshot?> HydrateAsync(SqliteConnection connection, GoalSnapshot? snapshot, string documentText,
-        CancellationToken token = default)
+        CancellationToken token = default, Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         // Leave malformed task collections to the existing domain validation.
         if (snapshot is null || snapshot.IsMetadataOnly) return snapshot;
         // Inspect only the marker fields, skipping the already-decoded task graphs. A hydrated
         // archive arrives with the hot stub text, so obtain its original marker-bearing payload.
-        var fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
+        var fields = DecodeLegacyMarkers(documentText, snapshot.Id, readObserver);
         if (fields?.IsMetadataOnly == true)
-        {
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
-            command.Parameters.AddWithValue("$id", snapshot.Id);
-            documentText = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token))
-                ?? throw new InvalidDataException($"Missing archive for goal '{snapshot.Id}'.");
-            fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
-        }
-        snapshot = await new GoalTimelineStore(options).ApplyAsync(connection, snapshot,
-            fields?.TimelineInTable ?? default, token);
+            fields = await ReadArchiveMarkersAsync(connection, snapshot.Id, token, readObserver);
+        return await ApplyLegacyMarkersAsync(connection, snapshot, fields, token);
+    }
+
+    private async Task<HistoryDocument?> ReadArchiveMarkersAsync(SqliteConnection connection, string goalId,
+        CancellationToken token, Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
+        command.Parameters.AddWithValue("$id", goalId);
+        var documentText = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token))
+            ?? throw new InvalidDataException($"Missing archive for goal '{goalId}'.");
+        return DecodeLegacyMarkers(documentText, goalId, readObserver);
+    }
+
+    private HistoryDocument? DecodeLegacyMarkers(string documentText, string goalId,
+        Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        readObserver?.Invoke(new("history-marker-decode", goalId, documentText.Length));
+        return JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
+    }
+
+    private Task<GoalSnapshot> ApplyLegacyMarkersAsync(SqliteConnection connection, GoalSnapshot snapshot,
+        HistoryDocument? fields, CancellationToken token) =>
+        ApplyMarkersAsync(connection, snapshot, fields?.TimelineInTable ?? default,
+            (fields?.Tasks ?? []).OfType<HistoryTask>().Select(task => (task.Id, task.HistoryInTable)), token);
+
+    private async Task<GoalSnapshot> ApplyMarkersAsync(SqliteConnection connection, GoalSnapshot snapshot,
+        JsonElement timelineMarker, IEnumerable<(string Id, JsonElement Marker)> taskMarkers, CancellationToken token)
+    {
+        snapshot = await new GoalTimelineStore(options).ApplyAsync(connection, snapshot, timelineMarker, token);
         if (snapshot.Tasks is null) return snapshot;
         var markers = new Dictionary<string, HistoryMarker>();
-        foreach (var task in fields?.Tasks ?? [])
-            if (task is not null && ReadMarker(task.HistoryInTable, snapshot.Id, task.Id) is { } counts)
-                markers[task.Id] = counts;
+        foreach (var (taskId, marker) in taskMarkers)
+            if (ReadMarker(marker, snapshot.Id, taskId) is { } counts)
+                markers[taskId] = counts;
         var rows = await ReadRowsAsync(connection, snapshot.Id, null, token, markers.Keys.FirstOrDefault());
         var tasks = new List<TaskSnapshot>();
         foreach (var task in snapshot.Tasks)
@@ -519,7 +664,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                     ? history.LatestDispatch.Deserialize<TaskDispatchSnapshot>(options) : task.LastDispatch
             });
         }
-        return snapshot with { Tasks = tasks };
+        return await _buildHistory.HydrateAsync(connection, snapshot with { Tasks = tasks }, token);
     }
 
     private sealed record HistoryDocument(bool IsMetadataOnly, IReadOnlyList<HistoryTask?>? Tasks,

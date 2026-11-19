@@ -11,12 +11,14 @@ internal static class ImpactReplay
         DateTimeOffset? since = null, int limit = 100, IReadOnlyList<string>? floor = null,
         string? tempCheckoutParent = null,
         IImpactReplaySink? observation = null, CancellationToken cancellationToken = default,
-        ImpactReplayExecutionSource? source = null, ImpactReplayHistoryQuery? historyQuery = null)
+        ImpactReplayExecutionSource? source = null, ImpactReplayHistoryQuery? historyQuery = null,
+        ImpactReplayFixedSet? attemptSet = null, string? attemptSetPath = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
         var sink = observation ?? ImpactReplayNullSink.Instance;
+        var effectiveSince = attemptSet is null ? since : null;
         var configuration = new ImpactReplayRunConfiguration(executionDirectory, orchestratorDirectory,
-            since, limit, floor, tempCheckoutParent);
+            effectiveSince, limit, floor, tempCheckoutParent, attemptSet?.Version, attemptSetPath);
         var loadingDiagnostics = new ImpactReplayDiagnostics(sink);
         var skipped = new List<ImpactReplayDiagnostic>();
         var unreplayable = new List<ImpactReplayDiagnostic>();
@@ -50,14 +52,22 @@ internal static class ImpactReplay
         var floorNames = new SortedSet<string>(floor ?? [], StringComparer.Ordinal);
         sink.Phase(ImpactReplayPhase.InventoryLoading);
         cancellationToken.ThrowIfCancellationRequested();
-        var attempts = source.LoadAttempts(orchestratorDirectory, since, loadingDiagnostics, sink, cancellationToken);
+        var attempts = source.LoadAttempts(orchestratorDirectory, effectiveSince, loadingDiagnostics, sink, cancellationToken);
+        if (attemptSet is not null)
+        {
+            var listedIds = attemptSet.AttemptIds.ToHashSet(StringComparer.Ordinal);
+            attempts = attempts.Where(attempt => listedIds.Contains(attempt.AttemptId)).ToArray();
+            var unmatchedIds = attemptSet.AttemptIds.Except(attempts.Select(attempt => attempt.AttemptId), StringComparer.Ordinal);
+            foreach (var id in unmatchedIds)
+                loadingDiagnostics.Add(new(id, "Listed attempt id has no loadable stored attempt."));
+        }
         skipped.AddRange(loadingDiagnostics);
         sink.InventorySelected(attempts.Count);
         var ordinal = 0;
         foreach (var attempt in attempts)
         {
             // Skipped cases do not consume the historical replay limit.
-            if (records.Count + unreplayable.Count >= limit) break;
+            if (attemptSet is null && records.Count + unreplayable.Count >= limit) break;
             cancellationToken.ThrowIfCancellationRequested();
             sink.BeginCase(attempt, ++ordinal);
             var context = new ImpactReplayCaseContext();
