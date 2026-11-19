@@ -37,7 +37,18 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
 
     internal Action? Invalidate { get; set; }
     private OwnerConsoleProviderRowModel? Selected => _rows.Length == 0 ? null : _rows[_selected];
-    public string Title => "Provider connections";
+    internal const string TabTitle = "Provider connections";
+    private const string BrowseKey = "Up/Down provider";
+    private const string CheckKey = "c check";
+    private const string SignInKey = "s sign in";
+    private const string DeviceCodeKey = "d device code";
+    private const string ReturnKey = "t return";
+    private const string StopWaitingKey = "x stop waiting";
+    private const string ReloadKey = "r reload";
+    // The help dialog lists these keys for the tab (OwnerConsoleBindings); KeyHint below uses the same constants.
+    internal const string HelpKeys = BrowseKey + "  " + CheckKey + "  " + SignInKey + "  " + DeviceCodeKey + "  " +
+        ReturnKey + "  " + StopWaitingKey + "  " + ReloadKey;
+    public string Title => TabTitle;
     public bool Editing => false;
     public int SelectedLine => _selected;
     public IReadOnlyList<string> Lines => RenderLines().ToArray();
@@ -48,16 +59,16 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     {
         get
         {
-            if (Selected is not { } row) return "r reload  Left/Right tab  Esc/q back";
+            if (Selected is not { } row) return ReloadKey + "  Left/Right tab  Esc/q back";
             var action = PrimaryAction(row);
             var related = action switch
             {
-                "t return" => "  x stop waiting",
-                "s sign in" when _signIn.DeviceCodeAvailable(Representative(row)) => "  d device code",
+                ReturnKey => "  " + StopWaitingKey,
+                SignInKey when _signIn.DeviceCodeAvailable(Representative(row)) => "  " + DeviceCodeKey,
                 _ => ""
             };
-            var check = action == "c check" ? "" : "  c check";
-            return $"{action}{related}{check}  r reload  Up/Down provider  Left/Right tab  Esc/q back";
+            var check = action == CheckKey ? "" : "  " + CheckKey;
+            return $"{action}{related}{check}  {ReloadKey}  {BrowseKey}  Left/Right tab  Esc/q back";
         }
     }
 
