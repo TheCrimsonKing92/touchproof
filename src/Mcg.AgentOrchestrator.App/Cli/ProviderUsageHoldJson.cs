@@ -36,8 +36,8 @@ internal static class ProviderUsageHoldJson
             fields.Add("reason", row.Reason.ToString());
             fields.Add("scope", row.Hold.BindingScope);
             fields.Add("model", row.Hold.ModelName);
-            fields.Add("providerResetAt", ProviderUsageHoldView.FormatProviderReset(row.ProviderResetAt));
         }
+        fields.Add("providerResetAt", ProviderUsageHoldView.FormatProviderReset(row.ProviderResetAt));
 
         return fields;
     }

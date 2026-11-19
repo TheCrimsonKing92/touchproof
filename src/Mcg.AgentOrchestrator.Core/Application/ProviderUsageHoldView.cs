@@ -77,9 +77,8 @@ public static class ProviderUsageHoldView
     public static string FormatStatusLine(ProviderUsageHoldRow row)
     {
         var source = $"source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}";
-        var evidence = row.HasAdditionalEvidence
-            ? $" | reason={row.Reason} | provider_reset={FormatProviderReset(row.ProviderResetAt)}"
-            : "";
+        var evidence = row.HasAdditionalEvidence ? $" | reason={row.Reason}" : "";
+        evidence += $" | provider_reset={FormatProviderReset(row.ProviderResetAt)}";
         if (row.OverdueSince is { } due && row.Schedule is { } overdue)
             return $"  {row.Hold.BindingKey} | state=probe-overdue | due={ProviderBudgetHoldSchedules.FormatInstant(due)} | balance=unverified since {ProviderBudgetHoldSchedules.FormatInstant(row.LastObservedAt ?? row.Hold.PlacedAt)} | attempt={overdue.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(due)} | reset_source={overdue.ResetSource} | last_probe={overdue.LastProbeOutcome} (historical) | {source}{evidence}";
         return row.Schedule is { } schedule
@@ -90,7 +89,7 @@ public static class ProviderUsageHoldView
     public static string FormatProviderReset(DateTimeOffset? reset) =>
         reset is { } at ? ProviderBudgetHoldSchedules.FormatInstant(at) : "unknown";
 
-    // Provider-wide hard budget failures with no reset keep the original status row contract.
+    // Provider-wide hard budget failures with no reset use the compact hold metadata.
     internal static bool HasAdditionalEvidence(ProviderBudgetExhaustionHold hold, DateTimeOffset? providerResetAt) =>
         hold.Reason == ProviderFailureKind.AuthenticationRequired || hold.HasUsageLimitDiagnostic ||
         hold.BindingScope == "provider+credential" || hold.ModelName is not null || providerResetAt is not null;

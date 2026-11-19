@@ -50,6 +50,7 @@ public sealed class ProviderHoldDispatchScenarioTests
         else
         {
             Assert.Contains($"provider_reset={reset}", blocked);
+            Assert.Equal(reset, OwnerEventFields.Field(evt, "provider_reset"));
             Assert.Contains($"provider reset: {reset}", reason);
         }
     }

@@ -26,7 +26,7 @@ public sealed class ProviderUsageHoldEventsScenarioTests
         Assert.Equal("provider-hold-placed", placed.EventKind);
         Assert.Equal(goal.Id.Value, placed.GoalId);
         Assert.Equal(DateTimeOffset.Parse("2026-10-17T11:08:00Z"), placed.Timestamp);
-        Assert.Equal($"PROVIDER_HOLD_PLACED source={source} placed_at=2026-10-17T11:08:00.0000000+00:00 next_probe=2026-10-17T11:38:00.0000000+00:00 reset_source=backoff attempt=1 binding={Key}", placed.Detail);
+        Assert.Equal($"PROVIDER_HOLD_PLACED source={source} placed_at=2026-10-17T11:08:00.0000000+00:00 next_probe=2026-10-17T11:38:00.0000000+00:00 reset_source=backoff attempt=1 provider_reset=unknown binding={Key}", placed.Detail);
         foreach (var at in new[] { "2026-10-17T11:20:00Z", "2026-10-17T11:37:00Z" })
         {
             scenario.At(at);

@@ -49,9 +49,11 @@ internal sealed class ConductorProviderHoldWatch
                 if (!_announced.TryGetValue(binding, out var announced) || announced.PlacedAt != hold.PlacedAt)
                 {
                     var schedule = row.Schedule;
+                    var reset = row.Reason == ProviderFailureKind.BudgetExhausted
+                        ? $" provider_reset={ProviderUsageHoldView.FormatProviderReset(row.ProviderResetAt)}" : "";
                     _restored.Remove(binding);
                     _writer.Append("provider-hold-placed", hold.SourceGoalId.Value,
-                        $"PROVIDER_HOLD_PLACED source={Prefix(hold.SourceGoalId.Value)}/{Prefix(hold.SourceTaskId.Value)} placed_at={Instant(hold.PlacedAt)} next_probe={(schedule is null ? "unavailable" : Instant(schedule.NextProbeAt))} reset_source={schedule?.ResetSource ?? "unavailable"} attempt={(schedule?.Attempt ?? 0).ToString(CultureInfo.InvariantCulture)}{(row.OverdueSince is { } overdue ? $" state=probe-overdue due={Instant(overdue)}" : "")}{ScopeField(hold.BindingKey)}{DiagnosisField(row)} binding={binding}", timestamp: now);
+                        $"PROVIDER_HOLD_PLACED source={Prefix(hold.SourceGoalId.Value)}/{Prefix(hold.SourceTaskId.Value)} placed_at={Instant(hold.PlacedAt)} next_probe={(schedule is null ? "unavailable" : Instant(schedule.NextProbeAt))} reset_source={schedule?.ResetSource ?? "unavailable"} attempt={(schedule?.Attempt ?? 0).ToString(CultureInfo.InvariantCulture)}{(row.OverdueSince is { } overdue ? $" state=probe-overdue due={Instant(overdue)}" : "")}{ScopeField(hold.BindingKey)}{DiagnosisField(row)}{reset} binding={binding}", timestamp: now);
                     _announced[binding] = new(hold.SourceGoalId.Value, hold.SourceTaskId.Value, hold.PlacedAt);
                 }
                 AnnounceProbe(scope, hold.BindingKey, now);
