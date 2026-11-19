@@ -214,7 +214,7 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
         }
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
