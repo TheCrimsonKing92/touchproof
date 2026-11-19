@@ -96,7 +96,8 @@ public sealed class ConductLoopKernelDependencyFallbackTests
                 metadata.Select(row => row.Id).Order(StringComparer.Ordinal));
             Assert.Equal(metadata.Select(row => row.UpdatedAt).OrderDescending(StringComparer.Ordinal),
                 metadata.Select(row => row.UpdatedAt));
-            var listSql = Assert.Single(statements);
+            // The observer also records connection setup PRAGMAs.
+            var listSql = Assert.Single(statements, sql => !sql.StartsWith("PRAGMA ", StringComparison.OrdinalIgnoreCase));
             Assert.Contains("WHERE status COLLATE NOCASE NOT IN", listSql, StringComparison.Ordinal);
             Assert.Contains("OR id IN (SELECT value FROM json_each($ids))", listSql, StringComparison.Ordinal);
             Assert.Contains("ORDER BY updated_at DESC", listSql, StringComparison.Ordinal);
@@ -111,7 +112,7 @@ public sealed class ConductLoopKernelDependencyFallbackTests
             var status = Assert.Single(await repository.ListConductLoopGoalStatusesByIdAsync(largeIdSet));
             Assert.Equal(requested.Id.Value, status.Key);
             Assert.Equal(nameof(GoalStatus.Completed), status.Value);
-            var statusSql = Assert.Single(statements);
+            var statusSql = Assert.Single(statements, sql => !sql.StartsWith("PRAGMA ", StringComparison.OrdinalIgnoreCase));
             Assert.StartsWith("SELECT id, status", statusSql, StringComparison.Ordinal);
             Assert.DoesNotContain("snapshot_json", statusSql, StringComparison.OrdinalIgnoreCase);
         }
