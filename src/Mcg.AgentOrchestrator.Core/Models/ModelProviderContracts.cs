@@ -361,7 +361,8 @@ public sealed record TaskDispatchRecord(
     FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
     FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
     // Host-captured dispatch input, never reconstructed from completion-time criteria.
-    string? PlannerEvidenceCriteriaVersionHash = null)
+    string? PlannerEvidenceCriteriaVersionHash = null,
+    string? ClaudeApiHoldIdentity = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

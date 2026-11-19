@@ -9,6 +9,15 @@ public sealed class ProviderHoldHistory
     private readonly SortedDictionary<string, Goal> _retained = new(StringComparer.Ordinal);
     private readonly Evaluator _evaluate;
 
+    internal static IReadOnlyList<string> HoldOutcomeRules { get; } =
+    [
+        TaskOutcomeRules.ProviderBudgetExhausted.Token,
+        TaskOutcomeRules.ProviderAuthentication.Token,
+        TaskOutcomeRules.SubscriptionLimit.Token,
+        TaskOutcomeRules.ProviderRateLimit.Token,
+        "recoverable-subscription-limit"
+    ];
+
     public ProviderHoldHistory() : this(Answer) { }
 
     internal ProviderHoldHistory(Evaluator evaluator)
@@ -36,7 +45,7 @@ public sealed class ProviderHoldHistory
             if (!ids.Contains(goal.Id.Value)) _retained[goal.Id.Value] = goal;
 
         var scope = Scope(working);
-        var answers = new Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?>();
+        var answers = new Dictionary<string, ProviderBudgetHoldSchedule?>(StringComparer.OrdinalIgnoreCase);
         var exhaustedBindings = ExhaustedBindings(scope);
         bool dropped;
         do
@@ -75,8 +84,7 @@ public sealed class ProviderHoldHistory
         IEnumerable<ModelFitHistoryRow> rows, IReadOnlySet<string> workingGoalIds)
     {
         var history = rows.ToArray();
-        var exhaustions = history.Where(row => string.Equals(
-            row.OutcomeRule, TaskOutcomeRules.ProviderBudgetExhausted.Token, StringComparison.Ordinal)).ToArray();
+        var exhaustions = history.Where(row => HoldOutcomeRules.Contains(row.OutcomeRule, StringComparer.Ordinal)).ToArray();
         var candidates = exhaustions.Select(row => row.GoalId).ToHashSet(StringComparer.Ordinal);
         foreach (var provider in exhaustions.GroupBy(row => row.ProviderName, StringComparer.OrdinalIgnoreCase))
         {
@@ -92,43 +100,45 @@ public sealed class ProviderHoldHistory
     }
 
     private bool SameAnswers(Goal goal, IReadOnlyCollection<Goal> scope, IReadOnlyCollection<Goal> without,
-        Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?> answers,
-        HashSet<SubscriptionLimitEvidence.ProviderBindingKey> exhaustedBindings,
-        out Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?> withoutAnswers)
+        Dictionary<string, ProviderBudgetHoldSchedule?> answers,
+        IReadOnlyCollection<ProviderHoldBinding> exhaustedBindings,
+        out Dictionary<string, ProviderBudgetHoldSchedule?> withoutAnswers)
     {
-        withoutAnswers = new();
-        var bindings = goal.Tasks.SelectMany(task => task.DispatchHistory)
-            .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName,
-                Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
-        foreach (var binding in bindings)
+        withoutAnswers = new(StringComparer.OrdinalIgnoreCase);
+        var dispatches = goal.Tasks.SelectMany(task => task.DispatchHistory).ToArray();
+        foreach (var binding in exhaustedBindings)
         {
-            // TryGetProviderBudgetExhaustionHold requires a matched exhaustion verification.
-            // Without one on this binding, neither this scope nor any subset can hold it.
-            if (!exhaustedBindings.Contains(SubscriptionLimitEvidence.BuildProviderBindingKey(
-                    binding.Provider, binding.Credential))) continue;
-            if (!answers.TryGetValue(binding, out var answer))
+            if (!dispatches.Any(dispatch => ProviderHoldBinding.Matches(dispatch, binding.Key))) continue;
+            if (!answers.TryGetValue(binding.Key, out var answer))
             {
-                answer = _evaluate(scope, binding.Provider, binding.Credential);
-                answers.Add(binding, answer);
+                answer = Evaluate(scope, binding);
+                answers.Add(binding.Key, answer);
             }
-            var withoutAnswer = _evaluate(without, binding.Provider, binding.Credential);
-            withoutAnswers.Add(binding, withoutAnswer);
+            var withoutAnswer = Evaluate(without, binding);
+            withoutAnswers.Add(binding.Key, withoutAnswer);
             if (answer != withoutAnswer) return false;
         }
         return true;
     }
 
-    private static HashSet<SubscriptionLimitEvidence.ProviderBindingKey> ExhaustedBindings(
+    private ProviderBudgetHoldSchedule? Evaluate(IReadOnlyCollection<Goal> scope, ProviderHoldBinding binding) =>
+        binding.Model is null ? _evaluate(scope, binding.Provider, binding.Credential) :
+            ProviderLimitSignals.TryGetExactHold(scope, binding, out var hold)
+                ? ProviderBudgetHoldSchedules.Evaluate(scope, hold, hold.PlacedAt) : null;
+
+    internal static IReadOnlyCollection<ProviderHoldBinding> ExhaustedBindings(
         IReadOnlyCollection<Goal> scope)
     {
-        var bindings = new HashSet<SubscriptionLimitEvidence.ProviderBindingKey>();
+        var bindings = new Dictionary<string, ProviderHoldBinding>(StringComparer.OrdinalIgnoreCase);
         foreach (var task in scope.SelectMany(goal => goal.Tasks))
             foreach (var verification in task.VerificationHistory)
-                if (verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-                    SubscriptionLimitEvidence.FindDispatchForVerification(task, verification) is { } dispatch)
-                    bindings.Add(SubscriptionLimitEvidence.BuildProviderBindingKey(
-                        dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory));
-        return bindings;
+                if (ProviderHoldEvidence.Read(verification) is { Confirmed: true } evidence &&
+                    ProviderHoldBinding.FindDispatch(task, verification) is { } dispatch)
+                {
+                    var binding = ProviderHoldBinding.From(dispatch, evidence.ScopedModel(dispatch));
+                    bindings.TryAdd(binding.Key, binding);
+                }
+        return bindings.Values;
     }
 
     internal static ProviderBudgetHoldSchedule? Answer(

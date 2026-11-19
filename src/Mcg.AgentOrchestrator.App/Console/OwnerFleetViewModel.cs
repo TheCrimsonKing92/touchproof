@@ -62,11 +62,15 @@ internal sealed record OwnerFleetProviderHoldNode(string BindingKey, string Name
     internal DateTimeOffset? OverdueSince { get; init; }
     internal DateTimeOffset? LastObservedAt { get; init; }
     internal string? Diagnosis { get; init; }
+    internal DateTimeOffset? ProviderResetAt { get; init; }
+    internal ProviderFailureKind HoldReason { get; init; } = ProviderFailureKind.BudgetExhausted;
     internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create(BindingKey,
         new("binding", "Binding", BindingKey), new("name", "Name", Name), new("source-goal", "Source goal ID", SourceGoalId),
         new("source-task", "Source task ID", SourceTaskId), new("placed", "Placed at", PlacedAt.ToString("O")),
         new("next", "Next probe", NextProbeAt?.ToString("O")), new("attempt", "Attempt", Attempt?.ToString()),
-        new("reset", "Reset source", ResetSource), new("last", "Last probe", LastProbe));
+        new("reset", "Reset source", ResetSource), new("last", "Last probe", LastProbe),
+        new("reason", "Hold reason", HoldReason.ToString()),
+        new("provider-reset", "Provider reset", ProviderResetAt?.ToString("O") ?? "unknown"));
 }
 
 internal static class OwnerFleetViewModelBuilder
@@ -100,7 +104,8 @@ internal static class OwnerFleetViewModelBuilder
                 { SourceGoalId = row.Hold.SourceGoalId.Value, SourceTaskId = row.Hold.SourceTaskId.Value,
                   OverdueSince = row.OverdueSince is { } due ? TimeZoneInfo.ConvertTime(due, zone) : null,
                   LastObservedAt = row.LastObservedAt is { } observed ? TimeZoneInfo.ConvertTime(observed, zone) : null,
-                  Diagnosis = row.Diagnosis }).ToArray());
+                  Diagnosis = row.Diagnosis, HoldReason = row.Reason,
+                  ProviderResetAt = row.ProviderResetAt is { } reset ? TimeZoneInfo.ConvertTime(reset, zone) : null }).ToArray());
 
     internal static OwnerFleetViewModel Load(OrchestratorWorkspace workspace, IConductorLiveness liveness, TimeProvider? clock = null,
         OwnerConsoleHostRowOwner? owners = null) =>

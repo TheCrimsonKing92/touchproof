@@ -102,9 +102,11 @@ internal static class ProviderHoldSeedEvidenceReader
         DateTimeOffset? LatestProviderBudgetRecoveryAt);
 
     private sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,
-        DateTimeOffset DispatchedAt, string? ProviderName, string? ClaudeCredentialSourceDirectory)
+        DateTimeOffset DispatchedAt, string? ProviderName, string? ClaudeCredentialSourceDirectory,
+        string? ModelName, string? ClaudeApiHoldIdentity)
     {
         internal TaskDispatchSnapshot Snapshot() => new(WorkerName, Command, WorkingDirectory, DispatchedAt,
-            ProviderName: ProviderName, ClaudeCredentialSourceDirectory: ClaudeCredentialSourceDirectory);
+            ProviderName: ProviderName, ModelName: ModelName, ClaudeCredentialSourceDirectory: ClaudeCredentialSourceDirectory,
+            ClaudeApiHoldIdentity: ClaudeApiHoldIdentity);
     }
 }

@@ -10,6 +10,8 @@ public sealed class ProviderHoldAvailabilityProbeTests
     [InlineData(0, "UNAVAILABLE", "", false, "failed")]
     [InlineData(0, "The prompt says AVAILABLE", "", false, "failed")]
     [InlineData(1, "", "API error (status 402 Payment Required): Grok Build usage balance exhausted", false, "exhausted")]
+    [InlineData(1, "You've hit your weekly limit · resets in 3h", "", false, "exhausted")]
+    [InlineData(1, "You've hit your grok limit", "", false, "failed")]
     [InlineData(1, "", "connection refused", false, "failed")]
     [InlineData(1, "", "No auth credentials for cli-chat-proxy\nNot signed in", false, "authentication-required")]
     [InlineData(1, "Not signed in", "", false, "authentication-required")]
@@ -19,6 +21,7 @@ public sealed class ProviderHoldAvailabilityProbeTests
     [InlineData(1, "", "```\nNot signed in\n```", false, "failed")]
     [InlineData(0, "AVAILABLE", "Not signed in", false, "available")]
     [InlineData(0, "AVAILABLE", "", true, "failed")]
+    [InlineData(1, "You've hit your weekly limit", "", true, "failed")]
     public async Task MinimalRequest_IsBoundedAndRequiresPositiveEvidence(int exit, string stdout, string stderr, bool timeout, string expected)
     {
         using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");

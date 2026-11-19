@@ -47,10 +47,14 @@ public static class SubscriptionLimitEvidence
             IsRecoverableSubscriptionLimitFailure(latest);
     }
 
-    public static int CountRecoverableSubscriptionLimitFailures(TaskSpec task)
+    public static int CountRecoverableSubscriptionLimitFailures(TaskSpec task) =>
+        CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds: true);
+
+    internal static int CountRecoverableSubscriptionLimitFailures(TaskSpec task, bool includeProviderHolds)
     {
         return task.VerificationHistory.Count(verification =>
             !verification.Succeeded &&
+            (includeProviderHolds || !ProviderHoldRetry.IsHoldInterruption(verification)) &&
             IsRecoverableSubscriptionLimitFailure(verification));
     }
 
@@ -94,10 +98,18 @@ public static class SubscriptionLimitEvidence
 
     internal sealed record ProviderBindingKey(string Key, string Scope);
 
-    internal static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line) =>
-        ProviderLimitEvidenceParser.TryGetEvidenceLine(
-            DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
-            out line) || TryGetCliRefusalLimitLine(verification, out line);
+    internal static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line)
+    {
+        if (ProviderLimitEvidenceParser.TryGetEvidenceLine(
+                DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
+                out line) || TryGetCliRefusalLimitLine(verification, out line))
+            return true;
+
+        var hold = ProviderHoldEvidence.Read(verification);
+        if (!hold.IsWeeklyUsageLimitReached) return false;
+        line = hold.Line;
+        return true;
+    }
 
     internal static bool TryGetCliAbsoluteResetRetryAfter(
         string line, DateTimeOffset completedAt, out DateTimeOffset retryAfter) =>

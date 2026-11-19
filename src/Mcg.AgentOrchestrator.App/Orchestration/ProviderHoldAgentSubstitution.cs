@@ -55,7 +55,8 @@ internal sealed class ProviderHoldAgentSubstitution(
             var view = scratch.ReassignTaskAgent(goal.Id, task.Id, candidate);
             var check = preflight(scratch.GetGoal(goal.Id), view, scratch.ProviderHoldScope);
             if (check.Allowed)
-                return hold is not null
+                return hold is not null && (cooldown is null ||
+                        !ProviderHoldBinding.BaseKey(hold.BindingKey).Equals(cooldown.BindingKey, StringComparison.OrdinalIgnoreCase))
                     ? new Result.Substitute(candidate, hold.BindingKey, hold.EvidenceReceipt, null, rejections, holdIdentity)
                     : new Result.Substitute(candidate, cooldown!.BindingKey, cooldown.EvidenceReceipt, cooldown, rejections, holdIdentity);
             var blocked = check.Findings.Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -141,14 +142,11 @@ internal sealed class ProviderHoldAgentSubstitution(
 
     private ProviderBudgetExhaustionHold? FindHold(IReadOnlyList<string> findings)
     {
-        var bindings = kernel.ProviderHoldScope.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory)
-            .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName,
-                Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
-        foreach (var binding in bindings)
-            if (ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope,
-                    binding.Provider, binding.Credential, out var hold) &&
-                findings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase) &&
-                    finding.Contains($"binding {hold.BindingKey} (", StringComparison.OrdinalIgnoreCase)))
+        var scope = kernel.ProviderHoldScope;
+        foreach (var binding in ProviderHoldBinding.Candidates(scope))
+            if (findings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase) &&
+                    finding.Contains($"binding {binding.Key} (", StringComparison.OrdinalIgnoreCase)) &&
+                ProviderLimitSignals.TryGetExactHold(scope, binding, out var hold))
                 return hold;
         return null;
     }

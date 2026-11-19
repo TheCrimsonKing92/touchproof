@@ -40,7 +40,6 @@ public sealed partial class AgentOrchestratorKernel
     private const int ProviderConnectivityRetryLimit = 3;
     private const int ProviderInterruptionRetryLimit = 3;
     private const int VerificationContractRepairLimit = 2;
-    private static readonly TimeSpan UnparsedSubscriptionLimitRetryDelay = TimeSpan.FromMinutes(5);
 
     public void RecordTaskVerification(GoalId goalId, TaskId taskId, TaskVerificationRecord verification)
     {
@@ -406,6 +405,13 @@ public sealed partial class AgentOrchestratorKernel
             ResetAnsweredHumanInputSuppressionStreaks(goal.Id, task.Id);
         }
 
+        if (ProviderHoldRetry.TryRequeueInconclusiveCheck(goal, task, verification, outcome, _clock.UtcNow, _eventWriter))
+        {
+            Append(goal, taskId, ProgressKind.TaskRetried, "Provider availability check was inconclusive; the held task remains eligible.");
+            RefreshGoalStatus(goal);
+            return;
+        }
+
         if (outcome.Kind == DispatchOutcomeKind.VerificationInconclusive)
         {
             if (!string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
@@ -453,18 +459,7 @@ public sealed partial class AgentOrchestratorKernel
         if (!verification.Succeeded &&
             outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit)
         {
-            if (!ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
-                retryAfter = _clock.UtcNow + UnparsedSubscriptionLimitRetryDelay;
-            task.SetSubscriptionRetryAfter(retryAfter);
-
-            var recoverableLimitFailures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
-            task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
-            task.ClearLatestVerification();
-            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultSubscriptionLimit);
-            var message = recoverableLimitFailures >= DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold
-                ? $"Dispatch hit a recoverable subscription usage limit {recoverableLimitFailures} time(s); review model, profile, or timing before redispatch: {task.LastDispatch.Command}"
-                : $"Dispatch hit a recoverable subscription usage limit; task is ready to retry later: {task.LastDispatch.Command}";
-            Append(goal, taskId, ProgressKind.TaskRetried, message);
+            Append(goal, taskId, ProgressKind.TaskRetried, ProviderHoldRetry.RequeueSubscriptionLimit(goal, task, verification, _clock.UtcNow, _eventWriter));
             RefreshGoalStatus(goal);
             return;
         }
