@@ -28,7 +28,7 @@ internal static class ProviderHoldRetry
     {
         var evidence = ProviderHoldEvidence.Read(verification);
         var retryAfter = evidence.ResetAt ??
-            (!evidence.Confirmed && ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var inferred)
+            (ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var inferred)
                 ? inferred : now + UnparsedLimitDelay);
         task.SetSubscriptionRetryAfter(retryAfter);
         var failureCount = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds: false);
