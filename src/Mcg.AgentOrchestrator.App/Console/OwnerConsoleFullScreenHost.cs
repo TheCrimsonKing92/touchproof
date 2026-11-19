@@ -158,14 +158,7 @@ internal static class OwnerConsoleFullScreenHost
                     landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument), sound: sound,
                     conductorPolicyPath: Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"), workspace: workspace,
                     agentsSettings: new(workspace.AgentCatalogPath, workspace.ModelFunctionCatalogPath, workspace.WorkerProfilePath),
-                    providerConnections: new ProviderConnectionsConsoleGateway(
-                        () => WorkerProfileStore.Load(workspace.WorkerProfilePath),
-                        state,
-                        () =>
-                        {
-                            WorkspaceStoreSetup.EnsureState(workspace);
-                            return new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-                        }, new ProviderConnectionStatusAdapters(workspace.RootDirectory, time: clock), clock),
+                    providerConnections: ProviderConnectionsConsoleGateway.ForWorkspace(workspace, state, clock),
                     providerSignIn: new ProviderSignInLauncher(workspace.RootDirectory));
                 view = new(app, controller, () => refresh.RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
                     projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);

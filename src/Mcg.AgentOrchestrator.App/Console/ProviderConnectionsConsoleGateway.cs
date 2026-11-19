@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -19,6 +20,15 @@ internal sealed class ProviderConnectionsConsoleGateway(
     ProviderConnectionStatusAdapters adapters,
     TimeProvider clock) : IProviderConnectionsConsoleGateway
 {
+    internal static ProviderConnectionsConsoleGateway ForWorkspace(OrchestratorWorkspace workspace,
+        IProviderConnectionEvidenceQueries queries, TimeProvider clock) => new(
+        () => WorkerProfileStore.Load(workspace.WorkerProfilePath), queries,
+        () =>
+        {
+            WorkspaceStoreSetup.EnsureState(workspace);
+            return new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        }, new ProviderConnectionStatusAdapters(workspace.RootDirectory, time: clock), clock);
+
     public async Task<IReadOnlyList<OwnerConsoleProviderConnection>> ListAsync(CancellationToken token)
     {
         var catalog = loadProfiles();

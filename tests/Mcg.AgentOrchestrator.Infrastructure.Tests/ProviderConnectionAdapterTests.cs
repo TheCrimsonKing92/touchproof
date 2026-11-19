@@ -133,7 +133,7 @@ public sealed class ProviderConnectionAdapterTests
             var adapter = new ProviderConnectionStatusAdapters(root.FullName, (request, token) =>
             {
                 Assert.Equal(WorkerShell.Executable, request.FileName);
-                Assert.StartsWith("$PSModuleAutoLoadingPreference", request.Arguments[^1]);
+                Assert.Contains("$PSModuleAutoLoadingPreference = 'None'", request.Arguments[^1]);
                 return WorkerProcessRunner.RunBoundedDirectAsync(request with
                 {
                     Arguments = [.. request.Arguments.SkipLast(1), setup + "\n" + request.Arguments[^1]],

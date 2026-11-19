@@ -99,10 +99,14 @@ public sealed class ProviderConnectionStatusAdapters(
     private static WorkerProcessDirectRunRequest CreateWindowsProbeRequest(string executable, string[] arguments, string directory)
     {
         // Resolve as dispatch does, then invoke that exact application within the same bounded shell.
-        // Disable module autoload during discovery because it can execute module initialization code.
+        // Disable module autoload only during discovery. The resolved script uses the normal shell settings.
         var command = $$"""
-            $PSModuleAutoLoadingPreference = 'None'
-            try { $launcher = Get-Command -Name '{{executable}}' -ErrorAction Stop }
+            try {
+                $launcher = & {
+                    $PSModuleAutoLoadingPreference = 'None'
+                    Get-Command -Name '{{executable}}' -ErrorAction Stop
+                }
+            }
             catch [System.Management.Automation.CommandNotFoundException] {
                 [Console]::WriteLine('missing')
                 exit 0
