@@ -297,7 +297,9 @@ try
         return ExitCompletedStartupCommand(CliImpactReplayCommand.Run(startupArgs, workspace));
     }
 
-    CliCommandHelp.ThrowIfInvalidFlags(startupArgs);
+    // This command validates its own arguments without echoing possibly sensitive values.
+    if (!CliProviderConnectionsCommand.IsCommand(startupArgs))
+        CliCommandHelp.ThrowIfInvalidFlags(startupArgs);
 }
 catch (ArgumentException ex)
 {
@@ -394,6 +396,27 @@ if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArg
         registry: projectRegistry, repositoryRoot: repoRoot));
 if (CliOperatorIntentRoute.IsServed(startupArgs))
     return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
+
+if (CliProviderConnectionsCheckCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliProviderConnectionsCheckCommand.ExecuteWorkspaceAsync(startupArgs, workspace,
+        () => ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace)));
+}
+if (CliProviderConnectionsCommand.IsListing(startupArgs))
+{
+    try
+    {
+        var catalog = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+        IOrchestratorStateQueries stateQueries = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+        return ExitCompletedStartupCommand(await CliProviderConnectionsCommand.ExecuteListingAsync(startupArgs, catalog,
+            stateQueries, new ProviderConnectionStatusAdapters(workspace.RootDirectory), Console.Out, Console.Error));
+    }
+    catch (Exception)
+    {
+        Console.Error.WriteLine("Provider connection configuration could not be read.");
+        return ExitCompletedStartupCommand(1);
+    }
+}
 
 if (CliGoalBranchCommitCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliGoalBranchCommitCommand.Run(startupArgs, workspace));

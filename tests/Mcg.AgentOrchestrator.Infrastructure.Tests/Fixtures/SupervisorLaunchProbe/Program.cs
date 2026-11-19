@@ -3,6 +3,9 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows job fixture required.");
+if (args[0] == "completion-build") return await CompletionBuildOperatorProbe.Run(args[1], args[2], args[3]);
+if (args[0] == "completion-build-host") return CompletionBuildOperatorHost.Run(args[1], args[2], args[3]);
+if (args[0] == "completion-build-gate") return CompletionBuildOperatorProbe.Gate(args[1]);
 if (args[0] == "conductor-start-caller") return ConductorStartCallerProbe.Run(args[1], args[2]);
 if (args[0] == "fake-conductor") return FakeConductorProbe.Run(args[1], args[2], args[3]);
 if (args[0] == "acceptance-claim") return AcceptanceCustodyProbe.Run(args[1], args[2]);

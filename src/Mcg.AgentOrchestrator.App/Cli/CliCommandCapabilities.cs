@@ -18,6 +18,7 @@ internal static class CliCommandCapabilities
         "impact-replay",
         "intent-coverage",
         "remote-executors",
+        "provider-connections",
         "round-value",
         "logs", "doctor", "tenant",
         "board-simulate",
@@ -35,6 +36,9 @@ internal static class CliCommandCapabilities
     {
         if (args.Count == 0)
             return CliCommandCapability.Execution;
+
+        if (CliProviderConnectionsCommand.IsCommand(args))
+            return CliProviderConnectionsCommand.IsListing(args) ? CliCommandCapability.QueryOnly : CliCommandCapability.Execution;
 
         return QueryCommands.Contains(args[0]) ||
                CliExperimentReplayCommand.IsQuery(args) ||

@@ -27,7 +27,8 @@ internal static partial class InfrastructureTestSupport
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            DELETE FROM schema_migrations WHERE migration_number = 15;
+            DELETE FROM schema_migrations WHERE migration_number > 14;
+            DROP TABLE IF EXISTS provider_connection_observations;
             DROP TABLE reconcile_sweep_remediation;
             DROP TABLE reconcile_acceptance_leases;
             """;
