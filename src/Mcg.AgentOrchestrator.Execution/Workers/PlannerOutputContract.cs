@@ -897,6 +897,12 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
+            if (PlannerFixturePathMarker.IsMarkedFixturePath(
+                targetSection, match.Index + match.Length, citation, candidate, hasExplicitDirectory))
+            {
+                continue;
+            }
+
             if (PathExistsWithExactCasing(candidate, candidateCasingRoot))
             {
                 continue;
