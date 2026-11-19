@@ -4,9 +4,11 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliArgumentParser
 {
+    private const string InlineBundledReasonPrefix = "--bundled-reason=";
+
     private static readonly HashSet<string> BacklogUpdateValueFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "--title", "--description", "--priority", "--tags", "--status", "--text-file", "--body-file"
+        "--title", "--description", "--priority", "--tags", "--status", "--text-file", "--body-file", "--bundled-reason"
     };
 
     internal static bool IsBacklogUpdateValueFlag(string token) => BacklogUpdateValueFlags.Contains(token);
@@ -17,6 +19,7 @@ internal static partial class CliArgumentParser
 
     internal static bool IsBacklogUpdateTerminator(string token) =>
         IsBacklogUpdateValueFlag(token) ||
+        token.StartsWith(InlineBundledReasonPrefix, StringComparison.OrdinalIgnoreCase) ||
         IsBacklogUpdateSwitchFlag(token) ||
         token.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
         token.Equals("-h", StringComparison.OrdinalIgnoreCase);
@@ -26,7 +29,9 @@ internal static partial class CliArgumentParser
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (var index = 2; index < parts.Count;)
         {
-            var flag = parts[index];
+            var token = parts[index];
+            var hasInlineReason = token.StartsWith(InlineBundledReasonPrefix, StringComparison.OrdinalIgnoreCase);
+            var flag = hasInlineReason ? "--bundled-reason" : token;
             if (IsBacklogUpdateSwitchFlag(flag))
             {
                 values.TryAdd(flag, "");
@@ -37,6 +42,12 @@ internal static partial class CliArgumentParser
                 throw new ArgumentException($"Unexpected backlog-update argument '{flag}'. {CliCommandHelp.BacklogUpdateUsage}");
             if (values.ContainsKey(flag))
                 throw new ArgumentException($"Provide {flag} only once.");
+            if (hasInlineReason)
+            {
+                values.Add(flag, token[InlineBundledReasonPrefix.Length..]);
+                index++;
+                continue;
+            }
             if (index + 1 >= parts.Count || IsBacklogUpdateTerminator(parts[index + 1]))
                 throw new ArgumentException($"{flag} requires a value. Use --text-file for descriptions containing literal option names.");
             values.Add(flag, parts[index + 1]);
