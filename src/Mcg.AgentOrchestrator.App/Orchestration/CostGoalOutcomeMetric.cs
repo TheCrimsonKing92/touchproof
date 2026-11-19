@@ -101,7 +101,8 @@ internal static class CostGoalOutcomeMetric
         var metrics = new List<OutcomeMetricLine>();
         var defects = new List<string>();
         var inSection = false;
-        var foundLine = false;
+        var declarationCount = 0;
+        var hasNoneDeclaration = false;
         foreach (var (text, _) in AuthorBriefDraftChecks.UnfencedLines(markdown))
         {
             var heading = Heading.Match(text);
@@ -116,7 +117,7 @@ internal static class CostGoalOutcomeMetric
                 line = line[2..].Trim();
             line = line.Trim('`');
             if (!Regex.IsMatch(line, @"\bmetric\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) continue;
-            foundLine = true;
+            declarationCount++;
             var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var malformed = false;
             string? guardRule = null;
@@ -133,6 +134,17 @@ internal static class CostGoalOutcomeMetric
                     guardRule = parts[++i].Trim();
             }
             fields.TryGetValue("metric", out var name);
+            if (name == "none")
+            {
+                hasNoneDeclaration = true;
+                var hasReason = fields.TryGetValue("reason", out var reason);
+                if (!hasReason) defects.Add("metric 'none' has no reason");
+                else if (string.IsNullOrWhiteSpace(reason)) defects.Add("metric 'none' has a blank reason");
+                if (parts.Length > (hasReason ? 2 : 1))
+                    defects.Add("metric 'none' has unexpected fields. Only metric and reason are allowed");
+                continue;
+            }
+
             fields.TryGetValue("direction", out var direction);
             fields.TryGetValue("target", out var target);
             fields.TryGetValue("window", out var window);
@@ -157,7 +169,8 @@ internal static class CostGoalOutcomeMetric
             if (defects.Count == start)
                 metrics.Add(new(name!, direction!, target!, gateCount, guardName is null ? null : new(guardName, guardRule!)));
         }
-        if (!foundLine) defects.Add("no well-formed ## Outcome metric line");
+        if (declarationCount == 0) defects.Add("no well-formed ## Outcome metric line");
+        if (hasNoneDeclaration && declarationCount > 1) defects.Add("metric 'none' must be the only metric line");
         return (metrics, defects);
     }
 
@@ -171,9 +184,15 @@ internal static class CostGoalOutcomeMetric
         (IReadOnlyList<OutcomeMetricLine> Metrics, IReadOnlyList<string> Defects) parsed)
     {
         var (metrics, defects) = parsed;
-        return new(CheckName, defects.Count == 0, defects.Count == 0
-            ? $"{metrics.Count} valid outcome metric line(s)."
-            : string.Join(" | ", defects) + $". Format: {LineFormat}. Allowed: {string.Join(", ", MetricNames)}.");
+        if (defects.Count > 0)
+        {
+            return new(CheckName, false, string.Join(" | ", defects) + $". Format: {LineFormat}. " +
+                "When no listed metric measures what the goal changes, use `metric: none; reason: <text>` as the only metric line. " +
+                $"Allowed: {string.Join(", ", MetricNames)}.");
+        }
+        return new(CheckName, true, metrics.Count == 0
+            ? "Metric 'none' declared. No baseline or verdict is recorded."
+            : $"{metrics.Count} valid outcome metric line(s).");
     }
 
     internal static CostGoalOutcomeFiling? CaptureAtFiling(string? source, string markdown,
