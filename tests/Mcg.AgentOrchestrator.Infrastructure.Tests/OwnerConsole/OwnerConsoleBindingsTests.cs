@@ -219,7 +219,7 @@ public sealed class OwnerConsoleBindingsTests
         var harness = new OwnerConsoleHarness();
         using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, context.Output,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
-            workspace: workspace.Workspace, providerConnections: provider, providerSignIn: provider);
+            sound: context.Sound, workspace: workspace.Workspace, providerConnections: provider, providerSignIn: provider);
         using IApplication app = Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
         var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
