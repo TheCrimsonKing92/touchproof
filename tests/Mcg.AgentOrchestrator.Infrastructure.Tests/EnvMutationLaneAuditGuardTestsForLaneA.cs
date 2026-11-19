@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 // Reads candidate source and assembly metadata only, so it can run in parallel.
-public sealed class EnvMutationLaneAuditGuardTests
+public sealed class EnvMutationLaneAuditGuardTestsForLaneA
 {
     private const string AuditedLane = "Worker dispatch fixtures A";
     private const string TestPath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/";
