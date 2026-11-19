@@ -58,8 +58,8 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
         OwnerLandingsPage? landingsPage = null;
         switch (parts[0].ToLowerInvariant())
         {
-            case "conductor": control.HandleConductor(line); break;
-            case "digest":
+            case OwnerConsoleDispatchVerbs.Conductor: control.HandleConductor(line); break;
+            case OwnerConsoleDispatchVerbs.Digest:
                 if (parts.Length != 1) output.WriteLine("usage: digest");
                 else
                 {
@@ -68,30 +68,30 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
                     output.Structured = result.Fields;
                 }
                 break;
-            case "metrics": control.HandleMetrics(line); break;
-            case "fleet":
+            case OwnerConsoleDispatchVerbs.Metrics: control.HandleMetrics(line); break;
+            case OwnerConsoleDispatchVerbs.Fleet:
                 if (parts.Length != 1) output.WriteLine("usage: fleet");
                 else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
                 else fleetModel = fleet();
                 break;
-            case "landings":
+            case OwnerConsoleDispatchVerbs.Landings:
                 if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
                 else if (landings is null) output.WriteLine("landings view unavailable in this session");
                 else landingsPage = landings(parts.Length == 2 ? parts[1] : "");
                 break;
-            case "sound":
+            case OwnerConsoleDispatchVerbs.Sound:
                 if (sound is null) output.WriteLine("sound unavailable in this session");
                 else sound.Run(line, output);
                 break;
-            case OwnerConsoleBindings.SettingsCommand:
+            case OwnerConsoleDispatchVerbs.Settings:
                 if (parts.Length != 1) output.WriteLine("usage: settings");
                 else if (sound is null) output.WriteLine("settings unavailable in this session");
                 else requestSettings();
                 break;
-            case "bell":
+            case OwnerConsoleDispatchVerbs.Bell:
                 lock (_notificationGate) _bell.Run(parts.Skip(1).ToArray(), output);
                 break;
-            case var verb when verb == OwnerConsoleBindings.Goal.Command:
+            case OwnerConsoleDispatchVerbs.Goal:
                 if (parts.Length != 2) { output.WriteLine("usage: " + OwnerConsoleBindings.Goal.Usage); break; }
                 goalId = await _goalDetail.ResolveGoalIdAsync(parts[1], output, stepToken);
                 break;

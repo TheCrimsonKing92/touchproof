@@ -26,13 +26,15 @@ internal sealed class OwnerConsolePolicySettingsTab : IOwnerConsoleSettingsTab
     private string _input = "";
 
     internal OwnerConsolePolicySettingsTab(string path) { _store = new OwnerConsolePolicySettingsStore(path); Refresh(); }
-    public string Title => "Conductor policy";
+    internal const string TabTitle = "Conductor policy";
+    internal const string HelpKeys = "Up/Down highlight  Enter edit  r reload";
+    public string Title => TabTitle;
     public bool Editing => _editingKey is not null;
     public int SelectedLine { get; private set; }
     internal string Message { get; private set; } = "";
     public string StatusText => Editing ? $"{_editingKey}: {_input}_  {Message}" : Message;
     public string KeyHint => Editing ? "Enter save  Esc cancel  Backspace edit" :
-        "Up/Down highlight  Enter edit  r reload  Left/Right tab  Esc/q back";
+        HelpKeys + "  Left/Right tab  Esc/q back";
     public IReadOnlyList<string> Lines { get { Refresh(); return _lines; } }
 
     public void Refresh()

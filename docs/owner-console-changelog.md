@@ -21,3 +21,10 @@ Surface fingerprint: sha256:a6fb5b7831f11e5c78569860ce0129e2d70635810f7bbc3f8d07
 - Type `:settings` to open Settings.
 - Press Left/Right to switch to Provider connections.
 - Type `:news` to read and acknowledge console changes.
+
+## 2 - Open Settings from any pane.
+
+Surface fingerprint: sha256:f04c5c82da23758760fa23b6e8fbcb7504dc7c1b621bf6eea4906fd59d9e797d
+
+- Press `s` in any pane to open Settings, or type `:settings`.
+- Press `?` and see the Settings section for all six tabs and their keys.
