@@ -125,21 +125,11 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         var root = CreateTempDirectory();
         try
         {
-            var (kernel, goal) = SoftwareGoal();
-            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-            foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
-            {
-                PassVerification(kernel, goal, task);
-            }
-
-            const string request = "Infrastructure.Tests: ConductorDriverTests";
+            const string request = "Infrastructure.Tests:ConductorDriverTests";
+            const string candidateSha = "def5678";
             const string blocker = "Infrastructure.Tests ConductorDriverTests receipt is missing.";
-            FailReviewerNeedsWork(
-                kernel,
-                goal,
-                reviewer,
-                blocker,
-                evidenceRequest: request, implicitFindingCategory: FindingCategory.AcceptanceOwned);
+            var (kernel, goal, reviewer) = ReviewerFindingEvidenceDeliveryFixture.FailedReviewer(blocker,
+                EvidenceFindingWithRequest(blocker, category: FindingCategory.AcceptanceOwned, classes: ["ConductorDriverTests"]));
 
             var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
             var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");
@@ -148,23 +138,22 @@ public sealed class ConductorDriverTestsPreReviewEvidence
                 isProcessAlive: _ => true,
                 attemptCompletionGateForTests: completionGate,
                 acquireStableSlotLease: (_, _) => null);
-            var focusedRuns = 0;
-            var retries = 0;
-            FocusedEvidenceRunResult RunEvidence(Goal _, string request)
+            var focusedRequests = new List<string>();
+            var retriedTasks = new List<TaskId>();
+            FocusedEvidenceRunResult RunEvidence(Goal _, string actualRequest)
             {
-                focusedRuns++;
-                Assert.Equal("Infrastructure.Tests: ConductorDriverTests", request);
-                return PassingPreReviewEvidence(request);
+                focusedRequests.Add(actualRequest);
+                return DualArmFindingEvidence(actualRequest, FindingEvidenceArmDisposition.Red, candidateSha);
             }
 
             ConductorDriver MakePostReviewDriver(ConductorParallelAcceptanceAttemptCoordinator coordinator) =>
                 MakeDriver(
                     getFacts: _ => GoalLifecycleFacts.None,
-                    getPreReviewEvidenceContext: _ => NoPreReviewContext("def5678"),
+                    getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                     runFocusedEvidence: RunEvidence,
                     retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                     {
-                        retries++;
+                        retriedTasks.Add(taskId);
                         return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
                     },
                     recordFindingEvidenceRequest: (goalId, taskId, message) =>
@@ -179,12 +168,12 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             var scheduled = startingDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
             Assert.IsType<ConductorAdvanceOutcome.Held>(scheduled.Outcome);
-            Assert.Equal(0, focusedRuns);
-            Assert.Equal(0, retries);
+            Assert.Empty(focusedRequests);
+            Assert.Empty(retriedTasks);
             Assert.Equal(1, completionGate.HeldCount);
 
             completionGate.RequiredHandleForTests(goal.Id.Value).CompleteForTests();
-            Assert.Equal(1, focusedRuns);
+            Assert.Equal(request, Assert.Single(focusedRequests));
 
             var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
@@ -196,9 +185,13 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             var reconciled = restartedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
             Assert.IsType<ConductorAdvanceOutcome.Executed>(reconciled.Outcome);
-            Assert.Equal(1, focusedRuns);
-            Assert.Equal(1, retries);
+            Assert.Equal(request, Assert.Single(focusedRequests));
+            Assert.Equal(reviewer.Id, Assert.Single(retriedTasks));
             Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+            var receipt = Assert.Single(reviewer.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []));
+            Assert.Equal(candidateSha, receipt.CandidateSha);
+            Assert.True(receipt.Passed);
+            Assert.Equal(FindingEvidenceRequestDecision.Executed, Assert.Single(receipt.RequestDispositions!).Decision);
         }
         finally
         {

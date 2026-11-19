@@ -7,6 +7,34 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Candidate/baseline comparison is independent of conductor lifecycle state.
 internal static class FindingEvidenceCandidateAttribution
 {
+    internal static FindingEvidenceReceipt? FindCurrentBaselineReceipt(
+        TaskSpec task, string findingId, string requestIdentity, string candidateSha, string round, string basis)
+    {
+        var receiptId = CreateFindingEvidenceReceiptId(candidateSha, round, requestIdentity + ":baseline-arm", basis);
+        return task.LastVerification?.FindingEvidenceReceipts?.FirstOrDefault(receipt =>
+            receipt is { Accepted: true, Passed: false } && receipt.ReceiptId == receiptId &&
+            string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+            receipt.FindingRoundFingerprint == round && receipt.ExecutionBasisIdentity == basis &&
+            (receipt.RequestDispositions ?? []).Any(disposition =>
+                disposition.FindingStableId == findingId && disposition.RequestIdentity == requestIdentity));
+    }
+
+    internal static bool IsCandidateOnlyRed(
+        string candidateSha,
+        IReadOnlyList<FindingEvidenceArmReceipt> arms,
+        out FindingEvidenceArmReceipt candidate)
+    {
+        candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate)!;
+        return candidate is
+            {
+                Accepted: true,
+                Disposition: FindingEvidenceArmDisposition.Red,
+                FailingTestIdentities.Count: > 0
+            } &&
+            string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+            arms.All(arm => arm.Arm != FindingEvidenceArm.Baseline);
+    }
+
     internal static ActionableCandidateRedAttribution? TryAttribute(
         string candidateSha, IReadOnlyList<FindingEvidenceArmReceipt> arms, FindingEvidenceBatch batch,
         Func<IReadOnlyList<string>, bool> everyFailingTestIsInsideCandidateChanges)

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -7,6 +8,7 @@ using static ConductorDriverTests;
 // Parallel-safe: each scenario owns its kernel and temporary attempt directory; runners and dispatch are fakes.
 public sealed class FindingRoundRedFanOutScenarioTests
 {
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
     private const string Candidate = "abc1234";
     private const string AlphaFailure = "Fixture.AlphaTests.FailsOnCandidate";
     private const string BetaFailure = "Fixture.BetaTests.FailsOnCandidate(outcome: Interrupted)";
@@ -17,6 +19,7 @@ public sealed class FindingRoundRedFanOutScenarioTests
     public void PrefixedTwoMemberRedRoutesDeveloperAfterOneRun()
     {
         using var scenario = new Scenario([AlphaFailure, BetaFailure]);
+        var identity = scenario.BatchIdentity;
 
         var result = scenario.Advance();
 
@@ -33,6 +36,65 @@ public sealed class FindingRoundRedFanOutScenarioTests
             item.Message.Contains("finding_id=gamma;", StringComparison.Ordinal) &&
             item.Message.Contains("reason=superseded-by-actionable-red;", StringComparison.Ordinal));
         Assert.Equal(1, scenario.Dispatches);
+        Assert.Empty(scenario.Escalations);
+        var closing = Assert.Single(scenario.Goal.Timeline.Where(item =>
+            item.Message.StartsWith($"finding-evidence batch-closed; batch_key={identity.Key};", StringComparison.Ordinal)));
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(
+            closing.Message[closing.Message.IndexOf('{')..])!;
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Superseded);
+        Assert.Equal(0, summary.Covered);
+        Assert.Equal(0, summary.Unavailable);
+        Assert.True(summary.IsSettled);
+        Assert.Equal(0, summary.PaidVerificationCallsAvoided);
+        Assert.Contains("Developer", summary.RoutingReason, StringComparison.Ordinal);
+        var restored = scenario.RestoredGoal();
+        Assert.False(FindingEvidenceBatchClosureAdmission.TryApply(restored, new(identity, "replayed"), () => true,
+            () => throw new InvalidOperationException("Actionable red retried twice after restoration.")));
+    }
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ActionablePartialRed_DefersOmittedMemberAndRetriesDeveloperOnce(bool replay)
+    {
+        using var scenario = new Scenario([AlphaFailure], omitBeta: true);
+        var identity = scenario.BatchIdentity;
+        if (replay)
+        {
+            scenario.RecordBatchAccounting = false;
+            Assert.True(scenario.Plan());
+            Assert.Empty(scenario.Retries);
+            scenario.RecordBatchAccounting = true;
+            scenario.RestartDriver();
+        }
+
+        scenario.Advance();
+        scenario.Advance();
+
+        Assert.Equal(UnionRequest, Assert.Single(scenario.Runs));
+        var retry = Assert.Single(scenario.Retries);
+        Assert.Equal(scenario.Developer.Id, retry.Task);
+        Assert.StartsWith("ACTIONABLE_CANDIDATE_RED", retry.Message, StringComparison.Ordinal);
+        var receipt = Assert.Single(scenario.Reviewer.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
+            .DistinctBy(item => item.ReceiptId));
+        Assert.Contains(receipt.RequestDispositions!, item => item.FindingStableId == "alpha" &&
+            item.Decision == FindingEvidenceRequestDecision.Executed);
+        Assert.Contains(receipt.RequestDispositions!, item => item.FindingStableId == "beta" &&
+            item.Decision == FindingEvidenceRequestDecision.DeferredToNextCandidate);
+        var restored = scenario.RestoredGoal();
+        var observations = FindingRoundBatchAccounting.Read(restored, identity);
+        Assert.Equal(new[] { "alpha" }, Assert.Single(observations.Where(item => item.Kind == "executed")).FindingIds);
+        Assert.Equal(new[] { "beta" }, Assert.Single(observations.Where(item => item.Kind == "deferred")).FindingIds);
+        var summary = FindingRoundBatchAccounting.Summarize(restored, restored.Tasks.Single(task => task.Id == scenario.Reviewer.Id),
+            identity, "test");
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(1, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Deferred);
+        Assert.Equal(1, summary.Superseded);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(restored, identity));
         Assert.Empty(scenario.Escalations);
     }
 
@@ -63,21 +125,40 @@ public sealed class FindingRoundRedFanOutScenarioTests
         Assert.Empty(scenario.Escalations);
     }
 
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void InheritedBaselineRed_DrainsSiblingAfterRestartBeforeOneRecovery()
+    {
+        using var scenario = new Scenario(["Fixture.SharedSetupTests.SetupFails"], inheritBaseline: true);
+        var identity = scenario.BatchIdentity;
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Advance().Outcome);
+        Assert.Equal(new[] { UnionRequest }, scenario.Runs);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Escalations);
+
+        scenario.RestartDriver();
+        scenario.Advance();
+        scenario.Advance();
+
+        Assert.Equal(new[] { UnionRequest, CoreRequest }, scenario.Runs);
+        Assert.Contains("inherited from a RED Baseline arm", Assert.Single(scenario.Escalations), StringComparison.Ordinal);
+        Assert.Empty(scenario.Retries);
+        Assert.Equal(0, scenario.Dispatches);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(scenario.RestoredGoal(), identity));
+    }
+
     [Fact]
-    public void RepeatedFailureWithoutRedArmStopsAtRunCap()
+    public void ExhaustedRequestAllowsLaterRequestBeforeUnavailableRecovery()
     {
         using var scenario = new Scenario([], armless: true);
 
-        for (var tick = 0; tick < 5; tick++) scenario.Advance();
+        for (var tick = 0; tick < 8; tick++) scenario.Advance();
 
-        Assert.Equal(Enumerable.Repeat("Infrastructure.Tests:FullyQualifiedName~AlphaTests", 3), scenario.Runs);
-        Assert.DoesNotContain(CoreRequest, scenario.Runs);
+        Assert.Equal(Enumerable.Repeat("Infrastructure.Tests:FullyQualifiedName~AlphaTests", 3).Concat(Enumerable.Repeat(CoreRequest, 3)), scenario.Runs);
         var escalation = Assert.Single(scenario.Escalations);
-        Assert.Contains(scenario.FirstIdentity, escalation, StringComparison.Ordinal);
-        Assert.Contains("runs=3", escalation, StringComparison.Ordinal);
-        Assert.Contains("last_receipt_id=finding-evidence-", escalation, StringComparison.Ordinal);
+        Assert.Contains("unavailable", escalation, StringComparison.Ordinal);
         Assert.Contains("No worker was dispatched.", escalation, StringComparison.Ordinal);
-        Assert.Equal(3, scenario.Goal.Timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded));
+        Assert.Equal(6, scenario.Goal.Timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded));
         Assert.Empty(scenario.Retries);
         Assert.Equal(0, scenario.Dispatches);
     }
@@ -88,12 +169,16 @@ public sealed class FindingRoundRedFanOutScenarioTests
         private readonly string _root = ConductorDriverTests.CreateTempDirectory();
         private readonly string[] _failures;
         private readonly bool _armless;
+        private readonly bool _inheritBaseline;
+        private readonly bool _omitBeta;
         private ConductorDriver _driver = null!;
 
-        internal Scenario(string[] failures, bool armless = false)
+        internal Scenario(string[] failures, bool armless = false, bool inheritBaseline = false, bool omitBeta = false)
         {
             _failures = failures;
             _armless = armless;
+            _inheritBaseline = inheritBaseline;
+            _omitBeta = omitBeta;
             (_kernel, Goal) = SoftwareGoal();
             Developer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
             Reviewer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
@@ -125,8 +210,12 @@ public sealed class FindingRoundRedFanOutScenarioTests
         internal List<(TaskId Task, string Message)> Retries { get; } = [];
         internal List<string> Escalations { get; } = [];
         internal int Dispatches { get; private set; }
+        internal bool RecordBatchAccounting { get; set; } = true;
+        internal FindingEvidenceBatchIdentity BatchIdentity => FindingRoundBatchCoordinator.Identity(_driver, Goal, Reviewer)!;
+        internal Goal RestoredGoal() => AgentOrchestratorKernel.FromSnapshot(_kernel.ExportSnapshot()).GetGoal(Goal.Id);
 
         internal ConductorAdvanceResult Advance() => _driver.AdvanceOnce(Goal, ConductorAutonomyPolicy.Permissive);
+        internal bool Plan() => _driver.TryBuildFindingEvidenceRequest(Goal, Reviewer, ConductorAutonomyPolicy.Permissive, out _);
 
         internal void RestartDriver() => _driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),
@@ -141,11 +230,14 @@ public sealed class FindingRoundRedFanOutScenarioTests
                 var red = CandidateRedFindingEvidence(request, Candidate, _failures[0]);
                 var candidate = red.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
                 var check = candidate.Checks.Single() with { FailingTestIdentities = _failures, ExecutedTestCount = 2 };
+                var inherited = _inheritBaseline && request == UnionRequest;
                 return red with
                 {
                     Checks = [check],
                     Arms = red.Arms!.Select(arm => arm.Arm == FindingEvidenceArm.Candidate
-                        ? arm with { Checks = [check] } : arm).ToArray()
+                        ? arm with { Checks = [check], NotRunSelections = _omitBeta ? [new("Infrastructure.Tests", "BetaTests")] : [] }
+                        : inherited ? arm with { Checks = [check], Passed = false, Disposition = FindingEvidenceArmDisposition.Red }
+                        : arm).ToArray()
                 };
             },
             dispatchAndStart: _ => { Dispatches++; return DispatchStartOutcome.Started(); },
@@ -156,7 +248,10 @@ public sealed class FindingRoundRedFanOutScenarioTests
             },
             writeEscalation: (_, _, message) => Escalations.Add(message),
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
-                _kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            {
+                if (RecordBatchAccounting || !message.StartsWith("finding-evidence batch-", StringComparison.Ordinal))
+                    _kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
+            },
             recordFindingEvidenceRun: (goalId, taskId, message) =>
                 _kernel.RecordFindingEvidenceRun(goalId, taskId, message),
             recordFindingEvidenceRequestDispositions: (goalId, taskId, dispositions) =>
