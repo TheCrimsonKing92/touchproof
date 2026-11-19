@@ -5,14 +5,28 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class AdoptedBuildPushTrigger(
     Func<ConductorAutonomyPolicy> readPolicy, Action<string, Action<string>> push,
-    Action<string> append, Action<string> attention, Action<string>? publishRepositories = null)
+    Action<string> append, Action<string> attention, Action<string>? publishRepositories = null,
+    Action? sweepOutcomes = null)
 {
     internal AdoptedBuildPushTrigger(
         Func<ConductorAutonomyPolicy> readPolicy, Action<string> push,
-        Action<string> append, Action<string> attention, Action<string>? publishRepositories = null)
-        : this(readPolicy, (commit, _) => push(commit), append, attention, publishRepositories) { }
+        Action<string> append, Action<string> attention, Action<string>? publishRepositories = null,
+        Action? sweepOutcomes = null)
+        : this(readPolicy, (commit, _) => push(commit), append, attention, publishRepositories, sweepOutcomes) { }
 
     internal void OnFinalized(string commit, string pending, string failed, string stopped = "")
+    {
+        Publish(commit, pending, failed, stopped);
+        try { sweepOutcomes?.Invoke(); }
+        catch (Exception ex)
+        {
+            AdoptedBuildPublicationReporting.Try(
+                () => append($"COST_GOAL_OUTCOME_SWEEP_FAILED source=adoption commit={commit} reason={ex.GetType().Name}"),
+                "cost-outcome-adoption-sweep");
+        }
+    }
+
+    private void Publish(string commit, string pending, string failed, string stopped)
     {
         ConductorAutonomyPolicy policy;
         void Hold(string reason)
@@ -49,16 +63,22 @@ internal sealed class AdoptedBuildPushTrigger(
         }
     }
 
-    internal static AdoptedBuildPushTrigger CreateDefault(Action<string> append)
+    internal static OrchestratorWorkspace ResolveHomeWorkspace(OrchestratorProjectRegistry registry)
     {
         var root = OrchestratorHome.ResolveForProcess().SourceRootDirectory
             ?? throw new InvalidOperationException("Adopted build publication requires a home source root.");
-        var registry = OrchestratorProjectRegistry.CreateDefault();
         var project = registry.ListProjects().SingleOrDefault(project => string.Equals(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(project.RootDirectory)),
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase));
-        var workspace = project?.ResolveWorkspace() ?? OrchestratorWorkspace.ForDirectory(
+        return project?.ResolveWorkspace() ?? OrchestratorWorkspace.ForDirectory(
             root, root, OrchestratorWorkspace.DefaultTenantName, registry);
+    }
+
+    internal static AdoptedBuildPushTrigger CreateDefault(Action<string> append, Action? sweepOutcomes = null)
+    {
+        var registry = OrchestratorProjectRegistry.CreateDefault();
+        var workspace = ResolveHomeWorkspace(registry);
+        var root = workspace.ExecutionDirectory;
         var pushGate = new object();
         var landings = new MultiRepositoryLandingRecordStore(workspace.OrchestratorDirectory);
         var publisher = new MultiRepositoryAdoptedBuildPublisher(new(workspace, registry),
@@ -76,6 +96,6 @@ internal sealed class AdoptedBuildPushTrigger(
             body => Mcg.AgentOrchestrator.Infrastructure.CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
                 .RaiseAsync(Mcg.AgentOrchestrator.Core.CollaborationItemType.Decision, null,
                     "Adopted build push held", body, "adopted-build-push-policy").GetAwaiter().GetResult(),
-            commit => publisher.Publish(landings.FindByLandedHomeCommit(commit)));
+            commit => publisher.Publish(landings.FindByLandedHomeCommit(commit)), sweepOutcomes);
     }
 }

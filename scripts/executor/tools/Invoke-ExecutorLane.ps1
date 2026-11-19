@@ -82,7 +82,8 @@ try {
     $script:observedTree = (git -C $work rev-parse 'HEAD^{tree}').Trim()
     if ($script:observedCommit -ne $Sha) { throw "worktree $work is not at $Sha" }
     $phases.worktreeSeconds = Get-PhaseSeconds $phaseStart
-    $results = Join-Path $env:LOCALAPPDATA "Temp\Low\mcg-tests\exec-$short-$laneKey"
+    $lowTemp = Join-Path $env:LOCALAPPDATA 'Temp\Low'
+    $results = Join-Path $lowTemp "mcg-tests\exec-$short-$laneKey"
     # Build the candidate's test project once per executor with the repository's sanctioned build wrapper and
     # McgIsolatedArtifactsPath set to this worktree. That puts the output and its MSBuild build receipt in
     # <worktree>\bin\<project>\Debug\, the "declared artifact output" MtpTestRunner's -NoBuild path verifies
@@ -114,6 +115,25 @@ try {
         }
     }
     finally { $buildMutex.ReleaseMutex(); $buildMutex.Dispose() }
+    if ($IsWindows) {
+        if (-not (Test-Path -LiteralPath $lowTemp -PathType Container)) {
+            [void][IO.Directory]::CreateDirectory($lowTemp)
+        }
+        & {
+            $PSNativeCommandUseErrorActionPreference = $false
+            try { $permissions = & icacls.exe $lowTemp }
+            catch { throw "Could not read the integrity label for '$lowTemp'. $($_.Exception.Message)" }
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) { throw "Could not read the integrity label for '$lowTemp'. icacls.exe exited with code $exitCode." }
+
+            if (-not ($permissions -match '(?:^|\s)Mandatory Label\\Low Mandatory Level:')) {
+                try { & icacls.exe $lowTemp '/setintegritylevel' '(OI)(CI)low' | Out-Null }
+                catch { throw "Could not set Low integrity on '$lowTemp'. $($_.Exception.Message)" }
+                $exitCode = $LASTEXITCODE
+                if ($exitCode -ne 0) { throw "Could not set Low integrity on '$lowTemp'. icacls.exe exited with code $exitCode." }
+            }
+        }
+    }
     # Keep timing outside the runner's per-invocation directory, which successful runs delete.
     $slotTimingSuffix = '.slot-timing.jsonl'
     New-Item -ItemType Directory -Force -Path $results | Out-Null
