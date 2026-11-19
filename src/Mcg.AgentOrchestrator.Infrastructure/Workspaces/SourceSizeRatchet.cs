@@ -448,7 +448,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2490),
             // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
             // Goal d62efe7a freezes the 36-class premise list so unrelated test inventory cannot change the split test.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1427),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1420),
             // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1217),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 536),
