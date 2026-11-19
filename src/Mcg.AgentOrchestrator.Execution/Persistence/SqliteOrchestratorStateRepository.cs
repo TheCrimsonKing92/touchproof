@@ -931,10 +931,12 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "tick cannot change explicit operator disposition", storedState!.HumanInputRequests)));
                     }
 
-                    if (SnapshotEquals(storedSnapshot, request.Baseline) && tickDisposition == storedDisposition)
+                    if (tickDisposition == storedDisposition && SnapshotEquals(
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(storedSnapshot),
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(request.Baseline)))
                     {
                         var state = ValidateConsistentGoalState(
-                            request.Current,
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(request.Current),
                             MergeHumanInputRequests(storedState!.HumanInputRequests, request.HumanInputRequests));
                         return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (true, state, new GoalSnapshotSaveResult(
@@ -2609,6 +2611,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 string.Join(",", obligationMerge.ConflictIds);
             return false;
         }
+        var refinedSpecVersions = PickStoreOwnedList(baseline.RefinedSpecVersions, stored.RefinedSpecVersions,
+            current.RefinedSpecVersions);
         merged = stored with
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
@@ -2629,15 +2633,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 current.SliceBatchParentId),
             SourceBacklogItemId = mergedSourceBacklogLink.SourceBacklogItemId,
             SourceBacklogCoverage = mergedSourceBacklogLink.SourceBacklogCoverage,
-            RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
+            RefinedSpec = RefinedSpecSnapshotAccess.UsesLegacyTopLevel(refinedSpecVersions?.Count ?? 0)
+                ? PickStoreOwned(RefinedSpecSnapshotAccess.GetCurrent(baseline),
+                    RefinedSpecSnapshotAccess.GetCurrent(stored), RefinedSpecSnapshotAccess.GetCurrent(current))
+                : null,
             ClarificationRoundCount = PickTickOwned(
                 baseline.ClarificationRoundCount,
                 stored.ClarificationRoundCount,
                 current.ClarificationRoundCount),
-            RefinedSpecVersions = PickStoreOwnedList(
-                baseline.RefinedSpecVersions,
-                stored.RefinedSpecVersions,
-                current.RefinedSpecVersions),
+            RefinedSpecVersions = refinedSpecVersions,
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
             AcceptanceFailureDeferredForRetry = PickStoreOwned(
                 baseline.AcceptanceFailureDeferredForRetry,
