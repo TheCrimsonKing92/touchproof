@@ -10,6 +10,14 @@ internal sealed record ExecutorScreeningCandidate(string GoalId, GoalStatus Stat
 internal sealed record ExecutorScreeningLaneSelection(IReadOnlyList<AcceptanceTestLane> Selected,
     IReadOnlyList<ExecutorScreeningExcludedLane> Excluded);
 
+internal sealed record ExecutorWholeGateTrialLane(string Name, string Project, string Filter,
+    IReadOnlyList<string> ExclusiveResourceKeys, double EstimatedSerialSeconds, TimeSpan Timeout,
+    bool AllowsEmptySelection = false);
+
+internal sealed record ExecutorWholeGateTrialPlan(IReadOnlyList<ExecutorWholeGateTrialLane> Lanes,
+    IReadOnlyList<ExecutorScreeningExcludedLane> UnsupportedChecks,
+    IReadOnlyDictionary<string, string> TestSettings);
+
 internal static class ExecutorScreeningPlanner
 {
     internal const string Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
@@ -47,10 +55,23 @@ internal static class ExecutorScreeningPlanner
             !receipts.Any(receipt => receipt.GoalId == candidate.GoalId && receipt.CandidateCommit == candidate.Commit))
         .OrderBy(candidate => candidate.CommittedAt).ThenBy(candidate => candidate.GoalId, StringComparer.Ordinal).FirstOrDefault();
 
+    internal static ExecutorScreeningCandidate? PickTrialCandidate(IEnumerable<ExecutorScreeningCandidate> candidates,
+        IReadOnlyList<ExecutorWholeGateTrialReceipt> receipts)
+    {
+        var trialled = receipts.Select(receipt => (receipt.GoalId, receipt.CandidateCommit)).ToHashSet();
+        return PickCandidate(candidates.Where(candidate => !trialled.Contains((candidate.GoalId, candidate.Commit))), []);
+    }
+
     internal static RemoteLaneExecutorEntry? PickIdleExecutor(IReadOnlyList<RemoteLaneExecutorEntry> executors,
         Func<string, bool> isOccupied, string? onlyExecutorId = null) => executors.FirstOrDefault(entry =>
             entry.AdmissionEnabled && entry.Transport == "ssh" && (onlyExecutorId is null || entry.Id == onlyExecutorId) && !isOccupied(entry.Id));
 
-    internal static string LaneName(string project, string filter) => "sc-" +
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(project + "\n" + filter)).AsSpan(0, 4)).ToLowerInvariant();
+    internal static string LaneName(string project, string filter) => "sc-" + LaneHash(project + "\n" + filter);
+
+    internal static string TrialLaneName(ExecutorWholeGateTrialLane lane, string receiptId) =>
+        "wgt-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+            receiptId + "\n" + lane.Name + "\n" + lane.Project + "\n" + lane.Filter)).AsSpan(0, 8));
+
+    private static string LaneHash(string identity) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 4)).ToLowerInvariant();
 }
