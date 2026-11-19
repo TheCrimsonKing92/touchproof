@@ -22,9 +22,11 @@ internal static class OperatorProcedureCoverage
         var spacedPaths = scripts.Concat(byFileName.Select(group => group.Key))
             .Where(path => path.Any(char.IsWhiteSpace))
             .OrderByDescending(path => path.Length)
-            .Select(Regex.Escape)
+            .Select(path => path.Contains('/')
+                ? $@"(?:{PathCharacter}*/)?{Regex.Escape(path)}"
+                : Regex.Escape(path))
             .ToArray();
-        // Match known paths with spaces before the ordinary tokenizer can split them.
+        // Keep a leading separator or path prefix in the token for repository-path resolution.
         var pathToken = spacedPaths.Length == 0 ? PathToken : new Regex(
             $@"(?<!{PathCharacter})(?:\./)?(?:{string.Join("|", spacedPaths)})\.*(?!{PathCharacter})|{PathToken}",
             RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);

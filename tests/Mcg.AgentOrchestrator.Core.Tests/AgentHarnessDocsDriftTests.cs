@@ -237,6 +237,9 @@ public sealed class AgentHarnessDocsDriftTests
 
         files["tests/Sample.cs"] = $"var script = \"{reference}\";";
         Xunit.Assert.Empty(OperatorProcedureCoverage.FindUncovered(files));
+
+        files["tests/Sample.cs"] = $$"""var script = $"{root}/{{script}}";""";
+        Xunit.Assert.Empty(OperatorProcedureCoverage.FindUncovered(files));
     }
 
     [Xunit.Fact]
