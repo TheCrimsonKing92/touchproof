@@ -214,7 +214,6 @@ internal static class FocusedReverseDependentLaneSplitter
             Project = check.Project,
             Arguments = arguments,
             Reports = check.Reports,
-            Environment = check.Environment,
             Pattern = check.Pattern,
             FilePath = check.FilePath,
             TimeoutMinutes = check.TimeoutMinutes,
