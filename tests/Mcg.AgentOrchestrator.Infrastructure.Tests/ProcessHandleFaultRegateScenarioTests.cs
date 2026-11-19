@@ -9,7 +9,7 @@ public sealed class ProcessHandleFaultRegateScenarioTests(ITestOutputHelper outp
     private const string Scope = "src/ProcessHandle.cs";
     private const string ProcessFault = "Process was not started by this object, so requested information cannot be determined.";
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void WrappedFaultReturnsToVerifiedUntilTheSharedRetryBudgetIsSpent()
     {
