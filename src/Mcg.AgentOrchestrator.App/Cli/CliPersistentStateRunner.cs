@@ -854,6 +854,7 @@ internal static partial class CliPersistentStateRunner
             workspace.OrchestratorDirectory,
             workspace.LogDirectory);
         var tickBaselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal);
+        var reloadMemory = new GoalReloadMemory();
         AgentOrchestratorKernel LoadLoopKernel() => LoadLoopKernelForGoals([]);
 
         AgentOrchestratorKernel LoadOperatorIntentTargets(IReadOnlyCollection<GoalId> goalIds)
@@ -867,7 +868,7 @@ internal static partial class CliPersistentStateRunner
                     .Concat(trackedGoalIds)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
-                workspace.ExecutionDirectory);
+                workspace.ExecutionDirectory, reloadMemory);
             ConductLoopTargetLoader.CaptureMissingTickBaselines(tickBaselines, loaded);
             return loaded;
         }
@@ -1401,13 +1402,11 @@ internal static partial class CliPersistentStateRunner
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
         IOrchestratorStateQueries stateRepository,
         IReadOnlyCollection<string>? additionalHydratedGoalIds = null,
-        string? executionDirectory = null)
+        string? executionDirectory = null, GoalReloadMemory? reloadMemory = null)
     {
         var summaries = ConductorTickStepLedger.CountMetadataRows(stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult());
-        var terminalSummaries = summaries
+        var terminalDependencyMetadata = summaries
             .Where(summary => IsConductLoopTerminalStatus(summary.Status))
-            .ToArray();
-        var terminalDependencyMetadata = terminalSummaries
             .Select(summary => ReadConductLoopDependencyMetadata(summary, executionDirectory))
             .ToDictionary(metadata => metadata.GoalId, StringComparer.Ordinal);
         var hydratedIds = summaries
@@ -1419,7 +1418,8 @@ internal static partial class CliPersistentStateRunner
                 .Select(id => new GoalId(id)))
             .Distinct()
             .ToArray();
-        var kernel = ConductorTickStepLedger.CountGoalsHydrated(stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult());
+        var kernel = ConductorTickStepLedger.CountGoalReload(
+            GoalReloadMemory.LoadAsync(stateRepository, hydratedIds, reloadMemory).GetAwaiter().GetResult());
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
             new KeyValuePair<GoalId, string>(
                 new GoalId(summary.Id),

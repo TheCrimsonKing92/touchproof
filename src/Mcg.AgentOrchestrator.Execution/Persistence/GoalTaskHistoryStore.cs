@@ -113,6 +113,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// loads flagged latest records as null and saves them inline as null.
 /// Writer search (src and scripts, excluding generated trees): UpsertGoalRowAsync, INSERT INTO goals,
 /// UPDATE goals, INSERT INTO goal_snapshot_archive, UPDATE goal_snapshot_archive, VACUUM INTO.
+/// A write that changes the goal document, history or Timeline content must bump the goal row's
+/// version in the same transaction. The conductor can reuse a hydrated goal while that version
+/// is unchanged. An archive swap may preserve the version because it preserves the content.
 /// </summary>
 internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 {
@@ -121,6 +124,10 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     internal const string MarkerProperty = "HistoryInTable";
 
     private static readonly ConditionalWeakTable<JsonSerializerOptions, DocumentOptions> SharedDocumentOptions = new();
+    private static readonly ConditionalWeakTable<JsonSerializerOptions, JsonSerializerOptions> SharedReadOptions = new();
+
+    [ThreadStatic]
+    private static DocumentMarkers? _activeReadMarkers;
 
     [ThreadStatic]
     private static IReadOnlyDictionary<TaskSnapshot, HistoryCounts>? _activeCounts;
@@ -470,30 +477,117 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     private static JsonElement[] Elements(JsonElement value) =>
         value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? [] : value.EnumerateArray().ToArray();
 
+    internal GoalSnapshot? DecodeDocument(string documentText, DocumentMarkers markers)
+    {
+        var previous = _activeReadMarkers;
+        _activeReadMarkers = markers;
+        try
+        {
+            return JsonSerializer.Deserialize<GoalSnapshot>(documentText,
+                SharedReadOptions.GetValue(options, CreateReadOptions));
+        }
+        finally
+        {
+            _activeReadMarkers = previous;
+        }
+    }
+
+    private static JsonSerializerOptions CreateReadOptions(JsonSerializerOptions source)
+    {
+        var resolver = new DefaultJsonTypeInfoResolver();
+        resolver.Modifiers.Add(type =>
+        {
+            if (type.Type == typeof(GoalSnapshot))
+            {
+                var marker = type.CreateJsonPropertyInfo(typeof(JsonElement), GoalTimelineStore.MarkerProperty);
+                marker.Set = (_, value) => _activeReadMarkers!.Timeline = (JsonElement)value!;
+                type.Properties.Add(marker);
+            }
+            else if (type.Type == typeof(TaskSnapshot))
+            {
+                var marker = type.CreateJsonPropertyInfo(typeof(JsonElement), MarkerProperty);
+                marker.Set = (task, value) => _activeReadMarkers!.SetTask((TaskSnapshot)task, (JsonElement)value!);
+                type.Properties.Add(marker);
+            }
+        });
+        return new(source) { TypeInfoResolver = resolver };
+    }
+
+    internal sealed class DocumentMarkers
+    {
+        // Collect by object identity so a superseded Tasks property cannot contribute markers.
+        private Dictionary<TaskSnapshot, JsonElement>? _tasks;
+        internal JsonElement Timeline { get; set; }
+
+        internal void SetTask(TaskSnapshot task, JsonElement marker) =>
+            (_tasks ??= new(ReferenceEqualityComparer.Instance))[task] = marker;
+
+        internal IEnumerable<(string Id, JsonElement Marker)> ForTasks(IReadOnlyList<TaskSnapshot>? tasks)
+        {
+            if (_tasks is null || tasks is null) yield break;
+            foreach (var task in tasks)
+                if (task is not null && _tasks.TryGetValue(task, out var marker))
+                    yield return (task.Id, marker);
+        }
+    }
+
+    internal async Task<GoalSnapshot?> HydrateDecodedAsync(SqliteConnection connection, GoalSnapshot? snapshot,
+        DocumentMarkers markers, bool hotDocumentWasStub, CancellationToken token,
+        Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        if (snapshot is null || snapshot.IsMetadataOnly) return snapshot;
+        if (!hotDocumentWasStub)
+            return await ApplyMarkersAsync(connection, snapshot, markers.Timeline, markers.ForTasks(snapshot.Tasks), token);
+
+        var fields = await ReadArchiveMarkersAsync(connection, snapshot.Id, token, readObserver);
+        return await ApplyLegacyMarkersAsync(connection, snapshot, fields, token);
+    }
+
     internal async Task<GoalSnapshot?> HydrateAsync(SqliteConnection connection, GoalSnapshot? snapshot, string documentText,
-        CancellationToken token = default)
+        CancellationToken token = default, Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         // Leave malformed task collections to the existing domain validation.
         if (snapshot is null || snapshot.IsMetadataOnly) return snapshot;
         // Inspect only the marker fields, skipping the already-decoded task graphs. A hydrated
         // archive arrives with the hot stub text, so obtain its original marker-bearing payload.
-        var fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
+        var fields = DecodeLegacyMarkers(documentText, snapshot.Id, readObserver);
         if (fields?.IsMetadataOnly == true)
-        {
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
-            command.Parameters.AddWithValue("$id", snapshot.Id);
-            documentText = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token))
-                ?? throw new InvalidDataException($"Missing archive for goal '{snapshot.Id}'.");
-            fields = JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
-        }
-        snapshot = await new GoalTimelineStore(options).ApplyAsync(connection, snapshot,
-            fields?.TimelineInTable ?? default, token);
+            fields = await ReadArchiveMarkersAsync(connection, snapshot.Id, token, readObserver);
+        return await ApplyLegacyMarkersAsync(connection, snapshot, fields, token);
+    }
+
+    private async Task<HistoryDocument?> ReadArchiveMarkersAsync(SqliteConnection connection, string goalId,
+        CancellationToken token, Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
+        command.Parameters.AddWithValue("$id", goalId);
+        var documentText = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token))
+            ?? throw new InvalidDataException($"Missing archive for goal '{goalId}'.");
+        return DecodeLegacyMarkers(documentText, goalId, readObserver);
+    }
+
+    private HistoryDocument? DecodeLegacyMarkers(string documentText, string goalId,
+        Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        readObserver?.Invoke(new("history-marker-decode", goalId, documentText.Length));
+        return JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
+    }
+
+    private Task<GoalSnapshot> ApplyLegacyMarkersAsync(SqliteConnection connection, GoalSnapshot snapshot,
+        HistoryDocument? fields, CancellationToken token) =>
+        ApplyMarkersAsync(connection, snapshot, fields?.TimelineInTable ?? default,
+            (fields?.Tasks ?? []).OfType<HistoryTask>().Select(task => (task.Id, task.HistoryInTable)), token);
+
+    private async Task<GoalSnapshot> ApplyMarkersAsync(SqliteConnection connection, GoalSnapshot snapshot,
+        JsonElement timelineMarker, IEnumerable<(string Id, JsonElement Marker)> taskMarkers, CancellationToken token)
+    {
+        snapshot = await new GoalTimelineStore(options).ApplyAsync(connection, snapshot, timelineMarker, token);
         if (snapshot.Tasks is null) return snapshot;
         var markers = new Dictionary<string, HistoryMarker>();
-        foreach (var task in fields?.Tasks ?? [])
-            if (task is not null && ReadMarker(task.HistoryInTable, snapshot.Id, task.Id) is { } counts)
-                markers[task.Id] = counts;
+        foreach (var (taskId, marker) in taskMarkers)
+            if (ReadMarker(marker, snapshot.Id, taskId) is { } counts)
+                markers[taskId] = counts;
         var rows = await ReadRowsAsync(connection, snapshot.Id, null, token, markers.Keys.FirstOrDefault());
         var tasks = new List<TaskSnapshot>();
         foreach (var task in snapshot.Tasks)
