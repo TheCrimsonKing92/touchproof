@@ -14,13 +14,12 @@ internal static class FindingEvidenceRequestCompletion
         IReadOnlyList<FindingEvidenceRequestDisposition> initialDispositions, bool homeRepository,
         IEnumerable<FindingEvidenceBatch>? supersededByActionableRed)
     {
-        // Legacy Reviewer delivery can carry a diagnostic summary from an untyped runner.
+        // Legacy Reviewer delivery can carry a diagnostic summary from an untyped runner,
+        // including results with no checks and checks that report no execution count.
         // Qualification still requires candidate execution and cannot use this receipt.
         var unverifiedReviewerResult = task.RequiredRole == AgentRole.Reviewer && !UsesQualifiedReviewerContinuation(goal, task) &&
-            homeRepository && evidence is { OutcomeReason: null, Coverage: null } && arms.Count == 0 &&
-            (evidence.Passed
-                ? evidence.Checks.Count > 0 && evidence.Checks.All(check => check.ExecutedTestCount is null)
-                : evidence.Checks.Count == 0) &&
+            homeRepository && evidence is { Accepted: true, OutcomeReason: null, Coverage: null } && arms.Count == 0 &&
+            evidence.Checks.All(check => check.ExecutedTestCount is null) &&
             batch.TypedRequest is { NegativeControl: null, RevertPaths: null, Mutation: null } &&
             batch.Members.All(member => member.ReusedSourceReceipts is not { Count: > 0 } && member.CoverageDecisionReason is null);
         var receipt = new FindingEvidenceReceipt(
