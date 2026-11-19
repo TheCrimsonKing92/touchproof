@@ -5,8 +5,10 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
 {
     private const string Summary = "Find Provider connections in Settings.";
     private const string Navigation = "Type :settings and press Left/Right to select Provider connections.";
+    private const string MarkdownNavigation = "Type `:settings` and press Left/Right to select Provider connections.";
     private const string SecondSummary = "Read recent changes in Console news.";
     private const string SecondNavigation = "Type :news to see the details.";
+    private const string SecondMarkdownNavigation = "Type `:news` to see the details.";
     private const string Fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     private readonly string _root = SharedTestSupport.CreateTempDirectory();
     private string ChangelogPath => Path.Combine(_root, OwnerConsoleChangelog.FileName);
@@ -47,8 +49,8 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
         await TestHangGuard.WaitAsync(controller.RunCommandAsync(":news"), "first-run news acknowledgement");
 
         var expectedDetails =
-            $"1 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {Navigation}\n\n" +
-            $"2 - {SecondSummary}\nSurface fingerprint: {Fingerprint}\n- {SecondNavigation}";
+            $"1 - {Summary}\n- {Navigation}\n\n" +
+            $"2 - {SecondSummary}\n- {SecondNavigation}";
         Assert.Equal(("Console news", expectedDetails), Assert.Single(dialogs.Shown));
         Assert.Equal("2", File.ReadAllText(RecordPath));
         Assert.Empty(strip.Visible);
@@ -80,7 +82,7 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
         var dialogs = new NewsDialogs();
         using var controller = CreateController(session, dialogs, clock);
         await TestHangGuard.WaitAsync(controller.RunCommandAsync(":news"), "news acknowledgement");
-        Assert.Equal(("Console news", $"3 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {Navigation}"),
+        Assert.Equal(("Console news", $"3 - {Summary}\n- {Navigation}"),
             Assert.Single(dialogs.Shown));
         Assert.Empty(strip.Visible);
         Assert.Equal("3", File.ReadAllText(RecordPath));
@@ -127,7 +129,8 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
 
     private async Task<OwnerConsoleNewsRecord> StartWithUnseenNewsAsync(OwnerConsoleNoticeStrip strip)
     {
-        File.WriteAllText(ChangelogPath, $"## 3 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {Navigation}");
+        File.WriteAllText(ChangelogPath,
+            $"## 3 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {MarkdownNavigation}");
         File.WriteAllText(RecordPath, "1");
         var session = StartSession(strip);
         await TestHangGuard.WaitAsync(session.Loaded, "startup news load");
@@ -136,8 +139,8 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
 
     private void WriteFirstRunChangelog() =>
         File.WriteAllText(ChangelogPath,
-            $"## 1 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {Navigation}\n\n" +
-            $"## 2 - {SecondSummary}\nSurface fingerprint: {Fingerprint}\n- {SecondNavigation}");
+            $"## 1 - {Summary}\nSurface fingerprint: {Fingerprint}\n- {MarkdownNavigation}\n\n" +
+            $"## 2 - {SecondSummary}\nSurface fingerprint: {Fingerprint}\n- {SecondMarkdownNavigation}");
 
     private OwnerConsoleNewsRecord StartSession(OwnerConsoleNoticeStrip strip, string? recordPath = null) =>
         OwnerConsoleNewsRecord.Start(ChangelogPath, recordPath ?? RecordPath,

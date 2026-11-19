@@ -8,14 +8,15 @@ public static class ReviewRetryBudgetLedger
     public static ReviewRetryBudgetState Evaluate(Goal goal)
     {
         ArgumentNullException.ThrowIfNull(goal);
+        var timeline = goal.Timeline;
         var reviewers = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Reviewer).ToArray();
         var reviewerIds = reviewers.Select(task => task.Id.Value).ToHashSet(StringComparer.Ordinal);
         var operatorReset = -1;
         var latestReset = -1;
         string? marker = null;
-        for (var index = 0; index < goal.Timeline.Count; index++)
+        for (var index = 0; index < timeline.Count; index++)
         {
-            if (goal.Timeline[index].OperatorIntentApplied is
+            if (timeline[index].OperatorIntentApplied is
                 { ActorKind: OperatorActorKind.Human, Outcome: "applied", RetryRoundKind: RetryRoundKind.Standard, TaskId: { } taskId } payload &&
                 reviewerIds.Contains(taskId))
             {
@@ -30,9 +31,9 @@ public static class ReviewRetryBudgetLedger
         foreach (var reviewer in reviewers)
         {
             var historyIndex = reviewer.VerificationHistory.Count - 1;
-            for (var index = goal.Timeline.Count - 1; index >= 0 && historyIndex >= 0; index--)
+            for (var index = timeline.Count - 1; index >= 0 && historyIndex >= 0; index--)
             {
-                var evt = goal.Timeline[index];
+                var evt = timeline[index];
                 if (evt.TaskId != reviewer.Id || evt.Kind != ProgressKind.TaskVerificationRecorded) continue;
                 var verification = reviewer.VerificationHistory[historyIndex];
                 if (!evt.Message.EndsWith($": {verification.Command}", StringComparison.Ordinal)) break;
@@ -58,9 +59,9 @@ public static class ReviewRetryBudgetLedger
 
         var consecutive = 0;
         var lifetime = 0;
-        for (var index = 0; index < goal.Timeline.Count; index++)
+        for (var index = 0; index < timeline.Count; index++)
         {
-            var evt = goal.Timeline[index];
+            var evt = timeline[index];
             if (evt.Kind != ProgressKind.TaskRetried || !evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase)) continue;
             if (index > operatorReset) lifetime++;
             if (index > latestReset) consecutive++;

@@ -792,6 +792,13 @@ public sealed partial class TaskSpec
 
     internal void ClearLatestVerification() => LastVerification = null;
 
+    internal void RestoreFindingEvidenceVerification(TaskVerificationRecord verification)
+    {
+        var historyIndex = _verificationHistory.FindLastIndex(item => item.HasSameRoundIdentity(verification));
+        if (historyIndex >= 0) _verificationHistory[historyIndex] = verification;
+        LastVerification = verification;
+    }
+
     internal TaskStatusChange ReinstateVerification(TaskVerificationRecord verification)
     {
         if (!_verificationHistory.Any(item => ReferenceEquals(item, verification)))

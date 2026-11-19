@@ -10,7 +10,8 @@ internal sealed record KeyedRepositoryEvidenceTarget(
     string ProjectHomeDirectory,
     string IntegrationBranch,
     AcceptanceGateEngineSettings EngineSettings,
-    string CandidateHead)
+    string CandidateHead,
+    string? ManifestIdentity = null)
 {
     internal static (KeyedRepositoryEvidenceTarget? Target, string Failure) TryResolve(
         Goal goal, string key, OrchestratorProjectRegistry registry)
@@ -31,8 +32,10 @@ internal sealed record KeyedRepositoryEvidenceTarget(
             var worktree = bindings![canonicalKey].WorktreePath;
             var home = MultiRepositoryProjectVerifier.ProjectHome(registry, canonicalKey);
             _ = GoalAcceptanceVerifier.AcceptanceManifest.Load(worktree, changedFiles: null, home);
+            var manifest = SelectionFileReadProbe.ReadAllText(AcceptanceManifestLocator.Resolve(worktree, home));
             return (new KeyedRepositoryEvidenceTarget(canonicalKey, worktree, home, project.IntegrationBranch,
-                AcceptanceGateEngineSettings.Load(worktree, home), ConductorGitRevisionReader.ReadRequiredCommit(worktree, "HEAD")),
+                AcceptanceGateEngineSettings.Parse(manifest), ConductorGitRevisionReader.ReadRequiredCommit(worktree, "HEAD"),
+                FindingEvidenceReviewContext.Hash(manifest)),
                 string.Empty);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException or System.Text.Json.JsonException)

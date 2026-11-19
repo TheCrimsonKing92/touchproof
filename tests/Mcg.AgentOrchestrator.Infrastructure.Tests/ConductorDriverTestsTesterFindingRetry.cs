@@ -72,8 +72,8 @@ public sealed class ConductorDriverTestsTesterFindingRetry
             evt.Message.Contains($"deferred_developer_task_id={developer.Id}", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "One_writable_finding_in_a_mixed_round_keeps_Developer_precedence")]
-    public void OneWritableFindingInAMixedRoundKeepsDeveloperPrecedence()
+    [Xunit.Fact]
+    public void MixedRound_DrainsEvidenceBeforeDeveloperRepair()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -91,9 +91,14 @@ public sealed class ConductorDriverTestsTesterFindingRetry
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(0, harness.FocusedRuns);
+        Assert.Equal(1, harness.FocusedRuns);
         Assert.Equal(developer.Id, harness.RetriedTaskId);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        var verification = tester.VerificationHistory.Last();
+        Assert.True(Assert.Single(verification.FindingEvidenceReceipts!).Passed);
+        Assert.Contains(verification.MergedReviewFindings!, finding =>
+            finding.StableId == "T-WRITABLE" && finding.State == ReviewFindingState.Open);
+        Assert.Contains("route=developer", harness.RetryMessage!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Receipt_already_taken_at_this_candidate_routes_the_blocker_to_Developer")]

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
@@ -289,26 +288,6 @@ internal sealed partial class ConductorDriver
         RecordEscalation(goal, state, reason);
         return MakeResult(goal.Id.Value, goalPrefix, policy,
             new ConductorAdvanceOutcome.Escalated(state, reason, kind));
-    }
-
-    private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason)
-    {
-        var escalationClock = Stopwatch.StartNew();
-        var sinkResult = LandingEscalationWriteResult.Error;
-        try
-        {
-            sinkResult = _writeEscalation(goal, state, reason);
-        }
-        finally
-        {
-            escalationClock.Stop();
-            EmitGoalPhaseTiming(
-                "escalation-write",
-                goal,
-                escalationClock.Elapsed,
-                $"json_ms={sinkResult.JsonElapsedMilliseconds} json={sinkResult.JsonOutcome} " +
-                $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome}");
-        }
     }
 
     private static ConductorAdvanceResult MakeResult(

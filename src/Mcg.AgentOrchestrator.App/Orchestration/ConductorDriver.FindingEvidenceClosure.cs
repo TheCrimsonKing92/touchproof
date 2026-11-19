@@ -14,14 +14,8 @@ internal sealed partial class ConductorDriver
         string summary,
         ConductorAutonomyPolicy? policy = null)
     {
-        FindingReceiptClosureDiagnosis? diagnosis = null;
-        if (task.RequiredRole == AgentRole.Tester &&
-            (_cohortKernel ?? _conductorTickKernel) is { } kernel)
-        {
-            if (FindingReceiptClosureCoordinator.TryClose(kernel, goal, task.Id, candidateSha, _utcNow,
-                    out diagnosis, out var observation))
-                return observation;
-        }
+        if (FindingRoundBatchCoordinator.TrySettleBeforeRouting(this, goal, task, candidateSha, _utcNow,
+                out var diagnosis, out var observation)) return observation;
 
         var receiptTask = (_cohortKernel ?? _conductorTickKernel)?.GetTask(goal.Id, task.Id) ?? task;
         if (policy is not null &&
@@ -30,6 +24,7 @@ internal sealed partial class ConductorDriver
         var openFindings = ReviewFindings.GetOpenBlockingFindings(
             receiptTask.LastVerification?.MergedReviewFindings ?? findings,
             goal.EffectiveAcceptanceCriteriaCorrections);
+        if (FindingRoundBatchCoordinator.TrySourceRepair(goal, receiptTask, candidateSha, receiptIds, openFindings, out var sourceRoute)) return sourceRoute;
         if (task.RequiredRole == AgentRole.Tester && openFindings.Count > 0 &&
             FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(receiptTask, candidateSha, receiptIds))
         {

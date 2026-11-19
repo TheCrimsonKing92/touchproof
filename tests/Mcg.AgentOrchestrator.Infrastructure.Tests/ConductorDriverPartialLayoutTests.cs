@@ -7,7 +7,6 @@ public sealed class ConductorDriverPartialLayoutTests
     [Fact]
     public void ParallelAcceptanceMembersHaveOneOwningFile() =>
         AssertMemberLocations("ConductorDriver.ParallelAcceptance.cs",
-            ("VerifyingFindingTrigger", 1),
             ("TryBuildParallelAcceptanceCandidate", 1),
             ("ProjectGateReadyCandidate", 1),
             ("ExcludedGateReadyCandidate", 1),
