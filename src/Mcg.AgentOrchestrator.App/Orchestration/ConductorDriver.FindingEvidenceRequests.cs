@@ -469,10 +469,16 @@ internal sealed partial class ConductorDriver
             initialRequestDispositions, runnable, receipt, FormatFindingEvidenceSelection,
             actionableCandidateRed is null ? null : batches.Skip(1));
         receipt = receipt with { RequestDispositions = requestDispositions };
-        var apparatusFailure = evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure &&
-            !armReceipts.Any(arm => arm is { Arm: FindingEvidenceArm.Candidate, Disposition: FindingEvidenceArmDisposition.Red });
+        var retryableFailure = evidence.OutcomeReason switch
+        {
+            FindingEvidenceOutcomeReason.ApparatusFailure when !armReceipts.Any(arm =>
+                arm is { Arm: FindingEvidenceArm.Candidate, Disposition: FindingEvidenceArmDisposition.Red }) =>
+                FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
+            FindingEvidenceOutcomeReason.CandidateInconclusive => FindingEvidenceNotHonouredReason.RunFailed,
+            _ => (FindingEvidenceNotHonouredReason?)null
+        };
         var completions = new List<(ReviewFinding Finding, PreTesterCoverageComposition.Completion Completion)>();
-        if (!apparatusFailure)
+        if (retryableFailure is null)
         {
             foreach (var finding in runnable.Findings)
             {
@@ -493,8 +499,8 @@ internal sealed partial class ConductorDriver
                 findingRoundFingerprint, receiptId, requestDispositions, out decision))
             return true;
 
-        var checkpointGreen = reconciliationDeferred && receipt.Passed && !apparatusFailure;
-        if (reconciliationDeferred && !checkpointGreen && !apparatusFailure)
+        var checkpointGreen = reconciliationDeferred && receipt.Passed && retryableFailure is null;
+        if (reconciliationDeferred && !checkpointGreen && retryableFailure is null)
             _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt!);
 
         FindingRoundRedCoverage.Delivery? completedDelivery = null;
@@ -512,10 +518,10 @@ internal sealed partial class ConductorDriver
             return route;
         }
 
-        if (apparatusFailure)
+        if (retryableFailure is { } failureReason)
         {
             FindingRoundBatchCoordinator.CheckpointFailedAttemptRun(this, goal, requestingTask, runnable,
-                candidateSha!, executionBasisIdentity, receiptId, FindingEvidenceNotHonouredReason.SelectionApparatusFailure, evidenceAttempt!);
+                candidateSha!, executionBasisIdentity, receiptId, failureReason, evidenceAttempt!);
             _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
             foreach (var finding in runnable.Findings)
             {
@@ -526,16 +532,16 @@ internal sealed partial class ConductorDriver
                     new FindingEvidenceOutcome(
                         Honoured: false,
                         ReceiptId: receiptId,
-                        Reason: FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
+                        Reason: failureReason,
                         Detail: evidence.Summary,
-                        ResultReason: FindingEvidenceOutcomeReason.ApparatusFailure),
+                        ResultReason: evidence.OutcomeReason),
                     receipt);
                 _recordFindingEvidenceRequest(
                     goal.Id,
                     requestingTask.Id,
                     $"finding-evidence disposition=not-honoured; role={requestingTask.RequiredRole}; " +
                     $"task_id={requestingTask.Id}; finding_id={finding.StableId}; candidate_sha={candidateSha}; " +
-                    $"receipt_id={receiptId}; reason=selection-apparatus-failure; " +
+                    $"receipt_id={receiptId}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(failureReason)}; " +
                     $"detail={TrimForConductorMessage(evidence.Summary)}");
             }
             if (reconciliationDeferred)

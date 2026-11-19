@@ -523,20 +523,23 @@ public sealed class FindingRoundBatchCompletionTests
     }
 
     [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData("accepted-apparatus-failure", "selection-apparatus-failure", false)]
+    [InlineData("accepted-apparatus-failure", "selection-apparatus-failure", true)]
+    [InlineData("accepted-inconclusive", "run-failed", false)]
+    [InlineData("accepted-inconclusive", "run-failed", true)]
     [Trait("Category", "CrossTick")]
-    public void AcceptedApparatusFailures_ConsumeRunAllowanceAcrossRestarts(bool refuseFirstCheckpoint)
+    public void AcceptedFailures_ConsumeRunAllowanceAcrossRestarts(
+        string failure, string expectedChargeReason, bool refuseFirstCheckpoint)
     {
-        using var scenario = new Scenario(false, failure: "accepted-apparatus-failure");
+        using var scenario = new Scenario(false, failure);
         var policy = ConductorAutonomyPolicy.Permissive;
         if (refuseFirstCheckpoint)
         {
             var beforeFailure = scenario.Kernel.ExportSnapshot();
             scenario.RefuseRunChargeCheckpoint = true;
-            var failure = Assert.Throws<IOException>(() =>
+            var checkpointFailure = Assert.Throws<IOException>(() =>
                 scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester, policy, out _));
-            Assert.Equal("Injected failure checkpointing the finding evidence run.", failure.Message);
+            Assert.Equal("Injected failure checkpointing the finding evidence run.", checkpointFailure.Message);
             Assert.Null(scenario.LatestAttempt().ReconciledAt);
             Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
             scenario.RefuseRunChargeCheckpoint = false;
@@ -553,13 +556,17 @@ public sealed class FindingRoundBatchCompletionTests
             Assert.NotNull(attempt.ReconciledAt);
             Assert.Empty(scenario.Retries);
             Assert.Empty(scenario.Prepared);
+            var identity = FindingRoundBatchCoordinator.Identity(scenario.Driver, scenario.Goal, scenario.Tester)!;
+            var pending = FindingRoundBatchAccounting.Summarize(scenario.Goal, scenario.Tester, identity, "pending");
 
             // Restore the snapshot saved before the attempt was reconciled, with no later outcome writes.
             scenario.Restore(AgentOrchestratorKernel.FromSnapshot(Assert.IsType<OrchestratorSnapshot>(scenario.LastRunChargeCheckpoint)));
             var charges = scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded).ToArray();
             Assert.Equal(run, charges.Length);
             var charge = Assert.Single(charges, item => item.Message.Contains($"attempt_id={attempt.AttemptId};", StringComparison.Ordinal));
-            Assert.Contains("reason=selection-apparatus-failure;", charge.Message, StringComparison.Ordinal);
+            Assert.Contains($"reason={expectedChargeReason};", charge.Message, StringComparison.Ordinal);
+            Assert.Equal(0, pending.CoalescedSelectionCount);
+            Assert.Equal(0, pending.UnknownSelections);
         }
         Assert.All(scenario.Runs, request => Assert.Contains("AlphaTests", request, StringComparison.Ordinal));
 
@@ -1107,6 +1114,11 @@ public sealed class FindingRoundBatchCompletionTests
                         Arms: [new(FindingEvidenceArm.Candidate, Candidate, FindingEvidenceArmDisposition.ApparatusFailure,
                             Accepted: true, Passed: false, "No tests ran", [])],
                         OutcomeReason: FindingEvidenceOutcomeReason.ApparatusFailure);
+                if (_failure == "accepted-inconclusive" && request == Runs[0])
+                    return new(request, Accepted: true, Passed: false, "Focused selection was inconclusive", [],
+                        Arms: [new(FindingEvidenceArm.Candidate, Candidate, FindingEvidenceArmDisposition.Inconclusive,
+                            Accepted: true, Passed: false, "No test verdict", [])],
+                        OutcomeReason: FindingEvidenceOutcomeReason.CandidateInconclusive);
                 // Passing requests can settle independently of a source finding that has no evidence request.
                 var partialGreen = _failure == "partial-green" && Runs.Count == 1;
                 var groupedPartial = _failure == "regrouped-green" && Runs.Count == 1 ||

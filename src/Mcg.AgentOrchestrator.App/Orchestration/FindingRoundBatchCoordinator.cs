@@ -623,6 +623,10 @@ internal static class FindingRoundBatchCoordinator
             // These conditions prove ineligibility; they are zero, not unknown savings.
             if (task.Status != WorkTaskStatus.Failed || goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) ||
                 Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any()) continue;
+            // A retryable failure keeps its own request pending, independent of any siblings.
+            if (receipt is { Passed: false, Arms: { } arms } &&
+                arms.Any(arm => arm.Disposition is FindingEvidenceArmDisposition.ApparatusFailure or FindingEvidenceArmDisposition.Inconclusive) &&
+                !arms.Any(arm => arm is { Arm: FindingEvidenceArm.Candidate, Disposition: FindingEvidenceArmDisposition.Red })) continue;
             // An incomplete GREEN execution cannot be delivered for interpretation.
             if (receipt is { Accepted: true, Passed: true } && (receipt.RequestDispositions ?? []).Any(disposition =>
                     FindingEvidenceRequestCompletion.IsIncompleteExecution(receipt, disposition))) continue;
