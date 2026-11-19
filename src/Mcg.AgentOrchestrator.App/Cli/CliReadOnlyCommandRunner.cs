@@ -72,7 +72,7 @@ internal static class CliReadOnlyCommandRunner
     {
         if (CliProviderConnectionsCommand.IsListing(args))
         {
-            Environment.ExitCode = CliProviderConnectionsCommand.ExecuteAsync(args, workerProfiles, _ => stateRepository,
+            Environment.ExitCode = CliProviderConnectionsCommand.ExecuteListingAsync(args, workerProfiles, stateRepository,
                 new ProviderConnectionStatusAdapters(workspace.RootDirectory), Console.Out, Console.Error).GetAwaiter().GetResult();
             changed = false;
             return true;

@@ -19,8 +19,8 @@ public sealed class ProviderConnectionRedactionTests
             _ => "claude.exe");
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        var exit = await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", "check", "--profile", "claude-cli", .. (json ? new[] { "--json" } : [])],
-            WorkerProfileCatalog.Default(), _ => fixture.Repository, adapter, stdout, stderr,
+        var exit = await CliProviderConnectionsCheckCommand.ExecuteAsync(["provider-connections", "check", "--profile", "claude-cli", .. (json ? new[] { "--json" } : [])],
+            WorkerProfileCatalog.Default(), () => fixture.Repository, adapter, stdout, stderr,
             claudeProbe: () => new(false, true, secret, secret, true));
         Assert.Equal(0, exit);
         Assert.Contains("SignedIn", stdout.ToString());
@@ -46,8 +46,10 @@ public sealed class ProviderConnectionRedactionTests
         {
             using var stdout = new StringWriter();
             using var stderr = new StringWriter();
-            Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteAsync(
-                args, catalog, _ => fixture.Repository, adapter, stdout, stderr));
+            var exit = CliProviderConnectionsCheckCommand.IsCommand(args)
+                ? await CliProviderConnectionsCheckCommand.ExecuteAsync(args, catalog, () => fixture.Repository, adapter, stdout, stderr)
+                : await CliProviderConnectionsCommand.ExecuteListingAsync(args, catalog, fixture.Repository, adapter, stdout, stderr);
+            Assert.Equal(0, exit);
             var report = stdout.ToString();
             Assert.Contains("MaterialPresent", report);
             Assert.Contains("ApiKey", report);
@@ -75,8 +77,8 @@ public sealed class ProviderConnectionRedactionTests
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
         var adapter = new ProviderConnectionStatusAdapters("fixture", (_, _) => throw new IOException(secret), _ => "codex.exe");
-        var exit = await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", "check", "--profile", "codex-cli", "--json"],
-            WorkerProfileCatalog.Default(), _ => fixture.Repository, adapter, stdout, stderr);
+        var exit = await CliProviderConnectionsCheckCommand.ExecuteAsync(["provider-connections", "check", "--profile", "codex-cli", "--json"],
+            WorkerProfileCatalog.Default(), () => fixture.Repository, adapter, stdout, stderr);
         Assert.NotEqual(0, exit);
         Assert.Empty(stdout.ToString());
         Assert.DoesNotContain(secret, stderr.ToString());

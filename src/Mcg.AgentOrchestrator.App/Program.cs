@@ -397,10 +397,25 @@ if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArg
 if (CliOperatorIntentRoute.IsServed(startupArgs))
     return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
 
-if (CliProviderConnectionsCommand.IsCommand(startupArgs))
+if (CliProviderConnectionsCheckCommand.IsCommand(startupArgs))
 {
-    return ExitCompletedStartupCommand(await CliProviderConnectionsCommand.ExecuteWorkspaceAsync(startupArgs, workspace,
+    return ExitCompletedStartupCommand(await CliProviderConnectionsCheckCommand.ExecuteWorkspaceAsync(startupArgs, workspace,
         () => ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace)));
+}
+if (CliProviderConnectionsCommand.IsListing(startupArgs))
+{
+    try
+    {
+        var catalog = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+        IOrchestratorStateQueries stateQueries = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+        return ExitCompletedStartupCommand(await CliProviderConnectionsCommand.ExecuteListingAsync(startupArgs, catalog,
+            stateQueries, new ProviderConnectionStatusAdapters(workspace.RootDirectory), Console.Out, Console.Error));
+    }
+    catch (Exception)
+    {
+        Console.Error.WriteLine("Provider connection configuration could not be read.");
+        return ExitCompletedStartupCommand(1);
+    }
 }
 
 if (CliGoalBranchCommitCommand.IsCommand(startupArgs))

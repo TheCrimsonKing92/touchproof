@@ -20,52 +20,28 @@ internal static class CliProviderConnectionsCommand
     internal static bool IsListing(IReadOnlyList<string> args) => IsCommand(args) &&
         !(args.Count > 1 && args[1].Equals("check", StringComparison.OrdinalIgnoreCase));
 
-    internal static async Task<int> ExecuteWorkspaceAsync(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
-        Action? prepareCheck = null)
-    {
-        try
-        {
-            return await ExecuteAsync(args, WorkerProfileStore.Load(workspace.WorkerProfilePath), check =>
-            {
-                if (!check) return SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
-                prepareCheck?.Invoke();
-                return new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-            }, new ProviderConnectionStatusAdapters(workspace.RootDirectory), Console.Out, Console.Error);
-        }
-        catch (Exception)
-        {
-            await Console.Error.WriteLineAsync("Provider connection configuration could not be read.");
-            return 1;
-        }
-    }
-
-    internal static async Task<int> ExecuteAsync(IReadOnlyList<string> args, WorkerProfileCatalog catalog,
-        Func<bool, IProviderConnectionEvidenceQueries> openStore, ProviderConnectionStatusAdapters adapters,
-        TextWriter output, TextWriter error, TimeProvider? time = null, Func<ClaudeCliAuthState>? claudeProbe = null,
+    internal static async Task<int> ExecuteListingAsync(IReadOnlyList<string> args, WorkerProfileCatalog catalog,
+        IProviderConnectionEvidenceQueries stateQueries, ProviderConnectionStatusAdapters adapters,
+        TextWriter output, TextWriter error, TimeProvider? time = null,
         CancellationToken cancellationToken = default)
     {
-        if (!TryParse(args, out var check, out var profile, out var json))
+        if (!TryParse(args, out var check, out _, out var json) || check)
         {
             await error.WriteLineAsync(Usage);
             return 1;
         }
+
+        return await ExecuteReportAsync(
+            () => new ProviderConnectionReadinessService(catalog, stateQueries, adapters, time).ListAsync(cancellationToken),
+            json, output, error, time, cancellationToken);
+    }
+
+    internal static async Task<int> ExecuteReportAsync(Func<Task<ProviderConnectionReport>> getReport,
+        bool json, TextWriter output, TextWriter error, TimeProvider? time, CancellationToken cancellationToken)
+    {
         try
         {
-            if (check)
-            {
-                // Validate before opening a writer, initializing schema or executing a probe.
-                var matches = catalog.Profiles.Count(p => string.Equals(LunaLaneNames.NormalizeProfileName(p.Name),
-                    LunaLaneNames.NormalizeProfileName(profile!), StringComparison.OrdinalIgnoreCase));
-                if (matches != 1)
-                {
-                    await error.WriteLineAsync("Select one configured, unambiguous profile. " + Usage);
-                    return 1;
-                }
-            }
-            var store = openStore(check);
-            var service = new ProviderConnectionReadinessService(catalog, store, adapters, time, claudeProbe);
-            var report = check ? await service.CheckAsync(profile!, (IProviderConnectionEvidenceStore)store, cancellationToken) : await service.ListAsync(cancellationToken);
-            await RenderAsync(report, json, output, time);
+            await RenderAsync(await getReport(), json, output, time);
             return 0;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -81,7 +57,7 @@ internal static class CliProviderConnectionsCommand
         }
     }
 
-    private static bool TryParse(IReadOnlyList<string> args, out bool check, out string? profile, out bool json)
+    internal static bool TryParse(IReadOnlyList<string> args, out bool check, out string? profile, out bool json)
     {
         check = args.Count > 1 && args[1].Equals("check", StringComparison.OrdinalIgnoreCase);
         profile = null;

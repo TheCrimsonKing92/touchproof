@@ -22,8 +22,12 @@ public sealed class CliProviderConnectionsContractTests
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var exit = await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", .. suffix.Split('|')],
-            WorkerProfileCatalog.Default(), _ => throw new Exception("must not open"), NoProbe(), output, error);
+        string[] args = ["provider-connections", .. suffix.Split('|')];
+        var catalog = WorkerProfileCatalog.Default();
+        var exit = CliProviderConnectionsCheckCommand.IsCommand(args)
+            ? await CliProviderConnectionsCheckCommand.ExecuteAsync(args, catalog,
+                () => throw new Exception("must not open"), NoProbe(), output, error)
+            : await CliProviderConnectionsCommand.ExecuteListingAsync(args, catalog, new Store(), NoProbe(), output, error);
         Assert.NotEqual(0, exit);
         Assert.Empty(output.ToString());
         Assert.Contains("Usage:", error.ToString());
@@ -35,8 +39,8 @@ public sealed class CliProviderConnectionsContractTests
         var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
         using var output = new StringWriter();
         using var error = new StringWriter();
-        Assert.Equal(1, await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", "check", "--profile", "CODEX-CLI"],
-            new([profile, profile with { Name = "CODEX-CLI" }]), _ => throw new Exception("must not open"), NoProbe(), output, error));
+        Assert.Equal(1, await CliProviderConnectionsCheckCommand.ExecuteAsync(["provider-connections", "check", "--profile", "CODEX-CLI"],
+            new([profile, profile with { Name = "CODEX-CLI" }]), () => throw new Exception("must not open"), NoProbe(), output, error));
         Assert.Contains("unambiguous", error.ToString());
     }
 
@@ -56,9 +60,8 @@ public sealed class CliProviderConnectionsContractTests
         using var json = new StringWriter();
         using var error = new StringWriter();
         var now = new FixedTime(at.AddDays(1));
-        IProviderConnectionEvidenceQueries Open(bool write) { Assert.False(write); return store; }
-        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections"], catalog, Open, NoProbe(), text, error, now));
-        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", "--json"], catalog, Open, NoProbe(), json, error, now));
+        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteListingAsync(["provider-connections"], catalog, store, NoProbe(), text, error, now));
+        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteListingAsync(["provider-connections", "--json"], catalog, store, NoProbe(), json, error, now));
         using var document = JsonDocument.Parse(json.ToString());
         var envelope = document.RootElement;
         Assert.Equal("mcg.provider-connections", envelope.GetProperty("schema").GetString());
@@ -80,6 +83,7 @@ public sealed class CliProviderConnectionsContractTests
         Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(["provider-connections"]));
         Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(["provider-connections"]));
         Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(["provider-connections", "check", "--profile", "codex-cli"]));
+        Assert.Equal(CliCommandCapability.Execution, CliCommandCapabilities.Classify(["provider-connections", "check", "--profile", "codex-cli"]));
     }
 
     [Theory]
@@ -93,8 +97,8 @@ public sealed class CliProviderConnectionsContractTests
         var store = new Store { Observations = [new(ProviderConnectionContext.Host, ProviderConnectionSource.CodexLoginStatus, status)] };
         using var output = new StringWriter();
         using var error = new StringWriter();
-        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", "--json"],
-            new([WorkerProfileCatalog.Default().GetRequired("codex-cli")]), _ => store, NoProbe(), output, error));
+        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteListingAsync(["provider-connections", "--json"],
+            new([WorkerProfileCatalog.Default().GetRequired("codex-cli")]), store, NoProbe(), output, error));
         Assert.Contains(status.ToString(), output.ToString());
         Assert.Empty(error.ToString());
     }
@@ -111,8 +115,8 @@ public sealed class CliProviderConnectionsContractTests
         }, _ => "codex.exe");
         using var output = new StringWriter();
         using var error = new StringWriter();
-        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", "check", "--profile", "CODEX-CLI", "--json"],
-            WorkerProfileCatalog.Default(), write => { Assert.True(write); return store; }, adapter, output, error));
+        Assert.Equal(0, await CliProviderConnectionsCheckCommand.ExecuteAsync(["provider-connections", "check", "--profile", "CODEX-CLI", "--json"],
+            WorkerProfileCatalog.Default(), () => store, adapter, output, error));
         Assert.Equal(1, calls);
         Assert.Equal(1, store.Writes);
         Assert.Equal("codex-cli", store.LastProfile);
@@ -124,9 +128,35 @@ public sealed class CliProviderConnectionsContractTests
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
-        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteAsync(["provider-connections", "--json"], new([]), _ => new Store(), NoProbe(), output, error));
+        Assert.Equal(0, await CliProviderConnectionsCommand.ExecuteListingAsync(["provider-connections", "--json"], new([]), new Store(), NoProbe(), output, error));
         using var json = JsonDocument.Parse(output.ToString());
         Assert.Equal(0, json.RootElement.GetProperty("payload").GetProperty("profiles").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task PublicStartup_CheckInitializesAndPersistsHostObservation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "provider-connections-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var check = await RunPublicAsync(root, ["provider-connections", "check", "--profile", "GROK-CLI", "--json"]);
+            Assert.True(check.ExitCode == 0, check.StandardError);
+            using var document = JsonDocument.Parse(check.StandardOutput);
+            var profile = Assert.Single(document.RootElement.GetProperty("payload").GetProperty("profiles").EnumerateArray());
+            Assert.Equal("grok-cli", profile.GetProperty("profileId").GetString());
+            var host = Assert.Single(profile.GetProperty("observations").EnumerateArray(),
+                observation => observation.GetProperty("executionContext").GetString() == "Host");
+            Assert.Equal("Unsupported", host.GetProperty("result").GetString());
+
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var queries = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+            var persisted = Assert.Single(await queries.ReadProviderConnectionEvidenceAsync("grok-cli"),
+                observation => observation.ExecutionContext == ProviderConnectionContext.Host);
+            Assert.Equal(ProviderConnectionResult.Unsupported, persisted.Result);
+            Assert.Equal(host.GetProperty("observedAt").GetDateTimeOffset(), persisted.ObservedAt);
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     [Fact]
