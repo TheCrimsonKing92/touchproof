@@ -49,6 +49,11 @@ internal static class WorktreeWriteProbe
                 : launch(request);
             Validate(result, request);
         }
+        catch (Exception ex) when (ex is not WorkerSandboxRefusedException && ArtifactExists(sentinel))
+        {
+            // Capture the leftover sentinel before fallback cleanup can remove it, retaining the child failure.
+            failure = new WorkerSandboxRefusedException(SentinelNotCleaned, sentinel, ex);
+        }
         catch (Exception ex)
         {
             failure = ex;

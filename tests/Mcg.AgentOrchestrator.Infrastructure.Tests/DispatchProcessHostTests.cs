@@ -1826,6 +1826,33 @@ public sealed class DispatchProcessHostTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData(23, "", "probe child stopped", typeof(InvalidOperationException))]
+    [Xunit.InlineData(0, WorktreeWriteProbe.ResultPrefix + "{", "", typeof(JsonException))]
+    public void WriteProbe_LeftoverSentinel_PreservesChildFailure(
+        int exitCode, string stdout, string stderr, Type childFailureType)
+    {
+        WithWriteProbePreflight((startInfo, parameters, _) =>
+        {
+            WorktreeWriteProbe.Launch? launched = null;
+            var error = Assert.Throws<WorkerSandboxRefusedException>(() =>
+                DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters, request =>
+                {
+                    launched = request;
+                    File.WriteAllText(request.SentinelPath, "probe payload");
+                    return new WorkerProcessRunResult(exitCode, stdout, stderr);
+                }, isWindows: true));
+
+            var request = Assert.IsType<WorktreeWriteProbe.Launch>(launched);
+            Assert.Equal("sentinel-not-cleaned", error.ReasonCode);
+            Assert.Equal(request.SentinelPath, error.Path);
+            Assert.IsAssignableFrom(childFailureType, error.InnerException);
+            if (exitCode != 0)
+                Assert.Contains(stderr, error.InnerException!.Message);
+            AssertProbeArtifactsRemoved(request);
+        });
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("inside-write-denied")]
     [Xunit.InlineData("outside-write-allowed")]
     [Xunit.InlineData("sentinel-not-cleaned")]
