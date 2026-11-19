@@ -43,12 +43,22 @@ internal static class OwnerConsoleChangelog
 
     internal static string FormatAnnouncement(IReadOnlyList<OwnerConsoleChangelogEntry> entries) =>
         "Console news (:news): " + string.Join(" | ", entries.Select(entry =>
-            $"{entry.Summary} {string.Join("; ", entry.Navigation)}"));
+            $"{entry.Summary} {string.Join("; ", entry.Navigation.Select(PlainKeyText))}"));
 
     internal static string FormatDetails(IReadOnlyList<OwnerConsoleChangelogEntry> entries) =>
         string.Join("\n\n", entries.Select(entry =>
-            $"{entry.Id.ToString(CultureInfo.InvariantCulture)} - {entry.Summary}\n{FingerprintLabel}{entry.Fingerprint}\n" +
-            string.Join("\n", entry.Navigation.Select(item => "- " + item))));
+            $"{entry.Id.ToString(CultureInfo.InvariantCulture)} - {entry.Summary}\n" +
+            string.Join("\n", entry.Navigation.Select(item => "- " + PlainKeyText(item)))));
+
+    private static string PlainKeyText(string navigation)
+    {
+        if (!navigation.Contains('`')) return navigation;
+
+        var parts = navigation.Split('`');
+        // An even part count leaves the last delimiter unpaired.
+        if (parts.Length % 2 == 0) parts[^2] += "`";
+        return string.Concat(parts);
+    }
 
     private static bool TryReadHeading(string line, out int id, out string summary)
     {
