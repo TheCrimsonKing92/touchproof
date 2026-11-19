@@ -14,7 +14,7 @@ public sealed class ProviderUsageHoldJsonTests
     private static readonly string[] LegacyFields = ["bindingKey", "provider", "sourceGoalId", "sourceTaskId", "placedAt", "evidence",
         "scheduleAvailable", "attempt", "nextProbeAt", "resetSource", "resetAt", "probeInFlight", "admittedGoalId", "admittedTaskId", "lastProbe", "resetCommand"];
     private static readonly string[] DiagnosticFields = ["lastProbeAt", "lastActionableFailure", "lastActionableFailureAt", "diagnosis", "resetIntentId"];
-    private static readonly string[] Fields = [.. LegacyFields, .. DiagnosticFields, "providerResetAt"];
+    private static readonly string[] Fields = [.. LegacyFields, .. DiagnosticFields];
 
     [Fact]
     public async Task HeldBinding_StatusAndAttentionEmitIdenticalOrderedRows()
@@ -36,7 +36,6 @@ public sealed class ProviderUsageHoldJsonTests
         Assert.Equal(ProviderBudgetHoldSchedules.FormatInstant(projected.Schedule!.NextProbeAt), row.GetProperty("nextProbeAt").GetString());
         Assert.Equal(projected.Schedule.Attempt, row.GetProperty("attempt").GetInt32());
         Assert.Equal(projected.Schedule.ResetSource, row.GetProperty("resetSource").GetString());
-        Assert.Equal("unknown", row.GetProperty("providerResetAt").GetString());
         Assert.Equal(JsonValueKind.Null, row.GetProperty("lastProbe").ValueKind);
         Assert.Equal($"provider-reset {Key} <ISO-8601 instant> --text-file <path>", row.GetProperty("resetCommand").GetString());
         Assert.Equal(projected.Hold.PlacedAt, row.GetProperty("lastProbeAt").GetDateTimeOffset());

@@ -104,8 +104,8 @@ internal sealed partial class ConductorDriver
         }
         if (decision.Action == FailedGoalRecoveryAction.Escalate &&
             IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _) &&
-            ((SignInFailover ?? ProviderSignInFailover.ForWorkspace(_cohortKernel, _cohortWorkspace))?.TryFailover(goal, decision, _retryTask) == true ||
-             (ProviderHoldRedispatch ?? ProviderHoldFailedGoalRedispatch.ForWorkspace(_cohortKernel, _cohortWorkspace, policy))?.TryRedispatch(goal, facts, _retryTask) == true))
+            ((ProviderHoldRedispatch ?? ProviderHoldFailedGoalRedispatch.ForWorkspace(_cohortKernel, _cohortWorkspace, policy))?.TryRedispatch(goal, facts, _retryTask) == true ||
+             (SignInFailover ?? ProviderSignInFailover.ForWorkspace(_cohortKernel, _cohortWorkspace))?.TryFailover(goal, decision, _retryTask) == true))
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return ExecuteDispatchAndStart(GetCurrentGoal(goal), goalPrefix, policy, GoalLifecycleState.WorkspaceReady);

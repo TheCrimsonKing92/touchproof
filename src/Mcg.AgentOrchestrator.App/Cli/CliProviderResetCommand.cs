@@ -30,14 +30,11 @@ internal static class CliProviderResetCommand
         if (agent is not null) target = agent.Model.ProviderName;
         var holds = new Dictionary<string, ProviderBudgetExhaustionHold>(StringComparer.OrdinalIgnoreCase);
         holdMemo ??= new ProviderBudgetHoldMemo(context.Kernel.Goals);
-        var bindings = context.Kernel.Goals.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory)
-            .Select(dispatch => ProviderHoldBinding.From(dispatch))
-            .Concat(ProviderHoldBinding.Candidates(context.Kernel.Goals))
-            .DistinctBy(binding => binding.Key, StringComparer.OrdinalIgnoreCase);
-        foreach (var binding in bindings)
+        foreach (var dispatch in context.Kernel.Goals.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
         {
-            if (!holdMemo.TryGetExact(binding, out var hold)) continue;
-            if (binding.Provider.Equals(target, StringComparison.OrdinalIgnoreCase) || hold.BindingKey.Equals(target, StringComparison.OrdinalIgnoreCase))
+            var provider = dispatch.ProviderName ?? dispatch.WorkerName;
+            if (!holdMemo.TryGet(provider, dispatch.ClaudeCredentialSourceDirectory, out var hold)) continue;
+            if (provider.Equals(target, StringComparison.OrdinalIgnoreCase) || hold.BindingKey.Equals(target, StringComparison.OrdinalIgnoreCase))
                 holds.TryAdd(hold.BindingKey, hold);
         }
         if (holds.Count == 0) throw new ArgumentException($"no-current-hold: {parts[1]}");

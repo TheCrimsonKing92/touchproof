@@ -91,7 +91,7 @@ public sealed class ProviderSignInFailoverScenarioTests
     [InlineData("The worker quoted: Not signed in", false)]
     public void ReplacementSignInFailureEscalatesWithoutReturningToSource(string stderr, bool recoverableAuthentication)
     {
-        using var scenario = new Scenario(retryOnHeldBinding: true);
+        using var scenario = new Scenario();
         var goal = scenario.Incident();
         Assert.IsNotType<ConductorAdvanceOutcome.Escalated>(scenario.Tick(goal).Outcome);
         Assert.Equal("openai-tester", scenario.Current(goal).Tasks.Single().LastDispatch!.AssignedAgentId);
@@ -160,8 +160,7 @@ public sealed class ProviderSignInFailoverScenarioTests
         internal static AgentDefinition PrimaryAgent() => ProviderHoldAgentSubstitutionTests.Scenario.Agent("xai-tester", "xAI", "grok-cli", "grok-4.7");
         internal static AgentDefinition AlternateAgent() => ProviderHoldAgentSubstitutionTests.Scenario.Agent("openai-tester", "OpenAI", "codex-cli", "gpt-6.1-sol");
 
-        internal Scenario(bool enabled = true, IReadOnlyList<AgentDefinition>? agents = null,
-            IReadOnlyList<AgentDefinition>? failoverAgents = null, bool retryOnHeldBinding = false)
+        internal Scenario(bool enabled = true, IReadOnlyList<AgentDefinition>? agents = null, IReadOnlyList<AgentDefinition>? failoverAgents = null)
         {
             Kernel = new(Clock);
             Workspace = OrchestratorWorkspace.ForDirectory(Root);
@@ -196,7 +195,7 @@ public sealed class ProviderSignInFailoverScenarioTests
                 writeEscalation: (goal, _, reason) => Escalations.Add((goal.Id, reason)), classifyChangeRisk: _ => null,
                 retryTaskWithCause: Retry, utcNow: () => Clock.UtcNow);
             _driver.ProviderHoldRedispatch = new ProviderHoldFailedGoalRedispatch(Kernel,
-                (kernel, _) => new ProviderHoldAgentSubstitution(kernel, Agents, Preflight), retryOnHeldBinding);
+                (kernel, _) => new ProviderHoldAgentSubstitution(kernel, Agents, Preflight));
             if (enabled) _driver.SignInFailover = new ProviderSignInFailover(Kernel, failoverAgents ?? Agents);
         }
 

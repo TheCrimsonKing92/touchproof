@@ -2353,12 +2353,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         ReadModelFitHistoryAsync(providerHoldRule: null, cancellationToken);
 
     public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(string exhaustionRule,
-        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync([exhaustionRule], cancellationToken);
+        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(exhaustionRule, cancellationToken);
 
-    public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(
-        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(ProviderHoldHistory.HoldOutcomeRules, cancellationToken);
-
-    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(IReadOnlyList<string>? providerHoldRule,
+    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(string? providerHoldRule,
         CancellationToken cancellationToken)
     {
         await using var conn = OpenConnection();
@@ -2368,22 +2365,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         // SQLite NOCASE only folds ASCII. For a non-ASCII provider retain the full read,
         // leaving canonical OrdinalIgnoreCase matching to SeedCandidates. For ASCII names
         // the SQL is a conservative superset (julianday rounds sub-millisecond instants).
-        var ruleParameters = providerHoldRule?.Select((rule, index) =>
-        {
-            var name = $"$holdRule{index}";
-            cmd.Parameters.AddWithValue(name, rule);
-            return name;
-        }).ToArray();
-        var rules = ruleParameters is null ? "" : string.Join(", ", ruleParameters);
-        var prefix = providerHoldRule is not null ? $"""
+        var prefix = providerHoldRule is not null ? """
             WITH exhausted AS MATERIALIZED (
                 SELECT provider_name, CASE WHEN count(*) != count(julianday(timestamp)) THEN NULL
                     ELSE min(julianday(timestamp)) END AS first_at
-                FROM model_fit_history WHERE outcome_rule IN ({rules})
+                FROM model_fit_history WHERE outcome_rule = $exhausted
                 GROUP BY provider_name COLLATE NOCASE)
             """ : string.Empty;
-        var restriction = providerHoldRule is not null ? $"""
-            WHERE outcome_rule IN ({rules}) OR EXISTS (
+        var restriction = providerHoldRule is not null ? """
+            WHERE outcome_rule = $exhausted OR EXISTS (
                 SELECT 1 FROM model_fit_history e
                 WHERE e.provider_name GLOB '*[^ -~]*') OR EXISTS (
                 SELECT 1 FROM exhausted e
@@ -2398,6 +2388,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             {restriction}
             ORDER BY timestamp DESC
             """;
+        if (providerHoldRule is not null) cmd.Parameters.AddWithValue("$exhausted", providerHoldRule);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         long characters = 0;

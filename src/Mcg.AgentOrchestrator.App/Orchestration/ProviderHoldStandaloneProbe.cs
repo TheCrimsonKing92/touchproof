@@ -43,14 +43,14 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
                 (task.Status == WorkTaskStatus.Running || task.LastProcess is { IsRunning: true }) &&
                 string.Equals(task.LastDispatch?.ProviderName ?? task.LastDispatch?.WorkerName, hold.ProviderName,
                     StringComparison.OrdinalIgnoreCase))) return;
-        if (hold.Reason != ProviderFailureKind.AuthenticationRequired &&
-            kernel.Goals.Where(goal => !goal.IsTerminal).Any(goal => goal.Tasks.Any(task =>
+        if (kernel.Goals.Where(goal => !goal.IsTerminal).Any(goal => goal.Tasks.Any(task =>
                 task.Status == WorkTaskStatus.Assigned && ProviderBudgetProbeAdmission.WaitsOnBinding(
                     preflight(goal, task, kernel.ProviderHoldScope), hold.BindingKey)))) return;
         var source = kernel.ProviderHoldScope.Single(goal => goal.Id == hold.SourceGoalId);
         var sourceTask = source.Tasks.Single(task => task.Id == hold.SourceTaskId);
         var dispatch = sourceTask.DispatchHistory.Last(record => record.DispatchedAt <= hold.PlacedAt &&
-            ProviderHoldBinding.Matches(record, hold.BindingKey));
+            SubscriptionLimitEvidence.BuildProviderBindingKey(record.ProviderName ?? record.WorkerName,
+                record.ClaudeCredentialSourceDirectory).Key.Equals(hold.BindingKey, StringComparison.OrdinalIgnoreCase));
         if (!_claims.Add(claim)) return;
         ProviderHoldProbeResult result;
         try { result = probe.CheckAsync(hold, dispatch, CancellationToken.None).GetAwaiter().GetResult(); }
@@ -66,8 +66,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
             return;
         }
         var note = ProviderBudgetHoldSchedules.FormatStandaloneResult(new(hold.BindingKey, hold.PlacedAt,
-            schedule.NextProbeAt, schedule.Attempt, now, result.Outcome, result.Reason)
-            { ResetIntentId = schedule.ResetIntentId, ProviderResetAt = result.ProviderResetAt });
+            schedule.NextProbeAt, schedule.Attempt, now, result.Outcome, result.Reason) { ResetIntentId = schedule.ResetIntentId });
         var recorded = true;
         try
         {
@@ -92,7 +91,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
         try
         {
             writer.Append("provider-hold-check", hold.SourceGoalId.Value,
-                $"PROVIDER_HOLD_CHECK due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} attempt={schedule.Attempt} outcome={outcome} reason={Uri.EscapeDataString(reason)}{(diagnosis is null ? "" : $" diagnosis={Uri.EscapeDataString(diagnosis)}")} binding={ConductorProviderHoldWatch.EventBinding(hold.BindingKey)}", timestamp: completed);
+                $"PROVIDER_HOLD_CHECK due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} attempt={schedule.Attempt} outcome={outcome} reason={Uri.EscapeDataString(reason)}{(diagnosis is null ? "" : $" diagnosis={Uri.EscapeDataString(diagnosis)}")} binding={hold.BindingKey}", timestamp: completed);
         }
         catch (Exception error) { ReportFault(error, hold.BindingKey); }
     }
@@ -102,7 +101,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
         // The fallback must remain safe even when both the event sink and stderr are broken.
         try
         {
-            var message = $"PROVIDER_HOLD_CHECK outcome=failed binding={ConductorProviderHoldWatch.EventBinding(binding)} exception={error.GetType().Name} message={Uri.EscapeDataString(error.Message)}";
+            var message = $"PROVIDER_HOLD_CHECK outcome=failed binding={binding} exception={error.GetType().Name} message={Uri.EscapeDataString(error.Message)}";
             if (diagnostic is { } report) report(message);
             else Console.Error.WriteLine(message);
         }

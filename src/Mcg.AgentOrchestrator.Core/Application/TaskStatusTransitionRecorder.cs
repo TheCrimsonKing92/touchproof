@@ -23,7 +23,6 @@ internal static class TaskStatusTransitionRecorder
     internal const string RecordingRecordDispatchExecutionResultStaleDispatch = "Recording.RecordDispatchExecutionResult.StaleDispatch";
     internal const string RecordingRecordDispatchExecutionResultTerminalContractRepair = "Recording.RecordDispatchExecutionResult.TerminalContractRepair";
     internal const string RecordingRecordDispatchExecutionResultSubscriptionLimit = "Recording.RecordDispatchExecutionResult.SubscriptionLimit";
-    internal const string RecordingRecordDispatchExecutionResultProviderHoldCheckInconclusive = "Recording.RecordDispatchExecutionResult.ProviderHoldCheckInconclusive";
     internal const string RecordingRecordDispatchExecutionResultProviderConnectivity = "Recording.RecordDispatchExecutionResult.ProviderConnectivity";
     internal const string RecordingRecordDispatchExecutionResultDetachedWithoutWorkerResult = "Recording.RecordDispatchExecutionResult.DetachedWithoutWorkerResult";
     internal const string RecordingRecordDispatchExecutionResultProviderInterruption = "Recording.RecordDispatchExecutionResult.ProviderInterruption";
