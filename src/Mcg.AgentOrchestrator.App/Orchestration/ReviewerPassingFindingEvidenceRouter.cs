@@ -8,35 +8,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // All authority comes from retained dispatches, parsed completions and the existing receipt selector.
 internal static class ReviewerPassingFindingEvidenceRouter
 {
-    internal static bool TryDeliverLegacyPartialGreen(ConductorDriver driver, Goal goal, TaskSpec task,
-        FindingEvidenceBatchIdentity? identity, FindingRoundBatchCoordinator.ExecutionContext execution,
-        out FailedGoalFindingObservation observation)
-    {
-        observation = FailedGoalFindingObservation.None;
-        if (identity is null || task.RequiredRole != AgentRole.Reviewer ||
-            task.LastVerification is not { CandidateIdentity: null, MergedReviewFindings: { } findings } verification ||
-            ReviewFindings.GetOpenBlockingFindings(findings, goal.EffectiveAcceptanceCriteriaCorrections) is not
-                [ { Category: FindingCategory.TestEvidence, EvidenceOutcome: { Honoured: true, ReceiptId: { } receiptId,
-                    ResultReason: FindingEvidenceOutcomeReason.ValidEvidence } } finding ]) return false;
-
-        // The legacy review can receive one partial run and request its omitted selections in the next round.
-        // A partial run cannot settle a member of a multi-request batch or qualify for typed continuation.
-        var members = FindingRoundBatchAccounting.Members(execution.Round.Findings.Where(item => item.State == ReviewFindingState.Open));
-        if (members is not [var member] || !member.FindingIds.Contains(finding.StableId, StringComparer.Ordinal) ||
-            !(verification.FindingEvidenceReceipts ?? []).Any(receipt => receipt.ReceiptId == receiptId &&
-                execution.Matches(receipt, identity) &&
-                (receipt.RequestDispositions ?? []).Any(disposition => disposition.FindingStableId == finding.StableId &&
-                    disposition is { Decision: FindingEvidenceRequestDecision.PendingExecution, Reason: "candidate-selections-not-executed" }) &&
-                IsReusableGreenFindingEvidenceReceipt(receipt, identity.CandidateSha, execution.HomeBasis))) return false;
-
-        const string reason = "Partial GREEN execution was recorded. Omitted selections remain eligible for another evidence request.";
-        FindingRoundBatchAccounting.Record(goal, identity,
-            new(identity.Key, "executed", member.RequestIdentity, [finding.StableId], receiptId, Eligibility: reason),
-            driver._recordFindingEvidenceRequest);
-        observation = BuildCappedFindingEvidenceDeliveryRetry(goal, task, identity.CandidateSha, [finding], [receiptId], reason);
-        return true;
-    }
-
     internal static bool TryObserveContinuationCap(Goal goal, TaskSpec task,
         ConductorAutonomyPolicy policy, out FailedGoalFindingObservation observation)
     {

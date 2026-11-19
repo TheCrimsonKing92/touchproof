@@ -55,10 +55,14 @@ internal static class FindingRoundRedCoverage
         coverage.RecordSkips(goal, task, candidateSha, fingerprint, basis, recordDispositions, recordOutcome, recordRequest);
         foreach (var item in coverage.Skipped)
             FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "covered", item.Receipts[0].ReceiptId);
+        var partialSources = FindingRoundBatchSchedule.PartialGreenReceiptIds(runnable,
+            runnable.Members.SelectMany(member => member.ReusedSourceReceipts ?? []), candidateSha, fingerprint, basis);
         var delivery = new Delivery(receipt.ReceiptId,
             runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
-            plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Append(receipt.ReceiptId).Distinct(StringComparer.Ordinal).ToArray());
-        if (reusedRedDecision is null) observeDelivery(delivery);
+            plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Concat(partialSources).Append(receipt.ReceiptId)
+                .Distinct(StringComparer.Ordinal).ToArray());
+        if (reusedRedDecision is null && (!receipt.Passed || settled.Passed.Any(item => item.ReceiptId == receipt.ReceiptId)))
+            observeDelivery(delivery);
         if (coverage.Remaining.Count > 0)
             return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence completed; another distinct request from the same finding round remains pending: " +

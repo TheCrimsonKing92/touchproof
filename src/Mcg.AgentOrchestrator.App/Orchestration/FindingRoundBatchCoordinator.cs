@@ -459,10 +459,8 @@ internal static class FindingRoundBatchCoordinator
                 execution.Round.Findings.Where(finding => finding.State == ReviewFindingState.Open),
                 driver._recordFindingEvidenceRequest);
         FindingRoundRedCoverage.Delivery? completedDelivery = null;
-        FailedGoalFindingObservation? reusedRedDecision = null;
-        var handled = ReviewerPassingFindingEvidenceRouter.TryDeliverLegacyPartialGreen(driver, goal, task, identity, execution, out decision) ||
-            driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, execution,
-                delivery => completedDelivery = delivery, out reusedRedDecision, out decision);
+        var handled = driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, execution,
+            delivery => completedDelivery = delivery, out var reusedRedDecision, out decision);
         if (identity is null) return handled;
         // Deterministic receipt closure records its summary atomically with the kernel action.
         if (FindingRoundBatchAccounting.IsClosed(goal, identity))
@@ -471,9 +469,6 @@ internal static class FindingRoundBatchCoordinator
                 "Finding batch closure was already applied; waiting for the routed owner.");
             return true;
         }
-        if (handled && decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending &&
-            ReviewerPassingFindingEvidenceRouter.TryDeliverLegacyPartialGreen(driver, goal, task, identity, execution, out var partialDelivery))
-            decision = partialDelivery;
         var deferredSummary = FindingRoundBatchAccounting.Summarize(goal, task, identity, "deferred-routing-check");
         // Deferred requests require the existing review retry route, including its caps and owner selection.
         // They settle current-candidate membership without claiming evidence coverage or unavailability.

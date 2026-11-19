@@ -409,8 +409,12 @@ internal sealed partial class ConductorDriver
         var reusableBySelection = new Dictionary<string, FindingEvidenceReceipt>(StringComparer.Ordinal);
         foreach (var selection in requestedCoverage)
         {
+            // A later remainder execution can replace the finding outcome while the original
+            // partial receipt still proves the selections it actually ran.
             if (latestReceiptBySelection.TryGetValue(selection, out var receipt) &&
                 (validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) ||
+                 (receipt.RequestDispositions ?? []).Any(disposition =>
+                     FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition)) ||
                  (preTesterCoverage ?? []).Any(source => source.Receipt == receipt)) &&
                 IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity))
             {
@@ -470,9 +474,7 @@ internal sealed partial class ConductorDriver
         var coverageDispositions = dispositions
             .Where(disposition =>
                 disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal) ||
-                (hasCandidateOmissions && disposition is
-                    { Disposition: "incomplete", Reason: "candidate-selections-not-executed", Decision: FindingEvidenceRequestDecision.PendingExecution } &&
-                 disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true))
+                (hasCandidateOmissions && FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition)))
             .ToArray();
         var executedDispositionCoverage = coverageDispositions.SelectMany(disposition =>
                 FindingEvidenceRoundPlanner.ExpandSelections(ParseDispositionSelections(disposition.RequestIdentity)))

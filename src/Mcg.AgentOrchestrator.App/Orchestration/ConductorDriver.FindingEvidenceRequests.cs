@@ -291,13 +291,8 @@ internal sealed partial class ConductorDriver
                 telemetryCandidateSha, redReceipt,
                 new(requestingTask.Id, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity),
                 _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
-        // Execution provenance belongs to this repository; batch membership belongs to the home candidate.
-        var plannedBatches = PreTesterCoverageComposition.BindExecutionIdentities(FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches(groups));
-        if (repositoryTarget is not null)
-            plannedBatches = plannedBatches.Select(batch => batch with { Identity = batch.Identity + ":" + executionBasisIdentity }).ToArray();
-        var plan = FindingRoundBatchSchedule.Plan(plannedBatches,
-            requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
-            telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, FindingRoundBatchSchedule.ReadRunTimeline(goal));
+        var plan = FindingRoundBatchSchedule.PlanRequests(goal, requestingTask, groups, telemetryCandidateSha,
+            findingRoundFingerprint, executionBasisIdentity, repositoryTarget is not null);
         FindingRoundBatchCoordinator.RecordSettledPlan(this, goal, requestingTask, batchCandidateSha,
             findingRoundFingerprint, batchBasisIdentity, plan, telemetryCandidateSha, findingEvidenceEngineSettings);
         FailedGoalFindingObservation? redRoute = null;

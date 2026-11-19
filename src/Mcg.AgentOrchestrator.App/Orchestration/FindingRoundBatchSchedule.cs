@@ -19,6 +19,37 @@ internal static class FindingRoundBatchSchedule
         lock (goal) return goal.Timeline;
     }
 
+    internal static FindingRoundBatchPlan PlanRequests(Goal goal, TaskSpec task,
+        IReadOnlyList<FindingEvidenceRequestGroup> groups, string candidate, string round, string basis,
+        bool usesKeyedRepository)
+    {
+        var batches = PreTesterCoverageComposition.BindExecutionIdentities(FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches(groups));
+        batches = batches.Select(batch => BindPartialGreenRemainder(batch, candidate, round, basis)).ToArray();
+        // Execution provenance belongs to this repository; batch membership belongs to the home candidate.
+        if (usesKeyedRepository)
+            batches = batches.Select(batch => batch with { Identity = batch.Identity + ":" + basis }).ToArray();
+        return Plan(batches, task.Id, task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []).ToArray(),
+            candidate, round, basis, ReadRunTimeline(goal));
+    }
+
+    private static FindingEvidenceBatch BindPartialGreenRemainder(FindingEvidenceBatch batch,
+        string candidate, string round, string basis) =>
+        PartialGreenReceiptIds(batch, batch.Members.SelectMany(member => member.ReusedSourceReceipts ?? []), candidate, round, basis).Any()
+            // Preserve the original partial receipt as proof of the selections already executed.
+            ? batch with { Identity = ConductorDriver.BuildFindingEvidenceIdentity(batch.TypedRequest) }
+            : batch;
+
+    internal static IEnumerable<string> PartialGreenReceiptIds(FindingEvidenceBatch batch,
+        IEnumerable<FindingEvidenceReceipt> receipts, string candidate, string round, string basis) =>
+        receipts.Where(receipt => receipt is { Accepted: true, Passed: true } &&
+                string.Equals(receipt.CandidateSha, candidate, StringComparison.OrdinalIgnoreCase) &&
+                receipt.FindingRoundFingerprint == round && receipt.ExecutionBasisIdentity == basis &&
+                (receipt.RequestDispositions ?? []).Any(disposition =>
+                    FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition) &&
+                    batch.Members.Any(member => member.Identity == disposition.RequestIdentity &&
+                        member.Findings.Any(finding => finding.StableId == disposition.FindingStableId))))
+            .Select(receipt => receipt.ReceiptId);
+
     internal static FindingRoundBatchPlan Plan(
         IReadOnlyList<FindingEvidenceBatch> batches,
         TaskId requestingTaskId,
@@ -66,35 +97,37 @@ internal static class FindingRoundBatchSchedule
                 covered.Add((batch, covering));
                 continue;
             }
-            var marker = $"receipt_id={receiptId};";
-            var legacyMarker = $"receipt_id={legacyId};";
+            // Earlier partial runs spent the same allowance even though the remainder has a new receipt ID.
+            var runMarkers = PartialGreenReceiptIds(batch, currentReceipts.Values, candidateSha,
+                    findingRoundFingerprint, executionBasisIdentity).Prepend(legacyId).Prepend(receiptId).Distinct()
+                .Select(id => (ReceiptId: id, Marker: $"receipt_id={id};")).ToArray();
+            var findingMarker = $"finding_id={batch.Findings[0].StableId};";
+            var basisMarker = $"execution_basis={executionBasisIdentity};";
             var chargedAttempts = new HashSet<string>(StringComparer.Ordinal);
             var runs = timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
                 item.TaskId == requestingTaskId &&
-                (item.Message.Contains(marker, StringComparison.Ordinal) ||
-                 item.Message.Contains(legacyMarker, StringComparison.Ordinal)) &&
-                item.Message.Contains($"finding_id={batch.Findings[0].StableId};", StringComparison.Ordinal) &&
-                (item.Message.Contains($"execution_basis={executionBasisIdentity};", StringComparison.Ordinal) ||
-                 (!item.Message.Contains("execution_basis=", StringComparison.Ordinal) &&
-                  (item.Message.Contains(marker, StringComparison.Ordinal) ||
-                   !receipts.Any(receipt => receipt.ReceiptId == legacyId && receipt.ExecutionBasisIdentity != executionBasisIdentity)))))
-                .Where(item => FailureAttemptId(item.Message) is not { } attemptId || chargedAttempts.Add(attemptId))
+                item.Message.Contains(findingMarker, StringComparison.Ordinal))
+                .Select(item => (Event: item, runMarkers.FirstOrDefault(marker =>
+                    item.Message.Contains(marker.Marker, StringComparison.Ordinal)).ReceiptId))
+                .Where(run => run.ReceiptId is not null &&
+                    (run.Event.Message.Contains(basisMarker, StringComparison.Ordinal) ||
+                     (!run.Event.Message.Contains("execution_basis=", StringComparison.Ordinal) &&
+                      (run.ReceiptId == receiptId || !receipts.Any(receipt =>
+                          receipt.ReceiptId == run.ReceiptId && receipt.ExecutionBasisIdentity != executionBasisIdentity)))))
+                .Where(run => FailureAttemptId(run.Event.Message) is not { } attemptId || chargedAttempts.Add(attemptId))
                 .ToArray();
             // A run-charge checkpoint can survive a restart before the task records the refusal.
-            if (ReadPermanentRefusal(batch, runs, receiptId, executionBasisIdentity) is { } refusal)
+            if (ReadPermanentRefusal(batch, runs.Select(run => run.Event), receiptId, executionBasisIdentity) is { } refusal)
                 refusals.Add(refusal);
             else if (runs.Length >= MaximumCompletedRuns)
-            {
-                var lastReceiptId = runs[^1].Message.Contains(marker, StringComparison.Ordinal) ? receiptId : legacyId;
-                unavailable.Add((batch, runs.Length, lastReceiptId));
-            }
+                unavailable.Add((batch, runs.Length, runs[^1].ReceiptId!));
             else executable.Add(batch);
         }
         return new(passed, covered, executable, unavailable, refusals);
     }
 
     private static FindingRoundBatchRefusal? ReadPermanentRefusal(
-        FindingEvidenceBatch batch, IReadOnlyList<ProgressEvent> runs, string receiptId, string basis)
+        FindingEvidenceBatch batch, IEnumerable<ProgressEvent> runs, string receiptId, string basis)
     {
         var marker = $"; receipt_id={receiptId}; execution_basis={basis};";
         foreach (var run in runs)

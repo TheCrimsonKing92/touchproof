@@ -6,6 +6,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Completed request decisions require candidate execution covering the member's remaining selections.
 internal static class FindingEvidenceRequestCompletion
 {
+    internal static bool IsPartialGreenDisposition(FindingEvidenceReceipt receipt, FindingEvidenceRequestDisposition disposition) =>
+        disposition is { Disposition: "incomplete", Decision: FindingEvidenceRequestDecision.PendingExecution,
+            Reason: "candidate-selections-not-executed" } &&
+        disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true;
+
     internal static bool TryPersistDispositions(
         ConductorParallelAcceptanceAttemptCoordinator coordinator, ConductorParallelAcceptanceAttempt? attempt,
         string round, string receiptId, IReadOnlyList<FindingEvidenceRequestDisposition> dispositions,
