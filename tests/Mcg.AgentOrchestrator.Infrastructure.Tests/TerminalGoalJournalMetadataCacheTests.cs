@@ -17,7 +17,7 @@ public sealed class TerminalGoalJournalMetadataCacheTests : ConductorBatchLoopTe
         var root = CreateTempDirectory("mcg-terminal-journal-cache");
         try
         {
-            var (kernel, landed, retired, plain) = SeedTerminalGoals(root);
+            var (kernel, landed, retired, plain) = SeedTerminalGoals(root, includePlainDependency: true);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             repository.SaveAsync(kernel).GetAwaiter().GetResult();
             var terminalIds = new[] { landed.Id, retired.Id, plain.Id };
@@ -63,6 +63,8 @@ public sealed class TerminalGoalJournalMetadataCacheTests : ConductorBatchLoopTe
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateActiveGoal(kernel, "Archived terminal");
+            var dependent = CreateActiveGoal(kernel, "Archive dependency consumer");
+            kernel.SetGoalDependency(dependent.Id, goal.Id);
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
             GoalOperationJournal.RecordTerminalDisposition(root, goal,
                 new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "Retired before archival."));
@@ -113,7 +115,7 @@ public sealed class TerminalGoalJournalMetadataCacheTests : ConductorBatchLoopTe
         var root = CreateTempDirectory("mcg-terminal-journal-timing");
         try
         {
-            var (storedKernel, _, _, _) = SeedTerminalGoals(root);
+            var (storedKernel, _, _, _) = SeedTerminalGoals(root, includePlainDependency: false);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             repository.SaveAsync(storedKernel).GetAwaiter().GetResult();
             var (loopKernel, _) = SimpleGoal("Keep timing loop active");
@@ -141,7 +143,7 @@ public sealed class TerminalGoalJournalMetadataCacheTests : ConductorBatchLoopTe
                 .ToArray();
             Xunit.Assert.Equal(2, sweepLines.Length);
             Xunit.Assert.Contains("dependency_metadata_ms=", sweepLines[0], StringComparison.Ordinal);
-            Xunit.Assert.Contains("dependency_journals_read=3", sweepLines[0], StringComparison.Ordinal);
+            Xunit.Assert.Contains("dependency_journals_read=2", sweepLines[0], StringComparison.Ordinal);
             Xunit.Assert.Contains("dependency_metadata_ms=", sweepLines[1], StringComparison.Ordinal);
             Xunit.Assert.Contains("dependency_journals_read=0", sweepLines[1], StringComparison.Ordinal);
         }
@@ -151,14 +153,19 @@ public sealed class TerminalGoalJournalMetadataCacheTests : ConductorBatchLoopTe
         }
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Landed, Goal Retired, Goal Plain) SeedTerminalGoals(string root)
+    private static (AgentOrchestratorKernel Kernel, Goal Landed, Goal Retired, Goal Plain) SeedTerminalGoals(
+        string root, bool includePlainDependency)
     {
         var kernel = new AgentOrchestratorKernel();
         var landed = CreateActiveGoal(kernel, "Landed terminal");
         var retired = CreateActiveGoal(kernel, "Retired terminal");
         var plain = CreateActiveGoal(kernel, "Plain terminal");
-        _ = CreateActiveGoal(kernel, "Active one");
-        _ = CreateActiveGoal(kernel, "Active two");
+        var first = CreateActiveGoal(kernel, "Active one");
+        var second = CreateActiveGoal(kernel, "Active two");
+        kernel.SetGoalDependency(first.Id, landed.Id);
+        kernel.SetGoalDependency(second.Id, retired.Id);
+        if (includePlainDependency)
+            kernel.SetGoalDependency(first.Id, plain.Id);
         kernel = WithGoalStatus(WithGoalStatus(WithGoalStatus(
             kernel, landed.Id, GoalStatus.Completed), retired.Id, GoalStatus.Completed), plain.Id, GoalStatus.Completed);
         GoalOperationJournal.RecordLandingIntent(root, landed, "goal/landed", "main", "abc123", "test");
