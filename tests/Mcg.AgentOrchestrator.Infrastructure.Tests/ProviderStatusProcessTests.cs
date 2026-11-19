@@ -36,15 +36,23 @@ public sealed class ProviderStatusProcessTests
     public async Task Deadline_DecisionAndCleanupAreObservableWithoutWallClockAssertions()
     {
         var time = new DeadlineTime();
-        var started = false;
         bool? reaped = null;
-        var result = await WorkerProcessRunner.RunBoundedDirectAsync(Request("Wait-Event"), 65536, default,
-            time, _ => { started = true; time.Expire(); return Task.CompletedTask; }, exited => reaped = exited);
-        Assert.True(started);
+        var parentStderr = await AsyncLocalConsoleRouter.CaptureErrorAsync(async () =>
+        {
+            var result = await WorkerProcessRunner.RunBoundedDirectAsync(Request("Wait-Event"), 65536, default,
+                time, process =>
+                {
+                    Assert.False(process.HasExited);
+                    time.Expire();
+                    return Task.CompletedTask;
+                }, exited => reaped = exited);
+            Assert.True(result.TimedOut);
+            Assert.False(result.CaptureLimited);
+            Assert.Empty(result.StandardError);
+        });
         Assert.Equal(TimeSpan.FromSeconds(10), time.DueTime);
-        Assert.True(result.TimedOut);
-        Assert.False(result.CaptureLimited);
         Assert.Equal(true, reaped);
+        Assert.Empty(parentStderr);
     }
 
     [Fact]

@@ -82,7 +82,11 @@ public static partial class WorkerProcessRunner
         }
         finally
         {
-            TryKillProcessTree(process, group);
+            // Status probes own only the process tree. Worker temp-root cleanup emits path diagnostics.
+            if (windowsGroup is null)
+                TryKillProcessTree(process, group);
+            else if (!windowsGroup.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(2)))
+                TryKillProcessTree(process, null);
             drain.Cancel();
             // Closing our pipe handles also unblocks a reader if a descendant escaped ownership.
             process.StandardOutput.Dispose();
@@ -92,7 +96,6 @@ public static partial class WorkerProcessRunner
                 try { await output.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
                 catch (Exception ex) when (ex is OperationCanceledException or TimeoutException or IOException or ObjectDisposedException) { }
             }
-            WorkerProcessJobs.ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
             try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
             catch (TimeoutException) { }
             cleanedUp?.Invoke(process.HasExited);
