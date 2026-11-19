@@ -233,40 +233,8 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         });
     }
 
-    private static ProviderConnectionObservation? ProbeFailure(OwnerConsoleProviderConnection connection) =>
-        connection.Report.Observations.FirstOrDefault(o => o.ExecutionContext == ProviderConnectionContext.Host &&
-            o.Result is ProviderConnectionResult.ToolMissing or ProviderConnectionResult.TimedOut or ProviderConnectionResult.OutputLimited);
-
-    private static string? ProbeFailureText(OwnerConsoleProviderConnection connection) =>
-        ProbeFailure(connection) is { } failure ? Describe(failure) : null;
-
     private static string? CheckStatus(OwnerConsoleProviderConnectionState profile) =>
         profile.Checking ? "Checking connection…" : profile.OperationText;
-
-    private static OwnerConsoleProviderConnection MergeCheckAfterReload(
-        OwnerConsoleProviderConnection listed, OwnerConsoleProviderConnection checkedConnection) => listed with
-    {
-        Report = listed.Report with
-        {
-            Observations = listed.Report.Observations.Concat(checkedConnection.Report.Observations)
-                .GroupBy(observation => observation.EvidenceSource == ProviderConnectionSource.RecordedInvocation
-                    ? ProviderConnectionContext.WorkerUnspecified : observation.ExecutionContext)
-                .Select(group => group.MaxBy(observation => observation.ObservedAt)!).ToArray()
-        }
-    };
-
-    private static OwnerConsoleProviderConnection RetainHostObservation(
-        OwnerConsoleProviderConnection current, OwnerConsoleProviderConnection result)
-    {
-        if (ProbeFailure(result) is not { } failure || ProbeFailure(current) is not null) return result;
-        var previous = current.Report.Observations.FirstOrDefault(o =>
-            o.ExecutionContext == ProviderConnectionContext.Host && o.ObservedAt is not null &&
-            o.Result != ProviderConnectionResult.Unknown);
-        return previous is null ? result : result with
-        {
-            Report = result.Report with { Observations = result.Report.Observations.Select(o => o == failure ? previous : o).ToArray() }
-        };
-    }
 
     private void Post(Action apply, Action? afterInvalidate = null)
     {
