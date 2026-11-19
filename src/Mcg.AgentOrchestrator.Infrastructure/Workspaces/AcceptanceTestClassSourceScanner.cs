@@ -161,14 +161,37 @@ internal static class AcceptanceTestClassSourceScanner
     internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanSourceTexts(IEnumerable<string> sources) =>
         ScanExtracts(sources.Select(ExtractText).ToArray());
 
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanWithLaneConstants(
+        string worktreePath, string[] files, SelectionSourceTexts? sourceTexts)
+    {
+        if (files.Length == 0)
+            return sourceTexts is null ? Scan(worktreePath, files) : [];
+
+        var laneFiles = LaneTestSourceRootResolver.SourceFiles(worktreePath, LaneTestSourceRootResolver.Resolve(worktreePath));
+        if (sourceTexts is not null)
+        {
+            var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var laneOnlyExtracts = laneFiles.Except(files.Select(Path.GetFullPath), pathComparer)
+                .Select(file => ExtractText(sourceTexts.Read(file)));
+            return ScanExtracts(files.Select(file => ExtractText(sourceTexts.Read(file))).ToArray(), laneOnlyExtracts);
+        }
+
+        // Read the lane set first so a warm lane cache also serves the matched files.
+        var cache = AcceptanceTestClassSourceCache.Current;
+        IReadOnlyList<FileExtract> laneExtracts = laneFiles.Length == 0 ? [] : cache.Extract(worktreePath, laneFiles);
+        return ScanExtracts(cache.Extract(worktreePath, files), laneExtracts);
+    }
+
     internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanSyntaxTreesForTests(IEnumerable<SyntaxTree> trees) =>
         ScanExtracts(trees.Select(tree => ExtractRoot(tree.GetRoot())).ToArray());
 
-    private static IReadOnlyList<AcceptanceTestClassDescriptor> ScanExtracts(IReadOnlyList<FileExtract> extracts)
+    private static IReadOnlyList<AcceptanceTestClassDescriptor> ScanExtracts(
+        IReadOnlyList<FileExtract> extracts, IEnumerable<FileExtract>? constantSources = null)
     {
         var derivedFacts = AcceptanceTestClassSourceScannerFactAncestry.Resolve(
             extracts.Select(extract => extract.Ancestry));
-        var constants = extracts.SelectMany(extract => extract.Constants)
+        var constants = (constantSources is null ? extracts : extracts.Concat(constantSources))
+            .SelectMany(extract => extract.Constants)
             .GroupBy(item => item.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key,
                 group => group.Select(item => item.Value).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
