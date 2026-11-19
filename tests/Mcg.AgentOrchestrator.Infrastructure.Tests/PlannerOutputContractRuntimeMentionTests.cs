@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each case owns its temporary repository and uses no process or clock.
@@ -29,6 +30,14 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
 
         Xunit.Assert.True(result.Succeeded, result.Diagnostic);
         Xunit.Assert.Contains(excerpt.Trim(), result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerDirective_AdvertisesFixturePathMarker()
+    {
+        var directive = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0];
+
+        Xunit.Assert.Contains("`(fixture path)`", directive, StringComparison.Ordinal);
     }
 
     [Xunit.Theory]

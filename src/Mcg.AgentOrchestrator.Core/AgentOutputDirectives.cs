@@ -97,7 +97,7 @@ public static class AgentOutputDirectives
                 "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, " +
                 "For every criterion mapping use `disposition=planned; plan=<mapping>` or `disposition=undecidable; would-settle=<evidence>; required-source=<producer/store>; unavailable-because=<reason>`. " +
                 "Example: `1. disposition=planned; plan=<one sentence>`. " +
-                "Use bare criterion number followed by a period; no prefix. " +
+                "Use bare criterion number followed by a period. " +
                 "`plan=`: non-empty one-sentence summary on that same line; detail bullets that follow must not begin with a digit and a period. " +
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
                 "Repeat `PLANNER_EVIDENCE_REQUEST:` JSON-object lines per criterion_index/evidence_key (max 16 lines/65536 UTF-8 payload bytes total). " +
@@ -108,10 +108,10 @@ public static class AgentOutputDirectives
                 "store_ref alone suffices; omitted store uses its kind. " +
                 "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. " +
                 "Prerequisites block now; future obligations: availability=post-implementation plus owner, no store, never claim execution. " +
-                "Evidence only the landed build or live host can show: availability=post-landing, owner=operator, no store or tests; it is a post-landing check and never holds landing. " +
+                "Landed build/live host only: availability=post-landing, owner=operator, no store/tests or landing hold. " +
                 GateTestSelectorForm.DirectiveSentence(stack, testCheckCommands) +
                 "Host alone binds goal/task/dispatch brief version. Invalid batch/identity conflicts or out-of-range criteria reject all; fix diagnostics and replan. " +
-                "If evidence contradicts criteria, emit one PLANNER_BRIEF_AMENDMENT: line per criterion that needs amending, at most one per criterion: JSON: criterion_index (1-based), defect, evidence (path:line), proposed_text, optional fallback_text; report the amendment in blockers; re-emit evidence lines after the ruling (only the owner questions). " +
+                "Evidence conflict: PLANNER_BRIEF_AMENDMENT: JSON line per criterion that needs amending (at most one per criterion): criterion_index (1-based), defect, evidence (path:line), proposed_text, optional fallback_text; report the amendment in blockers; re-emit evidence lines after the ruling (only the owner questions). " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create. " +
                 "Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file. " +
@@ -121,9 +121,8 @@ public static class AgentOutputDirectives
                 "Mark a new file with the exact token `(new file)` or `— new file` immediately after its backticked path, " +
                 "or use `— new` followed by up to three descriptive words and an artifact-kind noun (`store`, `class`, `record`, `interface`, `test`, `fixture`, `script`, `document`, or `receipt`) that ends the clause. " +
                 "The descriptive form must end at a period, semicolon, or the end of the line. Alternatively, use the words 'new file', 'create', or 'add' within 24 characters before the path containing no other backtick. " +
+                "Fixture paths with a directory and no wildcards qualify if `(fixture path)` follows each closing backtick. " +
                 "A marker applies only to the single citation it is adjacent to, not to the whole line, so mark every new path individually. " +
-                 "For a path inside a test fixture repository, put the exact marker `(fixture path)` immediately after the closing backtick on the same line. " +
-                 "The fixture marker applies to that citation alone, requires a directory in the path, and excludes wildcards and bare file names. " +
                 "To cite a symbol, use a double colon such as `Path/File.cs::SymbolName`, or `Path/File.cs:123`, or `Path/File.cs#L12`; " +
                 "a single colon before a symbol name is not recognised and the whole string is then treated as a file path that does not exist. " +
                 (string.IsNullOrWhiteSpace(contextDirectory)
