@@ -4,6 +4,7 @@ internal static class OwnerConsoleBindings
 {
     internal const char CommandLineKey = ':';
     internal const string SettingsCommand = "settings";
+    internal const string NewsCommand = "news";
     internal const char SettingsPreviewKey = 'p';
     internal const char SettingsSystemKey = 's';
     internal const char SettingsMuteKey = 'm';
@@ -26,6 +27,8 @@ internal static class OwnerConsoleBindings
         Row("goal <id-prefix>", "Open live goal detail, landing status and actions."),
         Row("epics", "Open the epic view", 'e', "Open the epic view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("fleet", "Show the fleet diagram: host and executor boxes."),
+        Row(SettingsCommand, "Open Settings. Use Left/Right to switch tabs."),
+        Row(NewsCommand, "Show and acknowledge unseen console changes.", effect: OwnerConsoleEffect.ConsoleLocal),
         Row("scope [<name>[,<name>...]|all]", "Show or change the BOARD project scope.", effect: OwnerConsoleEffect.ConsoleLocal, owner: OwnerConsoleCommandOwner.View),
         Row("follow", "Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).", owner: OwnerConsoleCommandOwner.View),
         Row("filter <text>", "Show only ACTIVITY rows whose goal id starts with <text> or whose line contains <text>; filter with no text shows every row.", '/', "Filter ACTIVITY by goal id prefix or text (any pane).", owner: OwnerConsoleCommandOwner.View),
