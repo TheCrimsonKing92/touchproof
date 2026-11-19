@@ -11,7 +11,8 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
     public void Sweep_ProgramHealth_ReportsCpuAsLastStepWithinPhaseBudget()
     {
         Assert.Equal(new[] { "kernel-reload", "refresh-dispatches", "parked-reloads", "terminal-sweep-run",
-            "owned-root-reap", "reconcile-remediation", "host-health", "maintenance", "state-log-check",
+            "owned-root-reap", "owned-root-build-roots", "owned-root-temp-janitor", "owned-root-orphan-fixtures",
+            "reconcile-remediation", "host-health", "maintenance", "state-log-check",
             "failure-clusters", "remote-git-mirror", "goal-refinement", "program-health" }, ConductorTickStepLedger.SweepNames);
         var (kernel, _) = SimpleGoal();
         var cpu = TimeSpan.Zero;
@@ -101,7 +102,7 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
         var tick = OneTick(loop, kernel, MakeDriver());
 
         var sweep = Phase(tick, "sweep");
-        Assert.Contains("sweep_steps=kernel-reload:3:1,refresh-dispatches:3:1,parked-reloads:3:1,terminal-sweep-run:3:1,owned-root-reap:7:1,reconcile-remediation:3:1,host-health:3:1,maintenance:3:1,state-log-check:3:1,failure-clusters:3:1,remote-git-mirror:3:1,goal-refinement:3:1", sweep);
+        Assert.Contains("sweep_steps=kernel-reload:3:1,refresh-dispatches:3:1,parked-reloads:3:1,terminal-sweep-run:3:1,owned-root-reap:7:1,owned-root-build-roots:0:0,owned-root-temp-janitor:0:0,owned-root-orphan-fixtures:0:0,reconcile-remediation:3:1,host-health:3:1,maintenance:3:1,state-log-check:3:1,failure-clusters:3:1,remote-git-mirror:3:1,goal-refinement:3:1", sweep);
         Assert.EndsWith(" cpu_ms=45", sweep);
         AssertBound(sweep, "sweep_steps");
         AssertBound(Phase(tick, "prewalk"), "prewalk_steps");
@@ -119,7 +120,7 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
 
         Assert.DoesNotContain("operator-intent-list", Phase(tick, "prewalk"));
         Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("phase=operator-intent ", StringComparison.Ordinal));
-        Assert.Contains("sweep_steps=kernel-reload:0:0,refresh-dispatches:0:0,parked-reloads:0:0,terminal-sweep-run:0:0,owned-root-reap:0:0,reconcile-remediation:0:0,host-health:0:0,maintenance:0:0,state-log-check:0:0,failure-clusters:0:0,remote-git-mirror:0:0,goal-refinement:0:0", Phase(tick, "sweep"));
+        Assert.Contains("sweep_steps=kernel-reload:0:0,refresh-dispatches:0:0,parked-reloads:0:0,terminal-sweep-run:0:0,owned-root-reap:0:0,owned-root-build-roots:0:0,owned-root-temp-janitor:0:0,owned-root-orphan-fixtures:0:0,reconcile-remediation:0:0,host-health:0:0,maintenance:0:0,state-log-check:0:0,failure-clusters:0:0,remote-git-mirror:0:0,goal-refinement:0:0", Phase(tick, "sweep"));
         Assert.Matches(@"candidate-supersession:\d+:0:1(?:,| )", Phase(tick, "acceptance-admission"));
         Assert.Equal(50, probeCalls);
         var outsideCalls = 0;
