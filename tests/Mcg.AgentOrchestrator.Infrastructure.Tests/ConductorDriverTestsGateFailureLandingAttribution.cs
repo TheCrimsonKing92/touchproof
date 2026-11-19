@@ -12,6 +12,8 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
 {
     private const string Identity = "Ns.RebindReplayProbe.Case";
     private const string Header = "Failing class attribution (candidate diff and main history only; no new test run):";
+    private const string TimeoutCheckName =
+        "acceptance-check-timeout: focused-reverse-dependent-infrastructure-tests elapsed=40m budget=40m";
     private readonly GateFailureLandingAttributorTests.RepositoryFixture _repository;
 
     public ConductorDriverTestsGateFailureLandingAttribution(GateFailureLandingAttributorTests.RepositoryFixture repository) =>
@@ -118,6 +120,130 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
             Assert.DoesNotContain("likely interaction", message);
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void TimeoutOnlyGateFailureRegatesUnchangedCandidateWithoutDeveloperDispatch()
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = VerifiedGoal();
+            var gatedCandidates = new List<(GoalId Goal, string? ReviewedCommit)>();
+            var driver = MakeDriver(
+                executionDirectory: root,
+                runAcceptanceSummary: candidate =>
+                {
+                    gatedCandidates.Add((candidate.Id, GateFailureLandingAttributor.SelectLastPassingCandidateSha(candidate)));
+                    return gatedCandidates.Count == 1
+                        ? RecordTimeout(root, candidate, 1, TimeoutCheck())
+                        : AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                retryTaskWithCause: (_, _, _, _, _) => throw new InvalidOperationException("Timeout must not retry a worker."),
+                dispatchAndStart: _ => throw new InvalidOperationException("Timeout must not dispatch a worker."),
+                recordTaskNote: (goalId, taskId, note) => kernel.RecordTaskNote(goalId, taskId, note));
+
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+
+            Assert.Equal(GoalLifecycleState.Verified, held.State);
+            Assert.Single(gatedCandidates);
+            Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.Contains("attempt=timeout-attempt-1", StringComparison.Ordinal) &&
+                evt.Message.Contains(TimeoutCheckName, StringComparison.Ordinal));
+
+            var next = Assert.IsType<ConductorAdvanceOutcome.Executed>(
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+
+            Assert.StartsWith("Landed:", next.Description);
+            Assert.Equal([(goal.Id, _repository.AnchorSha), (goal.Id, _repository.AnchorSha)], gatedCandidates);
+            Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void ConsecutiveSameLaneTimeoutRoutesToOperatorWithoutWorkerDispatch()
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = VerifiedGoal();
+            var attempt = 0;
+            string? escalation = null;
+            const string secondTimeout = "acceptance-check-timeout: focused-reverse-dependent-infrastructure-tests elapsed=42m budget=42m";
+            var driver = MakeDriver(
+                executionDirectory: root,
+                runAcceptanceSummary: candidate => RecordTimeout(root, candidate, ++attempt,
+                    attempt == 1 ? TimeoutCheck() : TimeoutCheck() with { Name = secondTimeout }),
+                retryTaskWithCause: (_, _, _, _, _) => throw new InvalidOperationException("Timeout must not retry a worker."),
+                dispatchAndStart: _ => throw new InvalidOperationException("Timeout must not dispatch a worker."),
+                recordTaskNote: (goalId, taskId, note) => kernel.RecordTaskNote(goalId, taskId, note),
+                writeEscalation: (_, _, reason) => escalation = reason);
+
+            Assert.IsType<ConductorAdvanceOutcome.Held>(
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+            Assert.Null(escalation);
+            Assert.IsType<ConductorAdvanceOutcome.Escalated>(
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+
+            var reason = Assert.IsType<string>(escalation);
+            Assert.Contains($"attempt timeout-attempt-1 ({TimeoutCheckName})", reason);
+            Assert.Contains($"attempt timeout-attempt-2 ({secondTimeout})", reason);
+            Assert.Equal(2, attempt);
+            Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void TimeoutWithFailingTestIdentityStillRetriesDeveloperWithFeedback()
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = VerifiedGoal();
+            var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var timeout = TimeoutCheck() with
+            {
+                FailingTestIdentities = [Identity],
+                OutputTail = $"[FAIL] {Identity}"
+            };
+            string? retryMessage = null;
+            var driver = MakeDriver(
+                executionDirectory: root,
+                runAcceptanceSummary: candidate => RecordTimeout(root, candidate, 1, timeout),
+                retryTaskWithCause: (goalId, taskId, message, _, cause) =>
+                {
+                    Assert.Equal(developer.Id, taskId);
+                    Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                    retryMessage = message;
+                    return kernel.RetryTask(goalId, taskId, message, cause);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+
+            var message = Assert.IsType<string>(retryMessage);
+            Assert.StartsWith("Acceptance criteria unmet; retrying task with feedback (attempt 1/", message);
+            Assert.Contains(TimeoutCheckName, message);
+            Assert.Contains(Identity, message);
+            Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static AcceptanceCheckResult TimeoutCheck() => new(TimeoutCheckName, false, -1, null);
+
+    private AcceptanceVerificationSummary RecordTimeout(
+        string root, Goal goal, int ordinal, params AcceptanceCheckResult[] checks)
+    {
+        var summary = RedSummary(checks) with { AttemptId = $"timeout-attempt-{ordinal}" };
+        GoalOperationJournal.AcceptanceBlocked(root, goal, "conductor:acceptance", "timeout",
+            summary.BranchHeadSha, summary.MainHeadSha,
+            attemptStartedAt: DateTimeOffset.UnixEpoch.AddHours(ordinal), failedCheckNames: summary.FailedChecks);
+        return summary;
     }
 
     private (AgentOrchestratorKernel Kernel, Goal Goal) VerifiedGoal()
