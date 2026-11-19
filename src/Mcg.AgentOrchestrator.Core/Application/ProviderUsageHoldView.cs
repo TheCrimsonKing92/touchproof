@@ -4,6 +4,7 @@ public sealed record ProviderUsageHoldRow(ProviderBudgetExhaustionHold Hold, Pro
 {
     public DateTimeOffset? ProviderResetAt => Schedule is null ? Hold.ProviderResetAt : Schedule.ProviderResetAt;
     public ProviderFailureKind Reason => Schedule?.Reason ?? Hold.Reason;
+    internal bool HasAdditionalEvidence => ProviderUsageHoldView.HasAdditionalEvidence(Hold, ProviderResetAt);
     public DateTimeOffset? OverdueSince { get; init; }
     public DateTimeOffset? LastObservedAt { get; init; }
     public string? Diagnosis { get; init; }
@@ -76,16 +77,23 @@ public static class ProviderUsageHoldView
     public static string FormatStatusLine(ProviderUsageHoldRow row)
     {
         var source = $"source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}";
-        var evidence = $"reason={row.Reason} | provider_reset={FormatProviderReset(row.ProviderResetAt)}";
+        var evidence = row.HasAdditionalEvidence
+            ? $" | reason={row.Reason} | provider_reset={FormatProviderReset(row.ProviderResetAt)}"
+            : "";
         if (row.OverdueSince is { } due && row.Schedule is { } overdue)
-            return $"  {row.Hold.BindingKey} | state=probe-overdue | due={ProviderBudgetHoldSchedules.FormatInstant(due)} | balance=unverified since {ProviderBudgetHoldSchedules.FormatInstant(row.LastObservedAt ?? row.Hold.PlacedAt)} | attempt={overdue.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(due)} | reset_source={overdue.ResetSource} | last_probe={overdue.LastProbeOutcome} (historical) | {source} | {evidence}";
+            return $"  {row.Hold.BindingKey} | state=probe-overdue | due={ProviderBudgetHoldSchedules.FormatInstant(due)} | balance=unverified since {ProviderBudgetHoldSchedules.FormatInstant(row.LastObservedAt ?? row.Hold.PlacedAt)} | attempt={overdue.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(due)} | reset_source={overdue.ResetSource} | last_probe={overdue.LastProbeOutcome} (historical) | {source}{evidence}";
         return row.Schedule is { } schedule
-            ? $"  {row.Hold.BindingKey} | attempt={schedule.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} | reset_source={schedule.ResetSource} | last_probe={schedule.LastProbeOutcome} | {source} | {evidence}"
-            : $"  {row.Hold.BindingKey} | schedule=unavailable | {source} | {evidence}";
+            ? $"  {row.Hold.BindingKey} | attempt={schedule.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} | reset_source={schedule.ResetSource} | last_probe={schedule.LastProbeOutcome} | {source}{evidence}"
+            : $"  {row.Hold.BindingKey} | schedule=unavailable | {source}{evidence}";
     }
 
     public static string FormatProviderReset(DateTimeOffset? reset) =>
         reset is { } at ? ProviderBudgetHoldSchedules.FormatInstant(at) : "unknown";
+
+    // Provider-wide hard budget failures with no reset keep the original status row contract.
+    internal static bool HasAdditionalEvidence(ProviderBudgetExhaustionHold hold, DateTimeOffset? providerResetAt) =>
+        hold.Reason == ProviderFailureKind.AuthenticationRequired || hold.HasUsageLimitDiagnostic ||
+        hold.BindingScope == "provider+credential" || hold.ModelName is not null || providerResetAt is not null;
 
     public static string FormatDiagnosis(ProviderBudgetExhaustionHold hold, ProviderBudgetHoldSchedule schedule, DateTimeOffset now)
     {
@@ -97,6 +105,7 @@ public static class ProviderUsageHoldView
             $"last confirmed: {failure} at {ProviderBudgetHoldSchedules.FormatInstant(at)} (age {age}s); " +
             (failure == "authentication-required" ? $"recovery: sign in to {hold.ProviderName}, then wait for a successful same-binding availability check; " : "balance remains unverified until a successful availability check; ") +
             $"historical {(hold.Reason == ProviderFailureKind.AuthenticationRequired ? "sign-in failure" : "exhaustion")}: {ProviderBudgetHoldSchedules.FormatInstant(hold.PlacedAt)} ({hold.EvidenceReceipt})" +
-            (schedule.Reason == ProviderFailureKind.BudgetExhausted ? $"; provider reset: {FormatProviderReset(schedule.ProviderResetAt)}" : "");
+            (schedule.Reason == ProviderFailureKind.BudgetExhausted && HasAdditionalEvidence(hold, schedule.ProviderResetAt)
+                ? $"; provider reset: {FormatProviderReset(schedule.ProviderResetAt)}" : "");
     }
 }

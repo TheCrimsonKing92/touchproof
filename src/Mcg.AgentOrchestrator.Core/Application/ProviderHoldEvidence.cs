@@ -71,6 +71,7 @@ internal sealed record ProviderHoldEvidence(ProviderFailureKind Kind, string Lin
     }
 
     internal bool Confirmed => Kind is ProviderFailureKind.BudgetExhausted or ProviderFailureKind.AuthenticationRequired;
+    internal bool HasUsageLimitDiagnostic => Kind == ProviderFailureKind.BudgetExhausted && UsageWindow.IsMatch(Line);
     internal bool IsWeeklyUsageLimitReached => Kind == ProviderFailureKind.BudgetExhausted && WeeklyUsageLimitReached.IsMatch(Line);
 
     private static bool IsUsageWindowDiagnostic(string line) =>

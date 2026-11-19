@@ -81,6 +81,7 @@ public sealed record ProviderBudgetExhaustionHold(
     public ProviderFailureKind Reason { get; init; } = ProviderFailureKind.BudgetExhausted;
     public string? ModelName { get; init; }
     public DateTimeOffset? ProviderResetAt { get; init; }
+    internal bool HasUsageLimitDiagnostic { get; init; }
 }
 
 public enum DispatchRoleOutputCapability

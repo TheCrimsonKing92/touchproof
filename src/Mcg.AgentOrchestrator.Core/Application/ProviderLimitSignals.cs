@@ -16,13 +16,22 @@ public static class ProviderLimitSignals
         @"\bresets?\s+in\s*:?\s*(?:(?<hours>\d+)\s*h(?:ours?)?)?\s*(?:(?<minutes>\d+)\s*m(?:in(?:ute)?s?)?)?\s*(?:(?<seconds>\d+)\s*s(?:ec(?:ond)?s?)?)?",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    public static bool RequiresSubscriptionLimitReview(TaskSpec task)
+    public static bool RequiresSubscriptionLimitReview(TaskSpec task) =>
+        RequiresSubscriptionLimitReview(task, includeProviderHolds: false);
+
+    internal static bool RequiresManualSubscriptionLimitReview(TaskSpec task) =>
+        RequiresSubscriptionLimitReview(task, includeProviderHolds: true);
+
+    private static bool RequiresSubscriptionLimitReview(TaskSpec task, bool includeProviderHolds)
     {
-        var failureCount = CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds: false);
-        return HasRecoverableSubscriptionLimitHistory(task) &&
-            task.VerificationHistory.LastOrDefault() is { } latest && !ProviderHoldRetry.IsHoldInterruption(latest) &&
-            failureCount >= RecoverableSubscriptionLimitReviewThreshold &&
-            task.SubscriptionLimitReviewedFailureCount < CountRecoverableSubscriptionLimitFailures(task);
+        if (!HasRecoverableSubscriptionLimitHistory(task) ||
+            (!includeProviderHolds && ProviderHoldRetry.IsHoldInterruption(task.VerificationHistory[^1])))
+            return false;
+
+        var failureCount = CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds);
+        return failureCount >= RecoverableSubscriptionLimitReviewThreshold &&
+            task.SubscriptionLimitReviewedFailureCount <
+                (includeProviderHolds ? failureCount : CountRecoverableSubscriptionLimitFailures(task));
     }
 
     public static bool IsSubscriptionRetryDeferred(TaskSpec task, DateTimeOffset now, out DateTimeOffset retryAfter)
@@ -242,7 +251,8 @@ public static class ProviderLimitSignals
             {
                 Reason = evidence.Kind,
                 ModelName = evidence.ScopedModel(dispatch),
-                ProviderResetAt = evidence.ResetAt
+                ProviderResetAt = evidence.ResetAt,
+                HasUsageLimitDiagnostic = evidence.HasUsageLimitDiagnostic
             };
             if (latest is null ||
                 candidate.Reason == ProviderFailureKind.BudgetExhausted && latest.Reason != candidate.Reason ||

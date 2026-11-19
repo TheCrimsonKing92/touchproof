@@ -9,24 +9,27 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ProviderHoldDispatchScenarioTests
 {
     [Theory]
-    [InlineData("You've hit your weekly limit · resets Oct 7, 12pm (America/Chicago)", "", ProviderFailureKind.BudgetExhausted, "2026-10-07T17:00:00.0000000+00:00")]
-    [InlineData("You've hit your weekly limit", "", ProviderFailureKind.BudgetExhausted, "unknown")]
-    [InlineData("", "ERROR: 401 invalid credentials", ProviderFailureKind.AuthenticationRequired, "unknown")]
-    public void PreflightStatusFleetAndWatchAgree(string stdout, string stderr, ProviderFailureKind kind, string reset)
+    [InlineData("You've hit your weekly limit · resets Oct 7, 12pm (America/Chicago)", "", ProviderFailureKind.BudgetExhausted, "2026-10-07T17:00:00.0000000+00:00", @"C:\private\account-a")]
+    [InlineData("You've hit your weekly limit", "", ProviderFailureKind.BudgetExhausted, "unknown", null)]
+    [InlineData("", "ERROR: 401 invalid credentials", ProviderFailureKind.AuthenticationRequired, "unknown", @"C:\private\account-a")]
+    public void PreflightStatusFleetAndWatchAgree(string stdout, string stderr, ProviderFailureKind kind, string reset, string? credential)
     {
         using var fixture = new ConductorVerbStartTests.Fixture();
         var clock = new ProviderHoldScenarioClock();
         var kernel = new AgentOrchestratorKernel(clock);
-        Record(kernel, clock, stdout, stderr, @"C:\private\account-a");
+        Record(kernel, clock, stdout, stderr, credential);
         var goal = NewGoal(kernel);
-        var findings = Findings(kernel, goal, @"C:\private\account-a");
+        var findings = Findings(kernel, goal, credential);
         var blocked = Assert.Single(findings);
         var row = Assert.Single(ProviderUsageHoldView.Read(kernel.Goals, clock.UtcNow));
         Assert.Equal(kind, row.Hold.Reason);
         Assert.Contains($"binding {row.Hold.BindingKey}", blocked);
         var json = JsonSerializer.SerializeToElement(ProviderUsageHoldJson.Row(row));
+        Assert.Equal(new[] { "resetIntentId", "reason", "scope", "model", "providerResetAt" },
+            json.EnumerateObject().Select(property => property.Name).TakeLast(5));
         Assert.Equal(kind.ToString(), json.GetProperty("reason").GetString());
         Assert.Equal(reset, json.GetProperty("providerResetAt").GetString());
+        Assert.Contains($"provider_reset={reset}", ProviderUsageHoldView.FormatStatusLine(row));
         var fleet = OwnerFleetViewModelBuilder.Build(RemoteExecutorReport.Build([], [], []), true, TimeZoneInfo.Utc, providerHolds: [row]);
         var node = Assert.Single(fleet.ProviderHolds!);
         Assert.Equal(kind, node.HoldReason);
