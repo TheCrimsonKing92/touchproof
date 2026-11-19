@@ -74,6 +74,9 @@ public static class FailedGoalRecoveryDecisionRecords
     public static PolicyDecisionRecord CompletionBuildEvidenceHeld(FailedGoalRecoveryIdentity identity, string reason) =>
         FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 19, "completion-build-evidence-held", reason);
 
+    public static PolicyDecisionRecord FindingBatchEscalationDeliveryPending(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 20, "finding-batch-escalation-delivery-pending", reason);
+
     private static PolicyDecisionRecord FromDriver(
         FailedGoalRecoveryIdentity identity, FailedGoalRecoveryAction action, int rung, string evidence, string reason) =>
         new(StageName, action.ToString(), rung, evidence, reason, Facts(identity));

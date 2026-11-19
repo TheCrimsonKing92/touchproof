@@ -72,9 +72,10 @@ internal sealed partial class ConductorDriver
     private readonly AgentOrchestratorKernel? _findingStagnationKernel;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
+    internal readonly Action<GoalId, TaskId, string> _checkpointFindingEvidenceRun;
     private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
     internal readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
-    private readonly Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> _recordFindingEvidenceRequestDispositions;
+    internal readonly Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> _recordFindingEvidenceRequestDispositions;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Action<
@@ -711,15 +712,19 @@ internal sealed partial class ConductorDriver
         };
         _recordFindingEvidenceRequest = (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
         _recordFindingEvidenceRun = (goalId, taskId, message) => kernel.RecordFindingEvidenceRun(goalId, taskId, message);
+        _checkpointFindingEvidenceRun = persistCriticalDispatchStart is null
+            ? _recordFindingEvidenceRun
+            : (goalId, taskId, message) => FindingRoundBatchAccounting.CheckpointRun(kernel.GetGoal(goalId), taskId,
+                message, _utcNow(), () => persistCriticalDispatchStart(kernel, [goalId]), dispatchLifecycleGate.AppendTimelineEvent);
+        if (persistCriticalDispatchStart is not null)
+            CheckpointFindingEvidenceCompletion = goalId => persistCriticalDispatchStart(kernel, [goalId]);
         PreTesterRecorder = new((gid, tid, entry, message) => kernel.RecordFindingEvidenceRequest(gid, tid, entry, message),
             (gid, tid, entry, message) => kernel.RecordFindingEvidenceRun(gid, tid, entry, message));
         _recordFindingEvidenceSuppressed = (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
             kernel.RecordFindingEvidenceSuppressed(
                 goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);
         _recordFindingEvidenceOutcome = (goalId, taskId, stableId, outcome, receipt) =>
-        {
             kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
-        };
         _recordFindingEvidenceRequestDispositions = (goalId, taskId, dispositions) =>
             kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions);
         _recordPreReviewEvidence = (goalId, taskId, receipt) =>
@@ -1119,6 +1124,7 @@ internal sealed partial class ConductorDriver
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
+        _checkpointFindingEvidenceRun = _recordFindingEvidenceRun;
         _recordFindingEvidenceSuppressed = recordFindingEvidenceSuppressed ?? ((_, _, _, _, _, _, _, _) => { });
         _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
         _recordFindingEvidenceRequestDispositions = recordFindingEvidenceRequestDispositions ?? ((_, _, _) => { });
@@ -1325,90 +1331,6 @@ internal sealed partial class ConductorDriver
         return ExecuteDispatchAndStart(retryGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => RepositoryTupleLanding?.ProjectFacts(goal, _getFacts(goal)) ?? _getFacts(goal);
-
-    internal bool TryReconcileFocusedEvidenceAttempt(
-        Goal goal,
-        ConductorAutonomyPolicy policy,
-        string request,
-        string? candidateSha,
-        string source,
-        ConductorFocusedEvidenceRequestContext? requestContext,
-        out FocusedEvidenceRunResult evidence,
-        out ConductorParallelAcceptanceAttempt? evidenceAttempt,
-        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind,
-        ConductorParallelAcceptanceAttempt? existingAttempt = null)
-    {
-        evidence = null!;
-        evidenceAttempt = null;
-        decision = FailedGoalFindingObservation.None;
-        attemptKind = null;
-        var candidate = ConductorParallelAcceptanceCandidate.Create(
-            goal,
-            slotIndex: 0,
-            fileScopes: [],
-            branchHeadSha: candidateSha?.Trim(),
-            mainHeadSha: null);
-        ConductorParallelAcceptanceAttemptDecision attemptDecision;
-        try
-        {
-            attemptDecision = existingAttempt is not null
-                ? _focusedEvidenceAttemptCoordinator.ObserveExistingAttempt(existingAttempt, candidate)
-                : _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-                candidate,
-                policy,
-                request,
-                SelectFindingEvidenceRunner(requestContext?.NegativeControl, runBaselineArm: true, requestContext?.RevertPaths, requestContext?.Mutation, requestContext?.RepositoryTarget),
-                requestContext);
-        }
-        catch (Exception ex) when (ex is AcceptanceArtifactWriterLeaseBusyException or PreReviewEvidenceBuildSlotsBusyException)
-        {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingEvidencePending,
-                FocusedEvidenceLaunchRefusal.Describe(ex, $"{source} focused-evidence"));
-            return false;
-        }
-        evidenceAttempt = attemptDecision.Attempt;
-        attemptKind = attemptDecision.Kind;
-        if (attemptDecision.Kind is
-            ConductorParallelAcceptanceAttemptDecisionKind.Started or
-            ConductorParallelAcceptanceAttemptDecisionKind.Running)
-        {
-            decision = FindingBaselineAttemptObservation.Pending(source, attemptDecision.Attempt.AttemptId);
-            return false;
-        }
-        if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||
-            attemptDecision.Run?.Exception is
-                DotnetBuildSlotsBusyException or
-                BuildLockBlockedException or
-                OperationCanceledException)
-        {
-            MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingEvidencePending,
-                $"Background {source} focused evidence did not run ({attemptDecision.Attempt.Outcome}); " +
-                $"retry on next conduct tick. attempt={attemptDecision.Attempt.AttemptId}: " +
-                (attemptDecision.Attempt.Detail ?? "no result artifact was produced"));
-            return false;
-        }
-        MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
-        if (attemptDecision.Run?.Exception is { } backgroundFailure)
-        {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
-                $"BACKGROUND_FOCUSED_EVIDENCE_FAILED: {source} focused evidence run failed. " +
-                $"attempt={attemptDecision.Attempt.AttemptId}: {backgroundFailure.Message}");
-            return false;
-        }
-
-        evidence = attemptDecision.Run?.FocusedEvidence ?? new FocusedEvidenceRunResult(
-            request,
-            Accepted: false,
-            Passed: false,
-            Summary: $"background {source} focused evidence {attemptDecision.Attempt.Outcome}: " +
-                (attemptDecision.Attempt.Detail ?? "no result artifact was produced"),
-            Checks: []);
-        return true;
-    }
 
     private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence) =>
         FocusedEvidenceResultText.Format(evidence, TrimForConductorMessage);

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -26,7 +27,7 @@ public sealed class SelectedExecutionGateMissDetectorTests
 
         Assert.Equal(FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired, actual.Kind);
         Assert.Contains("inherited from a RED Baseline arm", actual.Evidence, StringComparison.Ordinal);
-        Assert.Equal(Normalize(expected), Normalize(actual));
+        Assert.Equal(Normalize(control, expected), Normalize(scenario, actual));
         scenario.AssertPath();
         AssertNoMiss(await control.Backstop.Store.ReadAsync(), control.Backstop);
         var state = (await scenario.Backstop.Store.ReadAsync())!;
@@ -97,7 +98,7 @@ public sealed class SelectedExecutionGateMissDetectorTests
         var expected = control.Observe();
         var actual = scenario.Observe();
 
-        Assert.Equal(Normalize(expected), Normalize(actual));
+        Assert.Equal(Normalize(control, expected), Normalize(scenario, actual));
         scenario.AssertPath();
         var line = Assert.Single(scenario.Diagnostics);
         Assert.Contains($"result=detector-failed goal={scenario.Goal.Id} attempt={scenario.AttemptId} step=record", line, StringComparison.Ordinal);
@@ -127,10 +128,25 @@ public sealed class SelectedExecutionGateMissDetectorTests
         Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Message.Contains("result=detector-failed", StringComparison.Ordinal));
     }
 
-    private static FailedGoalFindingObservation Normalize(FailedGoalFindingObservation decision) => decision with
+    private static FailedGoalFindingObservation Normalize(DriverScenario scenario, FailedGoalFindingObservation decision)
     {
-        Evidence = Regex.Replace(decision.Evidence, "finding-evidence-[a-f0-9]{24}", "<attempt>")
-    };
+        var closure = Assert.IsType<FindingEvidenceBatchClosure>(decision.BatchClosure);
+        Assert.Equal(scenario.BatchIdentity, closure.Identity);
+        var accounting = JsonNode.Parse(closure.Accounting)!.AsObject();
+        accounting["RoutingReason"] = NormalizeReceiptIds(accounting["RoutingReason"]!.GetValue<string>());
+        return decision with
+        {
+            Evidence = NormalizeReceiptIds(decision.Evidence),
+            BatchClosure = closure with
+            {
+                Identity = closure.Identity with { RequestingTaskId = new("requester"), RoundFingerprint = "round" },
+                Accounting = accounting.ToJsonString()
+            }
+        };
+    }
+
+    private static string NormalizeReceiptIds(string text) =>
+        Regex.Replace(text, "finding-evidence-[a-f0-9]{24}", "<attempt>");
 
     private static void AssertNoMiss(SelectedExecutionBackstopState? state, SelectedExecutionBackstopFixture fixture)
     {
@@ -152,6 +168,7 @@ public sealed class SelectedExecutionGateMissDetectorTests
         internal TaskSpec Requester { get; }
         internal List<string> Diagnostics { get; } = [];
         internal string AttemptId => Requester.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []).Last().ReceiptId;
+        internal FindingEvidenceBatchIdentity? BatchIdentity => FindingRoundBatchCoordinator.Identity(_driver, Goal, Requester);
 
         internal DriverScenario(string path, bool detectorEnabled = true, string control = "inherited", Exception? observationFailure = null)
         {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -46,6 +47,40 @@ public sealed class PreTesterPartialCoverageTests
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
+    public void CompositeGreen_RestoresExecutionCreditWhileLaterRequestIsPending()
+    {
+        using var scenario = new Scenario();
+        var original = scenario.RunPreTester();
+        scenario.Report("BetaTests", "GammaTests", includeLaterRequest: true);
+        scenario.RecordBatchAccounting = false;
+        scenario.Tick(scenario.Driver());
+        var outcome = scenario.Finding.EvidenceOutcome!;
+        Assert.Equal("executed-uncovered-after-reuse:partial", outcome.DecisionReason);
+        Assert.Contains(original.FocusedEvidenceReceiptId!, outcome.SourceReceiptIds!);
+        Assert.Equal(["GammaTests"], Classes(scenario.Requests[1]));
+        Assert.Equal(2, scenario.Requests.Count);
+
+        scenario.Reload();
+        scenario.RecordBatchAccounting = true;
+        var gate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+        var driver = scenario.Driver(gate);
+        scenario.Tick(driver);
+
+        var later = gate.RequiredHandleForTests(scenario.Goal.Id.Value);
+        Assert.Equal(["DeltaTests"], Classes(later.Attempt.FocusedEvidenceRequest!));
+        var identity = FindingRoundBatchCoordinator.Identity(driver, scenario.Goal, scenario.Tester)!;
+        var observations = FindingRoundBatchAccounting.Read(scenario.Goal, identity);
+        var executed = Assert.Single(observations.Where(item => item.Kind == "executed"));
+        Assert.Equal(outcome.ReceiptId, executed.ReceiptId);
+        Assert.Equal(new[] { "mixed" }, executed.FindingIds);
+        Assert.DoesNotContain(observations, item => item.Kind == "covered" && item.FindingIds.Contains("mixed"));
+        Assert.False(FindingRoundBatchAccounting.IsClosed(scenario.Goal, identity));
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried);
+        later.CompleteForTests();
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
     public void PendingRemainderDeduplicatesAndPassingCompletionClosesFinding()
     {
         using var scenario = new Scenario();
@@ -86,12 +121,39 @@ public sealed class PreTesterPartialCoverageTests
         scenario.RunPreTester();
         scenario.Report("BetaTests", "GammaTests");
         scenario.NextResult = request => scenario.Unsuccessful(request, outcome);
-        scenario.Tick(scenario.Driver());
+        var driver = scenario.Driver();
+        scenario.Tick(driver);
 
         Assert.Equal(["GammaTests"], Classes(scenario.Requests[1]));
         Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
         Assert.NotEqual(WorkTaskStatus.Completed, scenario.Tester.Status);
         Assert.False(FindingReceiptClosureDiagnosis.Evaluate(scenario.Goal, scenario.Tester, CandidateSha).IsClosable);
+        if (outcome == "not-run")
+        {
+            var identity = FindingRoundBatchCoordinator.Identity(driver, scenario.Goal, scenario.Tester)!;
+            var incomplete = Assert.Single(scenario.Verification.FindingEvidenceReceipts!, receipt =>
+                receipt is { Accepted: true, Passed: true } && (receipt.RequestDispositions ?? []).Any(disposition =>
+                    disposition.Reason == "reused-pre-tester-invalidated-or-incomplete"));
+            Assert.DoesNotContain(FindingRoundBatchAccounting.Read(scenario.Goal, identity),
+                item => item.Kind == "suppressed-selection" && item.ReceiptId == incomplete.ReceiptId);
+            var summary = FindingRoundBatchAccounting.Summarize(scenario.Goal, scenario.Tester, identity, "pending");
+            Assert.Equal(0, summary.TesterCallsAvoided);
+            Assert.Equal(0, summary.PaidVerificationCallsAvoided);
+
+            scenario.NextResult = request => scenario.Unsuccessful(request, outcome);
+            scenario.Tick(driver);
+
+            Assert.Equal(3, scenario.Requests.Count);
+            Assert.Equal(["GammaTests"], Classes(scenario.Requests[2]));
+            Assert.Equal(FindingEvidenceExecutionState.PendingExecution,
+                FindingEvidenceExecutionClassifier.Classify(scenario.Tester, scenario.Finding, CandidateSha));
+            Assert.DoesNotContain(scenario.Tester.Id,
+                DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(scenario.Goal, DefaultAgents()).TaskIds);
+            Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried &&
+                item.TaskId == scenario.Tester.Id);
+            Assert.DoesNotContain(scenario.Goal.Timeline, item => item.TaskId == scenario.Tester.Id &&
+                item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal));
+        }
     }
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
@@ -190,6 +252,46 @@ public sealed class PreTesterPartialCoverageTests
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
+    public void InvalidatedComposition_ChargesRetainedRunBeforeAdvancingToLaterRequest()
+    {
+        using var scenario = new Scenario();
+        var original = scenario.RunPreTester();
+        scenario.Report("BetaTests", "GammaTests", includeLaterRequest: true);
+        var gate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+        var driver = scenario.Driver(gate);
+        scenario.Tick(driver);
+        var pending = gate.RequiredHandleForTests(scenario.Goal.Id.Value);
+        Assert.Equal(["GammaTests"], Classes(pending.Attempt.FocusedEvidenceRequest!));
+        scenario.Invalidate(original, "changed-trx");
+        pending.CompleteForTests();
+        scenario.Tick(driver);
+        Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
+
+        for (var failure = 0; failure < 2; failure++)
+        {
+            scenario.NextResult = request => new(request, false, false, "Source discovery unavailable", [],
+                Rejection: new(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, request, "Source discovery unavailable"));
+            scenario.Tick(scenario.Driver());
+            Assert.Equal(failure + 3, scenario.Requests.Count);
+            Assert.Equal(["BetaTests"], Classes(scenario.Requests[^1]));
+            scenario.Reload();
+        }
+
+        driver = scenario.Driver();
+        scenario.Tick(driver);
+
+        Assert.Equal(5, scenario.Requests.Count);
+        Assert.Equal(["DeltaTests"], Classes(scenario.Requests[^1]));
+        var identity = FindingRoundBatchCoordinator.Identity(driver, scenario.Goal, scenario.Tester)!;
+        var observations = FindingRoundBatchAccounting.Read(scenario.Goal, identity);
+        var unavailable = Assert.Single(observations.Where(item => item.Kind == "unavailable"));
+        Assert.Equal(new[] { "mixed" }, unavailable.FindingIds);
+        Assert.Contains("completed 3 runs", unavailable.Eligibility, StringComparison.Ordinal);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried);
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
     public void InFlightNewerRedRetainsCAndRoutesOriginalBetaFailureToDeveloper()
     {
         using var scenario = new Scenario();
@@ -214,6 +316,7 @@ public sealed class PreTesterPartialCoverageTests
         Assert.True(retainedC.Passed);
         var retainedCBytes = JsonSerializer.Serialize(retainedC);
         Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
+        var batch = FindingRoundBatchCoordinator.Identity(driver, scenario.Goal, scenario.Tester)!;
 
         scenario.Tick(driver);
 
@@ -231,11 +334,18 @@ public sealed class PreTesterPartialCoverageTests
             .Single(receipt => receipt.ReceiptId == retainedC.ReceiptId)));
         Assert.Equal(originalBytes, File.ReadAllText(original.ResultPath));
         var developer = scenario.Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
-        Assert.Contains(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried &&
-            item.TaskId == developer.Id && item.Message.Contains("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
-            item.Message.Contains($"candidate_sha={CandidateSha};", StringComparison.Ordinal) &&
-            item.Message.Contains($"receipt_id={red.ReceiptId};", StringComparison.Ordinal) &&
-            item.Message.Contains("BetaTests.Fails", StringComparison.Ordinal));
+        var retry = Assert.Single(scenario.Goal.Timeline.Where(item =>
+            item.Kind == ProgressKind.TaskRetried && item.TaskId == developer.Id));
+        Assert.Contains("ACTIONABLE_CANDIDATE_RED", retry.Message, StringComparison.Ordinal);
+        Assert.Contains($"candidate_sha={CandidateSha};", retry.Message, StringComparison.Ordinal);
+        Assert.Contains($"receipt_id={red.ReceiptId};", retry.Message, StringComparison.Ordinal);
+        Assert.Contains("BetaTests.Fails", retry.Message, StringComparison.Ordinal);
+        var observations = FindingRoundBatchAccounting.Read(scenario.Goal, batch);
+        var covered = Assert.Single(observations.Where(item => item.Kind == "covered"));
+        Assert.Equal(new[] { "mixed" }, covered.FindingIds);
+        Assert.Equal(red.ReceiptId, covered.ReceiptId);
+        Assert.DoesNotContain(observations, item => item.Kind == "executed");
+        Assert.True(FindingRoundBatchAccounting.IsClosed(scenario.Goal, batch));
     }
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
@@ -333,11 +443,12 @@ public sealed class PreTesterPartialCoverageTests
     private sealed class Scenario : IDisposable
     {
         public string Root { get; } = ConductorDriverTests.CreateTempDirectory();
-        public AgentOrchestratorKernel Kernel { get; } = new();
-        public Goal Goal { get; }
-        public TaskSpec Tester { get; }
+        public AgentOrchestratorKernel Kernel { get; private set; } = new();
+        public Goal Goal { get; private set; }
+        public TaskSpec Tester => Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         public List<string> Requests { get; } = [];
         public Func<string, FocusedEvidenceRunResult>? NextResult { get; set; }
+        public bool RecordBatchAccounting { get; set; } = true;
         public string Candidate { get; set; } = CandidateSha;
         public AcceptanceGateEngineSettings Settings { get; set; } = new();
         public TaskVerificationRecord Verification => Tester.VerificationHistory.Last();
@@ -360,7 +471,6 @@ public sealed class PreTesterPartialCoverageTests
                     "model_fit: test/model - adequate - fixture", "skills: none", "confidence: high", "END_WORKER_RESULT"), "",
                 DateTimeOffset.UtcNow, WorkerResultPresent: true, HasCommittedChanges: true));
             Kernel.RecordDispatchResultCommit(Goal.Id, developer.Id, CandidateSha);
-            Tester = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
             var worktree = GoalWorktrees.WorktreePath(Root, Goal.Id);
             Directory.CreateDirectory(worktree);
             File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: fixture");
@@ -400,17 +510,22 @@ public sealed class PreTesterPartialCoverageTests
             return attempt;
         }
 
-        public void Report(string first, string second, bool negativeControl = false, string? third = null)
+        public void Report(string first, string second, bool negativeControl = false, string? third = null,
+            bool includeLaterRequest = false)
         {
             var finding = EvidenceFindingWithRequest("Need combined evidence", id: "mixed", category: FindingCategory.TestEvidence,
                 classes: third is null ? [first, second] : [first, second, third]);
             if (negativeControl) finding = finding with { EvidenceRequest = finding.EvidenceRequest! with
                 { NegativeControl = FindingEvidenceNegativeControl.RevertSrc } };
+            var findings = includeLaterRequest
+                ? new[] { finding, EvidenceFindingWithRequest("Need separate evidence", id: "later",
+                    category: FindingCategory.TestEvidence, project: "Core.Tests", classes: ["DeltaTests"]) }
+                : [finding];
             DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: Root, baseCommit: Candidate);
             Assert.Equal(Root, Tester.LastDispatch!.WorkingDirectory);
             var output = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect evidence",
                 "tests: deferred - acceptance owns execution", "commit: none", "blockers: none",
-                $"findings: {JsonSerializer.Serialize(new[] { finding })}", "touched_anchors: []", "verdict: needs-work",
+                $"findings: {JsonSerializer.Serialize(findings)}", "touched_anchors: []", "verdict: needs-work",
                 "model_fit: test/model - adequate - fixture", "skills: none", "confidence: high", "END_WORKER_RESULT");
             Kernel.RecordDispatchExecutionResult(Goal.Id, Tester.Id, new TaskVerificationRecord("test", Root, 0, output, "",
                 DateTimeOffset.UtcNow, StandardOutputPath: Path.Combine(Root, "worker.out.log"), WorkerResultPresent: true, ReviewedCommit: Candidate));
@@ -469,7 +584,11 @@ public sealed class PreTesterPartialCoverageTests
                     return result;
                 }, dispatchAndStart: _ => DispatchStartOutcome.Started(),
                 retryTaskWithCause: (goal, task, message, round, cause) => Kernel.RetryTask(goal, task, message, retryRoundKind: round, retryCause: cause),
-                recordFindingEvidenceRequest: (goal, task, message) => Kernel.RecordFindingEvidenceRequest(goal, task, message),
+                recordFindingEvidenceRequest: (goal, task, message) =>
+                {
+                    if (RecordBatchAccounting || !message.StartsWith("finding-evidence batch-", StringComparison.Ordinal))
+                        Kernel.RecordFindingEvidenceRequest(goal, task, message);
+                },
                 recordFindingEvidenceRun: (goal, task, message) => Kernel.RecordFindingEvidenceRun(goal, task, message),
                 recordFindingEvidenceRequestDispositions: (goal, task, dispositions) => Kernel.RecordFindingEvidenceRequestDispositions(goal, task, dispositions),
                 recordFindingEvidenceOutcome: (goal, task, id, outcome, receipt) => Kernel.RecordFindingEvidenceOutcome(goal, task, id, outcome, receipt), executionDirectory: Root);
@@ -481,6 +600,12 @@ public sealed class PreTesterPartialCoverageTests
         {
             driver.BeginTick(Kernel, ++_tick);
             driver.AdvanceOnce(Goal, ConductorAutonomyPolicy.Permissive);
+        }
+
+        public void Reload()
+        {
+            Kernel = AgentOrchestratorKernel.FromSnapshot(Kernel.ExportSnapshot());
+            Goal = Kernel.GetGoal(Goal.Id);
         }
 
         public void Dispose() => Directory.Delete(Root, recursive: true);
