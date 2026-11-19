@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Disposable fixture data only. No operator store or checkout is opened by this probe.
 internal sealed record CompletionBuildOperatorRepository(
     string Root, string Source, string GateToken, string Goal, string Task, string DisjointGoal, string DisjointTask,
-    string InitialHead)
+    string InitialHead, string Profile)
 {
     internal string State => Path.Combine(Root, "state.db");
     internal string Repository => Path.Combine(Root, "repository");
@@ -27,9 +27,15 @@ internal sealed record CompletionBuildOperatorRepository(
         Require(Path.IsPathFullyQualified(root) && !Directory.Exists(root), "Scenario root must be a new absolute directory.");
         Require(File.Exists(Path.Combine(source, "Mcg.AgentOrchestrator.sln")), "Explicit source repository is required.");
         Directory.CreateDirectory(root);
+        // Git's private object store and scope-tool intermediate paths both grow under TEMP.
+        // Keep the child profile short even when the operator retains evidence at a deep path.
+        var buildStorage = DotnetBuildStorageLayout.ResolveIsolatedRootBase(null,
+            Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Path.GetTempPath(), isWindows: true);
+        var profile = Path.Combine(Path.GetDirectoryName(buildStorage)!, "cbe-p-" + Guid.NewGuid().ToString("N")[..12]);
         // The standalone controller runs Git before the first conductor host starts.
         Environment.SetEnvironmentVariable("GIT_CONFIG_NOSYSTEM", "1");
-        Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", Path.Combine(root, "profile", ".gitconfig"));
+        Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", Path.Combine(profile, ".gitconfig"));
         Environment.SetEnvironmentVariable("GIT_CONFIG_COUNT", "0");
         Environment.SetEnvironmentVariable("GIT_CONFIG_PARAMETERS", null);
         Environment.SetEnvironmentVariable("GIT_CONFIG", null);
@@ -56,7 +62,7 @@ internal sealed record CompletionBuildOperatorRepository(
         var other = kernel.CreateGoal("Disjoint progress while compilation is held", [otherTask]);
         kernel.ActivateGoal(other.Id, [agent]);
         var f = new CompletionBuildOperatorRepository(root, source, token, goal.Id.Value, task.Id.Value,
-            other.Id.Value, otherTask.Id.Value, head);
+            other.Id.Value, otherTask.Id.Value, head, profile);
         var worktree = GoalWorktrees.Ensure(repository, goal.Id);
         Directory.CreateDirectory(Path.Combine(worktree, "src", "Feature"));
         // The checkpoint is outside the candidate and build-storage trees. Its wait is an event,

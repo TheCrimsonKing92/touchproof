@@ -41,7 +41,7 @@ internal static class CompletionBuildOperatorProbe
         try
         {
             f.Record("candidate", new { control, sourceHead = Git(source, "rev-parse", "HEAD"),
-                sourceDirty = Git(source, "status", "--porcelain"), f.State, f.Storage,
+                sourceDirty = Git(source, "status", "--porcelain"), f.State, f.Storage, f.Profile,
                 application = typeof(ConductorBatchLoop).Assembly.Location,
                 applicationSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(ConductorBatchLoop).Assembly.Location))),
                 fixtureSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(CompletionBuildOperatorProbe).Assembly.Location))) });
@@ -213,6 +213,7 @@ internal static class CompletionBuildOperatorProbe
                 }
             }
         }
+        Directory.Delete(f.Profile, recursive: true);
         f.Record("control-passed", new { control });
         Console.WriteLine(JsonSerializer.Serialize(new { control, result = "passed", receipts = f.Receipts }));
         return 0;
@@ -309,10 +310,9 @@ internal static class CompletionBuildOperatorProbe
             if (Environment.GetEnvironmentVariable(key) is { } value) info.Environment[key] = value;
         info.Environment["PATH"] = Path.GetDirectoryName(WorkerShell.Executable) + Path.PathSeparator + info.Environment["PATH"];
         info.Environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
-        var profile = Path.Combine(f.Root, "profile");
-        Directory.CreateDirectory(profile);
-        foreach (var key in new[] { "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "DOTNET_CLI_HOME" }) info.Environment[key] = profile;
-        info.Environment["NUGET_PACKAGES"] = Path.Combine(profile, "packages");
+        Directory.CreateDirectory(f.Profile);
+        foreach (var key in new[] { "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "DOTNET_CLI_HOME" }) info.Environment[key] = f.Profile;
+        info.Environment["NUGET_PACKAGES"] = Path.Combine(f.Profile, "packages");
         info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         info.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
         info.Environment["MCG_ORCHESTRATOR_HOME"] = f.Source;
