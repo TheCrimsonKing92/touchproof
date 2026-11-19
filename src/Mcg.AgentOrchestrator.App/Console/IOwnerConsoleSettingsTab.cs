@@ -11,6 +11,7 @@ internal interface IOwnerConsoleSettingsTab
     string StatusText { get; }
     bool Editing { get; }
     int SelectedLine { get; }
+    void Activate() { }
     void HandleKey(Key key);
     void Refresh();
 }
