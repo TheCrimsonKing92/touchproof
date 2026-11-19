@@ -258,25 +258,27 @@ public sealed class ProviderConnectionEvidenceStoreTests
     }
 
     [Theory]
-    [InlineData(false, "claude-cli", "CLAUDE-CLI", 16)]
-    [InlineData(true, "claude-cli", "CLAUDE-CLI", 16)]
-    [InlineData(false, "café-worker", "CAFÉ-WORKER", 16)]
-    [InlineData(true, "café-worker", "CAFÉ-WORKER", 16)]
-    [InlineData(false, "café-worker", "CAFÉ-WORKER", 17)]
-    [InlineData(true, "café-worker", "CAFÉ-WORKER", 17)]
-    public async Task LegacyCaseDuplicates_ReadAndMigrateLatestPerContext(
-        bool newerFirst, string lowerProfile, string upperProfile, int legacyMigration)
+    [InlineData(false, "claude-cli", "CLAUDE-CLI")]
+    [InlineData(true, "claude-cli", "CLAUDE-CLI")]
+    [InlineData(false, "café-worker", "CAFÉ-WORKER")]
+    [InlineData(true, "café-worker", "CAFÉ-WORKER")]
+    public async Task UpgradeFromStep15_RecordsStep16AndKeepsLatestObservationPerContext(
+        bool newerFirst, string lowerProfile, string upperProfile)
     {
         using var fixture = new GoalTaskHistoryTestFixture();
-        fixture.Execute($"""
-            DROP INDEX IF EXISTS ux_provider_connection_observations_identity;
-            DELETE FROM schema_migrations WHERE migration_number > {legacyMigration};
+        fixture.Execute("""
+            DROP TABLE provider_connection_observations;
+            DELETE FROM schema_migrations WHERE migration_number > 15;
             """);
-        if (legacyMigration == 17)
-            fixture.Execute("""
-                CREATE UNIQUE INDEX ux_provider_connection_observations_identity
-                    ON provider_connection_observations (profile_id COLLATE NOCASE, execution_context);
-                """);
+        Assert.Equal(15, StateDbMigrations.Plan(fixture.DatabasePath).RecordedVersion);
+        StateDbMigrations.EnsureUpToDate(fixture.DatabasePath);
+        Assert.True(StateDbMigrations.IsUpToDate(fixture.DatabasePath));
+        Assert.Equal(["16:provider-connection-observations"], fixture.Rows("""
+            SELECT migration_number || ':' || name FROM schema_migrations
+            WHERE migration_number = 16 OR name LIKE 'provider-connection-%'
+            ORDER BY migration_number
+            """));
+
         var at = GoalTaskHistoryTestFixture.At;
         var older = new ProviderConnectionObservation(ProviderConnectionContext.Host,
             ProviderConnectionSource.ClaudeAuthStatus, ProviderConnectionResult.SignedIn,
@@ -288,41 +290,16 @@ public sealed class ProviderConnectionEvidenceStoreTests
         var entries = newerFirst
             ? new[] { (upperProfile, newer), (lowerProfile, older), (lowerProfile, material) }
             : new[] { (lowerProfile, older), (upperProfile, newer), (lowerProfile, material) };
-        using (var connection = fixture.Open())
-        {
-            foreach (var (profile, observation) in entries)
-            {
-                using var command = connection.CreateCommand();
-                command.CommandText = """
-                    INSERT INTO provider_connection_observations
-                        (profile_id, execution_context, evidence_source, result, authentication_mode, observed_at)
-                    VALUES ($profile, $context, $source, $result, $mode, $at)
-                    """;
-                command.Parameters.AddWithValue("$profile", profile);
-                command.Parameters.AddWithValue("$context", (int)observation.ExecutionContext);
-                command.Parameters.AddWithValue("$source", (int)observation.EvidenceSource);
-                command.Parameters.AddWithValue("$result", (int)observation.Result);
-                command.Parameters.AddWithValue("$mode", (int)observation.AuthenticationMode);
-                command.Parameters.AddWithValue("$at", observation.ObservedAt!.Value.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
-                command.ExecuteNonQuery();
-            }
-        }
-        Assert.Equal(["3"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
-        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.DatabasePath);
-        var before = await readOnly.ReadProviderConnectionEvidenceAsync(upperProfile);
-        Assert.Equal(2, before.Count);
-        Assert.Contains(newer, before);
-        Assert.Contains(material, before);
-        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync(lowerProfile));
-        Assert.Equal(["3"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
+        foreach (var (profile, observation) in entries)
+            await fixture.Repository.SaveProviderConnectionObservationAsync(profile, observation);
 
-        StateDbMigrations.EnsureUpToDate(fixture.DatabasePath);
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.DatabasePath);
+        var observations = await readOnly.ReadProviderConnectionEvidenceAsync(upperProfile);
+        Assert.Equal(2, observations.Count);
+        Assert.Contains(newer, observations);
+        Assert.Contains(material, observations);
+        Assert.Equal(observations, await readOnly.ReadProviderConnectionEvidenceAsync(lowerProfile));
         Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
-        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync(lowerProfile));
-        await fixture.Repository.SaveProviderConnectionObservationAsync(lowerProfile, older);
-        Assert.Equal(before, await readOnly.ReadProviderConnectionEvidenceAsync(upperProfile));
-        Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
-        Assert.True(StateDbMigrations.IsUpToDate(fixture.DatabasePath));
     }
 
     [Fact]

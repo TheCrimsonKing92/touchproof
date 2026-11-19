@@ -20,49 +20,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                 authentication_mode INTEGER NOT NULL,
                 observed_at TEXT NOT NULL,
                 PRIMARY KEY (profile_id, execution_context)
-            )
-            """;
-        command.ExecuteNonQuery();
-    }
-
-    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/SqliteOrchestratorStateRepository.ProviderConnections.cs")]
-    internal static void ApplyProviderConnectionIdentitySchema(SqliteConnection connection)
-    {
-        using var command = connection.CreateCommand();
-        // The migration runner owns the transaction. Equal timestamps keep the last inserted row,
-        // matching the upsert's replacement rule while preserving independent execution contexts.
-        command.CommandText = """
-            DELETE FROM provider_connection_observations WHERE rowid IN (
-                SELECT rowid FROM (
-                    SELECT rowid, ROW_NUMBER() OVER (
-                        PARTITION BY profile_id COLLATE NOCASE, execution_context
-                        ORDER BY observed_at DESC, rowid DESC) AS ordinal
-                    FROM provider_connection_observations
-                ) WHERE ordinal > 1
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ux_provider_connection_observations_identity
-                ON provider_connection_observations (profile_id COLLATE NOCASE, execution_context);
-            """;
-        command.ExecuteNonQuery();
-    }
-
-    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/SqliteOrchestratorStateRepository.ProviderConnections.cs")]
-    internal static void ApplyProviderConnectionOrdinalIdentitySchema(SqliteConnection connection)
-    {
-        using var command = connection.CreateCommand();
-        // Upgrade databases that already applied the ASCII-only identity migration. Use the
-        // catalog's exact comparer for deduplication, uniqueness, writes and read-only lookup.
-        command.CommandText = """
-            DROP INDEX IF EXISTS ux_provider_connection_observations_identity;
-            DELETE FROM provider_connection_observations WHERE rowid IN (
-                SELECT rowid FROM (
-                    SELECT rowid, ROW_NUMBER() OVER (
-                        PARTITION BY profile_id COLLATE mcg_profile_identity, execution_context
-                        ORDER BY observed_at DESC, rowid DESC) AS ordinal
-                    FROM provider_connection_observations
-                ) WHERE ordinal > 1
-            );
-            CREATE UNIQUE INDEX ux_provider_connection_observations_identity
                 ON provider_connection_observations (profile_id COLLATE mcg_profile_identity, execution_context);
             """;
         command.ExecuteNonQuery();
