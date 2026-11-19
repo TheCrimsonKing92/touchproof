@@ -335,7 +335,8 @@ internal static class FindingRoundBatchCoordinator
     }
 
     internal static void RecordActionableRedOutcomes(ConductorDriver driver, Goal goal, TaskSpec task,
-        string candidate, string round, string basis, FindingEvidenceBatch batch, FindingEvidenceReceipt receipt)
+        string candidate, string round, string basis, FindingEvidenceBatch batch, FindingEvidenceReceipt receipt,
+        bool validatedReplayCoverage = false)
     {
         var identity = new FindingEvidenceBatchIdentity(task.Id, candidate, round, basis);
         foreach (var member in batch.Members)
@@ -344,21 +345,27 @@ internal static class FindingRoundBatchCoordinator
                     disposition.RequestIdentity == member.Identity &&
                     member.Findings.Any(finding => finding.StableId == disposition.FindingStableId) &&
                     disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true)
-                .GroupBy(disposition => disposition.Decision);
-            foreach (var outcome in outcomes)
-            {
-                var kind = outcome.Key switch
+                .Select(disposition => (disposition.FindingStableId, Kind: disposition.Decision switch
                 {
                     FindingEvidenceRequestDecision.Executed => "executed",
                     FindingEvidenceRequestDecision.CoveredByReceipt => "covered",
                     FindingEvidenceRequestDecision.DeferredToNextCandidate => "deferred",
                     _ => null
-                };
-                if (kind is null) continue;
+                }))
+                .Where(outcome => outcome.Kind is not null).ToArray();
+            foreach (var outcome in outcomes.GroupBy(item => item.Kind!))
+            {
                 FindingRoundBatchAccounting.Record(goal, identity,
-                    new(identity.Key, kind, member.Identity, outcome.Select(item => item.FindingStableId).ToArray(), receipt.ReceiptId),
+                    new(identity.Key, outcome.Key, member.Identity, outcome.Select(item => item.FindingStableId).ToArray(), receipt.ReceiptId),
                     driver._recordFindingEvidenceRequest);
             }
+
+            if (!validatedReplayCoverage) continue;
+            // The scheduler can validate an earlier RED for the remaining selections
+            // even when its disposition belongs to a standalone request.
+            foreach (var finding in member.Findings.Where(finding =>
+                         !outcomes.Any(outcome => outcome.FindingStableId == finding.StableId)))
+                RecordCoverage(driver, goal, task, candidate, round, basis, member.Identity, finding.StableId, receipt.ReceiptId);
         }
     }
 

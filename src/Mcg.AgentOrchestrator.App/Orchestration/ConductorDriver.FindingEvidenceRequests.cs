@@ -307,7 +307,7 @@ internal sealed partial class ConductorDriver
                 redRoute ??= BuildActionableCandidateRedDecision(goal, requestingTask, telemetryCandidateSha,
                     covering.ReceiptId, attribution, $"request_identity={batch.Identity};");
                 FindingRoundBatchCoordinator.RecordActionableRedOutcomes(this, goal, requestingTask, batchCandidateSha,
-                    findingRoundFingerprint, batchBasisIdentity, batch, covering);
+                    findingRoundFingerprint, batchBasisIdentity, batch, covering, validatedReplayCoverage: true);
                 continue;
             }
             else if (CandidateRedBaselineInheritance.TryBuildUnattributableRedEscalation(

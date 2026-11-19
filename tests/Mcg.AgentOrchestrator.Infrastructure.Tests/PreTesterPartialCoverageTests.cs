@@ -316,6 +316,7 @@ public sealed class PreTesterPartialCoverageTests
         Assert.True(retainedC.Passed);
         var retainedCBytes = JsonSerializer.Serialize(retainedC);
         Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
+        var batch = FindingRoundBatchCoordinator.Identity(driver, scenario.Goal, scenario.Tester)!;
 
         scenario.Tick(driver);
 
@@ -333,11 +334,18 @@ public sealed class PreTesterPartialCoverageTests
             .Single(receipt => receipt.ReceiptId == retainedC.ReceiptId)));
         Assert.Equal(originalBytes, File.ReadAllText(original.ResultPath));
         var developer = scenario.Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
-        Assert.Contains(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried &&
-            item.TaskId == developer.Id && item.Message.Contains("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
-            item.Message.Contains($"candidate_sha={CandidateSha};", StringComparison.Ordinal) &&
-            item.Message.Contains($"receipt_id={red.ReceiptId};", StringComparison.Ordinal) &&
-            item.Message.Contains("BetaTests.Fails", StringComparison.Ordinal));
+        var retry = Assert.Single(scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+        Assert.Equal(developer.Id, retry.TaskId);
+        Assert.Contains("ACTIONABLE_CANDIDATE_RED", retry.Message, StringComparison.Ordinal);
+        Assert.Contains($"candidate_sha={CandidateSha};", retry.Message, StringComparison.Ordinal);
+        Assert.Contains($"receipt_id={red.ReceiptId};", retry.Message, StringComparison.Ordinal);
+        Assert.Contains("BetaTests.Fails", retry.Message, StringComparison.Ordinal);
+        var observations = FindingRoundBatchAccounting.Read(scenario.Goal, batch);
+        var covered = Assert.Single(observations.Where(item => item.Kind == "covered"));
+        Assert.Equal(new[] { "mixed" }, covered.FindingIds);
+        Assert.Equal(red.ReceiptId, covered.ReceiptId);
+        Assert.DoesNotContain(observations, item => item.Kind == "executed");
+        Assert.True(FindingRoundBatchAccounting.IsClosed(scenario.Goal, batch));
     }
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
