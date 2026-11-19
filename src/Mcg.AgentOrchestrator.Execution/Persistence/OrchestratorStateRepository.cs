@@ -92,6 +92,33 @@ public interface IOrchestratorStateQueries : IProviderConnectionEvidenceQueries
     Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This repository does not support conduct-loop goal metadata queries.");
 
+    async Task<IReadOnlyList<GoalSummary>> ListLiveConductLoopGoalMetadataAsync(
+        IReadOnlyCollection<string> requestedGoalIds, CancellationToken cancellationToken = default)
+    {
+        var requested = requestedGoalIds.ToHashSet(StringComparer.Ordinal);
+        var summaries = await ListConductLoopGoalMetadataAsync(cancellationToken);
+        return summaries.Where(summary => !ConductLoopGoalStatus.IsTerminal(summary.Status) || requested.Contains(summary.Id))
+            .ToArray();
+    }
+
+    async Task<IReadOnlyDictionary<string, string>> ListConductLoopGoalStatusesByIdAsync(
+        IReadOnlyCollection<string> goalIds, CancellationToken cancellationToken = default)
+    {
+        var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (goalIds.Count == 0)
+            return statuses;
+
+        var requested = goalIds.ToHashSet(StringComparer.Ordinal);
+        var summaries = await ListConductLoopGoalMetadataAsync(cancellationToken);
+        foreach (var summary in summaries)
+        {
+            if (requested.Contains(summary.Id))
+                statuses[summary.Id] = summary.Status;
+        }
+
+        return statuses;
+    }
+
     Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
         int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
         CancellationToken cancellationToken = default) =>

@@ -66,17 +66,19 @@ internal static class CostGoalOutcomeMetric
     internal const string OverrideFlag = "--override-draft-checks";
     internal const string ReplaySelectedClasses = "replay-selected-classes";
     internal const string ReplayMissedFailures = "replay-missed-failures";
+    private const string TickStepPrefix = "tick-step-milliseconds:";
     internal static IReadOnlyList<string> MetricNames { get; } = Array.AsReadOnly(new[]
     {
         "selection-milliseconds", "executed-class-count", "gate-test-cpu-seconds",
         "full-gate-rate", "process-launches", ReplaySelectedClasses, ReplayMissedFailures,
-        "worker-turns-per-session", "worker-input-volume-per-session"
+        "worker-turns-per-session", "worker-input-volume-per-session", TickStepPrefix + "<step>"
     });
     private const string LineFormat = "metric: <name>; direction: decrease|increase; target: <value or percent>; window: <N gates>" +
-        "; optional guard: <metric>; must-not-increase|must-not-decrease";
+        "; optional guard: <metric>; must-not-increase|must-not-decrease. Tick-step metrics require window: <N ticks> and omit the guard";
     private static readonly Regex Heading = new(@"^##[ \t]+([^\r\n]+)", RegexOptions.CultureInvariant);
     private static readonly Regex Number = new(@"^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)%?$", RegexOptions.CultureInvariant);
     private static readonly Regex Gates = new(@"^([0-9]+)(?:[ \t]+gates?)?$", RegexOptions.CultureInvariant);
+    private static readonly Regex Ticks = new(@"^([0-9]+)[ \t]+ticks$", RegexOptions.CultureInvariant);
     private static readonly Regex GateAttemptId = new(@"-(?<time>[0-9]{17})-[0-9a-f]{32}$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -101,7 +103,8 @@ internal static class CostGoalOutcomeMetric
         var metrics = new List<OutcomeMetricLine>();
         var defects = new List<string>();
         var inSection = false;
-        var foundLine = false;
+        var declarationCount = 0;
+        var hasNoneDeclaration = false;
         foreach (var (text, _) in AuthorBriefDraftChecks.UnfencedLines(markdown))
         {
             var heading = Heading.Match(text);
@@ -116,7 +119,7 @@ internal static class CostGoalOutcomeMetric
                 line = line[2..].Trim();
             line = line.Trim('`');
             if (!Regex.IsMatch(line, @"\bmetric\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) continue;
-            foundLine = true;
+            declarationCount++;
             var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var malformed = false;
             string? guardRule = null;
@@ -133,31 +136,56 @@ internal static class CostGoalOutcomeMetric
                     guardRule = parts[++i].Trim();
             }
             fields.TryGetValue("metric", out var name);
+            if (name == "none")
+            {
+                hasNoneDeclaration = true;
+                var hasReason = fields.TryGetValue("reason", out var reason);
+                if (!hasReason) defects.Add("metric 'none' has no reason");
+                else if (string.IsNullOrWhiteSpace(reason)) defects.Add("metric 'none' has a blank reason");
+                if (parts.Length > (hasReason ? 2 : 1))
+                    defects.Add("metric 'none' has unexpected fields. Only metric and reason are allowed");
+                continue;
+            }
+
             fields.TryGetValue("direction", out var direction);
             fields.TryGetValue("target", out var target);
             fields.TryGetValue("window", out var window);
             fields.TryGetValue("guard", out var guardName);
             var start = defects.Count;
-            if (!MetricNames.Contains(name, StringComparer.Ordinal)) defects.Add($"unknown metric '{name}'");
+            var tickStep = TickStepName(name);
+            if (tickStep is not null)
+            {
+                if (!TickStepLedgerReader.StepNames.Contains(tickStep, StringComparer.Ordinal))
+                    defects.Add($"unknown tick step '{tickStep}'. Allowed steps: {string.Join(", ", TickStepLedgerReader.StepNames)}");
+            }
+            else if (!MetricNames.Contains(name, StringComparer.Ordinal)) defects.Add($"unknown metric '{name}'");
             if (string.IsNullOrWhiteSpace(target)) defects.Add($"metric '{name}' has no target");
             else if (!Number.IsMatch(target) || !double.TryParse(target.TrimEnd('%'), CultureInfo.InvariantCulture, out var value) ||
                 !double.IsFinite(value)) defects.Add($"metric '{name}' has an invalid numeric target '{target}'");
             if (direction is not ("decrease" or "increase")) defects.Add($"metric '{name}' has an invalid direction '{direction}'");
-            var gateMatch = Gates.Match(window ?? "");
-            var gateCount = 0;
-            if (!gateMatch.Success || !int.TryParse(gateMatch.Groups[1].Value, out gateCount) || gateCount <= 0)
+            var windowMatch = (tickStep is null ? Gates : Ticks).Match(window ?? "");
+            var windowCount = 0;
+            if (!windowMatch.Success || !int.TryParse(windowMatch.Groups[1].Value, out windowCount) || windowCount <= 0)
                 defects.Add($"metric '{name}' has an invalid window '{window}'");
-            if (guardName is not null && !MetricNames.Contains(guardName, StringComparer.Ordinal))
-                defects.Add($"metric '{name}' has an unknown guard metric '{guardName}'");
-            if (guardName is not null && guardRule is not ("must-not-increase" or "must-not-decrease"))
-                defects.Add($"metric '{name}' has an invalid guard rule '{guardRule}'");
+            if (guardName is not null)
+            {
+                if (tickStep is not null)
+                    defects.Add($"tick-step metric '{name}' cannot carry a guard");
+                else if (TickStepName(guardName) is not null)
+                    defects.Add($"tick-step metric '{guardName}' cannot be a guard");
+                else if (!MetricNames.Contains(guardName, StringComparer.Ordinal))
+                    defects.Add($"metric '{name}' has an unknown guard metric '{guardName}'");
+                if (guardRule is not ("must-not-increase" or "must-not-decrease"))
+                    defects.Add($"metric '{name}' has an invalid guard rule '{guardRule}'");
+            }
             if (malformed || fields.Count != (guardName is null ? 4 : 5) || fields.Keys.Any(key =>
                 !new[] { "metric", "direction", "target", "window", "guard" }.Contains(key, StringComparer.OrdinalIgnoreCase)))
                 defects.Add($"metric '{name}' has malformed or unexpected fields");
             if (defects.Count == start)
-                metrics.Add(new(name!, direction!, target!, gateCount, guardName is null ? null : new(guardName, guardRule!)));
+                metrics.Add(new(name!, direction!, target!, windowCount, guardName is null ? null : new(guardName, guardRule!)));
         }
-        if (!foundLine) defects.Add("no well-formed ## Outcome metric line");
+        if (declarationCount == 0) defects.Add("no well-formed ## Outcome metric line");
+        if (hasNoneDeclaration && declarationCount > 1) defects.Add("metric 'none' must be the only metric line");
         return (metrics, defects);
     }
 
@@ -171,9 +199,15 @@ internal static class CostGoalOutcomeMetric
         (IReadOnlyList<OutcomeMetricLine> Metrics, IReadOnlyList<string> Defects) parsed)
     {
         var (metrics, defects) = parsed;
-        return new(CheckName, defects.Count == 0, defects.Count == 0
-            ? $"{metrics.Count} valid outcome metric line(s)."
-            : string.Join(" | ", defects) + $". Format: {LineFormat}. Allowed: {string.Join(", ", MetricNames)}.");
+        if (defects.Count > 0)
+        {
+            return new(CheckName, false, string.Join(" | ", defects) + $". Format: {LineFormat}. " +
+                "When no listed metric measures what the goal changes, use `metric: none; reason: <text>` as the only metric line. " +
+                $"Allowed: {string.Join(", ", MetricNames)}.");
+        }
+        return new(CheckName, true, metrics.Count == 0
+            ? "Metric 'none' declared. No baseline or verdict is recorded."
+            : $"{metrics.Count} valid outcome metric line(s).");
     }
 
     internal static CostGoalOutcomeFiling? CaptureAtFiling(string? source, string markdown,
@@ -194,7 +228,10 @@ internal static class CostGoalOutcomeMetric
 
         if (parsed.Metrics.Count == 0) return null;
         var filedAt = DateTimeOffset.UtcNow;
-        var baselines = CaptureBaselines(parsed.Metrics, ReadRecordedGates(workspace.OrchestratorDirectory, filedAt));
+        var ticks = parsed.Metrics.Any(line => TickStepName(line.Name) is not null)
+            ? TickStepLedgerReader.Read(workspace.ConductEventsLogPath) : [];
+        var baselines = CaptureBaselines(parsed.Metrics, ReadRecordedGates(workspace.OrchestratorDirectory, filedAt),
+            filedAt, ticks);
         return new(filedAt, item?.Id, baselines);
     }
 
@@ -203,12 +240,12 @@ internal static class CostGoalOutcomeMetric
         DiscoverGatePlans(orchestratorDirectory, recordedBefore).Select(ReadGate).OfType<OutcomeGateObservation>();
 
     internal static IReadOnlyList<OutcomeMetricBaseline> BaselinesAt(IReadOnlyList<OutcomeMetricLine> lines,
-        IEnumerable<OutcomeGateObservation> gates, DateTimeOffset filedAt) =>
+        IEnumerable<OutcomeGateObservation> gates, DateTimeOffset filedAt, IEnumerable<TickStepObservation>? ticks = null) =>
         CaptureBaselines(lines, gates.Where(gate => gate.RecordedAt < filedAt)
-            .OrderByDescending(gate => gate.RecordedAt).ThenBy(gate => gate.Id, StringComparer.Ordinal));
+            .OrderByDescending(gate => gate.RecordedAt).ThenBy(gate => gate.Id, StringComparer.Ordinal), filedAt, ticks);
 
     private static IReadOnlyList<OutcomeMetricBaseline> CaptureBaselines(IReadOnlyList<OutcomeMetricLine> lines,
-        IEnumerable<OutcomeGateObservation> newestFirst)
+        IEnumerable<OutcomeGateObservation> newestFirst, DateTimeOffset filedAt, IEnumerable<TickStepObservation>? ticks)
     {
         var windows = lines.Select(line => new OutcomeGateWindow(line)).ToArray();
         var supported = windows.Where(window => window.HasSource).ToArray();
@@ -222,14 +259,33 @@ internal static class CostGoalOutcomeMetric
             }
         }
 
+        var newestTicks = (ticks ?? []).Where(tick => tick.Timestamp < filedAt)
+            .OrderByDescending(tick => tick.Timestamp).ToArray();
         return windows.Select(window =>
         {
             var line = window.Line;
+            if (TickStepName(line.Name) is { } step)
+            {
+                var sample = MeasureTickStep(line, step, newestTicks, Math.Min(line.Window, 3));
+                return new OutcomeMetricBaseline(line, sample.Value, sample.SampleSize,
+                    sample.Value is null ? "baseline-unavailable" : null);
+            }
             var (metric, guard) = window.Measure(Math.Min(line.Window, 3));
             var reason = metric.Value is not null ? null : HasGateSource(line.Name) ? "baseline-unavailable" :
                 IsReplayMetric(line.Name) ? "replay-reports-unavailable" : "no-gate-source";
             return new OutcomeMetricBaseline(line, metric.Value, metric.SampleSize, reason, guard);
         }).ToArray();
+    }
+
+    internal static string? TickStepName(string? metric) =>
+        metric?.StartsWith(TickStepPrefix, StringComparison.Ordinal) == true ? metric[TickStepPrefix.Length..] : null;
+
+    internal static OutcomeMetricSample MeasureTickStep(OutcomeMetricLine line, string step,
+        IEnumerable<TickStepObservation> orderedTicks, int minimum)
+    {
+        var values = orderedTicks.Where(tick => tick.Step == step).Take(line.Window)
+            .Select(tick => tick.Milliseconds).ToList();
+        return new(values.Count >= minimum ? Aggregate(line.Name, values) : null, values.Count);
     }
 
     internal static bool HasGateSource(string? metric) =>

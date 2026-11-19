@@ -73,29 +73,53 @@ internal static partial class TerminalGoalSweep
         internal int ObservationCursor;
         internal string? UnstoredRetentionCursor;
         internal readonly OwnedRunRootObservationLedger ObservationLedger = new();
+        internal readonly TempJanitorCadenceGate TempJanitorGate = new(TempJanitorCadenceGate.DefaultInterval);
     }
 
-    private static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(
-        string stateDbPath, bool reclaimGoalRoots)
+    internal static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(
+        string stateDbPath,
+        bool reclaimGoalRoots,
+        string? tempRoot = null,
+        TimeProvider? clock = null,
+        OwnedRootSweepState? sweepState = null,
+        DotnetBuildStorageRoot? storageRoot = null,
+        string? orchestratorTempParent = null)
     {
-        var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
-        var result = ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
-            stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true,
-            reclaimGoalRoots: reclaimGoalRoots, requireSharedRootOwnership: reclaimGoalRoots));
-        string artifactReport;
-        try
+        var state = sweepState ?? s_ownedRootState;
+        var result = ConductorTickStepLedger.Measure("owned-root-build-roots", () =>
         {
-            artifactReport = TempRootJanitor.ReapLeakedTempArtifacts(
-                Path.GetTempPath(), OrchestratorTempRoot.GetParent(), TimeProvider.System).SummaryLine;
-        }
-        catch (Exception ex)
+            var buildStorageRoot = storageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
+            return ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
+                stateDbPath, buildStorageRoot, state, usesSharedStorageRoot: true,
+                reclaimGoalRoots: reclaimGoalRoots, requireSharedRootOwnership: reclaimGoalRoots),
+                writeFailureScope: storageRoot);
+        });
+
+        var janitorClock = clock ?? TimeProvider.System;
+        var artifactReport = "temp-artifact-janitor skipped=cadence";
+        if (state.TempJanitorGate.TryBeginPass(janitorClock))
         {
-            artifactReport = $"temp-artifact-janitor failed={ex.GetType().Name}";
+            artifactReport = ConductorTickStepLedger.Measure("owned-root-temp-janitor", () =>
+            {
+                try
+                {
+                    var janitorTempRoot = tempRoot ?? Path.GetTempPath();
+                    var janitorTempParent = orchestratorTempParent ?? OrchestratorTempRoot.GetParent(janitorTempRoot);
+                    return TempRootJanitor.ReapLeakedTempArtifacts(janitorTempRoot, janitorTempParent, janitorClock).SummaryLine;
+                }
+                catch (Exception ex)
+                {
+                    return $"temp-artifact-janitor failed={ex.GetType().Name}";
+                }
+            });
         }
+
+        var observation = $"owned-root-reap roots_examined={result.ProcessedCount} roots_removed={result.RemovedCount} {artifactReport}";
         return result with
         {
-            ObserveOnlyReports = [.. result.ObserveOnlyReports, artifactReport],
-            OrphanFixtureEvents = ReapOrphanFixtures(stateDbPath)
+            ObserveOnlyReports = [.. result.ObserveOnlyReports, observation],
+            OrphanFixtureEvents = ConductorTickStepLedger.Measure("owned-root-orphan-fixtures",
+                () => ReapOrphanFixtures(stateDbPath))
         };
     }
 

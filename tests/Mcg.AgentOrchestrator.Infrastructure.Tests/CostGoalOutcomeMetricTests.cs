@@ -8,6 +8,7 @@ using Microsoft.Data.Sqlite;
 public sealed class CostGoalOutcomeMetricTests
 {
     private const string ValidLine = "metric: selection-milliseconds; direction: decrease; target: 20%; window: 5 gates";
+    private const string NoneLine = "metric: none; reason: tick step cost is not a gate measure";
 
     [Theory]
     [InlineData("", "no well-formed ## Outcome metric line")]
@@ -21,6 +22,53 @@ public sealed class CostGoalOutcomeMetricTests
         Assert.False(check.Passed);
         Assert.Contains(detail, check.Detail);
         Assert.Contains("direction: decrease|increase", check.Detail);
+        Assert.Contains("When no listed metric measures what the goal changes, use `metric: none; reason: <text>` as the only metric line.", check.Detail);
+    }
+
+    [Theory]
+    [InlineData(NoneLine)]
+    [InlineData("\r\nNo listed measure applies.\r\n- `REASON : tick cost: no gate measure ; METRIC : none`")]
+    public void Parse_SoleReasonedNoneDeclaration_HasNoMetricsOrDefects(string section)
+    {
+        var (metrics, defects) = CostGoalOutcomeMetric.Parse("## Outcome metric\n" + section);
+
+        Assert.Empty(defects);
+        Assert.Empty(metrics);
+    }
+
+    [Theory]
+    [InlineData("metric: none", "has no reason")]
+    [InlineData("metric: none; reason: \t", "has a blank reason")]
+    [InlineData(NoneLine + "; target: 1", "has unexpected fields")]
+    [InlineData(NoneLine + "; reason: duplicate", "has unexpected fields")]
+    [InlineData(NoneLine + "; metric: none", "has unexpected fields")]
+    [InlineData(NoneLine + "; trailing text", "has unexpected fields")]
+    [InlineData(NoneLine + "\n" + ValidLine, "must be the only metric line")]
+    [InlineData(ValidLine + "\n" + NoneLine, "must be the only metric line")]
+    [InlineData(NoneLine + "\n" + NoneLine, "must be the only metric line")]
+    [InlineData(NoneLine + "\nmetric: unlisted", "must be the only metric line")]
+    public void Parse_InvalidNoneDeclaration_NamesDefect(string section, string detail)
+    {
+        var (_, defects) = CostGoalOutcomeMetric.Parse("## Outcome metric\n" + section);
+
+        Assert.Contains(defects, defect => defect.Contains($"metric 'none' {detail}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Render_NoListedMetricApplies_InstructsAuthorToDeclareNone()
+    {
+        var item = new BacklogItem("item", "Reduce tick step cost", "Reduce work per tick", BacklogItemStatus.Open,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, null);
+        var prompt = AuthorBriefDraftPrompt.Render(item, ConductorLessonSelection.Empty,
+            CliAuthorDraftCommandTests.Fixture.MainSha);
+        var instruction = Assert.Single(prompt.ReplaceLineEndings("\n").Split('\n'),
+            line => line.Contains("`metric: none; reason: <why no closed-set metric measures this>`", StringComparison.Ordinal));
+
+        Assert.Contains("no listed metric measures what the goal changes, declare", instruction);
+        Assert.Contains("as the only metric line under `## Outcome metric`", instruction);
+        Assert.Contains("Never pick the nearest listed metric.", instruction);
+        Assert.Contains("A correctness-only goal carries no cost metric line.", instruction);
+        Assert.Contains(string.Join(", ", CostGoalOutcomeMetric.MetricNames), instruction);
     }
 
     [Theory]
@@ -40,6 +88,84 @@ public sealed class CostGoalOutcomeMetricTests
         var parsed = CostGoalOutcomeMetric.Parse(markdown);
         Assert.Empty(parsed.Defects);
         Assert.Equal(new OutcomeMetricLine(name, "decrease", "20%", 5), Assert.Single(parsed.Metrics));
+    }
+
+    [Theory]
+    [InlineData("owned-root-reap")]
+    [InlineData("board-fill")]
+    [InlineData("kernel-merge")]
+    [InlineData("attempt-census")]
+    public void Filing_TickStepAcceptsNamedStepAndTickWindow(string step)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var name = $"tick-step-milliseconds:{step}";
+        var markdown = $"Expected effect: reduce tick cost\n## Outcome metric\n" +
+            $"metric: {name}; direction: decrease; target: 20%; window: 30 ticks";
+
+        Assert.True(CostGoalOutcomeMetric.Check(markdown, true).Passed);
+        var filing = CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, null);
+
+        Assert.NotNull(filing);
+        Assert.Equal(new OutcomeMetricLine(name, "decrease", "20%", 30), Assert.Single(filing.Baselines).Line);
+    }
+
+    [Theory]
+    [InlineData("tick-step-milliseconds:no-such-step", "30 ticks", "", "unknown tick step 'no-such-step'")]
+    [InlineData("tick-step-milliseconds:Owned-Root-Reap", "30 ticks", "", "unknown tick step 'Owned-Root-Reap'")]
+    [InlineData("tick-step-milliseconds:remainder", "30 ticks", "", "unknown tick step 'remainder'")]
+    [InlineData("tick-step-milliseconds:<step>", "30 ticks", "", "unknown tick step '<step>'")]
+    [InlineData("selection-milliseconds", "5 gates", "tick-step-milliseconds:owned-root-reap", "cannot be a guard")]
+    [InlineData("selection-milliseconds", "5 gates", "tick-step-milliseconds:<step>", "cannot be a guard")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 ticks", "tick-step-milliseconds:board-fill", "cannot carry a guard")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 ticks", "executed-class-count", "cannot carry a guard")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 ticks", "replay-missed-failures", "cannot carry a guard")]
+    public void Filing_TickStepDefectFailsDraftCheckAndCapture(string name, string window, string guard, string defect)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var markdown = $"Expected effect: reduce tick cost\n## Outcome metric\n" +
+            $"metric: {name}; direction: decrease; target: 20%; window: {window}";
+        if (guard.Length > 0) markdown += $"; guard: {guard}; must-not-increase";
+
+        var check = CostGoalOutcomeMetric.Check(markdown, true);
+
+        Assert.False(check.Passed);
+        Assert.Contains(defect, check.Detail);
+        if (guard.Length == 0)
+        {
+            var allowed = ConductorTickStepLedger.PrewalkNames.Concat(ConductorTickStepLedger.SweepNames)
+                .Concat(ConductorTickStepLedger.KernelReloadNames).Concat(ConductorTickStepLedger.AdmissionNames);
+            Assert.Contains($"Allowed steps: {string.Join(", ", allowed)}", check.Detail);
+        }
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, null));
+        Assert.Contains(check.Detail, error.Message);
+        Assert.Contains(CostGoalOutcomeMetric.OverrideFlag, error.Message);
+
+        const string reason = "reviewed metric exception";
+        var filing = CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, reason);
+
+        Assert.Null(filing);
+        var auditLine = Assert.Single(File.ReadAllLines(fixture.Workspace.ConductEventsLogPath));
+        var audit = JsonSerializer.Deserialize<ConductEventRecord>(auditLine, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(audit);
+        Assert.Equal("cost-goal-outcome-metric-override", audit.EventKind);
+        Assert.Equal($"reason={reason}; failedChecks={check.Name}; detail={check.Detail}; backlogItem=none; source=goal-file",
+            audit.Detail);
+    }
+
+    [Theory]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 gates")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "1 tick")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "0 ticks")]
+    [InlineData("selection-milliseconds", "30 ticks")]
+    public void Check_TickWindowsRequireTheTickStepFamilyAndPositiveTicks(string name, string window)
+    {
+        var markdown = $"## Outcome metric\nmetric: {name}; direction: decrease; target: 20%; window: {window}";
+        var check = CostGoalOutcomeMetric.Check(markdown, true);
+
+        Assert.False(check.Passed);
+        Assert.Contains($"invalid window '{window}'", check.Detail);
     }
 
     [Theory]

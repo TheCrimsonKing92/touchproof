@@ -143,15 +143,11 @@ internal sealed partial class ConductorDriver
                 TryDisposeExcludedAcceptanceFailures(
                     goal, goalPrefix, policy, acceptance, apparatusRedReading,
                     ref retryDisposition, out attemptedAllFlakyDisposition) is { } excludedResult)
-            {
                 return excludedResult;
-            }
 
             if (!attemptedAllFlakyDisposition &&
                 TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
-            {
                 return apparatusRed;
-            }
 
             if (retryDisposition.ExcludedFailures.Count > 0)
             {
@@ -182,6 +178,9 @@ internal sealed partial class ConductorDriver
             }
             if (attributionLines.Count > 0)
                 criteria += "; " + string.Join("; ", attributionLines);
+            if (TryDisposeTimeoutOnlyGateFailure(goal, goalPrefix, policy, acceptance) is { } timeoutResult)
+                return timeoutResult;
+
             var task = SelectTaskForCriterionRetry(goal);
             if (task is null)
             {
@@ -191,8 +190,8 @@ internal sealed partial class ConductorDriver
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
                 var failureRecordedAt = _utcNow();
-                IReadOnlyList<string> retryFeedback =
-                    [.. FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria), .. attributionLines];
+                var retryFeedback = FailedLaneSelectedClasses.AppendFeedback(goal.Id, acceptance, _parallelAcceptanceAttemptCoordinator,
+                    [.. FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria), .. attributionLines]);
                 var retryCount = _recordCriterionRetryFeedback(
                     goal.Id,
                     task.Id,
@@ -325,51 +324,88 @@ internal sealed partial class ConductorDriver
 
     private void RecordAdvisoryAcceptanceNotes(Goal goal, IReadOnlyList<AcceptanceCheckResult> advisoryCriteria)
     {
-        if (advisoryCriteria.Count == 0)
-        {
-            return;
-        }
-
-        var task = SelectTaskForCriterionRetry(goal);
-        if (task is null)
-        {
-            return;
-        }
-
-        _recordTaskNote(
-            goal.Id,
-            task.Id,
-            $"Advisory acceptance criteria observed during landing (non-gating): {FormatUnmetCriteria(advisoryCriteria)}");
+        if (advisoryCriteria.Count > 0 && SelectTaskForCriterionRetry(goal) is { } task)
+            _recordTaskNote(goal.Id, task.Id,
+                $"Advisory acceptance criteria observed during landing (non-gating): {FormatUnmetCriteria(advisoryCriteria)}");
     }
 
     private static string FormatUnmetCriteria(IReadOnlyList<AcceptanceCheckResult> criteria) =>
         string.Join("; ", criteria.Select(FormatUnmetCriterion));
 
-    private static string FormatCleanupDiagnostic(GoalWorktreeRemoveResult cleanup)
+    private ConductorAdvanceResult? TryDisposeTimeoutOnlyGateFailure(
+        Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
-        var parts = new List<string> { cleanup.Message };
-        if (!string.IsNullOrWhiteSpace(cleanup.LeftoverPath))
-        {
-            parts.Add($"leftover={cleanup.LeftoverPath}");
-        }
+        var (branch, main) = (acceptance.BranchHeadSha, acceptance.MainHeadSha);
+        if (acceptance.Passed || _executionDirectory is null || acceptance.AttemptId is not { Length: > 0 } attemptId ||
+            string.IsNullOrWhiteSpace(branch) || string.IsNullOrWhiteSpace(main) ||
+            !acceptance.UnmetCriteria.Any(check => !check.Passed && !check.Advisory && IsBlockingTimeoutCheck(check.Name)))
+            return null;
 
-        if (cleanup.LockHolders.Count > 0)
+        const string decisionStage = "acceptance-timeout-recovery";
+        const string timeout = "blocked:timeout";
+        GoalOperationJournalEntry[] attempts;
+        try
         {
-            parts.Add("lockHolders=" + string.Join(", ", cleanup.LockHolders.Select(FormatLockHolder)));
+            attempts = GoalOperationJournal.ReadStrict(_executionDirectory, goal.Id).Entries
+                .Where(entry => entry.AcceptanceOutcome is "passed" or "gate-passed" or "failed" or "aborted:state-guard" ||
+                    entry.AcceptanceOutcome?.StartsWith("blocked:", StringComparison.Ordinal) == true).ToArray();
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or FormatException)
+        { return null; }
+        if (attempts.LastOrDefault() is not { AcceptanceOutcome: timeout, FailedCheckNames: { } recorded } current ||
+            !current.HasCandidate(branch, main) ||
+            !recorded.ToHashSet(StringComparer.Ordinal).SetEquals(acceptance.RequiredUnmetCriteria.Select(check => check.Name)))
+            return null;
+        var attemptKey = TimeoutGateAttemptKey(current);
+        if (SelectTaskForCriterionRetry(goal) is { } noteTask)
+            _recordTaskNote(goal.Id, noteTask.Id, $"ACCEPTANCE_TIMEOUT_ATTEMPT: {attemptKey}{attemptId}");
+        if (acceptance.FailedChecks?.Any(name => !IsBlockingTimeoutCheck(name)) == true ||
+            acceptance.UnmetCriteria.Any(check =>
+                (!check.Passed && TimeoutLane(check.Name) is null) ||
+                check.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) == true ||
+                check.FailingTestAttributions?.Any(attribution => !string.IsNullOrWhiteSpace(attribution.TestIdentity)) == true))
+            return null;
 
-        if (cleanup.CleanupBackoff is not null)
+        var checks = acceptance.UnmetCriteria.Where(check => !check.Passed).Select(check => check.Name).ToArray();
+        if (attempts.Length > 1 && attempts[^2] is { AcceptanceOutcome: timeout, FailedCheckNames: { } priorChecks } prior &&
+            prior.HasCandidate(branch, main) &&
+            checks.Join(priorChecks, TimeoutLane, TimeoutLane, (check, previous) => (Current: check, Prior: previous),
+                StringComparer.OrdinalIgnoreCase).Distinct().ToArray() is { Length: > 0 } repeated)
         {
-            parts.Add(GoalWorktrees.FormatCleanupBackoff(cleanup.CleanupBackoff));
+            var priorKey = TimeoutGateAttemptKey(prior);
+            var priorId = goal.Timeline.LastOrDefault(evt => evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.StartsWith("ACCEPTANCE_TIMEOUT_", StringComparison.Ordinal) && evt.Message.Contains(priorKey, StringComparison.Ordinal))
+                ?.Message.Split(priorKey, 2)[1].Split(' ', 2)[0];
+            if (priorId is null or "" or "unknown") return null;
+            var details = repeated.Select(pair => $"attempt {priorId} ({pair.Prior}), attempt {attemptId} ({pair.Current})");
+            var escalationReason = $"ACCEPTANCE_TIMEOUT_CONSECUTIVE: candidate {branch}/{main} timed out on consecutive gate attempts. " +
+                string.Join("; ", details);
+            var state = GoalLifecycle.ResolveState(goal);
+            RecordEscalation(goal, state, escalationReason);
+            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(
+                state, escalationReason, ConductorEscalationKind.BackgroundAcceptanceFailed)
+                { Decision = new(decisionStage, "Escalate", 1, "consecutive-same-lane-timeout", escalationReason,
+                    [new("branchSha", branch), new("mainSha", main), new("previousAttemptId", priorId), new("attemptId", attemptId)]) });
         }
-
-        if (!string.IsNullOrWhiteSpace(cleanup.ResumeCommand))
-        {
-            parts.Add($"resume={cleanup.ResumeCommand}");
-        }
-
-        return string.Join(" ", parts);
+        if (attempts.SkipLast(1).Any(entry => entry.AcceptanceOutcome == timeout &&
+            (!entry.HasCandidatePair || entry.HasCandidate(branch, main))))
+            return null;
+        var reason = $"ACCEPTANCE_TIMEOUT_REGATE: {attemptKey}{attemptId} ({string.Join(", ", checks)}). " +
+            "Re-gating the unchanged candidate on the next conduct tick.";
+        RestoreVerifiedAfterAcceptanceClassification(goal, reason);
+        if (SelectTaskForCriterionRetry(goal) is { } task)
+            _recordTaskNote(goal.Id, task.Id, reason);
+        return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(
+            GoalLifecycleState.Verified, reason, StableIdentity: $"acceptance-timeout-regate:{branch}:{main}")
+            { Decision = new(decisionStage, "Hold", 2, "first-timeout-on-candidate", reason,
+                [new("branchSha", branch), new("mainSha", main), new("attemptId", attemptId)]) });
     }
+
+    private static string TimeoutGateAttemptKey(GoalOperationJournalEntry entry) =>
+        $"candidate={entry.BranchHeadSha}/{entry.MainHeadSha} started={entry.At:O} attempt=";
+
+    private static string? TimeoutLane(string name) =>
+        FailedGoalTimedOutSelectionRerunRule.TryParseSelection(name, out var lane) ? lane : null;
 
     private static string[] InferRecordedFileScopes(Goal goal)
     {
@@ -389,11 +425,6 @@ internal sealed partial class ConductorDriver
 
         return scopes.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
-
-    private static string FormatLockHolder(WorktreeLockHolder holder) =>
-        string.IsNullOrWhiteSpace(holder.CommandLine)
-            ? $"pid={holder.ProcessId} name={holder.ProcessName}"
-            : $"pid={holder.ProcessId} name={holder.ProcessName} command=\"{holder.CommandLine}\"";
 
     private static AcceptanceRetryDisposition ClassifyAcceptanceRetry(
         IReadOnlyList<AcceptanceCheckResult> criteria)
@@ -477,19 +508,10 @@ internal sealed partial class ConductorDriver
     private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)
     {
         var concreteEvidence = ExtractConcreteRetryEvidence(criteria);
-        if (concreteEvidence.Count == 0)
-        {
-            return criteria.Select(FormatUnmetCriterion).ToArray();
-        }
-
-        var feedback = new List<string>
-        {
-            "Concrete acceptance failure evidence:",
-        };
-        feedback.AddRange(concreteEvidence);
-        feedback.Add("Acceptance criteria summary:");
-        feedback.AddRange(criteria.Select(FormatUnmetCriterion));
-        return feedback.ToArray();
+        var summary = criteria.Select(FormatUnmetCriterion);
+        return concreteEvidence.Count == 0
+            ? summary.ToArray()
+            : ["Concrete acceptance failure evidence:", .. concreteEvidence, "Acceptance criteria summary:", .. summary];
     }
 
     private static List<string> ExtractConcreteRetryEvidence(IReadOnlyList<AcceptanceCheckResult> criteria)
@@ -526,55 +548,33 @@ internal sealed partial class ConductorDriver
             foreach (var testResultPath in testResultPaths)
             {
                 var receipt = AcceptanceTrxFailureReader.Read(testResultPath);
-                if (receipt.Status != AcceptanceTrxReadStatus.Readable)
-                {
-                    if (!fallbackAdded)
-                    {
-                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
-                        fallbackAdded = true;
-                    }
-
-                    var detail = string.IsNullOrWhiteSpace(receipt.Detail) ? string.Empty : $" ({receipt.Detail})";
-                    evidence.Add(
-                        $"detail unavailable: {DescribeTrxReadFailure(receipt.Status)} for partition \"{criterion.Name}\" at {receipt.Path}{detail}");
-                    continue;
-                }
-
                 var receiptLineIndex = evidence.Count;
-                evidence.Add($"TRX receipt for partition \"{criterion.Name}\": {receipt.Path}");
-                if (receipt.Failures.Count == 0)
-                {
-                    if (!fallbackAdded)
-                    {
-                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
-                        fallbackAdded = true;
-                    }
-
-                    evidence.Add(
-                        $"detail unavailable: readable TRX for partition \"{criterion.Name}\" contained no non-passing results at {receipt.Path}");
-                    continue;
-                }
-
+                var readable = receipt.Status == AcceptanceTrxReadStatus.Readable;
+                if (readable)
+                    evidence.Add($"TRX receipt for partition \"{criterion.Name}\": {receipt.Path}");
                 var attributableFailures = allowedFailingIdentities is null or { Count: 0 }
                     ? receipt.Failures
                     : receipt.Failures
                         .Where(failure => allowedFailingIdentities.Contains(failure.TestName))
                         .ToArray();
-                if (attributableFailures.Count == 0)
+                if (readable && attributableFailures.Count > 0)
                 {
-                    if (!fallbackAdded)
-                    {
-                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
-                        fallbackAdded = true;
-                    }
-
-                    evidence.Add(
-                        $"detail unavailable: readable TRX for partition \"{criterion.Name}\" contained no attributable non-passing results at {receipt.Path}");
+                    budget.AppendFailures(evidence, criterion.Name, receipt.Path, receiptLineIndex,
+                        attributableFailures, ref remainingEvidenceEntries);
                     continue;
                 }
 
-                budget.AppendFailures(evidence, criterion.Name, receipt.Path, receiptLineIndex,
-                    attributableFailures, ref remainingEvidenceEntries);
+                if (!fallbackAdded)
+                {
+                    AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
+                    fallbackAdded = true;
+                }
+                var partition = $"partition \"{criterion.Name}\"";
+                var detail = string.IsNullOrWhiteSpace(receipt.Detail) ? string.Empty : $" ({receipt.Detail})";
+                var missingResults = receipt.Failures.Count == 0 ? "non-passing" : "attributable non-passing";
+                evidence.Add(!readable
+                    ? $"detail unavailable: {DescribeTrxReadFailure(receipt.Status)} for {partition} at {receipt.Path}{detail}"
+                    : $"detail unavailable: readable TRX for {partition} contained no {missingResults} results at {receipt.Path}");
             }
             AppendAssemblyCleanupStderrEvidence(evidence, criterion, testResultPaths);
         }

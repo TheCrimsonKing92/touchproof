@@ -312,7 +312,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         internal bool RequiresReconstruction(string objective) =>
             _briefChain?.Invalid == true || _specChain?.Invalid == true ||
             _briefChain is { Count: > 1 } && !string.Equals(_briefChain.LatestText, objective, StringComparison.Ordinal) ||
-            (_specChain is not { Count: > 0 } && _invalidSpec) ||
+            (_invalidSpec && RefinedSpecSnapshotAccess.UsesLegacyTopLevel(_specChain?.Count ?? 0)) ||
             _invalidCorrections || _invalidFailure || _nullObligation ||
             _blankSourceId == true || _blankSourceId is null && _hasCoverage ||
             (_disposition?.Action == GoalExplicitDispositionAction.Park

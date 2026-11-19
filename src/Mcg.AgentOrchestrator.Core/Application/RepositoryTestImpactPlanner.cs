@@ -61,6 +61,8 @@ public sealed record RepositoryTestImpactPlan(
 
 public static partial class RepositoryTestImpactPlanner
 {
+    internal const string FocusedReverseDependentInfrastructureCheckName = "focused reverse-dependent infrastructure tests";
+
     internal sealed record TestClassFilterBuildResult(
         string? Filter,
         string? AbandonReason,
@@ -267,7 +269,7 @@ public static partial class RepositoryTestImpactPlanner
             resolved.TestClassNames.Count > 0)
         {
             checks.Add(new RepositoryTestImpactCheck(
-                "focused reverse-dependent infrastructure tests",
+                FocusedReverseDependentInfrastructureCheckName,
                 [
                     .. InfrastructureTests,
                     "--filter",

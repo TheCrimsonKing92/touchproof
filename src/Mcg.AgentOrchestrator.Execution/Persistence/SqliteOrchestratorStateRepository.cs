@@ -931,10 +931,12 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "tick cannot change explicit operator disposition", storedState!.HumanInputRequests)));
                     }
 
-                    if (SnapshotEquals(storedSnapshot, request.Baseline) && tickDisposition == storedDisposition)
+                    if (tickDisposition == storedDisposition && SnapshotEquals(
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(storedSnapshot),
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(request.Baseline)))
                     {
                         var state = ValidateConsistentGoalState(
-                            request.Current,
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(request.Current),
                             MergeHumanInputRequests(storedState!.HumanInputRequests, request.HumanInputRequests));
                         return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (true, state, new GoalSnapshotSaveResult(
@@ -1994,6 +1996,85 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return results;
     }
 
+    public async Task<IReadOnlyList<GoalSummary>> ListLiveConductLoopGoalMetadataAsync(
+        IReadOnlyCollection<string> requestedGoalIds, CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        var hasTimelineTable = await GoalTimelineStore.HasTableAsync(conn, cancellationToken);
+        var nonTerminal = ConductLoopGoalStatus.SqlNonTerminalPredicate("status");
+        var latestCommit = GoalTaskHistoryStore.LatestFieldSql(
+            await GoalTaskHistoryStore.HasTableAsync(conn, cancellationToken), "dispatch", "ResultCommit");
+        cmd.CommandText = $"""
+            SELECT
+                id,
+                status,
+                {GoalMetadataTitleSql()},
+                updated_at,
+                CASE WHEN {nonTerminal} THEN (
+                    SELECT {latestCommit}
+                    FROM json_each(goals.snapshot_json, '$.Tasks') AS task
+                    WHERE COALESCE(({latestCommit}), '') <> ''
+                    ORDER BY CAST(task.key AS INTEGER) DESC
+                    LIMIT 1
+                ) END AS result_commit,
+                CASE WHEN {nonTerminal} THEN {GoalTimelineStore.OrderedInstantSql(hasTimelineTable)} END AS created_at,
+                CASE WHEN {nonTerminal} THEN {GoalTimelineStore.OrderedInstantSql(hasTimelineTable, descending: true)} END AS terminated_at,
+                {ActiveWithFailedTaskConditionSql()}
+            FROM goals
+            WHERE {nonTerminal} OR id IN (SELECT value FROM json_each($ids))
+            ORDER BY updated_at DESC
+            """;
+        cmd.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(requestedGoalIds));
+        _statementObserver?.Invoke(cmd.CommandText);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        var results = new List<GoalSummary>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetString(0);
+            var status = reader.GetString(1);
+            var updatedAt = reader.GetString(3);
+            results.Add(new GoalSummary(
+                id,
+                status,
+                reader.GetString(2),
+                updatedAt,
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
+                reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
+                Condition: reader.IsDBNull(7) ? null : reader.GetString(7),
+                terminalMetadataLoader: ConductLoopGoalStatus.IsTerminal(status)
+                    ? () => LoadTerminalMetadata(id, updatedAt)
+                    : null));
+        }
+
+        return results;
+    }
+
+    public async Task<IReadOnlyDictionary<string, string>> ListConductLoopGoalStatusesByIdAsync(
+        IReadOnlyCollection<string> goalIds, CancellationToken cancellationToken = default)
+    {
+        var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (goalIds.Count == 0)
+            return statuses;
+
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, status
+            FROM goals
+            WHERE id IN (SELECT value FROM json_each($ids))
+            """;
+        cmd.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(goalIds));
+        _statementObserver?.Invoke(cmd.CommandText);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            statuses.Add(reader.GetString(0), reader.GetString(1));
+
+        return statuses;
+    }
+
     public async Task<bool> EnsureTerminalOpenWorkIndexAsync(CancellationToken cancellationToken = default)
     {
         _statementObserver?.Invoke("BEGIN IMMEDIATE");
@@ -2609,6 +2690,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 string.Join(",", obligationMerge.ConflictIds);
             return false;
         }
+        var refinedSpecVersions = PickStoreOwnedList(baseline.RefinedSpecVersions, stored.RefinedSpecVersions,
+            current.RefinedSpecVersions);
         merged = stored with
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
@@ -2629,15 +2712,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 current.SliceBatchParentId),
             SourceBacklogItemId = mergedSourceBacklogLink.SourceBacklogItemId,
             SourceBacklogCoverage = mergedSourceBacklogLink.SourceBacklogCoverage,
-            RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
+            RefinedSpec = RefinedSpecSnapshotAccess.UsesLegacyTopLevel(refinedSpecVersions?.Count ?? 0)
+                ? PickStoreOwned(RefinedSpecSnapshotAccess.GetCurrent(baseline),
+                    RefinedSpecSnapshotAccess.GetCurrent(stored), RefinedSpecSnapshotAccess.GetCurrent(current))
+                : null,
             ClarificationRoundCount = PickTickOwned(
                 baseline.ClarificationRoundCount,
                 stored.ClarificationRoundCount,
                 current.ClarificationRoundCount),
-            RefinedSpecVersions = PickStoreOwnedList(
-                baseline.RefinedSpecVersions,
-                stored.RefinedSpecVersions,
-                current.RefinedSpecVersions),
+            RefinedSpecVersions = refinedSpecVersions,
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
             AcceptanceFailureDeferredForRetry = PickStoreOwned(
                 baseline.AcceptanceFailureDeferredForRetry,

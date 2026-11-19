@@ -828,18 +828,15 @@ internal sealed partial class GoalDispatchOperations
         }
         if (stored is null)
             return false;
-        if (stored.RefinedSpec is null &&
-            (stored.RefinedSpecVersions is null || stored.RefinedSpecVersions.Count == 0))
+        var storedSpec = RefinedSpecSnapshotAccess.GetCurrent(stored);
+        if (storedSpec is null && RefinedSpecSnapshotAccess.UsesLegacyTopLevel(stored.RefinedSpecVersions?.Count ?? 0))
             return false;
 
         if (current.RefinedSpec is { } currentSpec)
         {
-            if (stored.IsMetadataOnly)
+            if (stored.IsMetadataOnly || storedSpec is null)
                 return false;
             var storedVersion = stored.RefinedSpecVersions?.LastOrDefault(version => version.SupersededByVersion is null);
-            var storedSpec = stored.RefinedSpecVersions is { Count: > 0 } ? storedVersion?.Spec : stored.RefinedSpec;
-            if (storedSpec is null)
-                return false;
 
             // Compare the current versions, not historical entries or unrelated snapshot metadata.
             var hasHigherVersion = (storedVersion?.Version ?? 1) > current.AuthoritativeRefinedSpecVersion!.Version;

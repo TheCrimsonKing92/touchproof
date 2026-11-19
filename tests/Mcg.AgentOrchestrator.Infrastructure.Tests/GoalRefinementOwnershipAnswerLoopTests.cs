@@ -113,8 +113,9 @@ public sealed class GoalRefinementOwnershipAnswerLoopTests
         Assert.True(first.Claimed);
         Assert.True(first.Attached); // The initial sync records the terminal item's answer history.
         var before = (await scenario.Repository.LoadAsync()).ExportGoalSnapshot(scenario.GoalId);
-        Assert.Equal("Open", Assert.Single(before.RefinedSpec!.OpenQuestions).Status);
-        Assert.Null(Assert.Single(before.RefinedSpec.OpenQuestions).Answer);
+        var openQuestion = Assert.Single(RefinedSpecSnapshotAccess.GetCurrent(before)!.OpenQuestions);
+        Assert.Equal("Open", openQuestion.Status);
+        Assert.Null(openQuestion.Answer);
         var writer = new GoalLifecycleEventWriter(scenario.Workspace.GoalLifecycleEventsDirectory);
         var eventPath = writer.EventFilePath(scenario.GoalId);
         var eventsBefore = File.ReadAllLines(eventPath);
