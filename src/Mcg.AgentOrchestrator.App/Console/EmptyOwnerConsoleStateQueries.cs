@@ -28,4 +28,10 @@ internal sealed class EmptyOwnerConsoleStateQueries(string? path = null) : IOrch
 
     public Task<AgentOrchestratorKernel> LoadGoalsAsync(IReadOnlyCollection<GoalId> ids, CancellationToken cancellationToken = default) =>
         Current?.LoadGoalsAsync(ids, cancellationToken) ?? Task.FromResult(new AgentOrchestratorKernel());
+
+    public Task<IReadOnlyDictionary<string, IReadOnlyList<ProviderConnectionObservation>>> ReadProviderConnectionEvidenceAsync(
+        IReadOnlyList<string> profileIds, CancellationToken cancellationToken = default) =>
+        Current?.ReadProviderConnectionEvidenceAsync(profileIds, cancellationToken) ??
+        Task.FromResult<IReadOnlyDictionary<string, IReadOnlyList<ProviderConnectionObservation>>>(
+            profileIds.ToDictionary(id => id, _ => (IReadOnlyList<ProviderConnectionObservation>)[], StringComparer.OrdinalIgnoreCase));
 }

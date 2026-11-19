@@ -51,7 +51,9 @@ public sealed class ProviderConnectionStatusAdapters(
                 if (path is null) return Observation(ProviderConnectionResult.ToolMissing);
                 request = CreateRequest(path, arguments, workingDirectory);
             }
-            var result = await (run ?? RunAsync)(request, cancellationToken);
+            var result = run is null
+                ? await RunAsync(request, kind, cancellationToken)
+                : await run(request, cancellationToken);
             if (result.TimedOut) return Observation(ProviderConnectionResult.TimedOut);
             if (result.CaptureLimited) return Observation(ProviderConnectionResult.OutputLimited);
             var parsed = resolveInShell ? ParseWindowsProbe(cli, result) : Parse(cli, result);
@@ -63,7 +65,7 @@ public sealed class ProviderConnectionStatusAdapters(
         }
     }
 
-    private static bool MatchesHostLauncher(string template, string executable, string cli, StringComparison comparison)
+    internal static bool MatchesHostLauncher(string template, string executable, string cli, StringComparison comparison)
     {
         // Executable extraction skips shell setup. Only probe native commands whose full
         // template establishes the same launcher and credential environment as the host.
@@ -72,12 +74,15 @@ public sealed class ProviderConnectionStatusAdapters(
         var arguments = command[executable.Length..].TrimStart(" \t");
         var defaultTemplate = WorkerProfileCatalog.Default().GetRequired(cli + "-cli").CommandTemplate;
         return arguments.IsEmpty ||
-            arguments.SequenceEqual(cli == "codex" ? "exec" : "-p") ||
+            (cli == "codex" && arguments.SequenceEqual("exec")) ||
+            (cli == "claude" && arguments.SequenceEqual("-p")) ||
             arguments.SequenceEqual(defaultTemplate.AsSpan(cli.Length + 1));
     }
 
-    private static Task<WorkerProcessRunResult> RunAsync(WorkerProcessDirectRunRequest request, CancellationToken token) =>
-        WorkerProcessRunner.RunBoundedDirectAsync(request, MaximumCaptureBytes, token);
+    private static Task<WorkerProcessRunResult> RunAsync(WorkerProcessDirectRunRequest request,
+        ProviderKind kind, CancellationToken token) =>
+        WorkerProcessRunner.RunBoundedDirectAsync(request, MaximumCaptureBytes, token, TimeProvider.System, null, null,
+            OperatingSystem.IsWindows() ? start => WorkerProviderHomeEnvironment.ApplyDesktopCredentialSource(start.Environment, kind) : null);
 
     internal static WorkerProcessDirectRunRequest CreateRequest(string path, string[] arguments, string directory)
     {
@@ -102,7 +107,7 @@ public sealed class ProviderConnectionStatusAdapters(
                 [Console]::WriteLine('missing')
                 exit 0
             }
-            if ($launcher.CommandType -ne 'Application' -or [IO.Path]::GetExtension($launcher.Path) -notin @('.exe', '.cmd')) {
+            if (-not ({{WindowsNativeLauncherCondition(executable)}})) {
                 [Console]::WriteLine('unsupported')
                 exit 0
             }
@@ -112,6 +117,16 @@ public sealed class ProviderConnectionStatusAdapters(
             """;
         return new(WorkerShell.Executable, [.. WorkerShell.BaseArguments(), command], directory, Deadline,
             RequireOwnedProcessGroup: true);
+    }
+
+    // npm's installed Codex command can resolve to its PowerShell shim. Explicit script
+    // templates are still outside the host probe's closed launcher contract.
+    internal static string WindowsNativeLauncherCondition(string executable)
+    {
+        const string application = "($launcher.CommandType -eq 'Application' -and [IO.Path]::GetExtension($launcher.Path) -in @('.exe', '.cmd'))";
+        return executable.Equals("codex", StringComparison.OrdinalIgnoreCase)
+            ? application + " -or ($launcher.CommandType -eq 'ExternalScript' -and [IO.Path]::GetFileName($launcher.Path) -eq 'codex.ps1')"
+            : application;
     }
 
     private static (ProviderConnectionResult Result, ProviderConnectionAuthMode Mode) ParseWindowsProbe(string cli, WorkerProcessRunResult response)
