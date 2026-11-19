@@ -40,7 +40,7 @@ public sealed class OwnerConsoleProviderSignInFlowTests
     [Theory]
     [InlineData('t', "Authentication outcome unknown")]
     [InlineData('x', "The native window may still be open")]
-    public async Task ManualReturnRechecksAndReleasesObserver(char action, string expected)
+    public async Task ManualReturnRechecksOnceAndBlocksSharedSignInUntilNativeExit(char action, string expected)
     {
         using var fixture = new Fixture();
         var session = new Session();
@@ -49,12 +49,42 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         fixture.Press('s');
         await fixture.ApplyAsync();
         fixture.Press(action);
-        await TestHangGuard.WaitAsync(session.Disposed.Task, "native observation released");
         var check = await fixture.TakeCheckAsync();
         Assert.Equal("codex-cli", check.ProfileId);
-        check.Result.SetResult(Fixture.Connection("codex-cli"));
+        check.Result.SetResult(Fixture.Connection("codex-cli", ProviderConnectionResult.SignedIn));
         await fixture.ApplyAsync();
+        Assert.Contains("  Host / CodexLoginStatus | OAuth | SignedIn", fixture.Tab.Lines);
         Assert.Contains(expected, fixture.Tab.StatusText);
+        fixture.Press('t');
+        fixture.Press('x');
+        Assert.Contains(expected, fixture.Tab.StatusText);
+        Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
+        fixture.Press('s');
+        Assert.Contains(expected, fixture.Tab.StatusText);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
+        fixture.Press('s');
+        Assert.DoesNotContain("Opening the provider's native sign-in", fixture.Tab.StatusText);
+
+        var profiles = fixture.Initial;
+        fixture.Initial = [profiles[1]];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
+        fixture.Press('s');
+        Assert.DoesNotContain(fixture.Tab.Lines, line => line.Contains("Opening the provider's native sign-in"));
+        Assert.Single(DrainLaunches(fixture));
+        fixture.Initial = profiles;
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        fixture.Tab.HandleKey(Key.CursorUp);
+
+        session.Exit.SetResult(new(ProviderSignInOutcome.Unknown, 0));
+        await fixture.ApplyAsync();
+        await TestHangGuard.WaitAsync(session.Disposed.Task, "native process observation released after exit");
+        Assert.Contains("Native sign-in exited", fixture.Tab.StatusText);
+        Assert.Contains("s sign in", fixture.Tab.KeyHint);
+        fixture.Tab.HandleKey(Key.CursorDown);
         Assert.Contains("s sign in", fixture.Tab.KeyHint);
     }
 

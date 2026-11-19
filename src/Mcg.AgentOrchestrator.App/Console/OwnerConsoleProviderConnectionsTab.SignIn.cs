@@ -5,10 +5,21 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed partial class OwnerConsoleProviderConnectionsTab
 {
     private readonly Dictionary<ProviderSignInTarget, bool> _deviceCode = [];
+    private readonly Dictionary<string, SignInOperation> _activeSignIns = new(StringComparer.OrdinalIgnoreCase);
 
     private bool CanSignIn(ProfileState profile) => profile.Connection.SignIn is { } target &&
         !HasHostApiKey(profile.Connection.Report) &&
-        !_profiles.Any(p => p.SignIn is { } operation && SharesCredentialSource(target, operation.Target));
+        !_activeSignIns.ContainsKey(profile.Id) &&
+        !_activeSignIns.Values.Any(operation => SharesCredentialSource(target, operation.Target));
+
+    private SignInOperation? AwaitingSignInReturn(ProfileState profile) =>
+        _activeSignIns.GetValueOrDefault(profile.Id) is { Started: true, RecheckRequested: false } operation
+            ? operation : null;
+
+    private string? SignInText(ProfileState profile) =>
+        _activeSignIns.GetValueOrDefault(profile.Id) is { ObservationFailed: true }
+            ? $"{profile.InteractionText} Could not verify native exit. Sign-in is unavailable for this credential scope until the console is reopened.".TrimStart()
+            : profile.InteractionText;
 
     private bool DeviceCodeAvailable(ProfileState profile) => profile.Connection.SignIn is { } target &&
         _deviceCode.GetValueOrDefault(target);
@@ -32,18 +43,18 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab
     {
         if (!CanSignIn(profile)) return;
         var operation = new SignInOperation(profile.Connection.SignIn!);
-        profile.SignIn = operation;
+        _activeSignIns.Add(profile.Id, operation);
         profile.InteractionText = "Opening the provider's native sign-in…";
-        _ = Task.Run(() => RunSignInAsync(profile, operation, deviceCode));
+        _ = Task.Run(() => RunSignInAsync(profile.Id, operation, deviceCode));
     }
 
-    private async Task RunSignInAsync(ProfileState profile, SignInOperation operation, bool deviceCode)
+    private async Task RunSignInAsync(string profileId, SignInOperation operation, bool deviceCode)
     {
         ProviderSignInLaunch launch;
         try
         {
             _lifetime.ThrowIfCancellationRequested();
-            var target = _connections.GetSignInTarget(profile.Id);
+            var target = _connections.GetSignInTarget(profileId);
             launch = target is not null && target == operation.Target
                 ? await _launcher.LaunchAsync(target, deviceCode, _lifetime)
                 : new(null, ProviderSignInOutcome.Unsupported);
@@ -56,8 +67,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab
         {
             Post(() =>
             {
-                if (profile.SignIn != operation) return;
-                profile.SignIn = null;
+                if (!ReleaseSignIn(profileId, operation) || FindSignInProfile(profileId) is not { } profile) return;
                 profile.InteractionText = launch.Failure switch
                 {
                     ProviderSignInOutcome.ToolMissing => "The provider CLI could not be found.",
@@ -70,45 +80,54 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab
         Post(() =>
         {
             operation.Started = true;
-            profile.InteractionText = "Native sign-in is open. Press t after returning, or x to stop waiting.";
+            if (FindSignInProfile(profileId) is { } profile)
+                profile.InteractionText = "Native sign-in is open. Press t after returning, or x to stop waiting.";
         });
-        using var observe = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
         try
         {
-            var exitTask = session.WaitAsync(observe.Token);
-            if (await Task.WhenAny(exitTask, operation.Returned.Task) != exitTask) observe.Cancel();
-            var exit = await exitTask;
-            Post(() => FinishSignIn(profile, operation, exit.Outcome switch
+            var exit = await session.WaitAsync(_lifetime);
+            Post(() =>
             {
-                ProviderSignInOutcome.Cancelled => "Native sign-in was cancelled.",
-                ProviderSignInOutcome.Succeeded => "The provider reported successful native sign-in.",
-                _ => $"Native sign-in exited ({exit.ExitCode}). Authentication outcome unknown."
-            }));
+                if (!ReleaseSignIn(profileId, operation) || FindSignInProfile(profileId) is not { } profile) return;
+                ReportSignInReturn(profile, operation, exit.Outcome switch
+                {
+                    ProviderSignInOutcome.Cancelled => "Native sign-in was cancelled.",
+                    ProviderSignInOutcome.Succeeded => "The provider reported successful native sign-in.",
+                    _ => $"Native sign-in exited ({exit.ExitCode}). Authentication outcome unknown."
+                });
+            });
         }
-        catch (OperationCanceledException) when (observe.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception)
         {
             Post(() =>
             {
-                if (profile.SignIn == operation)
-                    profile.InteractionText = "Could not observe native sign-in. Press t after returning, or x to stop waiting.";
+                operation.ObservationFailed = true;
+                if (!operation.RecheckRequested && FindSignInProfile(profileId) is { } profile)
+                    profile.InteractionText = "Press t after returning, or x to stop waiting.";
             });
         }
     }
 
-    private void FinishSignIn(ProfileState profile, SignInOperation operation, string text)
+    private bool ReleaseSignIn(string profileId, SignInOperation operation) =>
+        _activeSignIns.GetValueOrDefault(profileId) == operation && _activeSignIns.Remove(profileId);
+
+    private ProfileState? FindSignInProfile(string profileId) =>
+        _profiles.Find(profile => StringComparer.OrdinalIgnoreCase.Equals(profile.Id, profileId));
+
+    private void ReportSignInReturn(ProfileState profile, SignInOperation operation, string text)
     {
-        if (profile.SignIn != operation) return;
-        operation.Returned.TrySetResult();
-        profile.SignIn = null;
         profile.InteractionText = text;
-        if (_profiles.Contains(profile)) Check(profile);
+        if (operation.RecheckRequested) return;
+        operation.RecheckRequested = true;
+        Check(profile);
     }
 
     private sealed class SignInOperation(ProviderSignInTarget target)
     {
         internal ProviderSignInTarget Target { get; } = target;
         internal bool Started { get; set; }
-        internal TaskCompletionSource Returned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool RecheckRequested { get; set; }
+        internal bool ObservationFailed { get; set; }
     }
 }

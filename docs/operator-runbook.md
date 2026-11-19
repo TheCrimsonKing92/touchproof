@@ -29,7 +29,7 @@ In the full-screen Windows operator console, open **Settings** and use Left or R
 
 Press **s** to open the provider's native sign-in in a separate desktop window. **d** starts device-code sign-in when the installed Grok CLI advertises that option. Profiles listed under **Shared native sign-in** use the same provider credential source. For an API-key profile, follow the setup guidance shown on its row and then check the connection.
 
-When the native process exits, the console rechecks the selected profile. Use **t** to report that you have returned if the console is still waiting, or **x** to stop waiting and recheck. Stopping the wait leaves the native window running. Read the sign-in outcome and readiness observations separately. For example, the host CLI can report signed in while worker acceptance remains unverified.
+The console rechecks the selected profile when the native process exits or when you press **t** to report your return or **x** to stop waiting, whichever comes first. The native window stays open after **t** or **x** if the process is still running. The console continues monitoring it and enables sign-in for the shared credential scope after exit. Read the sign-in outcome and readiness observations separately. For example, the host CLI can report signed in while worker acceptance remains unverified.
 
 After activating the promoted console, use a consented test account. Record a redacted desktop sign-in launched from **Provider connections**, followed by the selected row after the return check. Include the installed provider CLI versions from their version commands. Redact account details, credentials, device codes, and any other authentication material. The operator collects this evidence after landing.
 

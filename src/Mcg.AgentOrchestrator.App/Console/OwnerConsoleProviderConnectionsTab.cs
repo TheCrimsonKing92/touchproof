@@ -29,7 +29,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
             _listed ? "No configured worker profiles." : "Provider connections have not been loaded."];
     public string StatusText => _listing ? "Reading provider connections…" :
         _listFailed ? "Could not list provider connections. Press r to retry." :
-        Selected is { } profile ? CheckStatus(profile) ?? profile.InteractionText ?? "" : "";
+        Selected is { } profile ? CheckStatus(profile) ?? SignInText(profile) ?? "" : "";
 
     public string KeyHint
     {
@@ -37,8 +37,8 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
         {
             var actions = Selected switch
             {
-                { SignIn: { Started: true } } => "  t return  x stop waiting",
-                { SignIn: null } profile when CanSignIn(profile) =>
+                { } profile when AwaitingSignInReturn(profile) is not null => "  t return  x stop waiting",
+                { } profile when CanSignIn(profile) =>
                     DeviceCodeAvailable(profile) ? "  s sign in  d device code" : "  s sign in",
                 _ => ""
             };
@@ -77,11 +77,11 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
             case 'c': Check(profile); break;
             case 's': BeginSignIn(profile, false); break;
             case 'd' when DeviceCodeAvailable(profile): BeginSignIn(profile, true); break;
-            case 't' when profile.SignIn is { Started: true } returned:
-                FinishSignIn(profile, returned, "Returned from native sign-in. Authentication outcome unknown.");
+            case 't' when AwaitingSignInReturn(profile) is { } returned:
+                ReportSignInReturn(profile, returned, "Returned from native sign-in. Authentication outcome unknown.");
                 break;
-            case 'x' when profile.SignIn is { Started: true } waiting:
-                FinishSignIn(profile, waiting, "Stopped waiting for native sign-in. The native window may still be open.");
+            case 'x' when AwaitingSignInReturn(profile) is { } waiting:
+                ReportSignInReturn(profile, waiting, "Stopped waiting for native sign-in. The native window may still be open.");
                 break;
         }
     }
@@ -91,7 +91,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
         yield return $"{ProfileId(profile.Id)} | {profile.Connection.Report.Provider}";
         foreach (var line in Details(profile.Connection, _profiles.Select(p => p.Connection), clock.GetUtcNow()))
             yield return line;
-        if (profile.InteractionText is { } interaction) yield return $"  Sign-in: {interaction}";
+        if (SignInText(profile) is { } interaction) yield return $"  Sign-in: {interaction}";
         if (CheckStatus(profile) is { } check) yield return $"  {check}";
     }
 
@@ -202,6 +202,5 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
         internal bool Checking { get; set; }
         internal string? InteractionText { get; set; }
         internal string? OperationText { get; set; }
-        internal SignInOperation? SignIn { get; set; }
     }
 }
