@@ -117,7 +117,7 @@ public sealed class GoalSupervisorUndispatchedAdvisoryTests
         var task = scenario.Goal.Tasks.Single();
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            scenario.RecordFailure("ERROR: rate limit exceeded. Try again in 2 hours.");
+            scenario.RecordFailure("ERROR: You've hit your usage limit. Try again in 2 hours.");
             scenario.Kernel.RetryTask(scenario.Goal.Id, task.Id,
                 "Retry after the recorded provider window.", RetryCause.ProviderInterruption);
             scenario.Clock.UtcNow = scenario.Clock.UtcNow.AddHours(3);

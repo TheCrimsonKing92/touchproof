@@ -598,7 +598,7 @@ public static class RetryAdmissionPolicy
                 receipt.Fingerprint == fingerprint &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
                 receipt.ReservationReleasedAt is null &&
-                HasKnownUnsuccessfulOutcome(task, receipt, cause))
+                HasKnownUnsuccessfulOutcome(task, receipt))
             : null;
         var recoveryEvidence = task.RetryAdmissionHistory.LastOrDefault(receipt =>
             receipt.Fingerprint == fingerprint &&
@@ -648,7 +648,7 @@ public static class RetryAdmissionPolicy
             reservationLeaseExpiresAt);
     }
 
-    private static bool HasKnownUnsuccessfulOutcome(TaskSpec task, RetryAdmissionReceipt receipt, RetryCause cause)
+    private static bool HasKnownUnsuccessfulOutcome(TaskSpec task, RetryAdmissionReceipt receipt)
     {
         var nextDispatchAt = task.DispatchHistory
             .Where(dispatch => dispatch.DispatchedAt > receipt.LinkedDispatchAt)
@@ -664,10 +664,7 @@ public static class RetryAdmissionPolicy
             .LastOrDefault();
         if (outcome is null)
             return false;
-        // Provider preflight owns the live hold gate. A refused invocation or reserved
-        // hold check supplies no evidence that repeating the worker's inputs is unproductive.
-        return !outcome.Succeeded &&
-            (cause != RetryCause.ProviderInterruption || !ProviderHoldRetry.IsHoldInterruption(outcome));
+        return !outcome.Succeeded;
     }
 
     private static RetryAdmissionResult Create(

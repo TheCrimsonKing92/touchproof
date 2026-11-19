@@ -12,7 +12,7 @@ internal static class OwnerProviderHoldNarration
         sentence = reason = nextStep = ownerAction = "";
         var binding = Binding(evt);
         if (string.IsNullOrWhiteSpace(binding)) return false;
-        var name = OwnerEventFields.Field(evt, "scope") is { } scope ? Uri.UnescapeDataString(scope) : DisplayName(binding);
+        var name = DisplayName(binding);
         var attempt = OwnerEventFields.Field(evt, "attempt");
         if (TryNarrateDiagnosis(evt, name, out sentence, out reason, out nextStep, out ownerAction)) return true;
         switch (evt.EventKind)
@@ -40,7 +40,6 @@ internal static class OwnerProviderHoldNarration
                 reason = next is not (null or "unavailable")
                     ? $"The provider reported that its usage balance is exhausted; next check {next} (attempt {attempt})."
                     : "The provider reported that its usage balance is exhausted; the next check time is unavailable.";
-                if (OwnerEventFields.Field(evt, "reset_source") == "backoff") reason += " Provider reset time is unknown.";
                 nextStep = $"Work assigned to {name} waits; the conductor tries one task at the next check.";
                 ownerAction = "No. If the provider states a reset time, record it with provider-reset.";
                 return true;
@@ -78,16 +77,13 @@ internal static class OwnerProviderHoldNarration
 
     internal static string DisplayName(string bindingKey)
     {
-        var baseKey = Mcg.AgentOrchestrator.Core.ProviderHoldBinding.BaseKey(bindingKey);
-        var model = baseKey.Length == bindingKey.Length ? "" : $" [{Uri.UnescapeDataString(bindingKey[(baseKey.Length + 7)..])}]";
-        var separator = baseKey.IndexOf("::", StringComparison.Ordinal);
+        var separator = bindingKey.IndexOf("::", StringComparison.Ordinal);
         if (separator < 0) return bindingKey;
-        var provider = baseKey[..separator];
-        var credential = baseKey[(separator + 2)..].Trim();
-        if (credential == "<provider-default>") return provider + model;
-        if (credential.StartsWith("api-", StringComparison.Ordinal)) return $"{provider} (API key){model}";
+        var provider = bindingKey[..separator];
+        var credential = bindingKey[(separator + 2)..].Trim();
+        if (credential == "<provider-default>") return provider;
         var leaf = credential[(credential.LastIndexOfAny(['\\', '/']) + 1)..];
-        return $"{provider} ({(leaf.Length == 0 ? credential : leaf)}){model}";
+        return $"{provider} ({(leaf.Length == 0 ? credential : leaf)})";
     }
 
     internal static string? Binding(OwnerConductEvent evt)

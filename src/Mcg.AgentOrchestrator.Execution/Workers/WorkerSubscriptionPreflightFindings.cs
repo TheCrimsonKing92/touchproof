@@ -26,7 +26,7 @@ internal static class WorkerSubscriptionPreflightFindings
         if (!sandbox.Enabled)
         {
             findings.Add("auth: Claude CLI Low-IL auth preflight not required because worker sandbox is disabled");
-            return (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)().ToTransportedSelection();
+            return null;
         }
 
         var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
@@ -59,25 +59,10 @@ internal static class WorkerSubscriptionPreflightFindings
     }
 
     internal static void AddProviderBudgetExhaustionFinding(
-        List<string> findings, IEnumerable<Goal> providerHoldScope, string providerName,
-        string? credentialBinding, Goal goal, TaskSpec task, DateTimeOffset now) =>
-        AddProviderBudgetExhaustionFinding(findings, providerHoldScope, providerName, credentialBinding, task.LastDispatch?.ModelName, goal, task, now);
-
-    internal static void AddProviderHoldFindings(List<string> findings, IEnumerable<Goal> scope, string provider,
-        string? credential, string? model, Goal goal, TaskSpec task, DateTimeOffset now)
-    {
-        if (ProviderLimitSignals.TryGetProviderSubscriptionCooldown(goal, task.Id, provider, model, now,
-                out var cooldown, new ProviderHoldBinding(provider, credential, null)))
-            findings.Add($"blocked: provider {cooldown.ProviderName} is cooling down after task {TaskDisplayNumber.Resolve(goal, cooldown.SourceTaskId)} until {cooldown.RetryAfter:u}");
-        AddProviderBudgetExhaustionFinding(findings, scope, provider, credential, model, goal, task, now);
-    }
-
-    internal static void AddProviderBudgetExhaustionFinding(
         List<string> findings,
         IEnumerable<Goal> providerHoldScope,
         string providerName,
         string? credentialBinding,
-        string? modelName,
         Goal goal, TaskSpec task, DateTimeOffset now)
     {
         var goals = providerHoldScope.ToArray();
@@ -85,7 +70,6 @@ internal static class WorkerSubscriptionPreflightFindings
             goals,
             providerName,
             credentialBinding,
-            modelName,
             out var providerHold))
         {
             return;
@@ -97,14 +81,9 @@ internal static class WorkerSubscriptionPreflightFindings
             findings.Add($"probe: code=provider-budget-probe; binding={providerHold.BindingKey}; due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)}; attempt={schedule.Attempt}");
             return;
         }
-        var reason = schedule.Reason == ProviderFailureKind.AuthenticationRequired
-            ? "provider authentication required" : "provider budget exhausted";
-        var reset = schedule.ProviderResetAt is { } at ? ProviderBudgetHoldSchedules.FormatInstant(at) : "unknown";
         findings.Add(
-            $"blocked: code={WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode}; {reason} for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
+            $"blocked: code={WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode}; provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
             $"source goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}" +
-            (schedule.Reason == ProviderFailureKind.BudgetExhausted ? $"; provider_reset={reset}" : "") +
-            (schedule.LastActionableFailure == ProviderFailureKind.AuthenticationRequired ? $"; sign in to {providerHold.ProviderName} and recheck availability" : "") +
             $"; next_probe={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)}; reset_source={schedule.ResetSource}; attempt={schedule.Attempt}");
     }
 }

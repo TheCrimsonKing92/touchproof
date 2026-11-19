@@ -293,9 +293,7 @@ public sealed record TaskDispatchSnapshot(
     FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
     string? PlannerEvidenceCriteriaVersionHash = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    bool? BriefSnapshotFromVersion = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? ClaudeApiHoldIdentity = null);
+    bool? BriefSnapshotFromVersion = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

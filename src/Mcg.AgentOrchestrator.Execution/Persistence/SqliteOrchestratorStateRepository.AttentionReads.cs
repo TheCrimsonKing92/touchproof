@@ -169,9 +169,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         ReadAttentionField<string>(value, "WorkerName")!, ReadAttentionField<string>(value, "Command")!,
         ReadAttentionField<string>(value, "WorkingDirectory")!, ReadAttentionField<DateTimeOffset>(value, "DispatchedAt"),
         ProviderName: ReadAttentionField<string>(value, "ProviderName"),
-        ModelName: ReadAttentionField<string>(value, "ModelName"),
-        ClaudeCredentialSourceDirectory: ReadAttentionField<string>(value, "ClaudeCredentialSourceDirectory"),
-        ClaudeApiHoldIdentity: ReadAttentionField<string>(value, "ClaudeApiHoldIdentity"));
+        ClaudeCredentialSourceDirectory: ReadAttentionField<string>(value, "ClaudeCredentialSourceDirectory"));
 
     private static TaskVerificationSnapshot? ReadAttentionVerificationField(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null

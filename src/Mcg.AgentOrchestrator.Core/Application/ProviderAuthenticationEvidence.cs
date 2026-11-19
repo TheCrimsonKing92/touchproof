@@ -51,7 +51,7 @@ public static class ProviderAuthenticationEvidence
         catch (InvalidOperationException) { return false; }
     }
 
-    internal static IEnumerable<string> TrustedLines(string text)
+    private static IEnumerable<string> TrustedLines(string text)
     {
         var fenced = false;
         var result = false;

@@ -110,6 +110,8 @@ public sealed class ProviderUsageSelfHealScenarioTests
     }
 
     [Theory]
+    [InlineData("weekly")]
+    [InlineData("signin")]
     [InlineData("early")]
     [InlineData("pinned")]
     public void BeforeDueOrWithoutBudgetHoldMatchesOptOutBaseline(string row)
@@ -170,7 +172,22 @@ public sealed class ProviderUsageSelfHealScenarioTests
     private sealed record Baseline(string Outcome, string[] DispatchAgents, string[] Substitutions, string[] BlockedReasons, DateTimeOffset?[] RetryAfter);
     private static Baseline Exercise(Scenario scenario, string row)
     {
-        scenario.Incident();
+        var incident = row switch
+        {
+            "weekly" => scenario.Incident("You've hit your weekly limit · resets Oct 7, 12pm (America/Chicago)", ""),
+            "signin" => scenario.Incident("", "ERROR: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again."),
+            _ => scenario.Incident()
+        };
+        if (row == "weekly")
+        {
+            var task = incident.Tasks.Single();
+            // Bare CLI refusals are recognized by dispatch classification, not the generic provider parser.
+            Assert.Equal(ProviderFailureKind.Unknown, task.LastVerification!.ProviderFailureKind);
+            Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit,
+                DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
+        }
+        if (row == "signin") Assert.Equal(DispatchOutcomeKind.ProviderAuthentication,
+            DispatchFailureClassifier.Classify(incident.Tasks.Single(), incident.Tasks.Single().LastVerification!).Kind);
         scenario.At("2026-10-17T11:37:00Z");
         var goal = scenario.NewGoal();
         if (row == "pinned") scenario.Pin(goal);

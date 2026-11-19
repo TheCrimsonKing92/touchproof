@@ -26,7 +26,7 @@ public sealed class ProviderUsageHoldEventsScenarioTests
         Assert.Equal("provider-hold-placed", placed.EventKind);
         Assert.Equal(goal.Id.Value, placed.GoalId);
         Assert.Equal(DateTimeOffset.Parse("2026-10-17T11:08:00Z"), placed.Timestamp);
-        Assert.Equal($"PROVIDER_HOLD_PLACED source={source} placed_at=2026-10-17T11:08:00.0000000+00:00 next_probe=2026-10-17T11:38:00.0000000+00:00 reset_source=backoff attempt=1 provider_reset=unknown binding={Key}", placed.Detail);
+        Assert.Equal($"PROVIDER_HOLD_PLACED source={source} placed_at=2026-10-17T11:08:00.0000000+00:00 next_probe=2026-10-17T11:38:00.0000000+00:00 reset_source=backoff attempt=1 binding={Key}", placed.Detail);
         foreach (var at in new[] { "2026-10-17T11:20:00Z", "2026-10-17T11:37:00Z" })
         {
             scenario.At(at);
@@ -45,14 +45,12 @@ public sealed class ProviderUsageHoldEventsScenarioTests
         Assert.True(scenario.Current(goal).Tasks.Single().LastVerification!.CompletionVerdictVerifiedSuccess);
         Assert.False(ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(scenario.Kernel.ProviderHoldScope, Key, out _));
         var events = Events(scenario);
-        Assert.Equal(4, events.Count);
+        Assert.Equal(3, events.Count);
         var restored = events[2];
         Assert.Equal("provider-hold-restored", restored.EventKind);
         Assert.Equal(goal.Id.Value, restored.GoalId);
         Assert.Equal(scenario.Clock.UtcNow, restored.Timestamp);
         Assert.Equal($"PROVIDER_HOLD_RESTORED source={source} placed_at=2026-10-17T11:08:00.0000000+00:00 held_seconds=1920 binding={Key}", restored.Detail);
-        Assert.Equal("provider-hold-redispatched", events[3].EventKind);
-        Assert.Equal(goal.Tasks.Single().Id.Value, OwnerEventFields.Field(events[3], "task"));
         Assert.Equal(new[] { "Provider back: xai is accepting work again", "Provider check: trying one task on xai", "Provider paused: xai has no usage balance left" },
             OwnerActivityNarrator.Narrate(events, _ => "").Select(row => row.Phrase));
     }
