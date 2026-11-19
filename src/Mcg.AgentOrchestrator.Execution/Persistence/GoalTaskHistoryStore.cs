@@ -39,6 +39,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// Bypass readers and handling (all source entries under Persistence):
 /// - AttentionReads and ProviderHoldSeedEvidenceReader: ReadAsync supplies marked latest elements,
 ///   decoded with each reader's existing sparse shape; cached provider evidence stores resolved values.
+/// - ProviderConnections: ReadMetadataAsync shares marker validation and latest authority while
+///   projecting only attribution/status fields, excluding invocation output and command text.
 /// - ReadTerminalMetadata: ReadLatestDispatchAsync resolves commit evidence; metadata-only hot stubs
 ///   already carry ResultCommit. ListConductLoopGoalMetadataAsync and AcceptanceQueueReads use
 ///   LatestFieldSql for ResultCommit and CompletedAt respectively, with an inline-only legacy-table fallback.
@@ -313,6 +315,49 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
     }
 
     private sealed record StoredEntry(long Sequence, string Json);
+
+    // SQL projections are repository-owned, never CLI/provider input. Unmarked documents
+    // already supply authoritative inline metadata; no table mirror can override it.
+    internal async Task<TaskHistory> ReadMetadataAsync<TVerification, TDispatch>(SqliteConnection connection,
+        string goalId, string taskId, JsonElement verification, JsonElement dispatch, JsonElement marker,
+        Func<string, string> projectVerification, Func<string, string> projectDispatch, CancellationToken token)
+    {
+        var counts = ReadMarker(marker, goalId, taskId);
+        if (counts is null) return new(new(Elements(verification), false), new(Elements(dispatch), false));
+        var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry>>();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT kind, sequence, CASE kind WHEN 'verification' THEN {projectVerification("entry_json")}
+                ELSE {projectDispatch("entry_json")} END
+                , json_type(entry_json)
+            FROM goal_task_history WHERE goal_id = $goal AND task_id = $task ORDER BY kind, sequence
+            """;
+        command.Parameters.AddWithValue("$goal", goalId);
+        command.Parameters.AddWithValue("$task", taskId);
+        using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            if (reader.IsDBNull(3) || reader.GetString(3) != "object")
+                throw HistoryError(goalId, taskId, reader.GetString(0), "history metadata entry must be an object");
+            var key = (taskId, reader.GetString(0));
+            if (!rows.TryGetValue(key, out var list)) rows.Add(key, list = []);
+            list.Add(new(reader.GetInt64(1), reader.GetString(2)));
+        }
+        var verifications = StrictEntries<TVerification>(rows.GetValueOrDefault((taskId, "verification")),
+            counts.Verification, goalId, taskId, "verification");
+        var dispatches = StrictEntries<TDispatch>(rows.GetValueOrDefault((taskId, "dispatch")),
+            counts.Dispatch, goalId, taskId, "dispatch");
+        return new(verifications, dispatches, counts.LatestVerificationInTable ? verifications.Entries[^1] : default,
+            counts.LatestDispatchInTable ? dispatches.Entries[^1] : default);
+    }
+
+    internal static string MetadataSql(string expression, IReadOnlyList<string> fields) =>
+        "json_object(" + string.Join(",", fields.Select(field =>
+        {
+            if (field.Length == 0 || field.Any(c => !char.IsAsciiLetterOrDigit(c)))
+                throw new ArgumentException("Metadata fields must be literal identifiers.");
+            return $"'{field}', json(({expression}) -> '$.{field}')";
+        })) + ")";
 
     private sealed record HistoryCounts(int? Verification, int? Dispatch,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool LatestVerificationInTable,
