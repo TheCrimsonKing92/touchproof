@@ -297,7 +297,7 @@ internal sealed partial class ConductorDriver
             requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
             telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, FindingRoundBatchSchedule.ReadRunTimeline(goal));
         FindingRoundBatchCoordinator.RecordSettledPlan(this, goal, requestingTask, batchCandidateSha,
-            findingRoundFingerprint, batchBasisIdentity, plan);
+            findingRoundFingerprint, batchBasisIdentity, plan, telemetryCandidateSha, findingEvidenceEngineSettings);
         FailedGoalFindingObservation? redRoute = null;
         FindingEvidenceReceipt? actionableReceipt = null;
         foreach (var (batch, covering) in plan.RedCovered)
@@ -391,9 +391,8 @@ internal sealed partial class ConductorDriver
                 goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint,
                 requestContext, out decision))
         {
-            if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
-                decision = FindingRoundBatchCoordinator.SettleUnavailable(this, goal, requestingTask, runnable,
-                    batches.Count > 1, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity, decision.Evidence, reusedRedDecision);
+            decision = FindingRoundBatchCoordinator.CompleteMissingBaseline(this, goal, requestingTask, runnable,
+                batches.Count > 1, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity, decision, reusedRedDecision);
             return true;
         }
         if (!TryRestorePendingBaselineCandidate(goal, runnable.Request, candidateSha!, requestContext,
@@ -443,9 +442,8 @@ internal sealed partial class ConductorDriver
                 evidence, initialArmReceipts,
                 out evidence, out var armReceipts, out var receiptIdentity, out decision))
         {
-            if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
-                decision = FindingRoundBatchCoordinator.SettleUnavailable(this, goal, requestingTask, runnable,
-                    batches.Count > 1, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity, decision.Evidence, reusedRedDecision);
+            decision = FindingRoundBatchCoordinator.CompleteMissingBaseline(this, goal, requestingTask, runnable,
+                batches.Count > 1, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity, decision, reusedRedDecision);
             return true;
         }
         var receiptId = CreateFindingEvidenceReceiptId(

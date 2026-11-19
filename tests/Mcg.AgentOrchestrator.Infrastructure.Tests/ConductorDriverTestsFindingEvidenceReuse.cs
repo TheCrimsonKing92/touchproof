@@ -292,6 +292,8 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
     [Xunit.InlineData("inherited-red")]
     [Xunit.InlineData("missing-baseline")]
     [Xunit.InlineData("resumed-missing-baseline")]
+    [Xunit.InlineData("missing-baseline-green")]
+    [Xunit.InlineData("resumed-missing-baseline-green")]
     public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper(string siblingOutcome)
     {
         const string candidateSha = "abc1234";
@@ -310,8 +312,10 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         TaskId? retriedTaskId = null;
         var retries = 0;
         string? escalation = null;
-        var missingBaseline = siblingOutcome is "missing-baseline" or "resumed-missing-baseline";
-        var interruptBeforeRerun = siblingOutcome == "resumed-missing-baseline";
+        var greenRerun = siblingOutcome is "missing-baseline-green" or "resumed-missing-baseline-green";
+        var missingBaseline = greenRerun || siblingOutcome is "missing-baseline" or "resumed-missing-baseline";
+        var resumeRerun = siblingOutcome is "resumed-missing-baseline" or "resumed-missing-baseline-green";
+        var interruptBeforeRerun = resumeRerun;
         FocusedEvidenceRunResult RunEvidence(string request)
         {
             focusedRequests.Add(request);
@@ -325,7 +329,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                     Rejection: new(FocusedEvidenceRejectionCode.UnsupportedProject, request, "Unsupported advisory project")),
                 3 when siblingOutcome == "inherited-red" => InheritedRed(request),
                 3 or 4 when missingBaseline => CandidateOnlyRedWithExecutedCount(request, candidateSha, "SiblingTests.Fails"),
-                5 when missingBaseline => new(request, false, false, "Advisory rerun produced no usable evidence", []),
+                5 when missingBaseline && !greenRerun => new(request, false, false, "Advisory rerun produced no usable evidence", []),
                 _ => RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha)
             };
         }
@@ -384,7 +388,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             executionDirectory: missingBaseline ? _artifactRoot : InfrastructureTestSupport.FindRepositoryRoot());
         var replayBatch = FindingRoundBatchCoordinator.Identity(replayDriver, goal, tester)!;
 
-        if (siblingOutcome == "resumed-missing-baseline")
+        if (resumeRerun)
         {
             var interrupted = Assert.Throws<IOException>(() => replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive));
             Assert.Equal("Interrupted before advisory candidate rerun.", interrupted.Message);
@@ -401,7 +405,19 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         Assert.Equal(developer.Id, retriedTaskId);
         Assert.Equal(1, retries);
         Assert.Null(escalation);
-        if (missingBaseline || siblingOutcome is "unsupported" or "inherited-red")
+        if (greenRerun)
+        {
+            Assert.Single(goal.Timeline, item => item.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal));
+            Assert.Single(FindingRoundBatchAccounting.Read(goal, replayBatch),
+                item => item.Kind == "executed" && item.FindingIds.Contains(sibling.StableId));
+            var closure = Assert.Single(goal.Timeline.Where(item => item.TaskId == tester.Id &&
+                item.Message.StartsWith($"finding-evidence batch-closed; batch_key={replayBatch.Key};", StringComparison.Ordinal)));
+            Assert.Contains("Developer:", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"NewlyExecuted\":1", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Covered\":1", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Unavailable\":0", closure.Message, StringComparison.Ordinal);
+        }
+        if (!greenRerun && (missingBaseline || siblingOutcome is "unsupported" or "inherited-red"))
         {
             if (siblingOutcome == "unsupported")
             {

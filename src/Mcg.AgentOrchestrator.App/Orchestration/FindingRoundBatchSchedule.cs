@@ -7,6 +7,12 @@ internal static class FindingRoundBatchSchedule
 {
     internal const int MaximumCompletedRuns = 3;
 
+    private static readonly (FindingEvidenceNotHonouredReason Reason, string Suffix)[] PermanentRunFailureReasons =
+        Enum.GetValues<FindingEvidenceNotHonouredReason>()
+            .Where(reason => FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason)))
+            .Select(reason => (reason, $" reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};"))
+            .ToArray();
+
     // A failed-attempt charge is staged under the goal lock until its checkpoint succeeds.
     internal static IReadOnlyList<ProgressEvent> ReadRunTimeline(Goal goal)
     {
@@ -22,7 +28,7 @@ internal static class FindingRoundBatchSchedule
         string executionBasisIdentity,
         IReadOnlyList<ProgressEvent> timeline)
     {
-        if (candidateSha == "unavailable") return new([], [], batches, []);
+        if (candidateSha == "unavailable") return new([], [], batches, [], []);
 
         // Completing a batch in this round does not require reattaching content-bound
         // evidence. Cross-round reuse keeps its stricter artifact and coverage checks.
@@ -36,6 +42,7 @@ internal static class FindingRoundBatchSchedule
         var covered = new List<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)>();
         var executable = new List<FindingEvidenceBatch>();
         var unavailable = new List<(FindingEvidenceBatch Batch, int Count, string ReceiptId)>();
+        var refusals = new List<FindingRoundBatchRefusal>();
         foreach (var batch in batches)
         {
             var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(
@@ -73,14 +80,31 @@ internal static class FindingRoundBatchSchedule
                    !receipts.Any(receipt => receipt.ReceiptId == legacyId && receipt.ExecutionBasisIdentity != executionBasisIdentity)))))
                 .Where(item => FailureAttemptId(item.Message) is not { } attemptId || chargedAttempts.Add(attemptId))
                 .ToArray();
-            if (runs.Length >= MaximumCompletedRuns)
+            // A run-charge checkpoint can survive a restart before the task records the refusal.
+            if (ReadPermanentRefusal(batch, runs, receiptId, executionBasisIdentity) is { } refusal)
+                refusals.Add(refusal);
+            else if (runs.Length >= MaximumCompletedRuns)
             {
                 var lastReceiptId = runs[^1].Message.Contains(marker, StringComparison.Ordinal) ? receiptId : legacyId;
                 unavailable.Add((batch, runs.Length, lastReceiptId));
             }
             else executable.Add(batch);
         }
-        return new(passed, covered, executable, unavailable);
+        return new(passed, covered, executable, unavailable, refusals);
+    }
+
+    private static FindingRoundBatchRefusal? ReadPermanentRefusal(
+        FindingEvidenceBatch batch, IReadOnlyList<ProgressEvent> runs, string receiptId, string basis)
+    {
+        var marker = $"; receipt_id={receiptId}; execution_basis={basis};";
+        foreach (var run in runs)
+        {
+            if (FailureAttemptId(run.Message) is not { } attemptId ||
+                !run.Message.Contains(marker, StringComparison.Ordinal)) continue;
+            foreach (var (reason, suffix) in PermanentRunFailureReasons)
+                if (run.Message.EndsWith(suffix, StringComparison.Ordinal)) return new(batch, attemptId, receiptId, reason);
+        }
+        return null;
     }
 
     private static string? FailureAttemptId(string message)

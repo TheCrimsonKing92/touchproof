@@ -426,6 +426,56 @@ public sealed class FindingRoundBatchCompletionTests
 
     [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
+    public void PermanentRefusal_ReplaysFromRunChargeWithoutRelaunch()
+    {
+        using var scenario = new Scenario(false, failure: "unsupported-first");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+        var refusedRequest = Assert.Single(scenario.Runs);
+        Assert.Contains("AlphaTests", refusedRequest, StringComparison.Ordinal);
+        var attempt = scenario.LatestAttempt();
+        Assert.NotNull(attempt.ReconciledAt);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+        Assert.Empty(scenario.Escalations);
+
+        // The attempt metadata was reconciled after this snapshot was persisted.
+        scenario.Restore(AgentOrchestratorKernel.FromSnapshot(Assert.IsType<OrchestratorSnapshot>(scenario.LastRunChargeCheckpoint)));
+        var charge = Assert.Single(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
+        Assert.Contains($"attempt_id={attempt.AttemptId};", charge.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=unsupported-project;", charge.Message, StringComparison.Ordinal);
+        var identity = FindingRoundBatchCoordinator.Identity(scenario.Driver, scenario.Goal, scenario.Tester)!;
+        Assert.DoesNotContain(FindingRoundBatchAccounting.Read(scenario.Goal, identity), item => item.Kind == "unavailable");
+
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+        Assert.Equal(2, scenario.Runs.Count);
+        Assert.NotEqual(refusedRequest, scenario.Runs[1]);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+        Assert.Empty(scenario.Escalations);
+        var unavailable = Assert.Single(FindingRoundBatchAccounting.Read(scenario.Goal, identity), item => item.Kind == "unavailable");
+        Assert.Equal("first", Assert.Single(unavailable.FindingIds));
+        Assert.Contains("unsupported-project", unavailable.Eligibility, StringComparison.Ordinal);
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, scenario.Tester.LastVerification!.MergedReviewFindings!
+            .Single(finding => finding.StableId == "first").EvidenceOutcome?.Reason);
+
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        scenario.Restart();
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+        Assert.Equal(3, scenario.Runs.Count);
+        Assert.Single(scenario.Runs, request => request == refusedRequest);
+        Assert.Single(scenario.Escalations);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+        Assert.Equal(0, scenario.ProcessStarts);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Unavailable);
+    }
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
     public async Task ConcurrentClose_AdmitsOneRetryAndSurvivesSnapshot()
     {
         using var scenario = new Scenario(true);
@@ -696,6 +746,9 @@ public sealed class FindingRoundBatchCompletionTests
             runFocusedEvidence: (_, request) =>
             {
                 Runs.Add(request);
+                if (_failure == "unsupported-first" && request == Runs[0])
+                    return new(request, false, false, "Project unavailable", [],
+                        Rejection: new(FocusedEvidenceRejectionCode.UnsupportedProject, request, "Project unavailable"));
                 if (_failure == "terminal" && Runs.Count == 1 || _failure == "terminal-advisory" && Runs.Count == 2)
                     return new(request, false, false, "Request unavailable", []);
                 if ((_failure == "rejected" && Runs.Count == 1) ||

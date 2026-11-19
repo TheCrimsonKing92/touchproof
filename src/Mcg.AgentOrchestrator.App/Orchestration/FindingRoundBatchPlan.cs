@@ -7,7 +7,8 @@ internal sealed record FindingRoundBatchPlan(
     IReadOnlyList<(FindingEvidenceBatch Batch, string ReceiptId)> Passed,
     IReadOnlyList<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)> RedCovered,
     IReadOnlyList<FindingEvidenceBatch> Executable,
-    IReadOnlyList<(FindingEvidenceBatch Batch, int Count, string ReceiptId)> Unavailable)
+    IReadOnlyList<(FindingEvidenceBatch Batch, int Count, string ReceiptId)> Unavailable,
+    IReadOnlyList<FindingRoundBatchRefusal> Refusals)
 {
     internal (FindingEvidenceBatch Batch, int Count, string ReceiptId)? RequiredCap(Goal goal, TaskSpec task)
     {
@@ -25,3 +26,6 @@ internal sealed record FindingRoundBatchPlan(
     internal string CoveredEvidence => string.Join("; ", RedCovered.Select(pair =>
         $"request_identity={pair.Batch.Identity}; receipt_id={pair.Receipt.ReceiptId}"));
 }
+
+internal sealed record FindingRoundBatchRefusal(
+    FindingEvidenceBatch Batch, string AttemptId, string ReceiptId, FindingEvidenceNotHonouredReason Reason);

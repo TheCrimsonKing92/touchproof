@@ -111,6 +111,19 @@ internal static class FindingRoundBatchCoordinator
             Observe(driver, goal, task, policy, out observation);
     }
 
+    internal static FailedGoalFindingObservation CompleteMissingBaseline(ConductorDriver driver, Goal goal, TaskSpec task,
+        FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis,
+        FailedGoalFindingObservation observation, FailedGoalFindingObservation? reusedActionableRed) =>
+        observation.Kind switch
+        {
+            FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired =>
+                SettleUnavailable(driver, goal, task, batch, morePending, candidate, round, basis, observation.Evidence, reusedActionableRed),
+            // A GREEN rerun settles this request. An earlier actionable RED still owns the route.
+            FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded or FailedGoalFindingObservationKind.FindingRetryCapReached
+                => reusedActionableRed ?? observation,
+            _ => observation
+        };
+
     internal static FailedGoalFindingObservation SettleUnavailable(ConductorDriver driver, Goal goal, TaskSpec task,
         FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis, string reason,
         FailedGoalFindingObservation? reusedActionableRed)
@@ -179,25 +192,40 @@ internal static class FindingRoundBatchCoordinator
                     $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
             foreach (var finding in batch.Findings)
                 driver.RecordNotHonoured(goal.Id, task, finding, reason, detail, candidate, settings);
-            driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
-        }
-        if (!FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason)))
-            return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
-                "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
 
-        return SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, batchBasis, detail, reusedActionableRed);
+            var decision = FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
+                ? SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, batchBasis, detail, reusedActionableRed)
+                : FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                    "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
+            driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
+            return decision;
+        }
     }
 
     internal const string FailedAttemptRunPrefix = "finding-evidence failed-attempt; attempt_id=";
 
     internal static void RecordSettledPlan(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
-        string round, string basis, FindingRoundBatchPlan plan)
+        string round, string basis, FindingRoundBatchPlan plan, string executionCandidate, AcceptanceGateEngineSettings settings)
     {
         foreach (var unavailable in plan.Unavailable)
             RecordOutcome(driver, goal, task, candidate, round, basis, unavailable.Batch, "unavailable", unavailable.ReceiptId,
                 $"Request {unavailable.Batch.Identity} completed {unavailable.Count} runs; last_receipt_id={unavailable.ReceiptId}.");
         foreach (var (batch, receiptId) in plan.Passed)
             RecordOutcome(driver, goal, task, candidate, round, basis, batch, "executed", receiptId);
+        foreach (var refusal in plan.Refusals)
+        {
+            var reason = FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(refusal.Reason);
+            var detail = $"Focused evidence attempt {refusal.AttemptId} recorded a permanent refusal ({reason}).";
+            lock (goal)
+            {
+                foreach (var finding in refusal.Batch.Findings)
+                    driver.RecordNotHonoured(goal.Id, task, finding, refusal.Reason, detail, executionCandidate, settings);
+                RecordOutcome(driver, goal, task, candidate, round, basis, refusal.Batch, "unavailable", refusal.ReceiptId, detail);
+                var attempt = driver.FocusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value])
+                    .SingleOrDefault(item => item.AttemptId == refusal.AttemptId);
+                if (attempt is not null) driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
+            }
+        }
     }
 
     internal static void RecordOutcome(ConductorDriver driver, Goal goal, TaskSpec task, string candidate, string round, string basis,
