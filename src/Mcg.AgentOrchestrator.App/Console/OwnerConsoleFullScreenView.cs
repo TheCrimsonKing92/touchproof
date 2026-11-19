@@ -161,28 +161,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     }
 
     internal Task HandleKeyAsync(Key key) => _keys.HandleKeyAsync(key);
-
     internal Task ObserveKeyAsync(Key key, bool routeToWindow, string boundary) => _keys.ObserveKeyAsync(key, routeToWindow, boundary);
 
-    public async Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false)
-    {
-        if (binding != OwnerConsoleBindings.Settings || ActionRunning)
-        {
-            await _bindingRunner.RunAsync(binding, argument, fromKey);
-            return;
-        }
-        _controller.SetSettingsTarget(fromKey ? SelectedSignInProvider() : null);
-        try { await _bindingRunner.RunAsync(binding, argument, fromKey); }
-        finally { _controller.SetSettingsTarget(null); }
-    }
-
-    private string? SelectedSignInProvider()
-    {
-        if (FocusedPane != OwnerConsolePane.Activity || _controller.Model is not { ActivityState: null } model ||
-            _activity.SelectedItem is not { } row || row < 0 || row >= _activityPane.Rows.Count ||
-            _activityPane.Rows[row].ItemIndex is not { } index || index < 0 || index >= model.Activity.Length) return null;
-        return model.Activity[index].SignInProvider;
-    }
+    public Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false) =>
+        SettingsView.RunBindingAsync(_controller, _bindingRunner, binding, argument, fromKey, ActionRunning, FocusedPane, _activityPane);
 
     public void OpenGate(string? goalId = null)
     {
@@ -207,9 +189,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             await EpicView.OpenAsync(FocusedPane, epicId);
         if (_controller.TakeRequestedGateGoalId() is { } gateGoalId && !_token.IsCancellationRequested)
             OpenGate(gateGoalId);
-        var settingsTarget = _controller.TakeSettingsTarget();
-        if (_controller.TakeSettingsRequested() && !_token.IsCancellationRequested)
-            SettingsView.Open(FocusedPane, settingsTarget);
+        SettingsView.OpenRequested(_controller, FocusedPane, _token);
     }
 
     public void StartAction() { NoticeStrip.ActionStarted(); RenderNotices(); }
@@ -242,7 +222,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         : (FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_controller.Model)
             ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleBindings.PaneHint(FocusedPane,
             _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision),
-            _activityPane.Following, signIn: SelectedSignInProvider() is not null);
+            _activityPane.Following, signIn: OwnerConsoleSettingsView.SelectedSignInProvider(_controller.Model, FocusedPane, _activityPane) is not null);
 
     public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false) =>
         _selection.Select(index, refresh, direction, allowHeader);

@@ -22,8 +22,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     private bool _listing;
     private bool _initialChecksStarted;
     private string? _loadError;
-    private string? _pendingTarget;
-    private string? _targetNotice;
+    private readonly OwnerConsoleSettingsView.ProviderTarget _target;
 
     internal OwnerConsoleProviderConnectionsTab(IProviderConnectionsConsoleGateway connections,
         IProviderSignInLauncher launcher, Func<IReadOnlyList<AgentDefinition>> loadRoster, Action<Action> invoke,
@@ -35,6 +34,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         _clock = clock;
         _lifetime = lifetime;
         _signIn = new(connections, launcher, FindProfile, Check, apply => Post(apply), lifetime);
+        _target = new(() => _rows, index => { _selected = index; ProbeSelectedDeviceCode(); });
     }
 
     internal Action? Invalidate { get; set; }
@@ -47,24 +47,9 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     public int SelectedLine => _selected;
     public IReadOnlyList<string> Lines => RenderLines().ToArray();
     public string StatusText => _listing ? "Reading provider connections…" :
-        _loadError ?? _targetNotice ?? (Selected is { } row ? RowStatus(row) ?? "" : "");
+        _loadError ?? _target.Notice ?? (Selected is { } row ? RowStatus(row) ?? "" : "");
 
-    internal void Target(string? provider)
-    {
-        _pendingTarget = string.IsNullOrWhiteSpace(provider) ? null : provider.Trim();
-        _targetNotice = null;
-        if (_listed && !_listing) ApplyTarget();
-    }
-
-    private void ApplyTarget()
-    {
-        if (_pendingTarget is not { } provider) return;
-        _pendingTarget = null;
-        var index = Array.FindIndex(_rows, row => row.Members.Any(member =>
-            StringComparer.OrdinalIgnoreCase.Equals(member.Report.Provider, provider)));
-        if (index < 0) _targetNotice = $"No configured profile found for provider {provider}.";
-        else { _selected = index; ProbeSelectedDeviceCode(); }
-    }
+    internal void Target(string? provider) => _target.Set(provider, _listed && !_listing);
 
     public string KeyHint
     {
@@ -76,10 +61,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         }
     }
 
-    public void Activate()
-    {
-        if (!_listed && _loadError is null) Refresh();
-    }
+    public void Activate() { if (!_listed && _loadError is null) Refresh(); }
 
     public void Refresh()
     {
@@ -92,7 +74,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
 
     public void HandleKey(Key key)
     {
-        _targetNotice = null;
+        _target.Notice = null;
         if (_lifetime.IsCancellationRequested || key.IsAlt || key.IsCtrl) return;
         if (key == Key.CursorUp || key == Key.CursorDown)
         {
@@ -187,7 +169,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         _listed = true;
         _listing = false;
         RebuildRows();
-        ApplyTarget();
+        _target.Apply();
     }
 
     private void RebuildRows()
