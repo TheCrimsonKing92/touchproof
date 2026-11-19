@@ -2333,7 +2333,8 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal([reviewer.Id], retries);
-        var failedReceipt = Assert.Single(reviewer.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []));
+        var evidenceRound = Assert.Single(reviewer.VerificationHistory, item => item.FindingEvidenceReceipts is { Count: > 0 });
+        var failedReceipt = Assert.Single(evidenceRound.FindingEvidenceReceipts!);
         Assert.False(failedReceipt.Passed);
         if (legacyResult)
         {
@@ -2341,8 +2342,10 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             Assert.Contains(failedReceipt.ReceiptId, retryMessage, StringComparison.Ordinal);
             Assert.Empty(failedReceipt.Arms!);
             Assert.Equal(FindingEvidenceRequestDecision.Refused, Assert.Single(failedReceipt.RequestDispositions!).Decision);
-            Assert.Equal(FindingEvidenceOutcomeReason.Unknown,
-                Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).EvidenceOutcome?.ResultReason);
+            var outcome = Assert.Single(evidenceRound.MergedReviewFindings!).EvidenceOutcome;
+            Assert.NotNull(outcome);
+            Assert.Equal(failedReceipt.ReceiptId, outcome.ReceiptId);
+            Assert.Equal(FindingEvidenceOutcomeReason.Unknown, outcome.ResultReason);
             return;
         }
 
