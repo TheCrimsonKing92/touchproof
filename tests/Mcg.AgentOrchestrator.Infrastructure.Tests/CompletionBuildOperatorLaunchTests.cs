@@ -4,6 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: the probe owns a disposable repository, SQLite stores, and process custody.
 public sealed class CompletionBuildOperatorLaunchTests
 {
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
     [Fact]
     public async Task HeldControlLaunchesHostAndRecordsProgressBeforeRelease()
     {
@@ -30,8 +32,63 @@ public sealed class CompletionBuildOperatorLaunchTests
         SharedTestSupport.RemoveTempDirectory(root);
     }
 
-    private static async Task<((string? Kind, int Pid, string? Action)[] Receipts, string Root)> RunControl(
-        string control, int minimumRootLength = 0)
+    [Fact(Skip = "The completion-build operator procedure requires Windows.", SkipUnless = nameof(IsWindows))]
+    public async Task HeldControlScriptRunsToFirstReceiptAndPasses()
+    {
+        var (probeDll, source, root) = CreateControlPaths();
+        var evidence = Path.Combine(root, "evidence");
+
+        var result = await RunHeldScript(probeDll, source, evidence);
+
+        Assert.False(result.TimedOut, $"The held control script did not exit. Evidence: {evidence}");
+        Assert.True(result.ExitCode == 0,
+            $"The held control script exited {result.ExitCode}. Evidence: {evidence}\n{result.StandardOutput}\n{result.StandardError}");
+        Assert.Contains($"PASS operator controls=1 evidence={evidence}",
+            result.StandardOutput.Split('\n').Select(line => line.TrimEnd('\r')));
+
+        var receipt = Path.Combine(evidence, "held", "receipts.jsonl");
+        Assert.True(File.Exists(receipt), $"Missing held control receipt: {receipt}");
+        Assert.Single(File.ReadLines(receipt).Where(line =>
+        {
+            using var record = JsonDocument.Parse(line);
+            return record.RootElement.GetProperty("kind").GetString() == "control-passed"
+                && record.RootElement.GetProperty("payload").GetProperty("control").GetString() == "held";
+        }));
+        SharedTestSupport.RemoveTempDirectory(root);
+    }
+
+    [Fact(Skip = "The completion-build operator procedure requires Windows.", SkipUnless = nameof(IsWindows))]
+    public async Task ScriptRejectsExistingOutputRootWithNonZeroExit()
+    {
+        var (probeDll, source, root) = CreateControlPaths();
+        var evidence = Directory.CreateDirectory(Path.Combine(root, "evidence")).FullName;
+
+        var result = await RunHeldScript(probeDll, source, evidence);
+
+        Assert.False(result.TimedOut, $"The held control script did not reject the existing evidence directory: {evidence}");
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("OutputRoot must be a new directory", result.StandardError);
+        Assert.DoesNotContain("PASS operator controls=", result.StandardOutput);
+        Assert.False(Directory.Exists(Path.Combine(evidence, "held")));
+        SharedTestSupport.RemoveTempDirectory(root);
+    }
+
+    private static Task<WorkerProcessRunResult> RunHeldScript(string probeDll, string source, string evidence)
+    {
+        var powerShell = TestPowerShell.Executable;
+        Assert.True(Path.IsPathFullyQualified(powerShell) && File.Exists(powerShell) &&
+            string.Equals(Path.GetFileName(powerShell), "pwsh.exe", StringComparison.OrdinalIgnoreCase),
+            $"PowerShell 7 is required for the operator procedure. Resolved shell: {powerShell}");
+        var script = Path.Combine(source, "scripts", "Invoke-CompletionBuildOperatorControl.ps1");
+        return WorkerProcessRunner.RunBufferedDirectAsync(
+            new(powerShell,
+                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
+                    "-ProbeDll", probeDll, "-SourceRepository", source, "-OutputRoot", evidence, "-Control", "held"],
+                source, Timeout: TimeSpan.FromMinutes(20)),
+            TestContext.Current.CancellationToken);
+    }
+
+    private static (string ProbeDll, string Source, string Root) CreateControlPaths()
     {
         const string probe = "Mcg.AgentOrchestrator.SupervisorLaunchProbe";
         string[] closureFiles = [probe + ".dll", probe + ".runtimeconfig.json", "Mcg.AgentOrchestrator.App.dll"];
@@ -43,6 +100,13 @@ public sealed class CompletionBuildOperatorLaunchTests
             Environment.GetEnvironmentVariable("LOCALAPPDATA"),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Path.GetTempPath(), isWindows: true);
         var root = Path.Combine(Path.GetDirectoryName(buildStorage)!, "cbe-" + Guid.NewGuid().ToString("N")[..12]);
+        return (Path.Combine(closure, closureFiles[0]), source, root);
+    }
+
+    private static async Task<((string? Kind, int Pid, string? Action)[] Receipts, string Root)> RunControl(
+        string control, int minimumRootLength = 0)
+    {
+        var (probeDll, source, root) = CreateControlPaths();
         // Reproduce the evidence depth at which the old profile layout failed before compilation.
         var evidence = root.Length < minimumRootLength
             ? Path.Combine(root, new string('x', minimumRootLength - root.Length))
@@ -50,7 +114,7 @@ public sealed class CompletionBuildOperatorLaunchTests
 
         // Use the same entry point and arguments as Invoke-CompletionBuildOperatorControl.ps1.
         var result = await WorkerProcessRunner.RunBufferedDirectAsync(
-            new("dotnet", [Path.Combine(closure, closureFiles[0]), "completion-build", evidence, source, control],
+            new("dotnet", [probeDll, "completion-build", evidence, source, control],
                 source, Timeout: TimeSpan.FromMinutes(20)),
             TestContext.Current.CancellationToken);
         Assert.True(result.ExitCode == 0,

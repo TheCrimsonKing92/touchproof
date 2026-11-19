@@ -20,9 +20,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $sourcePath 'Mcg.AgentOrchestrator.s
     throw 'SourceRepository must identify the explicit candidate checkout.'
 }
 New-Item -ItemType Directory -Path $evidenceRoot | Out-Null
-$controls = if ($Control -eq 'all') {
+[string[]]$controls = if ($Control -eq 'all') {
     @('held', 'stop', 'renewal', 'restart', 'ownership-loss', 'replacement', 'stale-candidate', 'stale-dispatch')
-} else { @($Control) }
+} else { $Control }
 foreach ($case in $controls) {
     $caseRoot = Join-Path $evidenceRoot $case
     # Foreground dotnet host, shell-plain argument array, no paid worker or deployed conductor.
