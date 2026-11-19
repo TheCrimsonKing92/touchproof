@@ -903,6 +903,45 @@ function Get-DefaultMtpResultsRoot {
     return Join-Path $localAppData 'Temp\Low\mcg-tests'
 }
 
+function Test-MtpLowIntegrityLabel {
+    param([string]$Path)
+
+    $PSNativeCommandUseErrorActionPreference = $false
+    $permissions = & icacls.exe $Path
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) { throw "icacls.exe exited with code $exitCode." }
+    return [bool]($permissions -match '(?:^|\s)Mandatory Label\\Low Mandatory Level:')
+}
+
+function Invoke-MtpIcacls {
+    $PSNativeCommandUseErrorActionPreference = $false
+    & icacls.exe @args | Out-Null
+    return $LASTEXITCODE
+}
+
+function Set-MtpLowIntegrityLabel {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [scriptblock]$LabelReader = { param($directory) Test-MtpLowIntegrityLabel -Path $directory },
+        [scriptblock]$IcaclsRunner = { Invoke-MtpIcacls @args }
+    )
+
+    if (-not (Test-MtpWindows)) { return }
+
+    $Path = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container -ErrorAction Stop)) {
+        [void][System.IO.Directory]::CreateDirectory($Path)
+    }
+
+    try { $isLow = & $LabelReader $Path }
+    catch { throw "Could not read the integrity label for '$Path'. $($_.Exception.Message)" }
+    if ($isLow) { return }
+
+    try { $exitCode = & $IcaclsRunner $Path '/setintegritylevel' '(OI)(CI)low' }
+    catch { throw "Could not set Low integrity on '$Path'. $($_.Exception.Message)" }
+    if ($exitCode -ne 0) { throw "Could not set Low integrity on '$Path'. icacls.exe exited with code $exitCode." }
+}
+
 function Write-MtpRunOwnershipSidecar {
     param(
         [Parameter(Mandatory = $true)][string]$ResultsDirectory,
@@ -975,6 +1014,7 @@ function Initialize-MtpResultsDirectory {
             -not $resolvedRoot.StartsWith($lowPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Results directory '$resolvedRoot' is not under the Low-integrity-writable root '$canonicalLowRoot'. Use -ResultsRoot beneath that root; an ordinary Medium-integrity directory is not writable by the MTP test process."
         }
+        Set-MtpLowIntegrityLabel -Path ([System.IO.Path]::GetDirectoryName($canonicalLowRoot))
     }
 
     try {
