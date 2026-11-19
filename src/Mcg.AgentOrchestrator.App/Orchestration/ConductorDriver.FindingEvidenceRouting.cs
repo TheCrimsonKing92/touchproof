@@ -135,7 +135,7 @@ internal sealed partial class ConductorDriver
         arms = initialArms;
         receiptIdentity = batch.Identity;
         decision = FailedGoalFindingObservation.None;
-        if (!IsCandidateOnlyRed(candidateSha, initialArms, out var candidateOnlyRed) ||
+        if (!FindingEvidenceCandidateAttribution.IsCandidateOnlyRed(candidateSha, initialArms, out var candidateOnlyRed) ||
             EveryFailingTestIsInsideCandidateChanges(
                 goal, batch, candidateOnlyRed.FailingTestIdentities ?? []))
         {
@@ -513,16 +513,36 @@ internal sealed partial class ConductorDriver
     {
         decision = FailedGoalFindingObservation.None;
         if (request.NegativeControl is not null) return false;
+
+        var group = new FindingEvidenceRequestGroup(
+            requestIdentity, executorRequest, request, [finding]);
+        var batch = new FindingEvidenceBatch(
+            requestIdentity, executorRequest, request, [finding], [group]);
+        ActionableCandidateRedAttribution? Attribute(string receiptId, IReadOnlyList<FindingEvidenceArmReceipt> evidenceArms) =>
+            TryAttributeActionableCandidateRed(goal, candidateSha,
+                SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, receiptId, evidenceArms, _recordTaskNote), batch);
+        FailedGoalFindingObservation Route(string receiptId, ActionableCandidateRedAttribution attribution)
+        {
+            FindingRoundBatchCoordinator.RecordCoverage(this, goal, requestingTask, candidateSha,
+                findingRoundFingerprint, batchBasisIdentity, requestIdentity, finding.StableId, receiptId);
+            return BuildActionableCandidateRedDecision(goal, requestingTask, candidateSha, receiptId, attribution);
+        }
+
+        // Replay a current-round attribution before looking for cross-round reusable evidence.
+        var baselineReceipt = FindingEvidenceCandidateAttribution.FindCurrentBaselineReceipt(
+            requestingTask, finding.StableId, requestIdentity, candidateSha, findingRoundFingerprint, executionBasisIdentity);
+        if (baselineReceipt is { Arms: { } baselineArms } && Attribute(baselineReceipt.ReceiptId, baselineArms) is { } priorAttribution)
+        {
+            decision = Route(baselineReceipt.ReceiptId, priorAttribution);
+            return true;
+        }
+
         if (!TryResolveReusableRedFindingEvidenceReceipt(
                 requestingTask, request, candidateSha, executionBasisIdentity, out var receipt))
         {
             return false;
         }
 
-        var group = new FindingEvidenceRequestGroup(
-            requestIdentity, executorRequest, request, [finding]);
-        var batch = new FindingEvidenceBatch(
-            requestIdentity, executorRequest, request, [finding], [group]);
         ReattachReusableRedFindingEvidence(
             goal, requestingTask, finding, requestIdentity, receipt);
         var arms = receipt.Arms ?? [];
@@ -595,14 +615,10 @@ internal sealed partial class ConductorDriver
             arms = resolvedArms;
         }
 
-        var attribution = TryAttributeActionableCandidateRed(
-            goal, candidateSha, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, routedReceiptId, arms, _recordTaskNote), batch);
+        var attribution = Attribute(routedReceiptId, arms);
         if (attribution is not null)
         {
-            FindingRoundBatchCoordinator.RecordCoverage(this, goal, requestingTask, candidateSha,
-                findingRoundFingerprint, batchBasisIdentity, requestIdentity, finding.StableId, routedReceiptId);
-            decision = BuildActionableCandidateRedDecision(
-                goal, requestingTask, candidateSha, routedReceiptId, attribution);
+            decision = Route(routedReceiptId, attribution);
             return true;
         }
         if (CandidateRedBaselineInheritance.TryBuildUnattributableRedEscalation(
@@ -715,20 +731,4 @@ internal sealed partial class ConductorDriver
             candidate,
             SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm, revertPaths, mutation, repositoryTarget)(
                 candidate.Goal, request, stableSlotLease, cancellationToken));
-
-    private static bool IsCandidateOnlyRed(
-        string candidateSha,
-        IReadOnlyList<FindingEvidenceArmReceipt> arms,
-        out FindingEvidenceArmReceipt candidate)
-    {
-        candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate)!;
-        return candidate is
-            {
-                Accepted: true,
-                Disposition: FindingEvidenceArmDisposition.Red,
-                FailingTestIdentities.Count: > 0
-            } &&
-            string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-            arms.All(arm => arm.Arm != FindingEvidenceArm.Baseline);
-    }
 }

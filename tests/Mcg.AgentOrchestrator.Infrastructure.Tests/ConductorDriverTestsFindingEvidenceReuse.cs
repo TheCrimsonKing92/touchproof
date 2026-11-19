@@ -306,7 +306,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             id: "reused-red-needs-baseline",
             category: FindingCategory.TestEvidence,
             classes: ["ConductorDriverTestsFindingEvidenceReuse"]);
-        var focusedRuns = 0;
+        var focusedRequests = new List<string>();
         TaskId? retriedTaskId = null;
         var retries = 0;
         string? escalation = null;
@@ -314,8 +314,8 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         var interruptBeforeRerun = siblingOutcome == "resumed-missing-baseline";
         FocusedEvidenceRunResult RunEvidence(string request)
         {
-            focusedRuns++;
-            return focusedRuns switch
+            focusedRequests.Add(request);
+            return focusedRequests.Count switch
             {
                 1 => CandidateOnlyRedWithExecutedClasses(_artifactRoot, request, candidateSha, failingTest,
                     ["ConductorDriverTestsFindingEvidenceReuse"]),
@@ -388,14 +388,16 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         {
             var interrupted = Assert.Throws<IOException>(() => replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive));
             Assert.Equal("Interrupted before advisory candidate rerun.", interrupted.Message);
-            Assert.Equal(4, focusedRuns);
+            Assert.Equal(4, focusedRequests.Count);
             Assert.Equal(0, retries);
             Assert.Null(escalation);
             Assert.Contains(goal.Timeline, item => item.Message.Contains("disposition=baseline-arm-absent;", StringComparison.Ordinal));
         }
         replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(missingBaseline ? 5 : siblingOutcome == "none" ? 2 : 3, focusedRuns);
+        Assert.Equal(missingBaseline ? 5 : siblingOutcome == "none" ? 2 : 3, focusedRequests.Count);
+        if (missingBaseline)
+            Assert.Equal(focusedRequests[2], focusedRequests[4]);
         Assert.Equal(developer.Id, retriedTaskId);
         Assert.Equal(1, retries);
         Assert.Null(escalation);

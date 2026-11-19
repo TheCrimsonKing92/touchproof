@@ -116,6 +116,6 @@ internal sealed partial class ConductorDriver
     }
 
     private static bool CanDeferFindingEvidenceReconciliation(string candidateSha, FocusedEvidenceRunResult evidence) =>
-        evidence.Accepted && !IsCandidateOnlyRed(candidateSha,
+        evidence.Accepted && !FindingEvidenceCandidateAttribution.IsCandidateOnlyRed(candidateSha,
             (evidence.Arms ?? []).Select(CreateFindingEvidenceArmReceipt).ToArray(), out _);
 }
