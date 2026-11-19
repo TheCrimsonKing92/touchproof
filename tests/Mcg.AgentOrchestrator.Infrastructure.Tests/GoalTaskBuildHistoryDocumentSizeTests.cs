@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json.Nodes;
 
 public sealed class GoalTaskBuildHistoryDocumentSizeTests(ITestOutputHelper output)
 {
@@ -9,23 +9,29 @@ public sealed class GoalTaskBuildHistoryDocumentSizeTests(ITestOutputHelper outp
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskBuildHistoryTestSupport.Snapshot();
-        // Match the repository's task history serializer and timeline projection.
-        var legacy = new GoalTaskHistoryStore(GoalTaskHistoryTestFixture.Options)
-            .PrepareWrite(goal, goal.Timeline.Count).Document;
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
         var stored = fixture.RawGoal(goal.Id);
+        // Reconstruct the old build shape while retaining the other history projections.
+        var legacyDocument = JsonNode.Parse(stored)!;
+        var legacyTasks = legacyDocument["Tasks"]!.AsArray();
+        Assert.Equal(4, legacyTasks.Count);
+        for (var index = 0; index < legacyTasks.Count; index++)
+        {
+            var task = legacyTasks[index]!.AsObject();
+            Assert.True(task.Remove("WorkerBuildInvocationsInTable"));
+            task["WorkerBuildInvocations"] = JsonSerializer.SerializeToNode(
+                goal.Tasks[index].WorkerBuildInvocations, GoalTaskHistoryTestFixture.Options);
+        }
+        var legacy = legacyDocument.ToJsonString(GoalTaskHistoryTestFixture.Options);
         var legacyBytes = Encoding.UTF8.GetByteCount(legacy);
         var storedBytes = Encoding.UTF8.GetByteCount(stored);
         output.WriteLine($"Legacy inline document {legacyBytes} bytes. Row-backed document {storedBytes} bytes.");
         Assert.True(storedBytes < legacyBytes);
 
-        using var legacyDocument = JsonDocument.Parse(legacy);
         using var storedDocument = JsonDocument.Parse(stored);
-        var legacyTasks = legacyDocument.RootElement.GetProperty("Tasks").EnumerateArray().ToArray();
         var storedTasks = storedDocument.RootElement.GetProperty("Tasks").EnumerateArray().ToArray();
-        Assert.Equal(4, legacyTasks.Length);
-        Assert.Equal(legacyTasks.Length, storedTasks.Length);
-        Assert.All(legacyTasks, task => Assert.Equal(10, task.GetProperty("WorkerBuildInvocations").GetArrayLength()));
+        Assert.Equal(legacyTasks.Count, storedTasks.Length);
+        Assert.All(legacyTasks, task => Assert.Equal(10, task!["WorkerBuildInvocations"]!.AsArray().Count));
         Assert.All(storedTasks, task =>
         {
             var inline = Assert.Single(task.GetProperty("WorkerBuildInvocations").EnumerateArray());

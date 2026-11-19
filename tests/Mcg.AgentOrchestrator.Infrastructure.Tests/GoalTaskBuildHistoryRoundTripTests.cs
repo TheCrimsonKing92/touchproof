@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalTaskBuildHistoryRoundTripTests
 {
@@ -42,19 +43,48 @@ public sealed class GoalTaskBuildHistoryRoundTripTests
         }
     }
 
-    [Fact]
-    public async Task ArchivedDocumentStillHydratesReleasedInvocations()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ArchivePreservesBuildHistoryRowsAndDocument(bool compress)
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var goal = GoalTaskBuildHistoryTestSupport.Snapshot(tasks: 1, openSequence: null);
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
-        Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(GoalTaskHistoryTestFixture.At.AddDays(1)));
+        var stored = fixture.RawGoal(goal.Id);
+        using var document = JsonDocument.Parse(stored);
+        var storedTask = document.RootElement.GetProperty("Tasks")[0];
+        Assert.Equal(10, storedTask.GetProperty("WorkerBuildInvocationsInTable").GetInt32());
+        Assert.Empty(storedTask.GetProperty("WorkerBuildInvocations").EnumerateArray());
+        var rows = ReadBuildRows();
+        Assert.Equal(10, rows.Length);
+
+        Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(
+            GoalTaskHistoryTestFixture.At.AddDays(1), compressSnapshots: compress));
 
         using var stub = JsonDocument.Parse(fixture.RawGoal(goal.Id));
         Assert.True(stub.RootElement.GetProperty("IsMetadataOnly").GetBoolean());
-        var loaded = (await fixture.Repository.LoadGoalAsync(new(goal.Id)))!;
+        using var connection = fixture.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
+        command.Parameters.AddWithValue("$id", goal.Id);
+        var archive = await command.ExecuteScalarAsync();
+        if (compress)
+            Assert.IsType<byte[]>(archive);
+        else
+            Assert.IsType<string>(archive);
+        Assert.Equal(stored, GoalSnapshotArchiveCodec.Decode(archive));
+        Assert.Equal(rows, ReadBuildRows());
+
+        var loaded = Assert.IsType<GoalSnapshot>(await fixture.Repository.LoadGoalAsync(new(goal.Id)));
         Assert.Equal(GoalTaskHistoryTestFixture.Json(goal.Tasks[0].WorkerBuildInvocations),
-            GoalTaskHistoryTestFixture.Json(loaded.Tasks[0].WorkerBuildInvocations));
+            GoalTaskHistoryTestFixture.Json(Assert.Single(loaded.Tasks).WorkerBuildInvocations));
+        Assert.Equal(stored, fixture.Store.PrepareWrite(loaded, loaded.Timeline.Count).Document);
+
+        string[] ReadBuildRows() => fixture.Rows("""
+            SELECT sequence || '|' || entry_json FROM goal_task_build_history
+            ORDER BY task_id, sequence
+            """);
     }
 
     [Fact]
