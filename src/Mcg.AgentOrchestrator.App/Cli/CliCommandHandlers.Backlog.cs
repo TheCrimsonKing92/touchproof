@@ -158,17 +158,20 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 defaultValue: "",
                 "--body-file",
                 "--text-file") ?? "";
+            var bundledReason = CliBacklogFiling.ValidateAdd(parts, body);
+
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var dependencies = GetFlagValues(parts, "--depends-on")
                 .Select(prefix => ResolveBacklogDependencyTarget(context, store, prefix))
                 .ToArray();
             var item = dependencies.Length == 0
-                ? store.AddAsync(title, body).GetAwaiter().GetResult()
+                ? store.AddAsync(title, body, bundledReason: bundledReason).GetAwaiter().GetResult()
                 : store.AddWithDependenciesAsync(
                     title,
                     body,
                     dependencies,
-                    goalExists: id => context.Kernel.Goals.Any(goal => goal.Id.Value == id))
+                    goalExists: id => context.Kernel.Goals.Any(goal => goal.Id.Value == id),
+                    bundledReason: bundledReason)
                     .GetAwaiter()
                     .GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
@@ -203,7 +206,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         {
             if (parts.Count < 2)
                 throw new ArgumentException(CliCommandHelp.BacklogUpdateUsage);
-            var update = ParseBacklogItemUpdate(parts);
+            var update = CliBacklogFiling.ParseUpdate(parts, ResolveBacklogUpdateDescription);
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = ResolveBacklogItemByPrefix(store, parts[1]);
             var updated = store.UpdateAsync(item.Id, update).GetAwaiter().GetResult();
@@ -528,39 +531,6 @@ private static string RenderBacklogReadinessSuffix(
             return new BacklogPrerequisiteOwner(goal, ambiguity is not null);
         },
         goal => ResolveBacklogShowGoalLandingState(context, goal)).Suffix;
-
-private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> parts)
-{
-    var values = CliArgumentParser.ReadBacklogUpdateValues(parts);
-    var pin = values.ContainsKey("--next");
-    var unpin = values.ContainsKey("--no-next");
-    if (pin && unpin)
-        throw new ArgumentException("--next and --no-next are mutually exclusive.");
-    var title = values.GetValueOrDefault("--title");
-    var description = values.GetValueOrDefault("--description");
-    var priority = values.GetValueOrDefault("--priority") is { } rawPriority ? BacklogPriorityLevels.ParseOrThrow(rawPriority) : null;
-    var tags = values.GetValueOrDefault("--tags");
-    description = ResolveBacklogUpdateDescription(parts, values, description);
-    BacklogItemStatus? status = null;
-    if (values.GetValueOrDefault("--status") is { } statusValue)
-    {
-        if (!Enum.TryParse<BacklogItemStatus>(statusValue, ignoreCase: true, out var parsed))
-            throw new ArgumentException("--status must be one of: open, done, superseded.");
-        status = parsed;
-    }
-
-    if (title is null &&
-        description is null &&
-        priority is null &&
-        tags is null &&
-        status is null && !pin && !unpin)
-    {
-        throw new ArgumentException(CliCommandHelp.BacklogUpdateUsage);
-    }
-
-    return new BacklogItemUpdate(title, description, priority, tags, status,
-        PinnedAt: pin ? DateTimeOffset.UtcNow : null, PinnedAtSpecified: pin || unpin);
-}
 
 private static bool IsBacklogListingStatus(string? status) =>
     status is not null &&

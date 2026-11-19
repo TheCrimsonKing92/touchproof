@@ -51,8 +51,8 @@ internal static class CliCommandHelp
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogPremiseCheckUsage = "Usage: backlog-premise-check [--min-age-days <n>]";
     public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
-    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
-    public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <" + BacklogPriorityLevels.UsageLevels + ">] [--tags <csv>] [--status <open|done|superseded>] [--next | --no-next]";
+    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--bundled-reason <text>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--bundled-reason <text>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--bundled-reason <text>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--bundled-reason <text>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
+    public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--bundled-reason <text>] [--priority <" + BacklogPriorityLevels.UsageLevels + ">] [--tags <csv>] [--status <open|done|superseded>] [--next | --no-next]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix> [--summary] [--json]";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
@@ -467,12 +467,12 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
         "Add a backlog item. Prints advisory similarity pointers unless suppressed.",
-        ["--title", "--text-file", "--body-file", "--depends-on", "--no-similar", "--epic", "--help", "-h"]);
+        ["--title", "--text-file", "--body-file", "--bundled-reason", "--depends-on", "--no-similar", "--epic", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
         "Update user-settable backlog item fields by id prefix.",
-        ["--title", "--description", "--text-file", "--body-file", "--priority", "--tags", "--status", "--next", "--no-next", "--help", "-h"]);
+        ["--title", "--description", "--text-file", "--body-file", "--bundled-reason", "--priority", "--tags", "--status", "--next", "--no-next", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogShow = new(
         BacklogShowUsage,
@@ -955,7 +955,7 @@ internal static class CliCommandHelp
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
             "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by",
-            "--home-build-blocked-commit", "--override-draft-checks"
+            "--home-build-blocked-commit", "--override-draft-checks", "--bundled-reason"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
