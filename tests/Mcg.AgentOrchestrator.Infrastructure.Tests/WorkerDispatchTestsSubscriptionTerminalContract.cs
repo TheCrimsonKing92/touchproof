@@ -2,7 +2,6 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-[Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsSubscriptionTerminalContract : WorkerDispatchTestSupport
 {
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_subscription_Reviewer_introduction_requires_terminal_contract")]
