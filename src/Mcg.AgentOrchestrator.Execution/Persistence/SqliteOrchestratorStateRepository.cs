@@ -37,6 +37,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
     private static readonly GoalSnapshotArchive SnapshotArchive = new(SerializerOptions);
     private static readonly GoalTaskHistoryStore TaskHistoryStore = new(SerializerOptions);
+    private static readonly GoalTaskBuildHistoryStore TaskBuildHistoryStore = new(SerializerOptions);
     internal static JsonSerializerOptions HistorySerializerOptions => SerializerOptions;
     private const string GoalSnapshotArchiveSchemaSql = """
         CREATE TABLE IF NOT EXISTS goal_snapshot_archive (
@@ -3478,9 +3479,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         }
 
         var timeline = await new GoalTimelineStore(SerializerOptions).WriteAsync(conn, goal, cancellationToken);
-        var prepared = TaskHistoryStore.PrepareWrite(goal, timeline.MarkerCount);
+        var buildHistory = TaskBuildHistoryStore.PrepareWrite(goal);
+        var prepared = TaskHistoryStore.PrepareWrite(buildHistory.ProjectedGoal, timeline.MarkerCount);
         var json = prepared.Document;
         var historyChanged = await TaskHistoryStore.WriteAsync(conn, prepared, cancellationToken);
+        var buildHistoryChanged = await TaskBuildHistoryStore.WriteAsync(conn, buildHistory, cancellationToken);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $$"""
             INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
@@ -3504,7 +3507,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         cmd.Parameters.AddWithValue("$json", json);
         cmd.Parameters.AddWithValue("$version", version is null ? DBNull.Value : version.Value);
         cmd.Parameters.AddWithValue("$skip_unchanged", skipUnchanged ? 1 : 0);
-        cmd.Parameters.AddWithValue("$history_changed", historyChanged || timeline.Changed ? 1 : 0);
+        cmd.Parameters.AddWithValue("$history_changed", historyChanged || buildHistoryChanged || timeline.Changed ? 1 : 0);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
         return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
     }

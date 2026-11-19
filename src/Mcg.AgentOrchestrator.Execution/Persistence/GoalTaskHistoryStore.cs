@@ -119,6 +119,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 {
+    private readonly GoalTaskBuildHistoryStore _buildHistory = new(options);
+
     internal const string VerificationProperty = "VerificationHistory";
     internal const string DispatchProperty = "DispatchHistory";
     internal const string MarkerProperty = "HistoryInTable";
@@ -613,7 +615,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                     ? history.LatestDispatch.Deserialize<TaskDispatchSnapshot>(options) : task.LastDispatch
             });
         }
-        return snapshot with { Tasks = tasks };
+        return await _buildHistory.HydrateAsync(connection, snapshot with { Tasks = tasks }, token);
     }
 
     private sealed record HistoryDocument(bool IsMetadataOnly, IReadOnlyList<HistoryTask?>? Tasks,
