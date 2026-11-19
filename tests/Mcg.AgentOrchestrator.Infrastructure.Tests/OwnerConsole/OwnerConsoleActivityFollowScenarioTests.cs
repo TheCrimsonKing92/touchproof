@@ -294,7 +294,7 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
             await following.View.HandleKeyAsync(Key.Tab);
             await inspecting.View.HandleKeyAsync(Key.Tab);
             Assert.Equal(pane, following.View.FocusedPane);
-            const string suffix = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  : command  ? help  q quit";
+            const string suffix = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  s settings  : command  ? help  q quit";
             var hint = (pane == OwnerConsolePane.Decisions ? "Enter detail  a accept default  r answer" : "Enter goal detail") + suffix;
             foreach (var key in new[] { Key.End, Key.Home, Key.CursorDown, Key.PageDown, Key.CursorUp, Key.PageUp })
             {
@@ -376,7 +376,7 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
         Assert.Equal(OwnerConsoleScope.Global, follow.Scope);
         Assert.Equal(OwnerConsoleCommandOwner.View, follow.Owner);
         Assert.Null(follow.Key);
-        Assert.Equal(new[] { 'a', 'e', 'g', 'l', 'q', 'r' }, OwnerConsoleBindings.Commands
+        Assert.Equal(new[] { 'a', 'e', 'g', 'l', 'q', 'r', 's' }, OwnerConsoleBindings.Commands
             .Where(row => row.Key is { } key && char.IsLetter(key)).Select(row => row.Key!.Value).Distinct().Order());
         var help = Assert.Single(OwnerConsoleKeyHints.HelpText.Split('\n'), line => line.StartsWith(":follow: ", StringComparison.Ordinal));
         Assert.Contains("Home in ACTIVITY", help);
