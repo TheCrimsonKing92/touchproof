@@ -1457,6 +1457,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
                 var conductEventLogWriter = new ConductEventLogWriter(context.Workspace.ConductEventsLogPath);
+                using var processErrorModeObserver = new ProcessErrorModeEventObserver(conductEventLogWriter);
                 var reconcileSweepOptions = ReconcileSweepConfiguration.Load(AppContext.BaseDirectory);
                 var reconcileSweepCoordinator = new ReconcileSweepRemediationCoordinator(
                     new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath),
@@ -1676,6 +1677,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             : Path.GetFileName(conductorOutputLogPath) + ".crash.log");
                 try
                 {
+                    ProcessErrorModeRepairLog.Observer = processErrorModeObserver.Observe;
                     using var gitCensus = GitLaunchWindowCensus.Install();
                     var loopSummary = new ConductorBatchLoop(
                         loadTrxCoherenceVerdicts: directory => { TrxCoherenceVerdictStore.Load(directory); TrxCoherenceVerdictStore.EnableAppend(directory); loopSetup.Dispose(); },
@@ -1754,6 +1756,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 }
                 finally
                 {
+                    ProcessErrorModeRepairLog.Observer = null;
                     LoopExitMaintenanceJoin.JoinAsync(
                         maintenanceCadence, stateLogCheck, failureClustersDaily,
                         conductEventLogWriter).GetAwaiter().GetResult();
