@@ -30,7 +30,14 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
 
     internal Action? Invalidate { get; set; }
     private OwnerConsoleProviderConnectionState? Selected => _profiles.Count == 0 ? null : _profiles[_selected];
-    public string Title => "Provider connections";
+    internal const string TabTitle = "Provider connections";
+    private const string BrowseKeys = "Up/Down profile  c check";
+    private const string SignInKey = "  s sign in";
+    private const string DeviceCodeKey = "  d device code";
+    private const string ReturnKeys = "  t return  x stop waiting";
+    private const string ReloadKey = "  r reload";
+    internal const string HelpKeys = BrowseKeys + SignInKey + DeviceCodeKey + ReturnKeys + ReloadKey;
+    public string Title => TabTitle;
     public bool Editing => false;
     public int SelectedLine => _profiles.Take(_selected).Sum(profile => LinesFor(profile).Count());
     public IReadOnlyList<string> Lines => _profiles.Count > 0
@@ -47,12 +54,12 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         {
             var actions = Selected switch
             {
-                { } profile when _signIn.CanReportReturn(profile) => "  t return  x stop waiting",
+                { } profile when _signIn.CanReportReturn(profile) => ReturnKeys,
                 { } profile when _signIn.CanSignIn(profile) =>
-                    _signIn.DeviceCodeAvailable(profile) ? "  s sign in  d device code" : "  s sign in",
+                    _signIn.DeviceCodeAvailable(profile) ? SignInKey + DeviceCodeKey : SignInKey,
                 _ => ""
             };
-            return $"Up/Down profile  c check{actions}  r reload  Left/Right tab  Esc/q back";
+            return BrowseKeys + actions + ReloadKey + "  Left/Right tab  Esc/q back";
         }
     }
 
