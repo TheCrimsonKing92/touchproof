@@ -208,12 +208,15 @@ public static class ProviderLimitSignals
             }
         }
 
-        var latestAvailableDispatch = observations
+        var availableCompletions = observations
             .Where(observation =>
                 HasAvailabilityEvidence(observation.Verification) &&
                 ProviderBudgetHoldSchedules.IsCurrentDispatch(goalList, requestedBinding.Key,
                     observation.Task, observation.Dispatch))
-            .Select(observation => (DateTimeOffset?)observation.Dispatch.DispatchedAt)
+            .ToLookup(observation => (observation.Task, observation.Dispatch),
+                observation => observation.Verification.CompletedAt);
+        var latestAvailableDispatchStart = availableCompletions
+            .Select(attempt => (DateTimeOffset?)attempt.Key.Dispatch.DispatchedAt)
             .Max();
         var reset = ProviderBudgetHoldSchedules.LatestReset(goalList, requestedBinding.Key);
         var checkedAvailabilityAt = goalList.SelectMany(goal => goal.Timeline.Select(evt => (Goal: goal, Event: evt)))
@@ -229,10 +232,13 @@ public static class ProviderLimitSignals
         foreach (var observation in observations)
         {
             var (goal, task, verification, dispatch, evidence) = observation;
+            // A later verified result can supersede the refusal from its own dispatch.
+            // A different dispatch must have started at or after hold placement.
             if (!evidence.Confirmed ||
                 HasExplicitBudgetRecoveryForBinding(task, requestedBinding.Key, verification.CompletedAt) ||
                 checkedAvailabilityAt >= verification.CompletedAt ||
-                latestAvailableDispatch >= verification.CompletedAt)
+                latestAvailableDispatchStart >= verification.CompletedAt ||
+                availableCompletions[(task, dispatch)].Any(completedAt => completedAt > verification.CompletedAt))
             {
                 continue;
             }
