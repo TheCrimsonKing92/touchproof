@@ -975,15 +975,21 @@ public static class DispatchProcessHost
         File.WriteAllText(shimPath, contents.Replace("\r\n", "\n", StringComparison.Ordinal));
     }
 
-    internal static void RunLowIntegrityLaunchPreflight(ProcessStartInfo workerStartInfo, DispatchRunParameters parameters)
+    internal static void RunLowIntegrityLaunchPreflight(
+        ProcessStartInfo workerStartInfo,
+        DispatchRunParameters parameters,
+        Func<WorktreeWriteProbe.Launch, WorkerProcessRunResult>? launchWriteProbe = null,
+        bool? isWindows = null)
     {
-        if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
+        if (!parameters.SandboxLowIntegrity || !(isWindows ?? OperatingSystem.IsWindows()))
         {
             return;
         }
 
         RunLowIntegrityLaunchPreflightCommand("git", parameters.WorkingDirectory, workerStartInfo.Environment["PATH"]);
         RunLowIntegrityLaunchPreflightCommand("dotnet", parameters.WorkingDirectory, workerStartInfo.Environment["PATH"]);
+        if (parameters.SandboxWorktreeWritable)
+            WorktreeWriteProbe.Run(workerStartInfo, parameters, launchWriteProbe);
     }
 
     private static void RunLowIntegrityLaunchPreflightCommand(string commandName, string workingDirectory, string? path)
@@ -1016,25 +1022,37 @@ public static class DispatchProcessHost
         }
         startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-        using var process = HandleListProcessLauncher.Start(startInfo);
-        if (process is null)
-        {
-            throw new InvalidOperationException($"Low-integrity launch preflight failed to start '{commandName} --version'.");
-        }
-
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit(30_000))
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException($"Low-integrity launch preflight timed out running '{commandName} --version'.");
-        }
-
-        if (process.ExitCode != 0)
+        var description = $"{commandName} --version";
+        var result = RunLaunchPreflightChild(startInfo, description);
+        if (result.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Low-integrity launch preflight failed for '{commandName} --version' with exit {process.ExitCode}: {stderr.Trim()} {stdout.Trim()}".Trim());
+                $"Low-integrity launch preflight failed for '{description}' with exit {result.ExitCode}: {result.StandardError.Trim()} {result.StandardOutput.Trim()}".Trim());
         }
+    }
+
+    internal static WorkerProcessRunResult RunLaunchPreflightChild(ProcessStartInfo startInfo, string description)
+    {
+        using var process = HandleListProcessLauncher.Start(startInfo);
+        var timeout = TimeSpan.FromSeconds(30);
+        using var cancellation = new CancellationTokenSource();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellation.Token);
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellation.Token);
+        var exitTask = process.WaitForExitAsync(cancellation.Token);
+        try
+        {
+            Task.WhenAll(exitTask, stdoutTask, stderrTask).WaitAsync(timeout).GetAwaiter().GetResult();
+        }
+        catch (TimeoutException)
+        {
+            cancellation.Cancel();
+            try { process.Kill(entireProcessTree: true); } catch { }
+            try { _ = process.WaitForExit(5_000); } catch { }
+            throw new TimeoutException($"Low-integrity launch preflight timed out running '{description}'.");
+        }
+
+        return new WorkerProcessRunResult(process.ExitCode,
+            stdoutTask.GetAwaiter().GetResult(), stderrTask.GetAwaiter().GetResult());
     }
 
     internal static string? ResolveCommandFromPath(string commandName, string? path)
@@ -1492,6 +1510,7 @@ public static void DropToLow() {
         internal Action<ProcessStartInfo>? BeforeTaskIntentAdmission { get; init; }
         internal Action<Process>? AfterTaskIntentAdmission { get; init; }
         internal Func<Process, SpawnProcessIdentityReadResult>? ReadTaskIntentLaunchIdentity { get; init; }
+        internal Func<WorktreeWriteProbe.Launch, WorkerProcessRunResult>? LaunchWriteProbe { get; init; }
     }
 
     internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks,
@@ -1538,6 +1557,7 @@ public static void DropToLow() {
         var stderrSessionCapture = new ProviderSessionCaptureState();
         var prepStarted = false;
         var prepExitWritten = false;
+        string? prepFailureReason = null;
         Process? worker = null;
         HandleListLaunchedProcess? workerLaunch = null;
         OwnedProcessGroup? workerGroup = null;
@@ -1872,7 +1892,8 @@ public static void DropToLow() {
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
                 lastProgressAt = DateTimeOffset.UtcNow.ToString("o"),
                 state,
-                exitFileExists = !string.IsNullOrWhiteSpace(parameters.PrepExitCodePath) && File.Exists(parameters.PrepExitCodePath)
+                exitFileExists = !string.IsNullOrWhiteSpace(parameters.PrepExitCodePath) && File.Exists(parameters.PrepExitCodePath),
+                failureReason = prepFailureReason
             };
 
             var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
@@ -2009,7 +2030,7 @@ public static void DropToLow() {
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
             WritePrepHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
             var preflightStartedAt = DateTimeOffset.UtcNow;
-            RunLowIntegrityLaunchPreflight(startInfo, parameters);
+            RunLowIntegrityLaunchPreflight(startInfo, parameters, heartbeatHooks?.LaunchWriteProbe);
             WriteSandboxPrepEvent(parameters, "launch-preflight", preflightStartedAt, DateTimeOffset.UtcNow - preflightStartedAt);
             prepHeartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
             CompletePrep(0);
@@ -2136,6 +2157,7 @@ public static void DropToLow() {
         {
             exitCode = 1;
             prepHeartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            prepFailureReason = (ex as WorkerSandboxRefusedException)?.ReasonCode;
             CompletePrep(1);
             // Capture launch/setup failures (e.g. launch-as-user under the OS sandbox) — otherwise the
             // worker never starts and nothing explains why (no worker means no redirected stderr).

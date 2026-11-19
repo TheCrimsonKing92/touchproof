@@ -1692,7 +1692,8 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "exit.txt"),
                 null,
                 DisableSharedCompilation: false,
-                SandboxLowIntegrity: true);
+                SandboxLowIntegrity: true,
+                SandboxWorktreeWritable: false);
 
             DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters);
 
@@ -1733,7 +1734,8 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "exit.txt"),
                 null,
                 DisableSharedCompilation: false,
-                SandboxLowIntegrity: true);
+                SandboxLowIntegrity: true,
+                SandboxWorktreeWritable: false);
 
             DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters);
 
@@ -1782,6 +1784,180 @@ public sealed class DispatchProcessHostTests
         {
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
+    }
+
+    // Boundary contract: docs/operator-runbook.md#worktree-write-boundary-invariant.
+    [Xunit.Fact]
+    public void WriteProbe_BoundaryHeld_PreflightCompletesAndSentinelAbsent()
+    {
+        WorktreeWriteProbe.Launch? launched = null;
+        WithWriteProbePreflight((startInfo, parameters, _) =>
+            DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters, request =>
+            {
+                Assert.Null(launched);
+                launched = request;
+                return SimulateWriteProbeChild(request);
+            }, isWindows: true));
+
+        AssertProbeArtifactsRemoved(Assert.IsType<WorktreeWriteProbe.Launch>(launched));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("inside-write-denied")]
+    [Xunit.InlineData("outside-write-allowed")]
+    [Xunit.InlineData("sentinel-not-cleaned")]
+    public void WriteProbe_FailureMode_ThrowsTypedReasonCode(string reason)
+    {
+        WithWriteProbePreflight((startInfo, parameters, _) =>
+        {
+            WorktreeWriteProbe.Launch? launched = null;
+            var error = Assert.Throws<WorkerSandboxRefusedException>(() =>
+                DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters, request =>
+                {
+                    launched = request;
+                    return SimulateWriteProbeChild(request, reason);
+                }, isWindows: true));
+
+            Assert.Equal(reason, error.ReasonCode);
+            var request = Assert.IsType<WorktreeWriteProbe.Launch>(launched);
+            Assert.Equal(reason == "outside-write-allowed" ? request.OutsidePath : request.SentinelPath, error.Path);
+            AssertProbeArtifactsRemoved(request);
+        });
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("inside-write-denied")]
+    [Xunit.InlineData("outside-write-allowed")]
+    [Xunit.InlineData("sentinel-not-cleaned")]
+    public void WriteProbeFailure_ReasonCodeInPrepHeartbeat_PrepFails(string reason)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Requires Windows Low-integrity dispatch preparation.");
+        Assert.SkipUnless(GetCurrentProcessIntegrityRid() >= MediumIntegrityRid,
+            "Requires a Medium integrity host to prepare a sandboxed linked worktree.");
+
+        var root = Directory.CreateTempSubdirectory("write-probe-prep-").FullName;
+        try
+        {
+            var worktree = Path.Combine(root, "worktree");
+            CreateLinkedWorktree(Path.Combine(root, "repo"), worktree);
+            var providerMarker = Path.Combine(worktree, "provider-started.txt");
+            var prepHeartbeatPath = Path.Combine(root, "prep-heartbeat.json");
+            var prepExitPath = Path.Combine(root, "prep-exit.txt");
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Codex) with
+            {
+                Command = $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(providerMarker)}' -Value started",
+                PrepHeartbeatPath = prepHeartbeatPath,
+                PrepExitCodePath = prepExitPath
+            };
+            WorktreeWriteProbe.Launch? launched = null;
+            var exitCode = DispatchProcessHost.RunWithHeartbeatHooksForTests(parameters, new()
+            {
+                LaunchWriteProbe = request =>
+                {
+                    launched = request;
+                    return SimulateWriteProbeChild(request, reason);
+                }
+            });
+
+            Assert.True(launched is not null, File.ReadAllText(parameters.StderrPath));
+            Assert.Equal(1, exitCode);
+            Assert.Equal("1", File.ReadAllText(prepExitPath).Trim());
+            using var heartbeat = JsonDocument.Parse(File.ReadAllText(prepHeartbeatPath));
+            Assert.Equal("failed", heartbeat.RootElement.GetProperty("state").GetString());
+            Assert.Equal(reason, heartbeat.RootElement.GetProperty("failureReason").GetString());
+            Assert.False(File.Exists(providerMarker));
+            AssertProbeArtifactsRemoved(launched);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void WriteProbe_ReadOnlyWorktree_LaunchesNoProbeChild()
+    {
+        WithWriteProbePreflight((startInfo, parameters, marker) =>
+        {
+            DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters with { SandboxWorktreeWritable = false },
+                _ => throw new InvalidOperationException("A read-only worktree launched a write probe."), isWindows: true);
+
+            Assert.Equal(new[] { "git --version", "dotnet --version" }, File.ReadAllLines(marker));
+        });
+    }
+
+    [Xunit.Fact]
+    public void WriteProbe_NonWindowsPlatform_LaunchesNoProbeChild()
+    {
+        WithWriteProbePreflight((startInfo, parameters, marker) =>
+        {
+            DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters,
+                _ => throw new InvalidOperationException("A non-Windows platform launched a write probe."), isWindows: false);
+
+            Assert.False(File.Exists(marker));
+        });
+    }
+
+    private static void WithWriteProbePreflight(Action<ProcessStartInfo, DispatchProcessHost.DispatchRunParameters, string> run)
+    {
+        var root = Directory.CreateTempSubdirectory("write-probe-preflight-").FullName;
+        try
+        {
+            var worktree = Directory.CreateDirectory(Path.Combine(root, "worktree")).FullName;
+            var shimDirectory = Directory.CreateDirectory(Path.Combine(root, "bin")).FullName;
+            var marker = Path.Combine(root, "version-commands.txt");
+            foreach (var command in new[] { "git", "dotnet" })
+            {
+                if (OperatingSystem.IsWindows())
+                    WriteMarkerShim(Path.Combine(shimDirectory, command + ".cmd"), marker, command);
+                else
+                {
+                    var shim = Path.Combine(shimDirectory, command);
+                    var quotedMarker = marker.Replace("'", "'\"'\"'", StringComparison.Ordinal);
+                    File.WriteAllText(shim, $"#!/bin/sh\necho '{command} --version' >> '{quotedMarker}'\n");
+                    File.SetUnixFileMode(shim, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                }
+            }
+
+            var startInfo = CreateSandboxStartInfo(worktree);
+            startInfo.Environment["PATH"] = shimDirectory;
+            run(startInfo, CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Codex), marker);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static WorkerProcessRunResult SimulateWriteProbeChild(WorktreeWriteProbe.Launch request, string? failure = null)
+    {
+        Assert.Equal(request.StartInfo.WorkingDirectory, Path.GetDirectoryName(request.SentinelPath));
+        Assert.True(Directory.Exists(Path.GetDirectoryName(request.OutsidePath)));
+        Assert.False(File.Exists(request.SentinelPath));
+        var insideDenied = failure == "inside-write-denied";
+        if (!insideDenied)
+        {
+            File.WriteAllText(request.SentinelPath, "probe payload");
+            if (failure != "sentinel-not-cleaned")
+                File.Delete(request.SentinelPath);
+        }
+        if (failure == "outside-write-allowed")
+            File.WriteAllText(request.OutsidePath, "unexpected write");
+
+        var report = JsonSerializer.Serialize(new
+        {
+            inside = insideDenied ? "denied" : "ok",
+            readback = insideDenied ? "skipped" : "match",
+            cleanup = insideDenied ? "skipped" : "removed",
+            outside = failure == "outside-write-allowed" ? "allowed" : "denied"
+        });
+        return new WorkerProcessRunResult(0, WorktreeWriteProbe.ResultPrefix + report, "");
+    }
+
+    private static void AssertProbeArtifactsRemoved(WorktreeWriteProbe.Launch request)
+    {
+        Assert.False(File.Exists(request.SentinelPath));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(request.OutsidePath)));
     }
 
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_exit_file_when_grandchild_holds_pipe_after_worker_exits")]
