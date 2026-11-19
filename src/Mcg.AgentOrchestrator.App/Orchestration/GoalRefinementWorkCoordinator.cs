@@ -243,17 +243,18 @@ internal static partial class GoalRefinementWorkCoordinator
                     }
 
                     var refinedSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
+                    var refinedSpec = RefinedSpecSnapshotAccess.GetCurrent(refinedSnapshot);
                     // Snapshot records contain fresh lists, so record equality does not compare their contents.
                     var changed = !string.Equals(
-                            JsonSerializer.Serialize(baselineSnapshot.RefinedSpec, JsonOptions),
-                            JsonSerializer.Serialize(refinedSnapshot.RefinedSpec, JsonOptions),
+                            JsonSerializer.Serialize(RefinedSpecSnapshotAccess.GetCurrent(baselineSnapshot), JsonOptions),
+                            JsonSerializer.Serialize(refinedSpec, JsonOptions),
                             StringComparison.Ordinal) ||
                         baselineSnapshot.RefinedSpecVersions.Count != refinedSnapshot.RefinedSpecVersions.Count ||
                         baselineSnapshot.Timeline.Count != refinedSnapshot.Timeline.Count;
                     if (!changed)
                         return OrchestratorStateOutboxProcessingResult.Completed;
 
-                    if (refinedSnapshot.RefinedSpec?.OpenQuestions.Any(question =>
+                    if (refinedSpec?.OpenQuestions.Any(question =>
                             string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase)) == true)
                     {
                         phase = "emit-clarification-event";
@@ -273,7 +274,7 @@ internal static partial class GoalRefinementWorkCoordinator
                                     $"Goal '{goalId.Value}' disappeared before refined-spec attachment.");
                             }
 
-                            if (!synchronizingAnswers && current.RefinedSpec is not null)
+                            if (!synchronizingAnswers && RefinedSpecSnapshotAccess.GetCurrent(current) is not null)
                                 return Task.FromResult((false, current, false));
 
                             staleBrief = AuthoritativeBriefVersion(current) != producedForBriefVersion;
@@ -293,7 +294,9 @@ internal static partial class GoalRefinementWorkCoordinator
                             }
                             var merged = current with
                             {
-                                RefinedSpec = refinedSnapshot.RefinedSpec,
+                                RefinedSpec = RefinedSpecSnapshotAccess.UsesLegacyTopLevel(refinedSnapshot.RefinedSpecVersions.Count)
+                                    ? refinedSpec
+                                    : null,
                                 RefinedSpecVersions = refinedSnapshot.RefinedSpecVersions,
                                 CriterionEvidenceObligations = obligations,
                                 ClarificationRoundCount = Math.Max(

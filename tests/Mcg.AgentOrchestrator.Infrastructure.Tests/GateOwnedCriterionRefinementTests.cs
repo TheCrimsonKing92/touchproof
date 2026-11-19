@@ -242,7 +242,7 @@ public sealed class GateOwnedCriterionRefinementTests
         Xunit.Assert.Equal(goal.CriterionEvidenceObligations, restored.CriterionEvidenceObligations);
 
         var goalSnapshot = Xunit.Assert.Single(snapshot.Goals);
-        var currentSpec = goalSnapshot.RefinedSpec!;
+        var currentSpec = RefinedSpecSnapshotAccess.GetCurrent(goalSnapshot)!;
         var oldSpec = new RefinedSpecSnapshot(
             currentSpec.BehavioralContract,
             currentSpec.AcceptanceCriteria,
