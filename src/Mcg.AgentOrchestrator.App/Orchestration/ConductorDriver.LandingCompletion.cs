@@ -143,15 +143,11 @@ internal sealed partial class ConductorDriver
                 TryDisposeExcludedAcceptanceFailures(
                     goal, goalPrefix, policy, acceptance, apparatusRedReading,
                     ref retryDisposition, out attemptedAllFlakyDisposition) is { } excludedResult)
-            {
                 return excludedResult;
-            }
 
             if (!attemptedAllFlakyDisposition &&
                 TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
-            {
                 return apparatusRed;
-            }
 
             if (retryDisposition.ExcludedFailures.Count > 0)
             {
@@ -340,13 +336,9 @@ internal sealed partial class ConductorDriver
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
         var (branch, main) = (acceptance.BranchHeadSha, acceptance.MainHeadSha);
-        if (acceptance.Passed || _executionDirectory is null ||
+        if (acceptance.Passed || _executionDirectory is null || acceptance.AttemptId is not { Length: > 0 } attemptId ||
             string.IsNullOrWhiteSpace(branch) || string.IsNullOrWhiteSpace(main) ||
-            acceptance.FailedChecks?.Any(name => !IsBlockingTimeoutCheck(name)) == true ||
-            acceptance.UnmetCriteria.Any(check =>
-                (!check.Passed && TimeoutLane(check.Name) is null) ||
-                check.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) == true ||
-                check.FailingTestAttributions?.Any(attribution => !string.IsNullOrWhiteSpace(attribution.TestIdentity)) == true))
+            !acceptance.UnmetCriteria.Any(check => !check.Passed && !check.Advisory && IsBlockingTimeoutCheck(check.Name)))
             return null;
 
         const string decisionStage = "acceptance-timeout-recovery";
@@ -355,27 +347,36 @@ internal sealed partial class ConductorDriver
         try
         {
             attempts = GoalOperationJournal.ReadStrict(_executionDirectory, goal.Id).Entries
-                .Where(entry => entry.AcceptanceOutcome is timeout or "passed" or "gate-passed" or "failed").ToArray();
+                .Where(entry => entry.AcceptanceOutcome is "passed" or "gate-passed" or "failed" or "aborted:state-guard" ||
+                    entry.AcceptanceOutcome?.StartsWith("blocked:", StringComparison.Ordinal) == true).ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or FormatException)
         { return null; }
-
         if (attempts.LastOrDefault() is not { AcceptanceOutcome: timeout, FailedCheckNames: { } recorded } current ||
             !current.HasCandidate(branch, main) ||
             !recorded.ToHashSet(StringComparer.Ordinal).SetEquals(acceptance.RequiredUnmetCriteria.Select(check => check.Name)))
             return null;
+        var attemptKey = TimeoutGateAttemptKey(current);
+        if (SelectTaskForCriterionRetry(goal) is { } noteTask)
+            _recordTaskNote(goal.Id, noteTask.Id, $"ACCEPTANCE_TIMEOUT_ATTEMPT: {attemptKey}{attemptId}");
+        if (acceptance.FailedChecks?.Any(name => !IsBlockingTimeoutCheck(name)) == true ||
+            acceptance.UnmetCriteria.Any(check =>
+                (!check.Passed && TimeoutLane(check.Name) is null) ||
+                check.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) == true ||
+                check.FailingTestAttributions?.Any(attribution => !string.IsNullOrWhiteSpace(attribution.TestIdentity)) == true))
+            return null;
 
         var checks = acceptance.UnmetCriteria.Where(check => !check.Passed).Select(check => check.Name).ToArray();
-        var attemptId = acceptance.AttemptId ?? "unknown";
         if (attempts.Length > 1 && attempts[^2] is { AcceptanceOutcome: timeout, FailedCheckNames: { } priorChecks } prior &&
             prior.HasCandidate(branch, main) &&
             checks.Join(priorChecks, TimeoutLane, TimeoutLane, (check, previous) => (Current: check, Prior: previous),
                 StringComparer.OrdinalIgnoreCase).Distinct().ToArray() is { Length: > 0 } repeated)
         {
-            var notePrefix = TimeoutRegateNotePrefix(prior);
+            var priorKey = TimeoutGateAttemptKey(prior);
             var priorId = goal.Timeline.LastOrDefault(evt => evt.Kind == ProgressKind.TaskNote &&
-                evt.Message.StartsWith(notePrefix, StringComparison.Ordinal))?.Message[notePrefix.Length..].Split(' ', 2)[0]
-                ?? $"unrecorded (journal start={prior.At:O})";
+                evt.Message.StartsWith("ACCEPTANCE_TIMEOUT_", StringComparison.Ordinal) && evt.Message.Contains(priorKey, StringComparison.Ordinal))
+                ?.Message.Split(priorKey, 2)[1].Split(' ', 2)[0];
+            if (priorId is null or "" or "unknown") return null;
             var details = repeated.Select(pair => $"attempt {priorId} ({pair.Prior}), attempt {attemptId} ({pair.Current})");
             var escalationReason = $"ACCEPTANCE_TIMEOUT_CONSECUTIVE: candidate {branch}/{main} timed out on consecutive gate attempts. " +
                 string.Join("; ", details);
@@ -389,8 +390,7 @@ internal sealed partial class ConductorDriver
         if (attempts.SkipLast(1).Any(entry => entry.AcceptanceOutcome == timeout &&
             (!entry.HasCandidatePair || entry.HasCandidate(branch, main))))
             return null;
-
-        var reason = $"{TimeoutRegateNotePrefix(current)}{attemptId} ({string.Join(", ", checks)}). " +
+        var reason = $"ACCEPTANCE_TIMEOUT_REGATE: {attemptKey}{attemptId} ({string.Join(", ", checks)}). " +
             "Re-gating the unchanged candidate on the next conduct tick.";
         RestoreVerifiedAfterAcceptanceClassification(goal, reason);
         if (SelectTaskForCriterionRetry(goal) is { } task)
@@ -401,8 +401,8 @@ internal sealed partial class ConductorDriver
                 [new("branchSha", branch), new("mainSha", main), new("attemptId", attemptId)]) });
     }
 
-    private static string TimeoutRegateNotePrefix(GoalOperationJournalEntry entry) =>
-        $"ACCEPTANCE_TIMEOUT_REGATE: candidate={entry.BranchHeadSha}/{entry.MainHeadSha} started={entry.At:O} attempt=";
+    private static string TimeoutGateAttemptKey(GoalOperationJournalEntry entry) =>
+        $"candidate={entry.BranchHeadSha}/{entry.MainHeadSha} started={entry.At:O} attempt=";
 
     private static string? TimeoutLane(string name) =>
         FailedGoalTimedOutSelectionRerunRule.TryParseSelection(name, out var lane) ? lane : null;

@@ -166,8 +166,10 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    [Fact]
-    public void ConsecutiveSameLaneTimeoutRoutesToOperatorWithoutWorkerDispatch()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConsecutiveSameLaneTimeoutRoutesToOperatorWithoutWorkerDispatch(bool priorTimeoutHasFailingTest)
     {
         var root = ConductorDriverTests.CreateTempDirectory();
         try
@@ -175,21 +177,40 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
             var (kernel, goal) = VerifiedGoal();
             var attempt = 0;
             string? escalation = null;
+            var policy = ConductorAutonomyPolicy.Conservative with { AutomaticRetryOperatorRoutingHoldSeconds = 0 };
+            var firstTimeout = priorTimeoutHasFailingTest ? TimeoutCheckWithFailingIdentity() : TimeoutCheck();
             const string secondTimeout = "acceptance-check-timeout: focused-reverse-dependent-infrastructure-tests elapsed=42m budget=42m";
             var driver = MakeDriver(
                 executionDirectory: root,
                 runAcceptanceSummary: candidate => RecordTimeout(root, candidate, ++attempt,
-                    attempt == 1 ? TimeoutCheck() : TimeoutCheck() with { Name = secondTimeout }),
-                retryTaskWithCause: (_, _, _, _, _) => throw new InvalidOperationException("Timeout must not retry a worker."),
+                    attempt == 1 ? firstTimeout : TimeoutCheck() with { Name = secondTimeout }),
+                retryTaskWithCause: (goalId, taskId, message, _, cause) =>
+                {
+                    Assert.True(priorTimeoutHasFailingTest);
+                    Assert.Equal(1, attempt);
+                    Assert.Equal(AgentRole.Developer, goal.FindTask(taskId).RequiredRole);
+                    Assert.Contains(Identity, message);
+                    return kernel.RetryTask(goalId, taskId, message, cause);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
                 dispatchAndStart: _ => throw new InvalidOperationException("Timeout must not dispatch a worker."),
                 recordTaskNote: (goalId, taskId, note) => kernel.RecordTaskNote(goalId, taskId, note),
                 writeEscalation: (_, _, reason) => escalation = reason);
 
-            Assert.IsType<ConductorAdvanceOutcome.Held>(
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+            var first = driver.AdvanceOnce(goal, policy).Outcome;
+            if (priorTimeoutHasFailingTest)
+            {
+                Assert.IsType<ConductorAdvanceOutcome.Executed>(first);
+                Assert.DoesNotContain(goal.Timeline, evt => evt.Message.StartsWith("ACCEPTANCE_TIMEOUT_REGATE:", StringComparison.Ordinal));
+                CompleteTasksAtSameCandidate(kernel, goal);
+            }
+            else
+            {
+                Assert.IsType<ConductorAdvanceOutcome.Held>(first);
+            }
             Assert.Null(escalation);
             var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+                driver.AdvanceOnce(goal, policy).Outcome);
 
             var decision = Assert.IsType<PolicyDecisionRecord>(escalated.Decision);
             Assert.Equal("Escalate", decision.Action);
@@ -200,7 +221,43 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
             Assert.Contains($"attempt timeout-attempt-1 ({TimeoutCheckName})", reason);
             Assert.Contains($"attempt timeout-attempt-2 ({secondTimeout})", reason);
             Assert.Equal(2, attempt);
-            Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+            Assert.Equal(priorTimeoutHasFailingTest ? 1 : 0, goal.AutomaticAcceptanceRetryCount);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void CancelledGateBetweenSameLaneTimeoutsPreservesDeveloperRetry()
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = VerifiedGoal();
+            var attempt = 1;
+            var driver = MakeDriver(
+                executionDirectory: root,
+                runAcceptanceSummary: candidate => RecordTimeout(root, candidate, attempt, TimeoutCheck()),
+                retryTaskWithCause: (goalId, taskId, message, _, cause) =>
+                {
+                    Assert.Equal(3, attempt);
+                    Assert.Equal(AgentRole.Developer, goal.FindTask(taskId).RequiredRole);
+                    Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                    Assert.Contains(TimeoutCheckName, message);
+                    return kernel.RetryTask(goalId, taskId, message, cause);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+                recordTaskNote: (goalId, taskId, note) => kernel.RecordTaskNote(goalId, taskId, note),
+                writeEscalation: (_, _, _) => throw new InvalidOperationException("The cancellation breaks the timeout sequence."));
+
+            Assert.IsType<ConductorAdvanceOutcome.Held>(
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+            GoalOperationJournal.AcceptanceBlocked(root, goal, "conductor:acceptance", "disposition-cancelled",
+                _repository.MergeSha, _repository.MainSha, attemptStartedAt: DateTimeOffset.UnixEpoch.AddHours(2));
+            attempt = 3;
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+            Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -213,15 +270,10 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
         {
             var (kernel, goal) = VerifiedGoal();
             var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
-            var timeout = TimeoutCheck() with
-            {
-                FailingTestIdentities = [Identity],
-                OutputTail = $"[FAIL] {Identity}"
-            };
             string? retryMessage = null;
             var driver = MakeDriver(
                 executionDirectory: root,
-                runAcceptanceSummary: candidate => RecordTimeout(root, candidate, 1, timeout),
+                runAcceptanceSummary: candidate => RecordTimeout(root, candidate, 1, TimeoutCheckWithFailingIdentity()),
                 retryTaskWithCause: (goalId, taskId, message, _, cause) =>
                 {
                     Assert.Equal(developer.Id, taskId);
@@ -245,6 +297,12 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
 
     private static AcceptanceCheckResult TimeoutCheck() => new(TimeoutCheckName, false, -1, null);
 
+    private static AcceptanceCheckResult TimeoutCheckWithFailingIdentity() => TimeoutCheck() with
+    {
+        FailingTestIdentities = [Identity],
+        OutputTail = $"[FAIL] {Identity}"
+    };
+
     private AcceptanceVerificationSummary RecordTimeout(
         string root, Goal goal, int ordinal, params AcceptanceCheckResult[] checks)
     {
@@ -258,7 +316,13 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
     private (AgentOrchestratorKernel Kernel, Goal Goal) VerifiedGoal()
     {
         var (kernel, goal) = SoftwareGoal();
-        foreach (var task in goal.Tasks)
+        CompleteTasksAtSameCandidate(kernel, goal);
+        return (kernel, goal);
+    }
+
+    private void CompleteTasksAtSameCandidate(AgentOrchestratorKernel kernel, Goal goal)
+    {
+        foreach (var task in goal.Tasks.Where(task => task.Status != WorkTaskStatus.Completed))
         {
             DispatchTask(kernel, goal, task, workingDirectory: _repository.Root, baseCommit: _repository.AnchorSha);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
@@ -267,7 +331,6 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
         }
         Assert.Equal(_repository.AnchorSha, GateFailureLandingAttributor.SelectLastPassingCandidateSha(goal));
-        return (kernel, goal);
     }
 
     private ApparatusRedGate CreateGate(string root, bool includeAttributor = true) => new(
