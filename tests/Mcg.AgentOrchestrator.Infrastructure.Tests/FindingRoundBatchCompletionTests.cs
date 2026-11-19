@@ -476,6 +476,53 @@ public sealed class FindingRoundBatchCompletionTests
 
     [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
+    public void CoalescedPermanentRefusal_ReplaysAllMembersAfterPartialWrite()
+    {
+        using var scenario = new Scenario(false, failure: "unsupported-batch");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        FindingEvidenceOutcome? Outcome(string id) =>
+            scenario.Tester.LastVerification!.MergedReviewFindings!.Single(finding => finding.StableId == id).EvidenceOutcome;
+        scenario.RefuseFindingOutcome = "second";
+        var failure = Assert.Throws<IOException>(() => scenario.Driver.AdvanceOnce(scenario.Goal, policy));
+        Assert.Equal("Injected failure writing the finding evidence outcome.", failure.Message);
+        var refusedRequest = Assert.Single(scenario.Runs);
+        Assert.Contains("AlphaTests", refusedRequest, StringComparison.Ordinal);
+        Assert.Contains("BetaTests", refusedRequest, StringComparison.Ordinal);
+        var attempt = scenario.LatestAttempt();
+        Assert.Null(attempt.ReconciledAt);
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, Outcome("first")?.Reason);
+        Assert.Null(Outcome("second"));
+        Assert.Empty(scenario.Retries);
+
+        scenario.RefuseFindingOutcome = null;
+        scenario.Restart();
+        var identity = FindingRoundBatchCoordinator.Identity(scenario.Driver, scenario.Goal, scenario.Tester)!;
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Equal(2, scenario.Runs.Count);
+        Assert.Contains("GammaTests", scenario.Runs[1], StringComparison.Ordinal);
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, Outcome("second")?.Reason);
+        var unavailable = FindingRoundBatchAccounting.Read(scenario.Goal, identity).Where(item => item.Kind == "unavailable").ToArray();
+        Assert.Equal(new[] { "first", "second" }, unavailable.SelectMany(item => item.FindingIds).Order(StringComparer.Ordinal));
+        var refusalReceipt = Assert.Single(unavailable.Select(item => item.ReceiptId).Distinct());
+        Assert.NotNull(refusalReceipt);
+        var charge = Assert.Single(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+            item.Message.StartsWith(FindingRoundBatchCoordinator.FailedAttemptRunPrefix, StringComparison.Ordinal));
+        Assert.Contains($"receipt_id={refusalReceipt};", charge.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(scenario.Driver.FocusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([scenario.Goal.Id.Value]),
+            item => item.AttemptId == attempt.AttemptId);
+
+        scenario.Restart();
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+        Assert.Equal(2, scenario.Runs.Count);
+        Assert.Single(scenario.Escalations);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+        Assert.Equal(0, scenario.ProcessStarts);
+        Assert.Equal(2, scenario.ClosingSummary().Unavailable);
+    }
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
     public async Task ConcurrentClose_AdmitsOneRetryAndSurvivesSnapshot()
     {
         using var scenario = new Scenario(true);
@@ -646,7 +693,8 @@ public sealed class FindingRoundBatchCompletionTests
                 EvidenceFindingWithRequest("First evidence request requires interpretation", "first",
                     FindingCategory.TestCoverage, classes: ["AlphaTests"]) with
                     { Severity = sourceBlocker ? FindingSeverity.Advisory : FindingSeverity.Blocking },
-                EvidenceFindingWithRequest("Second request", "second", project: "Core.Tests", classes: ["BetaTests"]) with { Severity = FindingSeverity.Advisory },
+                EvidenceFindingWithRequest("Second request", "second", project: failure == "unsupported-batch" ? "Infrastructure.Tests" : "Core.Tests",
+                    classes: ["BetaTests"]) with { Severity = FindingSeverity.Advisory },
                 EvidenceFindingWithRequest("Third request", "third", classes: ["FullyQualifiedName~GammaTests.Case&Category!=Slow"]) with { Severity = FindingSeverity.Advisory }];
             if (sourceBlocker)
                 Findings = [.. Findings, EvidenceFindingWithRequest("Source repair remains required", "source-blocker",
@@ -676,6 +724,7 @@ public sealed class FindingRoundBatchCompletionTests
         internal bool CapacityBlocked { get; set; }
         internal bool LaunchRecovered { get; set; }
         internal bool RefuseRunChargeCheckpoint { get; set; }
+        internal string? RefuseFindingOutcome { get; set; }
         internal OrchestratorSnapshot? LastRunChargeCheckpoint { get; private set; }
         private bool FailsOwnedAttempts => _failure is "launch-failed" or "process-died" or "corrupt-artifacts";
         private DateTimeOffset _evidenceNow = DateTimeOffset.UtcNow;
@@ -746,7 +795,7 @@ public sealed class FindingRoundBatchCompletionTests
             runFocusedEvidence: (_, request) =>
             {
                 Runs.Add(request);
-                if (_failure == "unsupported-first" && request == Runs[0])
+                if ((_failure is "unsupported-first" or "unsupported-batch") && request == Runs[0])
                     return new(request, false, false, "Project unavailable", [],
                         Rejection: new(FocusedEvidenceRejectionCode.UnsupportedProject, request, "Project unavailable"));
                 if (_failure == "terminal" && Runs.Count == 1 || _failure == "terminal-advisory" && Runs.Count == 2)
@@ -780,7 +829,12 @@ public sealed class FindingRoundBatchCompletionTests
             recordFindingEvidenceRequest: Record,
             recordFindingEvidenceRun: RecordRun,
             recordFindingEvidenceRequestDispositions: (goal, task, dispositions) => Kernel.RecordFindingEvidenceRequestDispositions(goal, task, dispositions),
-            recordFindingEvidenceOutcome: (goal, task, id, outcome, receipt) => Kernel.RecordFindingEvidenceOutcome(goal, task, id, outcome, receipt));
+            recordFindingEvidenceOutcome: (goal, task, id, outcome, receipt) =>
+            {
+                if (id == RefuseFindingOutcome)
+                    throw new IOException("Injected failure writing the finding evidence outcome.");
+                Kernel.RecordFindingEvidenceOutcome(goal, task, id, outcome, receipt);
+            });
 
         private void RecordRun(GoalId goal, TaskId task, string message)
         {

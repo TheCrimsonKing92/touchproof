@@ -17,9 +17,11 @@ internal sealed partial class ConductorDriver
         TaskSpec requestingTask,
         ConductorAutonomyPolicy policy,
         FindingRoundBatchCoordinator.ExecutionContext execution, Action<FindingRoundRedCoverage.Delivery> observeDelivery,
+        out FailedGoalFindingObservation? reusedRedDecision,
         out FailedGoalFindingObservation decision)
     {
         decision = FailedGoalFindingObservation.None;
+        reusedRedDecision = null;
         var round = execution.Round;
         var mergedFindings = requestingTask.LastVerification?.MergedReviewFindings ?? [];
         var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
@@ -40,6 +42,7 @@ internal sealed partial class ConductorDriver
         var batchBasisIdentity = execution.BatchBasis;
         var batchIdentity = new FindingEvidenceBatchIdentity(requestingTask.Id, telemetryCandidateSha,
             findingRoundFingerprint, batchBasisIdentity);
+        FindingRoundBatchCoordinator.ResumeTerminalRefusals(this, goal, requestingTask, batchIdentity, execution, requestingFindings);
         var continuationFindingIds = new HashSet<string>(StringComparer.Ordinal);
         if (UsesQualifiedReviewerContinuation(goal, requestingTask) &&
             FindingEvidenceContinuationCoordinator.TrySelectFindingEvidenceContinuation(this, goal, requestingTask, out var continuation, out _))
@@ -94,7 +97,6 @@ internal sealed partial class ConductorDriver
             new(requestingTask.Id, telemetryCandidateSha, findingRoundFingerprint, batchBasisIdentity));
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
-        FailedGoalFindingObservation? reusedRedDecision = null;
         var reattachedReceiptIds = new List<string>();
         foreach (var finding in requestingFindings)
         {

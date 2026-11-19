@@ -130,6 +130,12 @@ internal static class FindingRoundBatchCoordinator
     {
         RecordOutcome(driver, goal, task, candidate, round, basis, batch, "unavailable", null, reason);
         var identity = new FindingEvidenceBatchIdentity(task.Id, candidate, round, basis);
+        return RouteUnavailable(goal, task, identity, morePending, reason, reusedActionableRed);
+    }
+
+    private static FailedGoalFindingObservation RouteUnavailable(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity,
+        bool morePending, string reason, FailedGoalFindingObservation? reusedActionableRed)
+    {
         if (reusedActionableRed is not null && !morePending &&
             FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check").IsSettled &&
             FindingRoundBatchAccounting.RequiredUnavailable(goal, task, identity) is null)
@@ -183,26 +189,98 @@ internal static class FindingRoundBatchCoordinator
         // Rejected and failed executions consume the same existing allowance as completed runs.
         var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity, basis);
         var marker = $"{FailedAttemptRunPrefix}{attempt.AttemptId};";
+        var identity = new FindingEvidenceBatchIdentity(task.Id, batchCandidate, round, batchBasis);
+        // Checkpoint the original members before per-finding writes can change the next tick's plan.
+        var refusal = FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
+            ? new TerminalRefusal(attempt.AttemptId, batch.TypedRequest.Repository, receiptId, reason, detail,
+                batch.Members.Select(member => new FindingRoundBatchAccounting.Member(member.Identity,
+                    member.Findings.Select(finding => finding.StableId).ToArray())).ToArray())
+            : null;
         lock (goal)
         {
             if (!goal.Timeline.Any(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded && item.TaskId == task.Id &&
                     item.Message.StartsWith(marker, StringComparison.Ordinal)))
+            {
+                var membership = refusal is null ? "" : $"{RefusalCheckpointPrefix}{identity.Key}; refusal={JsonSerializer.Serialize(refusal)}";
                 driver._checkpointFindingEvidenceRun(goal.Id, task.Id,
                     $"{marker} finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
-                    $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
-            foreach (var finding in batch.Findings)
-                driver.RecordNotHonoured(goal.Id, task, finding, reason, detail, candidate, settings);
+                    $"receipt_id={receiptId}; execution_basis={basis}{membership}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
+            }
 
-            var decision = FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
-                ? SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, batchBasis, detail, reusedActionableRed)
-                : FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+            FailedGoalFindingObservation decision;
+            if (refusal is not null)
+            {
+                PublishTerminalRefusal(driver, goal, task, identity, refusal, batch.Findings, candidate, settings);
+                decision = RouteUnavailable(goal, task, identity, morePending, detail, reusedActionableRed);
+            }
+            else
+            {
+                foreach (var finding in batch.Findings)
+                    driver.RecordNotHonoured(goal.Id, task, finding, reason, detail, candidate, settings);
+                decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                     "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
+            }
             driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
             return decision;
         }
     }
 
     internal const string FailedAttemptRunPrefix = "finding-evidence failed-attempt; attempt_id=";
+    private const string RefusalCheckpointPrefix = "; refusal_batch=";
+
+    private sealed record TerminalRefusal(string AttemptId, string? Repository, string ReceiptId,
+        FindingEvidenceNotHonouredReason Reason, string Detail, FindingRoundBatchAccounting.Member[] Members);
+
+    internal static void ResumeTerminalRefusals(ConductorDriver driver, Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity,
+        ExecutionContext execution, IReadOnlyList<ReviewFinding> findings)
+    {
+        var marker = $"{RefusalCheckpointPrefix}{identity.Key}; refusal=";
+        lock (goal)
+        {
+            var refusals = new List<TerminalRefusal>();
+            foreach (var item in goal.Timeline)
+            {
+                if (item.TaskId != task.Id || item.Kind != ProgressKind.FindingEvidenceRunRecorded ||
+                    !item.Message.StartsWith(FailedAttemptRunPrefix, StringComparison.Ordinal)) continue;
+                var start = item.Message.IndexOf(RefusalCheckpointPrefix, StringComparison.Ordinal);
+                if (start < 0 || !item.Message.AsSpan(start).StartsWith(marker, StringComparison.Ordinal)) continue;
+                var end = item.Message.LastIndexOf("; reason=", StringComparison.Ordinal);
+                refusals.Add(JsonSerializer.Deserialize<TerminalRefusal>(item.Message[(start + marker.Length)..end]) ??
+                    throw new InvalidOperationException("Focused evidence refusal checkpoint is null."));
+            }
+            if (refusals.Count == 0) return;
+
+            var attempts = driver.FocusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]);
+            foreach (var refusal in refusals)
+            {
+                var target = FindingEvidenceRequestNormalization.IsHomeRepository(refusal.Repository)
+                    ? null : execution.Targets[refusal.Repository!].Target ??
+                        throw new InvalidOperationException("The repository for a current focused evidence refusal is unavailable.");
+                PublishTerminalRefusal(driver, goal, task, identity, refusal, findings,
+                    target?.CandidateHead ?? identity.CandidateSha, target?.EngineSettings ?? execution.HomeSettings);
+                var attempt = attempts.SingleOrDefault(item => item.AttemptId == refusal.AttemptId);
+                if (attempt is not null) driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
+            }
+        }
+    }
+
+    private static void PublishTerminalRefusal(ConductorDriver driver, Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity,
+        TerminalRefusal refusal, IReadOnlyList<ReviewFinding> findings, string candidate, AcceptanceGateEngineSettings? settings)
+    {
+        var recorded = FindingRoundBatchAccounting.Read(goal, identity)
+            .Where(item => item.Kind == "unavailable" && item.ReceiptId == refusal.ReceiptId)
+            .Select(item => item.Identity).ToHashSet(StringComparer.Ordinal);
+        var reason = FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(refusal.Reason);
+        foreach (var member in refusal.Members)
+        {
+            if (recorded.Contains(member.RequestIdentity)) continue;
+            foreach (var findingId in member.FindingIds)
+                driver.RecordNotHonoured(goal.Id, task, findings.Single(finding => finding.StableId == findingId),
+                    refusal.Reason, refusal.Detail, candidate, settings);
+            FindingRoundBatchAccounting.Record(goal, identity, new(identity.Key, "unavailable", member.RequestIdentity, member.FindingIds,
+                refusal.ReceiptId, Eligibility: $"{reason}: {refusal.Detail}"), driver._recordFindingEvidenceRequest);
+        }
+    }
 
     internal static void RecordSettledPlan(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
         string round, string basis, FindingRoundBatchPlan plan, string executionCandidate, AcceptanceGateEngineSettings settings)
@@ -374,7 +452,7 @@ internal static class FindingRoundBatchCoordinator
                 driver._recordFindingEvidenceRequest);
         FindingRoundRedCoverage.Delivery? completedDelivery = null;
         var handled = driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, execution,
-            delivery => completedDelivery = delivery, out decision);
+            delivery => completedDelivery = delivery, out var reusedRedDecision, out decision);
         if (identity is null) return handled;
         // Deterministic receipt closure records its summary atomically with the kernel action.
         if (FindingRoundBatchAccounting.IsClosed(goal, identity))
@@ -446,6 +524,17 @@ internal static class FindingRoundBatchCoordinator
                 // These conditions prove ineligibility; they are zero, not unknown savings.
                 if (task.Status != WorkTaskStatus.Failed || goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) ||
                     Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any()) continue;
+                if (reusedRedDecision is not null && receipt is { Accepted: true, Passed: true })
+                {
+                    if (reusedRedDecision.TargetTaskId is { } redTarget && PolicySelects(driver, goal, policy, reusedRedDecision))
+                    {
+                        FindingRoundBatchAccounting.Record(goal, identity,
+                            new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + redTarget.Value + ":Developer",
+                                [], receipt.ReceiptId, AgentRole.Developer, "recovery policy selects Developer through the retained actionable RED route"),
+                            driver._recordFindingEvidenceRequest);
+                    }
+                    continue;
+                }
                 var open = ReviewFindings.GetOpenBlockingFindings(findings, goal.EffectiveAcceptanceCriteriaCorrections);
                 var sourceRepair = TrySourceRepair(goal, task, identity.CandidateSha, [receipt.ReceiptId], open, out var sourceRoute);
                 var interpretation = PassingFindingEvidenceRouter.BuildDecision(goal, task, ConductorDriver.FindUpstreamDeveloperTask(goal, task),
