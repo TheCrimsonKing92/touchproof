@@ -225,8 +225,7 @@ internal static class PlannerRoundRecovery
     private static void Requeue(Goal goal, TaskSpec task, IGoalLifecycleEventWriter eventWriter, IClock clock, string note)
     {
         task.ClearLatestVerification();
-        TaskStatusTransitionRecorder.Record(eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Assigned),
-            TaskStatusTransitionRecorder.GoalLifecycleRestoreTaskAfterHumanInputObsoletePlanner);
+        TaskStatusTransitionRecorder.Record(eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleRestoreTaskAfterHumanInputObsoletePlanner);
         var progress = new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskNote, note, clock.UtcNow);
         goal.Append(progress);
         eventWriter.AppendTimelineEvent(progress);

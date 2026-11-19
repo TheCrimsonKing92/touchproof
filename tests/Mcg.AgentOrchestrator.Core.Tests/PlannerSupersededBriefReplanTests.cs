@@ -280,7 +280,7 @@ public sealed class PlannerSupersededBriefReplanTests
         }
 
         public void RecordSpecification(string contract) =>
-            Kernel.SetGoalRefinedSpec(Goal.Id, new RefinedSpec(contract, [], VerificationClass.TestVerifiable, [], []));
+            Kernel.RecordGoalRefinement(Goal.Id, new RefinedSpec(contract, [], VerificationClass.TestVerifiable, [], []));
 
         public void Dispatch(TaskSpec task)
         {
