@@ -735,7 +735,10 @@ internal static class FindingRoundBatchCoordinator
 
         var required = FindingRoundBatchAccounting.RequiredFindingIds(goal, task);
         required.IntersectWith(unavailable.SelectMany(item => item.FindingIds));
-        if (TryBuildFailedExecutionDelivery(goal, task, identity.CandidateSha, required, out observation)) return true;
+        var attemptBackedFindings = unavailable.Where(item => item.ReceiptId is not null)
+            .SelectMany(item => item.FindingIds).ToHashSet(StringComparer.Ordinal);
+        if (TryBuildFailedExecutionDelivery(goal, task, identity.CandidateSha, required, out observation, attemptBackedFindings))
+            return true;
 
         var detail = unavailable.FirstOrDefault(item => item.Eligibility is not null)?.Eligibility;
         observation = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
@@ -744,20 +747,21 @@ internal static class FindingRoundBatchCoordinator
     }
 
     private static bool TryBuildFailedExecutionDelivery(Goal goal, TaskSpec task, string candidate, IReadOnlySet<string> findingIds,
-        out FailedGoalFindingObservation observation)
+        out FailedGoalFindingObservation observation, IReadOnlySet<string>? attemptBackedFindings = null)
     {
         observation = FailedGoalFindingObservation.None;
         if (task.RequiredRole != AgentRole.Reviewer || ConductorDriver.UsesQualifiedReviewerContinuation(goal, task))
             return false;
 
-        // The legacy Reviewer can act on a refusal before execution. A recorded run
-        // still follows the batch's evidence recovery policy if its allowance is exhausted.
+        // A settlement can carry an attempt receipt ID even when the finding outcome has none.
+        // Only a permanent refusal can take legacy delivery after an attempt-backed settlement.
         var findings = task.LastVerification?.MergedReviewFindings?.Where(finding => findingIds.Contains(finding.StableId)).ToArray() ?? [];
         if (findings.Length == 0 || findings.Length != findingIds.Count || findings.Any(finding =>
             finding.EvidenceOutcome is not { Honoured: false, ReceiptId: null, Reason:
                 FindingEvidenceNotHonouredReason.UnsupportedProject or FindingEvidenceNotHonouredReason.UnparseableSelection or
                 FindingEvidenceNotHonouredReason.ExecutorUnavailable or FindingEvidenceNotHonouredReason.SelectionApparatusFailure or
-                FindingEvidenceNotHonouredReason.RunFailed }))
+                FindingEvidenceNotHonouredReason.RunFailed } outcome ||
+            (attemptBackedFindings?.Contains(finding.StableId) == true && !FindingEvidenceExecutionClassifier.IsPermanentRefusal(outcome))))
             return false;
 
         observation = ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidate, findings, [],

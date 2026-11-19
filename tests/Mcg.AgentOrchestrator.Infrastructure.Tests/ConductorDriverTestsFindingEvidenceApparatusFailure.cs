@@ -292,4 +292,92 @@ public sealed class ConductorDriverTestsFindingEvidenceApparatusFailure
         Assert.Empty(retriedTaskIds);
         Assert.Equal(0, dispatchStarts);
     }
+
+    [Xunit.Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Xunit.InlineData(FindingEvidenceNotHonouredReason.SelectionApparatusFailure)]
+    [Xunit.InlineData(FindingEvidenceNotHonouredReason.RunFailed)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void LegacyReviewer_ExhaustedReceiptlessFailures_EscalateOnceAcrossReplay(FindingEvidenceNotHonouredReason reason)
+    {
+        const string candidate = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.Id != reviewer.Id))
+            PassVerification(kernel, goal, task);
+        var finding = EvidenceFindingWithRequest("Focused evidence required.");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        Assert.False(ConductorDriver.UsesQualifiedReviewerContinuation(goal, reviewer));
+
+        var runs = 0;
+        var dispatchStarts = 0;
+        var retries = new List<TaskId>();
+        var escalations = new List<string>();
+        DispatchStartOutcome RecordDispatchStart(Goal _)
+        {
+            dispatchStarts++;
+            return DispatchStartOutcome.Deferred("Fixture records dispatch attempts only.");
+        }
+        ConductorDriver CreateDriver() => MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidate),
+            runFocusedEvidence: (_, request) =>
+            {
+                runs++;
+                if (reason == FindingEvidenceNotHonouredReason.RunFailed)
+                    throw new InvalidOperationException("Focused executor failed before producing evidence.");
+                return new(request, Accepted: false, Passed: false, Summary: "Source discovery failed", Checks: [],
+                    Rejection: new(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, request, "Source discovery failed"));
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, round) =>
+            {
+                retries.Add(taskId);
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: round);
+            },
+            dispatchAndStart: RecordDispatchStart,
+            startRecordedDispatches: RecordDispatchStart,
+            writeEscalationWithResult: (_, _, message) =>
+            {
+                escalations.Add(message);
+                return LandingEscalationWriteResult.CompletedWithoutExternalSinks;
+            },
+            recordFindingEvidenceRequest: (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceRun: (goalId, taskId, message) => kernel.RecordFindingEvidenceRun(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var driver = CreateDriver();
+        var identity = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer);
+        Assert.NotNull(identity);
+        var runCap = FindingRoundBatchSchedule.MaximumCompletedRuns;
+        for (var run = 1; run <= runCap; run++)
+        {
+            Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, policy).Outcome);
+            Assert.Equal(run, runs);
+            Assert.Empty(retries);
+            Assert.Empty(escalations);
+        }
+        var failure = Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).EvidenceOutcome;
+        Assert.NotNull(failure);
+        Assert.Equal(reason, failure.Reason);
+        Assert.Null(failure.ReceiptId);
+        Assert.Equal(runCap, goal.Timeline.Count(item => item.TaskId == reviewer.Id &&
+            item.Kind == ProgressKind.FindingEvidenceRunRecorded));
+
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        goal = kernel.GetGoal(goal.Id);
+        driver = CreateDriver();
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(driver.AdvanceOnce(goal, policy).Outcome);
+        Assert.Contains("unavailable required evidence", Assert.Single(escalations), StringComparison.Ordinal);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(goal, identity));
+
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        goal = kernel.GetGoal(goal.Id);
+        driver = CreateDriver();
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, policy).Outcome);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(goal, identity));
+        Assert.Single(escalations);
+        Assert.Empty(retries);
+        Assert.Equal(0, dispatchStarts);
+        Assert.Equal(runCap, runs);
+    }
 }
