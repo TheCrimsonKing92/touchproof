@@ -44,7 +44,9 @@ internal static class CliImpactReplayCommand
         }
         DateTimeOffset? since = null;
         var limit = 100;
+        var limitSpecified = false;
         string? destination = null;
+        string? attemptSetPath = null;
         var floor = new List<string>();
         for (var i = 1; i < args.Count; i++)
         {
@@ -54,7 +56,7 @@ internal static class CliImpactReplayCommand
                 output.WriteLine(CliCommandHelp.ImpactReplayStatusUsage);
                 return 0;
             }
-            if (args[i] is not ("--since" or "--limit" or "--out" or "--floor") || i + 1 == args.Count)
+            if (args[i] is not ("--since" or "--limit" or "--attempts-file" or "--out" or "--floor") || i + 1 == args.Count)
                 return Usage();
             var flag = args[i++];
             var value = args[i];
@@ -68,19 +70,41 @@ internal static class CliImpactReplayCommand
                     break;
                 case "--limit":
                     if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out limit) || limit < 1) return Usage();
+                    limitSpecified = true;
+                    break;
+                case "--attempts-file":
+                    if (attemptSetPath is not null) return Usage();
+                    attemptSetPath = value;
                     break;
                 case "--out": destination = value; break;
                 case "--floor": floor.Add(value); break;
             }
         }
         if (destination is null) return Usage();
+        ImpactReplayFixedSet? attemptSet = null;
+        if (attemptSetPath is not null)
+        {
+            if (since is not null || limitSpecified) return Usage();
+            try
+            {
+                attemptSetPath = Path.GetFullPath(attemptSetPath);
+                attemptSet = ImpactReplayFixedSet.Read(attemptSetPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
+                or ArgumentException or NotSupportedException)
+            {
+                error.WriteLine($"Impact replay attempts file is invalid: {ex.Message}");
+                return Usage();
+            }
+            limit = int.MaxValue;
+        }
         ImpactReplayRunSink? sink = null;
         try
         {
             clock ??= TimeProvider.System;
             var configuration = new ImpactReplayRunConfiguration(Path.GetFullPath(executionDirectory),
                 Path.GetFullPath(orchestratorDirectory), since, limit, floor.Count == 0 ? null : floor.ToArray(),
-                tempCheckoutParent is null ? null : Path.GetFullPath(tempCheckoutParent));
+                tempCheckoutParent is null ? null : Path.GetFullPath(tempCheckoutParent), attemptSet?.Version, attemptSetPath);
             var assembly = typeof(ImpactReplay).Assembly;
             source ??= new ImpactReplayExecutionSource();
             var revision = source.ReadSourceRevision(executionDirectory);
@@ -92,7 +116,7 @@ internal static class CliImpactReplayCommand
             sink = new ImpactReplayRunSink(destination, identity, error, clock);
             var report = ImpactReplay.Read(executionDirectory, orchestratorDirectory, since, limit,
                 floor.Count == 0 ? null : floor, tempCheckoutParent,
-                sink, cancellationToken, source);
+                sink, cancellationToken, source, attemptSet: attemptSet, attemptSetPath: attemptSetPath);
             report = report with { Run = new(sink.RunId, sink.CheckpointPath) };
             cancellationToken.ThrowIfCancellationRequested();
             sink.FinalizeReport(report);
