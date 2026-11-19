@@ -139,6 +139,18 @@ public sealed class CostGoalOutcomeMetricTests
         var error = Assert.Throws<InvalidOperationException>(() =>
             CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, null));
         Assert.Contains(check.Detail, error.Message);
+        Assert.Contains(CostGoalOutcomeMetric.OverrideFlag, error.Message);
+
+        const string reason = "reviewed metric exception";
+        var filing = CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, reason);
+
+        Assert.Null(filing);
+        var auditLine = Assert.Single(File.ReadAllLines(fixture.Workspace.ConductEventsLogPath));
+        var audit = JsonSerializer.Deserialize<ConductEventRecord>(auditLine, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(audit);
+        Assert.Equal("cost-goal-outcome-metric-override", audit.EventKind);
+        Assert.Equal($"reason={reason}; failedChecks={check.Name}; detail={check.Detail}; backlogItem=none; source=goal-file",
+            audit.Detail);
     }
 
     [Theory]

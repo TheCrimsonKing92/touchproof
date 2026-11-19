@@ -120,6 +120,55 @@ public sealed class CostGoalOutcomeBaselineTests
         }
     }
 
+    [Theory]
+    [InlineData(3, 4d, 12d, 20d, 28d)]
+    [InlineData(4, 7.5d, 17.5d, 26d, 35.5d)]
+    public void Baseline_TickStepLedger_UsesExactMediansFromTheFirstNumericField(
+        int window, double sweepMedian, double prewalkMedian, double kernelMedian, double admissionMedian)
+    {
+        var root = Directory.CreateTempSubdirectory("tick-step-baseline-").FullName;
+        try
+        {
+            var path = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+            var log = new ConductEventLogWriter(path);
+            (int Sweep, int Prewalk, int Kernel, int Admission)[] durations =
+            [
+                (90, 95, 97, 99),
+                (4, 12, 20, 28),
+                (11, 23, 32, 43),
+                (2, 6, 0, 10)
+            ];
+            for (var i = 0; i < durations.Length; i++)
+            {
+                var (sweep, prewalk, kernel, admission) = durations[i];
+                var tick = i + 1;
+                var timestamp = FiledAt.AddMinutes(i - durations.Length);
+                log.Append("phase-timing", null, $"PHASE_TIMING tick={tick} phase=sweep " +
+                    $"sweep_steps=owned-root-reap:{sweep}:1 kernel_reload_steps=kernel-merge:{kernel}:2", timestamp);
+                log.Append("phase-timing", null,
+                    $"PHASE_TIMING tick={tick} phase=boardfill prewalk_steps=board-fill:{prewalk}:3", timestamp);
+                log.Append("phase-timing", null,
+                    $"PHASE_TIMING tick={tick} phase=acceptance-admission " +
+                    $"admission_steps=attempt-census:{admission}:200:4", timestamp);
+            }
+
+            var lines = new[] { "owned-root-reap", "board-fill", "kernel-merge", "attempt-census" }
+                .Select(step => new OutcomeMetricLine($"tick-step-milliseconds:{step}", "decrease", "20%", window))
+                .ToArray();
+            var baselines = CostGoalOutcomeMetric.BaselinesAt(lines, [], FiledAt, TickStepLedgerReader.Read(path));
+
+            Assert.Collection(baselines,
+                row => Assert.Equal(new OutcomeMetricBaseline(lines[0], sweepMedian, window, null), row),
+                row => Assert.Equal(new OutcomeMetricBaseline(lines[1], prewalkMedian, window, null), row),
+                row => Assert.Equal(new OutcomeMetricBaseline(lines[2], kernelMedian, window, null), row),
+                row => Assert.Equal(new OutcomeMetricBaseline(lines[3], admissionMedian, window, null), row));
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
     internal static OutcomeGateObservation Gate(string id, DateTimeOffset startedAt, double milliseconds,
         int? classCount = 1, string? reason = null, string? commit = "landed") =>
         new(id, startedAt, startedAt, commit, Selection(milliseconds, classCount, reason));
