@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
@@ -97,13 +98,56 @@ public sealed class ConductorProviderHoldWatchLoopTests(ITestOutputHelper output
         ConductorProviderHoldWatch.Attach(fixture.Loop, new ConductorProviderHoldWatch(null));
         var before = fixture.Bytes();
         fixture.Run(2);
-        var baseline = fixture.Bytes()[before.Length..];
-        Assert.NotEmpty(baseline);
+        var baseline = SplitConductRecords(fixture.Bytes()[before.Length..]);
+        Assert.NotEmpty(baseline.NonTimingBytes);
+        Assert.NotEmpty(baseline.TimingFields);
         fixture.Restart();
         before = fixture.Bytes();
         fixture.Run(2);
-        Assert.Equal(baseline, fixture.Bytes()[before.Length..]);
+        var active = SplitConductRecords(fixture.Bytes()[before.Length..]);
+        Assert.Equal(baseline.NonTimingBytes, active.NonTimingBytes);
+        Assert.NotEmpty(active.TimingFields);
+        Assert.Equal(baseline.TimingFields.Count, active.TimingFields.Count);
+        foreach (var (expected, actual) in baseline.TimingFields.Zip(active.TimingFields))
+        {
+            Assert.Equal(expected.Properties, actual.Properties);
+            Assert.NotEmpty(expected.DetailFields);
+            Assert.Equal(expected.DetailFields, actual.DetailFields);
+        }
+
         Assert.Empty(fixture.Events());
+    }
+
+    private static (byte[] NonTimingBytes, List<(string[] Properties, string[] DetailFields)> TimingFields)
+        SplitConductRecords(byte[] bytes)
+    {
+        using var nonTimingBytes = new MemoryStream();
+        var timingFields = new List<(string[] Properties, string[] DetailFields)>();
+        for (var start = 0; start < bytes.Length;)
+        {
+            var newline = Array.IndexOf(bytes, (byte)'\n', start);
+            var end = newline < 0 ? bytes.Length : newline + 1;
+            var record = bytes.AsMemory(start, end - start);
+            using var json = JsonDocument.Parse(record);
+            var root = json.RootElement;
+            if (root.GetProperty("eventKind").ValueEquals("phase-timing"))
+            {
+                var properties = root.EnumerateObject().Select(property => property.Name).ToArray();
+                var detailFields = root.GetProperty("detail").GetString()!.Split(' ')
+                    .Select(token => token.Split('=', 2))
+                    .Where(parts => parts.Length == 2)
+                    .Select(parts => parts[0]).ToArray();
+                timingFields.Add((properties, detailFields));
+            }
+            else
+            {
+                nonTimingBytes.Write(record.Span);
+            }
+
+            start = end;
+        }
+
+        return (nonTimingBytes.ToArray(), timingFields);
     }
 
     [Fact]

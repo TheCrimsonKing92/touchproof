@@ -1,10 +1,59 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using static CostGoalOutcomeBaselineTests;
 
-// Parallel-safe: fixed instants, immutable gate observations and fixture commit ancestry.
+// Parallel-safe: fixed instants, immutable gate observations, fixture commit ancestry and owned logs.
 public sealed class CostGoalOutcomeVerdictTests
 {
     private static readonly DateTimeOffset AdoptedAt = new(2026, 11, 1, 0, 0, 0, TimeSpan.Zero);
+
+    [Theory]
+    [InlineData(80, true)]
+    [InlineData(81, false)]
+    public void Evaluate_TickStepLedger_UsesFilingBaselineAndFirstFullAdoptedWindow(int middle, bool met)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var path = fixture.Workspace.ConductEventsLogPath;
+        var log = new ConductEventLogWriter(path);
+        AppendTick(DateTimeOffset.UnixEpoch.AddMinutes(1), 1, 120);
+        AppendTick(DateTimeOffset.UnixEpoch.AddMinutes(2), 2, 90);
+        AppendTick(DateTimeOffset.UnixEpoch.AddMinutes(3), 3, 100);
+        const string markdown = """
+            Expected effect: reduce tick cost
+            ## Outcome metric
+            metric: tick-step-milliseconds:owned-root-reap; direction: decrease; target: 20%; window: 3 ticks
+            """;
+        var line = new OutcomeMetricLine("tick-step-milliseconds:owned-root-reap", "decrease", "20%", 3);
+        var filing = CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, null);
+        Assert.NotNull(filing);
+        Assert.Equal(new OutcomeMetricBaseline(line, 100, 3, null), Assert.Single(filing.Baselines));
+
+        var record = new CostGoalOutcomeRecord(filing, [], [], null, false);
+        var adoptedAt = filing.FiledAt.AddDays(1);
+        var deadline = adoptedAt.AddDays(7);
+        AppendTick(adoptedAt.AddTicks(-1), 4, 0);
+        AppendTick(adoptedAt, 5, 60);
+        AppendTick(adoptedAt.AddHours(1), 6, 100);
+        AppendTick(deadline, 9, 0);
+
+        Assert.Equal(new CostGoalOutcomeResult(0, line, CostGoalOutcomeState.Pending, 100, null, 3, 2, null),
+            EvaluateAt(deadline.AddTicks(-1)));
+        Assert.Equal(new CostGoalOutcomeResult(0, line, CostGoalOutcomeState.InsufficientData, 100, null, 3, 2, "window-unfilled"),
+            EvaluateAt(deadline));
+
+        AppendTick(adoptedAt.AddHours(3), 8, 0);
+        AppendTick(adoptedAt.AddHours(2), 7, middle);
+
+        var state = met ? CostGoalOutcomeState.Met : CostGoalOutcomeState.Missed;
+        Assert.Equal(new CostGoalOutcomeResult(0, line, state, 100, middle, 3, 3, null), EvaluateAt(deadline));
+
+        void AppendTick(DateTimeOffset at, int tick, int milliseconds) =>
+            log.Append("phase-timing", null,
+                $"PHASE_TIMING tick={tick} phase=sweep sweep_steps=owned-root-reap:{milliseconds}:1", at);
+
+        CostGoalOutcomeResult EvaluateAt(DateTimeOffset at) =>
+            Assert.Single(CostGoalOutcomeVerdict.Evaluate(record, [], "landed", (_, _) => false,
+                adoptedAt, at, ticks: TickStepLedgerReader.Read(path)));
+    }
 
     [Theory]
     [InlineData("decrease", "30%", 100d, 70d, true)]
