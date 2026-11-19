@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 internal static class OperatorProcedureCoverage
 {
-    private static readonly Regex PathToken = new(@"[\w./-]+", RegexOptions.CultureInvariant);
+    private static readonly Regex PathToken = new(@"[\w./+-]+", RegexOptions.CultureInvariant);
     private static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
 
     internal sealed record Reference(string Document, string Script)

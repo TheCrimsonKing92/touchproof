@@ -219,6 +219,25 @@ public sealed class AgentHarnessDocsDriftTests
             Xunit.Assert.Single(OperatorProcedureCoverage.FindUncovered(files)));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("scripts/nested/Run+Control.ps1")]
+    [Xunit.InlineData("Run+Control.ps1")]
+    public void ProcedureScriptWithPlusIsFlaggedUntilReferencedByTestLiteral(string reference)
+    {
+        const string script = "scripts/nested/Run+Control.ps1";
+        var files = new Dictionary<string, string>
+        {
+            [FixtureProcedure] = $"Run `{reference}`.",
+            [script] = "",
+        };
+
+        Xunit.Assert.Equal(new(FixtureProcedure, script),
+            Xunit.Assert.Single(OperatorProcedureCoverage.FindUncovered(files)));
+
+        files["tests/Sample.cs"] = $"var script = \"{reference}\";";
+        Xunit.Assert.Empty(OperatorProcedureCoverage.FindUncovered(files));
+    }
+
     [Xunit.Fact]
     public void BareScriptNameFlagsEveryMatchingScriptOnce()
     {
