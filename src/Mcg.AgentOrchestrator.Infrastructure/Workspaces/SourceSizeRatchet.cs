@@ -149,29 +149,29 @@ internal static class SourceSizeRatchet
             // and dispatch in the shared route body; ledger and gate behavior remain separately owned.
             // Goal 35c35d6d: three delegation lines wire the shared attributed-failure diagnosis coordinator.
             // Goal 7ca0990d: one scoped backstop reservation callback at the existing admission owner.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1626),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1548),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 466),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 366),
             // Goal 568eb0fe prevents terminal RED replay from preparing another retry and retains
             // exhausted retry outcomes at the existing acceptance completion boundary.
             // Goal 387027bb snapshots the routing deadline and emits its initial waiting event (+7 integration lines).
             // Goal c1182160: two defensive routing lines prevent any passing repository-set result from landing a single branch.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 605),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 584),
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             // Goal f608f29b: two admission call-site lines; probe/cache/hold logic lives in EnvironmentContractGate.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 624),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 660),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 638),
             // Goal bc361051: attach producer-owned failure facts at the existing escalation outcome seam.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 319), // Provider hold redispatch hook and injected recovery seam.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 311), // Provider hold redispatch hook and injected recovery seam.
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
             // holds new acceptance/landing work where candidate and terminal evidence meet.
             // Goal 350ad330: exclude multi-repository goals from gate-ready projection before I/O.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 568), // def5cd48: planner conflict probe and existing-policy escalation.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 560), // def5cd48: planner conflict probe and existing-policy escalation.
             // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 345),
@@ -448,7 +448,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2490),
             // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
             // Goal d62efe7a freezes the 36-class premise list so unrelated test inventory cannot change the split test.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1427),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1420),
             // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1217),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 536),
@@ -582,7 +582,7 @@ internal static class SourceSizeRatchet
             // Goal 9eb2f8ba: eight measured wiring lines connect the separate recurrence handler; no new partial.
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
-            new SourceClassCeiling("ConductorDriver", 13450, 67),
+            new SourceClassCeiling("ConductorDriver", 13433, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

@@ -28,7 +28,8 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
     };
 
     internal FreshFindingEvidenceFixture(bool twoRequests = false, bool retryReview = true, bool sourceFinding = false,
-        bool compositeRequest = false, bool negativeControl = false, bool unresolvedTesterFinding = false)
+        bool compositeRequest = false, bool negativeControl = false, bool unresolvedTesterFinding = false,
+        bool advisoryReviewSiblings = false)
     {
         Directory.CreateDirectory(Root);
         Kernel = new AgentOrchestratorKernel(new FixedClock(Now.AddMinutes(5)));
@@ -60,14 +61,18 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
         var reviewFindings = compositeRequest
             ? [findings[0] with { EvidenceRequest = new FindingEvidenceRequest(findings.SelectMany(item => item.EvidenceRequest!.Selections).ToArray()) }]
             : findings.ToArray();
+        if (advisoryReviewSiblings)
+            reviewFindings = [.. reviewFindings,
+                Finding("advisory-one", "OtherTests") with { Severity = FindingSeverity.Advisory },
+                Finding("advisory-two", "ThirdTests", "Core.Tests") with { Severity = FindingSeverity.Advisory }];
         Record(reviewer, reviewFindings, Now.AddMinutes(-1), Now, "needs-work");
         if (retryReview) Kernel.RetryTask(goal.Id, reviewer.Id, "No source or context change", RetryCause.UnchangedContextRepeat);
     }
 
-    private static ReviewFinding Finding(string id, string selection) => new(id, ReviewFindingState.Open,
+    private static ReviewFinding Finding(string id, string selection, string project = Project) => new(id, ReviewFindingState.Open,
         new ReviewFindingLocation("tests/LaneTests.cs", id), "Exact executed guard evidence is missing",
         FindingSeverity.Blocking, FindingCategory.TestEvidence,
-        new FindingEvidenceRequest([new(Project, selection)]));
+        new FindingEvidenceRequest([new(project, selection)]));
 
     private void Record(TaskSpec task, IReadOnlyList<ReviewFinding> findings, DateTimeOffset dispatchAt,
         DateTimeOffset completedAt, string verdict)
@@ -167,12 +172,28 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
         FindingEvidenceReceiptSelector.TrySelectReviewContinuation(Goal, Reviewer, Candidate, Identity,
             request => request, ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(Settings), out continuation, out reason);
 
-    internal ConductorDriver Driver()
+    internal ConductorDriver Driver(Action<string>? focusedExecution = null)
     {
         var driver = ConductorDriverTests.MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => ConductorDriverTests.NoPreReviewContext(Candidate),
             getFindingEvidenceEngineSettings: _ => Settings,
+            focusedEvidenceAttemptCoordinator: focusedExecution is null ? null : new(Root, "main", runInline: true,
+                acquireStableSlotLease: (_, _) => null),
+            runFocusedEvidence: focusedExecution is null ? null : (_, request) =>
+            {
+                focusedExecution(request);
+                var green = ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(Root, request, Candidate);
+                return green with { Arms = green.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray(),
+                    OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence };
+            },
+            recordFindingEvidenceRequest: (goalId, taskId, message) => Kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceRun: focusedExecution is null ? null :
+                (goalId, taskId, message) => Kernel.RecordFindingEvidenceRun(goalId, taskId, message),
+            recordFindingEvidenceRequestDispositions: focusedExecution is null ? null :
+                (goalId, taskId, dispositions) => Kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions),
+            recordFindingEvidenceOutcome: focusedExecution is null ? null :
+                (goalId, taskId, id, outcome, receipt) => Kernel.RecordFindingEvidenceOutcome(goalId, taskId, id, outcome, receipt),
             retryTaskWithCause: (goalId, taskId, message, round, cause) =>
             {
                 Causes.Add(cause);

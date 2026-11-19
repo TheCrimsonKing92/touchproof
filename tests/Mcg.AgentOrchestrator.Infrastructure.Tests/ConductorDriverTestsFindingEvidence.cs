@@ -13,31 +13,17 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed partial class ConductorDriverTestsFindingEvidence
 {
-    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_evidence_request_runs_focused_evidence_and_retries_reviewer_only")]
-    public void ConductorDriverReviewerEvidenceRequestRunsFocusedEvidenceAndRetriesReviewerOnly()
+    [Xunit.Theory(DisplayName = "ConductorDriver_reviewer_evidence_request_runs_focused_evidence_and_retries_reviewer_only")]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void ConductorDriverReviewerEvidenceRequestRunsFocusedEvidenceAndRetriesReviewerOnly(bool legacyResult)
     {
-        var (kernel, goal) = SoftwareGoal();
+        const string blocker = "missing focused conductor evidence";
+        var (kernel, goal, reviewer) = ReviewerFindingEvidenceDeliveryFixture.FailedReviewer(blocker,
+            EvidenceFindingWithRequest(blocker, category: FindingCategory.TestEvidence, classes: ["ConductorDriverTests"]));
         var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
-        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
         var request = "Infrastructure.Tests:ConductorDriverTests";
-        FailReviewerNeedsWork(
-            kernel,
-            goal,
-            reviewer,
-            "missing focused conductor evidence",
-            findings:
-            [
-                EvidenceFindingWithRequest(
-                    "missing focused conductor evidence",
-                    category: FindingCategory.TestEvidence,
-                    classes: ["ConductorDriverTests"])
-            ]);
         var focusedRuns = 0;
         var retriedTaskIds = new List<TaskId>();
         string? retryMessage = null;
@@ -50,20 +36,9 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             {
                 focusedRuns++;
                 Assert.Equal(request, actualRequest);
-                return new FocusedEvidenceRunResult(
-                    actualRequest,
-                    Accepted: true,
-                    Passed: true,
-                    Summary: "focused evidence passed: 1 check; receipts: C:\\tmp\\trx",
-                    Checks:
-                    [
-                        new AcceptanceCheckResult(
-                            "reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~ConductorDriverTests",
-                            true,
-                            0,
-                            null,
-                            ArtifactsPath: "C:\\tmp\\trx")
-                    ]);
+                return legacyResult
+                    ? ReviewerFindingEvidenceDeliveryFixture.LegacyGreen(actualRequest)
+                    : DualArmFindingEvidence(actualRequest, FindingEvidenceArmDisposition.Red, "abc1234");
             },
             retryTaskWithRoundKind: (gid, tid, msg, roundKind) =>
             {
@@ -86,19 +61,27 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
         Assert.Contains("finding evidence-on-demand", retryMessage);
         var receipt = Assert.Single(reviewer.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []));
-        Assert.Contains("C:\\tmp\\trx", receipt.Summary);
+        Assert.Equal(!legacyResult, receipt.Passed);
+        var disposition = Assert.Single(receipt.RequestDispositions!);
+        Assert.Equal(legacyResult ? FindingEvidenceRequestDecision.Refused : FindingEvidenceRequestDecision.Executed, disposition.Decision);
+        if (legacyResult)
+        {
+            Assert.Contains("C:\\tmp\\trx", receipt.Summary);
+            Assert.Empty(receipt.Arms!);
+        }
         var evidenceOutcome = Assert.Single(reviewer.VerificationHistory.Last().MergedReviewFindings!).EvidenceOutcome;
-        Assert.Equal(FindingEvidenceOutcomeReason.Unknown, evidenceOutcome?.ResultReason);
+        Assert.Equal(legacyResult ? FindingEvidenceOutcomeReason.Unknown : FindingEvidenceOutcomeReason.ValidEvidence,
+            evidenceOutcome?.ResultReason);
         Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
         Assert.Equal(RetryRoundKind.Mechanical, reviewer.PendingRetryRoundKind);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
-            evt.Message.Contains("reason=unknown", StringComparison.Ordinal));
+            evt.Message.Contains(legacyResult ? "reason=unknown" : "reason=valid-evidence", StringComparison.Ordinal));
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
-            evt.Message.Contains("outcome=unknown", StringComparison.Ordinal));
+            evt.Message.Contains(legacyResult ? "outcome=unknown" : "outcome=valid-evidence", StringComparison.Ordinal));
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -1540,12 +1523,16 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             reviewer,
             "vacuous evidence must be explicit",
             findings: [EvidenceFindingWithRequest("Run an always-green check.", id: "vacuous")]);
+        var retries = new List<TaskId>();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
             runFocusedEvidence: (_, request) =>
-                DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Green),
+                DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Green, "abc1234"),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            {
+                retries.Add(taskId);
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
@@ -1559,6 +1546,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         var receipt = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!);
         Assert.False(receipt.Passed);
         Assert.All(receipt.Arms!, arm => Assert.Equal(FindingEvidenceArmDisposition.Green, arm.Disposition));
+        Assert.Equal([reviewer.Id], retries);
         Assert.Contains("reason=vacuous-evidence", kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content, StringComparison.Ordinal);
     }
 
@@ -2088,7 +2076,10 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return new FocusedEvidenceRunResult(request, true, true, "valid evidence passed", []);
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, "abc1234") with
+                {
+                    Summary = "valid evidence passed"
+                };
             },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
@@ -2117,6 +2108,8 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         Assert.True(validOutcome?.Honoured);
         Assert.NotNull(validOutcome?.ReceiptId);
         Assert.Null(validOutcome?.Reason);
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, validOutcome!.ResultReason);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("reason=unsupported-project", retryBrief, StringComparison.Ordinal);
         Assert.Contains("valid evidence passed", retryBrief, StringComparison.Ordinal);
@@ -2305,55 +2298,62 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         Assert.Equal(tester.Id, retriedTaskId);
     }
 
-    [Xunit.Fact]
-    public void FailingDerivedEvidence_RetriesReviewerWithReceipt()
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void FailingDerivedEvidence_RetriesReviewerWithReceipt(bool legacyResult)
     {
-        var (kernel, goal) = SoftwareGoal();
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
         const string blocker = "Core.Tests GoalLifecycleTests receipt is missing.";
-        FailReviewerNeedsWork(
-            kernel,
-            goal,
-            reviewer,
-            blocker,
-            findings: [EvidenceFindingWithRequest(blocker, project: "Core.Tests", classes: ["GoalLifecycleTests"])]);
-        TaskId? retriedTaskId = null;
+        const string failingTest = "GoalLifecycleTests.RejectsInvalidTransition";
+        var finding = EvidenceFindingWithRequest(blocker, project: "Core.Tests", classes: ["GoalLifecycleTests"]);
+        if (!legacyResult)
+            finding = finding with { Location = new ReviewFindingLocation("docs/operator-runbook.md", "Receipt") };
+        var (kernel, goal, reviewer) = ReviewerFindingEvidenceDeliveryFixture.FailedReviewer(blocker, finding);
+        var retries = new List<TaskId>();
         string? retryMessage = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
-                request,
-                Accepted: true,
-                Passed: false,
-                Summary: "focused evidence failed; receipts: C:\\tmp\\failed-derived-trx",
-                Checks: []),
+            runFocusedEvidence: (_, request) => legacyResult
+                ? ReviewerFindingEvidenceDeliveryFixture.LegacyFailure(request)
+                : CandidateRedFindingEvidence(request, "abc1234", failingTest),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
-                retriedTaskId = taskId;
+                retries.Add(taskId);
                 retryMessage = message;
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             },
-            recordReviewerEvidenceRequestReceived: (goalId, taskId, message) =>
-                kernel.RecordReviewerEvidenceRequestReceived(goalId, taskId, message),
-            recordReviewerEvidenceRunRecorded: (goalId, taskId, message) =>
-                kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message),
-            recordPreReviewEvidence: (goalId, taskId, receipt) =>
-                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceRun: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRun(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(reviewer.Id, retriedTaskId);
-        var failedReceipt = Assert.Single(reviewer.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []));
+        Assert.Equal([reviewer.Id], retries);
+        var evidenceRound = Assert.Single(reviewer.VerificationHistory, item => item.FindingEvidenceReceipts is { Count: > 0 });
+        var failedReceipt = Assert.Single(evidenceRound.FindingEvidenceReceipts!);
         Assert.False(failedReceipt.Passed);
-        Assert.Contains("C:\\tmp\\failed-derived-trx", failedReceipt.Summary, StringComparison.Ordinal);
+        if (legacyResult)
+        {
+            Assert.Contains("C:\\tmp\\failed-derived-trx", failedReceipt.Summary, StringComparison.Ordinal);
+            Assert.Contains(failedReceipt.ReceiptId, retryMessage, StringComparison.Ordinal);
+            Assert.Empty(failedReceipt.Arms!);
+            Assert.Equal(FindingEvidenceRequestDecision.Refused, Assert.Single(failedReceipt.RequestDispositions!).Decision);
+            var outcome = Assert.Single(evidenceRound.MergedReviewFindings!).EvidenceOutcome;
+            Assert.NotNull(outcome);
+            Assert.Equal(failedReceipt.ReceiptId, outcome.ReceiptId);
+            Assert.Equal(FindingEvidenceOutcomeReason.Unknown, outcome.ResultReason);
+            return;
+        }
+
+        var candidate = Assert.Single(failedReceipt.Arms!, arm => arm.Arm == FindingEvidenceArm.Candidate);
+        Assert.Equal(FindingEvidenceArmDisposition.Red, candidate.Disposition);
+        Assert.Equal(1, candidate.ExecutedTestCount);
+        Assert.Equal([failingTest], candidate.FailingTestIdentities);
+        Assert.Equal(FindingEvidenceRequestDecision.Executed, Assert.Single(failedReceipt.RequestDispositions!).Decision);
     }
 
     [Xunit.Fact]

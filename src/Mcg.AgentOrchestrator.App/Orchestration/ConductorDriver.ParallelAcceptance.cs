@@ -48,14 +48,6 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private sealed record VerifyingFindingTrigger(
-        TaskSpec TriggeringTask,
-        string Finding,
-        IReadOnlyList<string> SuppressedFindings,
-        TaskSpec? TargetTask,
-        bool RequiresCommittedTarget = false,
-        IReadOnlyList<ReviewFinding>? DeveloperOwnedFindings = null);
-
     internal const string CandidateDeclineCohortAttributionFailure = "cohort-attribution-failure";
     internal const string CandidateDeclineVerifiedTransitionRequiresOperator = "verified-transition-requires-operator";
     internal const string CandidateDeclineLifecycleNotVerified = "lifecycle-not-verified";

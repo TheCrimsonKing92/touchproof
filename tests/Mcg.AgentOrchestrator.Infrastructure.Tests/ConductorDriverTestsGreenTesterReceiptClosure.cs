@@ -21,10 +21,24 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         Assert.Empty(fixture.Retried);
         Assert.Equal(2, fixture.Requests.Count);
         AssertClosed(fixture.Goal, fixture.Requester, "receipt-first", "receipt-second");
+        AssertBatchAccounting(fixture.Goal);
         var restored = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(
             JsonSerializer.Serialize(fixture.Kernel.ExportSnapshot()))!);
         AssertClosed(restored.GetGoal(fixture.Goal.Id), restored.GetTask(fixture.Goal.Id, fixture.Requester.Id),
             "receipt-first", "receipt-second");
+        AssertBatchAccounting(restored.GetGoal(fixture.Goal.Id));
+
+        static void AssertBatchAccounting(Goal goal)
+        {
+            var closed = Assert.Single(goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
+            var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closed.Message[closed.Message.IndexOf('{')..])!;
+            Assert.Equal(2, summary.BatchSize);
+            Assert.Equal(2, summary.NewlyExecuted);
+            Assert.Equal(0, summary.Covered);
+            Assert.Equal(0, summary.Unavailable);
+            Assert.Contains("deterministic-receipt-closure", summary.RoutingReason, StringComparison.Ordinal);
+            Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.TaskRetried && item.TaskId == closed.TaskId);
+        }
     }
 
     [Fact]
@@ -235,27 +249,26 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     [InlineData("rejected")]
     [InlineData("apparatus-failed")]
     [InlineData("executor-unavailable")]
-    public void NonPassingDeliveriesKeepTesterRetryCap(string failure)
+    public void NonPassingBatch_UsesEvidenceRecoveryWithoutPaidRetry(string failure)
     {
         using var fixture = new ClosureFixture(evidenceFailure: failure);
         var finding = failure == "refused"
             ? EvidenceFindingWithRequest("Unsupported project", "receipt-first", project: "Unknown.Tests",
                 classes: ["ConductorDriverTests"])
             : FirstEvidenceFinding();
-        for (var round = 0; round < 3; round++)
-        {
-            fixture.Report([finding]);
-            fixture.AdvanceToDecision();
-        }
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
 
-        Assert.Equal([fixture.Requester.Id, fixture.Requester.Id], fixture.Retried);
-        Assert.All(fixture.RetryMessages, message =>
-            Assert.StartsWith("finding evidence-on-demand:", message, StringComparison.Ordinal));
-        Assert.Equal(2, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
+        Assert.Empty(fixture.Retried);
+        Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
             fixture.Goal.Timeline, fixture.Requester.Id, CandidateSha, "receipt-first"));
-        Assert.Contains("retry cap reached", Assert.Single(fixture.Escalations), StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(fixture.Developer!.Id, fixture.Retried);
         Assert.Equal(failure is "refused" or "executor-unavailable" ? 0 : 3, fixture.Requests.Count);
+        Assert.Single(fixture.Escalations);
+        var closed = Assert.Single(fixture.Goal.Timeline.Where(item => item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal)));
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closed.Message[closed.Message.IndexOf('{')..])!;
+        Assert.Equal(1, summary.BatchSize);
+        Assert.Equal(1, summary.Unavailable);
+        Assert.Equal(0, summary.NewlyExecuted);
     }
 
     private static ReviewFinding FirstEvidenceFinding() => EvidenceFindingWithRequest(
@@ -416,6 +429,9 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
                     return Kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind, retryCause: cause);
                 },
                 writeEscalation: (_, _, message) => Escalations.Add(message),
+                recordFindingEvidenceRun: (goalId, taskId, message) => Kernel.RecordFindingEvidenceRun(goalId, taskId, message),
+                recordFindingEvidenceRequestDispositions: (goalId, taskId, dispositions) =>
+                    Kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions),
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
                     Kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>

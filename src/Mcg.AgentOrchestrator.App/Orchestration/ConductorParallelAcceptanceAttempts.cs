@@ -886,11 +886,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             string.IsNullOrWhiteSpace(attempt.Kind) ? GateDispatchKind : attempt.Kind,
             dispatchKind,
             StringComparison.Ordinal) &&
-        string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) &&
-        attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
-        FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) &&
-        FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) &&
-        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal) &&
+        SameFocusedEvidenceRequest(attempt, focusedEvidenceRequest, requestContext) &&
         string.Equals(
             attempt.FindingRoundFingerprint,
             requestContext?.FindingRoundFingerprint,
@@ -953,7 +949,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
         FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) &&
         FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) &&
-        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal);
+        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal) &&
+        string.Equals(attempt.FocusedExecutionBasisIdentity, requestContext?.ExecutionBasisIdentity, StringComparison.Ordinal);
 
     private PreReviewEvidenceRelaunchProvenance? BuildRelaunchProvenance(
         ConductorParallelAcceptanceAttempt prior,

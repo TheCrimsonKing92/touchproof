@@ -88,8 +88,10 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
         }
     }
 
-    [Fact]
-    public void CandidateOnlyBaselineAttemptRecordsOnceAndRerunsCandidate()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CandidateOnlyBaselineAttemptRecordsOncePerBasis(bool changeBasisAfterRestart)
     {
         const string candidateSha = "abc1234";
         var root = ConductorDriverTests.CreateTempDirectory();
@@ -108,17 +110,29 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 findings: [EvidenceFindingWithRequest("Find the failing test", id: "baseline-missing",
                     classes: ["ConductorDriverTests"])]);
 
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null);
+            var settings = new AcceptanceGateEngineSettings();
+            var newBasisRuns = 0;
             var retries = 0;
             var outcomes = 0;
-            var driver = MakeDriver(
+            ConductorDriver CreateDriver() => MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
-                focusedEvidenceAttemptCoordinator: coordinator,
+                getFindingEvidenceEngineSettings: _ => settings,
+                focusedEvidenceAttemptCoordinator: new(root, TrunkBranchName.Default, runInline: true,
+                    acquireStableSlotLease: (_, _) => null),
                 executionDirectory: root,
                 getLandingFileScopes: _ => [],
                 runFocusedEvidence: (_, request) =>
                 {
+                    if (settings.EnforceStructuralCoverage)
+                    {
+                        newBasisRuns++;
+                        var green = ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(root, request, candidateSha);
+                        return green with
+                        {
+                            Arms = green.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray(),
+                            OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence
+                        };
+                    }
                     var red = CandidateRedFindingEvidence(
                         request, candidateSha, "OutsideTests.FailingMethod(passed: True)");
                     return red with { Arms = red.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray() };
@@ -136,6 +150,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                     kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
                 });
 
+            var driver = CreateDriver();
             for (var tick = 0; tick < 5; tick++)
             {
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -170,6 +185,38 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 evt.Message.Contains("disposition=candidate-rerun-requested", StringComparison.Ordinal)));
             Assert.Single(goal.Timeline.Where(evt =>
                 evt.Message.Contains("disposition=candidate-rerun-red", StringComparison.Ordinal)));
+
+            if (!changeBasisAfterRestart) return;
+            var prior = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer)!;
+            var redReceipt = Assert.Single(reviewer.LastVerification!.FindingEvidenceReceipts!);
+            Assert.False(redReceipt.Passed);
+            Assert.Equal(prior.ExecutionBasisIdentity, redReceipt.ExecutionBasisIdentity);
+            kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            goal = kernel.GetGoal(goal.Id);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            settings = new AcceptanceGateEngineSettings { EnforceStructuralCoverage = true };
+            driver = CreateDriver();
+            var current = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer)!;
+            Assert.Equal(prior.CandidateSha, current.CandidateSha);
+            Assert.Equal(prior.RoundFingerprint, current.RoundFingerprint);
+            Assert.NotEqual(prior.ExecutionBasisIdentity, current.ExecutionBasisIdentity);
+            Assert.False(FindingRoundBatchAccounting.IsClosed(goal, current));
+
+            Assert.True(driver.TryBuildFindingEvidenceRequest(goal, reviewer, ConductorAutonomyPolicy.Permissive, out var fresh));
+
+            Assert.Equal(1, newBasisRuns);
+            var verification = reviewer.LastVerification!;
+            var receipts = verification.FindingEvidenceReceipts!;
+            var greenReceipt = Assert.Single(receipts.Where(receipt => receipt.Passed));
+            Assert.Equal(current.ExecutionBasisIdentity, greenReceipt.ExecutionBasisIdentity);
+            Assert.NotEqual(redReceipt.ReceiptId, greenReceipt.ReceiptId);
+            var retainedRed = Assert.Single(receipts.Where(receipt => receipt.ReceiptId == redReceipt.ReceiptId));
+            Assert.False(retainedRed.Passed);
+            Assert.Equal(prior.ExecutionBasisIdentity, retainedRed.ExecutionBasisIdentity);
+            Assert.Equal(greenReceipt.ReceiptId,
+                verification.MergedReviewFindings!.Single(item => item.StableId == finding.StableId).EvidenceOutcome?.ReceiptId);
+            Assert.Equal(reviewer.Id, fresh.TargetTaskId);
+            Assert.Equal(current, Assert.IsType<FindingEvidenceBatchClosure>(fresh.BatchClosure).Identity);
         }
         finally
         {

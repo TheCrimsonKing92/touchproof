@@ -52,12 +52,10 @@ internal sealed partial class ConductorDriver
     }
 
     /// <summary>
-    /// A Tester round whose Developer-owned findings are ALL still waiting on the focused execution
-    /// the conductor itself scheduled is pending verification, not a demonstrated writable defect.
-    /// Run that scheduled execution once for the exact candidate before spending a paid Developer
-    /// round on a candidate nobody has measured. A single writable finding in the round - no typed
-    /// request, a receipt already taken at this candidate, a permanent refusal, or an unknown
-    /// candidate - keeps today's immediate Developer dispatch with zero focused runs.
+    /// Drain pending requests from the whole Tester round before selecting its next paid worker.
+    /// Advisory requests remain batch members when a separate source blocker requires Developer
+    /// repair. The drained batch selects that repair once; without a pending request, the existing
+    /// immediate Developer route still applies.
     /// </summary>
     private bool TryRouteTesterFindingToPendingEvidence(
         Goal goal,
@@ -67,7 +65,7 @@ internal sealed partial class ConductorDriver
     {
         observation = FailedGoalFindingObservation.None;
         if (!_focusedEvidenceRunnerConfigured ||
-            trigger.DeveloperOwnedFindings is not { Count: > 0 } developerOwnedFindings ||
+            trigger.DeveloperOwnedFindings is not { Count: > 0 } ||
             // No feasible upstream Developer: today's escalation is the correct unchanged outcome.
             trigger.TargetTask is not { } upstreamDeveloper ||
             // An un-consumed Developer retry is already going to change the candidate, so evidence
@@ -78,9 +76,8 @@ internal sealed partial class ConductorDriver
         }
 
         var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
-        if (!ConductorGitRevisionReader.IsValid(candidateSha) ||
-            !FindingEvidenceExecutionClassifier.IsPendingExecutionOnly(
-                developerOwnedFindings, trigger.TriggeringTask, candidateSha))
+        var pendingFindings = FindingRoundBatchCoordinator.PendingFindings(trigger.TriggeringTask, candidateSha);
+        if (!ConductorGitRevisionReader.IsValid(candidateSha) || pendingFindings.Length == 0)
         {
             return false;
         }
@@ -99,7 +96,7 @@ internal sealed partial class ConductorDriver
         }
 
         var findingRound = BuildFindingRoundFingerprint(trigger.TriggeringTask, round);
-        var requestIdentity = BuildFindingEvidenceRequestIdentity(developerOwnedFindings);
+        var requestIdentity = BuildFindingEvidenceRequestIdentity(pendingFindings);
         var guard = $"candidate_sha={candidateSha}; finding_round={findingRound}; request_identity={requestIdentity}";
         if (!goal.Timeline.Any(evt =>
                 evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
@@ -112,7 +109,7 @@ internal sealed partial class ConductorDriver
                 trigger.TriggeringTask.Id,
                 $"finding-evidence disposition=pending-execution-gate; role={trigger.TriggeringTask.RequiredRole}; " +
                 $"task_id={trigger.TriggeringTask.Id}; " +
-                $"finding_ids={string.Join(",", developerOwnedFindings.Select(item => item.StableId))}; " +
+                $"finding_ids={string.Join(",", pendingFindings.Select(item => item.StableId))}; " +
                 $"{guard}; deferred_developer_task_id={upstreamDeveloper.Id}");
         }
         return true;
@@ -177,44 +174,6 @@ internal sealed partial class ConductorDriver
             goal, task, candidateSha!, findings, currentReceipts,
             "The Developer-owned findings have honoured GREEN evidence at this candidate.", policy);
         return true;
-    }
-
-    private static bool HasCurrentFindingEvidenceReceipt(
-        TaskSpec requestingTask,
-        ReviewFinding finding,
-        FindingEvidenceRequest request,
-        string candidateSha,
-        string findingRoundFingerprint,
-        string executionBasisIdentity)
-    {
-        var receiptId = finding.EvidenceOutcome?.ReceiptId;
-        if (string.IsNullOrWhiteSpace(receiptId) || candidateSha == "unavailable")
-        {
-            return false;
-        }
-
-        var identity = BuildFindingEvidenceIdentity(request);
-        if (!TryGetFindingEvidenceCoverage(request, out var requestedCoverage))
-        {
-            return false;
-        }
-
-        return requestingTask.VerificationHistory
-            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .Any(receipt =>
-                string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(
-                    receipt.FindingRoundFingerprint,
-                    findingRoundFingerprint,
-                    StringComparison.Ordinal) &&
-                IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity) &&
-                TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection), out var executedCoverage) &&
-                requestedCoverage.SetEquals(executedCoverage) &&
-                (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
-                    (receipt.RequestDispositions ?? []).Any(disposition =>
-                        string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
-                        string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal))));
     }
 
     private void ReattachReusableGreenFindingEvidence(
@@ -412,8 +371,12 @@ internal sealed partial class ConductorDriver
         var reusableBySelection = new Dictionary<string, FindingEvidenceReceipt>(StringComparer.Ordinal);
         foreach (var selection in requestedCoverage)
         {
+            // A later remainder execution can replace the finding outcome while the original
+            // partial receipt still proves the selections it actually ran.
             if (latestReceiptBySelection.TryGetValue(selection, out var receipt) &&
                 (validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) ||
+                 (receipt.RequestDispositions ?? []).Any(disposition =>
+                     FindingEvidenceRequestCompletion.IsIncompleteExecution(receipt, disposition)) ||
                  (preTesterCoverage ?? []).Any(source => source.Receipt == receipt)) &&
                 IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity))
             {
@@ -473,9 +436,7 @@ internal sealed partial class ConductorDriver
         var coverageDispositions = dispositions
             .Where(disposition =>
                 disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal) ||
-                (hasCandidateOmissions && disposition is
-                    { Disposition: "incomplete", Reason: "candidate-selections-not-executed", Decision: FindingEvidenceRequestDecision.PendingExecution } &&
-                 disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true))
+                (hasCandidateOmissions && FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition)))
             .ToArray();
         var executedDispositionCoverage = coverageDispositions.SelectMany(disposition =>
                 FindingEvidenceRoundPlanner.ExpandSelections(ParseDispositionSelections(disposition.RequestIdentity)))
@@ -587,7 +548,7 @@ internal sealed partial class ConductorDriver
             .ToLowerInvariant()[..24];
     }
 
-    private static bool TryGetFindingEvidenceCoverage(
+    internal static bool TryGetFindingEvidenceCoverage(
         FindingEvidenceRequest request,
         out HashSet<string> coverage)
     {
@@ -637,6 +598,11 @@ internal sealed partial class ConductorDriver
         }
         return selections;
     }
+
+    internal void RecordNotHonoured(GoalId goalId, TaskSpec task, ReviewFinding finding,
+        FindingEvidenceNotHonouredReason reason, string detail, string candidate, AcceptanceGateEngineSettings? settings = null) =>
+        FindingEvidenceRefusalRecorder.Record(goalId, task, finding, reason, detail, candidate, settings,
+            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, TrimForConductorMessage);
 
     // One refusal truth: routing and the worker-visible execution state read the same rule.
     private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome) =>
