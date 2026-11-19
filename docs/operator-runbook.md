@@ -23,6 +23,16 @@ Evidence ownership when applying this policy:
 
 This documentation slice is verified by document review, link verification and diff review. It adds no runtime implementation, instrumentation, configuration flag, model call or heavy test suite, and requires no current measurements or future Operator evidence to accept the documentation. Existing review and acceptance gates remain intact.
 
+## Provider connections
+
+In the full-screen Windows operator console, open **Settings** and use Left or Right to reach **Provider connections**. Use Up or Down to select a profile and **c** to check it. The tab displays the last observation for each context and identifies historical worker evidence. A failed refresh appears alongside the last available observation. Press **r** to reload the configured profiles and stored evidence.
+
+Press **s** to open the provider's native sign-in in a separate desktop window. **d** starts device-code sign-in when the installed Grok CLI advertises that option. Profiles listed under **Shared native sign-in** use the same provider credential source. For an API-key profile, follow the setup guidance shown on its row and then check the connection.
+
+The console rechecks the selected profile when the native process exits or when you press **t** to report your return or **x** to stop waiting, whichever comes first. The native window stays open after **t** or **x** if the process is still running. The console continues monitoring it and enables sign-in for the shared credential scope after exit. Read the sign-in outcome and readiness observations separately. For example, the host CLI can report signed in while worker acceptance remains unverified.
+
+After activating the promoted console, use a consented test account. Record a redacted desktop sign-in launched from **Provider connections**, followed by the selected row after the return check. Include the installed provider CLI versions from their version commands. Redact account details, credentials, device codes, and any other authentication material. The operator collects this evidence after landing.
+
 ## Console older than the shared store
 
 On a newer-store read failure, goal detail loading, goal detail refresh, or the board's failed state-read row displays: "This console build is older than the shared store. You must restart the console on a current build."

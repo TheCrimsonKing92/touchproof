@@ -51,6 +51,8 @@ Acceptance regression selectors: `OwnerConsoleReadDrainTests`, `OwnerConsoleScre
 
 ## Workspace reads
 
+**Provider connections** loads the workspace worker profile catalog and reads provider-connection observations and recorded worker evidence from the selected workspace's state store. Opening the tab is read-only. An explicit **Check connection**, including the check after returning from sign-in, uses the provider-readiness service to run the host status probe and write closed observation metadata for the selected profile.
+
 | Source | Scope | Console read location and provenance |
 | --- | --- | --- |
 | Selected workspace identity | Per-workspace | `src/Mcg.AgentOrchestrator.App/Console/OwnerConsoleProjectLabel.cs:8` reads `IsProjectScoped` and `ProjectName`; production supplies it at `src/Mcg.AgentOrchestrator.App/Console/OwnerConsoleVerb.cs:54` and `src/Mcg.AgentOrchestrator.App/Console/OwnerConsoleFullScreenHost.cs:131`. |
