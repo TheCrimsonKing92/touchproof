@@ -79,11 +79,11 @@ internal static class FindingRoundBatchAccounting
                 item.Message.StartsWith(marker, StringComparison.Ordinal));
     }
 
-    internal static Observation? RequiredUnavailable(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity)
+    internal static Observation[] RequiredUnavailable(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity)
     {
         var blockingIds = RequiredFindingIds(goal, task);
-        var unavailable = Read(goal, identity).Where(item => item.Kind == "unavailable" && item.FindingIds.Any(blockingIds.Contains));
-        return unavailable.FirstOrDefault(item => item.Eligibility is not null) ?? unavailable.FirstOrDefault();
+        return Read(goal, identity)
+            .Where(item => item.Kind == "unavailable" && item.FindingIds.Any(blockingIds.Contains)).ToArray();
     }
 
     internal static HashSet<string> RequiredFindingIds(Goal goal, TaskSpec task) =>
