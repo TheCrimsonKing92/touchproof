@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
@@ -98,15 +99,15 @@ internal static class FindingRoundBatchSchedule
                 continue;
             }
             // Earlier partial runs spent the same allowance even though the remainder has a new receipt ID.
-            var runMarkers = PartialGreenReceiptIds(batch, currentReceipts.Values, candidateSha,
-                    findingRoundFingerprint, executionBasisIdentity).Prepend(legacyId).Prepend(receiptId).Distinct()
+            var partialReceiptIds = PartialGreenReceiptIds(batch, currentReceipts.Values, candidateSha,
+                findingRoundFingerprint, executionBasisIdentity).ToHashSet(StringComparer.Ordinal);
+            var runMarkers = partialReceiptIds.Prepend(legacyId).Prepend(receiptId).Distinct()
                 .Select(id => (ReceiptId: id, Marker: $"receipt_id={id};")).ToArray();
             var findingMarker = $"finding_id={batch.Findings[0].StableId};";
             var basisMarker = $"execution_basis={executionBasisIdentity};";
             var chargedAttempts = new HashSet<string>(StringComparer.Ordinal);
             var runs = timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
-                item.TaskId == requestingTaskId &&
-                item.Message.Contains(findingMarker, StringComparison.Ordinal))
+                item.TaskId == requestingTaskId)
                 .Select(item => (Event: item, runMarkers.FirstOrDefault(marker =>
                     item.Message.Contains(marker.Marker, StringComparison.Ordinal)).ReceiptId))
                 .Where(run => run.ReceiptId is not null &&
@@ -114,7 +115,15 @@ internal static class FindingRoundBatchSchedule
                      (!run.Event.Message.Contains("execution_basis=", StringComparison.Ordinal) &&
                       (run.ReceiptId == receiptId || !receipts.Any(receipt =>
                           receipt.ReceiptId == run.ReceiptId && receipt.ExecutionBasisIdentity != executionBasisIdentity)))))
-                .Where(run => FailureAttemptId(run.Event.Message) is not { } attemptId || chargedAttempts.Add(attemptId))
+                .Where(run =>
+                {
+                    var message = run.Event.Message;
+                    if (FailureAttemptId(message) is not { } attemptId)
+                        return message.Contains(findingMarker, StringComparison.Ordinal);
+                    var partialReceipt = partialReceiptIds.Contains(run.ReceiptId!)
+                        ? currentReceipts[run.ReceiptId!] : null;
+                    return FailureChargedToBatch(message, batch, findingMarker, partialReceipt) && chargedAttempts.Add(attemptId);
+                })
                 .ToArray();
             // A run-charge checkpoint can survive a restart before the task records the refusal.
             if (ReadPermanentRefusal(batch, runs.Select(run => run.Event), receiptId, executionBasisIdentity) is { } refusal)
@@ -124,6 +133,28 @@ internal static class FindingRoundBatchSchedule
             else executable.Add(batch);
         }
         return new(passed, covered, executable, unavailable, refusals);
+    }
+
+    private static bool FailureChargedToBatch(string message, FindingEvidenceBatch batch, string findingMarker,
+        FindingEvidenceReceipt? partialReceipt)
+    {
+        const string prefix = FindingRoundBatchCoordinator.FailedAttemptMembersPrefix;
+        var start = message.IndexOf(prefix, StringComparison.Ordinal);
+        if (start >= 0)
+        {
+            var end = message.LastIndexOf("; reason=", StringComparison.Ordinal);
+            var members = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Member[]>(message[(start + prefix.Length)..end])
+                ?? throw new InvalidOperationException("Focused evidence failure checkpoint membership is null.");
+            return members.Any(charged => batch.Members.Any(member => member.Identity == charged.RequestIdentity &&
+                member.Findings.Any(finding => charged.FindingIds.Contains(finding.StableId, StringComparer.Ordinal))));
+        }
+
+        // Older charges named only the first finding. A matching partial receipt identifies
+        // that earlier run's members even after the original first finding has settled.
+        return message.Contains(findingMarker, StringComparison.Ordinal) ||
+            (partialReceipt?.RequestDispositions ?? []).Any(disposition =>
+                disposition.SourceReceiptIds?.Contains(partialReceipt!.ReceiptId, StringComparer.Ordinal) == true &&
+                message.Contains($"finding_id={disposition.FindingStableId};", StringComparison.Ordinal));
     }
 
     private static FindingRoundBatchRefusal? ReadPermanentRefusal(

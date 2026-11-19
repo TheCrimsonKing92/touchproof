@@ -7,8 +7,16 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class FindingEvidenceRequestCompletion
 {
     internal static bool IsPartialGreenDisposition(FindingEvidenceReceipt receipt, FindingEvidenceRequestDisposition disposition) =>
-        disposition is { Disposition: "incomplete", Decision: FindingEvidenceRequestDecision.PendingExecution,
-            Reason: "candidate-selections-not-executed" } &&
+        disposition.Reason == "candidate-selections-not-executed" && IsIncompleteExecution(receipt, disposition);
+
+    internal static bool IsIncompleteExecution(FindingEvidenceReceipt receipt, FindingEvidenceRequestDisposition disposition) =>
+        disposition is { Disposition: "incomplete", Decision: FindingEvidenceRequestDecision.PendingExecution } &&
+        disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true;
+
+    internal static bool IsExecutedMember(FindingEvidenceReceipt receipt, FindingEvidenceRequestDisposition disposition,
+        string requestIdentity, string findingId) =>
+        disposition.Decision == FindingEvidenceRequestDecision.Executed &&
+        disposition.RequestIdentity == requestIdentity && disposition.FindingStableId == findingId &&
         disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true;
 
     internal static bool TryPersistDispositions(

@@ -114,6 +114,82 @@ public sealed class FindingRoundBatchCompletionTests
     [Trait("Category", "CrossTick")]
     [InlineData(false)]
     [InlineData(true)]
+    public void GroupedPartialGreen_PreservesExecutedMemberAfterReload(bool retainObservations)
+    {
+        using var scenario = new Scenario(false, "regrouped-green") { RecordBatchAccounting = retainObservations };
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var identity = FindingRoundBatchCoordinator.Identity(scenario.Driver, scenario.Goal, scenario.Tester)!;
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Contains("GammaTests", Assert.Single(scenario.Runs), StringComparison.Ordinal);
+        var partial = Assert.Single(scenario.Tester.LastVerification!.FindingEvidenceReceipts!);
+        Assert.Contains(partial.RequestDispositions!, item =>
+            item.FindingStableId == "first" && item.Decision == FindingEvidenceRequestDecision.Executed);
+        Assert.Contains(partial.RequestDispositions!, item =>
+            item.FindingStableId == "second" && item.Decision == FindingEvidenceRequestDecision.PendingExecution);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepare());
+        if (retainObservations)
+        {
+            var pending = FindingRoundBatchAccounting.Summarize(scenario.Goal, scenario.Tester, identity, "pending");
+            Assert.Equal(1, pending.NewlyExecuted);
+            Assert.False(pending.IsSettled);
+        }
+
+        scenario.RecordBatchAccounting = true;
+        scenario.Restart();
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+
+        Assert.Equal(2, scenario.Runs.Count);
+        Assert.Equal("Infrastructure.Tests:GammaTests", scenario.Runs[1]);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(2, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(0, summary.Covered);
+        Assert.Equal(scenario.Tester.Id, Assert.Single(scenario.Retries));
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void GroupedFailureBeforePartialGreen_ExhaustsRemainderAfterReload()
+    {
+        using var scenario = new Scenario(false, "regrouped-failure");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+            Assert.Empty(scenario.Retries);
+            Assert.Empty(scenario.Prepare());
+            scenario.Restart();
+        }
+        Assert.Equal(3, scenario.Runs.Count);
+        Assert.Equal(scenario.Runs[0], scenario.Runs[1]);
+        Assert.Contains("AlphaTests", scenario.Runs[0], StringComparison.Ordinal);
+        Assert.Equal("Infrastructure.Tests:GammaTests", scenario.Runs[2]);
+        var charges = scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+            item.Message.StartsWith(FindingRoundBatchCoordinator.FailedAttemptRunPrefix, StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, charges.Length);
+        Assert.Contains("\"FindingIds\":[\"second\"]", charges[0].Message, StringComparison.Ordinal);
+
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+
+        Assert.Equal(4, scenario.Runs.Count);
+        Assert.EndsWith(":DeltaTests", scenario.Runs[3], StringComparison.Ordinal);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Unavailable);
+        Assert.Single(scenario.Escalations);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    [InlineData(false)]
+    [InlineData(true)]
     public void RestoredCurrentReceipts_ReconcileBeforeOneClosingSelection(bool sourceBlocker)
     {
         using var scenario = new Scenario(sourceBlocker) { RecordBatchAccounting = false };
@@ -744,6 +820,21 @@ public sealed class FindingRoundBatchCompletionTests
             if (failure == "partial-green")
                 Findings = [Findings[0] with { EvidenceRequest = new([
                     new("Infrastructure.Tests", "AlphaTests"), new("Infrastructure.Tests", "BetaTests")]) }];
+            if (failure is "regrouped-green" or "regrouped-failure")
+            {
+                var exhaust = failure == "regrouped-failure";
+                Findings = [
+                    Findings[0] with { Severity = exhaust ? FindingSeverity.Advisory : FindingSeverity.Blocking },
+                    Findings[1] with
+                    {
+                        Severity = exhaust ? FindingSeverity.Blocking : FindingSeverity.Advisory,
+                        EvidenceRequest = new([new("Infrastructure.Tests", "BetaTests"), new("Infrastructure.Tests", "GammaTests")])
+                    }];
+                if (exhaust)
+                    Findings = [.. Findings, EvidenceFindingWithRequest("Later request", "later",
+                        FindingCategory.TestCoverage, project: "Core.Tests", classes: ["DeltaTests"]) with
+                        { Severity = FindingSeverity.Advisory }];
+            }
             DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: _root, baseCommit: Candidate);
             var stdout = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
                 "tests: deferred - acceptance owns execution", "commit: none", "blockers: none",
@@ -844,17 +935,21 @@ public sealed class FindingRoundBatchCompletionTests
                 if (_failure == "terminal" && Runs.Count == 1 || _failure == "terminal-advisory" && Runs.Count == 2)
                     return new(request, false, false, "Request unavailable", []);
                 if ((_failure == "rejected" && Runs.Count == 1) ||
-                    (_failure == "always-rejected" && request == Runs[0]))
+                    (_failure == "always-rejected" && request == Runs[0]) ||
+                    (_failure == "regrouped-failure" && Runs.Count is 1 or 3))
                     return new(request, false, false, "Source discovery unavailable", [],
                         Rejection: new(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, request, "Source discovery unavailable"));
                 if (_failure == "run-failed" && Runs.Count == 1)
                     throw new InvalidOperationException("Focused executor failed before producing evidence.");
                 // Passing requests can settle independently of a source finding that has no evidence request.
                 var partialGreen = _failure == "partial-green" && Runs.Count == 1;
+                var groupedPartial = _failure == "regrouped-green" && Runs.Count == 1 ||
+                    _failure == "regrouped-failure" && Runs.Count == 2;
                 var green = ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
-                    _root, request, Candidate, partialGreen ? ["AlphaTests"] : null);
+                    _root, request, Candidate, groupedPartial ? ["AlphaTests", "BetaTests"] : partialGreen ? ["AlphaTests"] : null);
                 var arm = green.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
                 if (partialGreen) arm = arm with { NotRunSelections = [new("Infrastructure.Tests", "BetaTests")] };
+                if (groupedPartial) arm = arm with { NotRunSelections = [new("Infrastructure.Tests", "GammaTests")] };
                 return green with { Arms = [arm], OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence };
             },
             retryTaskWithRoundKind: (goal, task, message, round) =>

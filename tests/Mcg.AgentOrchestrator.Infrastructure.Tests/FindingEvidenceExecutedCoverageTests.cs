@@ -184,7 +184,10 @@ public sealed class FindingEvidenceExecutedCoverageTests
                     for (var tick = 0; tick < 2; tick++) driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
                     Assert.Equal(FindingRoundBatchSchedule.MaximumCompletedRuns, executions.Count);
                     Assert.Equal(executions[1], executions[2]);
-                    Assert.Equal(1, ClosingSummary().Unavailable);
+                    var exhausted = ClosingSummary();
+                    Assert.Equal(1, exhausted.Unavailable);
+                    Assert.Equal(0, exhausted.UnknownSelections);
+                    Assert.Equal(0, exhausted.PaidVerificationCallsAvoided);
                     Assert.Single(escalations);
                     Assert.Empty(Retries());
                     Assert.Equal(0, dispatchCalls);
@@ -201,6 +204,8 @@ public sealed class FindingEvidenceExecutedCoverageTests
                 var summary = ClosingSummary();
                 Assert.Equal(1, summary.NewlyExecuted);
                 Assert.Equal(0, summary.ReviewerCallsAvoided);
+                Assert.Equal(0, summary.UnknownSelections);
+                Assert.Equal(0, summary.PaidVerificationCallsAvoided);
                 Assert.Equal(1, dispatchCalls);
             }
 

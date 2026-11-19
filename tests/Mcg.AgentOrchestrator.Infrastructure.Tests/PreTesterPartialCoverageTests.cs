@@ -96,6 +96,16 @@ public sealed class PreTesterPartialCoverageTests
         Assert.False(FindingReceiptClosureDiagnosis.Evaluate(scenario.Goal, scenario.Tester, CandidateSha).IsClosable);
         if (outcome == "not-run")
         {
+            var identity = FindingRoundBatchCoordinator.Identity(driver, scenario.Goal, scenario.Tester)!;
+            var incomplete = Assert.Single(scenario.Verification.FindingEvidenceReceipts!, receipt =>
+                receipt is { Accepted: true, Passed: true } && (receipt.RequestDispositions ?? []).Any(disposition =>
+                    disposition.Reason == "reused-pre-tester-invalidated-or-incomplete"));
+            Assert.DoesNotContain(FindingRoundBatchAccounting.Read(scenario.Goal, identity),
+                item => item.Kind == "suppressed-selection" && item.ReceiptId == incomplete.ReceiptId);
+            var summary = FindingRoundBatchAccounting.Summarize(scenario.Goal, scenario.Tester, identity, "pending");
+            Assert.Equal(0, summary.TesterCallsAvoided);
+            Assert.Equal(0, summary.PaidVerificationCallsAvoided);
+
             scenario.NextResult = request => scenario.Unsuccessful(request, outcome);
             scenario.Tick(driver);
 

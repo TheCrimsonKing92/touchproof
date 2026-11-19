@@ -191,17 +191,19 @@ internal static class FindingRoundBatchCoordinator
         var marker = $"{FailedAttemptRunPrefix}{attempt.AttemptId};";
         var identity = new FindingEvidenceBatchIdentity(task.Id, batchCandidate, round, batchBasis);
         // Checkpoint the original members before per-finding writes can change the next tick's plan.
+        var members = batch.Members.Select(member => new FindingRoundBatchAccounting.Member(member.Identity,
+            member.Findings.Select(finding => finding.StableId).ToArray())).ToArray();
         var refusal = FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
             ? new TerminalRefusal(attempt.AttemptId, batch.TypedRequest.Repository, receiptId, reason, detail,
-                batch.Members.Select(member => new FindingRoundBatchAccounting.Member(member.Identity,
-                    member.Findings.Select(finding => finding.StableId).ToArray())).ToArray())
+                members)
             : null;
         lock (goal)
         {
             if (!goal.Timeline.Any(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded && item.TaskId == task.Id &&
                     item.Message.StartsWith(marker, StringComparison.Ordinal)))
             {
-                var membership = refusal is null ? "" : $"{RefusalCheckpointPrefix}{identity.Key}; refusal={JsonSerializer.Serialize(refusal)}";
+                var membership = refusal is null ? $"{FailedAttemptMembersPrefix}{JsonSerializer.Serialize(members)}"
+                    : $"{RefusalCheckpointPrefix}{identity.Key}; refusal={JsonSerializer.Serialize(refusal)}";
                 driver._checkpointFindingEvidenceRun(goal.Id, task.Id,
                     $"{marker} finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
                     $"receipt_id={receiptId}; execution_basis={basis}{membership}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
@@ -226,6 +228,7 @@ internal static class FindingRoundBatchCoordinator
     }
 
     internal const string FailedAttemptRunPrefix = "finding-evidence failed-attempt; attempt_id=";
+    internal const string FailedAttemptMembersPrefix = "; request_members=";
     private const string RefusalCheckpointPrefix = "; refusal_batch=";
 
     private sealed record TerminalRefusal(string AttemptId, string? Repository, string ReceiptId,
@@ -532,6 +535,10 @@ internal static class FindingRoundBatchCoordinator
                 // These conditions prove ineligibility; they are zero, not unknown savings.
                 if (task.Status != WorkTaskStatus.Failed || goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) ||
                     Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any()) continue;
+                // An incomplete GREEN execution cannot be delivered for interpretation.
+                if (receipt is { Accepted: true, Passed: true } && (receipt.RequestDispositions ?? []).Any(disposition =>
+                        FindingEvidenceRequestCompletion.IsIncompleteExecution(receipt, disposition))) continue;
+
                 if (reusedRedDecision is not null && receipt is { Accepted: true, Passed: true })
                 {
                     if (reusedRedDecision.TargetTaskId is { } redTarget && PolicySelects(driver, goal, policy, reusedRedDecision))
@@ -543,11 +550,6 @@ internal static class FindingRoundBatchCoordinator
                     }
                     continue;
                 }
-                // The scheduler withholds delivery while a partial GREEN receipt leaves its request pending.
-                if (task.RequiredRole == AgentRole.Tester && receipt is { Accepted: true, Passed: true } &&
-                    (receipt.RequestDispositions ?? []).Any(disposition =>
-                        FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition))) continue;
-
                 var open = ReviewFindings.GetOpenBlockingFindings(findings, goal.EffectiveAcceptanceCriteriaCorrections);
                 var sourceRepair = TrySourceRepair(goal, task, identity.CandidateSha, [receipt.ReceiptId], open, out var sourceRoute);
                 var diagnosis = FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha);

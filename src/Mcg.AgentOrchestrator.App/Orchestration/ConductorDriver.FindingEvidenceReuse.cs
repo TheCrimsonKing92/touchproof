@@ -207,11 +207,14 @@ internal sealed partial class ConductorDriver
                     StringComparison.Ordinal) &&
                 IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity) &&
                 TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection), out var executedCoverage) &&
-                requestedCoverage.SetEquals(executedCoverage) &&
-                (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
-                    (receipt.RequestDispositions ?? []).Any(disposition =>
-                        string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
-                        string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal))));
+                ((requestedCoverage.SetEquals(executedCoverage) &&
+                    (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
+                        (receipt.RequestDispositions ?? []).Any(disposition =>
+                            string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
+                            string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal)))) ||
+                 (requestedCoverage.IsSubsetOf(executedCoverage) &&
+                    (receipt.RequestDispositions ?? []).Any(disposition => FindingEvidenceRequestCompletion.IsExecutedMember(
+                        receipt, disposition, identity, finding.StableId)))));
     }
 
     private void ReattachReusableGreenFindingEvidence(

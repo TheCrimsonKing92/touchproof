@@ -46,6 +46,17 @@ internal static class FindingRoundRedCoverage
             candidateSha, fingerprint, basis, FindingRoundBatchSchedule.ReadRunTimeline(goal));
         foreach (var (batch, receiptId) in settled.Passed)
             FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, "executed", receiptId);
+        if (receipt is { Accepted: true, Passed: true } && !settled.Passed.Any(item => item.ReceiptId == receipt.ReceiptId))
+        {
+            // A partial group can complete individual requests while its remainder stays runnable.
+            var dispositions = receipt.RequestDispositions ?? [];
+            foreach (var member in runnable.Members)
+                foreach (var finding in member.Findings)
+                    if (dispositions.Any(disposition => FindingEvidenceRequestCompletion.IsExecutedMember(
+                            receipt, disposition, member.Identity, finding.StableId)))
+                        FindingRoundBatchCoordinator.RecordCurrentReceipt(driver, goal, task, batchCandidateSha, fingerprint,
+                            batchBasis, member.Identity, finding.StableId, receipt.ReceiptId);
+        }
         foreach (var item in settled.RedCovered)
             FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "executed", item.Receipt.ReceiptId);
         foreach (var item in settled.Unavailable)
