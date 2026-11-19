@@ -33,6 +33,7 @@ internal sealed partial class ConductorContinuitySupervisor
 {
     private FleetBuildAdoptionSummary? _fleetBuildAdoptionSummary;
     private FleetBuildRollingRestartTrigger? _fleetRollingRestartTrigger;
+    private CostGoalOutcomeSweep? _costGoalOutcomeSweep;
     internal Func<FleetBuildRollingRestartTrigger>? FleetRollingRestartTriggerFactory { get; init; }
     internal Func<FleetBuildAdoptionSummary>? FleetAdoptionSummaryFactory { get; init; }
 
@@ -360,7 +361,7 @@ internal sealed partial class ConductorContinuitySupervisor
                 (_fleetBuildAdoptionSummary ??= FleetAdoptionSummaryFactory?.Invoke() ?? new FleetBuildAdoptionSummary(
                     OrchestratorProjectRegistry.CreateDefault(), AppendAdoptedBuildEvent, _timeProvider,
                     homeRoot: OrchestratorHome.ResolveForProcess().SourceRootDirectory,
-                    onFinalized: AdoptedBuildPushTrigger.CreateDefault(AppendAdoptedBuildEvent).OnFinalized))
+                    onFinalized: AdoptedBuildPushTrigger.CreateDefault(AppendAdoptedBuildEvent, SweepCostGoalOutcomes).OnFinalized))
                     .OnHomeAdopted(primaryBuild.CommitSha, now);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
@@ -387,6 +388,11 @@ internal sealed partial class ConductorContinuitySupervisor
             throw new InvalidOperationException("Adopted build publication requires a conduct event sink.");
         appendConductEvent("loop-handoff", null, detail);
     }
+
+    private void SweepCostGoalOutcomes() =>
+        LazyInitializer.EnsureInitialized(ref _costGoalOutcomeSweep, () => CostGoalOutcomeSweep.CreateDefault(
+            AdoptedBuildPushTrigger.ResolveHomeWorkspace(OrchestratorProjectRegistry.CreateDefault()),
+            AppendAdoptedBuildEvent)).Run(_timeProvider.GetUtcNow);
 
     private void RaiseFailedBothAttention(
         string workingDirectory,
