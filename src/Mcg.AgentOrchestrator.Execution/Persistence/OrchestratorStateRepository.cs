@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public interface IOrchestratorStateQueries
+public interface IOrchestratorStateQueries : IProviderConnectionEvidenceQueries
 {
     /// <summary>Candidate-only provider policy inputs, without full snapshot restoration.
     /// Null means unsupported: callers must retain the full-load path.</summary>

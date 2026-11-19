@@ -31,7 +31,7 @@ public sealed record WorkerProcessDirectRunRequest(
     public string[] ToArgumentVector() => [FileName, .. Arguments];
 }
 
-public static class WorkerProcessRunner
+public static partial class WorkerProcessRunner
 {
     public static ProcessStartInfo BuildPowerShellStartInfo(
         string command,

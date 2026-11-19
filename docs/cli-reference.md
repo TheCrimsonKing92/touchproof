@@ -326,6 +326,8 @@ dispatch <task-number> <worker-name> <command>
 worker-profiles
 worker-profile <name> <command-template>
 worker-profile-check [name]
+provider-connections [--json]
+provider-connections check --profile <profile-id> [--json]
 worker-profile-export <path>
 worker-profile-import <path> [merge|replace]
 worker-dispatch <task-number> <worker-name> <command-template>
@@ -472,6 +474,8 @@ $env:OLLAMA_MODEL = "qwen3:8b"                    # default
 The Ollama adapter uses the OpenAI-compatible chat completions API, so it also works with other local inference servers (vLLM, LM Studio) that expose the same endpoint. Thinking-model output (e.g. Qwen3 reasoning) is captured as fallback content when the model exhausts its token budget before producing a final answer.
 
 ### Smoke Testing
+
+`provider-connections` lists the effective worker catalog and prior observations without probing or writing. `provider-connections check --profile codex-cli` performs one bounded host status check and retains its allowlisted metadata; `--json` uses the versioned `mcg.provider-connections` envelope. Codex uses `login status`, Claude uses `auth status --json`, and Grok/custom profiles show unsupported host probing plus recorded worker evidence or unknown. Host sign-in, selected Claude credential material and historical worker outcomes remain separate, with original UTC times and age. Checks never initiate login, a sandbox or a model request. A report returns exit 0 for all readiness states; invalid syntax/selection or report failure returns nonzero. After activation, record redacted installed-host checks of the configured Codex, Claude and Grok profiles against the promoted build.
 
 Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to make a live, minimal request and print the provider response, stop reason, and token usage. Omitting the provider tests reachable local Ollama only and does not fall back to paid providers. Use `provider-smoke openai --confirm-paid-smoke` or `provider-smoke anthropic --confirm-paid-smoke` only when deliberately making a paid smoke request. The command skips unconfigured providers and fails if no selected live provider is available. Add a task number, for example `provider-smoke openai --confirm-paid-smoke 4`, to append the successful smoke result to that task's verification history. Use `provider-smoke all --confirm-all` only when intentionally comparing every configured provider.
 
