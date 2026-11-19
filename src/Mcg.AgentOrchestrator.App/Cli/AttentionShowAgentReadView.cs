@@ -14,8 +14,8 @@ internal static class AttentionShowAgentReadView
         IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null)
     {
         var renderTime = PostLandingFollowUpAttention.CaptureRenderTime(time);
-        return AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
-            PostLandingFollowUpAttention.WithRows(EnvironmentHoldAttentionView.WithRows(AttentionAgentReadView.WithPostLandingDuties(WithDecisions(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
+        var selectedGoals = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray();
+        var payload = PostLandingFollowUpAttention.WithRows(EnvironmentHoldAttentionView.WithRows(AttentionAgentReadView.WithPostLandingDuties(WithDecisions(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
             {
                 ["goalId"] = goalId,
                 ["waits"] = waits.Select(wait => new
@@ -37,7 +37,7 @@ internal static class AttentionShowAgentReadView
                     isExternallyBlocked = wait.IsExternallyBlocked,
                     resumeCommand = wait.ResumeCommand
                 }).ToArray(),
-                ["gateEvidence"] = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)
+                ["gateEvidence"] = selectedGoals
                     .SelectMany(goal => goal.GateTestObligations.Where(item => item.BriefVersion == goal.AuthoritativeBrief.Version)
                         .Select(item => new { goalId = goal.Id.Value, identity = item.PlannerIdentity,
                             owner = "acceptance-gate", availability = "post-implementation", item.Selectors,
@@ -54,7 +54,7 @@ internal static class AttentionShowAgentReadView
                     correlationKey = item.CorrelationKey,
                     raisedAt = item.RaisedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
                 }).ToArray(),
-                ["ownerQuestionHolds"] = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)
+                ["ownerQuestionHolds"] = selectedGoals
                     .Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
                     .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>()
                     .Select(hold => new
@@ -71,11 +71,51 @@ internal static class AttentionShowAgentReadView
                         itemId = hold.ItemId,
                         recommendation = hold.Recommendation
                     }).ToArray()
-            }, amendmentHolds), decisions), AttentionAgentReadView.DutyRows(null,
-                (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray())),
-                (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)), waits,
-                (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray(), renderTime.GetUtcNow()),
+            }, amendmentHolds), decisions), AttentionAgentReadView.DutyRows(null, selectedGoals)), selectedGoals),
+                waits, selectedGoals, renderTime.GetUtcNow());
+        return AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
+            WithRetryFeedbackDelivery(payload, selectedGoals),
             new JsonSerializerOptions(JsonSerializerDefaults.Web), renderTime);
+    }
+
+    private static Dictionary<string, object?> WithRetryFeedbackDelivery(Dictionary<string, object?> payload,
+        IEnumerable<Goal> goals)
+    {
+        var rows = new List<object>();
+        foreach (var goal in goals)
+        {
+            foreach (var task in goal.Tasks)
+            {
+                if (task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)
+                {
+                    continue;
+                }
+
+                var delivery = RetryFeedbackDeliveryClassifier.Classify(task);
+                if (delivery.AcceptedAt is not { } acceptedAt)
+                {
+                    continue;
+                }
+
+                rows.Add(new
+                {
+                    goalId = goal.Id.Value,
+                    taskId = task.Id.Value,
+                    state = delivery.DeliveryState == RetryFeedbackDeliveryClassifier.State.Delivered
+                        ? "delivered" : "awaiting-delivery",
+                    acceptedAt = acceptedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+                    promptHash = delivery.PromptHash,
+                    dispatchedAt = delivery.DispatchedAt?.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
+                });
+            }
+        }
+
+        if (rows.Count > 0)
+        {
+            payload.Add("retryFeedbackDelivery", rows);
+        }
+
+        return payload;
     }
 
     private static Dictionary<string, object?> WithDecisions(Dictionary<string, object?> payload,
