@@ -118,7 +118,8 @@ public sealed record AttentionReadProjection(
     IReadOnlyList<ProviderUsageGoalEvidence> ProviderEvidence,
     AttentionProjectionReadCounts Reads,
     IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null,
-    IReadOnlyList<AttentionEnvironmentHoldEvidence>? EnvironmentHolds = null);
+    IReadOnlyList<AttentionEnvironmentHoldEvidence>? EnvironmentHolds = null,
+    IReadOnlyList<string>? OperatorPreLandingGoalIds = null);
 
 public sealed record AcceptanceQueueFact(string GoalId, GoalPriority Priority,
     DateTimeOffset VerifiedAt, DateTimeOffset CreatedAt);
