@@ -91,6 +91,7 @@ public static partial class WorkerProfileDispatcher
     public const string ArtifactTooLargeErrorCode = "artifact-too-large";
     public const string UnsupportedClaudeReasoningEffortErrorCode = "unsupported-claude-reasoning-effort";
     private const string HighRiskReviewerReasoningEffort = "xhigh";
+    private const string SubscriptionLimitReviewFinding = "blocked: repeated recoverable subscription limits require operator review";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
     private static readonly IReadOnlyDictionary<string, RegistryArtifactSource> RegistryArtifactSources =
         new Dictionary<string, RegistryArtifactSource>(StringComparer.Ordinal)
@@ -165,6 +166,9 @@ public static partial class WorkerProfileDispatcher
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         var retainedDispatch = WorkerDispatchPromptPreparation.RetainForRestoration(task, profile, workingDirectory, dispatchedAt, restorePreparedContext);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        if (retainedDispatch is null && ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
+            throw new InvalidOperationException(SubscriptionLimitReviewFinding);
+
         if (retainedDispatch is null) OperatorRoutingNoteLedger.PrepareDispatch(task, dispatchedAt);
         var priorDispatch = task.LastDispatch ?? task.DispatchHistory.LastOrDefault();
         var durableArtifactFindings = new List<string>();
@@ -706,7 +710,7 @@ public static partial class WorkerProfileDispatcher
 
             if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
             {
-                findings.Add("blocked: repeated recoverable subscription limits require operator review");
+                findings.Add(SubscriptionLimitReviewFinding);
             }
 
             var blocked = findings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase));
@@ -1541,18 +1545,6 @@ public static partial class WorkerProfileDispatcher
 
         throw new InvalidOperationException(
             $"Task '{task.Id}' subscription retry deferred until {retryAfter:u}; source: {ProviderLimitSignals.DescribeSubscriptionRetrySource(task)}.");
-    }
-
-    private static void EnsureRepeatedSubscriptionLimitReviewed(TaskSpec task)
-    {
-        if (!ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
-        {
-            return;
-        }
-
-        var failures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
-        throw new InvalidOperationException(
-            $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); inspect model, profile, or timing before redispatch.");
     }
 
     public static IReadOnlyDictionary<string, string?> BuildSubscriptionTemplateVariables(AgentDefinition agent)

@@ -529,7 +529,7 @@ private static void AcknowledgeSubscriptionLimitReviewFromCli(CliExecutionContex
         throw new ArgumentException("Usage: subscription-dispatch <task-number> [--confirm-limit-review <note>|--confirm-limit-review --text-file <path>]");
     }
 
-    if (ProviderLimitSignals.RequiresManualSubscriptionLimitReview(task) &&
+    if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task) &&
         !ProviderLimitSignals.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out _))
     {
         var failures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);

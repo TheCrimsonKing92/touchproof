@@ -16,22 +16,32 @@ public static class ProviderLimitSignals
         @"\bresets?\s+in\s*:?\s*(?:(?<hours>\d+)\s*h(?:ours?)?)?\s*(?:(?<minutes>\d+)\s*m(?:in(?:ute)?s?)?)?\s*(?:(?<seconds>\d+)\s*s(?:ec(?:ond)?s?)?)?",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    public static bool RequiresSubscriptionLimitReview(TaskSpec task) =>
-        RequiresSubscriptionLimitReview(task, includeProviderHolds: false);
-
-    internal static bool RequiresManualSubscriptionLimitReview(TaskSpec task) =>
-        RequiresSubscriptionLimitReview(task, includeProviderHolds: true);
-
-    private static bool RequiresSubscriptionLimitReview(TaskSpec task, bool includeProviderHolds)
+    public static bool RequiresSubscriptionLimitReview(TaskSpec task)
     {
-        if (!HasRecoverableSubscriptionLimitHistory(task) ||
-            (!includeProviderHolds && ProviderHoldRetry.IsHoldInterruption(task.VerificationHistory[^1])))
+        if (!HasRecoverableSubscriptionLimitHistory(task))
             return false;
 
-        var failureCount = CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds);
-        return failureCount >= RecoverableSubscriptionLimitReviewThreshold &&
-            task.SubscriptionLimitReviewedFailureCount <
-                (includeProviderHolds ? failureCount : CountRecoverableSubscriptionLimitFailures(task));
+        // Acknowledgments store the total recoverable-limit count. Compare each reviewable
+        // refusal with that same ordinal so an intervening hold does not reopen a review.
+        var failureCount = 0;
+        var reviewableCount = 0;
+        foreach (var verification in task.VerificationHistory)
+        {
+            if (!IsRecoverableSubscriptionLimitFailure(verification))
+                continue;
+
+            failureCount++;
+            if (ProviderHoldRetry.IsHoldInterruption(verification) &&
+                !ProviderHoldEvidence.Read(verification).OffersSubscriptionCooldownRetry)
+                continue;
+
+            reviewableCount++;
+            if (reviewableCount >= RecoverableSubscriptionLimitReviewThreshold &&
+                failureCount > task.SubscriptionLimitReviewedFailureCount)
+                return true;
+        }
+
+        return false;
     }
 
     public static bool IsSubscriptionRetryDeferred(TaskSpec task, DateTimeOffset now, out DateTimeOffset retryAfter)

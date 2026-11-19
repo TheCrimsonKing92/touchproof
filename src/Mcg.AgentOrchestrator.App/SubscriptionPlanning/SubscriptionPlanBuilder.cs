@@ -376,7 +376,7 @@ public static class SubscriptionPlanBuilder
                     : "Ready to prepare subscription dispatch."
                 : !AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy)
                     ? $"Agent execution policy is {agent.ExecutionPolicy}; subscription dispatch is disabled."
-                : providerBindingHeld
+                : providerBindingHeld && (!providerCoolingDown || providerHold.Reason == ProviderFailureKind.AuthenticationRequired)
                     ? DescribeProviderHold(providerHold)
                 : retryDeferred
                     ? $"Recoverable subscription usage limit ({previousLimitFailures}); retry after {retryAfter:u}."

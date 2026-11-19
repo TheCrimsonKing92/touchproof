@@ -73,6 +73,8 @@ internal sealed record ProviderHoldEvidence(ProviderFailureKind Kind, string Lin
     internal bool Confirmed => Kind is ProviderFailureKind.BudgetExhausted or ProviderFailureKind.AuthenticationRequired;
     internal bool HasUsageLimitDiagnostic => Kind == ProviderFailureKind.BudgetExhausted && UsageWindow.IsMatch(Line);
     internal bool IsWeeklyUsageLimitReached => Kind == ProviderFailureKind.BudgetExhausted && WeeklyUsageLimitReached.IsMatch(Line);
+    internal bool OffersSubscriptionCooldownRetry => HasUsageLimitDiagnostic &&
+        Line.Contains("purchase more credits or try again", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsUsageWindowDiagnostic(string line) =>
         WeeklyUsageLimitReached.IsMatch(line) ||
