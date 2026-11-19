@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
-// Parallel-safe: repository checks only read source; synthetic cases use in-memory data.
+// Parallel-safe: synthetic scans are pure; the repository scan only reads the shared snapshot.
 public sealed class OwnerConsoleControllerConstructionGuardTests
 {
     private const string FactoryPath =
