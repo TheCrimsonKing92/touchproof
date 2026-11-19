@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -301,6 +302,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         const string failingTest =
             "ConductorDriverTestsFindingEvidenceReuse.ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper";
         var (kernel, goal) = SoftwareGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single(task => task.RequiredRole == AgentRole.Planner));
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         PassVerification(kernel, goal, developer, hasCommittedChanges: true);
@@ -413,6 +415,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             Assert.Equal(5, focusedRequests.Count);
             Assert.Equal(0, retries);
             Assert.Null(escalation);
+            Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, tester));
             var observations = FindingRoundBatchAccounting.Read(goal, replayBatch);
             Assert.DoesNotContain(observations, item => item.Kind == "executed" && item.FindingIds.Contains(pendingSibling.StableId));
             var green = Assert.Single(observations, item => item.Kind == "executed" && item.FindingIds.Contains(sibling.StableId));
