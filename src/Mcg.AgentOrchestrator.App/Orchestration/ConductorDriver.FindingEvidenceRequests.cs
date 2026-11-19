@@ -244,10 +244,13 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
+        void ObserveDelivery(FindingRoundRedCoverage.Delivery delivery) =>
+            observeDelivery(delivery with { ReviewerRoute = hasReviewerDecision ? reviewerDecision : null });
+
         var homeGroups = groups.Where(group => !repositoryTargets.ContainsKey(group.Identity)).ToArray();
         if (homeGroups.Length > 0 && TryExecuteFindingEvidenceGroups(goal, requestingTask, policy, homeGroups,
                 requestingFindings, candidateSha, findingRoundFingerprint, executionBasisIdentity, findingEvidenceEngineSettings,
-                null, telemetryCandidateSha, batchBasisIdentity, groups.Except(homeGroups).ToArray(), reusedRedDecision, observeDelivery, out decision))
+                null, telemetryCandidateSha, batchBasisIdentity, groups.Except(homeGroups).ToArray(), reusedRedDecision, ObserveDelivery, out decision))
             return true;
         foreach (var partition in groups.Where(group => repositoryTargets.ContainsKey(group.Identity))
                      .GroupBy(group => repositoryTargets[group.Identity].Key).OrderBy(partition => partition.Key, StringComparer.Ordinal))
@@ -257,7 +260,7 @@ internal sealed partial class ConductorDriver
                     partition.SelectMany(group => group.Findings).ToArray(), target.CandidateHead,
                     findingRoundFingerprint, FindingRoundBatchCoordinator.ExecutionContext.TargetBasis(target), target.EngineSettings,
                     target, telemetryCandidateSha, batchBasisIdentity,
-                    groups.Except(partition).ToArray(), reusedRedDecision, observeDelivery, out decision))
+                    groups.Except(partition).ToArray(), reusedRedDecision, ObserveDelivery, out decision))
                 return true;
         }
         if (reusedRedDecision is not null || hasReviewerDecision)
@@ -403,21 +406,12 @@ internal sealed partial class ConductorDriver
                 requestContext,
                 out evidence,
                 out evidenceAttempt,
-                out decision, out _, existingAttempt: null, deferSuccessfulReconciliation: true))
+                out decision, out var attemptKind, existingAttempt: null, deferSuccessfulReconciliation: true))
         {
-            if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
-            {
-                foreach (var finding in runnable.Findings)
-                {
-                    RecordNotHonoured(
-                        goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed,
-                        decision.Evidence, telemetryCandidateSha);
-                }
-                decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
-                    batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
-                    FindingEvidenceNotHonouredReason.RunFailed,
-                    "The focused evidence executor failed; a typed refusal was attached.", batchCandidateSha, batchBasisIdentity, reusedRedDecision);
-            }
+            decision = FindingRoundBatchCoordinator.ObserveUnfinishedExecution(this, goal, requestingTask, runnable,
+                batches.Count > 1, telemetryCandidateSha, executionBasisIdentity,
+                new(requestingTask.Id, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity),
+                attemptKind, evidenceAttempt, decision, reusedRedDecision);
             return true;
         }
 
@@ -571,6 +565,7 @@ internal sealed partial class ConductorDriver
         {
             FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, batchCandidateSha, findingRoundFingerprint,
                 batchBasisIdentity, runnable, "unavailable", receiptId, decision.Evidence);
+            decision = reusedRedDecision ?? decision;
             return true;
         }
         if (completions.Any(item => item.Completion.Incomplete))

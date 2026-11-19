@@ -138,6 +138,24 @@ internal static class FindingRoundBatchCoordinator
                 [finding.StableId], Eligibility: reason), driver._recordFindingEvidenceRequest);
     }
 
+    internal static FailedGoalFindingObservation ObserveUnfinishedExecution(ConductorDriver driver, Goal goal, TaskSpec task,
+        FindingEvidenceBatch batch, bool morePending, string candidate, string basis, FindingEvidenceBatchIdentity identity,
+        ConductorParallelAcceptanceAttemptDecisionKind? attemptKind, ConductorParallelAcceptanceAttempt? attempt,
+        FailedGoalFindingObservation observation, FailedGoalFindingObservation? reusedActionableRed)
+    {
+        // Capacity and cancellation can defer execution without spending the request allowance.
+        var launchFailed = attemptKind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun &&
+            attempt?.Outcome == ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
+        if (!launchFailed && observation.Kind != FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
+            return observation;
+
+        const FindingEvidenceNotHonouredReason reason = FindingEvidenceNotHonouredReason.RunFailed;
+        foreach (var finding in batch.Findings)
+            driver.RecordNotHonoured(goal.Id, task, finding, reason, observation.Evidence, candidate);
+        return RecordExecutionFailure(driver, goal, task, batch, morePending, candidate, identity.RoundFingerprint, basis,
+            reason, observation.Evidence, identity.CandidateSha, identity.ExecutionBasisIdentity, reusedActionableRed);
+    }
+
     internal static FailedGoalFindingObservation RecordExecutionFailure(ConductorDriver driver, Goal goal, TaskSpec task,
         FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis,
         FindingEvidenceNotHonouredReason reason, string detail, string batchCandidate, string batchBasis,
@@ -411,21 +429,29 @@ internal static class FindingRoundBatchCoordinator
                         FailedGoalFindingObservationKind.FindingRouteObserved, developer!.Id,
                         ConductorDriver.BuildFailedGoalAttemptIdentity(developer), "Open source finding after evidence receipt.", null,
                         observedCause: RetryCause.NewSourceFinding));
-                var canDeliverToReviewer = task.RequiredRole == AgentRole.Reviewer &&
+                AgentRole? reviewerRouteRole = null;
+                if (task.RequiredRole == AgentRole.Reviewer &&
                     !ConductorDriver.UsesQualifiedReviewerContinuation(goal, task) &&
                     receipt is { Accepted: true, Passed: true } &&
-                    completedDelivery is { } delivery && delivery.CompletedReceiptId == receipt.ReceiptId &&
-                    PolicySelects(driver, goal, policy, ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(
-                        goal, task, identity.CandidateSha, delivery.Findings, delivery.ReceiptIds, "Focused evidence completed."));
+                    completedDelivery is { } delivery && delivery.CompletedReceiptId == receipt.ReceiptId)
+                {
+                    var reviewerRoute = delivery.ReviewerRoute ?? ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(
+                        goal, task, identity.CandidateSha, delivery.Findings, delivery.ReceiptIds, "Focused evidence completed.");
+                    if (reviewerRoute.TargetTaskId is { } reviewerRouteTarget && PolicySelects(driver, goal, policy, reviewerRoute))
+                        reviewerRouteRole = goal.Tasks.Single(candidate => candidate.Id == reviewerRouteTarget).RequiredRole;
+                    else if (delivery.ReviewerRoute is not null)
+                        continue;
+                }
                 var role = canInterpret ? AgentRole.Tester : canRepair ? AgentRole.Developer :
-                    canDeliverToReviewer ? AgentRole.Reviewer : (AgentRole?)null;
-                var target = canRepair ? developer!.Id : task.Id;
+                    reviewerRouteRole;
+                var target = reviewerRouteRole is not null && completedDelivery?.ReviewerRoute?.TargetTaskId is { } reviewerTarget
+                    ? reviewerTarget : canRepair ? developer!.Id : task.Id;
                 FindingRoundBatchAccounting.Record(goal, identity,
                     new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + target.Value + ":" + (role?.ToString() ?? "unknown"),
                         [], receipt.ReceiptId, role,
                         canInterpret ? "passing-receipt; failed Tester; dependencies complete; interpretation route selects requesting Tester"
                             : canRepair ? "source-repair route; open Developer-owned source finding; completed upstream Developer; no running processes"
-                            : canDeliverToReviewer ? "passing-receipt; capped evidence delivery selects requesting Reviewer"
+                            : reviewerRouteRole is not null ? $"passing-receipt; recovery policy selects {reviewerRouteRole} through the Reviewer evidence route"
                             : "unknown: no demonstrated eligible paid verification selection"), driver._recordFindingEvidenceRequest);
             }
         }

@@ -304,6 +304,49 @@ public sealed class FindingRoundBatchCompletionTests
 
     [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
+    public void RepeatedLaunchFailure_UsesRunAllowanceAndDrainsLaterRequests()
+    {
+        using var scenario = new Scenario(false, failure: "launch-failed");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        scenario.CapacityBlocked = true;
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Empty(scenario.FailedLaunchRequests);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
+
+        scenario.CapacityBlocked = false;
+        for (var attempt = 1; attempt <= FindingRoundBatchSchedule.MaximumCompletedRuns; attempt++)
+        {
+            Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+            Assert.Equal(attempt, scenario.FailedLaunchRequests.Count);
+            Assert.Empty(scenario.Retries);
+            Assert.Empty(scenario.Prepared);
+        }
+        Assert.All(scenario.FailedLaunchRequests, request => Assert.Contains("AlphaTests", request));
+        var failures = scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded).ToArray();
+        Assert.Equal(FindingRoundBatchSchedule.MaximumCompletedRuns, failures.Length);
+        Assert.All(failures, item => Assert.Contains("reason=run-failed;", item.Message, StringComparison.Ordinal));
+        Assert.Empty(scenario.Runs);
+        Assert.Empty(scenario.Escalations);
+
+        scenario.LaunchRecovered = true;
+        scenario.Restart();
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Contains("BetaTests", Assert.Single(scenario.Runs));
+        Assert.Empty(scenario.Retries);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Equal(2, scenario.Runs.Count);
+        Assert.Contains("GammaTests", scenario.Runs[1]);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(1, summary.Unavailable);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Single(scenario.Escalations);
+        Assert.Empty(scenario.Retries);
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
     public async Task ConcurrentClose_AdmitsOneRetryAndSurvivesSnapshot()
     {
         using var scenario = new Scenario(true);
@@ -500,6 +543,9 @@ public sealed class FindingRoundBatchCompletionTests
         internal ReviewFinding[] Findings { get; }
         internal ConductorDriver Driver { get; private set; }
         internal List<string> Runs { get; } = [];
+        internal List<string> FailedLaunchRequests { get; } = [];
+        internal bool CapacityBlocked { get; set; }
+        internal bool LaunchRecovered { get; set; }
         internal List<TaskId> Retries { get; } = [];
         internal List<string> Escalations { get; } = [];
         internal LandingEscalationWriteResult EscalationResult { get; set; } = LandingEscalationWriteResult.CompletedWithoutExternalSinks;
@@ -545,7 +591,15 @@ public sealed class FindingRoundBatchCompletionTests
             getLandingFileScopes: _ => [],
             getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),
             focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(_root,
-                TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null,
+                TrunkBranchName.Default, runInline: _failure != "launch-failed" || LaunchRecovered,
+                launchOwnedProcess: _failure == "launch-failed" ? launch =>
+                {
+                    FailedLaunchRequests.Add(launch.Attempt.FocusedEvidenceRequest!);
+                    throw new InvalidOperationException("Injected owned-process launch failure");
+                } : null,
+                readPreReviewEvidenceCapacity: _failure == "launch-failed" ? _ =>
+                    CapacityBlocked ? new(0, 2, 0, true) : new(2, 2, 0, true) : null,
+                acquireStableSlotLease: (_, _) => null,
                 conductEventLogWriter: new ConductEventLogWriter(Path.Combine(_root, "conduct.jsonl"),
                     beforeRequiredEventDrain: RejectDispositionWrite)),
             runFocusedEvidence: (_, request) =>

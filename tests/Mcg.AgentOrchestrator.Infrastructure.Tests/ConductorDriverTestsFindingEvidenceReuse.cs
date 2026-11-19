@@ -289,6 +289,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
     [Xunit.InlineData("none")]
     [Xunit.InlineData("green")]
     [Xunit.InlineData("unsupported")]
+    [Xunit.InlineData("inherited-red")]
     public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper(string siblingOutcome)
     {
         const string candidateSha = "abc1234";
@@ -305,6 +306,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             classes: ["ConductorDriverTestsFindingEvidenceReuse"]);
         var focusedRuns = 0;
         TaskId? retriedTaskId = null;
+        var retries = 0;
         string? escalation = null;
         FocusedEvidenceRunResult RunEvidence(string request)
         {
@@ -317,8 +319,16 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                 3 when siblingOutcome == "unsupported" => new FocusedEvidenceRunResult(
                     request, Accepted: false, Passed: false, Summary: "Unsupported advisory project", Checks: [],
                     Rejection: new(FocusedEvidenceRejectionCode.UnsupportedProject, request, "Unsupported advisory project")),
+                3 when siblingOutcome == "inherited-red" => InheritedRed(request),
                 _ => RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha)
             };
+        }
+
+        FocusedEvidenceRunResult InheritedRed(string request)
+        {
+            var red = CandidateRedFindingEvidence(request, candidateSha, "SiblingTests.Fails");
+            var candidate = red.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
+            return red with { Arms = [candidate, candidate with { Arm = FindingEvidenceArm.Baseline, Sha = "baseline-sha" }] };
         }
 
         RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
@@ -348,6 +358,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             runFocusedEvidence: (_, request) => RunEvidence(request),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
+                retries++;
                 retriedTaskId = taskId;
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             },
@@ -364,11 +375,21 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
 
         Assert.Equal(siblingOutcome == "none" ? 2 : 3, focusedRuns);
         Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Equal(1, retries);
         Assert.Null(escalation);
-        if (siblingOutcome == "unsupported")
+        if (siblingOutcome is "unsupported" or "inherited-red")
         {
-            var outcome = tester.VerificationHistory.Last().MergedReviewFindings!.Single(item => item.StableId == sibling.StableId);
-            Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, outcome.EvidenceOutcome?.Reason);
+            if (siblingOutcome == "unsupported")
+            {
+                var outcome = tester.VerificationHistory.Last().MergedReviewFindings!.Single(item => item.StableId == sibling.StableId);
+                Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, outcome.EvidenceOutcome?.Reason);
+            }
+            else
+            {
+                var unavailable = Assert.Single(FindingRoundBatchAccounting.Read(goal, replayBatch),
+                    item => item.Kind == "unavailable" && item.FindingIds.Contains(sibling.StableId));
+                Assert.Contains("inherited from a RED Baseline arm", unavailable.Eligibility);
+            }
             Assert.NotEqual(seedBatch.RoundFingerprint, replayBatch.RoundFingerprint);
             Assert.True(FindingRoundBatchAccounting.IsClosed(goal, seedBatch));
             var closure = Assert.Single(goal.Timeline.Where(item => item.TaskId == tester.Id &&

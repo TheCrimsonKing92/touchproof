@@ -20,13 +20,12 @@ internal static class FindingRoundBatchSchedule
 
         // Completing a batch in this round does not require reattaching content-bound
         // evidence. Cross-round reuse keeps its stricter artifact and coverage checks.
-        var passedReceiptIds = receipts
-            .Where(receipt => receipt is { Accepted: true, Passed: true } &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+        var currentReceipts = receipts
+            .Where(receipt => string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(receipt.FindingRoundFingerprint, findingRoundFingerprint, StringComparison.Ordinal) &&
                 string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal))
-            .Select(receipt => receipt.ReceiptId)
-            .ToHashSet(StringComparer.Ordinal);
+            .GroupBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
         var passed = new List<(FindingEvidenceBatch Batch, string ReceiptId)>();
         var covered = new List<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)>();
         var executable = new List<FindingEvidenceBatch>();
@@ -37,9 +36,14 @@ internal static class FindingRoundBatchSchedule
                 candidateSha, findingRoundFingerprint, batch.Identity, executionBasisIdentity);
             // Pre-upgrade receipts and run events still count when they bind to this basis.
             var legacyId = ConductorDriver.CreateFindingEvidenceReceiptId(candidateSha, findingRoundFingerprint, batch.Identity);
-            if (passedReceiptIds.Contains(receiptId) || passedReceiptIds.Contains(legacyId))
+            var current = currentReceipts.GetValueOrDefault(receiptId) ?? currentReceipts.GetValueOrDefault(legacyId);
+            if (current is { Accepted: true, Passed: true } &&
+                !(current.RequestDispositions ?? []).Any(disposition =>
+                    disposition.Decision == FindingEvidenceRequestDecision.PendingExecution &&
+                    batch.Members.Any(member => member.Identity == disposition.RequestIdentity &&
+                        member.Findings.Any(finding => finding.StableId == disposition.FindingStableId))))
             {
-                passed.Add((batch, passedReceiptIds.Contains(receiptId) ? receiptId : legacyId));
+                passed.Add((batch, current.ReceiptId));
                 continue;
             }
             var covering = receipts.FirstOrDefault(receipt => CoversRed(

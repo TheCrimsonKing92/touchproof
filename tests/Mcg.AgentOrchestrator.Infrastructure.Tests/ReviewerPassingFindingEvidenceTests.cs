@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
@@ -11,21 +12,38 @@ public sealed class ReviewerPassingFindingEvidenceTests
         using var fixture = new ReviewerPassingFindingEvidenceFixture();
         var consumed = ReviewerPassingFindingEvidenceFixture.CliFinding();
         var advisory = ReviewerPassingFindingEvidenceFixture.CaptureFinding() with { Severity = FindingSeverity.Advisory };
+        var secondAdvisory = advisory with
+        {
+            StableId = "second-advisory",
+            Location = new("src/Mcg.AgentOrchestrator.App/Orchestration/FindingRoundBatchCoordinator.cs", "Observe"),
+            Description = "Check recovery policy coverage for suppressed Reviewer selections.",
+            EvidenceRequest = new([new("Core.Tests", "FailedGoalRecoveryPolicyTests")])
+        };
         fixture.Report([consumed]);
         fixture.AdvanceToDecision();
         Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
         Assert.Single(fixture.Executions);
 
-        fixture.Report([consumed, advisory]);
+        fixture.Report([consumed, advisory, secondAdvisory]);
         fixture.Reload();
-        fixture.AdvanceToDecision();
-
+        Assert.IsType<ConductorAdvanceOutcome.Held>(fixture.Advance().Outcome);
+        Assert.Single(fixture.Retries);
         Assert.Equal(2, fixture.Executions.Count);
         Assert.Contains(advisory.EvidenceRequest!.Selections[0].TestClass, fixture.Executions[1]);
+        fixture.AdvanceToDecision();
+
+        Assert.Equal(3, fixture.Executions.Count);
+        Assert.Contains(secondAdvisory.EvidenceRequest!.Selections[0].TestClass, fixture.Executions[2]);
         Assert.Equal(2, fixture.Retries.Count);
         Assert.Equal(fixture.Developer.Id, fixture.Retries[1].Task);
         Assert.Contains("REVIEWER_PASSING_EVIDENCE_CORRECTION", fixture.Retries[1].Feedback);
         Assert.Equal(2, fixture.ReviewDispatches);
+        var closure = Assert.Single(fixture.Goal.Timeline.Where(item =>
+            item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal) &&
+            item.Message.Contains("\"BatchSize\":3", StringComparison.Ordinal)));
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closure.Message[closure.Message.IndexOf('{')..])!;
+        Assert.Equal(0, summary.ReviewerCallsAvoided);
+        Assert.DoesNotContain(summary.EligibilityWitnesses, witness => witness.Role == AgentRole.Reviewer);
     }
 
     [Theory]

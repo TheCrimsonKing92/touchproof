@@ -456,6 +456,48 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
     }
 
     [Fact]
+    public void Reviewer_DeferredMembersWithoutDeveloper_EscalateOnceAcrossReplay()
+    {
+        using var fixture = new Fixture(reviewerOnly: true);
+        var source = new ReviewFinding("source", ReviewFindingState.Open, new("src/Record.cs", "Read"),
+            "Repair source before running repository evidence", Category: FindingCategory.Correctness);
+        var advisory = Finding("deferred", new([new("./record", "TestReadInvalidFixtures")], Repository: "crosswalk")) with
+        { Severity = FindingSeverity.Advisory };
+        FailReviewerNeedsWork(fixture.Kernel, fixture.Goal, fixture.Reviewer, "Repair source", findings: [source, advisory],
+            reviewedCommit: fixture.HomeHead);
+        var escalations = new List<string>();
+        var calls = new List<string>();
+        var driver = NewDriver();
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var identity = FindingRoundBatchCoordinator.Identity(driver, fixture.Goal, fixture.Reviewer)!;
+
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+        Assert.Contains("could not be routed to an upstream Developer", Assert.Single(escalations), StringComparison.Ordinal);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(fixture.Goal, identity));
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+
+        fixture.Restart();
+        Assert.IsType<ConductorAdvanceOutcome.Held>(NewDriver().AdvanceOnce(fixture.Goal, policy).Outcome);
+        Assert.Single(escalations);
+        Assert.Empty(calls);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(fixture.Goal, identity));
+        var closure = Assert.Single(fixture.Goal.Timeline.Where(item =>
+            item.Message.StartsWith($"finding-evidence batch-closed; batch_key={identity.Key};", StringComparison.Ordinal)));
+        var summary = JsonSerializer.Deserialize<FindingRoundBatchAccounting.Summary>(closure.Message[closure.Message.IndexOf('{')..])!;
+        Assert.Equal(1, summary.BatchSize);
+        Assert.Equal(1, summary.Deferred);
+        Assert.StartsWith("FindingRouteUnavailable:", summary.RoutingReason);
+
+        ConductorDriver NewDriver()
+        {
+            var result = fixture.Driver([], calls, recordBatchAccounting: true, recordEscalation: escalations.Add);
+            result.RunKeyedFocusedEvidence = (_, _, _, _, _, _, _, _, _, _) =>
+                throw new InvalidOperationException("Deferred request ran before source repair");
+            return result;
+        }
+    }
+
+    [Fact]
     public void Reviewer_DeferredMembersAtRetryCap_AdmitOneClosureAcrossReplay()
     {
         using var fixture = new Fixture();
@@ -630,7 +672,7 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         internal string HomeHead { get; }
         internal string SecondaryHead { get; }
 
-        internal Fixture()
+        internal Fixture(bool reviewerOnly = false)
         {
             Registry = new(Path.Combine(Repositories.Home.Root, "evidence-registry"), Path.Combine(Repositories.Home.Root, "evidence-data"));
             Repositories.Crosswalk.Git("checkout", "-b", "trunk");
@@ -645,7 +687,13 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
                 """);
             Repositories.Home.Git("add", "config/acceptance-manifest.json");
             Repositories.Home.Git("commit", "-m", "Seed home settings");
-            (Kernel, Goal) = SoftwareGoal();
+            if (reviewerOnly)
+            {
+                Kernel = new AgentOrchestratorKernel();
+                Goal = Kernel.CreateGoal("Review existing source", [new TaskSpec(TaskId.New(), "Review source", AgentRole.Reviewer)]);
+                Kernel.ActivateGoal(Goal.Id, DefaultAgents());
+            }
+            else (Kernel, Goal) = SoftwareGoal();
             Kernel.DeclareGoalRepositories(Goal.Id, Repositories.Declaration);
             HomeWorktree = Repositories.CreateHomeWorktree(Goal);
             Assert.True(GoalRepositoryWorktreeProvisioner.TryProvision(new GoalRepositorySet(["crosswalk"]), Goal.Id,

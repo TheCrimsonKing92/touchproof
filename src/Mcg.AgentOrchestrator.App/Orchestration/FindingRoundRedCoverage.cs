@@ -13,7 +13,10 @@ internal static class FindingRoundRedCoverage
 {
     internal const string Reason = "redundant-candidate-red";
 
-    internal sealed record Delivery(string CompletedReceiptId, IReadOnlyList<ReviewFinding> Findings, IReadOnlyList<string> ReceiptIds);
+    internal sealed record Delivery(string CompletedReceiptId, IReadOnlyList<ReviewFinding> Findings, IReadOnlyList<string> ReceiptIds)
+    {
+        internal FailedGoalFindingObservation? ReviewerRoute { get; init; }
+    }
 
     // A completed request belongs to the round scheduler. Cross-round receipt reuse would
     // otherwise escalate its non-actionable red again before the next batch can run.

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -86,12 +87,29 @@ public sealed class PreTesterPartialCoverageTests
         scenario.RunPreTester();
         scenario.Report("BetaTests", "GammaTests");
         scenario.NextResult = request => scenario.Unsuccessful(request, outcome);
-        scenario.Tick(scenario.Driver());
+        var driver = scenario.Driver();
+        scenario.Tick(driver);
 
         Assert.Equal(["GammaTests"], Classes(scenario.Requests[1]));
         Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
         Assert.NotEqual(WorkTaskStatus.Completed, scenario.Tester.Status);
         Assert.False(FindingReceiptClosureDiagnosis.Evaluate(scenario.Goal, scenario.Tester, CandidateSha).IsClosable);
+        if (outcome == "not-run")
+        {
+            scenario.NextResult = request => scenario.Unsuccessful(request, outcome);
+            scenario.Tick(driver);
+
+            Assert.Equal(3, scenario.Requests.Count);
+            Assert.Equal(["GammaTests"], Classes(scenario.Requests[2]));
+            Assert.Equal(FindingEvidenceExecutionState.PendingExecution,
+                FindingEvidenceExecutionClassifier.Classify(scenario.Tester, scenario.Finding, CandidateSha));
+            Assert.DoesNotContain(scenario.Tester.Id,
+                DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(scenario.Goal, DefaultAgents()).TaskIds);
+            Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried &&
+                item.TaskId == scenario.Tester.Id);
+            Assert.DoesNotContain(scenario.Goal.Timeline, item => item.TaskId == scenario.Tester.Id &&
+                item.Message.StartsWith("finding-evidence batch-closed;", StringComparison.Ordinal));
+        }
     }
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]

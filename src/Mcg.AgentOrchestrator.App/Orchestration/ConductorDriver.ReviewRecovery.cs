@@ -211,7 +211,8 @@ internal sealed partial class ConductorDriver
                 FailedGoalFindingObservationKind.FindingRouteUnavailable,
                 $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {route.TargetRole} task; operator action required. " +
                 $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
-            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
+                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
             return true;
         }
 

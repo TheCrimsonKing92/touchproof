@@ -635,7 +635,7 @@ internal sealed partial class ConductorDriver
         return selections;
     }
 
-    private void RecordNotHonoured(GoalId goalId, TaskSpec task, ReviewFinding finding,
+    internal void RecordNotHonoured(GoalId goalId, TaskSpec task, ReviewFinding finding,
         FindingEvidenceNotHonouredReason reason, string detail, string candidate, AcceptanceGateEngineSettings? settings = null) =>
         FindingEvidenceRefusalRecorder.Record(goalId, task, finding, reason, detail, candidate, settings,
             _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, TrimForConductorMessage);
