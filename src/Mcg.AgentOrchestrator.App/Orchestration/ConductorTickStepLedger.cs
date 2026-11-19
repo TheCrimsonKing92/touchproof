@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -8,6 +9,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // but is restored on every exit and cannot keep recording after the tick ends.
 internal sealed class ConductorTickStepLedger
 {
+    private const string KernelReloadStepName = "kernel-reload";
+
     internal static readonly IReadOnlyList<string> WalkNames = Array.AsReadOnly(new[]
     {
         "walk-advance", "walk-retry-advance", "walk-outcome-capacity", "walk-disposition",
@@ -50,6 +53,19 @@ internal sealed class ConductorTickStepLedger
         "reconcile-remediation", "host-health", "maintenance", "state-log-check", "failure-clusters",
         "remote-git-mirror", "goal-refinement", "program-health"
     });
+    internal const string ActionableGoalIdQuery = "actionable-goal-id-query";
+    internal const string GoalMetadataList = "goal-metadata-list";
+    internal const string TerminalDependencyMetadataRead = "terminal-dependency-metadata-read";
+    internal const string KernelMerge = "kernel-merge";
+    internal const string TickBaselineCapture = "tick-baseline-capture";
+    internal const string KernelReloadRemainderName = "remainder";
+    internal static readonly IReadOnlyList<string> KernelReloadNames = Array.AsReadOnly(new[]
+    {
+        ActionableGoalIdQuery, GoalMetadataList, TerminalDependencyMetadataRead,
+        SqliteOrchestratorStateRepository.GoalVersionQuery, SqliteOrchestratorStateRepository.ChangedSnapshotRead,
+        SqliteOrchestratorStateRepository.HumanInputRequestLoad, SqliteOrchestratorStateRepository.KernelBuild,
+        SqliteOrchestratorStateRepository.EngineeringPracticeLoad, KernelMerge, TickBaselineCapture
+    });
     internal static readonly IReadOnlyList<string> AdmissionNames = Array.AsReadOnly(new[]
     {
         "attempt-census", "attempt-reconcile", "grouped-admission-prep", "candidate-supersession", "merge-train", "pair-cohort", "solo-admission",
@@ -69,6 +85,7 @@ internal sealed class ConductorTickStepLedger
     private readonly int _ownerThread = Environment.CurrentManagedThreadId;
     private readonly object _gate = new();
     private readonly Dictionary<string, (long Ticks, long WallTicks, long Calls, long InclusiveTicks, long InclusiveWallTicks)> _steps = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (long WallTicks, long Calls)> _kernelReloadSteps = new(StringComparer.Ordinal);
     private readonly Stack<Frame> _frames = new();
     private bool _active;
     private long _goalsHydrated, _metadataRows, _terminalJournalStats, _backlogRows, _readinessEvaluations;
@@ -127,6 +144,45 @@ internal sealed class ConductorTickStepLedger
 
     internal static void MeasureWithinWalk(string name, Action action) =>
         MeasureWithinWalk(name, () => { action(); return true; });
+
+    internal static T MeasureKernelReload<T>(string name, Func<T> action)
+    {
+        var ledger = CurrentKernelReload();
+        if (ledger is null) return action();
+
+        // Keep these wall-only measurements out of the CPU frame stack.
+        var startedAt = Stopwatch.GetTimestamp();
+        try { return action(); }
+        finally { ledger.RecordKernelReloadStep(name, Stopwatch.GetElapsedTime(startedAt)); }
+    }
+
+    internal static void MeasureKernelReload(string name, Action action) =>
+        MeasureKernelReload(name, () => { action(); return true; });
+
+    internal static Action<string, TimeSpan>? KernelReloadTimingSink()
+    {
+        var ledger = CurrentKernelReload();
+        return ledger is null ? null : ledger.RecordKernelReloadStep;
+    }
+
+    private static ConductorTickStepLedger? CurrentKernelReload()
+    {
+        var ledger = Current.Value;
+        if (ledger is null || Environment.CurrentManagedThreadId != ledger._ownerThread) return null;
+        lock (ledger._gate)
+            return ledger._active && ledger._frames.Any(frame => frame.Name == KernelReloadStepName) ? ledger : null;
+    }
+
+    private void RecordKernelReloadStep(string name, TimeSpan elapsed)
+    {
+        // SQLite busy retries can resume on another thread before the owner returns.
+        lock (_gate)
+        {
+            if (!_active || !KernelReloadNames.Contains(name)) return;
+            var old = _kernelReloadSteps.GetValueOrDefault(name);
+            _kernelReloadSteps[name] = (old.WallTicks + elapsed.Ticks, old.Calls + 1);
+        }
+    }
 
     internal static IDisposable? OpenScope(string name)
     {
@@ -288,6 +344,33 @@ internal sealed class ConductorTickStepLedger
             }));
     }
 
+    internal long KernelReloadTotalMs
+    {
+        get
+        {
+            lock (_gate)
+                return _steps.GetValueOrDefault(KernelReloadStepName).InclusiveWallTicks / TimeSpan.TicksPerMillisecond;
+        }
+    }
+
+    internal string FormatKernelReload()
+    {
+        lock (_gate)
+        {
+            long attributedMs = 0;
+            var steps = string.Join(',', KernelReloadNames.Select(name =>
+            {
+                var step = _kernelReloadSteps.GetValueOrDefault(name);
+                var wallMs = step.WallTicks / TimeSpan.TicksPerMillisecond;
+                attributedMs += wallMs;
+                return FormattableString.Invariant($"{name}:{wallMs}:{step.Calls}");
+            }));
+            var total = _steps.GetValueOrDefault(KernelReloadStepName);
+            var remainderMs = total.InclusiveWallTicks / TimeSpan.TicksPerMillisecond - attributedMs;
+            return FormattableString.Invariant($"{steps},{KernelReloadRemainderName}:{remainderMs}:{total.Calls}");
+        }
+    }
+
     internal string FormatWalk(TimeSpan elapsed, TimeSpan windowCpu)
     {
         lock (_gate)
@@ -360,7 +443,10 @@ internal sealed class ConductorTickStepLedger
     {
         internal string Name { get; } = name;
         internal TimeSpan Start { get; } = start;
-        internal ConductorBatchLoop.DiagnosticTimer Wall { get; } = ConductorBatchLoop.StartDiagnosticTimer();
+        // Reload attribution shares SQLite's Stopwatch clock even if the phase clock is injected.
+        internal ConductorBatchLoop.DiagnosticTimer Wall { get; } = name == KernelReloadStepName
+            ? new ConductorBatchLoop.DiagnosticTimer(null)
+            : ConductorBatchLoop.StartDiagnosticTimer();
         internal long ChildTicks { get; set; }
         internal long ChildWallTicks { get; set; }
     }

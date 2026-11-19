@@ -583,26 +583,10 @@ public sealed partial class AgentOrchestratorKernel
                 return;
             }
         }
-        task.RecordCompletionVerdict(
-            outcome.Kind == DispatchOutcomeKind.VerifiedSuccess,
-            outcomeRule);
-        RecordDeferredNoChangeOutcome(goal, task, taskId, verification, outcomeRule);
-        var isVerifiedNoChangeRound = string.Equals(
-            outcomeRule,
-            TaskOutcomeRules.VerifiedNoChangeRound.Token,
-            StringComparison.Ordinal);
-        if (isVerifiedNoChangeRound &&
-            task.LastDispatch is { } dispatch &&
-            !string.IsNullOrWhiteSpace(dispatch.BaseCommit) &&
-            string.IsNullOrWhiteSpace(dispatch.ResultCommit))
-        {
-            task.SetDispatchResultCommit(dispatch.BaseCommit);
-            Append(
-                goal,
-                null,
-                ProgressKind.TaskNote,
-                $"NO_CHANGE_DISPOSITION task={task.Id.Value} rule={TaskOutcomeRules.VerifiedNoChangeRound.Token} candidate={dispatch.BaseCommit}");
-        }
+        var verifiedSuccess = outcome.Kind == DispatchOutcomeKind.VerifiedSuccess;
+        task.RecordCompletionVerdict(verifiedSuccess, outcomeRule);
+        var isVerifiedNoChangeRound = WorkerCandidateRoundCompletion.Record(goal, task, verification, outcomeRule,
+            verifiedSuccess, (ownerTaskId, note) => Append(goal, ownerTaskId, ProgressKind.TaskNote, note));
 
         if (task.RequiredRole == AgentRole.Developer && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
         {

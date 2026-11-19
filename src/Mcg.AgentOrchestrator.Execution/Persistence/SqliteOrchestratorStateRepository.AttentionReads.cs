@@ -19,6 +19,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         var facts = new List<AttentionGoalReadFacts>();
         var gates = new List<AttentionGateEvidence>();
         var duties = new List<AttentionPostLandingDuty>();
+        var operatorPreLandingGoalIds = new List<string>();
         var questions = new List<AttentionOwnerQuestionEvidence>();
         var environmentHolds = new List<AttentionEnvironmentHoldEvidence>();
         var providers = new List<ProviderUsageGoalEvidence>();
@@ -66,13 +67,17 @@ public sealed partial class SqliteOrchestratorStateRepository
                     reader.IsDBNull(2) ? null : reader.GetString(2), ReadAttentionField<string>(root, "Objective") ?? ""));
                 if (metadataOnly) continue; // A missing archive retains the baseline metadata-only behavior.
 
-                duties.AddRange(ReadAttentionArray<CriterionEvidenceObligation>(root, "CriterionEvidenceObligations")
+                var criterionEvidence = ReadAttentionArray<CriterionEvidenceObligation>(root, "CriterionEvidenceObligations");
+                duties.AddRange(criterionEvidence
                     .Where(item => item.IsValidatedPostLanding &&
                         item.State is not (CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired))
                     .Select(item => new AttentionPostLandingDuty(id, item)));
 
                 if (options.IncludeGateEvidence)
                 {
+                    if (criterionEvidence.Any(HasOutstandingOperatorPreLandingBinding))
+                        operatorPreLandingGoalIds.Add(id);
+
                     var obligations = new List<GateTestObligation>();
                     foreach (var obligation in ReadAttentionArray<GateTestObligation>(root, "GateTestObligations"))
                     {
@@ -136,7 +141,17 @@ public sealed partial class SqliteOrchestratorStateRepository
             finally { archive?.Dispose(); }
         }
         return new(facts, gates, questions, providers, new(facts.Count, archiveReads, archiveDecodes,
-            providers.Sum(goal => goal.Tasks.Count), questions.Sum(question => question.TaskIds.Count)), duties, environmentHolds);
+            providers.Sum(goal => goal.Tasks.Count), questions.Sum(question => question.TaskIds.Count)), duties,
+            environmentHolds, operatorPreLandingGoalIds);
+    }
+
+    private static bool HasOutstandingOperatorPreLandingBinding(CriterionEvidenceObligation obligation)
+    {
+        var candidate = string.IsNullOrWhiteSpace(obligation.ExpectedCandidateSha)
+            ? obligation.CandidateSha : obligation.ExpectedCandidateSha;
+        return obligation.Owner == CriterionEvidenceOwner.Operator && obligation.Phase == CriterionEvidencePhase.PreLanding &&
+            obligation.State != CriterionEvidenceState.Repaired && !string.IsNullOrWhiteSpace(candidate) &&
+            !obligation.HasSatisfiedEvidenceFor(candidate);
     }
 
     private static T? ReadAttentionField<T>(JsonElement element, string name) =>

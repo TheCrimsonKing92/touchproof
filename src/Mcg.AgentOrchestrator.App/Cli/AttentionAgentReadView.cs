@@ -17,8 +17,7 @@ internal static class AttentionAgentReadView
         object[]? unlinkedGoals = null)
     {
         var renderTime = PostLandingFollowUpAttention.CaptureRenderTime(time);
-        return AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionSchema, AgentReadEnvelope.AttentionSchemaVersion,
-            UnlinkedGoalAttentionView.WithRows(PostLandingFollowUpAttention.WithRows(WithPostLandingDuties(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
+        var payload = UnlinkedGoalAttentionView.WithRows(PostLandingFollowUpAttention.WithRows(WithPostLandingDuties(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
             {
                 ["waits"] = WaitRows(waits),
                 ["gateEvidence"] = (gateEvidence ?? (goals ?? []).SelectMany(goal => goal.GateTestObligations
@@ -30,7 +29,9 @@ internal static class AttentionAgentReadView
                 ["items"] = ItemRows(items),
                 ["providerHolds"] = (providerHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray(),
                 ["ownerQuestionHolds"] = OwnerQuestionRows(ownerQuestions, goals)
-            }, amendmentHolds), DutyRows(postLandingDuties, goals)), waits, goals, renderTime.GetUtcNow()), unlinkedGoals),
+            }, amendmentHolds), DutyRows(postLandingDuties, goals)), waits, goals, renderTime.GetUtcNow()), unlinkedGoals);
+        return AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionSchema, AgentReadEnvelope.AttentionSchemaVersion,
+            AttentionOperatorPreLandingEvidenceView.WithRows(payload, goals),
             new JsonSerializerOptions(JsonSerializerDefaults.Web), renderTime);
     }
 

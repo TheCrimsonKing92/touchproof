@@ -652,8 +652,22 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         }, cancellationToken);
     }
 
+    internal const string GoalVersionQuery = "goal-version-query";
+    internal const string ChangedSnapshotRead = "changed-snapshot-read";
+    internal const string HumanInputRequestLoad = "human-input-request-load";
+    internal const string KernelBuild = "kernel-build";
+    internal const string EngineeringPracticeLoad = "engineering-practice-load";
+
+    private readonly struct ReloadTimingScope(Action<string, TimeSpan>? report, string name) : IDisposable
+    {
+        private readonly long _startedAt = report is null ? 0 : Stopwatch.GetTimestamp();
+
+        public void Dispose() => report?.Invoke(name, Stopwatch.GetElapsedTime(_startedAt));
+    }
+
     internal async Task<(AgentOrchestratorKernel Kernel, int Reloaded, int Reused)> LoadGoalsReusingUnchangedAsync(
-        IReadOnlyCollection<GoalId> goalIds, GoalReloadMemory memory, CancellationToken cancellationToken = default)
+        IReadOnlyCollection<GoalId> goalIds, GoalReloadMemory memory, CancellationToken cancellationToken = default,
+        Action<string, TimeSpan>? timing = null)
     {
         foreach (var id in goalIds)
             _readObserver?.Invoke(new("requested", id.Value));
@@ -663,7 +677,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             await using var connection = OpenConnection();
             // The probe, documents and split rows must describe the same committed state.
             using var transaction = connection.BeginTransaction(deferred: true);
-            var versions = await ReadSelectedGoalVersionsAsync(connection, goalIds, cancellationToken);
+            List<(string Id, long Version)> versions;
+            using (new ReloadTimingScope(timing, GoalVersionQuery))
+                versions = await ReadSelectedGoalVersionsAsync(connection, goalIds, cancellationToken);
             var previous = memory.Entries;
             var next = ImmutableDictionary.CreateBuilder<string, GoalReloadMemory.Entry>(StringComparer.Ordinal);
             var changed = new List<GoalId>();
@@ -679,7 +695,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             }
 
             var reused = next.Count;
-            var reloaded = await ReadGoalSnapshotsAsync(connection, changed, cancellationToken, _readObserver);
+            Dictionary<string, (GoalSnapshot Snapshot, bool WasArchived)> reloaded;
+            using (new ReloadTimingScope(timing, ChangedSnapshotRead))
+                reloaded = await ReadGoalSnapshotsAsync(connection, changed, cancellationToken, _readObserver);
             var snapshots = new List<GoalSnapshot>(reused + reloaded.Count);
             foreach (var (id, version) in versions)
             {
@@ -694,7 +712,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             }
 
             var kernel = await LoadFromConnectionAsync(connection, goalIds, cancellationToken, _readObserver,
-                preloadedGoals: snapshots);
+                preloadedGoals: snapshots, timing: timing);
             transaction.Commit();
             memory.Replace(next.ToImmutable());
             return (kernel, reloaded.Count, reused);
@@ -2348,46 +2366,59 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         IReadOnlyCollection<GoalId>? goalIds,
         CancellationToken cancellationToken,
         Action<GoalSnapshotReadObservation>? readObserver = null, bool includePractices = true,
-        IReadOnlyList<GoalSnapshot>? preloadedGoals = null)
+        IReadOnlyList<GoalSnapshot>? preloadedGoals = null, Action<string, TimeSpan>? timing = null)
     {
-        var goalSnapshots = preloadedGoals ?? (await ReadGoalSnapshotsAsync(conn, goalIds, cancellationToken, readObserver))
-            .Values.Select(goal => goal.Snapshot).ToArray();
-        var humanInputSnapshots = new List<HumanInputRequestSnapshot>();
-
-        if (goalIds is null || goalIds.Count > 0)
+        if (preloadedGoals is null)
         {
-            await using var cmd = conn.CreateCommand();
-            if (goalIds is null)
-            {
-                cmd.CommandText = "SELECT snapshot_json FROM human_input_requests";
-            }
-            else
-            {
-                var parameterNames = goalIds.Select((_, index) => $"$goal_id{index}").ToArray();
-                cmd.CommandText = $"SELECT snapshot_json FROM human_input_requests WHERE goal_id IN ({string.Join(", ", parameterNames)})";
-                var index = 0;
-                foreach (var goalId in goalIds)
-                {
-                    cmd.Parameters.AddWithValue(parameterNames[index], goalId.Value);
-                    index++;
-                }
-            }
-
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-            long characters = 0;
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                var json = reader.GetString(0);
-                characters += json.Length;
-                var snap = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(json, SerializerOptions);
-                if (snap != null) humanInputSnapshots.Add(snap);
-            }
-            readObserver?.Invoke(new("human-input", null, characters));
+            using var snapshotTiming = new ReloadTimingScope(timing, ChangedSnapshotRead);
+            preloadedGoals = (await ReadGoalSnapshotsAsync(conn, goalIds, cancellationToken, readObserver))
+                .Values.Select(goal => goal.Snapshot).ToArray();
         }
 
-        var kernel = AgentOrchestratorKernel.FromSnapshot(
-            new OrchestratorSnapshot(goalSnapshots, humanInputSnapshots));
-        if (includePractices) kernel.SetEngineeringPractices(PracticeRegistryStore.ListActive(conn));
+        List<HumanInputRequestSnapshot> humanInputSnapshots;
+        using (new ReloadTimingScope(timing, HumanInputRequestLoad))
+        {
+            humanInputSnapshots = new List<HumanInputRequestSnapshot>();
+            if (goalIds is null || goalIds.Count > 0)
+            {
+                await using var cmd = conn.CreateCommand();
+                if (goalIds is null)
+                {
+                    cmd.CommandText = "SELECT snapshot_json FROM human_input_requests";
+                }
+                else
+                {
+                    var parameterNames = goalIds.Select((_, index) => $"$goal_id{index}").ToArray();
+                    cmd.CommandText = $"SELECT snapshot_json FROM human_input_requests WHERE goal_id IN ({string.Join(", ", parameterNames)})";
+                    var index = 0;
+                    foreach (var goalId in goalIds)
+                    {
+                        cmd.Parameters.AddWithValue(parameterNames[index], goalId.Value);
+                        index++;
+                    }
+                }
+
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                long characters = 0;
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var json = reader.GetString(0);
+                    characters += json.Length;
+                    var snap = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(json, SerializerOptions);
+                    if (snap != null) humanInputSnapshots.Add(snap);
+                }
+                readObserver?.Invoke(new("human-input", null, characters));
+            }
+        }
+
+        AgentOrchestratorKernel kernel;
+        using (new ReloadTimingScope(timing, KernelBuild))
+            kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(preloadedGoals, humanInputSnapshots));
+        if (includePractices)
+        {
+            using var practiceTiming = new ReloadTimingScope(timing, EngineeringPracticeLoad);
+            kernel.SetEngineeringPractices(PracticeRegistryStore.ListActive(conn));
+        }
         return kernel;
     }
 
@@ -3636,10 +3667,11 @@ internal sealed class GoalReloadMemory
         ImmutableDictionary.Create<string, Entry>(StringComparer.Ordinal);
 
     internal static async Task<(AgentOrchestratorKernel Kernel, int Reloaded, int Reused)> LoadAsync(
-        IOrchestratorStateQueries repository, IReadOnlyCollection<GoalId> goalIds, GoalReloadMemory? memory)
+        IOrchestratorStateQueries repository, IReadOnlyCollection<GoalId> goalIds, GoalReloadMemory? memory,
+        Action<string, TimeSpan>? timing = null)
     {
         if (memory is not null && repository is SqliteOrchestratorStateRepository sqliteRepository)
-            return await sqliteRepository.LoadGoalsReusingUnchangedAsync(goalIds, memory);
+            return await sqliteRepository.LoadGoalsReusingUnchangedAsync(goalIds, memory, timing: timing);
 
         var kernel = await repository.LoadGoalsAsync(goalIds);
         return (kernel, kernel.Goals.Count, 0);
