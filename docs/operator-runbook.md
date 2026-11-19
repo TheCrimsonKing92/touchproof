@@ -203,7 +203,7 @@ mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspecti
 
 ### Cost goals: outcome metric
 
-A brief is a cost brief when its source backlog item directly belongs to an epic whose id begins with `79801150`, has the complete tag `cost` (case-insensitive), or the brief has a case-sensitive line beginning `Expected effect` with no indentation or markup. Cost briefs must declare at least one metric in an `## Outcome metric` section:
+A brief is a cost brief when its source backlog item directly belongs to an epic whose id begins with `79801150`, has the complete tag `cost` (case-insensitive), or the brief has a case-sensitive line beginning `Expected effect` with no indentation or markup. Cost briefs must use an `## Outcome metric` section to declare at least one listed metric or use the `none` form below.
 
 ```text
 ## Outcome metric
@@ -219,6 +219,8 @@ The closed metric names are:
 - `gate-test-cpu-seconds`: test CPU recorded in the launch-lock class CPU ledger.
 - `full-gate-rate`: rate derived from full-gate reasons in selected-execution records.
 - `process-launches`: launches recorded in the launch-lock summary.
+
+When no listed metric measures what the goal changes, declare `metric: none; reason: <text>` as the only metric line in the section. The reason must be nonblank and contain no semicolons. The declaration allows only the `metric` and `reason` fields. Filing records no baseline or outcome for this declaration and produces no verdict.
 
 Author draft validation and plain `goal --brief-file` / `goal --text-file` filings apply `cost-goal-outcome-metric`. A failure prints the defect and creates no goal. Supply `--override-draft-checks <reason>` with a nonblank reason to file despite that check's failure; the `cost-goal-outcome-metric-override` conduct event records the reason, failed check and source before creation. If the audit write fails, filing stops. Passing briefs produce no override event. Baseline storage and judging the declared outcome after landing are follow-up slices.
 

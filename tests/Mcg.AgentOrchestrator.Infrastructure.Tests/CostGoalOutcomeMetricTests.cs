@@ -8,6 +8,7 @@ using Microsoft.Data.Sqlite;
 public sealed class CostGoalOutcomeMetricTests
 {
     private const string ValidLine = "metric: selection-milliseconds; direction: decrease; target: 20%; window: 5 gates";
+    private const string NoneLine = "metric: none; reason: tick step cost is not a gate measure";
 
     [Theory]
     [InlineData("", "no well-formed ## Outcome metric line")]
@@ -21,6 +22,53 @@ public sealed class CostGoalOutcomeMetricTests
         Assert.False(check.Passed);
         Assert.Contains(detail, check.Detail);
         Assert.Contains("direction: decrease|increase", check.Detail);
+        Assert.Contains("When no listed metric measures what the goal changes, use `metric: none; reason: <text>` as the only metric line.", check.Detail);
+    }
+
+    [Theory]
+    [InlineData(NoneLine)]
+    [InlineData("\r\nNo listed measure applies.\r\n- `REASON : tick cost: no gate measure ; METRIC : none`")]
+    public void Parse_SoleReasonedNoneDeclaration_HasNoMetricsOrDefects(string section)
+    {
+        var (metrics, defects) = CostGoalOutcomeMetric.Parse("## Outcome metric\n" + section);
+
+        Assert.Empty(defects);
+        Assert.Empty(metrics);
+    }
+
+    [Theory]
+    [InlineData("metric: none", "has no reason")]
+    [InlineData("metric: none; reason: \t", "has a blank reason")]
+    [InlineData(NoneLine + "; target: 1", "has unexpected fields")]
+    [InlineData(NoneLine + "; reason: duplicate", "has unexpected fields")]
+    [InlineData(NoneLine + "; metric: none", "has unexpected fields")]
+    [InlineData(NoneLine + "; trailing text", "has unexpected fields")]
+    [InlineData(NoneLine + "\n" + ValidLine, "must be the only metric line")]
+    [InlineData(ValidLine + "\n" + NoneLine, "must be the only metric line")]
+    [InlineData(NoneLine + "\n" + NoneLine, "must be the only metric line")]
+    [InlineData(NoneLine + "\nmetric: unlisted", "must be the only metric line")]
+    public void Parse_InvalidNoneDeclaration_NamesDefect(string section, string detail)
+    {
+        var (_, defects) = CostGoalOutcomeMetric.Parse("## Outcome metric\n" + section);
+
+        Assert.Contains(defects, defect => defect.Contains($"metric 'none' {detail}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Render_NoListedMetricApplies_InstructsAuthorToDeclareNone()
+    {
+        var item = new BacklogItem("item", "Reduce tick step cost", "Reduce work per tick", BacklogItemStatus.Open,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, null);
+        var prompt = AuthorBriefDraftPrompt.Render(item, ConductorLessonSelection.Empty,
+            CliAuthorDraftCommandTests.Fixture.MainSha);
+        var instruction = Assert.Single(prompt.ReplaceLineEndings("\n").Split('\n'),
+            line => line.Contains("`metric: none; reason: <why no closed-set metric measures this>`", StringComparison.Ordinal));
+
+        Assert.Contains("no listed metric measures what the goal changes, declare", instruction);
+        Assert.Contains("as the only metric line under `## Outcome metric`", instruction);
+        Assert.Contains("Never pick the nearest listed metric.", instruction);
+        Assert.Contains("A correctness-only goal carries no cost metric line.", instruction);
+        Assert.Contains(string.Join(", ", CostGoalOutcomeMetric.MetricNames), instruction);
     }
 
     [Theory]
