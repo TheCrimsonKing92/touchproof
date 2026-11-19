@@ -375,6 +375,10 @@ internal static partial class AcceptancePolicyShardPlanner
         check.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
         check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
 
+    internal static bool IsFocusedReverseDependentInfrastructureCheck(AcceptanceManifestCheck check) =>
+        check.Name.Equals(RepositoryTestImpactPlanner.FocusedReverseDependentInfrastructureCheckName, StringComparison.OrdinalIgnoreCase) &&
+        IsFocusedProjectDotnetCheck(check) && ProjectMatches(check.Project!, InfrastructureTestsProject);
+
     internal static bool IsFullPolicyShardCheck(AcceptanceManifestCheck check) =>
         IsPolicyShardProjectCheck(check) &&
         !check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
