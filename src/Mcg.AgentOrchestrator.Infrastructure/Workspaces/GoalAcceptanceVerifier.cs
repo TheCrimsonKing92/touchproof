@@ -573,7 +573,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory, executionOwner.GateTestObligationSelectors, IntegrationBranch).ConfigureAwait(false);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
             executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform, projectCheckTransform: selectedExecution.ProjectCheckTransform,
-            readClassHistory: () => AcceptanceClassDurationHistoryAdapter.Read(worktreePath));
+            balanceFocusedSelection: true);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
             var message = StructuralCoverageFailureMessage.Build(worktreePath, executionOwner.ProjectHomeDirectory,
@@ -644,12 +644,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var scopedNames = scopedChecks?.Select(check => check.Name).ToHashSet(StringComparer.Ordinal);
         var dispatchedChecks = scopedNames is null ? effectiveChecks : effectiveChecks.Where(check =>
             !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedNames.Contains(check.Name)).ToArray();
-        var lanePlan = AcceptanceGateLanePlanPublisher.Classify(
+        phaseAccountant.BalancedPlan = FocusedReverseDependentLaneSplitter.PublishLanePlan(focusedExpansion,
+            AcceptanceGateLanePlanPublisher.Classify(
             executionOwner.Identity.AttemptId, effectivePlan.CandidateLanes, infrastructureTestLanes,
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
-            dispatchedChecks, engineSettings.DeclaredTestSettings, selectedExecution);
-        phaseAccountant.BalancedPlan = AcceptanceBalancedLanePlanWriter.Publish(focusedExpansion?.Observe(lanePlan, dispatchedChecks) ?? lanePlan,
+            dispatchedChecks, engineSettings.DeclaredTestSettings, selectedExecution), dispatchedChecks,
             AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)
@@ -1796,7 +1796,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null,
         Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceWholeProjectCheck>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null,
         SelectionSourceTexts? sourceTexts = null, Func<IReadOnlyList<AcceptanceManifestCheck>, IReadOnlyList<AcceptanceManifestCheck>>? projectCheckTransform = null,
-        Func<IClassDurationHistory>? readClassHistory = null)
+        bool balanceFocusedSelection = false)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
@@ -1825,8 +1825,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             changedFiles,
             policyShardPlan);
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks, sourceTexts));
-        var focusedExpansion = FocusedReverseDependentLaneSplitter.Resolve(policyRequiredChecks, manifest.Checks, policyShardPlan,
-            laneExpansion with { Lanes = infrastructureTestLanes }, engineSettings, readClassHistory, worktreePath);
+        var focusedExpansion = balanceFocusedSelection ? FocusedReverseDependentLaneSplitter.Resolve(
+            policyRequiredChecks, manifest.Checks, policyShardPlan,
+            laneExpansion with { Lanes = infrastructureTestLanes }, engineSettings, worktreePath, sourceTexts) : null;
         var fullInfrastructureGate = focusedExpansion?.FullGateReason is not null;
         infrastructureTestLanes = fullInfrastructureGate ? candidateLanes : laneTransform?.Invoke(infrastructureTestLanes,
             AcceptanceWholeProjectCheck.Scheduled(manifest.Checks, policyRequiredChecks, policyShardPlan, dotnetShardDisposition, changedFiles)) ?? infrastructureTestLanes;
@@ -2074,19 +2075,16 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        var standardPrefix = "infrastructure tests: ";
-        string? partitionName = null;
-        if (check.Name.StartsWith(standardPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            partitionName = check.Name[standardPrefix.Length..];
-        }
-
-        if (string.IsNullOrWhiteSpace(partitionName))
+        var prefix = check.IsResolvedInfrastructureLane &&
+                     check.Name.StartsWith(FocusedReverseDependentLaneSplitter.ShardNamePrefix, StringComparison.OrdinalIgnoreCase)
+            ? FocusedReverseDependentLaneSplitter.ShardNamePrefix : "infrastructure tests: ";
+        if (!check.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(check.Name[prefix.Length..]))
         {
             return false;
         }
 
-        partitionId = AcceptanceArtifactFileNames.Slug(partitionName);
+        partitionId = AcceptanceArtifactFileNames.Slug(check.Name[prefix.Length..]);
         return true;
     }
 

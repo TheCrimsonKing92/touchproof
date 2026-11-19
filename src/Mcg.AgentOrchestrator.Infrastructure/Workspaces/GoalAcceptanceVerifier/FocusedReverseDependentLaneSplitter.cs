@@ -1,3 +1,4 @@
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
@@ -7,6 +8,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class FocusedReverseDependentLaneSplitter
 {
     private const string ClassSelectorPrefix = "FullyQualifiedName~";
+    internal const string ShardNamePrefix = RepositoryTestImpactPlanner.FocusedReverseDependentInfrastructureCheckName + ": ";
 
     internal sealed record Expansion(IReadOnlyList<Check> Checks, string? FullGateReason = null)
     {
@@ -29,8 +31,7 @@ internal static class FocusedReverseDependentLaneSplitter
                 };
             }
             if (Checks.Count <= 1) return plan;
-            var prefixLength = RepositoryTestImpactPlanner.FocusedReverseDependentInfrastructureCheckName.Length + 2;
-            var scheduled = Checks.Where(dispatched.Contains).Select(check => check.Name[prefixLength..]).ToArray();
+            var scheduled = Checks.Where(dispatched.Contains).Select(check => check.Name[ShardNamePrefix.Length..]).ToArray();
             return plan with
             {
                 Scheduled = plan.Scheduled.Concat(scheduled).Distinct(StringComparer.Ordinal).ToArray(),
@@ -39,12 +40,20 @@ internal static class FocusedReverseDependentLaneSplitter
         }
     }
 
+    internal static AcceptanceBalancedLanePlanWriter PublishLanePlan(
+        Expansion? expansion, AcceptanceGateLanePlan plan, IReadOnlyList<Check> dispatched,
+        string? attemptPrefix, GoalId? goalId, Action<AcceptanceGateProgress> emit, TimeProvider clock,
+        string worktreePath, AcceptanceBalancedLaneLayout? layout) =>
+        AcceptanceBalancedLanePlanWriter.Publish(expansion?.Observe(plan, dispatched) ?? plan,
+            attemptPrefix, goalId, emit, clock, worktreePath, layout);
+
     internal static Expansion? Resolve(
         IReadOnlyList<Check> required, IReadOnlyList<Check> manifest, PolicyShardPlan policy,
         AcceptanceBalancedLaneExpansion lanes, AcceptanceGateEngineSettings settings,
-        Func<IClassDurationHistory>? readHistory, string worktreePath)
+        string worktreePath, SelectionSourceTexts? sourceTexts = null,
+        IClassDurationHistory? history = null, IReadOnlyList<string>? inventory = null)
     {
-        if (readHistory is null || policy.ForceFull || policy.IsAbsentProject(InfrastructureTestsProject) ||
+        if (policy.ForceFull || policy.IsAbsentProject(InfrastructureTestsProject) ||
             required.SingleOrDefault(IsFocusedReverseDependentInfrastructureCheck) is not { } focused)
             return null;
 
@@ -63,18 +72,21 @@ internal static class FocusedReverseDependentLaneSplitter
         var occupied = pool.ToDictionary(lane => lane.Name, lane => otherWork
             .Where(check => check.Name.EndsWith(": " + lane.Name, StringComparison.OrdinalIgnoreCase))
             .Sum(check => IsUsable(check.EstimatedSerialSeconds) &&
-                !check.Name.Equals($"{focused.Name}: {lane.Name}", StringComparison.OrdinalIgnoreCase)
+                !check.Name.Equals(ShardNamePrefix + lane.Name, StringComparison.OrdinalIgnoreCase)
                 ? check.EstimatedSerialSeconds : double.PositiveInfinity));
-        var resourceOwners = new Lazy<IReadOnlyList<(string Name, IReadOnlyList<string> Keys)>>(
-            () => ResolveResourceOwners(lanes.Lanes, worktreePath));
-        return Plan(focused, broad, pool, focusedBudget, laneBudget, readHistory(), occupied, name =>
-            resourceOwners.Value.Where(owner => owner.Name.Contains(name, StringComparison.OrdinalIgnoreCase))
-                .SelectMany(owner => owner.Keys));
+        inventory ??= (sourceTexts is null ? AcceptanceTestClassSourceScanner.Scan(worktreePath) :
+            AcceptanceTestClassSourceScanner.Scan(worktreePath, sourceTexts)).Select(item => item.FullName).ToArray();
+        var resourceOwners = new Lazy<(Func<string, bool> Includes, IReadOnlyList<string> Keys)[]>(() =>
+            lanes.Lanes.Where(lane => lane.ExclusiveResourceKeys.Count > 0)
+                .Select(lane => (AcceptanceLaneMembership.CreateClassMatcher(lane), lane.ExclusiveResourceKeys)).ToArray());
+        return Plan(focused, broad, pool, focusedBudget, laneBudget,
+            history ?? AcceptanceClassDurationHistoryAdapter.Read(worktreePath), inventory, occupied, name =>
+            resourceOwners.Value.Where(owner => owner.Includes(name)).SelectMany(owner => owner.Keys));
     }
 
     internal static Expansion Plan(
         Check focused, Check? broad, IReadOnlyList<AcceptanceTestLane> pool,
-        double focusedBudget, double laneBudget, IClassDurationHistory history,
+        double focusedBudget, double laneBudget, IClassDurationHistory history, IReadOnlyList<string> inventory,
         IReadOnlyDictionary<string, double>? occupiedSeconds = null,
         Func<string, IEnumerable<string>>? resourceKeysForClass = null)
     {
@@ -99,12 +111,22 @@ internal static class FocusedReverseDependentLaneSplitter
             args.Count(IsFilterFlag) != 1)
             return FullGate("total estimate unknown (known subtotal 0 seconds); unsupported class selection filter");
 
-        var classes = tokens.Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(token => (Token: token, Name: token[ClassSelectorPrefix.Length..],
-                Seconds: history.PredictSeconds("Infrastructure.Tests:" + token[ClassSelectorPrefix.Length..]) ?? 0))
-            .ToArray();
+        var selectors = tokens.Select(token => token[ClassSelectorPrefix.Length..])
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var matchedSelectors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selectedClasses = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var name in inventory)
+        foreach (var selector in selectors)
+        {
+            if (!name.Contains(selector, StringComparison.OrdinalIgnoreCase)) continue;
+            matchedSelectors.Add(selector);
+            selectedClasses.Add(name);
+        }
+        var classes = selectedClasses.Order(StringComparer.Ordinal)
+            .Select(name => (Name: name, Seconds: history.PredictSeconds("Infrastructure.Tests:" + name) ?? 0)).ToArray();
         var knownTotal = classes.Where(item => IsUsable(item.Seconds)).Sum(item => item.Seconds);
-        var unknown = classes.Where(item => !IsUsable(item.Seconds)).Select(item => item.Name).ToArray();
+        var unknown = classes.Where(item => !IsUsable(item.Seconds)).Select(item => item.Name)
+            .Concat(selectors.Where(selector => !matchedSelectors.Contains(selector))).ToArray();
         if (unknown.Length > 0)
             return FullGate(FormattableString.Invariant(
                 $"total estimate unknown (known subtotal {knownTotal} seconds); no usable estimate for {string.Join(", ", unknown)}"));
@@ -123,66 +145,59 @@ internal static class FocusedReverseDependentLaneSplitter
                 $"estimated {knownTotal} seconds; {largest.Name} estimates {largest.Seconds} seconds and exceeds every available lane"));
 
         var assignments = new int[classes.Length];
-        var loads = new double[pool.Count];
-        var searchLimitReached = false;
-        if (!Place())
-        {
-            var detail = searchLimitReached
-                ? "could not establish a valid assignment within the placement search limit"
-                : "cannot be assigned within the available lane budgets";
-            return FullGate(FormattableString.Invariant($"estimated {knownTotal} seconds {detail}"));
-        }
+        if (!PlaceClasses(order.Select(index => classes[index].Seconds).ToArray(), remaining, assignments))
+            return FullGate(FormattableString.Invariant(
+                $"estimated {knownTotal} seconds cannot be assigned within the available lane budgets"));
 
         var shards = new List<Check>();
         for (var laneIndex = 0; laneIndex < pool.Count; laneIndex++)
         {
-            var members = classes.Where((_, index) => assignments[index] == laneIndex).ToArray();
+            var members = order.Where((_, position) => assignments[position] == laneIndex)
+                .Select(index => classes[index]).OrderBy(item => item.Name, StringComparer.Ordinal).ToArray();
             if (members.Length == 0) continue;
             var lane = pool[laneIndex];
             var arguments = (string[])args.Clone();
-            arguments[filterIndex + 1] = string.Join('|', members.Select(item => item.Token));
+            arguments[filterIndex + 1] = string.Join('|', members.Select(item => "FullyQualifiedName=" + item.Name));
             var keys = focused.ExclusiveResourceKeys.Concat(lane.ExclusiveResourceKeys)
                 .Concat(members.SelectMany(item => resourceKeysForClass?.Invoke(item.Name) ?? []))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            shards.Add(Copy(focused, $"{focused.Name}: {lane.Name}", arguments, loads[laneIndex], keys));
+            shards.Add(Copy(focused, ShardNamePrefix + lane.Name, arguments, members.Sum(item => item.Seconds), keys,
+                isResolvedLane: true));
         }
         return new(shards);
 
-        bool Place()
+    }
+
+    private static bool PlaceClasses(double[] seconds, double[] remaining, int[] assignments)
+    {
+        // Lanes with the same spare capacity are interchangeable for feasibility. A position can
+        // only be revisited after its earlier search was exhausted, even if lane order differed.
+        var visited = new HashSet<(int Position, string Capacities)>();
+        var nextLane = new int[seconds.Length];
+        var previousCapacity = new double[seconds.Length];
+        var position = 0;
+        while (position >= 0 && position < seconds.Length)
         {
-            // Continue in first-fit order after a failed placement, with a bound on planning work.
-            const int maximumBacktracks = 100_000;
-            var nextLane = new int[order.Length];
-            var previousLoads = new double[order.Length];
-            var backtracks = 0;
-            var position = 0;
-            while (position >= 0 && position < order.Length)
+            if (nextLane[position] == 0 && !visited.Add((position, string.Join(',',
+                remaining.Order().Select(value => value.ToString("R", CultureInfo.InvariantCulture))))))
+                nextLane[position] = remaining.Length;
+
+            var lane = nextLane[position]++;
+            if (lane == remaining.Length)
             {
-                var lane = nextLane[position]++;
-                if (lane == pool.Count)
-                {
-                    if (++backtracks == maximumBacktracks)
-                    {
-                        searchLimitReached = true;
-                        return false;
-                    }
-                    nextLane[position] = 0;
-                    if (--position >= 0) loads[assignments[order[position]]] = previousLoads[position];
-                    continue;
-                }
-                var index = order[position];
-                var load = loads[lane] + classes[index].Seconds;
-                var spare = remaining[lane] - loads[lane];
-                if (load > remaining[lane] ||
-                    Enumerable.Range(0, lane).Any(previous => remaining[previous] - loads[previous] == spare))
-                    continue;
-                assignments[index] = lane;
-                previousLoads[position] = loads[lane];
-                loads[lane] = load;
-                position++;
+                nextLane[position] = 0;
+                if (--position >= 0) remaining[assignments[position]] = previousCapacity[position];
+                continue;
             }
-            return position == order.Length;
+
+            var capacity = remaining[lane];
+            if (seconds[position] > capacity || Array.IndexOf(remaining, capacity) != lane) continue;
+            assignments[position] = lane;
+            previousCapacity[position] = capacity;
+            remaining[lane] = capacity - seconds[position];
+            position++;
         }
+        return position == seconds.Length;
     }
 
     private static bool IsClassSelector(string token) =>
@@ -192,20 +207,9 @@ internal static class FocusedReverseDependentLaneSplitter
 
     private static bool IsUsable(double seconds) => double.IsFinite(seconds) && seconds > 0;
 
-    private static IReadOnlyList<(string Name, IReadOnlyList<string> Keys)> ResolveResourceOwners(
-        IReadOnlyList<AcceptanceTestLane> lanes, string worktreePath)
-    {
-        var owners = lanes.Where(lane => lane.ExclusiveResourceKeys.Count > 0)
-            .Select(lane => (Includes: AcceptanceLaneMembership.CreateClassMatcher(lane), lane.ExclusiveResourceKeys))
-            .ToArray();
-        if (owners.Length == 0) return [];
-        return AcceptanceTestClassSourceScanner.Scan(worktreePath).Select(item =>
-            (item.FullName, (IReadOnlyList<string>)owners.Where(lane => lane.Includes(item.FullName))
-                .SelectMany(lane => lane.ExclusiveResourceKeys).ToArray())).Where(item => item.Item2.Count > 0).ToArray();
-    }
-
     private static Check Copy(
-        Check check, string name, IReadOnlyList<string> arguments, double seconds, IReadOnlyList<string> resourceKeys) =>
+        Check check, string name, IReadOnlyList<string> arguments, double seconds, IReadOnlyList<string> resourceKeys,
+        bool isResolvedLane = false) =>
         new()
         {
             Name = name,
@@ -221,7 +225,7 @@ internal static class FocusedReverseDependentLaneSplitter
             Runner = check.Runner,
             EstimatedSerialSeconds = seconds,
             ExclusiveResourceKeys = resourceKeys,
-            IsResolvedInfrastructureLane = check.IsResolvedInfrastructureLane,
+            IsResolvedInfrastructureLane = isResolvedLane || check.IsResolvedInfrastructureLane,
             RequiresBuildSystemChange = check.RequiresBuildSystemChange,
             AllowsEmptySelection = check.AllowsEmptySelection,
             IsFocusedEvidenceSelection = check.IsFocusedEvidenceSelection,

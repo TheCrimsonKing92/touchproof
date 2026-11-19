@@ -27,7 +27,7 @@ public sealed class FocusedReverseDependentLaneSplitterTests
         };
         var focused = Focused([.. timings.Keys]);
         var expansion = FocusedReverseDependentLaneSplitter.Plan(focused, Broad, Pool, 10, 10,
-            new AcceptanceClassDurationHistoryAdapter(timings),
+            new AcceptanceClassDurationHistoryAdapter(timings), [.. timings.Keys],
             resourceKeysForClass: name => name == "Alpha" ? ["host:Alpha"] : []);
         var checks = Schedule(focused, expansion);
 
@@ -38,6 +38,10 @@ public sealed class FocusedReverseDependentLaneSplitterTests
         Assert.Equal(timings.Keys.Order(StringComparer.Ordinal), selectedClasses);
         Assert.All(checks, shard =>
         {
+            Assert.True(shard.IsResolvedInfrastructureLane);
+            Assert.True(GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(shard, out var partitionId, out var filter));
+            Assert.Equal(shard.Name.EndsWith("1", StringComparison.Ordinal) ? "balanced-1" : "balanced-2", partitionId);
+            Assert.Equal(shard.Arguments[3], filter);
             var estimate = Classes(shard).Sum(name => timings[name]);
             Assert.Equal(10, estimate);
             Assert.Equal(estimate, shard.EstimatedSerialSeconds);
@@ -49,6 +53,57 @@ public sealed class FocusedReverseDependentLaneSplitterTests
         });
         var keyedShard = Assert.Single(checks, shard => Classes(shard).Contains("Alpha"));
         Assert.Contains("host:Alpha", keyedShard.ExclusiveResourceKeys);
+    }
+
+    [Fact]
+    public void OversizedSelectionFindsTheFeasibleFourLanePacking()
+    {
+        int[] seconds = [14, 19, 72, 15, 34, 52, 22, 12, 3, 5, 8, 32, 20, 16, 4, 21, 11, 40, 24, 46, 10];
+        var timings = seconds.Select((value, index) => (Name: $"TestClass{index:D2}", Seconds: (double)value))
+            .ToDictionary(item => item.Name, item => item.Seconds);
+        var focused = Focused([.. timings.Keys]);
+        AcceptanceTestLane[] pool = [.. Pool, new("Balanced 3", ""), new("Balanced 4", "")];
+        var expansion = FocusedReverseDependentLaneSplitter.Plan(focused, Broad, pool, 120, 120,
+            new AcceptanceClassDurationHistoryAdapter(timings), [.. timings.Keys]);
+
+        Assert.Null(expansion.FullGateReason);
+        Assert.Equal(4, expansion.Checks.Count);
+        Assert.Equal(timings.Keys.Order(StringComparer.Ordinal),
+            expansion.Checks.SelectMany(Classes).Order(StringComparer.Ordinal));
+        Assert.All(expansion.Checks, shard =>
+        {
+            Assert.Equal(120d, Classes(shard).Sum(name => timings[name]));
+            Assert.Equal(120d, shard.EstimatedSerialSeconds);
+        });
+    }
+
+    [Fact]
+    public void OverlappingSelectorsScheduleEachActualClassOnce()
+    {
+        const string shortName = "ConductorDriverTests";
+        const string longerName = shortName + "GateFailureLandingAttribution";
+        string[] inventory = ["Tests." + shortName, "Tests." + longerName, "Tests.Other"];
+        // The short selector also executes the longer class. The original check therefore
+        // costs 12 seconds even when the planner emits only the short selector.
+        var focused = Focused(shortName);
+        var history = new AcceptanceClassDurationHistoryAdapter(new Dictionary<string, double>
+        {
+            [inventory[0]] = 6, [inventory[1]] = 6
+        });
+        var expansion = FocusedReverseDependentLaneSplitter.Plan(focused, Broad, Pool, 10, 10, history, inventory);
+        var checks = Schedule(focused, expansion);
+
+        Assert.Null(expansion.FullGateReason);
+        Assert.Equal(2, checks.Count);
+        var matches = checks.Select(shard =>
+        {
+            Assert.True(shard.IsResolvedInfrastructureLane);
+            Assert.True(GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(shard, out _, out var filter));
+            var matcher = AcceptanceLaneMembership.CreateClassMatcher(new AcceptanceTestLane(shard.Name, filter));
+            return Assert.Single(inventory.Where(matcher));
+        }).Order(StringComparer.Ordinal);
+        Assert.Equal(inventory.Take(2), matches);
+        Assert.All(checks, shard => Assert.Equal(6d, shard.EstimatedSerialSeconds));
     }
 
     [Theory]
@@ -93,7 +148,7 @@ public sealed class FocusedReverseDependentLaneSplitterTests
         {
             ["Alpha"] = 4, ["Beta"] = beta
         });
-        var expansion = FocusedReverseDependentLaneSplitter.Plan(focused, Broad, Pool, 10, 10, history);
+        var expansion = FocusedReverseDependentLaneSplitter.Plan(focused, Broad, Pool, 10, 10, history, ["Alpha", "Beta"]);
         var check = Assert.Single(Schedule(focused, expansion));
 
         Assert.Null(expansion.FullGateReason);
@@ -121,7 +176,7 @@ public sealed class FocusedReverseDependentLaneSplitterTests
         var lanes = new AcceptanceBalancedLaneExpansion([.. Pool, new("Other lane", "FullyQualifiedName=Tests.Other")], layout);
         var settings = new AcceptanceGateEngineSettings { Timeouts = new() { DefaultMinutes = 1 } };
         var expansion = FocusedReverseDependentLaneSplitter.Resolve([focused], [Broad, occupied], Policy,
-            lanes, settings, () => history, "fixture");
+            lanes, settings, "fixture", history: history, inventory: ["Alpha", "Beta"]);
 
         Assert.NotNull(expansion);
         Assert.Contains("estimated 95 seconds", expansion.FullGateReason);
@@ -133,7 +188,8 @@ public sealed class FocusedReverseDependentLaneSplitterTests
     private static void AssertFullGate(
         Check focused, IClassDurationHistory history, IReadOnlyDictionary<string, double>? occupied, params string[] reasonParts)
     {
-        var expansion = FocusedReverseDependentLaneSplitter.Plan(focused, Broad, Pool, 10, 10, history, occupied);
+        var expansion = FocusedReverseDependentLaneSplitter.Plan(focused, Broad, Pool, 10, 10, history,
+            Classes(focused).ToArray(), occupied);
         var checks = Schedule(focused, expansion);
         var receipt = expansion.Observe(new AcceptanceGateLanePlan("fixture", "attempt", [], []), checks);
 
@@ -159,5 +215,5 @@ public sealed class FocusedReverseDependentLaneSplitterTests
     };
 
     private static IEnumerable<string> Classes(Check check) =>
-        check.Arguments[3].Split('|').Select(token => token["FullyQualifiedName~".Length..]);
+        check.Arguments[3].Split('|').Select(token => token["FullyQualifiedName=".Length..]);
 }
