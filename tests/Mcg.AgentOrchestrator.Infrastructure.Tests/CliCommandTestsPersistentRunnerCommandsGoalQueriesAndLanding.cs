@@ -706,24 +706,24 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
         kernel.RecordTaskVerification(dependency.Id, dependency.Tasks.Single().Id,
             new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
         kernel = WithGoalStatus(kernel, dependency.Id, GoalStatus.Completed);
-        GoalOperationJournal.RecordLandingIntent(
-            root,
-            dependency,
-            $"goal/{dependency.Id.Value[..8]}",
-            "main",
-            "abcdef1234567890",
-            "goal-mark-landed");
+        GoalOperationJournal.RecordLandingIntent(root, dependency, $"goal/{dependency.Id.Value[..8]}", "main",
+            "abcdef1234567890", "goal-mark-landed");
         GoalOperationJournal.Completed(root, dependency, "conductor:land", "Out-of-band landing verified.");
-        GoalOperationJournal.RecordTerminalDisposition(
-            root,
-            dependency,
-            new GoalTerminalDisposition(
-                GoalTerminalDispositionKind.Retired,
+        GoalOperationJournal.RecordTerminalDisposition(root, dependency,
+            new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired,
                 "Goal was marked landed out-of-band via goal-mark-landed."));
-        var repository = new InMemoryTransactionalStateRepository(kernel);
+        TerminalGoalJournalMetadataCache.BeginMeasurement();
+        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(
+            new InMemoryTransactionalStateRepository(kernel), executionDirectory: root);
+        Xunit.Assert.Equal(0, TerminalGoalJournalMetadataCache.CompleteMeasurement().JournalsRead);
+        Xunit.Assert.False(loaded.TryGetKnownDependencyGoalStatus(dependency.Id, out _));
+        Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(dependency.Id));
 
-        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository, executionDirectory: root);
-
+        var dependent = kernel.CreateGoal("Consumes out-of-band landing", [new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner)]);
+        kernel.ActivateGoal(dependent.Id, agents);
+        kernel.SetGoalDependency(dependent.Id, dependency.Id);
+        loaded = CliPersistentStateRunner.LoadConductLoopKernel(
+            new InMemoryTransactionalStateRepository(kernel), executionDirectory: root);
         Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(dependency.Id));
     }
 
