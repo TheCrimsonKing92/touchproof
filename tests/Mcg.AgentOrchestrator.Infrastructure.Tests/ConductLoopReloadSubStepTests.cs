@@ -21,22 +21,21 @@ public sealed class ConductLoopReloadSubStepTests
         var intents = new SqliteOperatorIntentStore(Path.Combine(root, "intents.db"), Path.Combine(root, "logs"));
         var memory = new GoalReloadMemory();
         var baselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal);
-        var loop = new ConductorBatchLoop(measuredSweep: _ =>
+        ConductorTickStepLedger LoadWithLedger()
         {
+            var ledger = new ConductorTickStepLedger(() => TimeSpan.Zero);
+            using var scope = ledger.Activate();
             ConductorTickStepLedger.Measure("kernel-reload", () => CliPersistentStateRunner.LoadConductLoopKernelForTick(
                 fixture.Repository, intents, [], root, memory, baselines));
-            return null;
-        }, processCpuTime: () => TimeSpan.Zero);
-        var driver = ConductorBatchLoopTestsStepLedger.FixtureDriver();
+            return ledger;
+        }
 
-        var first = ConductorBatchLoopTestsStepLedger.OneTick(loop, kernel, driver);
-        var second = ConductorBatchLoopTestsStepLedger.OneTick(loop, kernel, driver);
-        var firstSweep = ConductorBatchLoopTestsStepLedger.Phase(first, "sweep");
-        var secondSweep = ConductorBatchLoopTestsStepLedger.Phase(second, "sweep");
+        var first = LoadWithLedger();
+        var second = LoadWithLedger();
 
-        Assert.Contains(FormattableString.Invariant($"goals_reloaded={goalCount},goals_reused=0 "), firstSweep);
-        Assert.Contains(FormattableString.Invariant($"goals_reloaded=0,goals_reused={goalCount} "), secondSweep);
-        var entries = Regex.Match(secondSweep, @" kernel_reload_steps=(\S+) ").Groups[1].Value
+        Assert.EndsWith(FormattableString.Invariant($"goals_reloaded={goalCount},goals_reused=0"), first.FormatCounters());
+        Assert.EndsWith(FormattableString.Invariant($"goals_reloaded=0,goals_reused={goalCount}"), second.FormatCounters());
+        var entries = second.FormatKernelReload()
             .Split(',').Select(entry => entry.Split(':')).ToArray();
         Assert.Equal(new[]
         {
@@ -49,6 +48,12 @@ public sealed class ConductLoopReloadSubStepTests
             Assert.Equal(3, entry.Length);
             Assert.True(long.Parse(entry[2], CultureInfo.InvariantCulture) >= 1, $"No calls recorded for {entry[0]}");
         });
+
+        var namedMs = entries.SkipLast(1).Sum(entry => long.Parse(entry[1], CultureInfo.InvariantCulture));
+        var remainderMs = long.Parse(entries[^1][1], CultureInfo.InvariantCulture);
+        var totalMs = second.KernelReloadTotalMs;
+        Assert.True(namedMs <= totalMs, $"Named sub-steps total {namedMs} ms, exceeding the reload total of {totalMs} ms.");
+        Assert.Equal(totalMs - namedMs, remainderMs);
     }
 
     [Fact]
