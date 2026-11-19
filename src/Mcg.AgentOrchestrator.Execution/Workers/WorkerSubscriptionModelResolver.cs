@@ -65,7 +65,7 @@ internal static partial class WorkerSubscriptionModelResolver
             {
                 var constrainedSelection = fullSelection with
                 {
-                    Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
+                    Reason = BuildProviderConstrainedReason(agent, task)
                 };
                 if (task.RequiredRole is (AgentRole.Developer or AgentRole.Tester) &&
                     agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
@@ -104,7 +104,7 @@ internal static partial class WorkerSubscriptionModelResolver
         {
             return fullSelection with
             {
-                Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
+                Reason = BuildProviderConstrainedReason(agent, task)
             };
         }
 
@@ -361,6 +361,18 @@ internal static partial class WorkerSubscriptionModelResolver
         return agent.ComplexModel is not null &&
             agent.ComplexModel.ProviderName.Equals(model.ProviderName, StringComparison.OrdinalIgnoreCase) &&
             agent.ComplexModel.ModelName.Equals(model.ModelName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildProviderConstrainedReason(AgentDefinition agent, TaskSpec task)
+    {
+        var resolvedAgentId = agent.Id.Value;
+        var storedAgentId = task.AssignedAgentId?.Value;
+        var assignment = !string.IsNullOrWhiteSpace(storedAgentId) &&
+            !string.Equals(storedAgentId, resolvedAgentId, StringComparison.Ordinal)
+            ? $", stored assignment {storedAgentId}"
+            : string.Empty;
+
+        return $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName} (agent {resolvedAgentId}{assignment})";
     }
 
     internal sealed record SubscriptionModelSelection(
