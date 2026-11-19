@@ -58,6 +58,7 @@ public sealed class AttentionOperatorPreLandingEvidenceTests : IClassFixture<Iso
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
             var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
             await repository.SaveAsync(kernel);
             Assert.Empty(await repository.ListOpenHumanInputRequestsAsync());
