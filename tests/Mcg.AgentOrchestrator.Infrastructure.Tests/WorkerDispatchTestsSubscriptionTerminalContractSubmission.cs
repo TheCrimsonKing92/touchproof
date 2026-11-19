@@ -5,7 +5,6 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-[Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsSubscriptionTerminalContractSubmission : WorkerDispatchTestSupport
 {
     [Theory]
