@@ -16,7 +16,7 @@ Literal backslashes and U+0000, U+001E, and U+001F in field values are escaped a
 
 ## 1 - Find Provider connections in Settings.
 
-Surface fingerprint: sha256:979aeb228f0eedef932534247e24430a673b15d68749a79dbe56025da6efc22a
+Surface fingerprint: sha256:a6fb5b7831f11e5c78569860ce0129e2d70635810f7bbc3f8d07044cdf77dafd
 
 - Type `:settings` to open Settings.
 - Press Left/Right to switch to Provider connections.

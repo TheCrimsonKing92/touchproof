@@ -48,7 +48,7 @@ public sealed class OwnerConsoleDialogBindingsTests
     [Fact]
     public void TypedSurfaces_DialogRowsExcluded_PreserveTopLevelCommands()
     {
-        const string prompt = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | settings | news | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string prompt = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | settings | news | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(prompt, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(prompt.Split(" | "), OwnerConsoleBindings.PromptEntries);
         Assert.Equal(24, OwnerConsoleKeyHints.Commands.Count);

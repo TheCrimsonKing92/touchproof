@@ -3,6 +3,7 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
+// Owns console news loading and persistence for one console session.
 internal sealed class OwnerConsoleNewsRecord
 {
     internal const string FileName = "owner-console-news.json";
