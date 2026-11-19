@@ -51,16 +51,19 @@ public sealed class ProviderHoldDispatchScenarioTests
         }
     }
 
-    [Fact]
-    public void QuotaRefusalsDoNotSpendTheReviewBudgetAndTimeoutDoesNotPlaceAHold()
+    [Theory]
+    [InlineData("You've hit your weekly limit", "")]
+    [InlineData("", "ERROR: weekly usage limit reached")]
+    public void QuotaRefusalsDoNotSpendTheReviewBudgetAndTimeoutDoesNotPlaceAHold(string stdout, string stderr)
     {
         var clock = new ProviderHoldScenarioClock();
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = NewGoal(kernel);
-        Record(kernel, clock, "You've hit your weekly limit", "", null, goal: goal);
+        Record(kernel, clock, stdout, stderr, null, goal: goal);
         clock.UtcNow = clock.UtcNow.AddHours(1);
-        Record(kernel, clock, "You've hit your weekly limit", "", null, goal: goal);
+        Record(kernel, clock, stdout, stderr, null, goal: goal);
         var task = goal.Tasks.Single();
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.Equal(2, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
         Assert.Equal(0, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds: false));
         Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));

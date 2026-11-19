@@ -17,7 +17,9 @@ internal static class ProviderHoldRetry
                 verification, verification.WorkerResultPresent, verification.HasCommittedChanges) ||
             ProviderHoldEvidence.Read(verification).Confirmed) return false;
         task.RecordCompletionVerdict(false, TaskOutcomeRules.ProviderHoldCheckInconclusive.Token);
-        Requeue(goal, task, now, eventWriter, TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultProviderInterruption);
+        PrepareRetry(task, now);
+        TaskStatusTransitionRecorder.Record(eventWriter, goal.Id,
+            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultProviderHoldCheckInconclusive);
         return true;
     }
 
@@ -30,17 +32,17 @@ internal static class ProviderHoldRetry
                 ? inferred : now + UnparsedLimitDelay);
         task.SetSubscriptionRetryAfter(retryAfter);
         var failureCount = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds: false);
-        Requeue(goal, task, now, eventWriter, TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultSubscriptionLimit);
+        PrepareRetry(task, now);
+        TaskStatusTransitionRecorder.Record(eventWriter, goal.Id,
+            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultSubscriptionLimit);
         return !evidence.Confirmed && failureCount >= DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold
             ? $"Dispatch hit a recoverable subscription usage limit {failureCount} time(s); review model, profile, or timing before redispatch: {task.LastDispatch!.Command}"
             : $"Dispatch hit a recoverable subscription usage limit; task is ready to retry later: {task.LastDispatch!.Command}";
     }
 
-    private static void Requeue(Goal goal, TaskSpec task, DateTimeOffset now, IGoalLifecycleEventWriter eventWriter, string source)
+    private static void PrepareRetry(TaskSpec task, DateTimeOffset now)
     {
         task.RecordRetry(now, retryCause: RetryCause.ProviderInterruption);
         task.ClearLatestVerification();
-        TaskStatusTransitionRecorder.Record(eventWriter, goal.Id,
-            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), source);
     }
 }

@@ -11,6 +11,9 @@ internal sealed record ProviderHoldEvidence(ProviderFailureKind Kind, string Lin
     private static readonly Regex UsageWindow = new(
         @"\b(?:usage|weekly|session|daily) limit\b|\bquota exceeded\b|\binsufficient_quota\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex WeeklyUsageLimitReached = new(
+        @"\AERROR:[ \t]+weekly usage limit reached[.!]?[ \t]*\z",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     internal static ProviderHoldEvidence Read(TaskVerificationRecord verification) =>
         verification.ExitCode == 0 || (verification.EvidenceSource == VerificationEvidenceSource.Manual &&
@@ -68,7 +71,9 @@ internal sealed record ProviderHoldEvidence(ProviderFailureKind Kind, string Lin
     }
 
     internal bool Confirmed => Kind is ProviderFailureKind.BudgetExhausted or ProviderFailureKind.AuthenticationRequired;
+    internal bool IsWeeklyUsageLimitReached => Kind == ProviderFailureKind.BudgetExhausted && WeeklyUsageLimitReached.IsMatch(Line);
 
     private static bool IsUsageWindowDiagnostic(string line) =>
-        UsageWindow.IsMatch(line) && ProviderLimitEvidenceParser.IsProviderLimitEvidenceLine(line);
+        WeeklyUsageLimitReached.IsMatch(line) ||
+        (UsageWindow.IsMatch(line) && ProviderLimitEvidenceParser.IsProviderLimitEvidenceLine(line));
 }
