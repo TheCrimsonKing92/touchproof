@@ -91,6 +91,84 @@ public sealed class CostGoalOutcomeMetricTests
     }
 
     [Theory]
+    [InlineData("owned-root-reap")]
+    [InlineData("board-fill")]
+    [InlineData("kernel-merge")]
+    [InlineData("attempt-census")]
+    public void Filing_TickStepAcceptsNamedStepAndTickWindow(string step)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var name = $"tick-step-milliseconds:{step}";
+        var markdown = $"Expected effect: reduce tick cost\n## Outcome metric\n" +
+            $"metric: {name}; direction: decrease; target: 20%; window: 30 ticks";
+
+        Assert.True(CostGoalOutcomeMetric.Check(markdown, true).Passed);
+        var filing = CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, null);
+
+        Assert.NotNull(filing);
+        Assert.Equal(new OutcomeMetricLine(name, "decrease", "20%", 30), Assert.Single(filing.Baselines).Line);
+    }
+
+    [Theory]
+    [InlineData("tick-step-milliseconds:no-such-step", "30 ticks", "", "unknown tick step 'no-such-step'")]
+    [InlineData("tick-step-milliseconds:Owned-Root-Reap", "30 ticks", "", "unknown tick step 'Owned-Root-Reap'")]
+    [InlineData("tick-step-milliseconds:remainder", "30 ticks", "", "unknown tick step 'remainder'")]
+    [InlineData("tick-step-milliseconds:<step>", "30 ticks", "", "unknown tick step '<step>'")]
+    [InlineData("selection-milliseconds", "5 gates", "tick-step-milliseconds:owned-root-reap", "cannot be a guard")]
+    [InlineData("selection-milliseconds", "5 gates", "tick-step-milliseconds:<step>", "cannot be a guard")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 ticks", "tick-step-milliseconds:board-fill", "cannot carry a guard")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 ticks", "executed-class-count", "cannot carry a guard")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 ticks", "replay-missed-failures", "cannot carry a guard")]
+    public void Filing_TickStepDefectFailsDraftCheckAndCapture(string name, string window, string guard, string defect)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var markdown = $"Expected effect: reduce tick cost\n## Outcome metric\n" +
+            $"metric: {name}; direction: decrease; target: 20%; window: {window}";
+        if (guard.Length > 0) markdown += $"; guard: {guard}; must-not-increase";
+
+        var check = CostGoalOutcomeMetric.Check(markdown, true);
+
+        Assert.False(check.Passed);
+        Assert.Contains(defect, check.Detail);
+        if (guard.Length == 0)
+        {
+            var allowed = ConductorTickStepLedger.PrewalkNames.Concat(ConductorTickStepLedger.SweepNames)
+                .Concat(ConductorTickStepLedger.KernelReloadNames).Concat(ConductorTickStepLedger.AdmissionNames);
+            Assert.Contains($"Allowed steps: {string.Join(", ", allowed)}", check.Detail);
+        }
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, null));
+        Assert.Contains(check.Detail, error.Message);
+        Assert.Contains(CostGoalOutcomeMetric.OverrideFlag, error.Message);
+
+        const string reason = "reviewed metric exception";
+        var filing = CostGoalOutcomeMetric.CaptureAtFiling("goal-file", markdown, null, fixture.Workspace, reason);
+
+        Assert.Null(filing);
+        var auditLine = Assert.Single(File.ReadAllLines(fixture.Workspace.ConductEventsLogPath));
+        var audit = JsonSerializer.Deserialize<ConductEventRecord>(auditLine, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(audit);
+        Assert.Equal("cost-goal-outcome-metric-override", audit.EventKind);
+        Assert.Equal($"reason={reason}; failedChecks={check.Name}; detail={check.Detail}; backlogItem=none; source=goal-file",
+            audit.Detail);
+    }
+
+    [Theory]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "30 gates")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "1 tick")]
+    [InlineData("tick-step-milliseconds:owned-root-reap", "0 ticks")]
+    [InlineData("selection-milliseconds", "30 ticks")]
+    public void Check_TickWindowsRequireTheTickStepFamilyAndPositiveTicks(string name, string window)
+    {
+        var markdown = $"## Outcome metric\nmetric: {name}; direction: decrease; target: 20%; window: {window}";
+        var check = CostGoalOutcomeMetric.Check(markdown, true);
+
+        Assert.False(check.Passed);
+        Assert.Contains($"invalid window '{window}'", check.Detail);
+    }
+
+    [Theory]
     [InlineData("worker-input-tokens-per-session")]
     [InlineData("worker-turns")]
     [InlineData("Worker-Turns-Per-Session")]
