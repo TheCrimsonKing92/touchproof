@@ -31,13 +31,16 @@ internal static class ProviderHoldRetry
             (ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var inferred)
                 ? inferred : now + UnparsedLimitDelay);
         task.SetSubscriptionRetryAfter(retryAfter);
-        var failureCount = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task, includeProviderHolds: false);
         PrepareRetry(task, now);
         TaskStatusTransitionRecorder.Record(eventWriter, goal.Id,
             task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultSubscriptionLimit);
-        return !evidence.Confirmed && failureCount >= DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold
-            ? $"Dispatch hit a recoverable subscription usage limit {failureCount} time(s); review model, profile, or timing before redispatch: {task.LastDispatch!.Command}"
-            : $"Dispatch hit a recoverable subscription usage limit; task is ready to retry later: {task.LastDispatch!.Command}";
+        if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
+        {
+            var failureCount = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
+            return $"Dispatch hit a recoverable subscription usage limit {failureCount} time(s); review model, profile, or timing before redispatch: {task.LastDispatch!.Command}";
+        }
+
+        return $"Dispatch hit a recoverable subscription usage limit; task is ready to retry later: {task.LastDispatch!.Command}";
     }
 
     private static void PrepareRetry(TaskSpec task, DateTimeOffset now)
