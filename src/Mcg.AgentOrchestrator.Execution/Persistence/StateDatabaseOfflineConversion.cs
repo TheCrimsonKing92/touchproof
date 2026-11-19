@@ -513,7 +513,6 @@ public static class StateDatabaseOfflineConversion
             DefaultTimeout = 1
         }.ConnectionString);
         connection.Open();
-        StateDbConnectionFactory.RegisterProfileIdentityCollation(connection);
         using var timeout = connection.CreateCommand();
         timeout.CommandText = "PRAGMA busy_timeout=0";
         timeout.ExecuteNonQuery();

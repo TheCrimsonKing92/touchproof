@@ -696,7 +696,6 @@ public static void CreateVersion7StateOutboxFixture(
     using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
         $"Data Source={databasePath};Mode=ReadWrite;Pooling=False");
     connection.Open();
-    StateDbConnectionFactory.RegisterProfileIdentityCollation(connection);
 
     static void Execute(Microsoft.Data.Sqlite.SqliteConnection connection, string sql)
     {

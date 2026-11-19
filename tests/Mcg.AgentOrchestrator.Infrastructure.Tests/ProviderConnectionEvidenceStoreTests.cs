@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 // Parallel-safe: private SQLite databases, fixed injected times and no provider processes.
@@ -303,7 +304,40 @@ public sealed class ProviderConnectionEvidenceStoreTests
     }
 
     [Fact]
-    public async Task DistinctUnicodeProfiles_KeepIndependentObservations()
+    public async Task Migration16_PlainConnectionCanCheckIntegrityAndReadAndWriteObservations()
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        await fixture.Repository.SaveProviderConnectionObservationAsync("Codex-Cli", new(
+            ProviderConnectionContext.Host, ProviderConnectionSource.CodexLoginStatus,
+            ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.OAuth, GoalTaskHistoryTestFixture.At));
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fixture.DatabasePath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ConnectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA integrity_check";
+        Assert.Equal("ok", command.ExecuteScalar());
+
+        command.CommandText = """
+            UPDATE provider_connection_observations SET result = $result
+            WHERE profile_id = 'CODEX-CLI'
+            """;
+        command.Parameters.AddWithValue("$result", (int)ProviderConnectionResult.SignedOut);
+        Assert.Equal(1, command.ExecuteNonQuery());
+
+        command.CommandText = "SELECT result FROM provider_connection_observations WHERE profile_id = 'CODEX-CLI'";
+        Assert.Equal((long)ProviderConnectionResult.SignedOut, command.ExecuteScalar());
+    }
+
+    [Theory]
+    [InlineData("café-worker", "cafe-worker", "CAFÉ-WORKER", "CAFE-WORKER")]
+    [InlineData("ſandbox-worker", "sandbox-worker", "ſANDBOX-WORKER", "SANDBOX-WORKER")]
+    public async Task DistinctUnicodeProfiles_KeepIndependentObservations(
+        string firstProfile, string secondProfile, string firstLookup, string secondLookup)
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var at = GoalTaskHistoryTestFixture.At;
@@ -311,12 +345,12 @@ public sealed class ProviderConnectionEvidenceStoreTests
             ProviderConnectionSource.CodexLoginStatus, ProviderConnectionResult.SignedIn,
             ProviderConnectionAuthMode.OAuth, at);
         var signedOut = signedIn with { Result = ProviderConnectionResult.SignedOut };
-        await fixture.Repository.SaveProviderConnectionObservationAsync("café-worker", signedIn);
-        await fixture.Repository.SaveProviderConnectionObservationAsync("cafe-worker", signedOut);
+        await fixture.Repository.SaveProviderConnectionObservationAsync(firstProfile, signedIn);
+        await fixture.Repository.SaveProviderConnectionObservationAsync(secondProfile, signedOut);
 
-        var observations = await fixture.Repository.ReadProviderConnectionEvidenceAsync(["CAFÉ-WORKER", "CAFE-WORKER"]);
-        Assert.Equal(signedIn, Assert.Single(observations["CAFÉ-WORKER"]));
-        Assert.Equal(signedOut, Assert.Single(observations["CAFE-WORKER"]));
+        var observations = await fixture.Repository.ReadProviderConnectionEvidenceAsync([firstLookup, secondLookup]);
+        Assert.Equal(signedIn, Assert.Single(observations[firstLookup]));
+        Assert.Equal(signedOut, Assert.Single(observations[secondLookup]));
         Assert.Equal(["2"], fixture.Rows("SELECT COUNT(*) FROM provider_connection_observations"));
     }
 

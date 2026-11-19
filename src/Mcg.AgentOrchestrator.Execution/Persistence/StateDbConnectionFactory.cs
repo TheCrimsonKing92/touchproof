@@ -54,7 +54,6 @@ internal static class StateDbConnectionFactory
         try
         {
             connection.Open();
-            RegisterProfileIdentityCollation(connection);
             ExecuteNonQuery(
                 connection,
                 "PRAGMA busy_timeout=" + timeoutMilliseconds.ToString(CultureInfo.InvariantCulture),
@@ -89,11 +88,6 @@ internal static class StateDbConnectionFactory
             throw;
         }
     }
-
-    // Lowercase avoids the environment-variable prefix; SQLite collation names are case-insensitive,
-    // so databases whose indexes retain the uppercase spelling use the same registration.
-    internal static void RegisterProfileIdentityCollation(SqliteConnection connection) =>
-        connection.CreateCollation("mcg_profile_identity", StringComparer.OrdinalIgnoreCase.Compare);
 
     private static void NotifyConnectionOpenedForDiagnostics(SqliteConnection connection, string databasePath)
     {

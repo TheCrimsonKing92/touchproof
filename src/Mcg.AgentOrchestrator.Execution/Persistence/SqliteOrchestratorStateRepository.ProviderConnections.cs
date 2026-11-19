@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -18,11 +19,10 @@ public sealed partial class SqliteOrchestratorStateRepository
                 evidence_source INTEGER NOT NULL,
                 result INTEGER NOT NULL,
                 authentication_mode INTEGER NOT NULL,
-                observed_at TEXT NOT NULL,
-                PRIMARY KEY (profile_id, execution_context)
+                observed_at TEXT NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ux_provider_connection_observations_identity
-                ON provider_connection_observations (profile_id COLLATE mcg_profile_identity, execution_context);
+                ON provider_connection_observations (profile_id, execution_context);
             """;
         command.ExecuteNonQuery();
     }
@@ -40,13 +40,12 @@ public sealed partial class SqliteOrchestratorStateRepository
                 INSERT INTO provider_connection_observations
                     (profile_id, execution_context, evidence_source, result, authentication_mode, observed_at)
                 VALUES ($profile, $context, $source, $result, $mode, $at)
-                ON CONFLICT(profile_id COLLATE mcg_profile_identity, execution_context) DO UPDATE SET
-                    profile_id = excluded.profile_id,
+                ON CONFLICT(profile_id, execution_context) DO UPDATE SET
                     evidence_source = excluded.evidence_source, result = excluded.result,
                     authentication_mode = excluded.authentication_mode, observed_at = excluded.observed_at
                 WHERE excluded.observed_at >= provider_connection_observations.observed_at
                 """;
-            command.Parameters.AddWithValue("$profile", profileId);
+            command.Parameters.AddWithValue("$profile", NormalizeConnectionProfileId(profileId));
             command.Parameters.AddWithValue("$context", (int)observation.ExecutionContext);
             command.Parameters.AddWithValue("$source", (int)observation.EvidenceSource);
             command.Parameters.AddWithValue("$result", (int)observation.Result);
@@ -62,6 +61,22 @@ public sealed partial class SqliteOrchestratorStateRepository
             write.Telemetry.Emit("rollback", exception);
             throw;
         }
+    }
+
+    private static string NormalizeConnectionProfileId(string profileId)
+    {
+        var uppercase = profileId.ToUpperInvariant();
+        if (StringComparer.OrdinalIgnoreCase.Equals(profileId, uppercase)) return uppercase;
+
+        // Invariant uppercase can cross an ordinal case boundary, for example from long s to ASCII S.
+        var key = new StringBuilder(profileId.Length);
+        foreach (var character in profileId.EnumerateRunes())
+        {
+            var original = character.ToString();
+            var candidate = original.ToUpperInvariant();
+            key.Append(StringComparer.OrdinalIgnoreCase.Equals(original, candidate) ? candidate : original);
+        }
+        return key.ToString();
     }
 
     private static void ValidateConnectionObservation(string profileId, ProviderConnectionObservation observation)
@@ -103,15 +118,11 @@ public sealed partial class SqliteOrchestratorStateRepository
             {
                 command.CommandText = """
                     SELECT execution_context, evidence_source, result, authentication_mode, observed_at, profile_id
-                    FROM (
-                        SELECT *, ROW_NUMBER() OVER (
-                            PARTITION BY profile_id COLLATE mcg_profile_identity, execution_context
-                            ORDER BY observed_at DESC, rowid DESC) AS ordinal
-                        FROM provider_connection_observations
-                        WHERE profile_id COLLATE mcg_profile_identity IN (SELECT value FROM json_each($profiles))
-                    ) WHERE ordinal = 1 ORDER BY execution_context
+                    FROM provider_connection_observations
+                    WHERE profile_id IN (SELECT value FROM json_each($profiles))
+                    ORDER BY execution_context
                     """;
-                command.Parameters.AddWithValue("$profiles", JsonSerializer.Serialize(profileIds));
+                command.Parameters.AddWithValue("$profiles", JsonSerializer.Serialize(profileIds.Select(NormalizeConnectionProfileId)));
                 using var reader = await command.ExecuteReaderAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken))
                 {
