@@ -15,7 +15,7 @@ public sealed class OwnerConsoleNewsInputFailureTests
     [InlineData(MalformedChangelog, "0")]
     [InlineData(ValidChangelog, "{")]
     [InlineData(ValidChangelog, "-1")]
-    [InlineData(ValidChangelog, null)]
+    [InlineData(null, null)]
     public async Task StartupWithMissingOrMalformedInputCompletesWithoutANotice(string? changelog, string? record)
     {
         var root = SharedTestSupport.CreateTempDirectory();
@@ -35,6 +35,7 @@ public sealed class OwnerConsoleNewsInputFailureTests
 
             Assert.Empty(strip.Visible);
             Assert.Empty(session.Unseen);
+            Assert.Equal(record, File.Exists(recordPath) ? File.ReadAllText(recordPath) : null);
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }

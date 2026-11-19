@@ -1142,6 +1142,10 @@ Dispatch sandboxes resolve by task role (2026-06-11): the templates carry `{sand
 
 Local-model file work uses `qwen-code-cli` as the harness (how) against LlamaCpp `llama-server` at `http://127.0.0.1:8080/v1` (what). The profile takes `{openaiBaseUrl}` / `{openaiApiKey}` from the selected provider, `{approvalMode}` from the role (`yolo` for Developer/Tester, `plan` for read-only roles including Ideation), and `--bare` so the startup prompt fits a 16k server context (default qwen-code at repo root is ~25728 tokens and 400s). Thinking must be disabled via the repo's `.qwen/settings.json` (`generationConfig.reasoning: false` per model). Task briefs should state absolute target paths because qwen-code's write tool rejects relative paths. qwen-code rewrites `.qwen/settings.json` at exit with its startup view — never hand-edit that file while a qwen process is running. Start the backend with `.\scripts\Start-LlamaServer.ps1` (do not pass `-ot` through `Invoke-RepoScript.ps1`; `;` splits the tensor override). Default context is 16384.
 
+#### Worktree write boundary invariant
+
+On Windows, Codex Developer and Tester workers may write inside their worktree. The sandbox denies writes outside the worktree. `WorktreeWriteProbe` runs before provider startup through the existing preflight launcher and lowers its child to the worker's Low integrity before attempting writes. The probe adds neither an operator-level launch identity nor a Medium-integrity full-access worker mode. One write attempt in host-owned scratch checks the boundary before dispatch.
+
 ### Changing which model a role uses
 
 `agent <role> <provider> <model> [name]` replaces the role's primary agent. `agent-add <role> <provider> <model> [name]` adds a second entry at `route=alternate` with a derived id, leaving the primary in place — that is the right verb when you want one goal's task moved to a different model via `reassign-agent` without switching the whole role.
