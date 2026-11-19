@@ -121,6 +121,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 {
+    private readonly GoalTaskBuildHistoryStore _buildHistory = new(options);
+
     internal const string VerificationProperty = "VerificationHistory";
     internal const string DispatchProperty = "DispatchHistory";
     internal const string MarkerProperty = "HistoryInTable";
@@ -191,14 +193,16 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
 
     internal string SerializeDocument(GoalSnapshot goal) => PrepareWrite(goal).Document;
 
-    // One per-save preparation supplies both the document decisions and the exact row payloads.
+    // One per-save preparation supplies the document decisions and all task history row payloads.
     // Options, resolver and task metadata are shared lazily per source options object. Reference-keyed
     // counts belong to this save, scoped to its synchronous document write on this thread. No output is kept.
     internal PreparedWrite PrepareWrite(GoalSnapshot goal, int? timelineInTable = null)
     {
+        var buildHistory = _buildHistory.PrepareWrite(goal);
+        var projectedGoal = buildHistory.ProjectedGoal;
         var rows = new List<HistoryWriteRow>();
         var counts = new Dictionary<TaskSnapshot, HistoryCounts>(ReferenceEqualityComparer.Instance);
-        foreach (var task in goal.Tasks)
+        foreach (var task in projectedGoal.Tasks)
         {
             string? AddRows<T>(IReadOnlyList<T>? entries, string kind)
             {
@@ -228,17 +232,18 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
         _activeTimelineCount = timelineInTable;
         try
         {
-            document = JsonSerializer.Serialize(goal, documentOptions);
+            document = JsonSerializer.Serialize(projectedGoal, documentOptions);
         }
         finally
         {
             _activeCounts = previousCounts;
             _activeTimelineCount = previousTimelineCount;
         }
-        return new(goal.Id, document, JsonSerializer.Serialize(rows, options));
+        return new(goal.Id, document, JsonSerializer.Serialize(rows, options), buildHistory);
     }
 
-    internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson);
+    internal sealed record PreparedWrite(string GoalId, string Document, string RowsJson,
+        GoalTaskBuildHistoryStore.PreparedWrite BuildHistory);
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTaskHistoryStore.cs")]
     internal static void CreateSchema(SqliteConnection connection)
@@ -284,7 +289,8 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                 )
             """;
         changed += await command.ExecuteNonQueryAsync(token);
-        return changed > 0;
+        var buildHistoryChanged = await _buildHistory.WriteAsync(connection, prepared.BuildHistory, token);
+        return changed > 0 || buildHistoryChanged;
     }
 
     private sealed record HistoryWriteRow(string TaskId, string Kind, int Sequence, string EntryJson);
@@ -658,7 +664,7 @@ internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
                     ? history.LatestDispatch.Deserialize<TaskDispatchSnapshot>(options) : task.LastDispatch
             });
         }
-        return snapshot with { Tasks = tasks };
+        return await _buildHistory.HydrateAsync(connection, snapshot with { Tasks = tasks }, token);
     }
 
     private sealed record HistoryDocument(bool IsMetadataOnly, IReadOnlyList<HistoryTask?>? Tasks,

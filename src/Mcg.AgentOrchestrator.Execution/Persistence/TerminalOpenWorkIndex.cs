@@ -7,6 +7,7 @@ internal static class TerminalOpenWorkIndex
     internal const string ExistsSql = "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'goal_open_work')";
     internal const string ListSql = "SELECT goal_id FROM goal_open_work WHERE terminal_open_work = 1 ORDER BY goal_id";
 
+    // GoalTaskBuildHistoryStore keeps this predicate's open invocations in the document.
     internal static string OpenWorkFlagSql(string statusExpression, string snapshotExpression) => $"""
         CASE WHEN {statusExpression} IN ('{GoalStatus.Superseded}', '{GoalStatus.Cancelled}', '{GoalStatus.Completed}')
           AND json_valid({snapshotExpression}) THEN EXISTS (
