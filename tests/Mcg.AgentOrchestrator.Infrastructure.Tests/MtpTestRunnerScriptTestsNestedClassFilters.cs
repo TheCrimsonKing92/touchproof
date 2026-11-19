@@ -56,7 +56,8 @@ public sealed class MtpTestRunnerScriptTestsNestedClassFilters
         string[] unsupported = ["FullyQualifiedName=+Outer", "FullyQualifiedName~Outer/Inner", "TestCategory=Fast"];
         foreach (var filter in unsupported)
         {
-            Assert.Throws<InvalidOperationException>(() => AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(filter));
+            Assert.Throws<InvalidOperationException>(() =>
+                AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(filter).ToArray());
 
             var rejected = sandbox.RunSummary(filter: filter, noBuild: false, dotnetPath: fakeDotnet);
 
