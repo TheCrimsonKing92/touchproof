@@ -7,14 +7,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliCommandTestBase
 {
-    [Xunit.Fact(DisplayName = "Real tick reload hydrates three open goals while keeping two hundred terminal goals metadata only")]
+    [Xunit.Fact(DisplayName = "Real tick reload hydrates three open goals and checks only their terminal dependencies")]
     public void RealReloadCountsOpenAndTerminalPopulation()
     {
         var root = CreateTempDirectory();
         try
         {
             var workspace = CreateRefinedWorkspace(root);
-            var (repository, openIds) = Seed(workspace);
+            var (repository, openIds, dependencyIds) = Seed(workspace);
             var kernel = CliPersistentStateRunner.LoadConductLoopKernel(repository, executionDirectory: root);
             Assert.Equal(3, kernel.Goals.Count);
             AgentOrchestratorKernel? reloaded = null;
@@ -30,8 +30,10 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
             AssertPopulation(ConductorBatchLoopTestsStepLedger.Phase(tick, "sweep"));
             Assert.NotNull(reloaded);
             Assert.Equal(openIds.Order(StringComparer.Ordinal), reloaded.Goals.Select(goal => goal.Id.Value).Order(StringComparer.Ordinal));
-            Assert.Equal(203, reloaded.KnownDependencyGoalStatuses.Count);
-            Assert.Equal("Completed", Assert.Single(reloaded.KnownDependencyGoalStatuses.Values.Distinct(), status => status == "Completed"));
+            Assert.Equal(5, reloaded.KnownDependencyGoalStatuses.Count);
+            Assert.Equal(dependencyIds.Order(StringComparer.Ordinal), reloaded.KnownDependencyGoalStatuses
+                .Where(pair => pair.Value == nameof(GoalStatus.Completed))
+                .Select(pair => pair.Key.Value).Order(StringComparer.Ordinal));
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }
@@ -43,7 +45,7 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
         try
         {
             var workspace = CreateRefinedWorkspace(root);
-            var (repository, _) = Seed(workspace);
+            var (repository, _, _) = Seed(workspace);
             var kernel = CliPersistentStateRunner.LoadConductLoopKernel(repository, executionDirectory: root);
             var reloadCalls = 0;
             var context = new CliExecutionContext(kernel, workspace, new InMemoryModelProviderRegistry([]),
@@ -72,20 +74,25 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
     }
 
     private static void AssertPopulation(string line) => Assert.Contains(
-        "load_counters=goals_hydrated=3,metadata_rows=203,terminal_journal_stats=200,", line);
+        "load_counters=goals_hydrated=3,metadata_rows=3,terminal_journal_stats=2,", line);
 
-    private static (SqliteOrchestratorStateRepository Repository, string[] OpenIds) Seed(OrchestratorWorkspace workspace)
+    private static (SqliteOrchestratorStateRepository Repository, string[] OpenIds, string[] DependencyIds) Seed(OrchestratorWorkspace workspace)
     {
         var kernel = new AgentOrchestratorKernel();
         var terminalIds = new HashSet<string>(StringComparer.Ordinal);
+        var dependencyIds = new List<string>();
         for (var index = 0; index < 200; index++)
         {
             var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, $"Terminal {index}");
             terminalIds.Add(goal.Id.Value);
+            if (index < 2)
+                dependencyIds.Add(goal.Id.Value);
             GoalOperationJournal.Completed(workspace.ExecutionDirectory, goal, "test:terminal", "Terminal load fixture.");
         }
         var openIds = Enumerable.Range(0, 3).Select(index => GoalLifecycleCommands.CreateAndActivateSimpleGoal(
             kernel, AgentCatalog.Default().Agents, $"Open {index}").Id.Value).ToArray();
+        for (var index = 0; index < dependencyIds.Count; index++)
+            kernel.SetGoalDependency(new GoalId(openIds[index]), new GoalId(dependencyIds[index]));
         var snapshot = kernel.ExportSnapshot();
         kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
         {
@@ -94,6 +101,6 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         repository.SaveAsync(kernel).GetAwaiter().GetResult();
         Assert.Equal(203, repository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult().Count);
-        return (repository, openIds);
+        return (repository, openIds, dependencyIds.ToArray());
     }
 }
