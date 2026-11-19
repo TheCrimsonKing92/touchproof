@@ -107,6 +107,7 @@ public sealed class ProviderConnectionAdapterTests
     [Theory]
     [InlineData(".bat", ProviderConnectionResult.Unsupported)]
     [InlineData(".cmd", ProviderConnectionResult.SignedIn)]
+    [InlineData(".ps1", ProviderConnectionResult.SignedIn)]
     public async Task WindowsHostProbe_UsesFirstLauncherResolvedByDispatchShell(string extension, ProviderConnectionResult expected)
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -117,7 +118,9 @@ public sealed class ProviderConnectionAdapterTests
             var later = root.CreateSubdirectory("later").FullName;
             var launcher = Path.Combine(earlier, "codex" + extension);
             const string script = "@echo %*>\"%~dp0invocation.txt\"\r\n@echo Logged in using ChatGPT\r\n@exit /b 0\r\n";
-            File.WriteAllText(launcher, script);
+            File.WriteAllText(launcher, extension == ".ps1"
+                ? "$args -join ' ' | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'invocation.txt')\n'Logged in using ChatGPT'\nexit 0"
+                : script);
             File.WriteAllText(Path.Combine(later, "codex.cmd"), script);
 
             var childPath = (earlier + ";" + later).Replace("'", "''");
@@ -130,7 +133,7 @@ public sealed class ProviderConnectionAdapterTests
             var adapter = new ProviderConnectionStatusAdapters(root.FullName, (request, token) =>
             {
                 Assert.Equal(WorkerShell.Executable, request.FileName);
-                Assert.StartsWith("$PSModuleAutoLoadingPreference", request.Arguments[^1]);
+                Assert.Contains("$PSModuleAutoLoadingPreference = 'None'", request.Arguments[^1]);
                 return WorkerProcessRunner.RunBoundedDirectAsync(request with
                 {
                     Arguments = [.. request.Arguments.SkipLast(1), setup + "\n" + request.Arguments[^1]],

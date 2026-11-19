@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -12,7 +13,8 @@ public static partial class WorkerProcessRunner
 
     internal static async Task<WorkerProcessRunResult> RunBoundedDirectAsync(
         WorkerProcessDirectRunRequest request, int maximumCaptureBytes, CancellationToken cancellationToken,
-        TimeProvider time, Func<HandleListLaunchedProcess, Task>? onLaunched, Action<bool>? cleanedUp)
+        TimeProvider time, Func<HandleListLaunchedProcess, Task>? onLaunched, Action<bool>? cleanedUp,
+        Action<ProcessStartInfo>? configureStart = null)
     {
         if (maximumCaptureBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maximumCaptureBytes));
         if (request.Timeout is not { } timeout || timeout <= TimeSpan.Zero)
@@ -22,6 +24,7 @@ public static partial class WorkerProcessRunner
         using var limit = new CancellationTokenSource();
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token, limit.Token);
         var startInfo = BuildDirectStartInfo(request.FileName, request.Arguments, request.WorkingDirectory);
+        configureStart?.Invoke(startInfo);
         // Windows assigns the contained job in CreateProcess, before the probe can spawn children.
         using var windowsGroup = OperatingSystem.IsWindows() ? OwnedProcessGroup.CreateContained() : null;
         using var process = windowsGroup is null

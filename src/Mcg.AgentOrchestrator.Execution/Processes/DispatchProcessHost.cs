@@ -1404,7 +1404,7 @@ public static void DropToLow() {
     {
         try
         {
-            var src = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
+            var src = Path.Combine(WorkerProviderHomeEnvironment.CodexSeedDirectory(), "auth.json");
             if (File.Exists(src))
             {
                 File.Copy(src, Path.Combine(codexHome, "auth.json"), overwrite: true);
@@ -1422,7 +1422,7 @@ public static void DropToLow() {
         var grokHome = Path.Combine(sandboxRoot, "grok-home");
         Directory.CreateDirectory(grokHome);
 
-        var userGrokDir = (grokHomeDirectoryAccessor ?? ResolveGrokHomeDirectory)();
+        var userGrokDir = (grokHomeDirectoryAccessor ?? WorkerProviderHomeEnvironment.GrokSeedDirectory)();
         var seededAuth = false;
         foreach (var fileName in new[] { "auth.json", "config.toml", "trusted_folders.toml" })
         {
@@ -1462,9 +1462,6 @@ public static void DropToLow() {
         startInfo.Environment["HERMES_HOME"] = hermesHome;
         startInfo.Environment["HERMES_ACP_SKIP_CONFIGURED_MCP"] = "1";
     }
-
-    private static string ResolveGrokHomeDirectory() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".grok");
 
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>
     public static int Run(string parametersPath,
@@ -2166,7 +2163,7 @@ public static void DropToLow() {
             {
                 GrokSignInWriteBack.TryWriteBack(
                     () => Path.Combine(ResolveSandboxRoot(parameters), "grok-home"),
-                    ResolveGrokHomeDirectory,
+                    WorkerProviderHomeEnvironment.GrokSeedDirectory,
                     line => AppendDispatchStderrDiagnostic(parameters.StderrPath, line));
             }
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it

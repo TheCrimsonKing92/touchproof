@@ -61,7 +61,14 @@ internal static class OwnerConsoleFullScreenComposer
             settingsTabs.Add(new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)));
         if (boardSource?.Registry is { } registry)
             settingsTabs.Add(new OwnerConsoleProjectsSettingsTab(registry, boardSource.HandleScope));
+        OwnerConsoleProviderConnectionsTab? providerTab = null;
+        if (controller.ProviderConnections is { } connections && controller.ProviderSignIn is { } signIn)
+        {
+            providerTab = new(connections, signIn, view.Invoke, clock, lifetimeToken);
+            settingsTabs.Add(providerTab);
+        }
         var settingsView = new OwnerConsoleSettingsView(settingsTabs);
+        if (providerTab is not null) providerTab.Invalidate = settingsView.Refresh;
         return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
     }
 
