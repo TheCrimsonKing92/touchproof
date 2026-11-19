@@ -1,6 +1,9 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
+using Terminal.Gui.Views;
 
 // Parallel-safe: immutable registry and isolated Settings contexts.
 public sealed class OwnerConsoleBindingsTests
@@ -158,6 +161,104 @@ public sealed class OwnerConsoleBindingsTests
         Assert.False(view.SettingsView.IsOpen);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
         Assert.False(context.Controller.QuitRequested);
+    }
+
+    [Fact]
+    public async Task SettingsKey_SignInRow_OpensProviderConnectionsWhileListIsPending()
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        var list = new TaskCompletionSource<IReadOnlyList<OwnerConsoleProviderConnection>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var provider = new OwnerConsoleProviderConnectionsTabTests.Fixture { PendingList = list.Task };
+        var harness = new OwnerConsoleHarness();
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, context.Output,
+            harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            sound: context.Sound, providerConnections: provider, providerSignIn: provider);
+        using IApplication app = Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "xai::<provider-default>", "last confirmed: authentication-required")], _ => ""));
+        view.Render(OwnerConsoleSettingsTestContext.Model() with { Activity = [signIn] });
+        view.FocusPane(OwnerConsolePane.Activity);
+        var row = view.ActivityModel.Rows.ToList().FindIndex(item => item.ItemIndex == 0);
+        Assert.True(row >= 0);
+        view.ActivityPane.SelectedItem = row;
+        Assert.False(view.SettingsView.IsOpen);
+
+        await TestHangGuard.WaitAsync(view.HandleKeyAsync(new Key('s')), "sign-in Settings key");
+
+        Assert.True(view.SettingsView.IsOpen);
+        Assert.Equal(OwnerConsolePane.Activity, view.SettingsView.ReturnPane);
+        Assert.Equal(1, view.SettingsView.ActiveTab);
+        Assert.Equal("xai", view.SettingsView.TargetProvider);
+        Assert.Equal(["Reading configured profiles and readiness evidence…"], view.SettingsView.Lines);
+        await TestHangGuard.WaitAsync(provider.ListStarted.Task, "sign-in provider list request");
+        Assert.False(list.Task.IsCompleted);
+        Assert.False(provider.Launches.Reader.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData((int)OwnerConsolePane.Board, 0)]
+    [InlineData((int)OwnerConsolePane.Board, 1)]
+    [InlineData((int)OwnerConsolePane.Activity, 0)]
+    [InlineData((int)OwnerConsolePane.Activity, 1)]
+    public async Task SettingsKey_UntargetedRow_PreservesLastTabAndProviderSelection(
+        int paneValue, int lastTab)
+    {
+        var pane = (OwnerConsolePane)paneValue;
+        using var workspace = new OwnerConsoleExecutorsSettingsTestContext();
+        using var context = new OwnerConsoleSettingsTestContext();
+        using var provider = new OwnerConsoleProviderConnectionsTabTests.Fixture
+        {
+            Initial = [OwnerConsoleProviderConnectionsTabTests.Fixture.Connection("codex-cli"),
+                OwnerConsoleProviderConnectionsTabTests.Fixture.Connection("grok-cli")],
+            Roster = [OwnerConsoleProviderConnectionsTabTests.Fixture.Agent("codex-cli", AgentRole.Developer),
+                OwnerConsoleProviderConnectionsTabTests.Fixture.Agent("grok-cli", AgentRole.Reviewer)]
+        };
+        AgentCatalogStore.Save(workspace.Workspace.AgentCatalogPath, new AgentCatalog(provider.Roster));
+        var harness = new OwnerConsoleHarness();
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, context.Output,
+            harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            workspace: workspace.Workspace, providerConnections: provider, providerSignIn: provider);
+        using IApplication app = Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "openai::<provider-default>", "last confirmed: authentication-required")], _ => ""));
+        var ordinary = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "openai::<provider-default>", "last confirmed: usage-exhausted")], _ => ""));
+        Assert.Null(ordinary.SignInProvider);
+        view.Render(OwnerConsoleSettingsTestContext.Model() with { Activity = [signIn, ordinary] });
+        var frame = view.SettingsView;
+        frame.Open(OwnerConsolePane.Board);
+        frame.HandleKey(Key.CursorRight);
+        await provider.TakeCheckAsync();
+        await provider.TakeCheckAsync();
+        Assert.Contains("  Profiles: codex-cli", frame.Lines);
+        frame.HandleKey(Key.CursorDown);
+        Assert.Contains("  Profiles: grok-cli", frame.Lines);
+        if (lastTab == 0) frame.HandleKey(Key.CursorLeft);
+        Assert.Equal(lastTab, frame.ActiveTab);
+        await view.HandleKeyAsync(new Key('q'));
+        Assert.False(frame.IsOpen);
+        view.FocusPane(pane);
+        // A selected sign-in row in another pane must not supply a Settings target.
+        var activityIndex = pane == OwnerConsolePane.Activity ? 1 : 0;
+        var row = view.ActivityModel.Rows.ToList().FindIndex(item => item.ItemIndex == activityIndex);
+        Assert.True(row >= 0);
+        view.ActivityPane.SelectedItem = row;
+
+        await view.HandleKeyAsync(new Key('s'));
+
+        Assert.True(frame.IsOpen);
+        Assert.Equal(pane, frame.ReturnPane);
+        Assert.Equal(lastTab, frame.ActiveTab);
+        Assert.Null(frame.TargetProvider);
+        if (lastTab == 0) frame.HandleKey(Key.CursorRight);
+        Assert.Contains("  Profiles: grok-cli", frame.Lines);
+        Assert.DoesNotContain("  Profiles: codex-cli", frame.Lines);
+        Assert.DoesNotContain(frame.SubViews.OfType<Label>(),
+            label => label.Text.ToString().Contains("No configured profile", StringComparison.Ordinal));
+        Assert.False(provider.Launches.Reader.TryRead(out _));
     }
 
     [Theory]
