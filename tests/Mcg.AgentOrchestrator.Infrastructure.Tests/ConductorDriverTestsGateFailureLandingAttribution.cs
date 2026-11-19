@@ -147,6 +147,10 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
 
             Assert.Equal(GoalLifecycleState.Verified, held.State);
+            var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+            Assert.Equal("Hold", decision.Action);
+            Assert.Equal("first-timeout-on-candidate", decision.DiscriminatingEvidence);
+            Assert.Contains(new PolicyDecisionFact("attemptId", "timeout-attempt-1"), decision.Facts);
             Assert.Single(gatedCandidates);
             Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskNote &&
                 evt.Message.Contains("attempt=timeout-attempt-1", StringComparison.Ordinal) &&
@@ -184,9 +188,14 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
             Assert.IsType<ConductorAdvanceOutcome.Held>(
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
             Assert.Null(escalation);
-            Assert.IsType<ConductorAdvanceOutcome.Escalated>(
+            var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
 
+            var decision = Assert.IsType<PolicyDecisionRecord>(escalated.Decision);
+            Assert.Equal("Escalate", decision.Action);
+            Assert.Equal("consecutive-same-lane-timeout", decision.DiscriminatingEvidence);
+            Assert.Contains(new PolicyDecisionFact("previousAttemptId", "timeout-attempt-1"), decision.Facts);
+            Assert.Contains(new PolicyDecisionFact("attemptId", "timeout-attempt-2"), decision.Facts);
             var reason = Assert.IsType<string>(escalation);
             Assert.Contains($"attempt timeout-attempt-1 ({TimeoutCheckName})", reason);
             Assert.Contains($"attempt timeout-attempt-2 ({secondTimeout})", reason);

@@ -339,8 +339,7 @@ internal sealed partial class ConductorDriver
     private ConductorAdvanceResult? TryDisposeTimeoutOnlyGateFailure(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
-        var branch = acceptance.BranchHeadSha;
-        var main = acceptance.MainHeadSha;
+        var (branch, main) = (acceptance.BranchHeadSha, acceptance.MainHeadSha);
         if (acceptance.Passed || _executionDirectory is null ||
             string.IsNullOrWhiteSpace(branch) || string.IsNullOrWhiteSpace(main) ||
             acceptance.FailedChecks?.Any(name => !IsBlockingTimeoutCheck(name)) == true ||
@@ -350,46 +349,45 @@ internal sealed partial class ConductorDriver
                 check.FailingTestAttributions?.Any(attribution => !string.IsNullOrWhiteSpace(attribution.TestIdentity)) == true))
             return null;
 
+        const string decisionStage = "acceptance-timeout-recovery";
         const string timeout = "blocked:timeout";
         GoalOperationJournalEntry[] attempts;
         try
         {
             attempts = GoalOperationJournal.ReadStrict(_executionDirectory, goal.Id).Entries
-                .Where(entry => entry.AcceptanceOutcome is timeout or "passed" or "gate-passed" or "failed")
-                .ToArray();
+                .Where(entry => entry.AcceptanceOutcome is timeout or "passed" or "gate-passed" or "failed").ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or FormatException)
-        {
-            return null;
-        }
+        { return null; }
 
-        var required = acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
         if (attempts.LastOrDefault() is not { AcceptanceOutcome: timeout, FailedCheckNames: { } recorded } current ||
-            !current.HasCandidate(branch, main) || !required.ToHashSet(StringComparer.Ordinal).SetEquals(recorded))
+            !current.HasCandidate(branch, main) ||
+            !recorded.ToHashSet(StringComparer.Ordinal).SetEquals(acceptance.RequiredUnmetCriteria.Select(check => check.Name)))
             return null;
 
         var checks = acceptance.UnmetCriteria.Where(check => !check.Passed).Select(check => check.Name).ToArray();
         var attemptId = acceptance.AttemptId ?? "unknown";
         if (attempts.Length > 1 && attempts[^2] is { AcceptanceOutcome: timeout, FailedCheckNames: { } priorChecks } prior &&
-            prior.HasCandidate(branch, main))
+            prior.HasCandidate(branch, main) &&
+            checks.Join(priorChecks, TimeoutLane, TimeoutLane, (check, previous) => (Current: check, Prior: previous),
+                StringComparer.OrdinalIgnoreCase).Distinct().ToArray() is { Length: > 0 } repeated)
         {
-            var repeated = checks.Join(priorChecks, TimeoutLane, TimeoutLane,
-                (check, priorCheck) => (Current: check, Prior: priorCheck), StringComparer.OrdinalIgnoreCase).Distinct().ToArray();
-            if (repeated.Length > 0)
-            {
-                var notePrefix = TimeoutRegateNotePrefix(prior);
-                var priorId = goal.Timeline.LastOrDefault(evt => evt.Kind == ProgressKind.TaskNote &&
-                    evt.Message.StartsWith(notePrefix, StringComparison.Ordinal))?.Message[notePrefix.Length..].Split(' ', 2)[0]
-                    ?? $"unrecorded (journal start={prior.At:O})";
-                var details = repeated.Select(pair => $"attempt {priorId} ({pair.Prior}), attempt {attemptId} ({pair.Current})");
-                return Escalate(goal, goalPrefix, policy, GoalLifecycle.ResolveState(goal),
-                    $"ACCEPTANCE_TIMEOUT_CONSECUTIVE: candidate {branch}/{main} timed out on consecutive gate attempts. " +
-                    string.Join("; ", details), ConductorEscalationKind.BackgroundAcceptanceFailed);
-            }
+            var notePrefix = TimeoutRegateNotePrefix(prior);
+            var priorId = goal.Timeline.LastOrDefault(evt => evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.StartsWith(notePrefix, StringComparison.Ordinal))?.Message[notePrefix.Length..].Split(' ', 2)[0]
+                ?? $"unrecorded (journal start={prior.At:O})";
+            var details = repeated.Select(pair => $"attempt {priorId} ({pair.Prior}), attempt {attemptId} ({pair.Current})");
+            var escalationReason = $"ACCEPTANCE_TIMEOUT_CONSECUTIVE: candidate {branch}/{main} timed out on consecutive gate attempts. " +
+                string.Join("; ", details);
+            var state = GoalLifecycle.ResolveState(goal);
+            RecordEscalation(goal, state, escalationReason);
+            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(
+                state, escalationReason, ConductorEscalationKind.BackgroundAcceptanceFailed)
+                { Decision = new(decisionStage, "Escalate", 1, "consecutive-same-lane-timeout", escalationReason,
+                    [new("branchSha", branch), new("mainSha", main), new("previousAttemptId", priorId), new("attemptId", attemptId)]) });
         }
-
         if (attempts.SkipLast(1).Any(entry => entry.AcceptanceOutcome == timeout &&
-                (!entry.HasCandidatePair || entry.HasCandidate(branch, main))))
+            (!entry.HasCandidatePair || entry.HasCandidate(branch, main))))
             return null;
 
         var reason = $"{TimeoutRegateNotePrefix(current)}{attemptId} ({string.Join(", ", checks)}). " +
@@ -398,7 +396,9 @@ internal sealed partial class ConductorDriver
         if (SelectTaskForCriterionRetry(goal) is { } task)
             _recordTaskNote(goal.Id, task.Id, reason);
         return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(
-            GoalLifecycleState.Verified, reason, StableIdentity: $"acceptance-timeout-regate:{branch}:{main}"));
+            GoalLifecycleState.Verified, reason, StableIdentity: $"acceptance-timeout-regate:{branch}:{main}")
+            { Decision = new(decisionStage, "Hold", 2, "first-timeout-on-candidate", reason,
+                [new("branchSha", branch), new("mainSha", main), new("attemptId", attemptId)]) });
     }
 
     private static string TimeoutRegateNotePrefix(GoalOperationJournalEntry entry) =>
