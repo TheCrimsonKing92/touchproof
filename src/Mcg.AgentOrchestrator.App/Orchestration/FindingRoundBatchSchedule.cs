@@ -70,7 +70,7 @@ internal static class FindingRoundBatchSchedule
                 string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal))
             .GroupBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
-        var passed = new List<(FindingEvidenceBatch Batch, string ReceiptId)>();
+        var passed = new List<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)>();
         var covered = new List<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)>();
         var executable = new List<FindingEvidenceBatch>();
         var unavailable = new List<(FindingEvidenceBatch Batch, int Count, string ReceiptId)>();
@@ -88,7 +88,7 @@ internal static class FindingRoundBatchSchedule
                     batch.Members.Any(member => member.Identity == disposition.RequestIdentity &&
                         member.Findings.Any(finding => finding.StableId == disposition.FindingStableId))))
             {
-                passed.Add((batch, current.ReceiptId));
+                passed.Add((batch, current));
                 continue;
             }
             var covering = receipts.FirstOrDefault(receipt => CoversRed(

@@ -44,18 +44,14 @@ internal static class FindingRoundRedCoverage
             plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
             task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
             candidateSha, fingerprint, basis, FindingRoundBatchSchedule.ReadRunTimeline(goal));
-        foreach (var (batch, receiptId) in settled.Passed)
-            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, "executed", receiptId);
-        if (receipt is { Accepted: true, Passed: true } && !settled.Passed.Any(item => item.ReceiptId == receipt.ReceiptId))
+        foreach (var (batch, passingReceipt) in settled.Passed)
+            FindingRoundBatchCoordinator.RecordGreenOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, passingReceipt);
+        var completedGreen = settled.Passed.Any(item => item.Receipt.ReceiptId == receipt.ReceiptId);
+        if (receipt is { Accepted: true, Passed: true } && !completedGreen)
         {
             // A partial group can complete individual requests while its remainder stays runnable.
-            var dispositions = receipt.RequestDispositions ?? [];
-            foreach (var member in runnable.Members)
-                foreach (var finding in member.Findings)
-                    if (dispositions.Any(disposition => FindingEvidenceRequestCompletion.IsExecutedMember(
-                            receipt, disposition, member.Identity, finding.StableId)))
-                        FindingRoundBatchCoordinator.RecordCurrentReceipt(driver, goal, task, batchCandidateSha, fingerprint,
-                            batchBasis, member.Identity, finding.StableId, receipt.ReceiptId);
+            FindingRoundBatchCoordinator.RecordGreenOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis,
+                runnable, receipt, partial: true);
         }
         foreach (var item in settled.RedCovered)
             FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "executed", item.Receipt.ReceiptId);
@@ -72,7 +68,7 @@ internal static class FindingRoundRedCoverage
             runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
             plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Concat(partialSources).Append(receipt.ReceiptId)
                 .Distinct(StringComparer.Ordinal).ToArray());
-        if (reusedRedDecision is null && (!receipt.Passed || settled.Passed.Any(item => item.ReceiptId == receipt.ReceiptId)))
+        if (reusedRedDecision is null && (!receipt.Passed || completedGreen))
             observeDelivery(delivery);
         if (coverage.Remaining.Count > 0)
             return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,

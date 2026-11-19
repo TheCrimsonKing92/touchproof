@@ -112,19 +112,20 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Request_MixedRepositories_ClosesHomeBatchWithRepositoryExecutionProvenance(bool cappedSibling)
+    [InlineData(null)]
+    [InlineData("keyed")]
+    [InlineData("home")]
+    public void Request_MixedRepositories_ClosesHomeBatchWithRepositoryExecutionProvenance(string? cappedFinding)
     {
         using var fixture = new Fixture();
         FailReviewerNeedsWork(fixture.Kernel, fixture.Goal, fixture.Reviewer, "Need repository evidence", findings:
             [Finding("home", new([new("Sample.Tests", "HomeTests")])),
              Finding("keyed", new([new("./record", "TestReadInvalidFixtures")], Repository: "crosswalk"))]);
-        if (cappedSibling)
+        if (cappedFinding is not null)
         {
             for (var retry = 0; retry < 2; retry++)
                 fixture.Goal.Append(new(fixture.Goal.Id, fixture.Reviewer.Id, ProgressKind.TaskRetried,
-                    $"finding evidence-on-demand: candidate_sha={fixture.HomeHead}; finding_ids=keyed;", DateTimeOffset.UtcNow));
+                    $"finding evidence-on-demand: candidate_sha={fixture.HomeHead}; finding_ids={cappedFinding};", DateTimeOffset.UtcNow));
         }
         var homeCalls = new List<string>();
         var receipts = new List<FindingEvidenceReceipt>();
@@ -142,12 +143,20 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.Null(intermediate.TargetTaskId);
         Assert.Null(intermediate.BatchClosure);
         Assert.Equal(0, keyedCalls);
+        if (cappedFinding == "home")
+        {
+            var pending = FindingRoundBatchAccounting.Summarize(fixture.Goal, fixture.Reviewer, identity, "pending");
+            Assert.Equal(1, pending.NewlyExecuted);
+            Assert.False(pending.IsSettled);
+            Assert.Empty(pending.EligibilityWitnesses);
+            Assert.Equal(0, pending.PaidVerificationCallsAvoided);
+        }
 
         Assert.True(driver.TryBuildFindingEvidenceRequest(fixture.Goal, fixture.Reviewer, ConductorAutonomyPolicy.Permissive, out var drained));
         Assert.NotEqual(FailedGoalFindingObservationKind.FindingEvidencePending, drained.Kind);
-        if (cappedSibling)
+        if (cappedFinding == "keyed")
             Assert.Equal(FailedGoalFindingObservationKind.FindingRetryCapReached, drained.Kind);
-        else
+        else if (cappedFinding is null)
             Assert.NotNull(drained.TargetTaskId);
         var closure = Assert.IsType<FindingEvidenceBatchClosure>(drained.BatchClosure);
         Assert.Equal(identity, closure.Identity);
@@ -156,11 +165,12 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.Equal(2, summary.BatchSize);
         Assert.Equal(2, summary.NewlyExecuted);
         Assert.True(summary.IsSettled);
-        var witness = Assert.Single(summary.EligibilityWitnesses);
-        Assert.Equal(AgentRole.Reviewer, witness.Role);
-        Assert.Equal(1, summary.ReviewerCallsAvoided);
+        var avoided = cappedFinding == "home" ? 0 : 1;
+        Assert.Equal(avoided, summary.EligibilityWitnesses.Length);
+        Assert.All(summary.EligibilityWitnesses, witness => Assert.Equal(AgentRole.Reviewer, witness.Role));
+        Assert.Equal(avoided, summary.ReviewerCallsAvoided);
         Assert.Equal(0, summary.TesterCallsAvoided);
-        Assert.Equal(1, summary.PaidVerificationCallsAvoided);
+        Assert.Equal(avoided, summary.PaidVerificationCallsAvoided);
         Assert.Single(homeCalls);
         Assert.Equal(1, keyedCalls);
         var keyed = Assert.Single(receipts.Where(receipt => receipt.Request.Repository == "crosswalk"));
@@ -170,7 +180,7 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         Assert.All(FindingRoundBatchAccounting.Read(fixture.Goal, identity), item => Assert.Equal(identity.Key, item.BatchKey));
         Assert.Empty(FindingRoundBatchAccounting.Read(fixture.Goal, identity with { CandidateSha = fixture.SecondaryHead }));
 
-        if (cappedSibling) return;
+        if (cappedFinding is not null) return;
 
         var retries = 0;
         string? Retry()

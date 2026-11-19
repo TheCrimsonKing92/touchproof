@@ -70,7 +70,9 @@ public sealed class FindingRoundBatchScheduleTests
             Assert.Equal(new[] { subset }, plan.Executable);
         }
         var passed = Plan([subset], [green with { ReceiptId = ReceiptId(subset) }]);
-        Assert.Equal((subset, ReceiptId(subset)), Assert.Single(passed.Passed));
+        var completed = Assert.Single(passed.Passed);
+        Assert.Equal(subset, completed.Batch);
+        Assert.Equal(ReceiptId(subset), completed.Receipt.ReceiptId);
         Assert.Empty(passed.RedCovered);
         Assert.Empty(passed.Executable);
     }

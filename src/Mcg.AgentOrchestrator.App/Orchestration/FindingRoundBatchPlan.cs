@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Round-local scheduling facts, recomputed from durable receipts and completed-run events.
 internal sealed record FindingRoundBatchPlan(
-    IReadOnlyList<(FindingEvidenceBatch Batch, string ReceiptId)> Passed,
+    IReadOnlyList<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)> Passed,
     IReadOnlyList<(FindingEvidenceBatch Batch, FindingEvidenceReceipt Receipt)> RedCovered,
     IReadOnlyList<FindingEvidenceBatch> Executable,
     IReadOnlyList<(FindingEvidenceBatch Batch, int Count, string ReceiptId)> Unavailable,

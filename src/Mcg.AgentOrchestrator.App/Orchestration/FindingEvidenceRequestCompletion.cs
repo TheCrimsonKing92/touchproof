@@ -14,13 +14,14 @@ internal static class FindingEvidenceRequestCompletion
         disposition is { Disposition: "incomplete", Decision: FindingEvidenceRequestDecision.PendingExecution } &&
         disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true;
 
-    internal static bool IsExecutedMember(FindingEvidenceReceipt receipt, FindingEvidenceRequestDisposition disposition,
-        string requestIdentity, string findingId) =>
-        disposition.Decision == FindingEvidenceRequestDecision.Executed &&
-        disposition.RequestIdentity == requestIdentity && disposition.FindingStableId == findingId &&
-        disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true;
+    internal static FindingEvidenceRequestDisposition? FindSettledMember(
+        FindingEvidenceReceipt receipt, string requestIdentity, string findingId) =>
+        (receipt.RequestDispositions ?? []).FirstOrDefault(disposition =>
+            disposition.Decision is FindingEvidenceRequestDecision.Executed or FindingEvidenceRequestDecision.CoveredByReceipt &&
+            disposition.RequestIdentity == requestIdentity && disposition.FindingStableId == findingId &&
+            disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true);
 
-    internal static bool HasCurrentGreenReceipt(
+    internal static FindingEvidenceReceipt? FindCurrentGreenReceipt(
         TaskSpec requestingTask,
         ReviewFinding finding,
         FindingEvidenceRequest request,
@@ -32,13 +33,13 @@ internal static class FindingEvidenceRequestCompletion
         var receiptId = finding.EvidenceOutcome?.ReceiptId;
         if (string.IsNullOrWhiteSpace(receiptId) || candidateSha == "unavailable")
         {
-            return false;
+            return null;
         }
 
         var identity = BuildFindingEvidenceIdentity(request);
         if (!TryGetFindingEvidenceCoverage(request, out var requestedCoverage))
         {
-            return false;
+            return null;
         }
 
         var receipt = requestingTask.VerificationHistory
@@ -49,27 +50,27 @@ internal static class FindingEvidenceRequestCompletion
         if (receipt is null ||
             !TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection),
                 out var executedCoverage))
-            return false;
+            return null;
 
         var memberDispositions = (receipt.RequestDispositions ?? []).Where(disposition =>
             disposition.RequestIdentity == identity && disposition.FindingStableId == finding.StableId).ToArray();
         if (requestedCoverage.SetEquals(executedCoverage) &&
             (BuildFindingEvidenceIdentity(receipt.Request) == identity || memberDispositions.Length > 0))
-            return true;
+            return receipt;
 
-        var executedMember = memberDispositions.FirstOrDefault(disposition =>
-            IsExecutedMember(receipt, disposition, identity, finding.StableId));
-        if (executedMember is null) return false;
-        if (requestedCoverage.IsSubsetOf(executedCoverage)) return true;
+        var settledMember = FindSettledMember(receipt, identity, finding.StableId);
+        if (settledMember is null) return null;
+        if (requestedCoverage.IsSubsetOf(executedCoverage)) return receipt;
 
         // Recheck the original contributors against current per-selection authority.
         // A current execution earns credit only if it still contributes to the complete request.
-        return executedMember.SourceReceiptIds is { Count: > 1 } sourceIds &&
+        return settledMember.SourceReceiptIds is { Count: > 1 } sourceIds &&
             TryResolveFindingEvidenceCoverage(requestingTask, request, candidateSha, executionBasisIdentity,
                 out var contributors, out var uncovered, out _, preTesterCoverage) &&
             uncovered.Count == 0 &&
             contributors.Any(source => source.ReceiptId == receipt.ReceiptId) &&
-            contributors.All(source => sourceIds.Contains(source.ReceiptId, StringComparer.Ordinal));
+            contributors.All(source => sourceIds.Contains(source.ReceiptId, StringComparer.Ordinal))
+            ? receipt : null;
     }
 
     // Composition can invalidate a reused source after the RED repair route has been selected.

@@ -150,6 +150,46 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Equal(0, scenario.ProcessStarts);
     }
 
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "CrossTick")]
+    public void GreenSuperset_AccountsForCoveredMemberAcrossReload(bool retainObservations)
+    {
+        using var scenario = new Scenario(false, "green-superset") { RecordBatchAccounting = retainObservations };
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var identity = FindingRoundBatchCoordinator.Identity(scenario.Driver, scenario.Goal, scenario.Tester)!;
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Contains("BetaTests", Assert.Single(scenario.Runs), StringComparison.Ordinal);
+        var receipt = Assert.Single(scenario.Tester.LastVerification!.FindingEvidenceReceipts!);
+        Assert.Contains(receipt.RequestDispositions!, item =>
+            item.FindingStableId == "first" && item.Decision == FindingEvidenceRequestDecision.CoveredByReceipt);
+        Assert.Contains(receipt.RequestDispositions!, item =>
+            item.FindingStableId == "second" && item.Decision == FindingEvidenceRequestDecision.Executed);
+        if (retainObservations)
+        {
+            var pending = FindingRoundBatchAccounting.Summarize(scenario.Goal, scenario.Tester, identity, "pending");
+            Assert.Equal(1, pending.NewlyExecuted);
+            Assert.Equal(1, pending.Covered);
+            Assert.False(pending.IsSettled);
+        }
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepare());
+
+        scenario.RecordBatchAccounting = true;
+        scenario.Restart();
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+
+        Assert.Equal(2, scenario.Runs.Count);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(3, summary.BatchSize);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Equal(1, summary.Covered);
+        Assert.Equal(scenario.Tester.Id, Assert.Single(scenario.Retries));
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
     [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void GroupedFailureBeforePartialGreen_ExhaustsRemainderAfterReload()
@@ -309,6 +349,51 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Single(scenario.Runs);
         Assert.Single(scenario.Tester.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
             .DistinctBy(receipt => receipt.ReceiptId));
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+    }
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "CrossTick")]
+    public void FailedGreenPublication_ReplaysTheGroupedAttemptOnce(bool failCheckpoint)
+    {
+        using var scenario = new Scenario(false, "green-superset");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var beforePublication = scenario.Kernel.ExportSnapshot();
+        if (failCheckpoint)
+            scenario.Driver.CheckpointFindingEvidenceCompletion = _ => throw new IOException("Injected GREEN checkpoint failure.");
+        else
+            scenario.RefuseFindingOutcome = "second";
+
+        Assert.Throws<IOException>(() => scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester, policy, out _));
+        var attempt = scenario.LatestAttempt();
+        Assert.Null(attempt.ReconciledAt);
+        Assert.Empty(scenario.Tester.LastVerification!.FindingEvidenceReceipts ?? []);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
+        Assert.Single(scenario.Runs);
+        Assert.Empty(scenario.Retries);
+
+        scenario.RefuseFindingOutcome = null;
+        scenario.Restore(AgentOrchestratorKernel.FromSnapshot(beforePublication));
+        OrchestratorSnapshot? checkpoint = null;
+        scenario.Driver.CheckpointFindingEvidenceCompletion = _ =>
+        {
+            Assert.Null(scenario.LatestAttempt().ReconciledAt);
+            checkpoint = scenario.Kernel.ExportSnapshot();
+        };
+        Assert.True(scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester, policy, out var replayed));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, replayed.Kind);
+        Assert.Single(scenario.Runs);
+        Assert.Equal(attempt.AttemptId, scenario.LatestAttempt().AttemptId);
+        Assert.NotNull(scenario.LatestAttempt().ReconciledAt);
+
+        scenario.Restore(AgentOrchestratorKernel.FromSnapshot(Assert.IsType<OrchestratorSnapshot>(checkpoint)));
+        var receipt = Assert.Single(scenario.Tester.LastVerification!.FindingEvidenceReceipts!);
+        Assert.All(scenario.Tester.LastVerification.MergedReviewFindings!.Where(finding => finding.StableId is "first" or "second"),
+            finding => Assert.Equal(receipt.ReceiptId, finding.EvidenceOutcome?.ReceiptId));
+        Assert.Equal(2, scenario.Goal.Timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded));
         Assert.Empty(scenario.Retries);
         Assert.Empty(scenario.Prepared);
     }
@@ -820,6 +905,9 @@ public sealed class FindingRoundBatchCompletionTests
             if (failure == "partial-green")
                 Findings = [Findings[0] with { EvidenceRequest = new([
                     new("Infrastructure.Tests", "AlphaTests"), new("Infrastructure.Tests", "BetaTests")]) }];
+            if (failure == "green-superset")
+                Findings[1] = Findings[1] with { EvidenceRequest = new([
+                    new("Infrastructure.Tests", "AlphaTests"), new("Infrastructure.Tests", "BetaTests")]) };
             if (failure is "regrouped-green" or "regrouped-failure")
             {
                 var exhaust = failure == "regrouped-failure";

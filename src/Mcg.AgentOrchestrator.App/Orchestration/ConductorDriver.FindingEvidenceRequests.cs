@@ -9,6 +9,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal Action<GoalId>? CheckpointFindingEvidenceCompletion { get; set; }
+
     internal bool TryBuildFindingEvidenceRequest(Goal goal, TaskSpec task, ConductorAutonomyPolicy policy,
         out FailedGoalFindingObservation decision) => FindingRoundBatchCoordinator.Observe(this, goal, task, policy, out decision);
 
@@ -142,18 +144,18 @@ internal sealed partial class ConductorDriver
             }
 
             if (mergedFinding is not null &&
-                FindingEvidenceRequestCompletion.HasCurrentGreenReceipt(
+                FindingEvidenceRequestCompletion.FindCurrentGreenReceipt(
                         requestingTask,
                         mergedFinding,
                         typedRequest,
                         requestCandidateSha,
                         findingRoundFingerprint,
                          requestBasis,
-                         repositoryTarget is null ? preTesterCoverage : []))
+                          repositoryTarget is null ? preTesterCoverage : []) is { } currentGreen)
             {
                 // Reconcile qualified receipts that predate batch observations before skipping execution.
-                FindingRoundBatchCoordinator.RecordCurrentReceipt(this, goal, requestingTask, telemetryCandidateSha,
-                    findingRoundFingerprint, batchBasisIdentity, identity, finding.StableId, mergedFinding.EvidenceOutcome!.ReceiptId!);
+                FindingRoundBatchCoordinator.RecordCurrentGreenReceipt(this, goal, requestingTask, telemetryCandidateSha,
+                    findingRoundFingerprint, batchBasisIdentity, identity, finding.StableId, currentGreen);
                 continue;
             }
 
@@ -484,10 +486,12 @@ internal sealed partial class ConductorDriver
                 findingRoundFingerprint, receiptId, requestDispositions, out decision))
             return true;
 
-        if (reconciliationDeferred) _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt!);
-        _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
+        var checkpointGreen = reconciliationDeferred && receipt.Passed && !apparatusFailure;
+        if (reconciliationDeferred && !checkpointGreen)
+            _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt!);
         if (apparatusFailure)
         {
+            _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
             foreach (var finding in runnable.Findings)
             {
                 _recordFindingEvidenceOutcome(
@@ -521,25 +525,8 @@ internal sealed partial class ConductorDriver
                 batchCandidateSha, batchBasisIdentity, policy, reusedRedDecision, observeDelivery);
             return true;
         }
-        foreach (var (finding, completion) in completions)
-        {
-            var outcome = completion.Outcome;
-            foreach (var contributingReceipt in completion.ContributingReceipts)
-            {
-                _recordFindingEvidenceOutcome(
-                    goal.Id, requestingTask.Id, finding.StableId, outcome,
-                    contributingReceipt.ReceiptId == receiptId ? receipt : contributingReceipt);
-            }
-            _recordFindingEvidenceRequest(
-                goal.Id, requestingTask.Id,
-                $"finding-evidence disposition=honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
-                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={completion.ExecutionResultReason}; " +
-                $"decision={outcome.DecisionReason}; source_receipt_ids={string.Join(',', outcome.SourceReceiptIds!)}");
-            _recordFindingEvidenceRun(
-                goal.Id, requestingTask.Id,
-                $"finding-evidence role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; finding_id={finding.StableId}; " +
-                $"candidate_sha={candidateSha}; receipt_id={receiptId}; execution_basis={executionBasisIdentity}; reason={completion.ExecutionResultReason}; {FormatFocusedEvidenceResult(evidence)}");
-        }
+        FindingEvidenceCompletionPublisher.Publish(this, goal, requestingTask, receipt, completions, FormatFocusedEvidenceResult(evidence),
+            checkpointGreen ? evidenceAttempt : null);
 
         if (actionableCandidateRed is not null)
         {

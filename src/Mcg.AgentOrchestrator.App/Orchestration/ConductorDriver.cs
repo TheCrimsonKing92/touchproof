@@ -75,7 +75,7 @@ internal sealed partial class ConductorDriver
     internal readonly Action<GoalId, TaskId, string> _checkpointFindingEvidenceRun;
     private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
     internal readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
-    private readonly Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> _recordFindingEvidenceRequestDispositions;
+    internal readonly Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> _recordFindingEvidenceRequestDispositions;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Action<
@@ -716,15 +716,15 @@ internal sealed partial class ConductorDriver
             ? _recordFindingEvidenceRun
             : (goalId, taskId, message) => FindingRoundBatchAccounting.CheckpointRun(kernel.GetGoal(goalId), taskId,
                 message, _utcNow(), () => persistCriticalDispatchStart(kernel, [goalId]), dispatchLifecycleGate.AppendTimelineEvent);
+        if (persistCriticalDispatchStart is not null)
+            CheckpointFindingEvidenceCompletion = goalId => persistCriticalDispatchStart(kernel, [goalId]);
         PreTesterRecorder = new((gid, tid, entry, message) => kernel.RecordFindingEvidenceRequest(gid, tid, entry, message),
             (gid, tid, entry, message) => kernel.RecordFindingEvidenceRun(gid, tid, entry, message));
         _recordFindingEvidenceSuppressed = (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
             kernel.RecordFindingEvidenceSuppressed(
                 goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);
         _recordFindingEvidenceOutcome = (goalId, taskId, stableId, outcome, receipt) =>
-        {
             kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
-        };
         _recordFindingEvidenceRequestDispositions = (goalId, taskId, dispositions) =>
             kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions);
         _recordPreReviewEvidence = (goalId, taskId, receipt) =>
