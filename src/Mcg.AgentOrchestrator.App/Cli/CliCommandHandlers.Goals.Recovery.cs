@@ -11,11 +11,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
-// Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the
-// operator used to memorize. It answers blocking human-input requests (which `SubmitHumanInput`
-// flips to Running) while retaining prospective acceptance evidence, normalizes stuck/orphaned tasks
-// to Failed so `RetryTask` accepts them, then retries them back to a dispatchable state — all with the
-// single operator note. Genuinely running tasks (a live process) are left alone.
+// Recover requeues failed refinement and reconciles stuck tasks using one operator note.
+// It retains prospective acceptance evidence and leaves live task processes alone.
 private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     if (parts.Count < 3)
@@ -28,12 +25,14 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     var goal = context.CurrentGoal;
     var note = ResolveTextArgument(parts, inlineIndex: 2, "recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>", "--text-file");
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
-    var actions = 0;
-    if (SpecRefinementLaunchAttemptStore.ForWorkspace(context.Workspace).Reset(goal.Id))
-    {
+    var (refinementReset, clearedEscalation) =
+        GoalRefinementWorkCoordinator.RecoverFailedRefinement(context.Kernel, context.Workspace, goal);
+    if (refinementReset is not null)
+        Console.WriteLine($"recover: spec-refinement reset outcome={refinementReset}.");
+    else if (clearedEscalation)
         Console.WriteLine("recover: cleared spec-refinement failed-claim escalation.");
-        actions++;
-    }
+    var actions = clearedEscalation || refinementReset is not (null or OrchestratorStateOutboxRequeueOutcome.ProtectedByLiveLease)
+        ? 1 : 0;
 
     var sweep = TerminalGoalSweep.Run(
         context.Kernel,

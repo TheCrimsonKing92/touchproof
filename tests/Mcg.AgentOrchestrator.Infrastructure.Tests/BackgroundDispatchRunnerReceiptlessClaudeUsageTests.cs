@@ -17,6 +17,7 @@ public sealed class BackgroundDispatchRunnerReceiptlessClaudeUsageTests
         Assert.Equal(3000, expected.CachedInputTokens);
         Assert.Equal(12, expected.OutputTokens);
         Assert.Equal(DispatchProviderUsage.From(expected, null), dispatch.ProviderUsage);
+        Assert.Equal(ProviderUsageValue.Reported(2), dispatch.ProviderUsage!.Turns);
         Assert.Equal(dispatch.ProviderUsage, goal.Tasks.First().DispatchHistory.Single().ProviderUsage);
 
         var round = Assert.Single(WorkerRoundLedger.FromGoals([goal]));
@@ -36,7 +37,7 @@ public sealed class BackgroundDispatchRunnerReceiptlessClaudeUsageTests
         Assert.Null(dispatch.ContextPackageReceipt);
         Assert.NotNull(dispatch.ProviderUsage);
         Assert.All(new[] { dispatch.ProviderUsage.InputTokens, dispatch.ProviderUsage.CachedInputTokens,
-            dispatch.ProviderUsage.OutputTokens }, value =>
+            dispatch.ProviderUsage.OutputTokens, dispatch.ProviderUsage.Turns }, value =>
         {
             Assert.Equal(ProviderUsageState.Unknown, value.State);
             Assert.Null(value.Value);
@@ -79,7 +80,7 @@ public sealed class BackgroundDispatchRunnerReceiptlessClaudeUsageTests
                 ClaudeTranscriptUsage = new ClaudeTranscriptUsageReader([])
             };
             var result = runner.ResolveDispatchProviderUsage(dispatch, Path.Combine(root, "unused.out.log"));
-            Assert.Equal(new ProviderReportedUsage(8, 2, 3), result.Usage);
+            Assert.Equal(new ProviderReportedUsage(8, 2, 3, TurnCount: 1), result.Usage);
         });
 
     private static void WithCompletedDispatch(

@@ -26,13 +26,19 @@ public sealed class ReviseAfterRefinementFailureTests : CliCommandTestBase
             {"behavioralContract":"Old contract","acceptanceCriteria":[{"text":"Unmatched model criterion","phase":"PreLanding"}],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
             """);
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => ProcessAsync(scenario, badProvider));
-        Assert.StartsWith("SPEC_REFINEMENT_FAILED", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("failed rule: criterion count.", failure.Message, StringComparison.Ordinal);
+        var failureLines = failure.Message.Split(Environment.NewLine);
+        Assert.Collection(failureLines,
+            diagnostic =>
+            {
+                Assert.StartsWith("SPEC_REFINEMENT_FAILED", diagnostic, StringComparison.Ordinal);
+                Assert.Contains("failed rule: criterion count.", diagnostic, StringComparison.Ordinal);
+            },
+            nextStep => Assert.Equal("Next step: recover <goal> <note>", nextStep));
         Assert.Equal(1, badProvider.Calls);
         scenario.Kernel = await scenario.Repository.LoadAsync();
         var failed = await scenario.Repository.GetOutboxStateAsync(scenario.MessageId);
         Assert.Equal(OrchestratorStateOutboxStatus.Failed, failed!.Status);
-        Assert.Equal(failure.Message, failed.Detail);
+        Assert.Equal(string.Join(new string(' ', Environment.NewLine.Length), failureLines), failed.Detail);
         Assert.Null(ReadRow(scenario)![6]); // Released token plus a recent timestamp is not a live lease.
         Assert.NotNull(failed.ProcessingStartedAt);
         Assert.Equal(GoalRefinementReadiness.Failed, Readiness(scenario, failed));

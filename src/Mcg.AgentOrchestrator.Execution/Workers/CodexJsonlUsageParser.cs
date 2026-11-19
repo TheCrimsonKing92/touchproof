@@ -96,8 +96,8 @@ public static class CodexJsonlUsageParser
         long? input = null;
         long? cached = null;
         long? output = null;
+        long turnCount = 0;
         var workerOutputRecognized = false;
-        var usageContractRecognized = false;
         var malformedUsage = false;
         var malformedLineCount = 0;
 
@@ -128,7 +128,7 @@ public static class CodexJsonlUsageParser
 
                 if (type == "turn.completed")
                 {
-                    usageContractRecognized = true;
+                    turnCount++;
                     if (root.TryGetProperty("usage", out var usage))
                     {
                         if (usage.ValueKind != JsonValueKind.Object)
@@ -152,8 +152,9 @@ public static class CodexJsonlUsageParser
         }
 
         var usageResult = input is not null || cached is not null || output is not null
-            ? new ProviderReportedUsage(input, output, cached)
+            ? new ProviderReportedUsage(input, output, cached, turnCount)
             : null;
+        var usageContractRecognized = turnCount > 0;
         var reason = malformedUsage ? "malformed" : usageContractRecognized ? "absent" : "unsupported";
         return new CodexJsonlParseResult(
             string.Join(Environment.NewLine, messages),
