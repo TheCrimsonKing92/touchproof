@@ -198,12 +198,12 @@ public sealed class OwnerConsoleBindingsTests
     }
 
     [Theory]
-    [InlineData((int)OwnerConsolePane.Board, 0)]
-    [InlineData((int)OwnerConsolePane.Board, 1)]
-    [InlineData((int)OwnerConsolePane.Activity, 0)]
-    [InlineData((int)OwnerConsolePane.Activity, 1)]
+    [InlineData((int)OwnerConsolePane.Board, false)]
+    [InlineData((int)OwnerConsolePane.Board, true)]
+    [InlineData((int)OwnerConsolePane.Activity, false)]
+    [InlineData((int)OwnerConsolePane.Activity, true)]
     public async Task SettingsKey_UntargetedRow_PreservesLastTabAndProviderSelection(
-        int paneValue, int lastTab)
+        int paneValue, bool providerTabWasActive)
     {
         var pane = (OwnerConsolePane)paneValue;
         using var workspace = new OwnerConsoleExecutorsSettingsTestContext();
@@ -221,7 +221,7 @@ public sealed class OwnerConsoleBindingsTests
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
             sound: context.Sound, workspace: workspace.Workspace, providerConnections: provider, providerSignIn: provider);
         using IApplication app = Application.Create();
-        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask, clock: context.Clock);
         var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
             [HoldEvent("provider-hold-check", "openai::<provider-default>", "last confirmed: authentication-required")], _ => ""));
         var ordinary = Assert.Single(OwnerActivityNarrator.Narrate(
@@ -229,14 +229,18 @@ public sealed class OwnerConsoleBindingsTests
         Assert.Null(ordinary.SignInProvider);
         view.Render(OwnerConsoleSettingsTestContext.Model() with { Activity = [signIn, ordinary] });
         var frame = view.SettingsView;
-        frame.Open(OwnerConsolePane.Board);
-        frame.HandleKey(Key.CursorRight);
+        // The workspace also contributes an Executors tab; target the provider tab rather than assuming its index.
+        frame.Open(OwnerConsolePane.Board, "openai");
+        Assert.Equal("openai", frame.TargetProvider);
+        var providerTab = frame.ActiveTab;
+        Assert.True(providerTab > 0);
         await provider.TakeCheckAsync();
         await provider.TakeCheckAsync();
         Assert.Contains("  Profiles: codex-cli", frame.Lines);
         frame.HandleKey(Key.CursorDown);
         Assert.Contains("  Profiles: grok-cli", frame.Lines);
-        if (lastTab == 0) frame.HandleKey(Key.CursorLeft);
+        var lastTab = providerTabWasActive ? providerTab : 0;
+        for (var tab = providerTab; tab > lastTab; tab--) frame.HandleKey(Key.CursorLeft);
         Assert.Equal(lastTab, frame.ActiveTab);
         await view.HandleKeyAsync(new Key('q'));
         Assert.False(frame.IsOpen);
@@ -253,7 +257,7 @@ public sealed class OwnerConsoleBindingsTests
         Assert.Equal(pane, frame.ReturnPane);
         Assert.Equal(lastTab, frame.ActiveTab);
         Assert.Null(frame.TargetProvider);
-        if (lastTab == 0) frame.HandleKey(Key.CursorRight);
+        for (var tab = lastTab; tab < providerTab; tab++) frame.HandleKey(Key.CursorRight);
         Assert.Contains("  Profiles: grok-cli", frame.Lines);
         Assert.DoesNotContain("  Profiles: codex-cli", frame.Lines);
         Assert.DoesNotContain(frame.SubViews.OfType<Label>(),
