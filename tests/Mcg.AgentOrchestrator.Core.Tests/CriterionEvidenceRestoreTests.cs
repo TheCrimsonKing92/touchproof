@@ -26,6 +26,7 @@ public sealed class CriterionEvidenceRestoreTests
         var original = kernel.ExportGoalSnapshot(goal.Id);
         var snapshot = original with
         {
+            RefinedSpec = legacy ? original.RefinedSpecVersions![^1].Spec : original.RefinedSpec,
             RefinedSpecVersions = legacy ? null : original.RefinedSpecVersions,
             CriterionEvidenceObligations = persistedShape switch
             {
