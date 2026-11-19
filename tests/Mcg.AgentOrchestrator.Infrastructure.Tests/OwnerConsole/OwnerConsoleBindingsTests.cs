@@ -95,7 +95,7 @@ public sealed class OwnerConsoleBindingsTests
     [Fact]
     public void PromptPreservesCommandOrderAndAdvertisesAliases()
     {
-        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | settings | news | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(expected, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(expected.Split(" | "), OwnerConsoleBindings.PromptEntries);
         Assert.Equal(expected, OwnerConsoleKeyHints.CommandPrompt);
@@ -165,6 +165,8 @@ public sealed class OwnerConsoleBindingsTests
             ":fleet: Show the fleet diagram: host and executor boxes.",
             ":scope [<name>[,<name>...]|all]: Show or change the BOARD project scope.",
             ":follow: Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).",
+            ":settings: Open Settings. Use Left/Right to switch tabs.",
+            ":news: Show and acknowledge unseen console changes.",
             "Fleet view x: Toggle between the top five lanes and all lanes for every executor."
         ];
         Assert.Equal(string.Join("\n", expected.Concat(unkeyed)), OwnerConsoleBindings.HelpText);

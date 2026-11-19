@@ -120,6 +120,24 @@ internal static class OwnerConsoleFullScreenComposer
         var keyboard = app.Initialized ? app.Keyboard : null;
         if (keyboard is not null) keyboard.KeyDown += keys.OnKeyDown;
         if (diagnostics is not null) app.LayoutAndDrawComplete += trace.OnLayoutAndDrawComplete;
+        StartNews(view, controller, token);
         return (keys, bindingRunner, keyboard);
+    }
+
+    private static void StartNews(OwnerConsoleFullScreenView view, OwnerConsoleScreenController controller, CancellationToken token)
+    {
+        if (controller.Workspace is not { } workspace) return;
+        controller.News = OwnerConsoleNewsRecord.Start(
+            Path.Combine(AppContext.BaseDirectory, "docs", OwnerConsoleChangelog.FileName),
+            Path.Combine(workspace.OrchestratorDirectory, OwnerConsoleNewsRecord.FileName),
+            text => Post(() => view.ShowNotice(text, OwnerConsoleNoticeSeverity.Announcement, OwnerConsoleNoticeSource.Announcement)),
+            () => Post(() => { view.NoticeStrip.DismissAnnouncement(); view.RenderNotices(); }),
+            text => Post(() => view.ShowNotice(text, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action)));
+
+        void Post(Action action)
+        {
+            if (token.IsCancellationRequested) return;
+            view.Invoke(() => { if (!token.IsCancellationRequested) action(); });
+        }
     }
 }
