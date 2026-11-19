@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -56,6 +58,9 @@ internal sealed record ClaudeCredentialInspection(
 /// </summary>
 public sealed record ClaudeCredentialSourceSelection(string DirectoryPath, bool IsExplicitSource)
 {
+    internal string? ApiHoldIdentity { get; init; }
+    internal string HoldBinding => ApiHoldIdentity ?? DirectoryPath;
+
     /// <summary>
     /// Rehydrates the selection a dispatch preflight recorded on its dispatch record, so the dispatch
     /// start boundary transports THAT decision instead of making a second one of its own. Returns null
@@ -85,6 +90,7 @@ public sealed record ClaudeCliAuthState(
     bool IsExplicitSource = false,
     string? UnavailableReason = null)
 {
+    internal string? ApiHoldIdentity { get; init; }
     /// <summary>
     /// The ONE resolved result this view was built from, carried so the next consumer in the same
     /// process (sandbox seeding) consumes THIS resolution instead of recomputing selection. Null only
@@ -103,7 +109,7 @@ public sealed record ClaudeCliAuthState(
     public ClaudeCredentialSourceSelection? ToTransportedSelection() =>
         string.IsNullOrWhiteSpace(SelectedSourceDirectory)
             ? null
-            : new ClaudeCredentialSourceSelection(SelectedSourceDirectory, IsExplicitSource);
+            : new ClaudeCredentialSourceSelection(SelectedSourceDirectory, IsExplicitSource) { ApiHoldIdentity = ApiHoldIdentity };
 }
 
 /// <summary>
@@ -162,8 +168,7 @@ public static class ClaudeCliAuthProbe
     /// </summary>
     internal static ClaudeCliAuthState From(ClaudeCredentialResolver resolver)
     {
-        var hasApiKey = !string.IsNullOrWhiteSpace(
-            resolver.ReadEnvironment(ClaudeCredentialSource.ApiKeyEnvironmentVariable));
+        var apiHoldIdentity = HoldIdentity(resolver.ReadEnvironment(ClaudeCredentialSource.ApiKeyEnvironmentVariable));
         var resolution = resolver.Resolve();
         var inspection = resolution.Inspection;
 
@@ -171,7 +176,7 @@ public static class ClaudeCliAuthProbe
         // found: without it an operator cannot tell which login source preflight rejected, which is
         // exactly how preflight and sandbox seeding drifted apart unnoticed.
         return new ClaudeCliAuthState(
-            hasApiKey,
+            apiHoldIdentity is not null,
             resolution.HasLocalAuthMaterial,
             resolution.HasLocalAuthMaterial ? inspection.CredentialFilePath : null,
             inspection.DirectoryPath,
@@ -180,9 +185,13 @@ public static class ClaudeCliAuthProbe
                 ? null
                 : ClaudeCredentialSource.DescribeRejectedSource(inspection))
         {
+            ApiHoldIdentity = apiHoldIdentity,
             Resolution = resolution,
         };
     }
+
+    internal static string? HoldIdentity(string? apiKey) => string.IsNullOrWhiteSpace(apiKey) ? null :
+        "api-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey))).ToLowerInvariant();
 }
 
 /// <summary>

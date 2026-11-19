@@ -487,8 +487,9 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
-    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
-    var kernel = new AgentOrchestratorKernel();
+    var quotaRecordedAt = DateTimeOffset.Parse("2026-06-01T15:01:00Z");
+    var dispatchedAt = quotaRecordedAt.AddDays(1);
+    var kernel = new AgentOrchestratorKernel(new TestClock(quotaRecordedAt));
     var goal = kernel.CreateGoal("Reject cross-profile placeholder mismatch");
     var agent = new AgentDefinition(
         new AgentId("anthropic-developer"),
@@ -501,6 +502,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var previousDispatch = ReopenTaskWithRecoverableDispatchLimit(kernel, goal, task);
     var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
+    Assert.False(WorkerProfileDispatcher.IsTaskRetryDeferred(task, dispatchedAt, out _));
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareTask(
         kernel,

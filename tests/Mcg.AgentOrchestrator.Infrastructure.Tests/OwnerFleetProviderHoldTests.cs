@@ -10,7 +10,7 @@ public sealed class OwnerFleetProviderHoldTests
     private static readonly DateTimeOffset At = DateTimeOffset.Parse("2026-10-17T11:08:00Z");
 
     [Fact]
-    public void HeldBinding_RendersSixRowsInsideDoubleEdgesAfterHost()
+    public void HeldBinding_RendersResetInsideDoubleEdgesAfterHost()
     {
         var row = HoldRow();
         var model = OwnerFleetViewModelBuilder.Build(Report(), true, TimeZoneInfo.Utc, providerHolds: [row]);
@@ -24,11 +24,11 @@ public sealed class OwnerFleetProviderHoldTests
             "Provider xai: HELD !", "binding: xai::<provider-default>",
             "next probe: 2026-10-17 11:38 +00:00 attempt 1 (backoff)",
             "last probe: none", "held since: 2026-10-17 11:08 +00:00",
-            "source: 11111111/22222222"
+            "source: 11111111/22222222", "provider reset: unknown"
         };
-        Assert.Equal(expected, lines.Skip(top + 1).Take(6).Select(line => line[2..^2].TrimEnd()));
-        Assert.All(lines.Skip(top + 1).Take(6), line => { Assert.StartsWith("║", line); Assert.EndsWith("║", line); });
-        Assert.StartsWith("╚", lines[top + 7]);
+        Assert.Equal(expected, lines.Skip(top + 1).Take(expected.Length).Select(line => line[2..^2].TrimEnd()));
+        Assert.All(lines.Skip(top + 1).Take(expected.Length), line => { Assert.StartsWith("║", line); Assert.EndsWith("║", line); });
+        Assert.StartsWith("╚", lines[top + 1 + expected.Length]);
         Assert.True(text.IndexOf("Provider xai", StringComparison.Ordinal) < text.IndexOf("Executor alpha", StringComparison.Ordinal));
     }
 
