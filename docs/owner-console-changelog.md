@@ -28,3 +28,11 @@ Surface fingerprint: sha256:f04c5c82da23758760fa23b6e8fbcb7504dc7c1b621bf6eea490
 
 - Press `s` in any pane to open Settings, or type `:settings`.
 - Press `?` and see the Settings section for all six tabs and their keys.
+
+## 3 - See provider sign-in status and which agent roles use each connection.
+
+Surface fingerprint: sha256:f04c5c82da23758760fa23b6e8fbcb7504dc7c1b621bf6eea4906fd59d9e797d
+
+- Press `s` in any pane or type `:settings`, then use Left/Right to open Provider connections. The first opening checks each provider in use in the background.
+- Use Up/Down to select a provider and see its connection details and next step. Press `c` to recheck it or `r` to reload the list.
+- When offered, press `s` to sign in or `d` for device-code sign-in. After signing in, press `t` to report your return, or press `x` to stop waiting.
