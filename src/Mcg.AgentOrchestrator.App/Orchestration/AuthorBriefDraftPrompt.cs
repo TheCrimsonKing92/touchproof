@@ -85,6 +85,7 @@ internal static class AuthorBriefDraftPrompt
         {{stackCriteria.Criterion}}{{(stackCriteria.WorkerNote is { } note ? Environment.NewLine + note : "")}}
         Keep What to build to at most four numbered items.
         Unless the backlog item is tagged measure, never draft work that only adds timers, counters or census output; propose the fix that measurement would inform, or return kind stale with staleKind refused and a reason saying the item needs a fix design.
+        When drafting a cost brief and no listed metric measures what the goal changes, declare `metric: none; reason: <why no closed-set metric measures this>` as the only metric line under `## Outcome metric`. Never pick the nearest listed metric. A correctness-only goal carries no cost metric line. The listed metrics are {{string.Join(", ", CostGoalOutcomeMetric.MetricNames)}}.
         When the backlog item needs more, draft only the first slice and list the remaining slices under Scope in a line beginning `Follow-up slices:`.
         Scope names only the files in scope and follow-up slices.
         Outside the numbered acceptance criteria, remove every sentence that names an owner, a gate or an after-landing action unless it is rewritten as a numbered criterion ending with an owner sentence.
