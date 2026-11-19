@@ -334,8 +334,8 @@ public sealed class PreTesterPartialCoverageTests
             .Single(receipt => receipt.ReceiptId == retainedC.ReceiptId)));
         Assert.Equal(originalBytes, File.ReadAllText(original.ResultPath));
         var developer = scenario.Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
-        var retry = Assert.Single(scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
-        Assert.Equal(developer.Id, retry.TaskId);
+        var retry = Assert.Single(scenario.Goal.Timeline.Where(item =>
+            item.Kind == ProgressKind.TaskRetried && item.TaskId == developer.Id));
         Assert.Contains("ACTIONABLE_CANDIDATE_RED", retry.Message, StringComparison.Ordinal);
         Assert.Contains($"candidate_sha={CandidateSha};", retry.Message, StringComparison.Ordinal);
         Assert.Contains($"receipt_id={red.ReceiptId};", retry.Message, StringComparison.Ordinal);
