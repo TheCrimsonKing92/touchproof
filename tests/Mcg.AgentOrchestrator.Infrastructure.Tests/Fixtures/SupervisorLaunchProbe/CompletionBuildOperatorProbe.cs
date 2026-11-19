@@ -58,13 +58,15 @@ internal static class CompletionBuildOperatorProbe
             f.Record("held-disjoint-before-progress", new { original.Id, disjointGoal = f.DisjointGoal,
                 disjointTask = f.DisjointTask, status = disjointBefore.ToString() });
             await Host("progress");
-            var current = f.LoadKernel();
-            var disjointAfter = current.GetTask(disjointGoal, disjointTask).Status;
-            Require(disjointAfter == WorkTaskStatus.Completed, "Disjoint tracked goal did not progress while build was held.");
-            Require(current.GetGoal(disjointGoal).Priority == GoalPriority.Critical, "Operator intent did not mutate goal priority.");
+            Require(f.LoadKernel().GetGoal(disjointGoal).Priority == GoalPriority.Critical, "Operator intent did not mutate goal priority.");
             var intent = await new SqliteOperatorIntentStore(Path.Combine(root, "operator-intents.db"), root)
                 .GetAsync(File.ReadAllText(Path.Combine(root, "intent-id.txt")));
             Require(intent?.Status == OperatorIntentStatus.Applied, "Real operator intent was not durably applied.");
+            Pending(f, original);
+            // The conductor defers walking goals changed by an intent until the next tick.
+            await Host("observe");
+            var disjointAfter = f.LoadKernel().GetTask(disjointGoal, disjointTask).Status;
+            Require(disjointAfter == WorkTaskStatus.Completed, "Disjoint tracked goal did not progress while build was held.");
             Pending(f, original);
             Require(!release.WaitOne(0), "Held build was released before unrelated progress and intent application.");
             f.Record("held-control-proven", new { original.Id, original.DispatchId, original.TreeDigest,

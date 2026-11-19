@@ -25,7 +25,7 @@ the .NET 10 SDK and git available:
 .\scripts\Invoke-RepoScript.ps1 scripts/Invoke-CompletionBuildOperatorControl.ps1 -ProbeDll C:\candidate-output\Mcg.AgentOrchestrator.SupervisorLaunchProbe.dll -SourceRepository C:\candidate-checkout -OutputRoot C:\operator-evidence\completion-build-new -Control all
 ```
 
-`OutputRoot` must not exist. Each control creates a separate disposable git repository,
+`OutputRoot` must be a new, short absolute path outside any goal worktree. Each control creates a separate disposable git repository,
 two goal worktrees, state and intent databases, build-storage root, profile and package
 directory. No live orchestrator state is read. All waits use readiness/release events
 or actual process exit; five-minute guards detect absent signals. Compilation restores
@@ -34,11 +34,12 @@ project's real MSBuild `BeforeTargets=CoreCompile` target invokes the fixture's 
 checkpoint, outside the source tree. Its receipt includes the checkpoint process PID
 and start time. Only the independent controlling process can signal release.
 
-Each case first starts the fallback from a production tick, waits for the real compiler
-checkpoint, then runs another production tick in a fresh host. That tick completes a
-disjoint tracked documentation task and applies a SQLite-backed priority intent. It
-checks pending state, no verification, unchanged HEAD, absent result commit and unchanged
-operation/dispatch/candidate/project/artifact/child identity **before** release.
+Each case starts the fallback from a production tick and waits for the real compiler
+checkpoint. One fresh host applies a SQLite-backed priority intent to the disjoint goal.
+The conductor defers goals changed by an intent until the next tick, so a second fresh
+host reconciles the disjoint documentation task. Both actions happen **before** release.
+The probe checks pending state, no verification, unchanged HEAD, absent result commit
+and unchanged operation/dispatch/candidate/project/artifact/child identity after each tick.
 
 | Control | Additional action and required observation |
 | --- | --- |
