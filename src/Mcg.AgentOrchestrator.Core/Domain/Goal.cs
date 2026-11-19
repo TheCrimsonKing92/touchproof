@@ -724,7 +724,8 @@ public sealed class Goal
             string.Equals(existing.ExpectedCandidateSha, mapped.ExpectedCandidateSha, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(existing.FindingStableId, mapped.FindingStableId, StringComparison.Ordinal))
         {
-            if (existing.PlannerSources?.Any(source => source.EstablishesOwnership) != true)
+            if (existing.PlannerSources?.Any(source => source.EstablishesOwnership) != true &&
+                !WorkerCandidateOperatorEvidenceBinding.CanFollowWorkerCandidate(existing))
                 return existing;
             // A matching explicit mapping establishes independent authority. Keep
             // Planner provenance as history and preserve every evidence receipt.
@@ -732,7 +733,7 @@ public sealed class Goal
             {
                 Provenance = mapped.Provenance,
                 RecordedAt = mapped.RecordedAt,
-                PlannerSources = existing.PlannerSources.Select(source => source with { EstablishesOwnership = false }).ToArray()
+                PlannerSources = existing.PlannerSources?.Select(source => source with { EstablishesOwnership = false }).ToArray()
             };
             _criterionEvidenceObligations[existingIndex] = mapped;
             return mapped;
@@ -783,10 +784,13 @@ public sealed class Goal
             existing.Owner == CriterionEvidenceOwner.Operator && existing.Phase == CriterionEvidencePhase.PreLanding &&
             existing.State == CriterionEvidenceState.Satisfied &&
             !string.Equals(existing.CandidateSha, candidateSha?.Trim(), StringComparison.OrdinalIgnoreCase);
+        // A worker binding makes the request visible early. An explicit mapping fixes the receipt's candidate.
+        var followsWorkerCandidate = !string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) &&
+            WorkerCandidateOperatorEvidenceBinding.CanFollowWorkerCandidate(existing);
         if (owner is not (CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator) ||
             existing.Owner != owner ||
             (existing.Owner == CriterionEvidenceOwner.Acceptance && string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha)) ||
-            (!replacesStaleOperatorEvidence && !string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) &&
+            (!replacesStaleOperatorEvidence && !followsWorkerCandidate && !string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) &&
              !string.Equals(existing.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) ||
             !string.Equals(existing.RequiredScope, RequireText(scope, nameof(scope)), StringComparison.Ordinal))
             throw new InvalidOperationException($"Evidence receipt is incompatible with obligation '{obligationId}'.");
@@ -809,7 +813,7 @@ public sealed class Goal
         var updated = existing with
         {
             State = passed ? CriterionEvidenceState.Satisfied : CriterionEvidenceState.Failed,
-            ExpectedCandidateSha = replacesStaleOperatorEvidence ? candidateSha : existing.ExpectedCandidateSha,
+            ExpectedCandidateSha = replacesStaleOperatorEvidence || followsWorkerCandidate ? candidateSha : existing.ExpectedCandidateSha,
             CandidateSha = candidateSha,
             ReceiptId = receiptId,
             Detail = detail,
@@ -820,6 +824,23 @@ public sealed class Goal
         };
         _criterionEvidenceObligations[index] = updated;
         return updated;
+    }
+
+    internal bool BindOperatorEvidenceToWorkerCandidate(string candidateSha, DateTimeOffset recordedAt)
+    {
+        var changed = false;
+        for (var index = 0; index < _criterionEvidenceObligations.Count; index++)
+        {
+            var obligation = _criterionEvidenceObligations[index];
+            if (!IsCurrentCriterionEvidenceObligation(obligation)) continue;
+
+            var bound = WorkerCandidateOperatorEvidenceBinding.Apply(obligation, candidateSha, recordedAt);
+            if (ReferenceEquals(bound, obligation)) continue;
+
+            _criterionEvidenceObligations[index] = bound;
+            changed = true;
+        }
+        return changed;
     }
 
     internal CriterionEvidenceObligation? BindDeferredCriterionObligation(

@@ -94,6 +94,16 @@ internal sealed record AttentionJsonReadContext(
             .Select(goal => new GoalId(goal.GoalId))).Distinct().OrderBy(id => id.Value, StringComparer.Ordinal).ToArray();
         var kernel = ids.Length == 0 ? new AgentOrchestratorKernel()
             : await queries.LoadGoalsAsync(ids, cancellationToken);
+        IReadOnlyCollection<Goal> goals = kernel.Goals;
+        if (options.IncludeGateEvidence && projection.OperatorPreLandingGoalIds is { Count: > 0 } evidenceGoalIds)
+        {
+            var extraIds = evidenceGoalIds.Select(id => new GoalId(id)).Except(ids).ToArray();
+            if (extraIds.Length > 0)
+            {
+                var evidenceKernel = await queries.LoadGoalsAsync(extraIds, cancellationToken);
+                goals = goals.Concat(evidenceKernel.Goals).ToArray();
+            }
+        }
         cancellationToken.ThrowIfCancellationRequested();
         var result = new AttentionJsonReadContext(CliCommandHandlers.HumanWaitsForAttention(kernel, null, includeHistory: false),
             CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, includeHistory: false),
@@ -102,7 +112,7 @@ internal sealed record AttentionJsonReadContext(
             projection.OwnerQuestions.Where(hold => existingItems is null ||
                 facts.TryGetValue(hold.GoalId, out var owner) && owner.Status is not
                     (GoalStatus.Parked or GoalStatus.Failed or GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
-                .Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, kernel.Goals,
+                .Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, goals,
             PlannerBriefAmendmentHoldAttentionView.Holds(kernel, kernel.Goals), projection.Goals);
         cancellationToken.ThrowIfCancellationRequested();
         return result;
