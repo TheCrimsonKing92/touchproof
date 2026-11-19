@@ -14,11 +14,13 @@ public sealed class GateOwnedCriterionDeferralTests
         if (legacy)
         {
             var snapshot = scenario.Kernel.ExportSnapshot();
+            var goalSnapshot = snapshot.Goals[0];
             var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
             {
-                Goals = [snapshot.Goals[0] with
+                Goals = [goalSnapshot with
                 {
                     CriterionEvidenceObligations = [],
+                    RefinedSpec = goalSnapshot.RefinedSpecVersions![^1].Spec,
                     RefinedSpecVersions = null
                 }]
             });

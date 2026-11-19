@@ -87,7 +87,7 @@ public sealed class ConductLoopReloadSubStepTests
         var tick = ConductorBatchLoopTestsStepLedger.OneTick(loop, kernel, ConductorBatchLoopTestsStepLedger.FixtureDriver());
         var sweep = ConductorBatchLoopTestsStepLedger.Phase(tick, "sweep");
 
-        Assert.Contains(" sweep_steps=kernel-reload:3:1,refresh-dispatches:3:1,parked-reloads:3:1,terminal-sweep-run:3:1,owned-root-reap:7:1,reconcile-remediation:3:1,host-health:3:1,maintenance:3:1,state-log-check:3:1,failure-clusters:3:1,remote-git-mirror:3:1,goal-refinement:3:1,program-health:0:0 load_counters=", sweep);
+        Assert.Contains(" sweep_steps=kernel-reload:3:1,refresh-dispatches:3:1,parked-reloads:3:1,terminal-sweep-run:3:1,owned-root-reap:7:1,owned-root-build-roots:0:0,owned-root-temp-janitor:0:0,owned-root-orphan-fixtures:0:0,reconcile-remediation:3:1,host-health:3:1,maintenance:3:1,state-log-check:3:1,failure-clusters:3:1,remote-git-mirror:3:1,goal-refinement:3:1,program-health:0:0 load_counters=", sweep);
         Assert.Matches(@" load_counters=\S+ kernel_reload_steps=actionable-goal-id-query:\d+:1,\S+,remainder:\d+:1 cpu_ms=45$", sweep);
     }
 }

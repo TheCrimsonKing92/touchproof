@@ -50,6 +50,7 @@ internal sealed class ConductorTickStepLedger
     internal static readonly IReadOnlyList<string> SweepNames = Array.AsReadOnly(new[]
     {
         "kernel-reload", "refresh-dispatches", "parked-reloads", "terminal-sweep-run", "owned-root-reap",
+        "owned-root-build-roots", "owned-root-temp-janitor", "owned-root-orphan-fixtures",
         "reconcile-remediation", "host-health", "maintenance", "state-log-check", "failure-clusters",
         "remote-git-mirror", "goal-refinement", "program-health"
     });

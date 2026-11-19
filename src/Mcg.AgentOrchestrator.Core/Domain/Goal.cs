@@ -1525,7 +1525,7 @@ public sealed class Goal
                 evt.TickOutcome, evt.Failure, evt.OperatorIntentCreatedAt, evt.PreTesterEvidence)).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
-            RefinedSpec is null ? null : ToRefinedSpecSnapshot(RefinedSpec),
+            _refinedSpecVersions.Count == 0 && RefinedSpec is { } spec ? ToRefinedSpecSnapshot(spec) : null,
             RetainedAcceptanceFailure is null
                 ? null
                 : new AcceptanceFailureSnapshot(
