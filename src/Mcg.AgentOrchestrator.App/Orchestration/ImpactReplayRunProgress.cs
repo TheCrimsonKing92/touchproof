@@ -32,7 +32,7 @@ internal sealed class ImpactReplayNullSink : IImpactReplaySink
 
 internal sealed record ImpactReplayRunConfiguration(string ExecutionDirectory, string OrchestratorDirectory,
     DateTimeOffset? Since, int RequestedLimit, IReadOnlyList<string>? Floor,
-    string? CheckoutParent);
+    string? CheckoutParent, int? AttemptSetVersion = null, string? AttemptSetPath = null);
 
 internal sealed record ImpactReplayRunIdentity(string RunId, DateTimeOffset StartedAt,
     ImpactReplayRunConfiguration Configuration, string Runtime, string Implementation, string SourceRevision);
