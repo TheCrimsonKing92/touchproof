@@ -18,22 +18,21 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         fixture.Tab.HandleKey(Key.CursorDown);
         fixture.Press('s');
         await fixture.ApplyAsync(); // Native window started.
-        Assert.Contains("t return", fixture.Tab.KeyHint);
+        Assert.StartsWith("t return  x stop waiting  c check", fixture.Tab.KeyHint);
         fixture.Press('s');
         fixture.Tab.HandleKey(Key.CursorUp);
-        Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
-        fixture.Press('s'); // Shares the active Codex credential source.
+        Assert.StartsWith("s sign in", fixture.Tab.KeyHint);
         fixture.Tab.HandleKey(Key.CursorDown);
-        Assert.Single(DrainLaunches(fixture));
+        Assert.Equal(ProviderKind.XaiGrokCli, Assert.Single(DrainLaunches(fixture)).Target.Kind);
 
         session.Exit.SetResult(new((ProviderSignInOutcome)outcome, 0));
         await fixture.ApplyAsync();
         var check = await fixture.TakeCheckAsync();
-        Assert.Equal("codex-luna", check.ProfileId);
-        check.Result.SetResult(Fixture.Connection("codex-luna", ProviderConnectionResult.SignedOut));
+        Assert.Equal("grok-cli", check.ProfileId);
+        check.Result.SetResult(Fixture.Connection("grok-cli", ProviderConnectionResult.SignedOut));
         await fixture.ApplyAsync();
         Assert.Contains(expected, fixture.Tab.StatusText);
-        Assert.Contains("  Host / CodexLoginStatus | OAuth | SignedOut", fixture.Tab.Lines);
+        Assert.Contains("  The provider reported no sign-in on the host.", fixture.Tab.Lines);
         Assert.False(fixture.Launches.Reader.TryRead(out _));
     }
 
@@ -51,9 +50,9 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         fixture.Press(action);
         var check = await fixture.TakeCheckAsync();
         Assert.Equal("codex-cli", check.ProfileId);
-        check.Result.SetResult(Fixture.Connection("codex-cli", ProviderConnectionResult.SignedIn));
+        check.Result.SetResult(Fixture.Connection("codex-cli", ProviderConnectionResult.SignedIn, at: fixture.Clock.GetUtcNow()));
         await fixture.ApplyAsync();
-        Assert.Contains("  Host / CodexLoginStatus | OAuth | SignedIn", fixture.Tab.Lines);
+        Assert.StartsWith("OpenAI | signed in: yes", fixture.Tab.Lines[0]);
         Assert.Contains(expected, fixture.Tab.StatusText);
         fixture.Press('t');
         fixture.Press('x');
@@ -62,14 +61,14 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         fixture.Press('s');
         Assert.Contains(expected, fixture.Tab.StatusText);
         fixture.Tab.HandleKey(Key.CursorDown);
-        Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
-        fixture.Press('s');
-        Assert.DoesNotContain("Opening the provider's native sign-in", fixture.Tab.StatusText);
+        Assert.StartsWith("s sign in", fixture.Tab.KeyHint);
 
         var profiles = fixture.Initial;
-        fixture.Initial = [profiles[1]];
+        fixture.Initial = [profiles[1], profiles[2]];
         fixture.Press('r');
         await fixture.ApplyAsync();
+        Assert.StartsWith("s sign in", fixture.Tab.KeyHint); // Reload preserved the selected Grok row.
+        fixture.Tab.HandleKey(Key.CursorUp);
         Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
         fixture.Press('s');
         Assert.DoesNotContain(fixture.Tab.Lines, line => line.Contains("Opening the provider's native sign-in"));
@@ -77,7 +76,6 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         fixture.Initial = profiles;
         fixture.Press('r');
         await fixture.ApplyAsync();
-        fixture.Tab.HandleKey(Key.CursorUp);
 
         session.Exit.SetResult(new(ProviderSignInOutcome.Unknown, 0));
         await fixture.ApplyAsync();
@@ -89,7 +87,7 @@ public sealed class OwnerConsoleProviderSignInFlowTests
     }
 
     [Fact]
-    public async Task ApiKeyUnsupportedAndLaunchFailureKeepReadiness()
+    public async Task ApiKeyBlocksSignInAndLaunchFailureKeepsReadiness()
     {
         using var fixture = new Fixture
         {
@@ -99,26 +97,29 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         };
         await fixture.LoadAsync();
         Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
-        Assert.Contains(fixture.Tab.Lines, l => l.Contains("Manage the API key"));
-        fixture.Press('s');
-        fixture.Tab.HandleKey(Key.CursorDown);
-        Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
+        Assert.Contains("  Using API key from the host; sign-in would not change what workers use", fixture.Tab.Lines);
         fixture.Press('s');
         fixture.Tab.HandleKey(Key.CursorDown);
         fixture.Press('s');
         await fixture.ApplyAsync();
         Assert.Contains("Could not open native sign-in", fixture.Tab.StatusText);
-        Assert.Contains("  Host / CodexLoginStatus | ApiKey | SignedOut", fixture.Tab.Lines);
+        Assert.Contains("  The provider reported no sign-in on the host.", fixture.Tab.Lines);
         Assert.Single(DrainLaunches(fixture));
     }
 
     [Fact]
     public async Task AdvertisedDeviceCodeIsOfferedAndSelected()
     {
-        using var fixture = new Fixture { DeviceCode = true, Initial = [Fixture.Connection("grok-cli")] };
-        await fixture.LoadAsync();
+        var deviceCodeProbe = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var fixture = new Fixture
+        {
+            DeviceCodeProbe = deviceCodeProbe,
+            Initial = [Fixture.Connection("grok-cli")]
+        };
+        await fixture.LoadAsync(initialChecks: 1);
+        deviceCodeProbe.SetResult(true);
         await fixture.ApplyAsync();
-        Assert.Contains("d device code", fixture.Tab.KeyHint);
+        Assert.StartsWith("s sign in  d device code  c check", fixture.Tab.KeyHint);
         fixture.Press('d');
         await fixture.ApplyAsync();
         Assert.True(Assert.Single(DrainLaunches(fixture)).DeviceCode);
