@@ -54,18 +54,22 @@ internal static class FindingEvidenceContinuationCoordinator
         {
             if (goal.Tasks.Any(task => DispatchReadinessRules.IsEarlierSdlcStageOf(task.RequiredRole, reviewer.RequiredRole) &&
                     task.Status != WorkTaskStatus.Completed)) continue;
-            if (!TrySelectFindingEvidenceContinuation(driver, goal, reviewer, out var continuation, out _)) continue;
-            var cap = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
-            if (cap.Round >= policy.ReviewAutoRetryStopRound || cap.LifetimeRound >= cap.LifetimeBackstop)
-                return false;
-            observation = FailedGoalFindingObservation.Routed(
-                FailedGoalFindingObservationKind.FindingRouteObserved, reviewer.Id,
-                BuildFailedGoalAttemptIdentity(reviewer), continuation!.Render(), null,
-                observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
+            if (!TrySelectFindingEvidenceContinuation(driver, goal, reviewer, out var continuation, out _) ||
+                ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, reviewer, policy, out _) ||
+                !FindingRoundBatchCoordinator.TryAccountCoveredContinuation(driver, goal, reviewer, continuation!,
+                    useRetainedVerification: false, out var closure)) continue;
+            observation = BuildObservation(reviewer, continuation!) with { BatchClosure = closure };
             return true;
         }
         return false;
     }
+
+    internal static FailedGoalFindingObservation BuildObservation(TaskSpec reviewer,
+        FindingEvidenceReviewContinuation continuation) =>
+        FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.FindingRouteObserved, reviewer.Id,
+            BuildFailedGoalAttemptIdentity(reviewer), continuation.Render(), null,
+            observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
 
     internal static bool FindingEvidenceContinuationInvalid(ConductorDriver driver, Goal goal, TaskSpec task) =>
         FindingEvidenceContinuationInvalid(driver, goal, task, out _);
@@ -120,9 +124,15 @@ internal static class FindingEvidenceContinuationCoordinator
                     task.PendingRetryCause == RetryCause.NewTestFinding ||
                 task.DispatchHistory.Any(dispatch => dispatch.FindingEvidenceReviewContinuation?.DecisionKey == continuation.DecisionKey)) continue;
             var cap = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
-            if (cap.Round >= policy.ReviewAutoRetryStopRound || cap.LifetimeRound >= cap.LifetimeBackstop) continue;
-            kernel.RecordFindingEvidenceReviewContinuation(goal.Id, task.Id, continuation);
-            driver._retryTask(goal.Id, task.Id, continuation.Render(), null, RetryCause.NewTestFinding);
+            if (cap.IsAtCap || !FindingRoundBatchCoordinator.TryAccountCoveredContinuation(driver, goal, task, continuation,
+                    useRetainedVerification: true, out var closure)) continue;
+            FindingRoundBatchCoordinator.TryApply(driver, goal, closure!, () => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Pending,
+                () =>
+                {
+                    kernel.RecordFindingEvidenceReviewContinuation(goal.Id, task.Id, continuation);
+                    return driver._retryTask(goal.Id, task.Id, continuation.Render(), null, RetryCause.NewTestFinding)
+                        .PendingRetryCause == RetryCause.NewTestFinding;
+                }, useRetainedVerification: true);
         }
     }
 

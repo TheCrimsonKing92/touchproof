@@ -24,7 +24,7 @@ public sealed class FindingRoundBatchScheduleTests
         Assert.Equal(new[] { union, subset }, plan.RedCovered.Select(pair => pair.Batch));
         Assert.All(plan.RedCovered, pair => Assert.Same(receipt, pair.Receipt));
         Assert.Equal(new[] { outside, otherProject }, plan.Executable);
-        Assert.Null(plan.Capped);
+        Assert.Empty(plan.Unavailable);
     }
 
     [Fact]
@@ -70,7 +70,9 @@ public sealed class FindingRoundBatchScheduleTests
             Assert.Equal(new[] { subset }, plan.Executable);
         }
         var passed = Plan([subset], [green with { ReceiptId = ReceiptId(subset) }]);
-        Assert.Equal(new[] { subset }, passed.Passed);
+        var completed = Assert.Single(passed.Passed);
+        Assert.Equal(subset, completed.Batch);
+        Assert.Equal(ReceiptId(subset), completed.Receipt.ReceiptId);
         Assert.Empty(passed.RedCovered);
         Assert.Empty(passed.Executable);
     }
@@ -96,16 +98,55 @@ public sealed class FindingRoundBatchScheduleTests
 
         var before = Plan([batch, second], [], twoRuns);
         Assert.Equal(new[] { batch, second }, before.Executable);
-        Assert.Null(before.Capped);
-        var capped = Plan([batch, second], [], [.. twoRuns, Event(message)]).Capped;
-        Assert.NotNull(capped);
-        Assert.Same(batch, capped.Value.Batch);
-        Assert.Equal(3, capped.Value.Count);
-        Assert.Equal(receiptId, capped.Value.ReceiptId);
+        Assert.Empty(before.Unavailable);
+        var drained = Plan([batch, second], [], [.. twoRuns, Event(message)]);
+        Assert.Equal(new[] { second }, drained.Executable);
+        var capped = Assert.Single(drained.Unavailable);
+        Assert.Same(batch, capped.Batch);
+        Assert.Equal(3, capped.Count);
+        Assert.Equal(receiptId, capped.ReceiptId);
 
-        // The first capped batch blocks dispatch even if an earlier batch has no runs.
-        var laterCapped = Plan([second, batch], [], [.. twoRuns, Event(message)]).Capped;
-        Assert.Same(batch, laterCapped!.Value.Batch);
+        // Exhaustion settles only that request; unrelated work remains runnable.
+        var later = Plan([second, batch], [], [.. twoRuns, Event(message)]);
+        Assert.Same(batch, Assert.Single(later.Unavailable).Batch);
+
+        var basisReceiptId = ConductorDriver.CreateFindingEvidenceReceiptId(Candidate, Round, batch.Identity, Basis);
+        var upgraded = Plan([batch, second], [],
+            [.. twoRuns, Event($"receipt_id={basisReceiptId}; finding_id=alpha; execution_basis={Basis};")]);
+        Assert.Equal(new[] { second }, upgraded.Executable);
+        var upgradedCap = Assert.Single(upgraded.Unavailable);
+        Assert.Equal(3, upgradedCap.Count);
+        Assert.Equal(basisReceiptId, upgradedCap.ReceiptId);
+    }
+
+    [Fact]
+    public void ReplayedFailureAttemptSpendsOneRun()
+    {
+        var batch = Batch("alpha", "Infrastructure.Tests", "AlphaTests");
+        var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(Candidate, Round, batch.Identity, Basis);
+        ProgressEvent Failure(string attempt) => Event(
+            $"finding-evidence failed-attempt; attempt_id={attempt}; receipt_id={receiptId}; finding_id=alpha; execution_basis={Basis};");
+        var first = Failure("first");
+        ProgressEvent[] twoAttempts = [first, first, Failure("second")];
+
+        var pending = Plan([batch], [], twoAttempts);
+        Assert.Same(batch, Assert.Single(pending.Executable));
+        Assert.Empty(pending.Unavailable);
+        var exhausted = Plan([batch], [], [.. twoAttempts, Failure("third")]);
+        Assert.Empty(exhausted.Executable);
+        Assert.Equal(3, Assert.Single(exhausted.Unavailable).Count);
+    }
+
+    [Fact]
+    public void ChangedBasisDoesNotReuseGreenOrExhaustion()
+    {
+        var batch = Batch("alpha", "Infrastructure.Tests", "AlphaTests");
+        var old = RedReceipt(batch) with { Passed = true, ExecutionBasisIdentity = "old-basis" };
+        var message = $"receipt_id={ReceiptId(batch)}; finding_id=alpha; execution_basis=old-basis;";
+        var plan = Plan([batch], [old], [Event(message), Event(message), Event(message)]);
+        Assert.Empty(plan.Passed);
+        Assert.Empty(plan.Unavailable);
+        Assert.Equal(new[] { batch }, plan.Executable);
     }
 
     [Fact]
@@ -122,7 +163,7 @@ public sealed class FindingRoundBatchScheduleTests
         Assert.Same(first, Assert.Single(Plan([alpha], [first, second]).RedCovered).Receipt);
         var unavailable = FindingRoundBatchSchedule.Plan([alpha], RequestingTask, [first], "unavailable", Round, Basis, []);
         Assert.Equal(new[] { alpha }, unavailable.Executable);
-        Assert.Null(unavailable.Capped);
+        Assert.Empty(unavailable.Unavailable);
     }
 
     private static FindingRoundBatchPlan Plan(IReadOnlyList<FindingEvidenceBatch> batches,

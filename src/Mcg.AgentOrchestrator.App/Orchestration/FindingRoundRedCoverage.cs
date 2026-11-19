@@ -13,6 +13,11 @@ internal static class FindingRoundRedCoverage
 {
     internal const string Reason = "redundant-candidate-red";
 
+    internal sealed record Delivery(string CompletedReceiptId, IReadOnlyList<ReviewFinding> Findings, IReadOnlyList<string> ReceiptIds)
+    {
+        internal FailedGoalFindingObservation? ReviewerRoute { get; init; }
+    }
+
     // A completed request belongs to the round scheduler. Cross-round receipt reuse would
     // otherwise escalate its non-actionable red again before the next batch can run.
     internal static bool HasCompletedRedRequest(
@@ -26,25 +31,69 @@ internal static class FindingRoundRedCoverage
             candidateSha, fingerprint, basis, timeline).RedCovered.Count > 0;
     }
 
-    internal static FailedGoalFindingObservation Complete(
+    internal static (Func<FailedGoalFindingObservation> Route, Delivery? Deliverable) StageCompletion(
         ConductorDriver driver, Goal goal, TaskSpec task, IReadOnlyList<FindingEvidenceBatch> pending,
         FindingEvidenceBatch runnable, FindingRoundBatchPlan plan, FindingEvidenceReceipt receipt,
         string candidateSha, string fingerprint, string basis,
         Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
-        Action<GoalId, TaskId, string> recordRequest, ConductorAutonomyPolicy? policy = null)
+        Action<GoalId, TaskId, string> recordRequest, string batchCandidateSha, string batchBasis,
+        ConductorAutonomyPolicy? policy, FailedGoalFindingObservation? reusedRedDecision,
+        FindingEvidenceOutcomeReason? outcomeReason, bool unverifiedReviewerResult)
     {
-        var coverage = Evaluate(pending, task, goal.Timeline, candidateSha, fingerprint, basis, receipt);
+        var vacuous = outcomeReason == FindingEvidenceOutcomeReason.VacuousEvidence;
+        var completedVacuous = vacuous && runnable.Members.All(member => member.Findings.All(finding =>
+            FindingEvidenceRequestCompletion.FindSettledMember(receipt, member.Identity, finding.StableId) is not null));
+        // An executed vacuous control can be delivered for interpretation but supplies no passing coverage.
+        var remaining = plan.Unavailable.Select(item => item.Batch).Concat(pending);
+        if (unverifiedReviewerResult)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis,
+                runnable, "unavailable", receipt.ReceiptId, FindingRoundBatchCoordinator.UnverifiedReviewerResult);
+        var settled = FindingRoundBatchSchedule.Plan(
+            (completedVacuous || unverifiedReviewerResult ? remaining : remaining.Prepend(runnable)).ToArray(), task.Id,
+            task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
+            candidateSha, fingerprint, basis, FindingRoundBatchSchedule.ReadRunTimeline(goal));
+        foreach (var (batch, passingReceipt) in settled.Passed)
+            FindingRoundBatchCoordinator.RecordExecutedOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, passingReceipt);
+        var completedGreen = settled.Passed.Any(item => item.Receipt.ReceiptId == receipt.ReceiptId);
+        if ((receipt is { Accepted: true, Passed: true } && !completedGreen) || vacuous)
+        {
+            // A group can complete individual requests while its remainder stays runnable.
+            FindingRoundBatchCoordinator.RecordExecutedOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis,
+                runnable, receipt, partial: true);
+        }
+        foreach (var item in settled.RedCovered)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "executed", item.Receipt.ReceiptId);
+        foreach (var item in settled.Unavailable)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "unavailable", item.ReceiptId,
+                $"Request {item.Batch.Identity} completed {item.Count} runs; last_receipt_id={item.ReceiptId}.");
+        var coverage = Evaluate(settled.Executable, task, goal.Timeline, candidateSha, fingerprint, basis, receipt);
         coverage.RecordSkips(goal, task, candidateSha, fingerprint, basis, recordDispositions, recordOutcome, recordRequest);
-        return coverage.Remaining.Count > 0
-            ? FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
-                "Focused evidence completed; another distinct request from the same finding round remains pending: " +
-                $"next_request={coverage.Remaining[0].Identity}; completed_receipt_id={receipt.ReceiptId}.")
-            : driver.BuildReceiptClosureOrDeliveryRetry(goal, task, candidateSha,
-                runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
-                plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Append(receipt.ReceiptId).Distinct(StringComparer.Ordinal).ToArray(),
-                "Focused evidence completed and its receipt was attached to the requesting finding." +
-                (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence) + "; " + coverage.Evidence, policy);
+        foreach (var item in coverage.Skipped)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, item.Batch, "covered", item.Receipts[0].ReceiptId);
+        var partialSources = FindingRoundBatchSchedule.PartialGreenReceiptIds(runnable,
+            runnable.Members.SelectMany(member => member.ReusedSourceReceipts ?? []), candidateSha, fingerprint, basis);
+        var delivery = new Delivery(receipt.ReceiptId,
+            runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
+            plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Concat(partialSources).Append(receipt.ReceiptId)
+                .Distinct(StringComparer.Ordinal).ToArray());
+        // Route after publication. Deterministic closure can mutate the task lifecycle.
+        FailedGoalFindingObservation Route()
+        {
+            if (coverage.Remaining.Count > 0)
+                return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                    "Focused evidence completed; another distinct request from the same finding round remains pending: " +
+                    $"next_request={coverage.Remaining[0].Identity}; completed_receipt_id={receipt.ReceiptId}.");
+            if (settled.RequiredCap(goal, task) is { } unavailable)
+                return FindingRoundBatchSchedule.BuildRunCapDecision(goal, task, unavailable.Batch, unavailable.Count,
+                    unavailable.ReceiptId, candidateSha, fingerprint, recordRequest);
+            return reusedRedDecision ?? driver.BuildReceiptClosureOrDeliveryRetry(goal, task, batchCandidateSha,
+                    delivery.Findings, delivery.ReceiptIds,
+                    "Focused evidence completed and its receipt was attached to the requesting finding." +
+                    (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence) + "; " + coverage.Evidence, policy);
+        }
+
+        return (Route, reusedRedDecision is null && (!receipt.Passed || completedGreen) ? delivery : null);
     }
 
     internal static Coverage Evaluate(
