@@ -231,3 +231,4 @@ Keep required deterministic gates, declared test-removal procedures, and indepen
 ## Reviewer Checklist
 
 - Reviewers must check new and changed tests against the `test-design-discipline` guidance before judging residual risk and acceptance readiness.
+- When a candidate adds or changes a procedure document under `docs/negative-controls/` that names a script, or a script under `scripts/` that a criterion cites as evidence, reviewers must require a committed test that executes the procedure at least to its first receipt in a disposable directory.

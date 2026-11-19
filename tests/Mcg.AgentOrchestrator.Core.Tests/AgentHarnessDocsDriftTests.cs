@@ -1,12 +1,18 @@
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 
+[LiveTreeStructural]
 public sealed class AgentHarnessDocsDriftTests
 {
     private const string AgentsPath = "AGENTS.md";
     private const string ClaudePath = "CLAUDE.md";
     private const string RepositoryConventionsPath = "docs/repository-conventions.md";
     private const string TestDesignDisciplinePath = "docs/test-design-discipline.md";
+    private const string FixtureProcedure = "docs/negative-controls/nested/fixture.md";
+    private const string FixtureScript = "scripts/nested/Invoke-FixtureProcedure.ps1";
+
+    // Frozen at introduction. Remove an entry when it gains coverage or becomes stale.
+    private static readonly OperatorProcedureCoverage.Reference[] UncoveredProcedureBaseline = [];
 
     private static readonly SharedSection[] SharedSections =
     [
@@ -167,6 +173,159 @@ public sealed class AgentHarnessDocsDriftTests
         Xunit.Assert.True(exception.Message.Contains(ClaudePath, StringComparison.Ordinal));
         Xunit.Assert.True(exception.Message.Contains(section.EscapeHatchName, StringComparison.Ordinal));
     }
+
+    [Xunit.Fact]
+    public void ProcedureScriptWithoutTestLiteralIsFlagged()
+    {
+        var files = ProcedureFixture();
+        files["docs/negative-controls/other.md"] = "`wrong-directory/Invoke-FixtureProcedure.ps1`";
+        files["docs/other.md"] = "`Invoke-FixtureProcedure.ps1`";
+        files["src/Sample.cs"] = "var script = \"Invoke-FixtureProcedure.ps1\";";
+
+        Xunit.Assert.Equal(new(FixtureProcedure, FixtureScript),
+            Xunit.Assert.Single(OperatorProcedureCoverage.FindUncovered(files)));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("var script = \"Invoke-FixtureProcedure.ps1\";")]
+    [Xunit.InlineData("var script = \"scripts\\\\nested\\\\Invoke-FixtureProcedure.ps1\";")]
+    [Xunit.InlineData("var script = @\".\\scripts\\nested\\Invoke-FixtureProcedure.ps1\";")]
+    [Xunit.InlineData("var script = \"\"\"https://localhost scripts/nested/Invoke-FixtureProcedure.ps1\"\"\";")]
+    [Xunit.InlineData("var script = $\"{root}/scripts/nested/Invoke-FixtureProcedure.ps1\";")]
+    [Xunit.InlineData("var script = $$\"\"\"{{root}}/scripts/nested/Invoke-FixtureProcedure.ps1\"\"\";")]
+    [Xunit.InlineData("var script = $\"{GetPath(\"Invoke-FixtureProcedure.ps1\")}\";")]
+    [Xunit.InlineData("var script = \"Invoke-FixtureProcedure\\u002eps1\";")]
+    public void ProcedureScriptInTestStringLiteralPasses(string testSource)
+    {
+        var files = ProcedureFixture();
+        files["tests/nested/Sample.cs"] = testSource;
+
+        Xunit.Assert.Empty(OperatorProcedureCoverage.FindUncovered(files));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("var other = \"other\"; // \"Invoke-FixtureProcedure.ps1\"")]
+    [Xunit.InlineData("/* \"scripts/nested/Invoke-FixtureProcedure.ps1\" */")]
+    [Xunit.InlineData("var script = $\"{value /* \"Invoke-FixtureProcedure.ps1\" */}\";")]
+    [Xunit.InlineData("var script = \"Invoke-Fixture\" + \"Procedure.ps1\";")]
+    [Xunit.InlineData("var script = $\"Invoke-Fixture{part}.ps1\";")]
+    [Xunit.InlineData("var script = \"Other-Invoke-FixtureProcedure.ps1\";")]
+    public void ProcedureScriptWithoutACompleteLiteralIsFlagged(string testSource)
+    {
+        var files = ProcedureFixture();
+        files["tests/nested/Sample.cs"] = testSource;
+
+        Xunit.Assert.Equal(new(FixtureProcedure, FixtureScript),
+            Xunit.Assert.Single(OperatorProcedureCoverage.FindUncovered(files)));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("scripts/nested/Run+Control.ps1", "scripts/nested/Run+Control.ps1")]
+    [Xunit.InlineData("scripts/nested/Run+Control.ps1", "Run+Control.ps1")]
+    [Xunit.InlineData("scripts/nested/Run Control.ps1", "scripts/nested/Run Control.ps1")]
+    [Xunit.InlineData("scripts/nested/Run Control.ps1", "Run Control.ps1")]
+    public void ProcedureScriptPathIsFlaggedUntilReferencedByTestLiteral(string script, string reference)
+    {
+        var files = new Dictionary<string, string>
+        {
+            [FixtureProcedure] = $"Run `{reference}`.",
+            [script] = "",
+        };
+
+        Xunit.Assert.Equal(new(FixtureProcedure, script),
+            Xunit.Assert.Single(OperatorProcedureCoverage.FindUncovered(files)));
+
+        files["tests/Sample.cs"] = $"var script = \"{reference}\";";
+        Xunit.Assert.Empty(OperatorProcedureCoverage.FindUncovered(files));
+
+        files["tests/Sample.cs"] = $$"""var script = $"{root}/{{script}}";""";
+        Xunit.Assert.Empty(OperatorProcedureCoverage.FindUncovered(files));
+    }
+
+    [Xunit.Fact]
+    public void BareScriptNameFlagsEveryMatchingScriptOnce()
+    {
+        var files = ProcedureFixture();
+        files[FixtureProcedure] = "Run `Invoke-FixtureProcedure.ps1` or `./Invoke-FixtureProcedure.ps1`.";
+        const string secondScript = "scripts/other/Invoke-FixtureProcedure.ps1";
+        files[secondScript] = "";
+
+        Xunit.Assert.Equal(new OperatorProcedureCoverage.Reference[]
+        {
+            new(FixtureProcedure, FixtureScript),
+            new(FixtureProcedure, secondScript)
+        }, OperatorProcedureCoverage.FindUncovered(files));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void BaselineComparisonRejectsNewAndCoveredOrStaleEntries(bool coverOriginal)
+    {
+        var files = ProcedureFixture();
+        var baseline = OperatorProcedureCoverage.FindUncovered(files);
+        if (coverOriginal)
+            files["tests/Sample.cs"] = "var script = \"Invoke-FixtureProcedure.ps1\";";
+        else
+            files.Remove(FixtureProcedure);
+
+        const string newProcedure = "docs/negative-controls/new.md";
+        const string newScript = "scripts/fixture-control";
+        files[newProcedure] = "Run `scripts/fixture-control`.";
+        files[newScript] = "";
+
+        var (added, stale) = OperatorProcedureCoverage.CompareBaseline(
+            OperatorProcedureCoverage.FindUncovered(files), baseline);
+
+        Xunit.Assert.Equal(new(newProcedure, newScript), Xunit.Assert.Single(added));
+        Xunit.Assert.Equal(new(FixtureProcedure, FixtureScript), Xunit.Assert.Single(stale));
+    }
+
+    [Xunit.Fact]
+    public void RepositoryProceduresMatchFrozenUncoveredBaseline()
+    {
+        var root = FindRepositoryRoot();
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        AddTree("docs/negative-controls", "*.md", readContents: true);
+        AddTree("scripts", "*", readContents: false);
+        AddTree("tests", "*.cs", readContents: true);
+
+        var completionBuild = new OperatorProcedureCoverage.Reference(
+            "docs/negative-controls/b176116e-completion-build-operator.md",
+            "scripts/Invoke-CompletionBuildOperatorControl.ps1");
+        Xunit.Assert.DoesNotContain(completionBuild, UncoveredProcedureBaseline);
+
+        // The guard and its baseline cannot supply script references for the procedures they check.
+        files.Remove("tests/Mcg.AgentOrchestrator.Core.Tests/AgentHarnessDocsDriftTests.cs");
+        files.Remove("tests/Mcg.AgentOrchestrator.Core.Tests/OperatorProcedureCoverage.cs");
+        var current = OperatorProcedureCoverage.FindUncovered(files);
+        Xunit.Assert.DoesNotContain(completionBuild, current);
+        var (added, stale) = OperatorProcedureCoverage.CompareBaseline(current, UncoveredProcedureBaseline);
+        Xunit.Assert.True(added.Length == 0 && stale.Length == 0,
+            $"New uncovered procedures: [{string.Join(", ", added.AsEnumerable())}]. " +
+            $"Covered or stale baseline entries: [{string.Join(", ", stale.AsEnumerable())}].");
+
+        void AddTree(string directory, string pattern, bool readContents)
+        {
+            var countBefore = files.Count;
+            foreach (var path in Directory.EnumerateFiles(Path.Combine(root, directory), pattern, SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                if (!relative.Split('/').Any(segment => segment is "bin" or "obj" or ".scratch"
+                        or ".orchestrator-prototype" or "TestResults" or "playwright-report"))
+                {
+                    files.Add(relative, readContents ? File.ReadAllText(path) : "");
+                }
+            }
+            Xunit.Assert.True(files.Count > countBefore, $"No procedure coverage inputs found in {directory}.");
+        }
+    }
+
+    private static Dictionary<string, string> ProcedureFixture() => new()
+    {
+        [FixtureProcedure] = "Run `.\\scripts\\nested\\Invoke-FixtureProcedure.ps1`.",
+        [FixtureScript] = ""
+    };
 
     private static void Validate(string root, HarnessDocs docs)
     {
