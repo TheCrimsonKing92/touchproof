@@ -4,7 +4,8 @@ using System.Text.RegularExpressions;
 
 internal static class OperatorProcedureCoverage
 {
-    private static readonly Regex PathToken = new(@"[\w./+-]+", RegexOptions.CultureInvariant);
+    private const string PathCharacter = @"[\w./+-]";
+    private static readonly Regex PathToken = new(PathCharacter + "+", RegexOptions.CultureInvariant);
     private static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
 
     internal sealed record Reference(string Document, string Script)
@@ -18,10 +19,19 @@ internal static class OperatorProcedureCoverage
         var scripts = files.Keys.Where(path => path.StartsWith("scripts/", StringComparison.OrdinalIgnoreCase))
             .ToHashSet(PathComparer);
         var byFileName = scripts.ToLookup(Path.GetFileName, PathComparer);
+        var spacedPaths = scripts.Concat(byFileName.Select(group => group.Key))
+            .Where(path => path.Any(char.IsWhiteSpace))
+            .OrderByDescending(path => path.Length)
+            .Select(Regex.Escape)
+            .ToArray();
+        // Match known paths with spaces before the ordinary tokenizer can split them.
+        var pathToken = spacedPaths.Length == 0 ? PathToken : new Regex(
+            $@"(?<!{PathCharacter})(?:\./)?(?:{string.Join("|", spacedPaths)})\.*(?!{PathCharacter})|{PathToken}",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
         IEnumerable<string> NamedScripts(string text)
         {
-            foreach (Match match in PathToken.Matches(text.Replace('\\', '/')))
+            foreach (Match match in pathToken.Matches(text.Replace('\\', '/')))
             {
                 var token = NormalizePath(match.Value.TrimEnd('.'));
                 if (token.Contains('/'))

@@ -220,11 +220,12 @@ public sealed class AgentHarnessDocsDriftTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("scripts/nested/Run+Control.ps1")]
-    [Xunit.InlineData("Run+Control.ps1")]
-    public void ProcedureScriptWithPlusIsFlaggedUntilReferencedByTestLiteral(string reference)
+    [Xunit.InlineData("scripts/nested/Run+Control.ps1", "scripts/nested/Run+Control.ps1")]
+    [Xunit.InlineData("scripts/nested/Run+Control.ps1", "Run+Control.ps1")]
+    [Xunit.InlineData("scripts/nested/Run Control.ps1", "scripts/nested/Run Control.ps1")]
+    [Xunit.InlineData("scripts/nested/Run Control.ps1", "Run Control.ps1")]
+    public void ProcedureScriptPathIsFlaggedUntilReferencedByTestLiteral(string script, string reference)
     {
-        const string script = "scripts/nested/Run+Control.ps1";
         var files = new Dictionary<string, string>
         {
             [FixtureProcedure] = $"Run `{reference}`.",
