@@ -46,7 +46,7 @@ internal static class FindingRoundBatchSchedule
                 string.Equals(receipt.CandidateSha, candidate, StringComparison.OrdinalIgnoreCase) &&
                 receipt.FindingRoundFingerprint == round && receipt.ExecutionBasisIdentity == basis &&
                 (receipt.RequestDispositions ?? []).Any(disposition =>
-                    FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition) &&
+                    FindingEvidenceRequestCompletion.IsIncompleteExecution(receipt, disposition) &&
                     batch.Members.Any(member => member.Identity == disposition.RequestIdentity &&
                         member.Findings.Any(finding => finding.StableId == disposition.FindingStableId))))
             .Select(receipt => receipt.ReceiptId);
@@ -197,8 +197,20 @@ internal static class FindingRoundBatchSchedule
                 ExecutedTestCount: > 0, FailingTestIdentities.Count: > 0 } ||
             !string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
             arms.Any(arm => arm.Disposition is FindingEvidenceArmDisposition.ApparatusFailure or
-                FindingEvidenceArmDisposition.Inconclusive) ||
-            !batch.Findings.All(finding => (receipt.RequestDispositions ?? []).Any(disposition =>
+                FindingEvidenceArmDisposition.Inconclusive)) return false;
+
+        var dispositions = receipt.RequestDispositions ?? [];
+        // A matching grouped RED can settle omitted members by deferral without claiming their coverage.
+        if ((receipt.ReceiptId == receiptId || receipt.ReceiptId == legacyReceiptId) &&
+            dispositions.Any(disposition => disposition.Decision == FindingEvidenceRequestDecision.DeferredToNextCandidate) &&
+            batch.Members.All(member => member.Findings.All(finding => dispositions.Any(disposition =>
+                disposition.FindingStableId == finding.StableId && disposition.RequestIdentity == member.Identity &&
+                disposition.Decision is (FindingEvidenceRequestDecision.Executed or FindingEvidenceRequestDecision.CoveredByReceipt
+                    or FindingEvidenceRequestDecision.DeferredToNextCandidate) &&
+                disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true))))
+            return true;
+
+        if (!batch.Findings.All(finding => dispositions.Any(disposition =>
                 disposition.FindingStableId == finding.StableId &&
                 disposition.Decision == FindingEvidenceRequestDecision.Executed))) return false;
 

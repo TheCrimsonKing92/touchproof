@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using static Mcg.AgentOrchestrator.App.Orchestration.ConductorDriver;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -18,6 +19,65 @@ internal static class FindingEvidenceRequestCompletion
         disposition.Decision == FindingEvidenceRequestDecision.Executed &&
         disposition.RequestIdentity == requestIdentity && disposition.FindingStableId == findingId &&
         disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true;
+
+    internal static bool HasCurrentGreenReceipt(
+        TaskSpec requestingTask,
+        ReviewFinding finding,
+        FindingEvidenceRequest request,
+        string candidateSha,
+        string findingRoundFingerprint,
+        string executionBasisIdentity,
+        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource> preTesterCoverage)
+    {
+        var receiptId = finding.EvidenceOutcome?.ReceiptId;
+        if (string.IsNullOrWhiteSpace(receiptId) || candidateSha == "unavailable")
+        {
+            return false;
+        }
+
+        var identity = BuildFindingEvidenceIdentity(request);
+        if (!TryGetFindingEvidenceCoverage(request, out var requestedCoverage))
+        {
+            return false;
+        }
+
+        var receipt = requestingTask.VerificationHistory
+            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+            .LastOrDefault(item => item.ReceiptId == receiptId &&
+                item.FindingRoundFingerprint == findingRoundFingerprint &&
+                IsReusableGreenFindingEvidenceReceipt(item, candidateSha, executionBasisIdentity));
+        if (receipt is null ||
+            !TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection),
+                out var executedCoverage))
+            return false;
+
+        var memberDispositions = (receipt.RequestDispositions ?? []).Where(disposition =>
+            disposition.RequestIdentity == identity && disposition.FindingStableId == finding.StableId).ToArray();
+        if (requestedCoverage.SetEquals(executedCoverage) &&
+            (BuildFindingEvidenceIdentity(receipt.Request) == identity || memberDispositions.Length > 0))
+            return true;
+
+        var executedMember = memberDispositions.FirstOrDefault(disposition =>
+            IsExecutedMember(receipt, disposition, identity, finding.StableId));
+        if (executedMember is null) return false;
+        if (requestedCoverage.IsSubsetOf(executedCoverage)) return true;
+
+        // Recheck the original contributors against current per-selection authority.
+        // A current execution earns credit only if it still contributes to the complete request.
+        return executedMember.SourceReceiptIds is { Count: > 1 } sourceIds &&
+            TryResolveFindingEvidenceCoverage(requestingTask, request, candidateSha, executionBasisIdentity,
+                out var contributors, out var uncovered, out _, preTesterCoverage) &&
+            uncovered.Count == 0 &&
+            contributors.Any(source => source.ReceiptId == receipt.ReceiptId) &&
+            contributors.All(source => sourceIds.Contains(source.ReceiptId, StringComparer.Ordinal));
+    }
+
+    // Composition can invalidate a reused source after the RED repair route has been selected.
+    internal static FindingEvidenceReceipt DeferIncompleteMembers(FindingEvidenceReceipt receipt) =>
+        receipt with { RequestDispositions = (receipt.RequestDispositions ?? []).Select(disposition =>
+            IsIncompleteExecution(receipt, disposition)
+                ? disposition with { Decision = FindingEvidenceRequestDecision.DeferredToNextCandidate }
+                : disposition).ToArray() };
 
     internal static bool TryPersistDispositions(
         ConductorParallelAcceptanceAttemptCoordinator coordinator, ConductorParallelAcceptanceAttempt? attempt,

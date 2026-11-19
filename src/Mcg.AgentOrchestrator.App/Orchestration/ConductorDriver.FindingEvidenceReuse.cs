@@ -176,47 +176,6 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static bool HasCurrentFindingEvidenceReceipt(
-        TaskSpec requestingTask,
-        ReviewFinding finding,
-        FindingEvidenceRequest request,
-        string candidateSha,
-        string findingRoundFingerprint,
-        string executionBasisIdentity)
-    {
-        var receiptId = finding.EvidenceOutcome?.ReceiptId;
-        if (string.IsNullOrWhiteSpace(receiptId) || candidateSha == "unavailable")
-        {
-            return false;
-        }
-
-        var identity = BuildFindingEvidenceIdentity(request);
-        if (!TryGetFindingEvidenceCoverage(request, out var requestedCoverage))
-        {
-            return false;
-        }
-
-        return requestingTask.VerificationHistory
-            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .Any(receipt =>
-                string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(
-                    receipt.FindingRoundFingerprint,
-                    findingRoundFingerprint,
-                    StringComparison.Ordinal) &&
-                IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity) &&
-                TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection), out var executedCoverage) &&
-                ((requestedCoverage.SetEquals(executedCoverage) &&
-                    (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
-                        (receipt.RequestDispositions ?? []).Any(disposition =>
-                            string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
-                            string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal)))) ||
-                 (requestedCoverage.IsSubsetOf(executedCoverage) &&
-                    (receipt.RequestDispositions ?? []).Any(disposition => FindingEvidenceRequestCompletion.IsExecutedMember(
-                        receipt, disposition, identity, finding.StableId)))));
-    }
-
     private void ReattachReusableGreenFindingEvidence(
         Goal goal,
         TaskSpec requestingTask,
@@ -417,7 +376,7 @@ internal sealed partial class ConductorDriver
             if (latestReceiptBySelection.TryGetValue(selection, out var receipt) &&
                 (validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) ||
                  (receipt.RequestDispositions ?? []).Any(disposition =>
-                     FindingEvidenceRequestCompletion.IsPartialGreenDisposition(receipt, disposition)) ||
+                     FindingEvidenceRequestCompletion.IsIncompleteExecution(receipt, disposition)) ||
                  (preTesterCoverage ?? []).Any(source => source.Receipt == receipt)) &&
                 IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity))
             {
@@ -589,7 +548,7 @@ internal sealed partial class ConductorDriver
             .ToLowerInvariant()[..24];
     }
 
-    private static bool TryGetFindingEvidenceCoverage(
+    internal static bool TryGetFindingEvidenceCoverage(
         FindingEvidenceRequest request,
         out HashSet<string> coverage)
     {

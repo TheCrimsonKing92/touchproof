@@ -334,6 +334,34 @@ internal static class FindingRoundBatchCoordinator
                 identity.ExecutionBasisIdentity, batch, "executed", receipt.ReceiptId);
     }
 
+    internal static void RecordActionableRedOutcomes(ConductorDriver driver, Goal goal, TaskSpec task,
+        string candidate, string round, string basis, FindingEvidenceBatch batch, FindingEvidenceReceipt receipt)
+    {
+        var identity = new FindingEvidenceBatchIdentity(task.Id, candidate, round, basis);
+        foreach (var member in batch.Members)
+        {
+            var outcomes = (receipt.RequestDispositions ?? []).Where(disposition =>
+                    disposition.RequestIdentity == member.Identity &&
+                    member.Findings.Any(finding => finding.StableId == disposition.FindingStableId) &&
+                    disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true)
+                .GroupBy(disposition => disposition.Decision);
+            foreach (var outcome in outcomes)
+            {
+                var kind = outcome.Key switch
+                {
+                    FindingEvidenceRequestDecision.Executed => "executed",
+                    FindingEvidenceRequestDecision.CoveredByReceipt => "covered",
+                    FindingEvidenceRequestDecision.DeferredToNextCandidate => "deferred",
+                    _ => null
+                };
+                if (kind is null) continue;
+                FindingRoundBatchAccounting.Record(goal, identity,
+                    new(identity.Key, kind, member.Identity, outcome.Select(item => item.FindingStableId).ToArray(), receipt.ReceiptId),
+                    driver._recordFindingEvidenceRequest);
+            }
+        }
+    }
+
     internal static void RecordCurrentReceipt(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
         string round, string basis, string requestIdentity, string findingId, string receiptId)
     {
@@ -477,6 +505,7 @@ internal static class FindingRoundBatchCoordinator
         // They settle current-candidate membership without claiming evidence coverage or unavailability.
         if (deferredSummary is { IsSettled: true, Deferred: > 0 } &&
             FindingRoundBatchAccounting.RequiredUnavailable(goal, task, identity) is null &&
+            decision.Kind != FailedGoalFindingObservationKind.FindingActionableRed &&
             (!handled || decision.TargetTaskId is not null)) return false;
         var settlement = FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check");
         if ((!handled || (settlement.IsSettled && settlement.Unavailable > 0 &&

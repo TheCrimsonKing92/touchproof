@@ -142,13 +142,14 @@ internal sealed partial class ConductorDriver
             }
 
             if (mergedFinding is not null &&
-                HasCurrentFindingEvidenceReceipt(
+                FindingEvidenceRequestCompletion.HasCurrentGreenReceipt(
                         requestingTask,
                         mergedFinding,
                         typedRequest,
                         requestCandidateSha,
                         findingRoundFingerprint,
-                        requestBasis))
+                         requestBasis,
+                         repositoryTarget is null ? preTesterCoverage : []))
             {
                 // Reconcile qualified receipts that predate batch observations before skipping execution.
                 FindingRoundBatchCoordinator.RecordCurrentReceipt(this, goal, requestingTask, telemetryCandidateSha,
@@ -305,6 +306,9 @@ internal sealed partial class ConductorDriver
                 actionableReceipt ??= covering;
                 redRoute ??= BuildActionableCandidateRedDecision(goal, requestingTask, telemetryCandidateSha,
                     covering.ReceiptId, attribution, $"request_identity={batch.Identity};");
+                FindingRoundBatchCoordinator.RecordActionableRedOutcomes(this, goal, requestingTask, batchCandidateSha,
+                    findingRoundFingerprint, batchBasisIdentity, batch, covering);
+                continue;
             }
             else if (CandidateRedBaselineInheritance.TryBuildUnattributableRedEscalation(
                     telemetryCandidateSha, covering.Arms!, batch, covering.ReceiptId, out var unavailable))
@@ -470,6 +474,8 @@ internal sealed partial class ConductorDriver
                 completions.Add((finding, completion));
             }
         }
+        if (actionableCandidateRed is not null)
+            receipt = FindingEvidenceRequestCompletion.DeferIncompleteMembers(receipt);
 
         // Until the dispositions persist, the focused attempt can be reconciled again and
         // no task receipt can bypass that reconciliation on the next tick.
@@ -538,12 +544,8 @@ internal sealed partial class ConductorDriver
         if (actionableCandidateRed is not null)
         {
             SupersedeRemaining(batches.Skip(1), receipt);
-        }
-
-        if (actionableCandidateRed is not null)
-        {
-            FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, batchCandidateSha, findingRoundFingerprint,
-                batchBasisIdentity, runnable, "executed", receiptId);
+            FindingRoundBatchCoordinator.RecordActionableRedOutcomes(this, goal, requestingTask, batchCandidateSha,
+                findingRoundFingerprint, batchBasisIdentity, runnable, receipt);
             decision = BuildActionableCandidateRedDecision(
                 goal, requestingTask, candidateSha!, receiptId, actionableCandidateRed);
             return true;
