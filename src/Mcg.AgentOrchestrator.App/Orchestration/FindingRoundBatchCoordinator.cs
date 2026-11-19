@@ -335,8 +335,16 @@ internal static class FindingRoundBatchCoordinator
         string round, string basis, string requestIdentity, string findingId, string receiptId)
     {
         var identity = new FindingEvidenceBatchIdentity(task.Id, candidate, round, basis);
-        FindingRoundBatchAccounting.Record(goal, identity,
-            new(identity.Key, "executed", requestIdentity + ":" + findingId, [findingId], receiptId), driver._recordFindingEvidenceRequest);
+        lock (goal)
+        {
+            // A fresh execution may already have settled this finding in a grouped observation.
+            if (FindingRoundBatchAccounting.Read(goal, identity).Any(item => item.Kind == "executed" &&
+                    item.ReceiptId == receiptId && item.FindingIds.Contains(findingId, StringComparer.Ordinal)))
+                return;
+
+            FindingRoundBatchAccounting.Record(goal, identity,
+                new(identity.Key, "executed", requestIdentity + ":" + findingId, [findingId], receiptId), driver._recordFindingEvidenceRequest);
+        }
     }
 
     internal static void RecordCoverage(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
