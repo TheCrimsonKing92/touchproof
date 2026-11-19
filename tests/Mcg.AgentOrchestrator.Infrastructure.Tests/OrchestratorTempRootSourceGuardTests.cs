@@ -7,7 +7,7 @@ public sealed class OrchestratorTempRootSourceGuardTests
     private static readonly AllowedUse[] Allowed =
     [
         new("Mcg.AgentOrchestrator.Execution/Processes/LockAttribution.cs", "var temp = Path.GetTempPath();", 1, "Reads the temp search root only."),
-        new("Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalSweep.OwnedRoots.cs", "Path.GetTempPath(), OrchestratorTempRoot.GetParent(), TimeProvider.System).SummaryLine;", 1, "Janitor scans the legacy temp root for leaked artifacts."),
+        new("Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalSweep.OwnedRoots.cs", "var janitorTempRoot = tempRoot ?? Path.GetTempPath();", 1, "Janitor scans the legacy temp root for leaked artifacts."),
         new("Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageLayout.cs", "Path.GetTempPath(),", 1, "Fallback base for the separately excluded dotnet isolated root."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildLandingFixtureLocks.cs", "var landingTestsRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), LandingTestsRootDirectoryName))", 1, "Read-only containment check for landing test fixtures."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", "var baselineRoot = Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.FocusedEvidenceBaselinesRootDirectoryName);", 1, "Existing baseline path is pinned by a test."),
