@@ -17,7 +17,13 @@ internal sealed record CostGoalOutcomeResult(int LineIndex, OutcomeMetricLine Li
 
 internal sealed record CostGoalOutcomeRecord(CostGoalOutcomeFiling Filing,
     IReadOnlyList<CostGoalOutcomeResult> FinalVerdicts, IReadOnlyList<int> EmittedLines,
-    string? BacklogNote, bool BacklogApplied);
+    string? BacklogNote, bool BacklogApplied)
+{
+    public IReadOnlyList<CostGoalOutcomeResult> PendingResults { get; init; } = [];
+    public CostGoalOutcomeAdoption? Adoption { get; init; }
+}
+
+internal sealed record CostGoalOutcomeAdoption(string LandedHomeCommit, string AdoptedCommit, DateTimeOffset AdoptedAt);
 
 internal sealed record CostGoalOutcomeBacklogChange(bool CreateFollowUp, string Note);
 
@@ -228,14 +234,16 @@ internal static class CostGoalOutcomeVerdict
             var existing = record.FinalVerdicts.ToDictionary(result => result.LineIndex);
             var effective = evaluated.Select(result => existing.GetValueOrDefault(result.LineIndex, result)).ToArray();
             var finals = effective.Where(result => result.State != CostGoalOutcomeState.Pending).ToArray();
-            if (finals.Length > existing.Count)
+            var pending = effective.Where(result => result.State == CostGoalOutcomeState.Pending).ToArray();
+            var hasNewFinals = finals.Length > existing.Count;
+            if (hasNewFinals || !record.PendingResults.SequenceEqual(pending))
             {
                 // Store the first final results and the first miss's note before delivering side effects.
                 var note = record.BacklogNote;
-                if (note is null && record.Filing.SourceBacklogItemId is not null &&
+                if (hasNewFinals && note is null && record.Filing.SourceBacklogItemId is not null &&
                     finals.Any(result => result.State == CostGoalOutcomeState.Missed))
                     note = BacklogNote(goalId, effective);
-                record = record with { FinalVerdicts = finals, BacklogNote = note };
+                record = record with { FinalVerdicts = finals, PendingResults = pending, BacklogNote = note };
                 store.Write(goalId, record);
             }
 
