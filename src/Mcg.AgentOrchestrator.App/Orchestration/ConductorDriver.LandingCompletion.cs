@@ -190,8 +190,8 @@ internal sealed partial class ConductorDriver
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
                 var failureRecordedAt = _utcNow();
-                IReadOnlyList<string> retryFeedback =
-                    [.. FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria), .. attributionLines];
+                var retryFeedback = FailedLaneSelectedClasses.AppendFeedback(goal.Id, acceptance, _parallelAcceptanceAttemptCoordinator,
+                    [.. FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria), .. attributionLines]);
                 var retryCount = _recordCriterionRetryFeedback(
                     goal.Id,
                     task.Id,
