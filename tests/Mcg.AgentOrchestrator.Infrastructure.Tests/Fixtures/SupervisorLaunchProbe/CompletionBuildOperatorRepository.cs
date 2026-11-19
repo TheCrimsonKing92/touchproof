@@ -27,6 +27,13 @@ internal sealed record CompletionBuildOperatorRepository(
         Require(Path.IsPathFullyQualified(root) && !Directory.Exists(root), "Scenario root must be a new absolute directory.");
         Require(File.Exists(Path.Combine(source, "Mcg.AgentOrchestrator.sln")), "Explicit source repository is required.");
         Directory.CreateDirectory(root);
+        // The standalone controller runs Git before the first conductor host starts.
+        Environment.SetEnvironmentVariable("GIT_CONFIG_NOSYSTEM", "1");
+        Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", Path.Combine(root, "profile", ".gitconfig"));
+        Environment.SetEnvironmentVariable("GIT_CONFIG_COUNT", "0");
+        Environment.SetEnvironmentVariable("GIT_CONFIG_PARAMETERS", null);
+        Environment.SetEnvironmentVariable("GIT_CONFIG", null);
+        Environment.SetEnvironmentVariable("GIT_TEMPLATE_DIR", null);
         var repository = Path.Combine(root, "repository");
         Directory.CreateDirectory(repository);
         Git(repository, "init", "-b", "main");

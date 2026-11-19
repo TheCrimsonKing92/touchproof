@@ -304,7 +304,8 @@ internal static class CompletionBuildOperatorProbe
             info.ArgumentList.Add(arg);
         // Child handoff environment is explicit, with isolated profile, packages and artifacts.
         info.Environment.Clear();
-        foreach (var key in new[] { "SystemRoot", "WINDIR", "PATH", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432" })
+        foreach (var key in new[] { "SystemRoot", "WINDIR", "PATH", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+            "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL" })
             if (Environment.GetEnvironmentVariable(key) is { } value) info.Environment[key] = value;
         info.Environment["PATH"] = Path.GetDirectoryName(WorkerShell.Executable) + Path.PathSeparator + info.Environment["PATH"];
         info.Environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
