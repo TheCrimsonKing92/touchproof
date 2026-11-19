@@ -8,7 +8,9 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
     Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
-    OwnerConsoleSoundCommand? sound = null, string? conductorPolicyPath = null, OrchestratorWorkspace? workspace = null, OwnerConsoleAgentsSettingsTab? agentsSettings = null) : IDisposable
+    OwnerConsoleSoundCommand? sound = null, string? conductorPolicyPath = null, OrchestratorWorkspace? workspace = null,
+    OwnerConsoleAgentsSettingsTab? agentsSettings = null, IProviderConnectionsConsoleGateway? providerConnections = null,
+    IProviderSignInLauncher? providerSignIn = null) : IDisposable
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
     private readonly OwnerFleetViewKeys _fleetKeys = new();
@@ -22,6 +24,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerConsoleBellTiers EffectiveBellTiers => _bell.Tiers;
     internal OwnerConsoleSoundCommand? Sound => sound;
     internal OwnerConsoleAgentsSettingsTab? AgentsSettings => agentsSettings;
+    internal IProviderConnectionsConsoleGateway? ProviderConnections => providerConnections;
+    internal IProviderSignInLauncher? ProviderSignIn => providerSignIn;
     internal string? ConductorPolicyPath => conductorPolicyPath;
     internal OrchestratorWorkspace? Workspace => workspace;
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);

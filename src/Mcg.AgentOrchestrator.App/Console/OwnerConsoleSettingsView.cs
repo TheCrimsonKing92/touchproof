@@ -33,6 +33,7 @@ internal sealed class OwnerConsoleSettingsView : FrameView
     {
         ReturnPane = returnPane;
         IsOpen = Visible = true;
+        if (_tabs.Count > 0) _tabs[_active].Activate();
         Refresh();
         _body.SetFocus();
     }
@@ -59,7 +60,10 @@ internal sealed class OwnerConsoleSettingsView : FrameView
         if (!editing && (key == Key.Esc || !key.IsCtrl && !key.IsAlt && char.ToLowerInvariant((char)key.AsRune.Value) == 'q'))
         { IsOpen = Visible = false; return true; }
         if (!editing && _tabs.Count > 0 && (key == Key.CursorLeft || key == Key.CursorRight))
+        {
             _active = (_active + _tabs.Count + (key == Key.CursorLeft ? -1 : 1)) % _tabs.Count;
+            _tabs[_active].Activate();
+        }
         else if (_tabs.Count > 0) _tabs[_active].HandleKey(key);
         Refresh();
         return false;
