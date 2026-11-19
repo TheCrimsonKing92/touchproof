@@ -86,6 +86,8 @@ public sealed class RefinedSpecSingleStorageTests
             RefinedSpec = legacySpec,
             RefinedSpecVersions = omitVersionList ? null : []
         };
+        Assert.Null(legacySnapshot.CreatedAt);
+        var goalCreated = Assert.Single(legacySnapshot.Timeline, item => item.Kind == ProgressKind.GoalCreated);
 
         var restoredKernel = new AgentOrchestratorKernel();
         restoredKernel.ReplaceGoalWithSnapshot(legacySnapshot);
@@ -94,7 +96,7 @@ public sealed class RefinedSpecSingleStorageTests
         var version = Assert.Single(restored.RefinedSpecVersions);
         Assert.Equal(1, version.Version);
         Assert.Null(version.SupersededByVersion);
-        Assert.Equal(snapshot.CreatedAt!.Value, version.RecordedAt);
+        Assert.Equal(goalCreated.OccurredAt, version.RecordedAt);
         Assert.Equal(2, version.BriefVersion);
         Assert.Same(version.Spec, restored.RefinedSpec);
         Assert.Equal("Legacy contract", version.Spec.BehavioralContract);
