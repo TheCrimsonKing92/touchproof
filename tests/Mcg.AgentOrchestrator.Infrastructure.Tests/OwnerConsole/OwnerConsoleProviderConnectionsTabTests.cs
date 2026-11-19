@@ -10,7 +10,8 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
     {
         using var fixture = new Fixture
         {
-            Initial = [Fixture.Connection("codex-cli", ProviderConnectionResult.MaterialPresent, ProviderConnectionAuthMode.ApiKey),
+            Initial = [Fixture.Connection("codex-cli", ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.ApiKey,
+                    at: new(2026, 1, 1, 0, 5, 0, TimeSpan.Zero)),
                 Fixture.Connection("codex-luna", ProviderConnectionResult.SignedIn), Fixture.Connection("grok-cli"),
                 Fixture.Connection("claude-cli"), Fixture.Connection("unrouted")],
             Roster = [Fixture.Agent("codex-cli", AgentRole.Developer), Fixture.Agent("codex-spark", AgentRole.Tester, AgentStatus.Busy),
@@ -78,7 +79,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
     {
         using var fixture = new Fixture
         {
-            Initial = [Fixture.Connection("codex-cli", ProviderConnectionResult.MaterialPresent, ProviderConnectionAuthMode.ApiKey),
+            Initial = [Fixture.Connection("codex-cli", ProviderConnectionResult.SignedIn, ProviderConnectionAuthMode.ApiKey),
                 Fixture.Connection("claude-cli") with { SignIn = null }],
             Roster = [Fixture.Agent("codex-cli", AgentRole.Developer), Fixture.Agent("claude-cli", AgentRole.Tester)]
         };
@@ -88,6 +89,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         Assert.DoesNotContain("unsupported", string.Join("\n", fixture.Tab.Lines), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
         Assert.StartsWith("OpenAI | signed in: not checked", fixture.Tab.Lines[0]);
+        Assert.Contains("confirmed: not checked", fixture.Tab.Lines[0]);
         fixture.Tab.HandleKey(Key.CursorDown);
         Assert.Contains("  The claude-cli profile does not launch the provider's own command line. Set its launch command to start with claude.",
             fixture.Tab.Lines);
@@ -173,11 +175,14 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         var historical = signedIn with { IsHistorical = true, ObservedAt = later };
         var keyPresent = signedIn with { AuthenticationMode = ProviderConnectionAuthMode.ApiKey,
             Result = ProviderConnectionResult.MaterialPresent, ObservedAt = later };
+        var signedInWithKey = keyPresent with { Result = ProviderConnectionResult.SignedIn };
         var signedOut = signedIn with { Result = ProviderConnectionResult.SignedOut };
         var expired = signedIn with { Result = ProviderConnectionResult.Expired };
         var undated = expired with { ObservedAt = null };
 
         Assert.Null(OwnerConsoleProviderRowModel.SelectSignInEvidence([worker, historical, keyPresent]));
+        Assert.Null(OwnerConsoleProviderRowModel.SelectSignInEvidence([signedInWithKey]));
+        Assert.Equal(signedIn, OwnerConsoleProviderRowModel.SelectSignInEvidence([signedIn, signedInWithKey]));
         Assert.Equal(signedIn, OwnerConsoleProviderRowModel.SelectSignInEvidence([keyPresent, worker, signedIn, undated]));
         Assert.Equal(signedOut, OwnerConsoleProviderRowModel.SelectSignInEvidence([signedIn, signedOut]));
         Assert.Equal(expired, OwnerConsoleProviderRowModel.SelectSignInEvidence([signedIn, signedOut, expired]));

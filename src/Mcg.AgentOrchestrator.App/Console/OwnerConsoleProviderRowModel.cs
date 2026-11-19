@@ -63,6 +63,7 @@ internal sealed record OwnerConsoleProviderRowModel(
     internal static ProviderConnectionObservation? SelectSignInEvidence(IEnumerable<ProviderConnectionObservation> observations) =>
         observations.Where(observation => !observation.IsHistorical &&
                 observation.ExecutionContext == ProviderConnectionContext.Host &&
+                observation.AuthenticationMode != ProviderConnectionAuthMode.ApiKey &&
                 observation.Result is ProviderConnectionResult.SignedIn or ProviderConnectionResult.SignedOut or ProviderConnectionResult.Expired)
             .OrderByDescending(observation => observation.ObservedAt)
             .ThenBy(observation => observation.Result switch
