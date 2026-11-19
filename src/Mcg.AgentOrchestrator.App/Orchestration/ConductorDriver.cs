@@ -72,6 +72,7 @@ internal sealed partial class ConductorDriver
     private readonly AgentOrchestratorKernel? _findingStagnationKernel;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
+    internal readonly Action<GoalId, TaskId, string> _checkpointFindingEvidenceRun;
     private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
     internal readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
     private readonly Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> _recordFindingEvidenceRequestDispositions;
@@ -711,6 +712,10 @@ internal sealed partial class ConductorDriver
         };
         _recordFindingEvidenceRequest = (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
         _recordFindingEvidenceRun = (goalId, taskId, message) => kernel.RecordFindingEvidenceRun(goalId, taskId, message);
+        _checkpointFindingEvidenceRun = persistCriticalDispatchStart is null
+            ? _recordFindingEvidenceRun
+            : (goalId, taskId, message) => FindingRoundBatchAccounting.CheckpointRun(kernel.GetGoal(goalId), taskId,
+                message, _utcNow(), () => persistCriticalDispatchStart(kernel, [goalId]), dispatchLifecycleGate.AppendTimelineEvent);
         PreTesterRecorder = new((gid, tid, entry, message) => kernel.RecordFindingEvidenceRequest(gid, tid, entry, message),
             (gid, tid, entry, message) => kernel.RecordFindingEvidenceRun(gid, tid, entry, message));
         _recordFindingEvidenceSuppressed = (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
@@ -1119,6 +1124,7 @@ internal sealed partial class ConductorDriver
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
+        _checkpointFindingEvidenceRun = _recordFindingEvidenceRun;
         _recordFindingEvidenceSuppressed = recordFindingEvidenceSuppressed ?? ((_, _, _, _, _, _, _, _) => { });
         _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
         _recordFindingEvidenceRequestDispositions = recordFindingEvidenceRequestDispositions ?? ((_, _, _) => { });

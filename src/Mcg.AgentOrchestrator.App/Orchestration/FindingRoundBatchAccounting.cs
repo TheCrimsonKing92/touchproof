@@ -41,6 +41,21 @@ internal static class FindingRoundBatchAccounting
         }
     }
 
+    internal static void CheckpointRun(Goal goal, TaskId taskId, string message, DateTimeOffset occurredAt,
+        Action checkpoint, Action<ProgressEvent> writeEvent)
+    {
+        // The run allowance is read from the goal snapshot after a restart.
+        var progress = new ProgressEvent(goal.Id, taskId, ProgressKind.FindingEvidenceRunRecorded, message, occurredAt);
+        goal.Append(progress);
+        try { checkpoint(); }
+        catch
+        {
+            goal.RemoveStagedProgress(progress);
+            throw;
+        }
+        writeEvent(progress);
+    }
+
     internal static void Begin(Goal goal, FindingEvidenceBatchIdentity identity, IEnumerable<ReviewFinding> findings,
         Action<GoalId, TaskId, string> record)
     {

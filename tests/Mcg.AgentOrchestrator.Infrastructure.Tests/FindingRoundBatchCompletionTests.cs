@@ -302,27 +302,47 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Equal(0, scenario.ProcessStarts);
     }
 
-    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
-    public void RepeatedLaunchFailure_UsesRunAllowanceAndDrainsLaterRequests()
+    [InlineData("launch-failed", nameof(ConductorParallelAcceptanceAttemptOutcome.LaunchFailed))]
+    [InlineData("process-died", nameof(ConductorParallelAcceptanceAttemptOutcome.ProcessDied))]
+    [InlineData("corrupt-artifacts", nameof(ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts))]
+    public void RepeatedAttemptFailure_UsesRunAllowanceAndDrainsLaterRequests(string failure, string expectedOutcome)
     {
-        using var scenario = new Scenario(false, failure: "launch-failed");
+        using var scenario = new Scenario(false, failure);
         var policy = ConductorAutonomyPolicy.Permissive;
         scenario.CapacityBlocked = true;
 
         Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
-        Assert.Empty(scenario.FailedLaunchRequests);
+        Assert.Empty(scenario.FailedAttemptRequests);
         Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
 
         scenario.CapacityBlocked = false;
+        var attemptIds = new HashSet<string>(StringComparer.Ordinal);
         for (var attempt = 1; attempt <= FindingRoundBatchSchedule.MaximumCompletedRuns; attempt++)
         {
+            scenario.AdvanceEvidenceClock();
             Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
-            Assert.Equal(attempt, scenario.FailedLaunchRequests.Count);
+            if (failure != "launch-failed")
+            {
+                var running = scenario.LatestAttempt();
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, running.Outcome);
+                if (failure == "corrupt-artifacts")
+                    File.WriteAllText(running.ExitCodePath, "1");
+                scenario.AdvanceEvidenceClock();
+                Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+            }
+            var terminal = scenario.LatestAttempt();
+            Assert.Equal(expectedOutcome, terminal.Outcome.ToString());
+            Assert.NotNull(terminal.ReconciledAt);
+            Assert.True(attemptIds.Add(terminal.AttemptId));
+            Assert.Equal(attempt, scenario.FailedAttemptRequests.Count);
+            Assert.Single(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+                item.Message.Contains($"attempt_id={terminal.AttemptId};", StringComparison.Ordinal));
             Assert.Empty(scenario.Retries);
             Assert.Empty(scenario.Prepared);
         }
-        Assert.All(scenario.FailedLaunchRequests, request => Assert.Contains("AlphaTests", request));
+        Assert.All(scenario.FailedAttemptRequests, request => Assert.Contains("AlphaTests", request));
         var failures = scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded).ToArray();
         Assert.Equal(FindingRoundBatchSchedule.MaximumCompletedRuns, failures.Length);
         Assert.All(failures, item => Assert.Contains("reason=run-failed;", item.Message, StringComparison.Ordinal));
@@ -331,9 +351,11 @@ public sealed class FindingRoundBatchCompletionTests
 
         scenario.LaunchRecovered = true;
         scenario.Restart();
+        scenario.AdvanceEvidenceClock();
         Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
         Assert.Contains("BetaTests", Assert.Single(scenario.Runs));
         Assert.Empty(scenario.Retries);
+        scenario.AdvanceEvidenceClock();
         Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
         Assert.Equal(2, scenario.Runs.Count);
         Assert.Contains("GammaTests", scenario.Runs[1]);
@@ -343,6 +365,63 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Single(scenario.Escalations);
         Assert.Empty(scenario.Retries);
         Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public async Task FailedRunChargeWrite_ReplaysAndChargesTheAttemptOnce()
+    {
+        using var scenario = new Scenario(false, failure: "launch-failed");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var beforeFailure = scenario.Kernel.ExportSnapshot();
+        scenario.RefuseRunChargeCheckpoint = true;
+
+        var failure = Assert.Throws<IOException>(() =>
+            scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester, policy, out _));
+        Assert.Equal("Injected failure checkpointing the finding evidence run.", failure.Message);
+        var attempt = scenario.LatestAttempt();
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.LaunchFailed, attempt.Outcome);
+        Assert.Null(attempt.ReconciledAt);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
+
+        scenario.RefuseRunChargeCheckpoint = false;
+        scenario.Restore(AgentOrchestratorKernel.FromSnapshot(beforeFailure));
+        var identity = FindingRoundBatchCoordinator.Identity(scenario.Driver, scenario.Goal, scenario.Tester)!;
+        Assert.Equal(identity.RoundFingerprint, attempt.FindingRoundFingerprint);
+        var finding = scenario.Findings[0];
+        Assert.True(ConductorDriver.TryNormalizeFindingEvidenceRequest(finding.EvidenceRequest!,
+            scenario.Driver._getFindingEvidenceEngineSettings(scenario.Goal), (_, _) => [],
+            out var request, out var executorRequest, out _, out _));
+        var group = new FindingEvidenceRequestGroup(ConductorDriver.BuildFindingEvidenceIdentity(request), executorRequest, request, [finding]);
+        var batch = Assert.Single(FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches([group]));
+        Assert.Equal(attempt.FocusedEvidenceRequest, batch.Request);
+
+        using var barrier = new Barrier(2);
+        Task<FailedGoalFindingObservation> Replay() => Task.Run(() =>
+        {
+            if (!barrier.SignalAndWait(TimeSpan.FromSeconds(30)))
+                throw new TimeoutException("Both charge observers did not reach the barrier.");
+            return FindingRoundBatchCoordinator.ObserveUnfinishedExecution(
+                scenario.Driver, scenario.Goal, scenario.Tester, batch, true, attempt.BranchHeadSha!,
+                attempt.FocusedExecutionBasisIdentity!, identity, ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun,
+                attempt, FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending, "Launch failed"), null);
+        });
+        Assert.All(await Task.WhenAll(Replay(), Replay()), observation =>
+            Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, observation.Kind));
+        Assert.Equal(attempt.AttemptId, scenario.LatestAttempt().AttemptId);
+        Assert.NotNull(scenario.LatestAttempt().ReconciledAt);
+        Assert.Single(scenario.FailedAttemptRequests);
+        Assert.Empty(scenario.Retries);
+        Assert.Empty(scenario.Prepared);
+
+        scenario.Restore(AgentOrchestratorKernel.FromSnapshot(Assert.IsType<OrchestratorSnapshot>(scenario.LastRunChargeCheckpoint)));
+        var charge = Assert.Single(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
+        Assert.Contains($"attempt_id={attempt.AttemptId};", charge.Message, StringComparison.Ordinal);
+        scenario.AdvanceEvidenceClock();
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.NotEqual(attempt.AttemptId, scenario.LatestAttempt().AttemptId);
+        Assert.Equal(2, scenario.Goal.Timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded));
+        Assert.All(scenario.FailedAttemptRequests, requestText => Assert.Contains("AlphaTests", requestText));
     }
 
     [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
@@ -543,9 +622,16 @@ public sealed class FindingRoundBatchCompletionTests
         internal ReviewFinding[] Findings { get; }
         internal ConductorDriver Driver { get; private set; }
         internal List<string> Runs { get; } = [];
-        internal List<string> FailedLaunchRequests { get; } = [];
+        internal List<string> FailedAttemptRequests { get; } = [];
         internal bool CapacityBlocked { get; set; }
         internal bool LaunchRecovered { get; set; }
+        internal bool RefuseRunChargeCheckpoint { get; set; }
+        internal OrchestratorSnapshot? LastRunChargeCheckpoint { get; private set; }
+        private bool FailsOwnedAttempts => _failure is "launch-failed" or "process-died" or "corrupt-artifacts";
+        private DateTimeOffset _evidenceNow = DateTimeOffset.UtcNow;
+        internal void AdvanceEvidenceClock() => _evidenceNow = _evidenceNow.AddSeconds(2);
+        internal ConductorParallelAcceptanceAttempt LatestAttempt() =>
+            Assert.IsType<ConductorParallelAcceptanceAttempt>(Driver.FocusedEvidenceAttemptCoordinator.TryReadLatest(Goal.Id.Value));
         internal List<TaskId> Retries { get; } = [];
         internal List<string> Escalations { get; } = [];
         internal LandingEscalationWriteResult EscalationResult { get; set; } = LandingEscalationWriteResult.CompletedWithoutExternalSinks;
@@ -591,13 +677,18 @@ public sealed class FindingRoundBatchCompletionTests
             getLandingFileScopes: _ => [],
             getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),
             focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(_root,
-                TrunkBranchName.Default, runInline: _failure != "launch-failed" || LaunchRecovered,
-                launchOwnedProcess: _failure == "launch-failed" ? launch =>
+                TrunkBranchName.Default, runInline: !FailsOwnedAttempts || LaunchRecovered,
+                utcNow: FailsOwnedAttempts ? () => _evidenceNow : null,
+                isProcessAlive: FailsOwnedAttempts ? _ => false : null,
+                recentHeartbeatGrace: TimeSpan.FromSeconds(1),
+                launchOwnedProcess: FailsOwnedAttempts ? launch =>
                 {
-                    FailedLaunchRequests.Add(launch.Attempt.FocusedEvidenceRequest!);
-                    throw new InvalidOperationException("Injected owned-process launch failure");
+                    FailedAttemptRequests.Add(launch.Attempt.FocusedEvidenceRequest!);
+                    if (_failure == "launch-failed")
+                        throw new InvalidOperationException("Injected owned-process launch failure");
+                    return new(12345);
                 } : null,
-                readPreReviewEvidenceCapacity: _failure == "launch-failed" ? _ =>
+                readPreReviewEvidenceCapacity: FailsOwnedAttempts ? _ =>
                     CapacityBlocked ? new(0, 2, 0, true) : new(2, 2, 0, true) : null,
                 acquireStableSlotLease: (_, _) => null,
                 conductEventLogWriter: new ConductEventLogWriter(Path.Combine(_root, "conduct.jsonl"),
@@ -634,9 +725,25 @@ public sealed class FindingRoundBatchCompletionTests
                 return EscalationResult;
             },
             recordFindingEvidenceRequest: Record,
-            recordFindingEvidenceRun: (goal, task, message) => Kernel.RecordFindingEvidenceRun(goal, task, message),
+            recordFindingEvidenceRun: RecordRun,
             recordFindingEvidenceRequestDispositions: (goal, task, dispositions) => Kernel.RecordFindingEvidenceRequestDispositions(goal, task, dispositions),
             recordFindingEvidenceOutcome: (goal, task, id, outcome, receipt) => Kernel.RecordFindingEvidenceOutcome(goal, task, id, outcome, receipt));
+
+        private void RecordRun(GoalId goal, TaskId task, string message)
+        {
+            if (!message.StartsWith(FindingRoundBatchCoordinator.FailedAttemptRunPrefix, StringComparison.Ordinal))
+            {
+                Kernel.RecordFindingEvidenceRun(goal, task, message);
+                return;
+            }
+            FindingRoundBatchAccounting.CheckpointRun(Kernel.GetGoal(goal), task, message, _evidenceNow, () =>
+            {
+                if (RefuseRunChargeCheckpoint)
+                    throw new IOException("Injected failure checkpointing the finding evidence run.");
+                Assert.Null(LatestAttempt().ReconciledAt);
+                LastRunChargeCheckpoint = Kernel.ExportSnapshot();
+            }, _ => { });
+        }
 
         private void RejectDispositionWrite()
         {

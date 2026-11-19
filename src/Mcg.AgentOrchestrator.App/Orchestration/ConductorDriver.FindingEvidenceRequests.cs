@@ -295,7 +295,7 @@ internal sealed partial class ConductorDriver
             plannedBatches = plannedBatches.Select(batch => batch with { Identity = batch.Identity + ":" + executionBasisIdentity }).ToArray();
         var plan = FindingRoundBatchSchedule.Plan(plannedBatches,
             requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
-            telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline);
+            telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, FindingRoundBatchSchedule.ReadRunTimeline(goal));
         FindingRoundBatchCoordinator.RecordSettledPlan(this, goal, requestingTask, batchCandidateSha,
             findingRoundFingerprint, batchBasisIdentity, plan);
         FailedGoalFindingObservation? redRoute = null;
@@ -392,8 +392,8 @@ internal sealed partial class ConductorDriver
                 requestContext, out decision))
         {
             if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
-                FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, batchCandidateSha, findingRoundFingerprint,
-                    batchBasisIdentity, runnable, "unavailable", null, decision.Evidence);
+                decision = FindingRoundBatchCoordinator.SettleUnavailable(this, goal, requestingTask, runnable,
+                    batches.Count > 1, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity, decision.Evidence, reusedRedDecision);
             return true;
         }
         if (!TryRestorePendingBaselineCandidate(goal, runnable.Request, candidateSha!, requestContext,
@@ -406,7 +406,7 @@ internal sealed partial class ConductorDriver
                 requestContext,
                 out evidence,
                 out evidenceAttempt,
-                out decision, out var attemptKind, existingAttempt: null, deferSuccessfulReconciliation: true))
+                out decision, out var attemptKind, existingAttempt: null, deferRoundReconciliation: true))
         {
             decision = FindingRoundBatchCoordinator.ObserveUnfinishedExecution(this, goal, requestingTask, runnable,
                 batches.Count > 1, telemetryCandidateSha, executionBasisIdentity,
@@ -428,16 +428,9 @@ internal sealed partial class ConductorDriver
             var detail = evidence.Rejection is null
                 ? evidence.Summary
                 : $"{evidence.Rejection.Detail}; offending_filter='{evidence.Rejection.OffendingToken}'";
-            foreach (var finding in runnable.Findings)
-            {
-                RecordNotHonoured(
-                    goal.Id, requestingTask, finding, reason,
-                    detail, telemetryCandidateSha, findingEvidenceEngineSettings);
-            }
             decision = FindingRoundBatchCoordinator.RecordExecutionFailure(this, goal, requestingTask, runnable,
                 batches.Count > 1, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
-                reason,
-                "The focused evidence executor did not accept the request.", batchCandidateSha, batchBasisIdentity, reusedRedDecision);
+                reason, detail, batchCandidateSha, batchBasisIdentity, reusedRedDecision, evidenceAttempt!, findingEvidenceEngineSettings);
             return true;
         }
 
@@ -451,8 +444,8 @@ internal sealed partial class ConductorDriver
                 out evidence, out var armReceipts, out var receiptIdentity, out decision))
         {
             if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
-                FindingRoundBatchCoordinator.RecordOutcome(this, goal, requestingTask, batchCandidateSha, findingRoundFingerprint,
-                    batchBasisIdentity, runnable, "unavailable", null, decision.Evidence);
+                decision = FindingRoundBatchCoordinator.SettleUnavailable(this, goal, requestingTask, runnable,
+                    batches.Count > 1, batchCandidateSha, findingRoundFingerprint, batchBasisIdentity, decision.Evidence, reusedRedDecision);
             return true;
         }
         var receiptId = CreateFindingEvidenceReceiptId(

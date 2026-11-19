@@ -112,9 +112,16 @@ internal static class FindingRoundBatchCoordinator
     }
 
     internal static FailedGoalFindingObservation SettleUnavailable(ConductorDriver driver, Goal goal, TaskSpec task,
-        FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis, string reason)
+        FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis, string reason,
+        FailedGoalFindingObservation? reusedActionableRed)
     {
         RecordOutcome(driver, goal, task, candidate, round, basis, batch, "unavailable", null, reason);
+        var identity = new FindingEvidenceBatchIdentity(task.Id, candidate, round, basis);
+        if (reusedActionableRed is not null && !morePending &&
+            FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check").IsSettled &&
+            FindingRoundBatchAccounting.RequiredUnavailable(goal, task, identity) is null)
+            return reusedActionableRed;
+
         return FailedGoalFindingObservation.Observed(morePending ? FailedGoalFindingObservationKind.FindingEvidencePending
             : FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
             morePending ? "A focused evidence request is unavailable; other distinct requests remain pending. " + reason
@@ -144,40 +151,44 @@ internal static class FindingRoundBatchCoordinator
         FailedGoalFindingObservation observation, FailedGoalFindingObservation? reusedActionableRed)
     {
         // Capacity and cancellation can defer execution without spending the request allowance.
-        var launchFailed = attemptKind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun &&
-            attempt?.Outcome == ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
-        if (!launchFailed && observation.Kind != FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
+        var executionFault = attemptKind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun &&
+            attempt is not null && ConductorDriver.IsFocusedEvidenceExecutionFault(attempt.Outcome);
+        if (!executionFault && observation.Kind != FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
             return observation;
 
         const FindingEvidenceNotHonouredReason reason = FindingEvidenceNotHonouredReason.RunFailed;
-        foreach (var finding in batch.Findings)
-            driver.RecordNotHonoured(goal.Id, task, finding, reason, observation.Evidence, candidate);
         return RecordExecutionFailure(driver, goal, task, batch, morePending, candidate, identity.RoundFingerprint, basis,
-            reason, observation.Evidence, identity.CandidateSha, identity.ExecutionBasisIdentity, reusedActionableRed);
+            reason, observation.Evidence, identity.CandidateSha, identity.ExecutionBasisIdentity, reusedActionableRed, attempt!);
     }
 
     internal static FailedGoalFindingObservation RecordExecutionFailure(ConductorDriver driver, Goal goal, TaskSpec task,
         FindingEvidenceBatch batch, bool morePending, string candidate, string round, string basis,
         FindingEvidenceNotHonouredReason reason, string detail, string batchCandidate, string batchBasis,
-        FailedGoalFindingObservation? reusedActionableRed)
+        FailedGoalFindingObservation? reusedActionableRed, ConductorParallelAcceptanceAttempt attempt,
+        AcceptanceGateEngineSettings? settings = null)
     {
         // Rejected and failed executions consume the same existing allowance as completed runs.
         var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity, basis);
-        driver._recordFindingEvidenceRun(goal.Id, task.Id,
-            $"finding-evidence failed-attempt; finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
-            $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
+        var marker = $"{FailedAttemptRunPrefix}{attempt.AttemptId};";
+        lock (goal)
+        {
+            if (!goal.Timeline.Any(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded && item.TaskId == task.Id &&
+                    item.Message.StartsWith(marker, StringComparison.Ordinal)))
+                driver._checkpointFindingEvidenceRun(goal.Id, task.Id,
+                    $"{marker} finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
+                    $"receipt_id={receiptId}; execution_basis={basis}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
+            foreach (var finding in batch.Findings)
+                driver.RecordNotHonoured(goal.Id, task, finding, reason, detail, candidate, settings);
+            driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
+        }
         if (!FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason)))
             return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence execution failed transiently; the request remains pending within its run allowance. " + detail);
 
-        var decision = SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, batchBasis, detail);
-        var identity = new FindingEvidenceBatchIdentity(task.Id, batchCandidate, round, batchBasis);
-        return reusedActionableRed is not null && !morePending &&
-            FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check").IsSettled &&
-            FindingRoundBatchAccounting.RequiredUnavailable(goal, task, identity) is null
-                ? reusedActionableRed
-                : decision;
+        return SettleUnavailable(driver, goal, task, batch, morePending, batchCandidate, round, batchBasis, detail, reusedActionableRed);
     }
+
+    internal const string FailedAttemptRunPrefix = "finding-evidence failed-attempt; attempt_id=";
 
     internal static void RecordSettledPlan(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
         string round, string basis, FindingRoundBatchPlan plan)

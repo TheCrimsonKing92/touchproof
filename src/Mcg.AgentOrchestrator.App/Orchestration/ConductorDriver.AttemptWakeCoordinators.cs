@@ -21,7 +21,7 @@ internal sealed partial class ConductorDriver
         out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind,
         ConductorParallelAcceptanceAttempt? existingAttempt = null) =>
         TryReconcileFocusedEvidenceAttempt(goal, policy, request, candidateSha, source, requestContext,
-            out evidence, out evidenceAttempt, out decision, out attemptKind, existingAttempt, deferSuccessfulReconciliation: false);
+            out evidence, out evidenceAttempt, out decision, out attemptKind, existingAttempt, deferRoundReconciliation: false);
 
     private bool TryReconcileFocusedEvidenceAttempt(
         Goal goal,
@@ -34,7 +34,7 @@ internal sealed partial class ConductorDriver
         out ConductorParallelAcceptanceAttempt? evidenceAttempt,
         out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind,
         ConductorParallelAcceptanceAttempt? existingAttempt,
-        bool deferSuccessfulReconciliation)
+        bool deferRoundReconciliation)
     {
         evidence = null!;
         evidenceAttempt = null;
@@ -80,7 +80,9 @@ internal sealed partial class ConductorDriver
                 BuildLockBlockedException or
                 OperationCanceledException)
         {
-            MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
+            if (!deferRoundReconciliation || attemptDecision.Kind != ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||
+                !IsFocusedEvidenceExecutionFault(attemptDecision.Attempt.Outcome))
+                MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
                 $"Background {source} focused evidence did not run ({attemptDecision.Attempt.Outcome}); " +
@@ -90,7 +92,8 @@ internal sealed partial class ConductorDriver
         }
         if (attemptDecision.Run?.Exception is { } backgroundFailure)
         {
-            MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
+            if (!deferRoundReconciliation)
+                MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
                 $"BACKGROUND_FOCUSED_EVIDENCE_FAILED: {source} focused evidence run failed. " +
@@ -105,7 +108,9 @@ internal sealed partial class ConductorDriver
             Summary: $"background {source} focused evidence {attemptDecision.Attempt.Outcome}: " +
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"),
             Checks: []);
-        if (!deferSuccessfulReconciliation || !CanDeferFindingEvidenceReconciliation(candidateSha!, evidence))
+        // Round rejections need a durable charge, and accepted results need durable dispositions.
+        // Candidate-only RED instead uses the existing baseline recovery path.
+        if (!deferRoundReconciliation || (evidence.Accepted && !CanDeferFindingEvidenceReconciliation(candidateSha!, evidence)))
             MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
         return true;
     }

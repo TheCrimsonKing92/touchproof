@@ -43,7 +43,7 @@ internal static class FindingRoundRedCoverage
         var settled = FindingRoundBatchSchedule.Plan(
             plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
             task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
-            candidateSha, fingerprint, basis, goal.Timeline);
+            candidateSha, fingerprint, basis, FindingRoundBatchSchedule.ReadRunTimeline(goal));
         foreach (var (batch, receiptId) in settled.Passed)
             FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, "executed", receiptId);
         foreach (var item in settled.RedCovered)

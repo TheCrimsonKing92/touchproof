@@ -290,6 +290,8 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
     [Xunit.InlineData("green")]
     [Xunit.InlineData("unsupported")]
     [Xunit.InlineData("inherited-red")]
+    [Xunit.InlineData("missing-baseline")]
+    [Xunit.InlineData("resumed-missing-baseline")]
     public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper(string siblingOutcome)
     {
         const string candidateSha = "abc1234";
@@ -308,6 +310,8 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         TaskId? retriedTaskId = null;
         var retries = 0;
         string? escalation = null;
+        var missingBaseline = siblingOutcome is "missing-baseline" or "resumed-missing-baseline";
+        var interruptBeforeRerun = siblingOutcome == "resumed-missing-baseline";
         FocusedEvidenceRunResult RunEvidence(string request)
         {
             focusedRuns++;
@@ -320,6 +324,8 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                     request, Accepted: false, Passed: false, Summary: "Unsupported advisory project", Checks: [],
                     Rejection: new(FocusedEvidenceRejectionCode.UnsupportedProject, request, "Unsupported advisory project")),
                 3 when siblingOutcome == "inherited-red" => InheritedRed(request),
+                3 or 4 when missingBaseline => CandidateOnlyRedWithExecutedCount(request, candidateSha, "SiblingTests.Fails"),
+                5 when missingBaseline => new(request, false, false, "Advisory rerun produced no usable evidence", []),
                 _ => RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha)
             };
         }
@@ -363,21 +369,37 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             },
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
-                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            {
+                if (interruptBeforeRerun && message.Contains("disposition=candidate-rerun-requested;", StringComparison.Ordinal))
+                {
+                    interruptBeforeRerun = false;
+                    throw new IOException("Interrupted before advisory candidate rerun.");
+                }
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
+            },
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
-            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"],
+            getLandingFileScopes: _ => missingBaseline ? [] : ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"],
             writeEscalation: (_, _, message) => escalation = message,
-            executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+            executionDirectory: missingBaseline ? _artifactRoot : InfrastructureTestSupport.FindRepositoryRoot());
         var replayBatch = FindingRoundBatchCoordinator.Identity(replayDriver, goal, tester)!;
 
+        if (siblingOutcome == "resumed-missing-baseline")
+        {
+            var interrupted = Assert.Throws<IOException>(() => replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive));
+            Assert.Equal("Interrupted before advisory candidate rerun.", interrupted.Message);
+            Assert.Equal(4, focusedRuns);
+            Assert.Equal(0, retries);
+            Assert.Null(escalation);
+            Assert.Contains(goal.Timeline, item => item.Message.Contains("disposition=baseline-arm-absent;", StringComparison.Ordinal));
+        }
         replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(siblingOutcome == "none" ? 2 : 3, focusedRuns);
+        Assert.Equal(missingBaseline ? 5 : siblingOutcome == "none" ? 2 : 3, focusedRuns);
         Assert.Equal(developer.Id, retriedTaskId);
         Assert.Equal(1, retries);
         Assert.Null(escalation);
-        if (siblingOutcome is "unsupported" or "inherited-red")
+        if (missingBaseline || siblingOutcome is "unsupported" or "inherited-red")
         {
             if (siblingOutcome == "unsupported")
             {
@@ -388,7 +410,9 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             {
                 var unavailable = Assert.Single(FindingRoundBatchAccounting.Read(goal, replayBatch),
                     item => item.Kind == "unavailable" && item.FindingIds.Contains(sibling.StableId));
-                Assert.Contains("inherited from a RED Baseline arm", unavailable.Eligibility);
+                Assert.Contains(missingBaseline ? "Baseline execution failure" : "inherited from a RED Baseline arm", unavailable.Eligibility);
+                if (missingBaseline)
+                    Assert.Single(goal.Timeline, item => item.Message.Contains("disposition=candidate-rerun-unusable;", StringComparison.Ordinal));
             }
             Assert.NotEqual(seedBatch.RoundFingerprint, replayBatch.RoundFingerprint);
             Assert.True(FindingRoundBatchAccounting.IsClosed(goal, seedBatch));

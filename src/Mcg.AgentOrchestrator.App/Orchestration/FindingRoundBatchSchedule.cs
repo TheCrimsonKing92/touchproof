@@ -7,6 +7,12 @@ internal static class FindingRoundBatchSchedule
 {
     internal const int MaximumCompletedRuns = 3;
 
+    // A failed-attempt charge is staged under the goal lock until its checkpoint succeeds.
+    internal static IReadOnlyList<ProgressEvent> ReadRunTimeline(Goal goal)
+    {
+        lock (goal) return goal.Timeline;
+    }
+
     internal static FindingRoundBatchPlan Plan(
         IReadOnlyList<FindingEvidenceBatch> batches,
         TaskId requestingTaskId,
@@ -55,6 +61,7 @@ internal static class FindingRoundBatchSchedule
             }
             var marker = $"receipt_id={receiptId};";
             var legacyMarker = $"receipt_id={legacyId};";
+            var chargedAttempts = new HashSet<string>(StringComparer.Ordinal);
             var runs = timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded &&
                 item.TaskId == requestingTaskId &&
                 (item.Message.Contains(marker, StringComparison.Ordinal) ||
@@ -64,6 +71,7 @@ internal static class FindingRoundBatchSchedule
                  (!item.Message.Contains("execution_basis=", StringComparison.Ordinal) &&
                   (item.Message.Contains(marker, StringComparison.Ordinal) ||
                    !receipts.Any(receipt => receipt.ReceiptId == legacyId && receipt.ExecutionBasisIdentity != executionBasisIdentity)))))
+                .Where(item => FailureAttemptId(item.Message) is not { } attemptId || chargedAttempts.Add(attemptId))
                 .ToArray();
             if (runs.Length >= MaximumCompletedRuns)
             {
@@ -73,6 +81,14 @@ internal static class FindingRoundBatchSchedule
             else executable.Add(batch);
         }
         return new(passed, covered, executable, unavailable);
+    }
+
+    private static string? FailureAttemptId(string message)
+    {
+        const string prefix = FindingRoundBatchCoordinator.FailedAttemptRunPrefix;
+        if (!message.StartsWith(prefix, StringComparison.Ordinal)) return null;
+        var end = message.IndexOf(';', prefix.Length);
+        return end > prefix.Length ? message[prefix.Length..end] : null;
     }
 
     private static bool CoversRed(

@@ -118,6 +118,24 @@ public sealed class FindingRoundBatchScheduleTests
     }
 
     [Fact]
+    public void ReplayedFailureAttemptSpendsOneRun()
+    {
+        var batch = Batch("alpha", "Infrastructure.Tests", "AlphaTests");
+        var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(Candidate, Round, batch.Identity, Basis);
+        ProgressEvent Failure(string attempt) => Event(
+            $"finding-evidence failed-attempt; attempt_id={attempt}; receipt_id={receiptId}; finding_id=alpha; execution_basis={Basis};");
+        var first = Failure("first");
+        ProgressEvent[] twoAttempts = [first, first, Failure("second")];
+
+        var pending = Plan([batch], [], twoAttempts);
+        Assert.Same(batch, Assert.Single(pending.Executable));
+        Assert.Empty(pending.Unavailable);
+        var exhausted = Plan([batch], [], [.. twoAttempts, Failure("third")]);
+        Assert.Empty(exhausted.Executable);
+        Assert.Equal(3, Assert.Single(exhausted.Unavailable).Count);
+    }
+
+    [Fact]
     public void ChangedBasisDoesNotReuseGreenOrExhaustion()
     {
         var batch = Batch("alpha", "Infrastructure.Tests", "AlphaTests");

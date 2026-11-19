@@ -79,7 +79,7 @@ internal sealed partial class ConductorDriver
         _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
     }
 
-    private static bool IsFocusedEvidenceExecutionFault(ConductorParallelAcceptanceAttemptOutcome outcome) =>
+    internal static bool IsFocusedEvidenceExecutionFault(ConductorParallelAcceptanceAttemptOutcome outcome) =>
         outcome is
             ConductorParallelAcceptanceAttemptOutcome.ProcessDied or
             ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts or
