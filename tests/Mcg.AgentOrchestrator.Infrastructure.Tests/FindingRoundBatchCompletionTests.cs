@@ -523,6 +523,60 @@ public sealed class FindingRoundBatchCompletionTests
     }
 
     [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "CrossTick")]
+    public void AcceptedApparatusFailures_ConsumeRunAllowanceAcrossRestarts(bool refuseFirstCheckpoint)
+    {
+        using var scenario = new Scenario(false, failure: "accepted-apparatus-failure");
+        var policy = ConductorAutonomyPolicy.Permissive;
+        if (refuseFirstCheckpoint)
+        {
+            var beforeFailure = scenario.Kernel.ExportSnapshot();
+            scenario.RefuseRunChargeCheckpoint = true;
+            var failure = Assert.Throws<IOException>(() =>
+                scenario.Driver.TryBuildFindingEvidenceRequest(scenario.Goal, scenario.Tester, policy, out _));
+            Assert.Equal("Injected failure checkpointing the finding evidence run.", failure.Message);
+            Assert.Null(scenario.LatestAttempt().ReconciledAt);
+            Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.FindingEvidenceRunRecorded);
+            scenario.RefuseRunChargeCheckpoint = false;
+            scenario.Restore(AgentOrchestratorKernel.FromSnapshot(beforeFailure));
+        }
+
+        var attemptIds = new HashSet<string>(StringComparer.Ordinal);
+        for (var run = 1; run <= FindingRoundBatchSchedule.MaximumCompletedRuns; run++)
+        {
+            Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+            Assert.Equal(run, scenario.Runs.Count);
+            var attempt = scenario.LatestAttempt();
+            Assert.True(attemptIds.Add(attempt.AttemptId));
+            Assert.NotNull(attempt.ReconciledAt);
+            Assert.Empty(scenario.Retries);
+            Assert.Empty(scenario.Prepared);
+
+            // Restore the snapshot saved before the attempt was reconciled, with no later outcome writes.
+            scenario.Restore(AgentOrchestratorKernel.FromSnapshot(Assert.IsType<OrchestratorSnapshot>(scenario.LastRunChargeCheckpoint)));
+            var charges = scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded).ToArray();
+            Assert.Equal(run, charges.Length);
+            var charge = Assert.Single(charges, item => item.Message.Contains($"attempt_id={attempt.AttemptId};", StringComparison.Ordinal));
+            Assert.Contains("reason=selection-apparatus-failure;", charge.Message, StringComparison.Ordinal);
+        }
+        Assert.All(scenario.Runs, request => Assert.Contains("AlphaTests", request, StringComparison.Ordinal));
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Contains("BetaTests", scenario.Runs[3], StringComparison.Ordinal);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Driver.AdvanceOnce(scenario.Goal, policy).Outcome);
+        Assert.Equal(5, scenario.Runs.Count);
+        Assert.Contains("GammaTests", scenario.Runs[4], StringComparison.Ordinal);
+        var summary = scenario.ClosingSummary();
+        Assert.Equal(1, summary.Unavailable);
+        Assert.Equal(2, summary.NewlyExecuted);
+        Assert.Single(scenario.Escalations);
+        Assert.Empty(scenario.Retries);
+        Assert.Equal(0, scenario.ProcessStarts);
+    }
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData("launch-failed", nameof(ConductorParallelAcceptanceAttemptOutcome.LaunchFailed))]
     [InlineData("process-died", nameof(ConductorParallelAcceptanceAttemptOutcome.ProcessDied))]
@@ -1048,6 +1102,11 @@ public sealed class FindingRoundBatchCompletionTests
                         Rejection: new(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, request, "Source discovery unavailable"));
                 if (_failure == "run-failed" && Runs.Count == 1)
                     throw new InvalidOperationException("Focused executor failed before producing evidence.");
+                if (_failure == "accepted-apparatus-failure" && request == Runs[0])
+                    return new(request, Accepted: true, Passed: false, "Focused selection failed", [],
+                        Arms: [new(FindingEvidenceArm.Candidate, Candidate, FindingEvidenceArmDisposition.ApparatusFailure,
+                            Accepted: true, Passed: false, "No tests ran", [])],
+                        OutcomeReason: FindingEvidenceOutcomeReason.ApparatusFailure);
                 // Passing requests can settle independently of a source finding that has no evidence request.
                 var partialGreen = _failure == "partial-green" && Runs.Count == 1;
                 var groupedPartial = _failure == "regrouped-green" && Runs.Count == 1 ||

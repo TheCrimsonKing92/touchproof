@@ -17,7 +17,7 @@ internal sealed partial class ConductorDriver
         string findingRoundFingerprint,
         ConductorFocusedEvidenceRequestContext requestContext,
         out FailedGoalFindingObservation decision,
-        Action? stageRerunSuppressions = null)
+        Action<FindingRoundRedCoverage.Delivery>? stageRerunSuppressions = null)
     {
         decision = FailedGoalFindingObservation.None;
         var guard = BuildMissingBaselineGuard(candidateSha, findingRoundFingerprint,
@@ -132,7 +132,7 @@ internal sealed partial class ConductorDriver
         out string receiptIdentity,
         out FailedGoalFindingObservation decision,
         string? existingCandidateReceiptId = null,
-        Action? stageRerunSuppressions = null)
+        Action<FindingRoundRedCoverage.Delivery>? stageRerunSuppressions = null)
     {
         evidence = initialEvidence;
         arms = initialArms;
@@ -224,7 +224,7 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceAttempt baselineAttempt,
         string? resultPath,
         string reason,
-        Action? stageRerunSuppressions,
+        Action<FindingRoundRedCoverage.Delivery>? stageRerunSuppressions,
         out FailedGoalFindingObservation decision)
     {
         var guard = BuildMissingBaselineGuard(candidateSha, findingRoundFingerprint, requestIdentity, requestContext);
@@ -270,7 +270,7 @@ internal sealed partial class ConductorDriver
         ConductorFocusedEvidenceRequestContext requestContext,
         string originalReceiptId,
         string guard,
-        Action? stageRerunSuppressions,
+        Action<FindingRoundRedCoverage.Delivery>? stageRerunSuppressions,
         out FailedGoalFindingObservation decision)
     {
         var rerunGuard = $"disposition=candidate-rerun-requested; {guard}";
@@ -382,7 +382,7 @@ internal sealed partial class ConductorDriver
                 }
                 FindingRoundBatchCoordinator.RecordRerunOutcome(this, goal, requestingTask, batch, receipt);
                 RecordTerminal();
-                stageRerunSuppressions?.Invoke();
+                stageRerunSuppressions?.Invoke(new(rerunReceiptId, batch.Findings, [rerunReceiptId]));
             });
             decision = BuildCandidateRerunGreenDecision(
                 goal, requestingTask, candidateSha, batch, requestContext, rerunReceiptId);
@@ -534,7 +534,7 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         string findingRoundFingerprint,
         string batchBasisIdentity,
-        Action stageRerunSuppressions,
+        Action<FindingRoundRedCoverage.Delivery> stageRerunSuppressions,
         out FailedGoalFindingObservation decision)
     {
         decision = FailedGoalFindingObservation.None;

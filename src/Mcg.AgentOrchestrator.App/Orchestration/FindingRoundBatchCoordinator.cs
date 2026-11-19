@@ -188,26 +188,16 @@ internal static class FindingRoundBatchCoordinator
     {
         // Rejected and failed executions consume the same existing allowance as completed runs.
         var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity, basis);
-        var marker = $"{FailedAttemptRunPrefix}{attempt.AttemptId};";
         var identity = new FindingEvidenceBatchIdentity(task.Id, batchCandidate, round, batchBasis);
         // Checkpoint the original members before per-finding writes can change the next tick's plan.
-        var members = batch.Members.Select(member => new FindingRoundBatchAccounting.Member(member.Identity,
-            member.Findings.Select(finding => finding.StableId).ToArray())).ToArray();
         var refusal = FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
             ? new TerminalRefusal(attempt.AttemptId, batch.TypedRequest.Repository, receiptId, reason, detail,
-                members)
+                FailedAttemptMembers(batch))
             : null;
         lock (goal)
         {
-            if (!goal.Timeline.Any(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded && item.TaskId == task.Id &&
-                    item.Message.StartsWith(marker, StringComparison.Ordinal)))
-            {
-                var membership = refusal is null ? $"{FailedAttemptMembersPrefix}{JsonSerializer.Serialize(members)}"
-                    : $"{RefusalCheckpointPrefix}{identity.Key}; refusal={JsonSerializer.Serialize(refusal)}";
-                driver._checkpointFindingEvidenceRun(goal.Id, task.Id,
-                    $"{marker} finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
-                    $"receipt_id={receiptId}; execution_basis={basis}{membership}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
-            }
+            CheckpointFailedAttemptRun(driver, goal, task, batch, candidate, basis, receiptId, reason, attempt,
+                refusal is null ? null : $"{RefusalCheckpointPrefix}{identity.Key}; refusal={JsonSerializer.Serialize(refusal)}");
 
             FailedGoalFindingObservation decision;
             if (refusal is not null)
@@ -226,6 +216,27 @@ internal static class FindingRoundBatchCoordinator
             return decision;
         }
     }
+
+    internal static void CheckpointFailedAttemptRun(ConductorDriver driver, Goal goal, TaskSpec task,
+        FindingEvidenceBatch batch, string candidate, string basis, string receiptId,
+        FindingEvidenceNotHonouredReason reason, ConductorParallelAcceptanceAttempt attempt, string? membership = null)
+    {
+        var marker = $"{FailedAttemptRunPrefix}{attempt.AttemptId};";
+        lock (goal)
+        {
+            if (goal.Timeline.Any(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded && item.TaskId == task.Id &&
+                    item.Message.StartsWith(marker, StringComparison.Ordinal))) return;
+
+            membership ??= $"{FailedAttemptMembersPrefix}{JsonSerializer.Serialize(FailedAttemptMembers(batch))}";
+            driver._checkpointFindingEvidenceRun(goal.Id, task.Id,
+                $"{marker} finding_id={batch.Findings[0].StableId}; candidate_sha={candidate}; " +
+                $"receipt_id={receiptId}; execution_basis={basis}{membership}; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)};");
+        }
+    }
+
+    private static FindingRoundBatchAccounting.Member[] FailedAttemptMembers(FindingEvidenceBatch batch) =>
+        batch.Members.Select(member => new FindingRoundBatchAccounting.Member(member.Identity,
+            member.Findings.Select(finding => finding.StableId).ToArray())).ToArray();
 
     internal const string FailedAttemptRunPrefix = "finding-evidence failed-attempt; attempt_id=";
     internal const string FailedAttemptMembersPrefix = "; request_members=";

@@ -197,7 +197,7 @@ internal sealed partial class ConductorDriver
                 TryRouteReusableRedFindingEvidence(
                     goal, requestingTask, finding, typedRequest, request, identity,
                     telemetryCandidateSha, executionBasisIdentity, policy, findingRoundFingerprint, batchBasisIdentity,
-                    () => stagePendingSuppressions(null, retainedRed), out var redDecision))
+                    delivery => stagePendingSuppressions(delivery, retainedRed), out var redDecision))
             {
                 if (redDecision.Kind is not (FailedGoalFindingObservationKind.FindingActionableRed or
                     FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired))
@@ -394,7 +394,8 @@ internal sealed partial class ConductorDriver
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
             initialRequestDispositions, NegativeControl: runnable.TypedRequest.NegativeControl, RevertPaths: runnable.TypedRequest.RevertPaths,
             Mutation: runnable.TypedRequest.Mutation, RepositoryTarget: repositoryTarget, ExecutionBasisIdentity: executionBasisIdentity);
-        void StageRerunSuppressions() => stagePendingSuppressions(null, reusedRedDecision);
+        void StageRerunSuppressions(FindingRoundRedCoverage.Delivery delivery) =>
+            stagePendingSuppressions(delivery, reusedRedDecision);
         if (TryResumeUnconfirmedCandidateRed(
                 goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint,
                 requestContext, out decision, StageRerunSuppressions))
@@ -493,7 +494,7 @@ internal sealed partial class ConductorDriver
             return true;
 
         var checkpointGreen = reconciliationDeferred && receipt.Passed && !apparatusFailure;
-        if (reconciliationDeferred && !checkpointGreen)
+        if (reconciliationDeferred && !checkpointGreen && !apparatusFailure)
             _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt!);
 
         FindingRoundRedCoverage.Delivery? completedDelivery = null;
@@ -513,6 +514,8 @@ internal sealed partial class ConductorDriver
 
         if (apparatusFailure)
         {
+            FindingRoundBatchCoordinator.CheckpointFailedAttemptRun(this, goal, requestingTask, runnable,
+                candidateSha!, executionBasisIdentity, receiptId, FindingEvidenceNotHonouredReason.SelectionApparatusFailure, evidenceAttempt!);
             _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
             foreach (var finding in runnable.Findings)
             {
@@ -534,13 +537,9 @@ internal sealed partial class ConductorDriver
                     $"task_id={requestingTask.Id}; finding_id={finding.StableId}; candidate_sha={candidateSha}; " +
                     $"receipt_id={receiptId}; reason=selection-apparatus-failure; " +
                     $"detail={TrimForConductorMessage(evidence.Summary)}");
-                _recordFindingEvidenceRun(
-                    goal.Id,
-                    requestingTask.Id,
-                    $"finding-evidence apparatus-failure role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
-                    $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; execution_basis={executionBasisIdentity}; " +
-                    FormatFocusedEvidenceResult(evidence));
             }
+            if (reconciliationDeferred)
+                _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt!);
             decision = StageCompletion()();
             return true;
         }

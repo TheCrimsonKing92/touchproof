@@ -369,6 +369,14 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
             Assert.DoesNotContain(driver.FocusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]),
                 attempt => attempt.FocusedEvidenceBatchId?.EndsWith("-candidate-rerun", StringComparison.Ordinal) == true);
 
+            var identity = Assert.IsType<FindingEvidenceBatchIdentity>(FindingRoundBatchCoordinator.Identity(driver, goal, reviewer));
+            var pending = FindingRoundBatchAccounting.Summarize(goal, reviewer, identity, "pending");
+            Assert.Equal(1, pending.ReviewerCallsAvoided);
+            Assert.Equal(0, pending.TesterCallsAvoided);
+            var witness = Assert.Single(pending.EligibilityWitnesses, item => item.ReceiptId == firstReceipt.ReceiptId);
+            Assert.Equal(AgentRole.Reviewer, witness.Role);
+            Assert.Empty(retried);
+
             for (var tick = 0; tick < 4 && retried.Count == 0; tick++)
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
