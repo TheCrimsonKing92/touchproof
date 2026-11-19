@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -9,6 +11,70 @@ internal sealed record ReviewerFindingEvidenceSuppressionRoute(
 
 internal static class ReviewerFindingEvidenceSuppressionRouting
 {
+    internal static ReviewFinding[] Apply(
+        ConductorDriver driver, Goal goal, TaskSpec requestingTask,
+        IReadOnlyList<ReviewFinding> roundFindings, ReviewFinding[] requestingFindings,
+        string? candidateSha, FindingEvidenceBatchIdentity batch,
+        Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions,
+        Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> recordSuppression)
+    {
+        var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
+        var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+            roundFindings, goal.EffectiveAcceptanceCriteriaCorrections);
+        var route = Resolve(requestingTask.LastVerification, goal.EffectiveAcceptanceCriteriaCorrections, openBlockingFindings);
+        if (route.DeferToReviewRetryRoute)
+        {
+            FindingRoundBatchCoordinator.RecordDeferred(driver, recordDispositions, goal, requestingTask,
+                requestingFindings, candidateShaAvailable ? candidateSha : null, batch.RoundFingerprint,
+                batch.ExecutionBasisIdentity, "legacy-review-retry-ownership");
+            return [];
+        }
+
+        var writableBlockerIds = route.WritableBlockerIds;
+        var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
+        var requestTargetsCurrentCandidate =
+            !candidateShaAvailable ||
+            !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
+            string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
+        if (writableBlockerIds.Length == 0 || !requestTargetsCurrentCandidate)
+            return requestingFindings;
+
+        var reason = candidateShaAvailable ? "unresolved-writable-blockers-on-unchanged-candidate"
+            : "candidate-sha-unavailable-with-unresolved-writable-blockers";
+        var remaining = SelectAndSuppress(
+            writableBlockerIds, requestingFindings, requestingTask, candidateSha,
+            ConductorDriver.BuildFindingEvidenceIdentity, requestIdentity => recordSuppression(
+                goal.Id, requestingTask.Id, batch.CandidateSha, writableBlockerIds,
+                CreateFindingEvidenceRequestId(requestIdentity),
+                route.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
+                reason,
+                CreateFindingEvidenceSuppressionIdentity(batch.CandidateSha, requestIdentity, writableBlockerIds)));
+        FindingRoundBatchCoordinator.RecordDeferred(driver, recordDispositions, goal, requestingTask,
+            requestingFindings.Except(remaining).ToArray(), candidateShaAvailable ? candidateSha : null,
+            batch.RoundFingerprint, batch.ExecutionBasisIdentity, reason);
+        return remaining;
+    }
+
+    private static string CreateFindingEvidenceRequestId(string identity) =>
+        "evidence-request-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
+            .ToLowerInvariant()[..20];
+
+    private static string CreateFindingEvidenceSuppressionIdentity(
+        string candidateSha,
+        string requestIdentity,
+        IReadOnlyList<string> writableBlockerIds)
+    {
+        var blockerIdentity = string.Join(
+            "\u001f",
+            writableBlockerIds
+                .OrderBy(id => id, StringComparer.Ordinal));
+        return "evidence-suppression-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{candidateSha.Trim().ToLowerInvariant()}\u001e{requestIdentity}\u001e{blockerIdentity}")))
+            .ToLowerInvariant()[..24];
+    }
+
     internal static ReviewFinding[] SelectAndSuppress(
         IReadOnlyList<string> writableBlockerIds,
         ReviewFinding[] requestingFindings,

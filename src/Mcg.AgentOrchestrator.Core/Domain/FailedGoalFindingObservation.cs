@@ -14,7 +14,8 @@ public sealed record FailedGoalFindingObservation(
     string? WarningMessage = null,
     string Attribution = "structured-finding-routing",
     ImmutableArray<FailedGoalPendingNote> PendingNotes = default, Conductor.ConductorHoldOwner HoldOwner = default,
-    FindingEvidenceReviewContinuation? EvidenceContinuation = null)
+    FindingEvidenceReviewContinuation? EvidenceContinuation = null,
+    FindingEvidenceBatchClosure? BatchClosure = null)
 {
     public static FailedGoalFindingObservation None { get; } = new(
         FailedGoalFindingObservationKind.None,
