@@ -163,7 +163,10 @@ public sealed record TaskSnapshot(
     FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
     AcceptanceRetryRoutingHold? AcceptanceRetryRoutingHold = null,
     IReadOnlyList<OperatorRoutingNote>? OperatorRoutingNotes = null,
-    IReadOnlyList<string>? OperatorRoutingAutomaticFeedback = null);
+    IReadOnlyList<string>? OperatorRoutingAutomaticFeedback = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? WorkerBuildInvocationsInTable = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
