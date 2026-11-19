@@ -39,15 +39,18 @@ internal static class FindingRoundRedCoverage
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
         Action<GoalId, TaskId, string> recordRequest, string batchCandidateSha, string batchBasis,
         ConductorAutonomyPolicy? policy, FailedGoalFindingObservation? reusedRedDecision,
-        FindingEvidenceOutcomeReason? outcomeReason)
+        FindingEvidenceOutcomeReason? outcomeReason, bool unverifiedReviewerResult)
     {
         var vacuous = outcomeReason == FindingEvidenceOutcomeReason.VacuousEvidence;
         var completedVacuous = vacuous && runnable.Members.All(member => member.Findings.All(finding =>
             FindingEvidenceRequestCompletion.FindSettledMember(receipt, member.Identity, finding.StableId) is not null));
         // An executed vacuous control can be delivered for interpretation but supplies no passing coverage.
         var remaining = plan.Unavailable.Select(item => item.Batch).Concat(pending);
+        if (unverifiedReviewerResult)
+            FindingRoundBatchCoordinator.RecordOutcome(driver, goal, task, batchCandidateSha, fingerprint, batchBasis,
+                runnable, "unavailable", receipt.ReceiptId, FindingRoundBatchCoordinator.UnverifiedReviewerResult);
         var settled = FindingRoundBatchSchedule.Plan(
-            (completedVacuous ? remaining : remaining.Prepend(runnable)).ToArray(), task.Id,
+            (completedVacuous || unverifiedReviewerResult ? remaining : remaining.Prepend(runnable)).ToArray(), task.Id,
             task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
             candidateSha, fingerprint, basis, FindingRoundBatchSchedule.ReadRunTimeline(goal));
         foreach (var (batch, passingReceipt) in settled.Passed)

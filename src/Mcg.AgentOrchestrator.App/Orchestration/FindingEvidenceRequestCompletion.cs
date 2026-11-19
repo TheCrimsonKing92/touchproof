@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.App.Orchestration.ConductorDriver;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -7,6 +8,38 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Completed request decisions require candidate execution covering the member's remaining selections.
 internal static class FindingEvidenceRequestCompletion
 {
+    internal static (FindingEvidenceReceipt Receipt, bool UnverifiedReviewerResult) PrepareReceipt(
+        Goal goal, TaskSpec task, FindingEvidenceBatch batch, FocusedEvidenceRunResult evidence,
+        string receiptId, string candidateSha, string round, string basis, IReadOnlyList<FindingEvidenceArmReceipt> arms,
+        IReadOnlyList<FindingEvidenceRequestDisposition> initialDispositions, bool homeRepository,
+        IEnumerable<FindingEvidenceBatch>? supersededByActionableRed)
+    {
+        // Legacy Reviewer delivery can carry a diagnostic summary from an untyped runner.
+        // Qualification still requires candidate execution and cannot use this receipt.
+        var unverifiedReviewerResult = task.RequiredRole == AgentRole.Reviewer && !UsesQualifiedReviewerContinuation(goal, task) &&
+            homeRepository && evidence is { OutcomeReason: null, Coverage: null } && arms.Count == 0 &&
+            (evidence.Passed
+                ? evidence.Checks.Count > 0 && evidence.Checks.All(check => check.ExecutedTestCount is null)
+                : evidence.Checks.Count == 0) &&
+            batch.TypedRequest is { NegativeControl: null, RevertPaths: null, Mutation: null } &&
+            batch.Members.All(member => member.ReusedSourceReceipts is not { Count: > 0 } && member.CoverageDecisionReason is null);
+        var receipt = new FindingEvidenceReceipt(
+            receiptId, candidateSha, batch.TypedRequest, evidence.Accepted, evidence.IsValidEvidence && !unverifiedReviewerResult,
+            evidence.Summary, arms, FindingRoundFingerprint: round, ExecutionBasisIdentity: basis,
+            NegativeControlOutcome: evidence.NegativeControlOutcome, RevertPathsRejection: evidence.RevertPathsRejection);
+        var dispositions = BuildDispositions(initialDispositions, batch, receipt, FormatFindingEvidenceSelection, supersededByActionableRed);
+        if (unverifiedReviewerResult)
+            dispositions = dispositions.Select(disposition => IsIncompleteExecution(receipt, disposition)
+                ? disposition with
+                {
+                    Disposition = "unavailable",
+                    Decision = FindingEvidenceRequestDecision.Refused,
+                    Reason = FindingRoundBatchCoordinator.UnverifiedReviewerResult
+                }
+                : disposition).ToArray();
+        return (receipt with { RequestDispositions = dispositions }, unverifiedReviewerResult);
+    }
+
     internal static bool IsPartialGreenDisposition(FindingEvidenceReceipt receipt, FindingEvidenceRequestDisposition disposition) =>
         disposition.Reason == "candidate-selections-not-executed" && IsIncompleteExecution(receipt, disposition);
 

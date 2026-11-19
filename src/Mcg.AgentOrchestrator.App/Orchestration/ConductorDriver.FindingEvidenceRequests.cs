@@ -460,15 +460,9 @@ internal sealed partial class ConductorDriver
             candidateSha!, findingRoundFingerprint, receiptIdentity, executionBasisIdentity);
         var actionableCandidateRed = TryAttributeActionableCandidateRed(
             goal, candidateSha!, SelectedExecutionGateMissDetector.Observe(GateMissDetector, goal.Id, requestingTask.Id, receiptId, armReceipts, _recordTaskNote), runnable);
-        var receipt = new FindingEvidenceReceipt(
-            receiptId, candidateSha!, runnable.TypedRequest, evidence.Accepted, evidence.IsValidEvidence,
-            evidence.Summary, armReceipts, FindingRoundFingerprint: findingRoundFingerprint,
-            ExecutionBasisIdentity: executionBasisIdentity, NegativeControlOutcome: evidence.NegativeControlOutcome,
-            RevertPathsRejection: evidence.RevertPathsRejection);
-        var requestDispositions = FindingEvidenceRequestCompletion.BuildDispositions(
-            initialRequestDispositions, runnable, receipt, FormatFindingEvidenceSelection,
-            actionableCandidateRed is null ? null : batches.Skip(1));
-        receipt = receipt with { RequestDispositions = requestDispositions };
+        var (receipt, unverifiedReviewerResult) = FindingEvidenceRequestCompletion.PrepareReceipt(goal, requestingTask,
+            runnable, evidence, receiptId, candidateSha!, findingRoundFingerprint, executionBasisIdentity, armReceipts,
+            initialRequestDispositions, repositoryTarget is null, actionableCandidateRed is null ? null : batches.Skip(1));
         var retryableFailure = evidence.OutcomeReason switch
         {
             FindingEvidenceOutcomeReason.ApparatusFailure when !armReceipts.Any(arm =>
@@ -486,7 +480,9 @@ internal sealed partial class ConductorDriver
                 var completion = PreTesterCoverageComposition.Complete(this, goal, requestingTask, finding, member,
                     receipt, candidateSha!, executionBasisIdentity, findingRoundFingerprint, evidence.OutcomeReason);
                 receipt = completion.Receipt;
-                completions.Add((finding, completion));
+                completions.Add((finding, unverifiedReviewerResult
+                    ? completion with { Outcome = completion.Outcome with { DecisionReason = FindingRoundBatchCoordinator.UnverifiedReviewerResult } }
+                    : completion));
             }
         }
         if (actionableCandidateRed is not null)
@@ -494,13 +490,13 @@ internal sealed partial class ConductorDriver
 
         // Until the dispositions persist, the focused attempt can be reconciled again and
         // no task receipt can bypass that reconciliation on the next tick.
-        requestDispositions = receipt.RequestDispositions!;
+        var requestDispositions = receipt.RequestDispositions!;
         if (!FindingEvidenceRequestCompletion.TryPersistDispositions(_focusedEvidenceAttemptCoordinator, evidenceAttempt,
                 findingRoundFingerprint, receiptId, requestDispositions, out decision))
             return true;
 
-        var checkpointGreen = reconciliationDeferred && receipt.Passed && retryableFailure is null;
-        if (reconciliationDeferred && !checkpointGreen && retryableFailure is null)
+        var checkpointCompletion = reconciliationDeferred && (receipt.Passed || unverifiedReviewerResult) && retryableFailure is null;
+        if (reconciliationDeferred && !checkpointCompletion && retryableFailure is null)
             _focusedEvidenceAttemptCoordinator.MarkReconciled(evidenceAttempt!);
 
         FindingRoundRedCoverage.Delivery? completedDelivery = null;
@@ -509,7 +505,7 @@ internal sealed partial class ConductorDriver
             var (route, deliverable) = FindingRoundRedCoverage.StageCompletion(this, goal, requestingTask, batches.Skip(1).ToArray(),
                 runnable, plan, receipt, candidateSha!, findingRoundFingerprint, executionBasisIdentity,
                 _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest,
-                batchCandidateSha, batchBasisIdentity, policy, reusedRedDecision, evidence.OutcomeReason);
+                batchCandidateSha, batchBasisIdentity, policy, reusedRedDecision, evidence.OutcomeReason, unverifiedReviewerResult);
             if (deliverable is not null)
             {
                 completedDelivery = deliverable with { ReviewerRoute = reviewerRoute };
@@ -552,7 +548,7 @@ internal sealed partial class ConductorDriver
         var incomplete = completions.Any(item => item.Completion.Incomplete);
         Func<FailedGoalFindingObservation>? routeAfterCheckpoint = null;
         FindingEvidenceCompletionPublisher.Publish(this, goal, requestingTask, receipt, completions, FormatFocusedEvidenceResult(evidence),
-            checkpointGreen ? evidenceAttempt : null, () =>
+            checkpointCompletion ? evidenceAttempt : null, () =>
             {
                 if (!incomplete) routeAfterCheckpoint = StageCompletion();
                 stagePendingSuppressions(completedDelivery, reusedRedDecision);

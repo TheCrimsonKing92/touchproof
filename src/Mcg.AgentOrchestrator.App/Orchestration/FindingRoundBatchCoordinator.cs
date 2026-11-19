@@ -726,6 +726,8 @@ internal static class FindingRoundBatchCoordinator
         return true;
     }
 
+    internal const string UnverifiedReviewerResult = "legacy-result-execution-unverified";
+
     private static bool TryObserveRequiredUnavailable(Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity,
         out FailedGoalFindingObservation observation)
     {
@@ -735,9 +737,7 @@ internal static class FindingRoundBatchCoordinator
 
         var required = FindingRoundBatchAccounting.RequiredFindingIds(goal, task);
         required.IntersectWith(unavailable.SelectMany(item => item.FindingIds));
-        var attemptBackedFindings = unavailable.Where(item => item.ReceiptId is not null)
-            .SelectMany(item => item.FindingIds).ToHashSet(StringComparer.Ordinal);
-        if (TryBuildFailedExecutionDelivery(goal, task, identity.CandidateSha, required, out observation, attemptBackedFindings))
+        if (TryBuildFailedExecutionDelivery(goal, task, identity.CandidateSha, required, out observation, unavailable))
             return true;
 
         var detail = unavailable.FirstOrDefault(item => item.Eligibility is not null)?.Eligibility;
@@ -747,24 +747,35 @@ internal static class FindingRoundBatchCoordinator
     }
 
     private static bool TryBuildFailedExecutionDelivery(Goal goal, TaskSpec task, string candidate, IReadOnlySet<string> findingIds,
-        out FailedGoalFindingObservation observation, IReadOnlySet<string>? attemptBackedFindings = null)
+        out FailedGoalFindingObservation observation, IReadOnlyList<FindingRoundBatchAccounting.Observation>? unavailable = null)
     {
         observation = FailedGoalFindingObservation.None;
         if (task.RequiredRole != AgentRole.Reviewer || ConductorDriver.UsesQualifiedReviewerContinuation(goal, task))
             return false;
 
-        // A settlement can carry an attempt receipt ID even when the finding outcome has none.
-        // Only a permanent refusal can take legacy delivery after an attempt-backed settlement.
         var findings = task.LastVerification?.MergedReviewFindings?.Where(finding => findingIds.Contains(finding.StableId)).ToArray() ?? [];
-        if (findings.Length == 0 || findings.Length != findingIds.Count || findings.Any(finding =>
-            finding.EvidenceOutcome is not { Honoured: false, ReceiptId: null, Reason:
-                FindingEvidenceNotHonouredReason.UnsupportedProject or FindingEvidenceNotHonouredReason.UnparseableSelection or
-                 FindingEvidenceNotHonouredReason.SelectionApparatusFailure or
-                FindingEvidenceNotHonouredReason.RunFailed } outcome ||
-            (attemptBackedFindings?.Contains(finding.StableId) == true && !FindingEvidenceExecutionClassifier.IsPermanentRefusal(outcome))))
-            return false;
+        if (findings.Length == 0 || findings.Length != findingIds.Count) return false;
+        var diagnosticReceiptIds = new List<string>();
+        foreach (var finding in findings)
+        {
+            var settlements = (unavailable ?? []).Where(item => item.FindingIds.Contains(finding.StableId)).ToArray();
+            if (finding.EvidenceOutcome is { ReceiptId: { } receiptId, ResultReason: FindingEvidenceOutcomeReason.Unknown } &&
+                settlements.Any(item => item.ReceiptId == receiptId && item.Eligibility == UnverifiedReviewerResult))
+            {
+                diagnosticReceiptIds.Add(receiptId);
+                continue;
+            }
 
-        observation = ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidate, findings, [],
+            // A settlement can carry an attempt receipt ID even when the finding outcome has none.
+            // Only a permanent refusal can take legacy delivery after an attempt-backed settlement.
+            if (finding.EvidenceOutcome is not { Honoured: false, ReceiptId: null, Reason:
+                    FindingEvidenceNotHonouredReason.UnsupportedProject or FindingEvidenceNotHonouredReason.UnparseableSelection or
+                    FindingEvidenceNotHonouredReason.SelectionApparatusFailure or FindingEvidenceNotHonouredReason.RunFailed } outcome ||
+                (settlements.Any(item => item.ReceiptId is not null) && !FindingEvidenceExecutionClassifier.IsPermanentRefusal(outcome)))
+                return false;
+        }
+
+        observation = ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidate, findings, diagnosticReceiptIds,
             "Focused evidence was unavailable for the affected findings; typed outcomes were attached.");
         return true;
     }
