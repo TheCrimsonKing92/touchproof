@@ -4,22 +4,32 @@ using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleProviderConnecti
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnectionsConsoleGateway connections,
-    IProviderSignInLauncher launcher, Action<Action> invoke, TimeProvider clock, CancellationToken lifetime)
-    : IOwnerConsoleSettingsTab
+internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettingsTab
 {
-    private readonly IProviderConnectionsConsoleGateway _connections = connections;
-    private readonly IProviderSignInLauncher _launcher = launcher;
-    private readonly CancellationToken _lifetime = lifetime;
-    private List<ProfileState> _profiles = [];
+    private readonly IProviderConnectionsConsoleGateway _connections;
+    private readonly OwnerConsoleProviderSignInFlow _signIn;
+    private readonly Action<Action> _invoke;
+    private readonly TimeProvider _clock;
+    private readonly CancellationToken _lifetime;
+    private List<OwnerConsoleProviderConnectionState> _profiles = [];
     private int _selected;
     private long _revision;
     private bool _listed;
     private bool _listing;
     private bool _listFailed;
 
+    internal OwnerConsoleProviderConnectionsTab(IProviderConnectionsConsoleGateway connections,
+        IProviderSignInLauncher launcher, Action<Action> invoke, TimeProvider clock, CancellationToken lifetime)
+    {
+        _connections = connections;
+        _invoke = invoke;
+        _clock = clock;
+        _lifetime = lifetime;
+        _signIn = new(connections, launcher, FindProfile, Check, Post, lifetime);
+    }
+
     internal Action? Invalidate { get; set; }
-    private ProfileState? Selected => _profiles.Count == 0 ? null : _profiles[_selected];
+    private OwnerConsoleProviderConnectionState? Selected => _profiles.Count == 0 ? null : _profiles[_selected];
     public string Title => "Provider connections";
     public bool Editing => false;
     public int SelectedLine => _profiles.Take(_selected).Sum(profile => LinesFor(profile).Count());
@@ -29,7 +39,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
             _listed ? "No configured worker profiles." : "Provider connections have not been loaded."];
     public string StatusText => _listing ? "Reading provider connections…" :
         _listFailed ? "Could not list provider connections. Press r to retry." :
-        Selected is { } profile ? CheckStatus(profile) ?? SignInText(profile) ?? "" : "";
+        Selected is { } profile ? CheckStatus(profile) ?? _signIn.StatusText(profile) ?? "" : "";
 
     public string KeyHint
     {
@@ -37,9 +47,9 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
         {
             var actions = Selected switch
             {
-                { } profile when AwaitingSignInReturn(profile) is not null => "  t return  x stop waiting",
-                { } profile when CanSignIn(profile) =>
-                    DeviceCodeAvailable(profile) ? "  s sign in  d device code" : "  s sign in",
+                { } profile when _signIn.CanReportReturn(profile) => "  t return  x stop waiting",
+                { } profile when _signIn.CanSignIn(profile) =>
+                    _signIn.DeviceCodeAvailable(profile) ? "  s sign in  d device code" : "  s sign in",
                 _ => ""
             };
             return $"Up/Down profile  c check{actions}  r reload  Left/Right tab  Esc/q back";
@@ -66,7 +76,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
         if (key == Key.CursorUp || key == Key.CursorDown)
         {
             _selected = Math.Clamp(_selected + (key == Key.CursorUp ? -1 : 1), 0, Math.Max(0, _profiles.Count - 1));
-            ProbeDeviceCode();
+            _signIn.ProbeDeviceCode(Selected);
             return;
         }
         var action = char.ToLowerInvariant((char)key.AsRune.Value);
@@ -75,23 +85,19 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
         switch (action)
         {
             case 'c': Check(profile); break;
-            case 's': BeginSignIn(profile, false); break;
-            case 'd' when DeviceCodeAvailable(profile): BeginSignIn(profile, true); break;
-            case 't' when AwaitingSignInReturn(profile) is { } returned:
-                ReportSignInReturn(profile, returned, "Returned from native sign-in. Authentication outcome unknown.");
-                break;
-            case 'x' when AwaitingSignInReturn(profile) is { } waiting:
-                ReportSignInReturn(profile, waiting, "Stopped waiting for native sign-in. The native window may still be open.");
-                break;
+            case 's': _signIn.BeginSignIn(profile, deviceCode: false); break;
+            case 'd' when _signIn.DeviceCodeAvailable(profile): _signIn.BeginSignIn(profile, deviceCode: true); break;
+            case 't': _signIn.ReportReturn(profile, stoppedWaiting: false); break;
+            case 'x': _signIn.ReportReturn(profile, stoppedWaiting: true); break;
         }
     }
 
-    private IEnumerable<string> LinesFor(ProfileState profile)
+    private IEnumerable<string> LinesFor(OwnerConsoleProviderConnectionState profile)
     {
         yield return $"{ProfileId(profile.Id)} | {profile.Connection.Report.Provider}";
-        foreach (var line in Details(profile.Connection, _profiles.Select(p => p.Connection), clock.GetUtcNow()))
+        foreach (var line in Details(profile.Connection, _profiles.Select(p => p.Connection), _clock.GetUtcNow()))
             yield return line;
-        if (SignInText(profile) is { } interaction) yield return $"  Sign-in: {interaction}";
+        if (_signIn.StatusText(profile) is { } interaction) yield return $"  Sign-in: {interaction}";
         if (CheckStatus(profile) is { } check) yield return $"  {check}";
     }
 
@@ -107,7 +113,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
                 var previous = _profiles.ToDictionary(profile => profile.Id, StringComparer.OrdinalIgnoreCase);
                 _profiles = items.Select(item =>
                 {
-                    if (!previous.TryGetValue(item.Report.ProfileId, out var existing)) return new ProfileState(item);
+                    if (!previous.TryGetValue(item.Report.ProfileId, out var existing)) return new OwnerConsoleProviderConnectionState(item);
                     if (existing.LastRefresh <= revision)
                     {
                         existing.Connection = RetainHostObservation(existing.Connection, item);
@@ -118,14 +124,17 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
                 _selected = Math.Max(0, _profiles.FindIndex(profile => StringComparer.OrdinalIgnoreCase.Equals(profile.Id, selected)));
                 _listed = true;
                 _listing = false;
-                ProbeDeviceCode();
+                _signIn.ProbeDeviceCode(Selected);
             });
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception) { Post(() => { _listing = false; _listFailed = true; }); }
     }
 
-    private void Check(ProfileState profile)
+    private OwnerConsoleProviderConnectionState? FindProfile(string profileId) =>
+        _profiles.Find(profile => StringComparer.OrdinalIgnoreCase.Equals(profile.Id, profileId));
+
+    private void Check(OwnerConsoleProviderConnectionState profile)
     {
         var revision = ++_revision;
         profile.CheckRevision = revision;
@@ -133,7 +142,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
         _ = Task.Run(() => CheckAsync(profile, revision));
     }
 
-    private async Task CheckAsync(ProfileState profile, long revision)
+    private async Task CheckAsync(OwnerConsoleProviderConnectionState profile, long revision)
     {
         OwnerConsoleProviderConnection? result = null;
         try
@@ -155,7 +164,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
             profile.Connection = RetainHostObservation(profile.Connection, result);
             profile.OperationText = ProbeFailureText(result);
             profile.LastRefresh = ++_revision;
-            ProbeDeviceCode();
+            _signIn.ProbeDeviceCode(Selected);
         });
     }
 
@@ -166,7 +175,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
     private static string? ProbeFailureText(OwnerConsoleProviderConnection connection) =>
         ProbeFailure(connection) is { } failure ? $"Check reported {failure.Result}. {failure.NextAction}" : null;
 
-    private static string? CheckStatus(ProfileState profile) =>
+    private static string? CheckStatus(OwnerConsoleProviderConnectionState profile) =>
         profile.Checking ? "Checking connection…" : profile.OperationText;
 
     private static OwnerConsoleProviderConnection RetainHostObservation(
@@ -185,22 +194,11 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab(IProviderConnec
     private void Post(Action apply)
     {
         if (_lifetime.IsCancellationRequested) return;
-        invoke(() =>
+        _invoke(() =>
         {
             if (_lifetime.IsCancellationRequested) return;
             apply();
             Invalidate?.Invoke();
         });
-    }
-
-    private sealed class ProfileState(OwnerConsoleProviderConnection connection)
-    {
-        internal string Id { get; } = connection.Report.ProfileId;
-        internal OwnerConsoleProviderConnection Connection { get; set; } = connection;
-        internal long CheckRevision { get; set; }
-        internal long LastRefresh { get; set; }
-        internal bool Checking { get; set; }
-        internal string? InteractionText { get; set; }
-        internal string? OperationText { get; set; }
     }
 }
