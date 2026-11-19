@@ -22,6 +22,8 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     private bool _listing;
     private bool _initialChecksStarted;
     private string? _loadError;
+    private string? _pendingTarget;
+    private string? _targetNotice;
 
     internal OwnerConsoleProviderConnectionsTab(IProviderConnectionsConsoleGateway connections,
         IProviderSignInLauncher launcher, Func<IReadOnlyList<AgentDefinition>> loadRoster, Action<Action> invoke,
@@ -45,7 +47,24 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     public int SelectedLine => _selected;
     public IReadOnlyList<string> Lines => RenderLines().ToArray();
     public string StatusText => _listing ? "Reading provider connections…" :
-        _loadError ?? (Selected is { } row ? RowStatus(row) ?? "" : "");
+        _loadError ?? _targetNotice ?? (Selected is { } row ? RowStatus(row) ?? "" : "");
+
+    internal void Target(string? provider)
+    {
+        _pendingTarget = string.IsNullOrWhiteSpace(provider) ? null : provider.Trim();
+        _targetNotice = null;
+        if (_listed && !_listing) ApplyTarget();
+    }
+
+    private void ApplyTarget()
+    {
+        if (_pendingTarget is not { } provider) return;
+        _pendingTarget = null;
+        var index = Array.FindIndex(_rows, row => row.Members.Any(member =>
+            StringComparer.OrdinalIgnoreCase.Equals(member.Report.Provider, provider)));
+        if (index < 0) _targetNotice = $"No configured profile found for provider {provider}.";
+        else { _selected = index; ProbeSelectedDeviceCode(); }
+    }
 
     public string KeyHint
     {
@@ -73,6 +92,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
 
     public void HandleKey(Key key)
     {
+        _targetNotice = null;
         if (_lifetime.IsCancellationRequested || key.IsAlt || key.IsCtrl) return;
         if (key == Key.CursorUp || key == Key.CursorDown)
         {
@@ -167,6 +187,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         _listed = true;
         _listing = false;
         RebuildRows();
+        ApplyTarget();
     }
 
     private void RebuildRows()

@@ -14,6 +14,7 @@ public sealed class OwnerConsoleBindingsTests
         var row = Assert.Single(OwnerConsoleBindings.Commands, row => row.Command == "settings");
         Assert.Equal(OwnerConsoleScope.Global, row.Scope);
         Assert.Equal('s', row.Key);
+        Assert.Single(OwnerConsoleBindings.Commands, binding => binding.Key == 's');
         foreach (var pane in Enum.GetValues<OwnerConsolePane>())
         {
             Assert.Same(row, OwnerConsoleBindings.ForKey('s', pane));
@@ -22,6 +23,75 @@ public sealed class OwnerConsoleBindingsTests
         Assert.Same(row, OwnerConsoleBindings.ForLine("settings"));
         Assert.Same(row, OwnerConsoleBindings.ForLine(":settings"));
     }
+
+    [Theory]
+    [InlineData("provider-hold-placed")]
+    [InlineData("provider-hold-check")]
+    [InlineData("provider-hold-overdue")]
+    public void SignInRequiredHoldRowCarriesProviderAndSKeySentence(string kind)
+    {
+        var evt = HoldEvent(kind, "xai::<provider-default>", "last confirmed: authentication-required");
+        var row = Assert.Single(OwnerActivityNarrator.Narrate([evt], _ => ""));
+
+        Assert.Equal("xai", row.SignInProvider);
+        Assert.EndsWith("Press s to open sign-in for xai.", row.Act);
+        Assert.True(OwnerProviderHoldNarration.TryNarrate(evt, out _, out _, out _, out var originalAction));
+        Assert.Equal(originalAction + " Press s to open sign-in for xai.", row.Act);
+    }
+
+    [Theory]
+    [InlineData("provider-hold-placed", "xai::<provider-default>", "last confirmed: usage-exhausted")]
+    [InlineData("provider-hold-overdue", "xai::<provider-default>", "last confirmed: usage-exhausted")]
+    [InlineData("provider-hold-restored", "xai::<provider-default>", "last confirmed: authentication-required")]
+    [InlineData("provider-hold-check", "::profile", "last confirmed: authentication-required")]
+    [InlineData("provider-hold-check", "  ::profile", "last confirmed: authentication-required")]
+    [InlineData("provider-hold-check", "xai", "last confirmed: authentication-required")]
+    public void OtherHoldRowsKeepTheirActionWithoutSignInTarget(string kind, string binding, string diagnosis)
+    {
+        var evt = HoldEvent(kind, binding, diagnosis);
+        var row = Assert.Single(OwnerActivityNarrator.Narrate([evt], _ => ""));
+
+        Assert.Null(row.SignInProvider);
+        Assert.DoesNotContain("Press s", row.Act);
+        Assert.True(OwnerProviderHoldNarration.TryNarrate(evt, out _, out _, out _, out var originalAction));
+        Assert.Equal(originalAction, row.Act);
+    }
+
+    [Fact]
+    public void MissingBindingCannotOfferSignIn()
+    {
+        var evt = HoldEvent("provider-hold-check", "", "last confirmed: authentication-required");
+        Assert.Null(OwnerProviderHoldNarration.SignInProvider(evt));
+        Assert.Empty(OwnerActivityNarrator.Narrate([evt], _ => ""));
+    }
+
+    [Fact]
+    public void ActivityHintLabelsSAsSignInOnASignInRow()
+    {
+        Assert.Contains("s sign-in", OwnerConsoleBindings.PaneHint(OwnerConsolePane.Activity, signIn: true));
+        Assert.DoesNotContain("s sign-in", OwnerConsoleBindings.PaneHint(OwnerConsolePane.Activity));
+        Assert.DoesNotContain("s sign-in", OwnerConsoleBindings.PaneHint(OwnerConsolePane.Board, signIn: true));
+        using var context = new OwnerConsoleSettingsTestContext();
+        using IApplication app = Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, context.Controller, () => Task.CompletedTask);
+        var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "xai::<provider-default>", "last confirmed: authentication-required")], _ => ""));
+        var ordinary = signIn with { Timestamp = signIn.Timestamp.AddSeconds(-1), SignInProvider = null };
+        view.Render(OwnerConsoleSettingsTestContext.Model() with { Activity = [signIn, ordinary] });
+        view.FocusPane(OwnerConsolePane.Activity);
+        view.ActivityPane.SelectedItem = view.ActivityModel.Rows.ToList().FindIndex(row => row.ItemIndex == 0);
+        view.RenderHints();
+        Assert.Contains("s sign-in", view.HintText);
+
+        view.ActivityPane.SelectedItem = view.ActivityModel.Rows.ToList().FindIndex(row => row.ItemIndex == 1);
+        view.RenderHints();
+        Assert.DoesNotContain("s sign-in", view.HintText);
+        Assert.Contains("s settings", view.HintText);
+    }
+
+    private static OwnerConductEvent HoldEvent(string kind, string binding, string diagnosis) =>
+        new(DateTimeOffset.Parse("2026-11-19T12:00:00Z"), kind, "11111111222233334444555566667777",
+            $"PROVIDER_HOLD diagnosis={Uri.EscapeDataString(diagnosis)} binding={binding}");
 
     [Fact]
     public void DispatchVerbsHaveTopLevelBindingRows()
@@ -189,6 +259,7 @@ public sealed class OwnerConsoleBindingsTests
     [
         "s: Open Settings (any pane).",
         ":settings: Open Settings. Use Left/Right to switch tabs (same as s).",
+        "ACTIVITY s on a sign-in-required provider row: Open Settings on Provider connections for that provider.",
         "Settings Left/Right: Switch to the previous or next tab.",
         "Settings Esc or q: Close Settings and return to the previous pane.",
         "Settings tab Alerts & sounds: Up/Down highlight  p preview  Enter select/edit  s system sound  m mute",
