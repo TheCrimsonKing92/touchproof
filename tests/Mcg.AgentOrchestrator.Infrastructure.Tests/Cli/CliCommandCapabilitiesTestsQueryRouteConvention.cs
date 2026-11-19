@@ -11,6 +11,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["task"] = [["task", "abc10000"]],
             ["verifications"] = [["verifications", "abc10000", "1"], ["verifications", "--goal", "abc10000", "1"], ["verifications", "1"]],
             ["agents"] = [["agents"]],
+            ["provider-connections"] = [["provider-connections"], ["provider-connections", "--json"]],
             ["finding"] = [["finding", "query-route-finding"]],
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],

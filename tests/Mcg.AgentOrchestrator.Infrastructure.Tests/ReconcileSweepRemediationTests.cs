@@ -36,6 +36,12 @@ public sealed class ReconcileSweepRemediationTests
         """
     ];
 
+    private const string ReconcileSweepSchemaQuery = """
+        SELECT sql FROM sqlite_schema
+        WHERE name IN ('reconcile_sweep_remediation', 'reconcile_acceptance_leases', 'ix_reconcile_sweep_goal')
+        ORDER BY CASE name WHEN 'reconcile_sweep_remediation' THEN 0 WHEN 'ix_reconcile_sweep_goal' THEN 1 ELSE 2 END
+        """;
+
     // These database contract tests use unique temporary roots and no shared state.
     [Xunit.Fact]
     public void Setup_FreshDatabase_RecordsStep15AndPreservesBaselineDefinitions()
@@ -47,12 +53,8 @@ public sealed class ReconcileSweepRemediationTests
 
             var expected = BaselineSchemaStatements.Select(statement => statement
                 .Replace(" IF NOT EXISTS", "", StringComparison.Ordinal).TrimEnd(';'));
-            Xunit.Assert.Equal(expected, ReadSchemaValues(dbPath, """
-                SELECT sql FROM sqlite_schema
-                WHERE name IN ('reconcile_sweep_remediation', 'reconcile_acceptance_leases', 'ix_reconcile_sweep_goal')
-                ORDER BY CASE name WHEN 'reconcile_sweep_remediation' THEN 0 WHEN 'ix_reconcile_sweep_goal' THEN 1 ELSE 2 END
-                """));
-            AssertStep15Current(dbPath);
+            Xunit.Assert.Equal(expected, ReadSchemaValues(dbPath, ReconcileSweepSchemaQuery));
+            AssertStep15RecordedAndPlanCurrent(dbPath);
         }
         finally
         {
@@ -143,12 +145,12 @@ public sealed class ReconcileSweepRemediationTests
             CreateHistoricalReconcileSweepSchema(dbPath, BaselineSchemaStatements);
             var pending = StateDbMigrations.Plan(dbPath);
             Xunit.Assert.Equal(14, pending.RecordedVersion);
-            Xunit.Assert.Equal(15, pending.RequiredVersion);
+            Xunit.Assert.True(pending.RequiredVersion >= 15);
             Xunit.Assert.True(pending.RequiresMigration);
             var store = new ReconcileSweepRemediationStore(dbPath);
             var state = store.Observe("historical", "goal-1", "blocked", "evidence", "remedy");
             Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", "historical-owner", TimeSpan.FromMinutes(30)));
-            var schema = ReadSchemaValues(dbPath, "SELECT sql FROM sqlite_schema ORDER BY type, name");
+            var schema = ReadSchemaValues(dbPath, ReconcileSweepSchemaQuery);
             const string remediationRows = """
                 SELECT json_array(state_key, goal_id, blocker_kind, evidence, remedy, attempt_count,
                     blocker_emitted, escalation_emitted, in_flight_owner, in_flight_at,
@@ -160,8 +162,8 @@ public sealed class ReconcileSweepRemediationTests
 
             SetUpStateDatabase(dbPath);
 
-            AssertStep15Current(dbPath);
-            Xunit.Assert.Equal(schema, ReadSchemaValues(dbPath, "SELECT sql FROM sqlite_schema ORDER BY type, name"));
+            AssertStep15RecordedAndPlanCurrent(dbPath);
+            Xunit.Assert.Equal(schema, ReadSchemaValues(dbPath, ReconcileSweepSchemaQuery));
             Xunit.Assert.Equal(rows, ReadSchemaValues(dbPath, remediationRows));
             Xunit.Assert.Equal(leases, ReadSchemaValues(dbPath,
                 "SELECT goal_id || ':' || owner || ':' || acquired_at FROM reconcile_acceptance_leases"));
@@ -207,11 +209,10 @@ public sealed class ReconcileSweepRemediationTests
         Xunit.Assert.Contains(Path.GetFullPath(dbPath), error.Message, StringComparison.Ordinal);
     }
 
-    private static void AssertStep15Current(string dbPath)
+    private static void AssertStep15RecordedAndPlanCurrent(string dbPath)
     {
         var plan = StateDbMigrations.Plan(dbPath);
-        Xunit.Assert.Equal(15, plan.RecordedVersion);
-        Xunit.Assert.Equal(15, plan.RequiredVersion);
+        Xunit.Assert.Equal(plan.RequiredVersion, plan.RecordedVersion);
         Xunit.Assert.Equal("current", plan.Action);
         Xunit.Assert.Equal(["reconcile-sweep-remediation"], ReadSchemaValues(dbPath,
             "SELECT name FROM schema_migrations WHERE migration_number = 15"));
