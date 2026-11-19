@@ -1,7 +1,8 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: fixed instants and in-memory gate observations.
+// Parallel-safe: fixed instants, in-memory gates, an owned log, and an AsyncLocal writer.
 public sealed class CostGoalOutcomeBaselineTests
 {
     private static readonly DateTimeOffset FiledAt = new(2026, 11, 1, 0, 0, 0, TimeSpan.Zero);
@@ -66,6 +67,57 @@ public sealed class CostGoalOutcomeBaselineTests
         var baseline = Assert.Single(CostGoalOutcomeMetric.BaselinesAt([line], gates, FiledAt));
 
         Assert.Equal(new OutcomeMetricBaseline(line, 7.5, 4, null), baseline);
+    }
+
+    [Fact]
+    public async Task PhaseTiming_RoundTripsAcrossLogRotation()
+    {
+        var root = Directory.CreateTempSubdirectory("tick-step-ledger-").FullName;
+        var path = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var previous = ConductorBatchLoop.CurrentConductEventLogWriter.Value;
+        var now = FiledAt.AddMinutes(-2);
+        var firstAt = now;
+        var secondAt = now.AddMinutes(1);
+        const string first = "PHASE_TIMING tick=1 phase=sweep elapsed_ms=40 " +
+            "sweep_steps=owned-root-reap:30:7,maintenance:NaN:1,host-health:-1:1 " +
+            "kernel_reload_steps=kernel-merge:0:5,remainder:7:1";
+        const string second = "PHASE_TIMING tick=1 phase=sweep elapsed_ms=15 sweep_steps=owned-root-reap:10:2";
+        try
+        {
+            ConductorBatchLoop.CurrentConductEventLogWriter.Value = new(path, maxBytes: 1, utcNow: () => now);
+            await AsyncLocalConsoleRouter.Out.CaptureLocalAsync(() =>
+            {
+                ConductorBatchLoop.EmitProgress(first);
+                now = secondAt;
+                ConductorBatchLoop.EmitProgress(second);
+                return Task.CompletedTask;
+            });
+
+            var rotated = Assert.Single(Directory.GetFiles(root, "conduct-events-*.log"));
+            var firstLine = Assert.Single(File.ReadAllLines(rotated));
+            var secondLine = Assert.Single(File.ReadAllLines(path));
+            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            Assert.Equal(new ConductEventRecord(firstAt, "phase-timing", null, first),
+                JsonSerializer.Deserialize<ConductEventRecord>(firstLine, options));
+            Assert.Equal(new ConductEventRecord(secondAt, "phase-timing", null, second),
+                JsonSerializer.Deserialize<ConductEventRecord>(secondLine, options));
+
+            TickStepObservation[] expected =
+            [
+                new(firstAt, 1, "owned-root-reap", 30),
+                new(firstAt, 1, "kernel-merge", 0),
+                new(secondAt, 1, "owned-root-reap", 10)
+            ];
+            Assert.Equal(expected, TickStepLedgerReader.Read(path).ToArray());
+
+            File.AppendAllText(path, firstLine + Environment.NewLine);
+            Assert.Equal(expected, TickStepLedgerReader.Read(path).ToArray());
+        }
+        finally
+        {
+            ConductorBatchLoop.CurrentConductEventLogWriter.Value = previous;
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
     }
 
     internal static OutcomeGateObservation Gate(string id, DateTimeOffset startedAt, double milliseconds,
