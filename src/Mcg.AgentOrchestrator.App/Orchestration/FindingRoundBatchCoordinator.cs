@@ -508,9 +508,16 @@ internal static class FindingRoundBatchCoordinator
             FindingRoundBatchAccounting.Begin(goal, identity,
                 execution.Round.Findings.Where(finding => finding.State == ReviewFindingState.Open),
                 driver._recordFindingEvidenceRequest);
+        void RecordPendingSuppressions(FindingRoundRedCoverage.Delivery? delivery, FailedGoalFindingObservation? retainedRed)
+        {
+            if (identity is not null && !FindingRoundBatchAccounting.IsClosed(goal, identity) &&
+                !FindingRoundBatchAccounting.Summarize(goal, task, identity, "suppression-check").IsSettled)
+                RecordSuppressionWitnesses(driver, goal, task, identity, execution, policy, findings, delivery, retainedRed);
+        }
+
         FindingRoundRedCoverage.Delivery? completedDelivery = null;
         var handled = driver.TryBuildFindingEvidenceRequestCore(goal, task, policy, execution,
-            delivery => completedDelivery = delivery, out var reusedRedDecision, out decision);
+            delivery => completedDelivery = delivery, RecordPendingSuppressions, out var reusedRedDecision, out decision);
         if (identity is null) return handled;
         // Deterministic receipt closure records its summary atomically with the kernel action.
         if (FindingRoundBatchAccounting.IsClosed(goal, identity))
@@ -568,90 +575,8 @@ internal static class FindingRoundBatchCoordinator
             else if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending) return handled;
         }
 
-        if (!settlement.IsSettled && decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending &&
-            !TryObserveQualifiedReviewerSuppression(driver, goal, task, identity, policy))
-        {
-            // A passing receipt plus the production interpretation route is an eligibility witness.
-            // Cases needing closure, continuation or policy information we did not evaluate stay unknown.
-            var witnessed = FindingRoundBatchAccounting.Read(goal, identity)
-                .Where(item => item.Kind is "suppressed-selection" or "ineligible-selection")
-                .Select(item => item.ReceiptId).ToHashSet(StringComparer.Ordinal);
-            var receipts = task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
-                .Where(receipt => !witnessed.Contains(receipt.ReceiptId) && execution.Matches(receipt, identity))
-                .DistinctBy(receipt => receipt.ReceiptId);
-            foreach (var receipt in receipts)
-            {
-                // These conditions prove ineligibility; they are zero, not unknown savings.
-                if (task.Status != WorkTaskStatus.Failed || goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) ||
-                    Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any()) continue;
-                // An incomplete GREEN execution cannot be delivered for interpretation.
-                if (receipt is { Accepted: true, Passed: true } && (receipt.RequestDispositions ?? []).Any(disposition =>
-                        FindingEvidenceRequestCompletion.IsIncompleteExecution(receipt, disposition))) continue;
-
-                if (reusedRedDecision is not null && receipt is { Accepted: true, Passed: true })
-                {
-                    if (reusedRedDecision.TargetTaskId is { } redTarget && PolicySelects(driver, goal, policy, reusedRedDecision))
-                    {
-                        FindingRoundBatchAccounting.Record(goal, identity,
-                            new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + redTarget.Value + ":Developer",
-                                [], receipt.ReceiptId, AgentRole.Developer, "recovery policy selects Developer through the retained actionable RED route"),
-                            driver._recordFindingEvidenceRequest);
-                    }
-                    continue;
-                }
-                var open = ReviewFindings.GetOpenBlockingFindings(findings, goal.EffectiveAcceptanceCriteriaCorrections);
-                var sourceRepair = TrySourceRepair(goal, task, identity.CandidateSha, [receipt.ReceiptId], open, out var sourceRoute);
-                var diagnosis = FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha);
-                var interpretation = PassingFindingEvidenceRouter.BuildDecision(goal, task, ConductorDriver.FindUpstreamDeveloperTask(goal, task),
-                    identity.CandidateSha, [receipt.ReceiptId], open, diagnosis, ConductorDriver.BuildFailedGoalAttemptIdentity);
-                var canInterpret = !sourceRepair && task.RequiredRole == AgentRole.Tester && open.Count > 0 && !diagnosis.IsClosable &&
-                    FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, identity.CandidateSha, [receipt.ReceiptId]) &&
-                    interpretation.TargetTaskId == task.Id && PolicySelects(driver, goal, policy, interpretation);
-                var developer = ConductorDriver.FindUpstreamDeveloperTask(goal, task);
-                var canRepair = task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed &&
-                    developer?.Status == WorkTaskStatus.Completed && !goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) &&
-                    (sourceRepair || (receipt is { Accepted: true, Passed: false } && receipt.Arms?.Any(arm =>
-                        arm is { Arm: FindingEvidenceArm.Candidate, Accepted: true, Disposition: FindingEvidenceArmDisposition.Red, ExecutedTestCount: > 0 }) == true)) &&
-                    open.Any(finding => finding.Category is FindingCategory.Correctness or FindingCategory.TestCoverage or
-                        FindingCategory.SpecCompliance or FindingCategory.CodeQuality) &&
-                    PolicySelects(driver, goal, policy, sourceRepair ? sourceRoute : FailedGoalFindingObservation.Routed(
-                        FailedGoalFindingObservationKind.FindingRouteObserved, developer!.Id,
-                        ConductorDriver.BuildFailedGoalAttemptIdentity(developer), "Open source finding after evidence receipt.", null,
-                        observedCause: RetryCause.NewSourceFinding));
-                AgentRole? reviewerRouteRole = null;
-                if (task.RequiredRole == AgentRole.Reviewer &&
-                    !ConductorDriver.UsesQualifiedReviewerContinuation(goal, task) &&
-                    receipt is { Accepted: true, Passed: true } &&
-                    completedDelivery is { } delivery && delivery.CompletedReceiptId == receipt.ReceiptId)
-                {
-                    var reviewerRoute = delivery.ReviewerRoute ?? ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(
-                        goal, task, identity.CandidateSha, delivery.Findings, delivery.ReceiptIds, "Focused evidence completed.");
-                    if (reviewerRoute.TargetTaskId is { } reviewerRouteTarget && PolicySelects(driver, goal, policy, reviewerRoute))
-                        reviewerRouteRole = goal.Tasks.Single(candidate => candidate.Id == reviewerRouteTarget).RequiredRole;
-                    else if (reviewerRoute.Kind == FailedGoalFindingObservationKind.FindingRetryCapReached)
-                    {
-                        FindingRoundBatchAccounting.Record(goal, identity,
-                            new(identity.Key, "ineligible-selection", receipt.ReceiptId, [], receipt.ReceiptId,
-                                AgentRole.Reviewer, "Reviewer evidence delivery retry cap reached"),
-                            driver._recordFindingEvidenceRequest);
-                        continue;
-                    }
-                    else if (delivery.ReviewerRoute is not null)
-                        continue;
-                }
-                var role = canInterpret ? AgentRole.Tester : canRepair ? AgentRole.Developer :
-                    reviewerRouteRole;
-                var target = reviewerRouteRole is not null && completedDelivery?.ReviewerRoute?.TargetTaskId is { } reviewerTarget
-                    ? reviewerTarget : canRepair ? developer!.Id : task.Id;
-                FindingRoundBatchAccounting.Record(goal, identity,
-                    new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + target.Value + ":" + (role?.ToString() ?? "unknown"),
-                        [], receipt.ReceiptId, role,
-                        canInterpret ? "passing-receipt; failed Tester; dependencies complete; interpretation route selects requesting Tester"
-                            : canRepair ? "source-repair route; open Developer-owned source finding; completed upstream Developer; no running processes"
-                            : reviewerRouteRole is not null ? $"passing-receipt; recovery policy selects {reviewerRouteRole} through the Reviewer evidence route"
-                            : "unknown: no demonstrated eligible paid verification selection"), driver._recordFindingEvidenceRequest);
-            }
-        }
+        if (!settlement.IsSettled && decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending)
+            RecordPendingSuppressions(completedDelivery, reusedRedDecision);
         else if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending)
         {
             var settled = FindingRoundBatchAccounting.Summarize(goal, task, identity, "settlement-check");
@@ -665,6 +590,95 @@ internal static class FindingRoundBatchCoordinator
                 decision = decision with { BatchClosure = new(identity, JsonSerializer.Serialize(summary)) };
         }
         return handled;
+    }
+
+    private static void RecordSuppressionWitnesses(ConductorDriver driver, Goal goal, TaskSpec task,
+        FindingEvidenceBatchIdentity identity, ExecutionContext execution, ConductorAutonomyPolicy policy,
+        IReadOnlyList<ReviewFinding> findings, FindingRoundRedCoverage.Delivery? completedDelivery,
+        FailedGoalFindingObservation? reusedRedDecision)
+    {
+        if (TryObserveQualifiedReviewerSuppression(driver, goal, task, identity, policy)) return;
+
+        // A passing receipt plus the production interpretation route is an eligibility witness.
+        // Cases needing closure, continuation or policy information we did not evaluate stay unknown.
+        var witnessed = FindingRoundBatchAccounting.Read(goal, identity)
+            .Where(item => item.Kind is "suppressed-selection" or "ineligible-selection")
+            .Select(item => item.ReceiptId).ToHashSet(StringComparer.Ordinal);
+        var receipts = task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? [])
+            .Where(receipt => !witnessed.Contains(receipt.ReceiptId) && execution.Matches(receipt, identity))
+            .DistinctBy(receipt => receipt.ReceiptId);
+        foreach (var receipt in receipts)
+        {
+            // These conditions prove ineligibility; they are zero, not unknown savings.
+            if (task.Status != WorkTaskStatus.Failed || goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) ||
+                Mcg.AgentOrchestrator.App.Application.DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Any()) continue;
+            // An incomplete GREEN execution cannot be delivered for interpretation.
+            if (receipt is { Accepted: true, Passed: true } && (receipt.RequestDispositions ?? []).Any(disposition =>
+                    FindingEvidenceRequestCompletion.IsIncompleteExecution(receipt, disposition))) continue;
+
+            if (reusedRedDecision is not null && receipt is { Accepted: true, Passed: true })
+            {
+                if (reusedRedDecision.TargetTaskId is { } redTarget && PolicySelects(driver, goal, policy, reusedRedDecision))
+                {
+                    FindingRoundBatchAccounting.Record(goal, identity,
+                        new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + redTarget.Value + ":Developer",
+                            [], receipt.ReceiptId, AgentRole.Developer, "recovery policy selects Developer through the retained actionable RED route"),
+                        driver._recordFindingEvidenceRequest);
+                }
+                continue;
+            }
+            var open = ReviewFindings.GetOpenBlockingFindings(findings, goal.EffectiveAcceptanceCriteriaCorrections);
+            var sourceRepair = TrySourceRepair(goal, task, identity.CandidateSha, [receipt.ReceiptId], open, out var sourceRoute);
+            var diagnosis = FindingReceiptClosureDiagnosis.Evaluate(goal, task, identity.CandidateSha);
+            var interpretation = PassingFindingEvidenceRouter.BuildDecision(goal, task, ConductorDriver.FindUpstreamDeveloperTask(goal, task),
+                identity.CandidateSha, [receipt.ReceiptId], open, diagnosis, ConductorDriver.BuildFailedGoalAttemptIdentity);
+            var canInterpret = !sourceRepair && task.RequiredRole == AgentRole.Tester && open.Count > 0 && !diagnosis.IsClosable &&
+                FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, identity.CandidateSha, [receipt.ReceiptId]) &&
+                interpretation.TargetTaskId == task.Id && PolicySelects(driver, goal, policy, interpretation);
+            var developer = ConductorDriver.FindUpstreamDeveloperTask(goal, task);
+            var canRepair = task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed &&
+                developer?.Status == WorkTaskStatus.Completed && !goal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }) &&
+                (sourceRepair || (receipt is { Accepted: true, Passed: false } && receipt.Arms?.Any(arm =>
+                    arm is { Arm: FindingEvidenceArm.Candidate, Accepted: true, Disposition: FindingEvidenceArmDisposition.Red, ExecutedTestCount: > 0 }) == true)) &&
+                open.Any(finding => finding.Category is FindingCategory.Correctness or FindingCategory.TestCoverage or
+                    FindingCategory.SpecCompliance or FindingCategory.CodeQuality) &&
+                PolicySelects(driver, goal, policy, sourceRepair ? sourceRoute : FailedGoalFindingObservation.Routed(
+                    FailedGoalFindingObservationKind.FindingRouteObserved, developer!.Id,
+                    ConductorDriver.BuildFailedGoalAttemptIdentity(developer), "Open source finding after evidence receipt.", null,
+                    observedCause: RetryCause.NewSourceFinding));
+            AgentRole? reviewerRouteRole = null;
+            if (task.RequiredRole == AgentRole.Reviewer &&
+                !ConductorDriver.UsesQualifiedReviewerContinuation(goal, task) &&
+                receipt is { Accepted: true, Passed: true } &&
+                completedDelivery is { } delivery && delivery.CompletedReceiptId == receipt.ReceiptId)
+            {
+                var reviewerRoute = delivery.ReviewerRoute ?? ConductorDriver.BuildCappedFindingEvidenceDeliveryRetry(
+                    goal, task, identity.CandidateSha, delivery.Findings, delivery.ReceiptIds, "Focused evidence completed.");
+                if (reviewerRoute.TargetTaskId is { } reviewerRouteTarget && PolicySelects(driver, goal, policy, reviewerRoute))
+                    reviewerRouteRole = goal.Tasks.Single(candidate => candidate.Id == reviewerRouteTarget).RequiredRole;
+                else if (reviewerRoute.Kind == FailedGoalFindingObservationKind.FindingRetryCapReached)
+                {
+                    FindingRoundBatchAccounting.Record(goal, identity,
+                        new(identity.Key, "ineligible-selection", receipt.ReceiptId, [], receipt.ReceiptId,
+                            AgentRole.Reviewer, "Reviewer evidence delivery retry cap reached"),
+                        driver._recordFindingEvidenceRequest);
+                    continue;
+                }
+                else if (delivery.ReviewerRoute is not null)
+                    continue;
+            }
+            var role = canInterpret ? AgentRole.Tester : canRepair ? AgentRole.Developer :
+                reviewerRouteRole;
+            var target = reviewerRouteRole is not null && completedDelivery?.ReviewerRoute?.TargetTaskId is { } reviewerTarget
+                ? reviewerTarget : canRepair ? developer!.Id : task.Id;
+            FindingRoundBatchAccounting.Record(goal, identity,
+                new(identity.Key, "suppressed-selection", receipt.ReceiptId + ":" + target.Value + ":" + (role?.ToString() ?? "unknown"),
+                    [], receipt.ReceiptId, role,
+                    canInterpret ? "passing-receipt; failed Tester; dependencies complete; interpretation route selects requesting Tester"
+                        : canRepair ? "source-repair route; open Developer-owned source finding; completed upstream Developer; no running processes"
+                        : reviewerRouteRole is not null ? $"passing-receipt; recovery policy selects {reviewerRouteRole} through the Reviewer evidence route"
+                        : "unknown: no demonstrated eligible paid verification selection"), driver._recordFindingEvidenceRequest);
+        }
     }
 
     private static bool TryObserveQualifiedReviewerSuppression(ConductorDriver driver, Goal goal, TaskSpec reviewer,

@@ -214,10 +214,12 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
         }
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void GreenRerunReceiptRunsQueuedRequestBeforeDelivery(bool refuseDispositionWrite)
+    [Theory(Timeout = 30_000)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [Trait("Category", "CrossTick")]
+    public void GreenRerunReceiptRunsQueuedRequestBeforeDelivery(bool refuseDispositionWrite, bool refuseCheckpoint)
     {
         const string candidateSha = "abc1234";
         var root = ConductorDriverTests.CreateTempDirectory();
@@ -297,16 +299,40 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
             var driver = CreateDriver();
             var policy = ConductorAutonomyPolicy.Permissive;
             var observed = FailedGoalFindingObservation.None;
-            for (var tick = 0; tick < 5 && requests.Count < 3; tick++)
-                Assert.True(driver.TryBuildFindingEvidenceRequest(goal, reviewer, policy, out observed));
+            var rejectCheckpoint = refuseCheckpoint;
+            OrchestratorSnapshot? checkpoint = null;
+            void Checkpoint(GoalId goalId)
+            {
+                Assert.Equal(goal.Id, goalId);
+                Assert.Single(driver.FocusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value])
+                    .Where(attempt => attempt.FocusedEvidenceBatchId?.EndsWith("-candidate-rerun", StringComparison.Ordinal) == true));
+                if (rejectCheckpoint)
+                    throw new IOException("Injected GREEN rerun checkpoint failure.");
+                checkpoint = kernel.ExportSnapshot();
+            }
+            driver.CheckpointFindingEvidenceCompletion = Checkpoint;
+
+            void ObserveRerun()
+            {
+                for (var tick = 0; tick < 5 && requests.Count < 3; tick++)
+                    Assert.True(driver.TryBuildFindingEvidenceRequest(goal, reviewer, policy, out observed));
+            }
+            if (refuseCheckpoint)
+                Assert.Equal("Injected GREEN rerun checkpoint failure.", Assert.Throws<IOException>(ObserveRerun).Message);
+            else
+                ObserveRerun();
 
             Assert.Equal(3, requests.Count);
             Assert.Empty(retried);
-            if (refuseDispositionWrite)
+            if (refuseDispositionWrite || refuseCheckpoint)
             {
-                Assert.True(refusedWrites > 0);
-                Assert.Equal(FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed, observed.Kind);
-                Assert.Null(observed.BatchClosure);
+                if (refuseDispositionWrite)
+                {
+                    Assert.True(refusedWrites > 0);
+                    Assert.Equal(FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed, observed.Kind);
+                    Assert.Null(observed.BatchClosure);
+                }
+                Assert.Null(checkpoint);
                 Assert.DoesNotContain(reviewer.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []),
                     receipt => receipt.Passed);
                 Assert.DoesNotContain(goal.Timeline, item =>
@@ -317,12 +343,18 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
                 goal = kernel.GetGoal(goal.Id);
                 reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
                 refuseWrite = false;
+                rejectCheckpoint = false;
                 driver = CreateDriver();
+                driver.CheckpointFindingEvidenceCompletion = Checkpoint;
                 Assert.True(driver.TryBuildFindingEvidenceRequest(goal, reviewer, policy, out observed));
                 Assert.Equal(FailedGoalFindingObservationKind.FindingEvidencePending, observed.Kind);
                 Assert.Equal(3, requests.Count);
             }
 
+            kernel = AgentOrchestratorKernel.FromSnapshot(Assert.IsType<OrchestratorSnapshot>(checkpoint));
+            goal = kernel.GetGoal(goal.Id);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            driver = CreateDriver();
             var first = reviewer.VerificationHistory.Last().MergedReviewFindings!
                 .Single(finding => finding.StableId == "rerun-green");
             var firstReceipt = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!

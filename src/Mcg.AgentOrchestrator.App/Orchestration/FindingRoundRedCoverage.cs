@@ -31,14 +31,14 @@ internal static class FindingRoundRedCoverage
             candidateSha, fingerprint, basis, timeline).RedCovered.Count > 0;
     }
 
-    internal static FailedGoalFindingObservation Complete(
+    internal static (Func<FailedGoalFindingObservation> Route, Delivery? Deliverable) StageCompletion(
         ConductorDriver driver, Goal goal, TaskSpec task, IReadOnlyList<FindingEvidenceBatch> pending,
         FindingEvidenceBatch runnable, FindingRoundBatchPlan plan, FindingEvidenceReceipt receipt,
         string candidateSha, string fingerprint, string basis,
         Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
         Action<GoalId, TaskId, string> recordRequest, string batchCandidateSha, string batchBasis,
-        ConductorAutonomyPolicy? policy, FailedGoalFindingObservation? reusedRedDecision, Action<Delivery> observeDelivery)
+        ConductorAutonomyPolicy? policy, FailedGoalFindingObservation? reusedRedDecision)
     {
         var settled = FindingRoundBatchSchedule.Plan(
             plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
@@ -68,19 +68,23 @@ internal static class FindingRoundRedCoverage
             runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
             plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Concat(partialSources).Append(receipt.ReceiptId)
                 .Distinct(StringComparer.Ordinal).ToArray());
-        if (reusedRedDecision is null && (!receipt.Passed || completedGreen))
-            observeDelivery(delivery);
-        if (coverage.Remaining.Count > 0)
-            return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
-                "Focused evidence completed; another distinct request from the same finding round remains pending: " +
-                $"next_request={coverage.Remaining[0].Identity}; completed_receipt_id={receipt.ReceiptId}.");
-        if (settled.RequiredCap(goal, task) is { } unavailable)
-            return FindingRoundBatchSchedule.BuildRunCapDecision(goal, task, unavailable.Batch, unavailable.Count,
-                unavailable.ReceiptId, candidateSha, fingerprint, recordRequest);
-        return reusedRedDecision ?? driver.BuildReceiptClosureOrDeliveryRetry(goal, task, batchCandidateSha,
-                delivery.Findings, delivery.ReceiptIds,
-                "Focused evidence completed and its receipt was attached to the requesting finding." +
-                (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence) + "; " + coverage.Evidence, policy);
+        // Route after publication. Deterministic closure can mutate the task lifecycle.
+        FailedGoalFindingObservation Route()
+        {
+            if (coverage.Remaining.Count > 0)
+                return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                    "Focused evidence completed; another distinct request from the same finding round remains pending: " +
+                    $"next_request={coverage.Remaining[0].Identity}; completed_receipt_id={receipt.ReceiptId}.");
+            if (settled.RequiredCap(goal, task) is { } unavailable)
+                return FindingRoundBatchSchedule.BuildRunCapDecision(goal, task, unavailable.Batch, unavailable.Count,
+                    unavailable.ReceiptId, candidateSha, fingerprint, recordRequest);
+            return reusedRedDecision ?? driver.BuildReceiptClosureOrDeliveryRetry(goal, task, batchCandidateSha,
+                    delivery.Findings, delivery.ReceiptIds,
+                    "Focused evidence completed and its receipt was attached to the requesting finding." +
+                    (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence) + "; " + coverage.Evidence, policy);
+        }
+
+        return (Route, reusedRedDecision is null && (!receipt.Passed || completedGreen) ? delivery : null);
     }
 
     internal static Coverage Evaluate(

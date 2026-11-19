@@ -396,6 +396,25 @@ public sealed class FindingRoundBatchCompletionTests
         Assert.Equal(2, scenario.Goal.Timeline.Count(item => item.Kind == ProgressKind.FindingEvidenceRunRecorded));
         Assert.Empty(scenario.Retries);
         Assert.Empty(scenario.Prepared);
+
+        scenario.Driver.AdvanceOnce(scenario.Goal, policy);
+        var restored = scenario.ClosingSummary();
+        Assert.Equal(scenario.Tester.Id, Assert.Single(scenario.Retries));
+        Assert.Equal(scenario.Tester.Id, Assert.Single(scenario.Prepared).Task.Id);
+        Assert.Equal(2, scenario.Runs.Count);
+        Assert.Equal(0, scenario.ProcessStarts);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restored.EligibilityWitnesses).ReceiptId);
+
+        using var uninterrupted = new Scenario(false, "green-superset");
+        uninterrupted.Driver.AdvanceOnce(uninterrupted.Goal, policy);
+        uninterrupted.Driver.AdvanceOnce(uninterrupted.Goal, policy);
+        var expected = uninterrupted.ClosingSummary();
+        Assert.Equal(1, expected.TesterCallsAvoided);
+        Assert.Equal(0, expected.ReviewerCallsAvoided);
+        Assert.Equal(expected.TesterCallsAvoided, restored.TesterCallsAvoided);
+        Assert.Equal(expected.ReviewerCallsAvoided, restored.ReviewerCallsAvoided);
+        Assert.Equal(expected.CoalescedSelectionCount, restored.CoalescedSelectionCount);
+        Assert.Equal(expected.PaidVerificationCallsAvoided, restored.PaidVerificationCallsAvoided);
     }
 
     [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]

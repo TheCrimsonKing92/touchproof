@@ -6,7 +6,7 @@ internal static class FindingEvidenceCompletionPublisher
 {
     internal static void Publish(ConductorDriver driver, Goal goal, TaskSpec task, FindingEvidenceReceipt receipt,
         IReadOnlyList<(ReviewFinding Finding, PreTesterCoverageComposition.Completion Completion)> completions,
-        string evidenceSummary, ConductorParallelAcceptanceAttempt? attemptToReconcile)
+        string evidenceSummary, ConductorParallelAcceptanceAttempt? attemptToReconcile, Action stageBatchCompletion)
     {
         void Record()
         {
@@ -37,9 +37,19 @@ internal static class FindingEvidenceCompletionPublisher
             return;
         }
 
-        // The green attempt remains replayable until its receipt and run charges share a durable snapshot.
-        FindingEvidenceCompletionPublication.Apply(goal, task, Record,
+        PublishGreen(driver, goal, task, attemptToReconcile, () =>
+        {
+            Record();
+            stageBatchCompletion();
+        });
+    }
+
+    internal static void PublishGreen(ConductorDriver driver, Goal goal, TaskSpec task,
+        ConductorParallelAcceptanceAttempt attempt, Action stageCompletion)
+    {
+        // Keep the completed attempt replayable until the goal snapshot contains its full publication.
+        FindingEvidenceCompletionPublication.Apply(goal, task, stageCompletion,
             () => driver.CheckpointFindingEvidenceCompletion?.Invoke(goal.Id));
-        driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attemptToReconcile);
+        driver.FocusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
     }
 }
