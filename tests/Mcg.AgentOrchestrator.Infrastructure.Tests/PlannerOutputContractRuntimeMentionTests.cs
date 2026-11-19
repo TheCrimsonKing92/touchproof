@@ -32,6 +32,33 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("  - Inspect `tests/Shared.cs` (fixture path).")]
+    [Xunit.InlineData("  - Inspect `tests/Fixtures/Nested/Shared.cs`\t(fixture path) for shared test code.")]
+    public void Resolve_FixturePathMarker_PreservesExcerpt(string excerpt)
+    {
+        var result = ResolveExcerpt(excerpt);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains(excerpt.Trim(), result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("  - Inspect `tests/Shared.cs`.", "tests/Shared.cs")]
+    [Xunit.InlineData("  - Inspect `Shared.cs` (fixture path).", "Shared.cs")]
+    [Xunit.InlineData("  - Inspect `tests/*.cs` (fixture path).", "tests/*.cs")]
+    [Xunit.InlineData("  - Inspect `tests/Shared.cs` alongside `src/Present.cs` (fixture path).", "tests/Shared.cs")]
+    public void Resolve_FixturePathWithoutAdjacentEligibleMarker_KeepsDiagnostic(string excerpt, string citation)
+    {
+        var result = ResolveExcerpt(excerpt);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains(
+            $"target citation '{citation}' does not exist and is not marked as a new file",
+            result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Offending citation: '{citation}'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("src/Absent/settings.json")]
     [Xunit.InlineData("Missing.cs")]
     [Xunit.InlineData("Missing.csproj")]

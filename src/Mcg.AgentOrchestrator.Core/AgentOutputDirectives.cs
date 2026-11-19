@@ -122,6 +122,8 @@ public static class AgentOutputDirectives
                 "or use `— new` followed by up to three descriptive words and an artifact-kind noun (`store`, `class`, `record`, `interface`, `test`, `fixture`, `script`, `document`, or `receipt`) that ends the clause. " +
                 "The descriptive form must end at a period, semicolon, or the end of the line. Alternatively, use the words 'new file', 'create', or 'add' within 24 characters before the path containing no other backtick. " +
                 "A marker applies only to the single citation it is adjacent to, not to the whole line, so mark every new path individually. " +
+                 "For a path inside a test fixture repository, put the exact marker `(fixture path)` immediately after the closing backtick on the same line. " +
+                 "The fixture marker applies to that citation alone, requires a directory in the path, and excludes wildcards and bare file names. " +
                 "To cite a symbol, use a double colon such as `Path/File.cs::SymbolName`, or `Path/File.cs:123`, or `Path/File.cs#L12`; " +
                 "a single colon before a symbol name is not recognised and the whole string is then treated as a file path that does not exist. " +
                 (string.IsNullOrWhiteSpace(contextDirectory)
