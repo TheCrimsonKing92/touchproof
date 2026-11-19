@@ -77,7 +77,8 @@ internal static class FocusedReverseDependentLaneSplitter
             .Sum(check => IsUsable(check.EstimatedSerialSeconds) &&
                 !check.Name.Equals(ShardNamePrefix + lane.Name, StringComparison.OrdinalIgnoreCase)
                 ? check.EstimatedSerialSeconds : double.PositiveInfinity));
-        inventory ??= ReadProjectInventory(worktreePath, focused.Project!, sourceTexts);
+        inventory ??= ReadProjectInventory(worktreePath, focused.Project!, sourceTexts)
+            .Select(item => item.FullName).ToArray();
         var resourceOwners = new Lazy<(Func<string, bool> Includes, IReadOnlyList<string> Keys)[]>(() =>
             lanes.Lanes.Where(lane => lane.ExclusiveResourceKeys.Count > 0)
                 .Select(lane => (AcceptanceLaneMembership.CreateClassMatcher(lane), lane.ExclusiveResourceKeys)).ToArray());
@@ -86,7 +87,8 @@ internal static class FocusedReverseDependentLaneSplitter
             resourceOwners.Value.Where(owner => owner.Includes(name)).SelectMany(owner => owner.Keys));
     }
 
-    private static string[] ReadProjectInventory(string worktreePath, string project, SelectionSourceTexts? sourceTexts)
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> ReadProjectInventory(
+        string worktreePath, string project, SelectionSourceTexts? sourceTexts)
     {
         var projectPath = Path.GetFullPath(Path.Combine(worktreePath, project.Replace('\\', '/')));
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
@@ -150,10 +152,7 @@ internal static class FocusedReverseDependentLaneSplitter
                 return rule.Pattern is not null ? rule.Include :
                     defaultItems && !relative.Split('/').Any(part => part == "artifacts" || part.StartsWith('.'));
             }).ToArray();
-        var classes = sourceTexts is null
-            ? AcceptanceTestClassSourceScanner.Scan(worktreePath, files)
-            : AcceptanceTestClassSourceScanner.ScanSourceTexts(files.Select(sourceTexts.Read));
-        return classes.Select(item => item.FullName).ToArray();
+        return AcceptanceTestClassSourceScanner.ScanWithLaneConstants(worktreePath, files, sourceTexts);
     }
 
     private static bool IsConditional(XElement item) => item.AncestorsAndSelf().Any(parent =>
