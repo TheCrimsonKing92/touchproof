@@ -809,6 +809,44 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void PlannerContract_OwnershipKeyWithAngleBracketTokenIsProse()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "src"));
+        File.WriteAllText(Path.Combine(workingDirectory, "src", "Present.cs"), "// fixture");
+        var targetBody = """
+            - Inspect `src/Present.cs` for the concrete implementation seam.
+            - Reserve the ownership key `ownership:test-project:tests/<lowercase-top-level-project>` for the test project.
+            """.ReplaceLineEndings("\n");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Equal(plan, result.Plan);
+        Xunit.Assert.Contains(targetBody, result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_AbsentColonDelimitedOwnershipKeyIsNotACitation()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "src"));
+        File.WriteAllText(Path.Combine(workingDirectory, "src", "Present.cs"), "// fixture");
+        var targetBody = """
+            - Inspect `src/Present.cs` for the concrete implementation seam.
+            - Reserve the ownership key `ownership:test-project:tests/Foo` for the test project.
+            """.ReplaceLineEndings("\n");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Equal(plan, result.Plan);
+        Xunit.Assert.Contains(targetBody, result.Plan, StringComparison.Ordinal);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("src/Absent/Missing.cs")]
     [Xunit.InlineData("*.cs")]
