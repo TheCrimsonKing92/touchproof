@@ -101,7 +101,10 @@ public sealed class ConductorBatchLoopTestsSpecRefinementTransientRetry(ITestOut
 
         var result = fixture.Evaluate();
 
-        Assert.Equal($"SPEC_REFINEMENT_FAILED goal={fixture.Goal.Id.Value} owner=durable-outbox {detail}", result.Message);
+        Assert.Equal([
+            $"SPEC_REFINEMENT_FAILED goal={fixture.Goal.Id.Value} owner=durable-outbox {detail}",
+            "Next step: recover <goal> <note>"
+        ], result.Message.Split(Environment.NewLine));
         Assert.Equal(0, fixture.Launches);
         Assert.False(Directory.Exists(Path.Combine(
             fixture.Workspace.SpecRefinementLaunchAttemptsDirectory, "transient-retries")));

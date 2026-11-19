@@ -33,9 +33,11 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains(CriterionEvidenceLifecycle.AtomicDeclarationRequired, failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Offending criterion: 'Unmatched model criterion'", failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("failed rule: criterion count.", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith(Environment.NewLine + "Next step: recover <goal> <note>", failure.Message, StringComparison.Ordinal);
         var failedState = await repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id));
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState!.Status);
-        Xunit.Assert.Equal(failure.Message, failedState.Detail);
+        Xunit.Assert.Equal(failure.Message.Replace(Environment.NewLine, new string(' ', Environment.NewLine.Length),
+            StringComparison.Ordinal), failedState.Detail);
         kernel = await repository.LoadAsync();
         goal = kernel.GetGoal(goal.Id);
         Xunit.Assert.True(SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal));
@@ -486,6 +488,179 @@ public sealed class GoalRefinementTests
             OrchestratorStateOutboxEnsureDisposition.Quarantined,
             (await repository.EnsureOutboxMessageAsync(replacement)).Disposition);
         Xunit.Assert.Equal(message.PayloadJson, (await repository.GetOutboxStateAsync(message.Id))!.Message.PayloadJson);
+    }
+
+    [Xunit.Fact]
+    public async Task RecoverRequeuesFailedRefinementAfterBindingAdded()
+    {
+        var scenario = await CreateFailedRefinementAsync();
+        var before = (await scenario.Repository.LoadAsync()).GetGoal(scenario.GoalId);
+        var provider = new CountingResponseModelProvider(RecoveryRefiner, RecoveryResponse);
+        SaveRecoveryBinding(scenario.Workspace);
+
+        var output = scenario.Recover();
+
+        Xunit.Assert.Contains("recover: spec-refinement reset outcome=Requeued.", output, StringComparison.Ordinal);
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Pending, (await scenario.ReadStateAsync())!.Status);
+        var result = await scenario.ProcessAsync(new InMemoryModelProviderRegistry([provider]));
+        Xunit.Assert.True(result.Claimed);
+        Xunit.Assert.True(result.Attached);
+        Xunit.Assert.Equal(1, provider.InvocationCount);
+        var after = (await scenario.Repository.LoadAsync()).GetGoal(scenario.GoalId);
+        Xunit.Assert.Equal("Recovered contract", after.RefinedSpec!.BehavioralContract);
+        Xunit.Assert.Equal(before.Objective, after.Objective);
+        Xunit.Assert.Equal(before.BriefVersions.ToArray(), after.BriefVersions.ToArray());
+        Xunit.Assert.Null(await scenario.ReadStateAsync());
+    }
+
+    [Xunit.Fact]
+    public async Task RecoverWithUnchangedConfigFailsAgainAndKeepsHistory()
+    {
+        var scenario = await CreateFailedRefinementAsync();
+        var kernel = await scenario.Repository.LoadAsync();
+        kernel.RecordGoalPolicyDecision(scenario.GoalId, "Existing policy decision before recover");
+        var before = kernel.GetGoal(scenario.GoalId);
+        await scenario.Repository.SaveAsync(kernel);
+        var eventWriter = new GoalLifecycleEventWriter(scenario.Workspace.GoalLifecycleEventsDirectory);
+        eventWriter.AppendTimelineEvent(before.Timeline.Last());
+        var eventPath = eventWriter.EventFilePath(scenario.GoalId);
+        var events = File.ReadAllLines(eventPath);
+        Xunit.Assert.NotEmpty(events);
+
+        var output = scenario.Recover();
+
+        Xunit.Assert.Single(output.Split(Environment.NewLine), line =>
+            line.Equals("recover: spec-refinement reset outcome=Requeued.", StringComparison.Ordinal));
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Pending, (await scenario.ReadStateAsync())!.Status);
+        var failure = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => scenario.ProcessAsync());
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_FAILED", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("No model-function binding found", failure.Message, StringComparison.Ordinal);
+        var failed = await scenario.ReadStateAsync();
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failed!.Status);
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_FAILED", failed.Detail!, StringComparison.Ordinal);
+        var after = (await scenario.Repository.LoadAsync()).GetGoal(scenario.GoalId);
+        Xunit.Assert.Null(after.RefinedSpec);
+        Xunit.Assert.True(SpecRefinementFailureResetEvaluation.Evaluate(scenario.Workspace, after));
+        Xunit.Assert.Equal(before.Timeline.ToArray(), after.Timeline.Take(before.Timeline.Count).ToArray());
+        Xunit.Assert.Equal(events, File.ReadLines(eventPath).Take(events.Length).ToArray());
+    }
+
+    [Xunit.Fact]
+    public async Task ConsecutiveRecoversLeaveOnePendingRow()
+    {
+        var scenario = await CreateFailedRefinementAsync();
+        using var clock = GoalRefinementWorkCoordinator.UseClock(() => new DateTimeOffset(2026, 11, 18, 0, 0, 0, TimeSpan.Zero));
+        var previousLaunchOverride = GoalRefinementWorkCoordinator.LaunchOverride;
+        var launches = 0;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, 1, "test-launch");
+        };
+        try
+        {
+            var first = scenario.Recover();
+            Xunit.Assert.Contains("recover: spec-refinement reset outcome=Requeued.", first, StringComparison.Ordinal);
+            var pending = await scenario.ReadStateAsync();
+            Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Pending, pending!.Status);
+            Xunit.Assert.Equal(0, launches);
+
+            var kernel = await scenario.Repository.LoadAsync();
+            var goal = kernel.GetGoal(scenario.GoalId);
+            var firstGate = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, scenario.Workspace, null, goal));
+            Xunit.Assert.Contains("executor_started=true", firstGate.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, launches);
+
+            var second = scenario.Recover();
+            Xunit.Assert.DoesNotContain("spec-refinement reset outcome=", second, StringComparison.Ordinal);
+            Xunit.Assert.Equal(pending, await scenario.ReadStateAsync());
+            Xunit.Assert.Equal(pending.Message, Xunit.Assert.Single(await scenario.Repository.ListOutboxMessagesAsync(
+                GoalRefinementWorkCoordinator.OutboxKind)));
+
+            kernel = await scenario.Repository.LoadAsync();
+            goal = kernel.GetGoal(scenario.GoalId);
+            var secondGate = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, scenario.Workspace, null, goal));
+            Xunit.Assert.Contains("detail=executor-launch-deferred-cadence", secondGate.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, launches);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = previousLaunchOverride;
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task RecoverUnderLiveLeaseReportsProtected()
+    {
+        var scenario = await CreateFailedRefinementAsync();
+        SaveRecoveryBinding(scenario.Workspace);
+        Xunit.Assert.Contains("outcome=Requeued", scenario.Recover(), StringComparison.Ordinal);
+        var provider = new BlockingModelProvider(RecoveryRefiner);
+        var executor = scenario.ProcessAsync(new InMemoryModelProviderRegistry([provider]));
+        try
+        {
+            var started = await Task.WhenAny(provider.Started.Task, executor).WaitAsync(TimeSpan.FromSeconds(30));
+            Xunit.Assert.Same(provider.Started.Task, started);
+            var processing = await scenario.ReadStateAsync();
+            Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Processing, processing!.Status);
+            var attempts = SpecRefinementLaunchAttemptStore.ForWorkspace(scenario.Workspace);
+            var now = DateTimeOffset.UtcNow;
+            var escalation = new SpecRefinementLaunchAttempt(now, 3, now, processing.Message.Id,
+                scenario.Workspace.SqliteStatePath);
+            attempts.Save(scenario.GoalId, escalation);
+
+            var output = scenario.Recover();
+
+            Xunit.Assert.Contains("recover: spec-refinement reset outcome=ProtectedByLiveLease.", output, StringComparison.Ordinal);
+            Xunit.Assert.Equal(processing, await scenario.ReadStateAsync());
+            Xunit.Assert.Equal(escalation, attempts.Get(scenario.GoalId));
+        }
+        finally
+        {
+            provider.CompleteWith(RecoveryResponse);
+            await executor;
+        }
+        Xunit.Assert.True((await executor).Attached);
+    }
+
+    [Xunit.Fact]
+    public async Task RefinementFailureTextNamesRecover()
+    {
+        const string nextStep = "Next step: recover <goal> <note>";
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, ModelFunctionCatalog.Empty);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Fail refinement without a model-function binding");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        await repository.SaveAsync(kernel);
+        GoalRefinementWorkCoordinator.TryEnsurePendingOutbox(workspace, goal.Id);
+        var providers = new InMemoryModelProviderRegistry([]);
+
+        var failure = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GoalRefinementWorkCoordinator.ProcessAsync(repository, workspace, providers,
+                WorkerProfileCatalog.Default(), goal.Id));
+
+        var bindingFailure = Xunit.Assert.IsType<InvalidOperationException>(failure.InnerException);
+        var bindingLines = bindingFailure.Message.Split(Environment.NewLine);
+        Xunit.Assert.Contains("No model-function binding found", bindingLines[0], StringComparison.Ordinal);
+        Xunit.Assert.Equal([bindingLines[0], nextStep], bindingLines);
+        var diagnostic = $"SPEC_REFINEMENT_FAILED owner=durable-outbox phase=provider-refinement detail={bindingLines[0]}";
+        Xunit.Assert.Equal([diagnostic, nextStep], failure.Message.Split(Environment.NewLine));
+        var failedState = await repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id));
+        Xunit.Assert.NotNull(failedState);
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState.Status);
+        Xunit.Assert.StartsWith(diagnostic, failedState.Detail!, StringComparison.Ordinal);
+
+        kernel = await repository.LoadAsync();
+        goal = kernel.GetGoal(goal.Id);
+        Xunit.Assert.True(SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal));
+        var dispatchFailure = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+        var dispatchDiagnostic = $"SPEC_REFINEMENT_FAILED goal={goal.Id.Value}{diagnostic["SPEC_REFINEMENT_FAILED".Length..]}";
+        Xunit.Assert.Equal([dispatchDiagnostic, nextStep], dispatchFailure.Message.Split(Environment.NewLine));
     }
 
     [Xunit.Fact]
@@ -3334,6 +3509,56 @@ public sealed class GoalRefinementTests
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
             WorkerProfileCatalog.Default(),
             rawOutputDirectory: workspace.LogDirectory);
+
+    private const string RecoveryRefiner = "recovery-refiner";
+    private const string RecoveryResponse = """
+        {"behavioralContract":"Recovered contract","acceptanceCriteria":["Refinement can resume"],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+        """;
+
+    private static void SaveRecoveryBinding(OrchestratorWorkspace workspace) =>
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(ModelFunctionPurposes.SpecRefiner, ModelLane.CheapApi,
+                new ModelProfile(RecoveryRefiner, "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+
+    private static async Task<RefinementRecoveryScenario> CreateFailedRefinementAsync()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, ModelFunctionCatalog.Empty);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Resume refinement on the original brief");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        await repository.SaveAsync(kernel);
+        await repository.EnsureOutboxMessageAsync(GoalRefinementWorkCoordinator.CreateMessage(goal.Id));
+        var scenario = new RefinementRecoveryScenario(workspace, repository, goal.Id);
+        var failure = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => scenario.ProcessAsync());
+        Xunit.Assert.Contains("No model-function binding found", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, (await scenario.ReadStateAsync())!.Status);
+        return scenario;
+    }
+
+    private sealed record RefinementRecoveryScenario(
+        OrchestratorWorkspace Workspace, SqliteOrchestratorStateRepository Repository, GoalId GoalId)
+    {
+        public Task<OrchestratorStateOutboxState?> ReadStateAsync() =>
+            Repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(GoalId));
+
+        public Task<GoalRefinementWorkProcessResult> ProcessAsync(IModelProviderRegistry? providers = null) =>
+            GoalRefinementWorkCoordinator.ProcessAsync(Repository, Workspace,
+                providers ?? new InMemoryModelProviderRegistry([]), WorkerProfileCatalog.Default(), GoalId);
+
+        public string Recover()
+        {
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            return CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["recover", GoalId.Value, "Retry spec refinement"], Repository, Workspace,
+                ref agents, providers, ref profiles, ref currentGoal));
+        }
+    }
 
     private static (
         GoalRefinementService Service,
