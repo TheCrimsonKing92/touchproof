@@ -27,9 +27,10 @@ internal static class WorktreeWriteProbe
         var worktree = ResolveDirectoryPath(parameters.WorkingDirectory);
         var token = Guid.NewGuid().ToString("N");
         var sentinel = Path.Combine(worktree, $".mcg-write-probe-{token}.tmp");
-        var tempPath = ResolveDirectoryPath(GetHostTempPath());
+        var tempPath = GetWindowsHostTempPath();
         RequireOutsideWorktree(worktree, ResolveDirectoryPath(OrchestratorTempRoot.GetRoot(tempPath)));
-        RequireNonLowDirectory(tempPath);
+        if (tempPath is not null)
+            RequireNonLowDirectory(tempPath);
         var scratchParent = ResolveDirectoryPath(OrchestratorTempRoot.GetPurposeDirectory("worktree-write-probe", tempPath));
         RequireOutsideWorktree(worktree, scratchParent);
         RequireNonLowDirectory(scratchParent);
@@ -137,10 +138,10 @@ internal static class WorktreeWriteProbe
             throw new InvalidOperationException($"Worktree write probe scratch root '{scratch}' is within '{worktree}'.");
     }
 
-    private static string GetHostTempPath()
+    private static string? GetWindowsHostTempPath()
     {
         if (!OperatingSystem.IsWindows())
-            return Path.GetTempPath();
+            return null;
 
         // The process TEMP can point to a Low-integrity worker or test directory.
         // Acceptance preserves the real LOCALAPPDATA even when it redirects USERPROFILE.
@@ -150,7 +151,7 @@ internal static class WorktreeWriteProbe
         if (!Path.IsPathFullyQualified(localAppData))
             throw new InvalidOperationException("Worktree write probe could not resolve the host's Windows temp directory.");
 
-        return Path.Combine(localAppData, "Temp");
+        return ResolveDirectoryPath(Path.Combine(localAppData, "Temp"));
     }
 
     private static void RequireNonLowDirectory(string path)
