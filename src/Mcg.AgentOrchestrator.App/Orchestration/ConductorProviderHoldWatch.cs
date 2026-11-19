@@ -164,7 +164,7 @@ internal sealed class ConductorProviderHoldWatch
         DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out instant);
     private static string DiagnosisField(ProviderUsageHoldRow row) =>
         row.Schedule is { LastProbeOutcome: "none", ResetIntentId: null } && row.OverdueSince is null &&
-        row.Hold.Reason != ProviderFailureKind.AuthenticationRequired && row.ProviderResetAt is null &&
+        !row.HasAdditionalEvidence &&
         EventBinding(row.Hold.BindingKey) == row.Hold.BindingKey ? "" : row.Diagnosis is { } diagnosis
         ? $" diagnosis={Uri.EscapeDataString(diagnosis)}" : "";
     private static string ScopeField(string binding) => EventBinding(binding) == binding ? "" :
