@@ -15,7 +15,8 @@ public sealed record BacklogItem(
     string Tags = "",
     string? SupersededBy = null,
     DateTimeOffset? SupersededAt = null,
-    DateTimeOffset? PinnedAt = null)
+    DateTimeOffset? PinnedAt = null,
+    string BundledReason = "")
 {
     public IReadOnlyList<BacklogNote> Notes { get; init; } = [];
     public IReadOnlyList<BacklogLink> Links { get; init; } = [];
@@ -76,7 +77,8 @@ public sealed record BacklogItemUpdate(
     BacklogItemStatus? Status = null,
     DateTimeOffset? PinnedAt = null,
     // Presence distinguishes clearing the pin from leaving it unchanged.
-    bool PinnedAtSpecified = false);
+    bool PinnedAtSpecified = false,
+    string? BundledReason = null);
 
 public sealed record BacklogUnsupersedeResult(bool Changed, BacklogItem Item);
 
@@ -117,7 +119,7 @@ public sealed class BacklogStore
     // but the deadlock-avoidance path can still surface an immediate BUSY; this turns that into a brief
     // wait instead of a fatal throw. Mirrors SqliteOrchestratorStateRepository.
     private const int MaxBusyRetries = 6;
-    private const string SelectColumns = "id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at, pinned_at";
+    private const string SelectColumns = "id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at, pinned_at, bundled_reason";
 
     private static bool IsTransientLock(SqliteException ex) =>
         ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
@@ -227,6 +229,7 @@ public sealed class BacklogStore
             AddColumnIfMissing(conn, "backlog", "superseded_by", "TEXT");
             AddColumnIfMissing(conn, "backlog", "superseded_at", "TEXT");
             AddColumnIfMissing(conn, "backlog", "pinned_at", "TEXT");
+            AddColumnIfMissing(conn, "backlog", "bundled_reason", "TEXT NOT NULL DEFAULT ''");
             StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Backlog);
             RunNonQuery(conn, "COMMIT");
         }
@@ -241,11 +244,12 @@ public sealed class BacklogStore
         string title,
         string body = "",
         string? sourceGoalId = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string bundledReason = "")
     {
         var id = Guid.NewGuid().ToString("n");
         var now = DateTimeOffset.UtcNow;
-        var item = new BacklogItem(id, title, body, BacklogItemStatus.Open, now, now, sourceGoalId);
+        var item = new BacklogItem(id, title, body, BacklogItemStatus.Open, now, now, sourceGoalId, BundledReason: bundledReason);
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
@@ -270,14 +274,15 @@ public sealed class BacklogStore
         IReadOnlyList<BacklogDependencyTarget> dependencies,
         string? sourceGoalId = null,
         CancellationToken cancellationToken = default,
-        Func<string, bool>? goalExists = null)
+        Func<string, bool>? goalExists = null,
+        string bundledReason = "")
     {
         var distinctDependencies = dependencies
             .DistinctBy(dependency => dependency.Id, StringComparer.Ordinal)
             .ToArray();
         var id = Guid.NewGuid().ToString("n");
         var now = DateTimeOffset.UtcNow;
-        var item = new BacklogItem(id, title, body, BacklogItemStatus.Open, now, now, sourceGoalId);
+        var item = new BacklogItem(id, title, body, BacklogItemStatus.Open, now, now, sourceGoalId, BundledReason: bundledReason);
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
@@ -683,6 +688,7 @@ public sealed class BacklogStore
                             tags = $tags,
                             status = $status,
                             pinned_at = $pinned_at,
+                            bundled_reason = $bundled_reason,
                             updated_at = $updated_at
                         WHERE id = $id
                         """;
@@ -690,6 +696,7 @@ public sealed class BacklogStore
                     cmd.Parameters.AddWithValue("$body", update.Body ?? existing.Body);
                     cmd.Parameters.AddWithValue("$priority", (object?)(update.Priority ?? existing.Priority) ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$tags", update.Tags ?? existing.Tags);
+                    cmd.Parameters.AddWithValue("$bundled_reason", update.BundledReason ?? existing.BundledReason);
                     cmd.Parameters.AddWithValue("$status", (update.Status ?? existing.Status).ToString());
                     cmd.Parameters.AddWithValue("$pinned_at", (object?)pinnedAt?.ToString("O") ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$updated_at", updatedAt);
@@ -1063,8 +1070,8 @@ public sealed class BacklogStore
             {
                 await using var cmd = conn.CreateCommand();
                 cmd.CommandText = """
-                    INSERT OR IGNORE INTO backlog (id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at, pinned_at)
-                    VALUES ($id, $title, $body, $status, $created_at, $updated_at, $source_goal_id, $priority, $tags, $superseded_by, $superseded_at, $pinned_at)
+                    INSERT OR IGNORE INTO backlog (id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at, pinned_at, bundled_reason)
+                    VALUES ($id, $title, $body, $status, $created_at, $updated_at, $source_goal_id, $priority, $tags, $superseded_by, $superseded_at, $pinned_at, $bundled_reason)
                     """;
                 SetItemParameters(cmd, item);
                 var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -1107,7 +1114,8 @@ public sealed class BacklogStore
             reader.IsDBNull(8) ? "" : reader.GetString(8),
             reader.IsDBNull(9) ? null : reader.GetString(9),
             reader.IsDBNull(10) ? null : DateTimeOffset.Parse(reader.GetString(10)),
-            reader.IsDBNull(11) ? null : DateTimeOffset.Parse(reader.GetString(11)));
+            reader.IsDBNull(11) ? null : DateTimeOffset.Parse(reader.GetString(11)),
+            reader.FieldCount <= 12 || reader.IsDBNull(12) ? "" : reader.GetString(12));
 
     private static async Task<BacklogItem?> LoadItemByIdAsync(
         SqliteConnection conn,
@@ -1471,8 +1479,8 @@ public sealed class BacklogStore
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO backlog (id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at, pinned_at)
-            VALUES ($id, $title, $body, $status, $created_at, $updated_at, $source_goal_id, $priority, $tags, $superseded_by, $superseded_at, $pinned_at)
+            INSERT INTO backlog (id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at, pinned_at, bundled_reason)
+            VALUES ($id, $title, $body, $status, $created_at, $updated_at, $source_goal_id, $priority, $tags, $superseded_by, $superseded_at, $pinned_at, $bundled_reason)
             """;
         SetItemParameters(cmd, item);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -1489,6 +1497,7 @@ public sealed class BacklogStore
         cmd.Parameters.AddWithValue("$source_goal_id", (object?)item.SourceGoalId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$priority", (object?)item.Priority ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$tags", item.Tags);
+        cmd.Parameters.AddWithValue("$bundled_reason", item.BundledReason);
         cmd.Parameters.AddWithValue("$superseded_by", (object?)item.SupersededBy ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$superseded_at", item.SupersededAt is null ? DBNull.Value : (object)item.SupersededAt.Value.ToString("O"));
         cmd.Parameters.AddWithValue("$pinned_at", (object?)item.PinnedAt?.ToUniversalTime().ToString("O") ?? DBNull.Value);
