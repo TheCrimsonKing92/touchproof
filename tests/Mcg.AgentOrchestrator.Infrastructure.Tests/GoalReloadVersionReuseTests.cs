@@ -58,7 +58,13 @@ public sealed class GoalReloadVersionReuseTests
         await repository.LoadGoalsReusingUnchangedAsync(ids, memory);
         var previousVersion = memory.Entries[first.Id].Version;
         var writer = secondRepository ? support.Repository : repository;
-        var changed = first with { Objective = "Updated in the state store" };
+        const string updatedObjective = "Updated in the state store";
+        var originalBrief = Assert.Single(first.BriefVersions!);
+        var changed = first with
+        {
+            Objective = updatedObjective,
+            BriefVersions = [originalBrief with { Text = updatedObjective }]
+        };
         await writer.SaveGoalSnapshotsAsync([changed]);
 
         reads.Clear();
