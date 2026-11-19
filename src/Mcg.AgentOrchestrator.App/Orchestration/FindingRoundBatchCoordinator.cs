@@ -307,7 +307,7 @@ internal static class FindingRoundBatchCoordinator
             RecordOutcome(driver, goal, task, candidate, round, basis, unavailable.Batch, "unavailable", unavailable.ReceiptId,
                 $"Request {unavailable.Batch.Identity} completed {unavailable.Count} runs; last_receipt_id={unavailable.ReceiptId}.");
         foreach (var (batch, receipt) in plan.Passed)
-            RecordGreenOutcomes(driver, goal, task, candidate, round, basis, batch, receipt);
+            RecordExecutedOutcomes(driver, goal, task, candidate, round, basis, batch, receipt);
         foreach (var refusal in plan.Refusals)
         {
             var reason = FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(refusal.Reason);
@@ -345,7 +345,7 @@ internal static class FindingRoundBatchCoordinator
             return;
 
         if (Identity(driver, goal, task, out var execution) is { } identity && execution!.Matches(receipt, identity))
-            RecordGreenOutcomes(driver, goal, task, identity.CandidateSha, identity.RoundFingerprint,
+            RecordExecutedOutcomes(driver, goal, task, identity.CandidateSha, identity.RoundFingerprint,
                 identity.ExecutionBasisIdentity, batch, receipt);
     }
 
@@ -384,16 +384,16 @@ internal static class FindingRoundBatchCoordinator
         }
     }
 
-    internal static void RecordGreenOutcomes(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
+    internal static void RecordExecutedOutcomes(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
         string round, string basis, FindingEvidenceBatch batch, FindingEvidenceReceipt receipt, bool partial = false)
     {
         foreach (var member in batch.Members)
         foreach (var finding in member.Findings)
-            RecordCurrentGreenReceipt(driver, goal, task, candidate, round, basis, member.Identity, finding.StableId,
+            RecordCurrentExecutedReceipt(driver, goal, task, candidate, round, basis, member.Identity, finding.StableId,
                 receipt, partial);
     }
 
-    internal static void RecordCurrentGreenReceipt(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
+    internal static void RecordCurrentExecutedReceipt(ConductorDriver driver, Goal goal, TaskSpec task, string candidate,
         string round, string basis, string requestIdentity, string findingId, FindingEvidenceReceipt receipt, bool partial = false)
     {
         var disposition = FindingEvidenceRequestCompletion.FindSettledMember(receipt, requestIdentity, findingId);
@@ -759,7 +759,7 @@ internal static class FindingRoundBatchCoordinator
         if (findings.Length == 0 || findings.Length != findingIds.Count || findings.Any(finding =>
             finding.EvidenceOutcome is not { Honoured: false, ReceiptId: null, Reason:
                 FindingEvidenceNotHonouredReason.UnsupportedProject or FindingEvidenceNotHonouredReason.UnparseableSelection or
-                FindingEvidenceNotHonouredReason.ExecutorUnavailable or FindingEvidenceNotHonouredReason.SelectionApparatusFailure or
+                 FindingEvidenceNotHonouredReason.SelectionApparatusFailure or
                 FindingEvidenceNotHonouredReason.RunFailed } outcome ||
             (attemptBackedFindings?.Contains(finding.StableId) == true && !FindingEvidenceExecutionClassifier.IsPermanentRefusal(outcome))))
             return false;

@@ -4,6 +4,10 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class FindingEvidenceBriefProjection
 {
+    internal static bool IsBatchAccounting(ProgressEvent progress) =>
+        progress.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+        progress.Message.StartsWith("finding-evidence batch-", StringComparison.Ordinal);
+
     internal static void AppendContinuation(List<string> lines, Goal goal, TaskSpec task)
     {
         if (task.RequiredRole == AgentRole.Reviewer && task.PendingRetryCause == RetryCause.NewTestFinding &&

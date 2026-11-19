@@ -21,7 +21,27 @@ internal static class FindingEvidenceRequestCompletion
             disposition.RequestIdentity == requestIdentity && disposition.FindingStableId == findingId &&
             disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true);
 
-    internal static FindingEvidenceReceipt? FindCurrentGreenReceipt(
+    internal static FindingEvidenceReceipt? FindCurrentCompletedReceipt(TaskSpec task, ReviewFinding finding,
+        FindingEvidenceRequest request, string candidate, string round, string basis,
+        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource> preTesterCoverage) =>
+        FindCurrentGreenReceipt(task, finding, request, candidate, round, basis, preTesterCoverage) ??
+        FindCurrentVacuousReceipt(task, finding, BuildFindingEvidenceIdentity(request), candidate, round, basis);
+
+    private static FindingEvidenceReceipt? FindCurrentVacuousReceipt(TaskSpec task, ReviewFinding finding,
+        string requestIdentity, string candidate, string round, string basis)
+    {
+        if (finding.EvidenceOutcome is not { Honoured: true, ResultReason: FindingEvidenceOutcomeReason.VacuousEvidence,
+                ReceiptId: { } receiptId })
+            return null;
+
+        return task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []).LastOrDefault(receipt =>
+            receipt is { Accepted: true, Passed: false } && receipt.ReceiptId == receiptId &&
+            string.Equals(receipt.CandidateSha, candidate, StringComparison.OrdinalIgnoreCase) &&
+            receipt.FindingRoundFingerprint == round && receipt.ExecutionBasisIdentity == basis &&
+            FindSettledMember(receipt, requestIdentity, finding.StableId) is not null);
+    }
+
+    private static FindingEvidenceReceipt? FindCurrentGreenReceipt(
         TaskSpec requestingTask,
         ReviewFinding finding,
         FindingEvidenceRequest request,

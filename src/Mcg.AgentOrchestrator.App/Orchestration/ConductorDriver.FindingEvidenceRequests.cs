@@ -145,18 +145,18 @@ internal sealed partial class ConductorDriver
             }
 
             if (mergedFinding is not null &&
-                FindingEvidenceRequestCompletion.FindCurrentGreenReceipt(
+                FindingEvidenceRequestCompletion.FindCurrentCompletedReceipt(
                         requestingTask,
                         mergedFinding,
                         typedRequest,
                         requestCandidateSha,
                         findingRoundFingerprint,
                          requestBasis,
-                          repositoryTarget is null ? preTesterCoverage : []) is { } currentGreen)
+                         repositoryTarget is null ? preTesterCoverage : []) is { } completedReceipt)
             {
-                // Reconcile qualified receipts that predate batch observations before skipping execution.
-                FindingRoundBatchCoordinator.RecordCurrentGreenReceipt(this, goal, requestingTask, telemetryCandidateSha,
-                    findingRoundFingerprint, batchBasisIdentity, identity, finding.StableId, currentGreen);
+                // Reconcile retained execution before skipping a settled member.
+                FindingRoundBatchCoordinator.RecordCurrentExecutedReceipt(this, goal, requestingTask, telemetryCandidateSha,
+                    findingRoundFingerprint, batchBasisIdentity, identity, finding.StableId, completedReceipt);
                 continue;
             }
 
@@ -509,7 +509,7 @@ internal sealed partial class ConductorDriver
             var (route, deliverable) = FindingRoundRedCoverage.StageCompletion(this, goal, requestingTask, batches.Skip(1).ToArray(),
                 runnable, plan, receipt, candidateSha!, findingRoundFingerprint, executionBasisIdentity,
                 _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest,
-                batchCandidateSha, batchBasisIdentity, policy, reusedRedDecision);
+                batchCandidateSha, batchBasisIdentity, policy, reusedRedDecision, evidence.OutcomeReason);
             if (deliverable is not null)
             {
                 completedDelivery = deliverable with { ReviewerRoute = reviewerRoute };

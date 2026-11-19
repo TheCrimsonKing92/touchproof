@@ -38,19 +38,25 @@ internal static class FindingRoundRedCoverage
         Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
         Action<GoalId, TaskId, string> recordRequest, string batchCandidateSha, string batchBasis,
-        ConductorAutonomyPolicy? policy, FailedGoalFindingObservation? reusedRedDecision)
+        ConductorAutonomyPolicy? policy, FailedGoalFindingObservation? reusedRedDecision,
+        FindingEvidenceOutcomeReason? outcomeReason)
     {
+        var vacuous = outcomeReason == FindingEvidenceOutcomeReason.VacuousEvidence;
+        var completedVacuous = vacuous && runnable.Members.All(member => member.Findings.All(finding =>
+            FindingEvidenceRequestCompletion.FindSettledMember(receipt, member.Identity, finding.StableId) is not null));
+        // An executed vacuous control can be delivered for interpretation but supplies no passing coverage.
+        var remaining = plan.Unavailable.Select(item => item.Batch).Concat(pending);
         var settled = FindingRoundBatchSchedule.Plan(
-            plan.Unavailable.Select(item => item.Batch).Concat(pending).Prepend(runnable).ToArray(), task.Id,
+            (completedVacuous ? remaining : remaining.Prepend(runnable)).ToArray(), task.Id,
             task.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).Append(receipt).ToArray(),
             candidateSha, fingerprint, basis, FindingRoundBatchSchedule.ReadRunTimeline(goal));
         foreach (var (batch, passingReceipt) in settled.Passed)
-            FindingRoundBatchCoordinator.RecordGreenOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, passingReceipt);
+            FindingRoundBatchCoordinator.RecordExecutedOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis, batch, passingReceipt);
         var completedGreen = settled.Passed.Any(item => item.Receipt.ReceiptId == receipt.ReceiptId);
-        if (receipt is { Accepted: true, Passed: true } && !completedGreen)
+        if ((receipt is { Accepted: true, Passed: true } && !completedGreen) || vacuous)
         {
-            // A partial group can complete individual requests while its remainder stays runnable.
-            FindingRoundBatchCoordinator.RecordGreenOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis,
+            // A group can complete individual requests while its remainder stays runnable.
+            FindingRoundBatchCoordinator.RecordExecutedOutcomes(driver, goal, task, batchCandidateSha, fingerprint, batchBasis,
                 runnable, receipt, partial: true);
         }
         foreach (var item in settled.RedCovered)
