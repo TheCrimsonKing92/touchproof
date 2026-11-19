@@ -41,7 +41,7 @@ public sealed class TempRootJanitorLeakedArtifactReapTests
             Assert.True(File.Exists(heldCapture));
             Assert.True(Directory.Exists(heldDigest));
             Assert.Equal(0, result.Failed);
-            Assert.Equal("temp-artifact-janitor removed_files=3 removed_folders=3 bytes=27 retained_fresh=4 retained_held=2 failed=0", result.SummaryLine);
+            Assert.Equal("temp-artifact-janitor entries_enumerated=23 removed_files=3 removed_folders=3 bytes=27 retained_fresh=4 retained_held=2 failed=0", result.SummaryLine);
             Assert.False(File.Exists(oldLegacyCapture));
             Assert.False(File.Exists(oldNewCapture));
             Assert.False(File.Exists(oldParentCapture));
