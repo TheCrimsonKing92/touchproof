@@ -164,5 +164,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerConsoleCommandDispatch NewCommandDispatch() => new(dialogs, conductor, digest, summary, clock,
         fleet, landings, sound, _goalDetail, _fleetKeys, _notificationGate, _bell, () => _settingsRequested,
         () => _settingsRequested = true, () => _requestedEpicId, () => _requestedGateGoalId, ShowGoalDetailAsync,
-        () => CommandNotice);
+        () => CommandNotice, () => News);
+
+    internal OwnerConsoleNewsRecord? News { get; set; }
 }

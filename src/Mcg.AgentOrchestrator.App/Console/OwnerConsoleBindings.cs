@@ -4,6 +4,7 @@ internal static class OwnerConsoleBindings
 {
     internal const char CommandLineKey = ':';
     internal const string SettingsCommand = "settings";
+    internal const string NewsCommand = "news";
     internal const char SettingsPreviewKey = 'p';
     internal const char SettingsSystemKey = 's';
     internal const char SettingsMuteKey = 'm';
@@ -31,6 +32,8 @@ internal static class OwnerConsoleBindings
         Row("filter <text>", "Show only ACTIVITY rows whose goal id starts with <text> or whose line contains <text>; filter with no text shows every row.", '/', "Filter ACTIVITY by goal id prefix or text (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("landings", "Show delivered goals: landing commit, integration kind and acceptance (landings today|30)", 'l', "Show delivered goals (any pane)."),
         Row("gate", "Open the GATE view (gate <goal-id-prefix> opens the gate that goal is in)", 'g', "Open the GATE view (any pane).", owner: OwnerConsoleCommandOwner.View),
+        Row(SettingsCommand, "Open Settings. Use Left/Right to switch tabs."),
+        Row(NewsCommand, "Show and acknowledge unseen console changes.", effect: OwnerConsoleEffect.ConsoleLocal),
         Row("help", "Open this help dialog", '?', "Open this help dialog (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("quit", "Quit the console", 'q', "Quit the console (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("accept", "Accept the selected default in DECISIONS after confirmation", 'a', "Accept the selected default in DECISIONS after confirmation.",
