@@ -322,7 +322,8 @@ public sealed partial class AgentOrchestratorKernel
                     recordDuplicateSuppression: verification.WorkerResultPresent,
                     evidenceOwner: owner,
                     storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
-                    testNames: testNames, amendmentCriterionIndex: parsedHumanInput.Directive?.AmendmentCriterionIndex);
+                    testNames: testNames, amendmentCriterionIndex: parsedHumanInput.Directive?.AmendmentCriterionIndex,
+                    amendmentProposedText: parsedHumanInput.Directive?.AmendmentProposedText);
                 if (verification.WorkerResultPresent &&
                     requestResult.WasSuppressedByAnswer &&
                     WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&

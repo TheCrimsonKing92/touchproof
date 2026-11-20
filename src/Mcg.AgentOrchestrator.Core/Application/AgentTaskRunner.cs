@@ -183,7 +183,8 @@ public sealed class AgentTaskRunner
                 completedRound: hasCompleteWorkerResult ? completedRound : null,
                 workerResultLogReference: workerResultReference,
                 recordDuplicateSuppression: hasCompleteWorkerResult,
-                amendmentCriterionIndex: humanInputDirective.Directive.AmendmentCriterionIndex);
+                amendmentCriterionIndex: humanInputDirective.Directive.AmendmentCriterionIndex,
+                amendmentProposedText: humanInputDirective.Directive.AmendmentProposedText);
             if (hasCompleteWorkerResult &&
                 requestResult.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(output, out var blockersStatus) &&
