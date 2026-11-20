@@ -729,13 +729,24 @@ internal static partial class GoalOperationJournal
         string executionDirectory,
         GoalId goalId,
         bool includeArchive,
-        bool rejectMalformedEntries)
+        bool rejectMalformedEntries) =>
+        ReadPaths(PathFor(executionDirectory, goalId), ArchivePathFor(executionDirectory, goalId),
+            includeArchive, rejectMalformedEntries);
+
+    internal static GoalOperationJournalSummary ReadFromStateCopy(string stateDirectory, GoalId goalId)
     {
-        var path = PathFor(executionDirectory, goalId);
+        var directory = Path.Combine(stateDirectory, "goal-operations");
+        var name = $"{goalId.Value}.jsonl";
+        return ReadPaths(Path.Combine(directory, name), Path.Combine(directory, "archive", name),
+            includeArchive: true, rejectMalformedEntries: false);
+    }
+
+    private static GoalOperationJournalSummary ReadPaths(
+        string path, string archivePath, bool includeArchive, bool rejectMalformedEntries)
+    {
         var plainExists = File.Exists(path);
         var compressedPath = path + ".gz";
         var compressedExists = File.Exists(compressedPath);
-        var archivePath = ArchivePathFor(executionDirectory, goalId);
         var plainEntries = plainExists ? ReadEntries(path, rejectMalformedEntries) : [];
         GoalOperationJournalEntry[] compressedEntries;
         try { compressedEntries = compressedExists ? ReadEntries(compressedPath, rejectMalformedEntries) : []; }
