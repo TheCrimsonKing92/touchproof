@@ -26,6 +26,7 @@ internal sealed class PostLandingCanaryCoordinator
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Func<TimeSpan, CancellationToken, Task>? _leaseRetryWait;
     private readonly Action<string> _progress;
+    private CanaryExecution _execution = new();
 
     internal PostLandingCanaryCoordinator(
         PostLandingCanaryConfiguration configuration,
@@ -51,16 +52,25 @@ internal sealed class PostLandingCanaryCoordinator
 
     internal AcceptanceEngineCircuitBreaker CircuitBreaker { get; }
 
-    internal void ResumePending()
+    internal CanaryExecution Execution => Volatile.Read(ref _execution);
+
+    internal void RetireExecution(CanaryExecution execution)
     {
-        _ = ResumePendingAsync();
+        Interlocked.CompareExchange(ref _execution, new CanaryExecution(), execution);
+        execution.Retire();
     }
 
-    private async Task ResumePendingAsync()
+    internal Task ResumePending()
+    {
+        var execution = Execution;
+        return execution.Start(() => ResumePendingAsync(execution), false);
+    }
+
+    private async Task<bool> ResumePendingAsync(CanaryExecution execution)
     {
         try
         {
-            var events = await _events.ReadProjectionEventsAsync(CancellationToken.None).ConfigureAwait(false);
+            var events = await _events.ReadProjectionEventsAsync(execution.Token).ConfigureAwait(false);
             var pending = events
                 .Where(item => !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
                 .GroupBy(item => item.Payload.LandingSha!, StringComparer.OrdinalIgnoreCase)
@@ -75,8 +85,13 @@ internal sealed class PostLandingCanaryCoordinator
             {
                 ScheduleDeferredRetry(new PostLandingCanaryRequest(
                     item.Payload.LandingSha!,
-                    item.Payload.TriggeringPaths));
+                    item.Payload.TriggeringPaths), execution);
             }
+            return true;
+        }
+        catch (OperationCanceledException) when (execution.Token.IsCancellationRequested)
+        {
+            return false;
         }
         catch (Exception ex)
         {
@@ -87,6 +102,7 @@ internal sealed class PostLandingCanaryCoordinator
             catch
             {
             }
+            return false;
         }
     }
 
@@ -118,10 +134,15 @@ internal sealed class PostLandingCanaryCoordinator
 
             var request = new PostLandingCanaryRequest(landing.LandingSha, trigger.TriggeringPaths);
             var queued = EnsureQueuedAsync(request, CancellationToken.None).GetAwaiter().GetResult();
-            var task = queued.ExistingReceipt is { } existing
-                ? Task.FromResult(ReceiptDisposition(existing))
-                : Task.Run(() => RunQueuedAsync(request, CancellationToken.None));
-            return ObservePostLandingTaskAsync(task, landing);
+            if (queued.ExistingReceipt is { } existing)
+            {
+                return Task.FromResult(ReceiptDisposition(existing));
+            }
+
+            var execution = Execution;
+            return execution.Start(
+                () => ObservePostLandingTaskAsync(request, landing, execution),
+                PostLandingCanaryDisposition.Deferred);
         }
         catch (Exception ex)
         {
@@ -170,7 +191,8 @@ internal sealed class PostLandingCanaryCoordinator
 
     private async Task<PostLandingCanaryDisposition> RunQueuedAsync(
         PostLandingCanaryRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CanaryExecution? execution = null)
     {
         while (true)
         {
@@ -206,7 +228,7 @@ internal sealed class PostLandingCanaryCoordinator
                 {
                     if (retryDelay is null)
                     {
-                        return await RunOwnedAsync(request, cancellationToken).ConfigureAwait(false);
+                        return await RunOwnedAsync(request, cancellationToken, execution).ConfigureAwait(false);
                     }
                 }
             }
@@ -224,7 +246,8 @@ internal sealed class PostLandingCanaryCoordinator
 
     private async Task<PostLandingCanaryDisposition> RunOwnedAsync(
         PostLandingCanaryRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CanaryExecution? execution)
     {
         var priorEvents = await _events.ReadForLandingAsync(request.LandingSha, cancellationToken)
             .ConfigureAwait(false);
@@ -243,6 +266,7 @@ internal sealed class PostLandingCanaryCoordinator
             cancellationToken).ConfigureAwait(false);
         if (!started.Appended)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return await DeferOrAbandonAsync(
                     request,
                     attempt,
@@ -251,7 +275,8 @@ internal sealed class PostLandingCanaryCoordinator
                     "InvalidOperationException: canary attempt start was already recorded without a terminal outcome.",
                     startedAt,
                     _utcNow(),
-                    priorEvents)
+                    priorEvents,
+                    execution)
                 .ConfigureAwait(false);
         }
         ReportProgress(
@@ -261,15 +286,18 @@ internal sealed class PostLandingCanaryCoordinator
         Exception? runnerException = null;
         using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
+            using var runner = execution?.RegisterRunner(request.LandingSha);
             Task<PostLandingCanaryOutcome>? runTask = null;
             try
             {
-                runTask = _runner.RunAsync(request, timeoutCts.Token);
+                runTask = _runner is PostLandingCanaryRunner processRunner
+                    ? processRunner.RunAsync(request, timeoutCts.Token, runner)
+                    : _runner.RunAsync(request, timeoutCts.Token);
                 outcome = await runTask
                     .WaitAsync(_configuration.Timeout, cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (TimeoutException)
+            catch (TimeoutException) when (!cancellationToken.IsCancellationRequested)
             {
                 timeoutCts.Cancel();
                 if (runTask is not null)
@@ -292,7 +320,7 @@ internal sealed class PostLandingCanaryCoordinator
                     PostLandingCanaryFailureReason.InfrastructureError,
                     $"runner cancelled internally: {ex.GetType().Name}: {ex.Message}");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 runnerException = ex;
                 outcome = PostLandingCanaryOutcome.Failed(
@@ -311,6 +339,7 @@ internal sealed class PostLandingCanaryCoordinator
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var completedAt = _utcNow();
         if (!outcome.Green)
         {
@@ -327,7 +356,8 @@ internal sealed class PostLandingCanaryCoordinator
                         outcome.Detail,
                         startedAt,
                         completedAt,
-                        priorEvents)
+                        priorEvents,
+                        execution)
                     .ConfigureAwait(false);
             }
         }
@@ -444,7 +474,8 @@ internal sealed class PostLandingCanaryCoordinator
         string detail,
         DateTimeOffset startedAt,
         DateTimeOffset completedAt,
-        IReadOnlyList<PostLandingCanaryEvent> priorEvents)
+        IReadOnlyList<PostLandingCanaryEvent> priorEvents,
+        CanaryExecution? execution = null)
     {
         var reason = FaultReasonToken(faultDisposition);
         var consumesAttempt = faultDisposition != PostLandingCanaryFaultDisposition.PreconditionFailure;
@@ -543,14 +574,14 @@ internal sealed class PostLandingCanaryCoordinator
         ReportProgress(
             $"CANARY_GATE sha={request.LandingSha} result=deferred attempt={completedAttemptCount} reason={reason} " +
             $"detail={FormatProgressDetail(detail)} not-before={notBefore:O} receipt=run-event:{deferred.Event.Sequence}");
-        ScheduleDeferredRetry(request);
+        ScheduleDeferredRetry(request, execution ?? Execution);
         return PostLandingCanaryDisposition.Deferred;
     }
 
-    private void ScheduleDeferredRetry(PostLandingCanaryRequest request) =>
-        _ = ObserveDeferredRetryAsync(request);
+    private void ScheduleDeferredRetry(PostLandingCanaryRequest request, CanaryExecution execution) =>
+        _ = execution.Start(() => ObserveDeferredRetryAsync(request, execution), PostLandingCanaryDisposition.Deferred);
 
-    private void ReportProgress(string message)
+    internal void ReportProgress(string message)
     {
         try
         {
@@ -562,11 +593,16 @@ internal sealed class PostLandingCanaryCoordinator
         }
     }
 
-    private async Task ObserveDeferredRetryAsync(PostLandingCanaryRequest request)
+    private async Task<PostLandingCanaryDisposition> ObserveDeferredRetryAsync(
+        PostLandingCanaryRequest request, CanaryExecution execution)
     {
         try
         {
-            await RunQueuedAsync(request, CancellationToken.None).ConfigureAwait(false);
+            return await RunQueuedAsync(request, execution.Token, execution).ConfigureAwait(false);
+        }
+        catch (Exception) when (execution.Token.IsCancellationRequested)
+        {
+            return PostLandingCanaryDisposition.Deferred;
         }
         catch (Exception ex)
         {
@@ -579,6 +615,7 @@ internal sealed class PostLandingCanaryCoordinator
             catch
             {
             }
+            return PostLandingCanaryDisposition.Deferred;
         }
     }
 
@@ -588,12 +625,15 @@ internal sealed class PostLandingCanaryCoordinator
             : throw new InvalidOperationException($"Canary event {receipt.EventId} is not terminal.");
 
     private async Task<PostLandingCanaryDisposition> ObservePostLandingTaskAsync(
-        Task<PostLandingCanaryDisposition> task,
-        ConductorLandingReceipt landing)
+        PostLandingCanaryRequest request, ConductorLandingReceipt landing, CanaryExecution execution)
     {
         try
         {
-            return await task.ConfigureAwait(false);
+            return await RunQueuedAsync(request, execution.Token, execution).ConfigureAwait(false);
+        }
+        catch (Exception) when (execution.Token.IsCancellationRequested)
+        {
+            return PostLandingCanaryDisposition.Deferred;
         }
         catch (Exception ex)
         {
