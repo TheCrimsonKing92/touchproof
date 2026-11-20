@@ -2562,9 +2562,13 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
-    internal ConductorParallelAcceptanceAttempt? TryReadLatest(string goalId)
+    internal ConductorParallelAcceptanceAttempt? TryReadLatest(string goalId) =>
+        ReadLatest(_rootDirectory, goalId, _utcNow);
+
+    internal static ConductorParallelAcceptanceAttempt? ReadLatest(
+        string rootDirectory, string goalId, Func<DateTimeOffset> utcNow)
     {
-        var directory = Path.Combine(_rootDirectory, goalId);
+        var directory = Path.Combine(rootDirectory, goalId);
         if (!Directory.Exists(directory))
         {
             return null;
@@ -2590,8 +2594,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     0,
                     null,
                     null,
-                    _utcNow(),
-                    _utcNow(),
+                    utcNow(),
+                    utcNow(),
                     0,
                     ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts,
                     path + ".out.log",
@@ -2600,7 +2604,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     path + ".heartbeat.json",
                     path + ".result.json",
                     path,
-                    CompletedAt: _utcNow(),
+                    CompletedAt: utcNow(),
                     Detail: ex.Message);
             }
 
@@ -3724,7 +3728,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         return _utcNow() - observedAt >= _recentHeartbeatGrace;
     }
 
-    private static DateTimeOffset? ReadHeartbeatObservedAt(string path)
+    internal static DateTimeOffset? ReadHeartbeatObservedAt(string path)
     {
         try
         {
