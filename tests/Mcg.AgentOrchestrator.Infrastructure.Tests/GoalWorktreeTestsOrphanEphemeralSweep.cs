@@ -124,6 +124,201 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
     }
 
+    private const string OwnedEphemeralDeleteFailure = "owned-ephemeral-sweep:delete-failed";
+
+    [Xunit.Fact]
+    public void SweepNowRetriesExpiredOwnedDebtAndIncrementsFailureCount()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var path = Directory.CreateDirectory(Path.Combine(repo, ".orchestrator-context", GoalId.New().Value)).FullName;
+            var now = new DateTimeOffset(2026, 7, 2, 5, 0, 0, TimeSpan.Zero);
+            SeedCleanupBackoff(repo, path, now.AddMinutes(-1), OwnedEphemeralDeleteFailure, failureCount: 1);
+            var previousCount = CleanupJournalSkipCount(repo, path);
+            Assert.Equal(1, previousCount);
+
+            var attempts = new List<string>();
+            var scheduler = new GoalWorktreeOrphanSweepScheduler(new GoalWorktreeCleanupHooks
+            {
+                CleanupUtcNow = () => now,
+                CleanupWarningSink = _ => { },
+                DeleteDirectoryForCleanup = attemptedPath =>
+                {
+                    attempts.Add(attemptedPath);
+                    return GoalWorktreeDeleteResult.Failed(GoalWorktreeDeleteFailureKind.Transient, "Fixture deletion failure.");
+                }
+            });
+
+            scheduler.SweepNow(repo);
+
+            Assert.Equal(path, Assert.Single(attempts));
+            Assert.True(Directory.Exists(path));
+            Assert.Equal(previousCount + 1, CleanupJournalSkipCount(repo, path));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void SweepNowClearsDueOwnedDebtAndPreservesExcludedRows()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var contextRoot = Path.Combine(repo, ".orchestrator-context");
+            var duePath = Directory.CreateDirectory(Path.Combine(contextRoot, GoalId.New().Value)).FullName;
+            var boundaryPath = Directory.CreateDirectory(Path.Combine(contextRoot, GoalId.New().Value)).FullName;
+            var futurePath = Directory.CreateDirectory(Path.Combine(contextRoot, GoalId.New().Value)).FullName;
+            var otherReasonPath = Directory.CreateDirectory(Path.Combine(contextRoot, GoalId.New().Value)).FullName;
+            var absentPath = Path.Combine(contextRoot, GoalId.New().Value);
+            var now = new DateTimeOffset(2026, 7, 2, 5, 0, 0, TimeSpan.Zero);
+            var expired = now.AddMinutes(-1);
+            var future = now.AddMinutes(1);
+            const string otherReason = "orphan-sweep:delete-failed";
+            // A path-based state lookup would stop at this nested .git marker.
+            File.WriteAllText(Path.Combine(contextRoot, ".git"), "fixture");
+            SeedCleanupBackoff(repo, duePath, expired, OwnedEphemeralDeleteFailure);
+            SeedCleanupBackoff(repo, boundaryPath, now.ToOffset(TimeSpan.FromHours(2)), OwnedEphemeralDeleteFailure);
+            SeedCleanupBackoff(repo, futurePath, future, OwnedEphemeralDeleteFailure);
+            SeedCleanupBackoff(repo, otherReasonPath, expired, otherReason);
+            SeedCleanupBackoff(repo, absentPath, expired, OwnedEphemeralDeleteFailure, failureCount: 1);
+            Assert.Equal(1, CleanupJournalSkipCount(repo, absentPath));
+
+            var attempts = new List<string>();
+            var scheduler = new GoalWorktreeOrphanSweepScheduler(new GoalWorktreeCleanupHooks
+            {
+                CleanupUtcNow = () => now,
+                DeleteDirectoryForCleanup = path =>
+                {
+                    attempts.Add(path);
+                    Directory.Delete(path, recursive: true);
+                    return GoalWorktreeDeleteResult.Success;
+                }
+            });
+
+            scheduler.SweepNow(repo);
+
+            Assert.Equal(2, attempts.Count);
+            Assert.Contains(duePath, attempts);
+            Assert.Contains(boundaryPath, attempts);
+            Assert.False(Directory.Exists(duePath));
+            Assert.False(Directory.Exists(boundaryPath));
+            Assert.Null(ReadCleanupBackoff(repo, duePath));
+            Assert.Null(ReadCleanupBackoff(repo, boundaryPath));
+            Assert.Null(ReadCleanupBackoff(repo, absentPath));
+            Assert.Equal(0, CleanupJournalSkipCount(repo, absentPath));
+            Assert.True(Directory.Exists(futurePath));
+            Assert.True(Directory.Exists(otherReasonPath));
+            Assert.Equal((future.ToString("O"), OwnedEphemeralDeleteFailure), ReadCleanupBackoff(repo, futurePath));
+            Assert.Equal((expired.ToString("O"), otherReason), ReadCleanupBackoff(repo, otherReasonPath));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void SweepNowEscalatesOwnedDebtOnThirdFailureAndListsIt()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var path = Directory.CreateDirectory(Path.Combine(repo, ".orchestrator-context", GoalId.New().Value)).FullName;
+            var now = new DateTimeOffset(2026, 7, 2, 5, 0, 0, TimeSpan.Zero);
+            SeedCleanupBackoff(repo, path, now, OwnedEphemeralDeleteFailure);
+            Assert.Equal(0, CleanupJournalSkipCount(repo, path));
+
+            var attempts = new List<string>();
+            var options = GoalWorktreeCleanupOptions.Default with { EscalationThreshold = 3 };
+            var hooks = GoalWorktreeCleanupHooks.ForConfiguration(options, Path.Combine(repo, ".orchestrator")) with
+            {
+                CleanupUtcNow = () => now,
+                CleanupWarningSink = _ => { },
+                FindLockHoldersForCleanup = _ => [],
+                DeleteDirectoryForCleanup = attemptedPath =>
+                {
+                    attempts.Add(attemptedPath);
+                    return GoalWorktreeDeleteResult.Failed(GoalWorktreeDeleteFailureKind.Transient, "Fixture deletion failure.");
+                }
+            };
+            var scheduler = new GoalWorktreeOrphanSweepScheduler(hooks);
+
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                var backoff = ReadCleanupBackoff(repo, path);
+                Assert.NotNull(backoff);
+                now = DateTimeOffset.Parse(backoff.Value.SkipUntilUtc, CultureInfo.InvariantCulture).AddSeconds(1);
+
+                scheduler.SweepNow(repo);
+
+                Assert.Equal(attempt, attempts.Count);
+                Assert.Equal(path, attempts[^1]);
+                Assert.Equal(attempt, CleanupJournalSkipCount(repo, path));
+            }
+
+            using var connection = OpenCleanupFixtureState(repo, SqliteOpenMode.ReadOnly);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT escalated_at_utc FROM worktree_cleanup_journal WHERE path = $path;";
+            command.Parameters.AddWithValue("$path", NormalizePath(path));
+            var escalation = Assert.IsType<string>(command.ExecuteScalar());
+            var escalatedAtUtc = DateTimeOffset.Parse(escalation, CultureInfo.InvariantCulture);
+            Assert.Equal(now, escalatedAtUtc);
+
+            var debt = Assert.Single(GoalWorktrees.ListCleanupDebt(repo, hooks), entry => entry.Path == NormalizePath(path));
+            Assert.Equal(escalatedAtUtc, debt.EscalatedAtUtc);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static void SeedCleanupBackoff(
+        string repo, string path, DateTimeOffset skipUntilUtc, string reason, int? failureCount = null)
+    {
+        using var connection = OpenCleanupFixtureState(repo, SqliteOpenMode.ReadWrite);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO worktree_cleanup_backoff(path, skip_until_utc, reason)
+            VALUES ($path, $skipUntilUtc, $reason);
+            """;
+        command.Parameters.AddWithValue("$path", NormalizePath(path));
+        command.Parameters.AddWithValue("$skipUntilUtc", skipUntilUtc.ToString("O"));
+        command.Parameters.AddWithValue("$reason", reason);
+        command.ExecuteNonQuery();
+
+        if (failureCount is null)
+        {
+            return;
+        }
+
+        command.CommandText = """
+            INSERT INTO worktree_cleanup_journal(path, first_seen_utc, last_seen_utc, last_operation, last_reason, skip_count)
+            VALUES ($path, $skipUntilUtc, $skipUntilUtc, 'owned-ephemeral-sweep:backoff', $reason, $failureCount);
+            """;
+        command.Parameters.AddWithValue("$failureCount", failureCount.Value);
+        command.ExecuteNonQuery();
+    }
+
+    private static (string SkipUntilUtc, string Reason)? ReadCleanupBackoff(string repo, string path)
+    {
+        using var connection = OpenCleanupFixtureState(repo, SqliteOpenMode.ReadOnly);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT skip_until_utc, reason FROM worktree_cleanup_backoff WHERE path = $path;";
+        command.Parameters.AddWithValue("$path", NormalizePath(path));
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? (reader.GetString(0), reader.GetString(1)) : null;
+    }
+
+    private static SqliteConnection OpenCleanupFixtureState(string repo, SqliteOpenMode mode) =>
+        StateDbConnectionFactory.Open(OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath, mode == SqliteOpenMode.ReadOnly
+            ? StateDbConnectionProfile.FastFailRead
+            : StateDbConnectionProfile.ReadWrite);
+
     [Xunit.Fact(DisplayName = "Conductor_cleanup_records_cleanup_needed_without_deleting_on_critical_path")]
     public void ConductorCleanupRecordsCleanupNeededWithoutDeletingOnCriticalPath()
     {
