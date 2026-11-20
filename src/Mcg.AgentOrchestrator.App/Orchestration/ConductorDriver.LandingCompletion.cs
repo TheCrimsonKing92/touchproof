@@ -386,7 +386,7 @@ internal sealed partial class ConductorDriver
     private static string? TimeoutLane(string name) =>
         FailedGoalTimedOutSelectionRerunRule.TryParseSelection(name, out var lane) ? lane : null;
 
-    internal static string[] InferRecordedFileScopes(Goal goal)
+    private static string[] InferRecordedFileScopes(Goal goal)
     {
         var scopes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var task in goal.Tasks)
