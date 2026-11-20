@@ -33,7 +33,10 @@ public sealed record PreReviewEvidenceReceipt(
     string? EvidencePointer,
     DateTimeOffset RecordedAt,
     IReadOnlyList<string>? Advisories = null,
-    IReadOnlyList<string>? EvidenceTimeoutChecks = null)
+    IReadOnlyList<string>? EvidenceTimeoutChecks = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CandidateTreeSha = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ManifestIdentity = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceAttemptId = null)
 {
     public const string SyntheticReuseAdvisory = "reused-current-candidate";
 
@@ -52,6 +55,9 @@ public sealed record PreReviewEvidenceReceipt(
         string.Equals(GoalId, other.GoalId, StringComparison.Ordinal) &&
         ReviewerRound == other.ReviewerRound &&
         string.Equals(CandidateSha, other.CandidateSha, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(CandidateTreeSha, other.CandidateTreeSha, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(ManifestIdentity, other.ManifestIdentity, StringComparison.Ordinal) &&
+        string.Equals(SourceAttemptId, other.SourceAttemptId, StringComparison.Ordinal) &&
         SelectedFocusedTests.SequenceEqual(other.SelectedFocusedTests, StringComparer.Ordinal) &&
         Disposition == other.Disposition &&
         PassedCheckCount == other.PassedCheckCount &&
