@@ -36,6 +36,14 @@ internal static class GoalIntakeRequestMapper
             throw new ArgumentException(
                 "--request-key on backlog intake requires --create-goal or --create-simple-goal.");
         }
+
+        var coverage = GetFlagValue(args, "--backlog-coverage");
+        if (coverage is { Length: > 0 } && !coverage.StartsWith("--", StringComparison.Ordinal) &&
+            coverage.Trim().ToLowerInvariant() is not ("full" or "slice"))
+        {
+            throw new ArgumentException("--backlog-coverage must be full or slice.");
+        }
+
         var simple = command == "simple-goal" || HasFlag(args, "--simple") || HasFlag(args, "--create-simple-goal");
         var mode = fromBacklog
             ? simple ? "backlog-simple" : "backlog-full"

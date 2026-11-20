@@ -10,6 +10,35 @@ using static DotnetBuildEnvironmentManagerTests;
 [Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
 public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : DotnetBuildEnvironmentManagerRootedTestBase
 {
+    [Xunit.Fact]
+    public void StableSlotLayoutAndValidationFollowArtifactRootCapacity()
+    {
+        const int capacity = DotnetBuildEnvironmentManager.ArtifactRootCapacity;
+        Assert.InRange(DotnetBuildEnvironmentManager.BuildThrottleLimit, 1, capacity);
+        Assert.Equal(DotnetBuildEnvironmentManager.BuildConcurrencySlotCount, DotnetBuildEnvironmentManager.BuildThrottleLimit);
+
+        foreach (var index in new[] { 0, 1 })
+        {
+            var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, index);
+            var expectedRoot = Path.Combine(StorageRoot.RootPath, "runs", $"p{Environment.ProcessId}-build-{index}");
+
+            Assert.Equal(expectedRoot, environment.RootPath);
+            Assert.Equal(Path.Combine(expectedRoot, "artifacts"), environment.ArtifactsPath);
+            Assert.Equal(Path.Combine(StorageRoot.RootPath, "build-slots", $"build-{index}.lock"), environment.ExecutionLockPath);
+            Assert.Equal(index, environment.BuildPermitIndex);
+        }
+
+        for (var index = 0; index < capacity; index++)
+        {
+            Assert.True(RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, index));
+        }
+
+        Assert.Throws<ArgumentOutOfRangeException>("slotIndex", () =>
+            RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, capacity));
+        Assert.Throws<ArgumentOutOfRangeException>("slotIndex", () =>
+            RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, -1));
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_concurrent_stable_slot_acquirers_get_different_slots")]
     public async Task DotnetBuildEnvironmentManagerConcurrentStableSlotAcquirersGetDifferentSlots()
     {

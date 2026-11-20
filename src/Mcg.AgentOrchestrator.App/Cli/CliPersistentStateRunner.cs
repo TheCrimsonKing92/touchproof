@@ -276,8 +276,8 @@ internal static partial class CliPersistentStateRunner
                 ref workerProfiles, ref currentGoal, id => LoadSingleGoalKernel(stateRepository, id));
 
         if (IsGoalScopedWriteCommand(args) && stateRepository is IOrchestratorStateOutboxRepository scopedRepository &&
-            TryExecuteGoalScopedWrite(args, scopedRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, out var scopedChanged))
-            return scopedChanged;
+            TryExecuteGoalScopedWrite(CliGoalDependencyCommands.Track(args, out var dependencyWrite), scopedRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, out var scopedChanged))
+            return dependencyWrite?.Confirm(scopedChanged, scopedRepository) ?? scopedChanged;
 
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
