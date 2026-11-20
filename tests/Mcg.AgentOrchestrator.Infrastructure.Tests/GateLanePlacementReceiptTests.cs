@@ -7,6 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GateLanePlacementReceiptTests : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
+    private const string ExclusiveKey = "xunit:EnvMutation";
+
     [Fact]
     public async Task DeclinedOffer_RecordsLocalPlacementAndExactCoordinatorReason()
     {
@@ -19,12 +21,13 @@ public sealed class GateLanePlacementReceiptTests : GoalAcceptanceVerifierDotnet
         Assert.Equal("offer-skipped-no-executor", row.GetProperty("offer_outcome").GetString());
         var line = Assert.Single(scenario.Events, line => line.Contains("outcome=offer-skipped-no-executor", StringComparison.Ordinal));
         Assert.Equal(line[(line.IndexOf(" reason=", StringComparison.Ordinal) + 8)..], row.GetProperty("offer_reason").GetString());
-        AssertNeverOffered(scenario.LaneRows.Where(row => row.GetProperty("lane").GetString() != Lane(2)));
+        AssertKeptLocal(scenario, 0, "short");
+        AssertKeptLocal(scenario, 1, "remote-slower");
         var summary = Assert.Single(scenario.Summaries);
         Assert.Equal(6, summary.EnumerateObject().Count());
         Assert.Equal(1, summary.GetProperty("version").GetInt32());
         Assert.Equal(scenario.Goal.Value, summary.GetProperty("goal_id").GetString());
-        Assert.Equal(1, summary.GetProperty("lanes_offered").GetInt32());
+        Assert.Equal(3, summary.GetProperty("lanes_offered").GetInt32());
         Assert.Equal(0, summary.GetProperty("lanes_remote").GetInt32());
     }
 
@@ -56,15 +59,33 @@ public sealed class GateLanePlacementReceiptTests : GoalAcceptanceVerifierDotnet
     }
 
     [Fact]
-    public async Task NoOffers_RecordsNullOfferFieldsAndNoSummary()
+    public async Task AllKeptLocal_RecordsPlannerReasonsAndSummary()
     {
         using var scenario = CreateScenario("none");
         var result = await scenario.RunAsync();
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
         Assert.Empty(scenario.Fake.Requests);
         Assert.Equal(3, scenario.LaneRows.Length);
-        AssertNeverOffered(scenario.LaneRows);
-        Assert.Empty(scenario.Summaries);
+        AssertKeptLocal(scenario, 0, "short");
+        AssertKeptLocal(scenario, 1, "remote-slower");
+        AssertKeptLocal(scenario, 2, "remote-slower");
+        var summary = Assert.Single(scenario.Summaries);
+        Assert.Equal(3, summary.GetProperty("lanes_offered").GetInt32());
+        Assert.Equal(0, summary.GetProperty("lanes_remote").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(false, "exclusive-key:xunit:EnvMutation")]
+    [InlineData(true, "build-system-change")]
+    public async Task NotEligible_RecordsExactExclusionReason(bool requiresBuildSystemChange, string expectedReason)
+    {
+        using var scenario = CreateScenario("none", excludeLane: true, requiresBuildSystemChange: requiresBuildSystemChange);
+        var result = await scenario.RunAsync();
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        var row = Assert.Single(scenario.LaneRows, row => row.GetProperty("lane").GetString() == Lane(1));
+        Assert.Equal("local", row.GetProperty("placement").GetString());
+        Assert.Equal("not-eligible-exclusive-resource", row.GetProperty("offer_outcome").GetString());
+        Assert.Equal(expectedReason, row.GetProperty("offer_reason").GetString());
     }
 
     [Theory]
@@ -162,25 +183,27 @@ public sealed class GateLanePlacementReceiptTests : GoalAcceptanceVerifierDotnet
         finally { DeleteDirectoryWithRetry(root); }
     }
 
-    private static void AssertNeverOffered(IEnumerable<JsonElement> rows)
+    private static void AssertKeptLocal(Scenario scenario, int lane, string reason)
     {
-        var values = rows.ToArray();
-        Assert.NotEmpty(values);
-        Assert.All(values, row =>
-        {
-            Assert.Equal("local", row.GetProperty("placement").GetString());
-            Assert.Equal(JsonValueKind.Null, row.GetProperty("offer_outcome").ValueKind);
-            Assert.Equal(JsonValueKind.Null, row.GetProperty("offer_reason").ValueKind);
-        });
+        var row = Assert.Single(scenario.LaneRows, row => row.GetProperty("lane").GetString() == Lane(lane));
+        Assert.Equal("local", row.GetProperty("placement").GetString());
+        Assert.Equal("keep-local", row.GetProperty("offer_outcome").GetString());
+        Assert.Equal(reason, row.GetProperty("offer_reason").GetString());
     }
 
-    private Scenario CreateScenario(string mode)
+    private Scenario CreateScenario(string mode, bool excludeLane = false, bool requiresBuildSystemChange = false)
     {
         SetPartitionVerdictKeyHooks("candidate-tree", "main-sha", "verifying-commit");
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         TestOverrides.ResolveShardCoreBudgetForTests = () => 3;
         var lanes = Enumerable.Range(0, 3).Select(index => new
-        { name = $"Lane {index}", filter = Filter(index), estimatedSerialSeconds = 999 });
+        {
+            name = $"Lane {index}",
+            filter = Filter(index),
+            estimatedSerialSeconds = 999,
+            exclusiveResourceKeys = excludeLane && index == 1 ? new[] { ExclusiveKey } : Array.Empty<string>(),
+            requiresBuildSystemChange = requiresBuildSystemChange && index == 1
+        });
         var root = CreateManifestWorkspace($$"""
             {
               "version": 1,
@@ -214,7 +237,8 @@ public sealed class GateLanePlacementReceiptTests : GoalAcceptanceVerifierDotnet
         File.WriteAllText(config, JsonSerializer.Serialize(new
         {
             executors = new[] { new { id = "fixture-executor", leaseSeconds = 60, slots = 3, costBudget = 6.0 } },
-            lanes = Enumerable.Range(0, 3).Select(Lane).ToArray()
+            lanes = Enumerable.Range(0, 3).Select(Lane).ToArray(),
+            machineLocalResourceKeys = requiresBuildSystemChange ? new[] { ExclusiveKey } : Array.Empty<string>()
         }));
         TestOverrides.RemoteLaneExecutorConfigurationPathForTests = config;
         TestOverrides.RemoteLaneTimeProviderForTests = scenario.Clock;

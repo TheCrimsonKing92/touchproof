@@ -15,5 +15,5 @@ public sealed record PlannerBriefAmendmentRevisionPendingHold(
     public string Render() =>
         $"{State} criterion={CriterionIndex} request={RequestId.Value} " +
         $"requestedBriefVersion={RequestedBriefVersion} currentBriefVersion={CurrentBriefVersion}. " +
-        "Amendment answered; revise the brief or answer with --amendment decline to replan.";
+        "Amendment answered. Use --amendment accept to apply the proposed text, revise the brief, or use --amendment decline to replan.";
 }
