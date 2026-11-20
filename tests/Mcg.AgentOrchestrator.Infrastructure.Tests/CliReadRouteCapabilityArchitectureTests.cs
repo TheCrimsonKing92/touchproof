@@ -1,25 +1,16 @@
-using ArchUnitNET.Domain;
-using ArchUnitNET.Fluent;
-using ArchUnitNET.Fluent.Conditions;
-using ArchUnitNET.Fluent.Extensions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Architecture = ArchUnitNET.Domain.Architecture;
-using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
 // Parallel-safe: immutable assembly inputs and one published architecture; no external state.
 public sealed class CliReadRouteCapabilityArchitectureTests
 {
-    private static readonly Lazy<Architecture> SharedArchitecture = new(() =>
-        SharedArchitectureCache.Get(
-            typeof(CliReadOnlyCommandRunner).Assembly,
-            typeof(IOrchestratorStateQueries).Assembly),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static DependencyIndex Index => DependencyIndexCache.Get(
+        typeof(CliReadOnlyCommandRunner).Assembly, typeof(IOrchestratorStateQueries).Assembly);
 
     [Xunit.Fact]
     public void ReadRoute_ContainsCommandSubjectsAndHasNoWriterDependencies()
     {
-        var subjects = DeriveReadRouteSubjects(SharedArchitecture.Value);
+        var subjects = DeriveReadRouteSubjects(Index);
         foreach (var expected in new[]
         {
             typeof(CliReadOnlyCommandRunner), typeof(CliInspectionQueryCommand),
@@ -27,15 +18,15 @@ public sealed class CliReadRouteCapabilityArchitectureTests
         })
             Xunit.Assert.Contains(subjects, subject => subject.FullName == expected.FullName);
 
-        var failures = Failures(ReadRouteRule(subjects));
+        var failures = ReadRouteRule(subjects);
         Xunit.Assert.True(failures.Length == 0, failures.ToErrorMessage());
     }
 
     [Xunit.Fact]
     public void WriterRunner_NegativeControlNamesSubjectAndTransactionalRepository()
     {
-        var subject = SharedArchitecture.Value.Types.Single(type => type.FullName == typeof(CliPersistentStateRunner).FullName);
-        var failures = Failures(ReadRouteRule([subject]));
+        var subject = Index.Types.Single(type => type.FullName == typeof(CliPersistentStateRunner).FullName);
+        var failures = ReadRouteRule([subject]);
 
         Xunit.Assert.NotEmpty(failures);
         Xunit.Assert.Contains(failures, result =>
@@ -44,18 +35,18 @@ public sealed class CliReadRouteCapabilityArchitectureTests
                 StringComparison.Ordinal));
     }
 
-    private static IType[] DeriveReadRouteSubjects(Architecture architecture)
+    private static DependencyDeclaration[] DeriveReadRouteSubjects(DependencyIndex index)
     {
-        var runner = architecture.Types.Single(type => type.FullName == typeof(CliReadOnlyCommandRunner).FullName);
-        var roots = runner.Dependencies.Select(dependency => dependency.Target)
-            .Where(type => type.Namespace.FullName == "Mcg.AgentOrchestrator.App.Cli")
-            .Append(runner).Select(type => type.FullName).ToHashSet(StringComparer.Ordinal);
-        return architecture.Types.Where(type => roots.Contains(type.FullName)
+        var runner = index.Types.Single(type => type.FullName == typeof(CliReadOnlyCommandRunner).FullName);
+        var roots = runner.References
+            .Where(type => type.Namespace == "Mcg.AgentOrchestrator.App.Cli")
+            .Append(runner.Type).Select(type => type.FullName).ToHashSet(StringComparer.Ordinal);
+        return index.Types.Where(type => roots.Contains(type.FullName)
             || roots.Any(root => type.FullName.StartsWith(root + "+", StringComparison.Ordinal)
                 || type.FullName.StartsWith(root + "/", StringComparison.Ordinal))).ToArray();
     }
 
-    private static ICanBeEvaluated ReadRouteRule(IType[] subjects)
+    private static DependencyViolation[] ReadRouteRule(DependencyDeclaration[] subjects)
     {
         var writerTypes = new[]
         {
@@ -64,16 +55,6 @@ public sealed class CliReadRouteCapabilityArchitectureTests
             typeof(IOrchestratorStateOutboxRepository).FullName!,
             typeof(SqliteOrchestratorStateRepository).FullName!
         }.ToHashSet(StringComparer.Ordinal);
-        return Types().That().Are(subjects).Should().FollowCustomCondition(type =>
-        {
-            var forbidden = type.Dependencies.Select(dependency => dependency.Target.FullName)
-                .Where(writerTypes.Contains).Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal).ToArray();
-            return new ConditionResult(type, forbidden.Length == 0,
-                $"{type.FullName} depends on writer types: {string.Join(", ", forbidden)}");
-        }, "depend only on state query capabilities, without writer types");
+        return DependencyIndexRules.WalkTypes(subjects, target => writerTypes.Contains(target.FullName), "writer types");
     }
-
-    private static EvaluationResult[] Failures(ICanBeEvaluated rule) =>
-        rule.Evaluate(SharedArchitecture.Value).Where(result => !result.Passed).ToArray();
 }
