@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class MtpFilterArgumentSemantics
 {
@@ -6,6 +8,32 @@ internal static class MtpFilterArgumentSemantics
     [
         "--filter-class", "--filter-not-class", "--filter-method", "--filter-not-method", "--filter-not-trait"
     ];
+
+    internal static IReadOnlyList<MtpTestRunnerScriptTests.ManagedTestDescriptor> ReadHostCatalog(string json)
+    {
+        using var document = JsonDocument.Parse(TestCoverageInvariantDiscoveryJson.EscapeRawControlCharacters(json.Trim()));
+        return document.RootElement.GetProperty("tests").EnumerateArray().Select(test =>
+        {
+            var type = test.GetProperty("type");
+            var typeName = RequiredString(type, "typeName");
+            var typeNamespace = type.TryGetProperty("namespace", out var ns) ? ns.GetString() : null;
+            var traits = test.TryGetProperty("traits", out var traitElements)
+                ? traitElements.EnumerateArray()
+                    .Select(trait => new KeyValuePair<string, string>(
+                        RequiredString(trait, "key"), RequiredString(trait, "value")))
+                    .ToArray()
+                : [];
+            return new MtpTestRunnerScriptTests.ManagedTestDescriptor(
+                RequiredString(test, "uid"),
+                RequiredString(test, "displayName"),
+                string.IsNullOrEmpty(typeNamespace) ? typeName : $"{typeNamespace}.{typeName}",
+                RequiredString(type, "methodName"),
+                traits);
+        }).ToArray();
+
+        static string RequiredString(JsonElement element, string propertyName) =>
+            element.GetProperty(propertyName).GetString() ?? throw new JsonException($"'{propertyName}' must be a string.");
+    }
 
     internal static IReadOnlyList<MtpTestRunnerScriptTests.ManagedTestDescriptor> Select(
         IReadOnlyList<string> arguments,
