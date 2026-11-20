@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -138,7 +139,48 @@ public sealed class ActivationAdmissionSlotOwnerSourceTests
     }
 
     [Theory]
-    [InlineData("missing")]
+    [InlineData("matching", false)]
+    [InlineData("matching", true)]
+    [InlineData("gone", false)]
+    [InlineData("mismatched", false)]
+    public void Read_TrainWithoutReceipt_TracksHolderAcrossSevenTicks(string holderState, bool databaseExists)
+    {
+        using var fixture = new Fixture();
+        var liveHolder = new SpawnProcessIdentity(1234, DateTimeOffset.UnixEpoch, Path.Combine(fixture.Directory, "owner.exe"));
+        var recordedHolder = holderState switch
+        {
+            "gone" => liveHolder with { ProcessId = 5678 },
+            "mismatched" => liveHolder with { StartedAt = liveHolder.StartedAt.AddSeconds(-1) },
+            _ => liveHolder
+        };
+        var attempt = fixture.SaveWithHolder("train", recordedHolder);
+        if (databaseExists)
+        {
+            var store = new MergeTrainAcceptanceStore(Path.Combine(fixture.Directory, "merge-train-acceptance.db"));
+            var unrelated = MergeTrainIdentity.Create([Binding('a'), Binding('b')],
+                new string('f', 40), new string('1', 40), "manifest");
+            store.SaveGateReceipt(new("unrelated", unrelated, MergeTrainGateOutcome.Invalidated,
+                DateTimeOffset.UnixEpoch, 1, [], 0, []));
+        }
+
+        AssertSevenTicks(fixture, attempt, liveHolder, expectPreparing: holderState == "matching");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Read_CohortWithoutReceipt_TracksHolderAcrossSevenTicks(bool databaseExists)
+    {
+        using var fixture = new Fixture();
+        var liveHolder = new SpawnProcessIdentity(1234, DateTimeOffset.UnixEpoch, Path.Combine(fixture.Directory, "owner.exe"));
+        var attempt = fixture.SaveWithHolder("cohort", liveHolder);
+        if (databaseExists)
+            _ = new CohortAcceptanceStore(Path.Combine(fixture.Directory, "cohort-acceptance.db"));
+
+        AssertSevenTicks(fixture, attempt, liveHolder, expectPreparing: true);
+    }
+
+    [Theory]
     [InlineData("malformed")]
     [InlineData("wrong-schema")]
     [InlineData("unreadable")]
@@ -174,6 +216,40 @@ public sealed class ActivationAdmissionSlotOwnerSourceTests
         Assert.Empty(ActivationAdmissionSlotOwnerSource.Read());
     }
 
+    private static void AssertSevenTicks(Fixture fixture, ConductorGroupedGateAttempt attempt,
+        SpawnProcessIdentity liveHolder, bool expectPreparing)
+    {
+        var elapsed = TimeSpan.Zero;
+        var tracker = new ActivationAdmissionHealthTracker(() => elapsed);
+        for (var tick = 1; tick <= 7; tick++)
+        {
+            elapsed = TimeSpan.FromSeconds((tick - 1) * 39);
+            var now = DateTimeOffset.UnixEpoch + elapsed;
+            var owners = ActivationAdmissionSlotOwnerSource.Read(fixture.Directory, classifyOwner: recorded =>
+                recorded.OwnerProcessId != liveHolder.ProcessId ? SpawnTrackedProcessStatus.DeadOrRecycled :
+                    SpawnProcessIdentityReader.EvaluateRecordedIdentity(new(recorded.OwnerProcessId,
+                        recorded.OwnerProcessStartedAt!.Value, recorded.OwnerExecutablePath!), liveHolder, out _));
+            if (expectPreparing)
+                Assert.Equal(ActivationAdmissionOwnerPendingStep.AwaitingReceipt, Assert.Single(owners).PendingStep);
+            else
+                Assert.Empty(owners);
+
+            var tally = ActivationAdmissionPreparingAttemptCensus.Evaluate([], [], now,
+                _ => SpawnTrackedProcessStatus.LiveMatch, owners);
+            Assert.Equal(0, tally.Live);
+            Assert.Equal(expectPreparing ? 1 : 0, tally.Preparing);
+            Assert.Equal(expectPreparing ? $"{attempt.Kind}:{attempt.AttemptId}" : "", tally.PreparingOwners);
+
+            var verdict = tracker.Observe(new(tick, false, 5, 1, tally.Live,
+                PreparingAttempts: tally.Preparing, PreparingOwners: tally.PreparingOwners), now);
+            Assert.Equal(expectPreparing ? ActivationAdmissionHealthState.Healthy :
+                tick < 7 ? ActivationAdmissionHealthState.StreakOpen : ActivationAdmissionHealthState.Tripped, verdict.State);
+        }
+
+        Assert.Equal(expectPreparing ? (ConductorActivationRevertReason?)null : ConductorActivationRevertReason.AdmissionStalled,
+            tracker.Verdict.Reason);
+    }
+
     private static MergeTrainMemberBinding Binding(char goal) => new(
         new GoalId(new string(goal, 32)), new string(goal, 40), new string(goal, 40),
         ["src/Example.cs"], [], ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,
@@ -193,6 +269,22 @@ public sealed class ActivationAdmissionSlotOwnerSourceTests
             ResultPath: Path.Combine(Directory, kind + ".result"), ExitCodePath: Path.Combine(Directory, kind + ".exit"),
             StdoutPath: "", StderrPath: "", ExecutionDirectory: Directory, PolicyJson: "{}",
             OwnerProcessStartedAt: DateTimeOffset.UnixEpoch, OwnerExecutablePath: "owner.exe");
+
+        internal ConductorGroupedGateAttempt SaveWithHolder(string kind, SpawnProcessIdentity holder)
+        {
+            var attempt = Attempt(kind) with
+            {
+                OwnerProcessId = holder.ProcessId, OwnerProcessStartedAt = holder.StartedAt,
+                OwnerExecutablePath = holder.ImagePath, HolderContractVersion = 1
+            };
+            ConductorGroupedGateAttemptCoordinator.Save(attempt);
+            var binding = AcceptanceHolderBinding.For(attempt);
+            var generation = holder with { ProcessId = 4321 };
+            var lease = new AcceptanceHolderLeaseRecord(binding, binding.JobName, generation, holder, "Claimed",
+                [new("claim", generation, holder.StartedAt, 0, "job-custody-ready")]);
+            File.WriteAllText(binding.LeasePath, JsonSerializer.Serialize(lease));
+            return attempt;
+        }
 
         public void Dispose() => System.IO.Directory.Delete(Directory, recursive: true);
     }
