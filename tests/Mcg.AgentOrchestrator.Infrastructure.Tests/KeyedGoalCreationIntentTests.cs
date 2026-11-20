@@ -142,6 +142,37 @@ public sealed class KeyedGoalCreationIntentTests : CliCommandTestBase
     }
 
     [Fact]
+    public async Task PreviouslyQueuedFollowUpFailsWithoutCreatingAGoal()
+    {
+        using var root = new TemporaryDirectory();
+        var workspace = CreateRefinedWorkspace(root.Path);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        const string key = "queued-dispatch";
+        string[] args = ["simple-goal", "Add a durable goal", "--dispatch", "--confirm-dispatch-start",
+            "--request-key", key];
+        var agents = AgentCatalog.Default().Agents;
+        var request = GoalIntakeRequestMapper.Map(args, workspace, agents)!;
+        var requests = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+        var reservation = request.Reserve(requests);
+        var payload = new GoalCreationOperatorIntentPayload(request.RequestKey, request.Fingerprint, request.Mode,
+            request.Objective, request.RequestedEpicId, args, null, agents, false);
+        var inbox = OpenInbox(workspace);
+        var intent = new OperatorIntentRecord(Guid.NewGuid().ToString("N"), key, OperatorIntentVerbs.GoalCreate,
+            OperatorIntentScopes.Workspace, null, JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [],
+            "test", "cli", "local", DateTimeOffset.UtcNow);
+        await inbox.EnqueueAsync(intent);
+        Assert.Equal(GoalIntakeRequestStates.StillCommitting, reservation.Record.State);
+
+        Assert.Contains("result=rejected", ApplyWorkspace(workspace));
+
+        var status = Execute(workspace, "goal-intake-status", key);
+        Assert.Contains("\"state\":\"failed\"", status);
+        Assert.Contains("\"failureCode\":\"GOAL_INTAKE_FOLLOW_UP_UNSUPPORTED\"", status);
+        Assert.Equal(OperatorIntentStatus.Rejected, (await inbox.GetAsync(intent.Id))!.Status);
+        Assert.Empty(await repository.ListGoalMetadataAsync());
+    }
+
+    [Fact]
     public async Task GoalIntake_concurrent_same_key_creates_one_goal()
     {
         using var root = new TemporaryDirectory();

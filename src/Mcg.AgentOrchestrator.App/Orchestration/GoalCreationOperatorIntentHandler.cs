@@ -1,7 +1,5 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
-using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -89,16 +87,10 @@ internal sealed class GoalCreationOperatorIntentHandler(
             summary = $"goal={goalId.Value}";
             if (!replayed)
             {
-                if (payload.Mode == "full" && !CliCommandHandlers.HasCliConfirmation(payload.CreationArguments, "--run"))
+                if (payload.Mode == "full")
                     GoalCitedDefectAdvisory.Warn(goal.Objective, () => workingKernel.Goals, goal, workspace.ConductEventsLogPath);
                 if (GoalCreationSummaryView.IsRequested(payload.CreationArguments))
                     GoalCreationSummaryView.Print(goal, "created", workspace.PortfolioStorePath);
-                try { RunRequestedFollowUp(payload, workingKernel, goal); }
-                catch (Exception ex)
-                {
-                    summary += $"; follow-up failed: {ex.Message.ReplaceLineEndings(" ")}";
-                    Console.Error.WriteLine(ex.Message);
-                }
             }
         }
         catch (Exception ex)
@@ -128,6 +120,8 @@ internal sealed class GoalCreationOperatorIntentHandler(
         GoalSnapshot? prepared = null;
         try
         {
+            // Pending intents from before submission validation can still carry a follow-up flag.
+            CliKeyedGoalCreationSubmission.ValidateCreationOnly(payload.CreationArguments);
             // Prepare on a detached kernel so preconditions see the pre-creation state and
             // nothing from a failed build can enter the live conductor's working set.
             var constructionKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
@@ -181,39 +175,6 @@ internal sealed class GoalCreationOperatorIntentHandler(
             GoalCreationSideEffectDelivery.CreateMessage(goalId, collaboration.SnapshotEffects(), events.SnapshotEffects()),
             GoalRefinementWorkCoordinator.CreateMessage(goalId)
         ]);
-    }
-
-    private void RunRequestedFollowUp(GoalCreationOperatorIntentPayload payload, AgentOrchestratorKernel workingKernel, Goal goal)
-    {
-        var args = payload.CreationArguments;
-        var run = payload.Mode == "full" && CliCommandHandlers.HasCliConfirmation(args, "--run");
-        var dispatch = payload.Mode == "simple" && CliCommandHandlers.HasCliConfirmation(args, "--dispatch");
-        if (!run && !dispatch) return;
-
-        List<string> followUp = run
-            ? new List<string> { "run-goal", goal.Id.Value, "--confirm-batch-start" }
-            : ["subscription-dispatch", "--goal", goal.Id.Value, "1", "--confirm-dispatch-start"];
-        if (run)
-        {
-            foreach (var flag in new[] { "--confirm-readiness-risk", SubscriptionPromptCostGuard.CliConfirmationFlag })
-                if (CliCommandHandlers.HasCliConfirmation(args, flag)) followUp.Add(flag);
-            var autonomy = CliCommandHandlers.GetFlagValue(args, "--autonomy") ??
-                CliCommandHandlers.GetFlagValue(args, "--autonomy-policy");
-            if (autonomy is not null) followUp.AddRange(["--autonomy", autonomy]);
-        }
-        var agents = payload.Agents;
-        var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-        Goal? currentGoal = goal;
-        try
-        {
-            _ = CliPersistentStateRunner.ExecuteCommand(followUp, repository, workspace, ref agents,
-                ProviderRegistryFactory.CreateDefaultProviders(), ref profiles, ref currentGoal);
-        }
-        finally
-        {
-            var snapshot = repository.LoadGoalAsync(goal.Id).GetAwaiter().GetResult();
-            if (snapshot is not null) workingKernel.ReplaceGoalWithSnapshot(snapshot);
-        }
     }
 
     internal sealed class ApplyDeferredException(Exception cause) : Exception(cause.Message, cause);

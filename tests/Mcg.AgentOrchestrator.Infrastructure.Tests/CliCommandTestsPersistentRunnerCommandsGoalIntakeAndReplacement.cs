@@ -419,57 +419,27 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Xunit.Assert.Contains("\"failureCode\":\"TEST_FAILURE\"", output);
     }
 
-    [Xunit.Fact]
-    public async Task GoalIntake_dispatch_replay_stops_before_second_preflight()
+    [Xunit.Theory]
+    [Xunit.InlineData("goal", "--run", "--confirm-batch-start")]
+    [Xunit.InlineData("simple-goal", "--dispatch", "--confirm-dispatch-start")]
+    public async Task KeyedGoalIntakeRejectsFollowUpBeforeReservation(string command, string flag, string confirmation)
     {
-        using var sandbox = ClearWorkerSandboxEnv();
-        var root = CreateTempDirectory();
-        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: fake");
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-        var agent = new AgentDefinition(
-            new AgentId("developer"),
-            "Developer",
-            AgentRole.Developer,
-            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
-            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli"));
-        IReadOnlyList<AgentDefinition> agents = [agent];
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var args = new[]
-        {
-            "simple-goal", "Dispatch exactly once", "--dispatch", "--confirm-dispatch-start",
-            "--request-key", "dispatch-key"
-        };
-        var previous = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
-        try
-        {
-            Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
-            var queued = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-                    args, repository, workspace, ref agents,
-                    new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]),
-                    ref profiles, ref currentGoal));
-            Xunit.Assert.Contains("\"state\":\"still-committing\"", queued);
-            var applied = KeyedGoalCreationIntentTests.ApplyWorkspace(workspace);
-            Xunit.Assert.Contains("result=applied", applied);
-            var inbox = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
-            var intent = Xunit.Assert.Single(await inbox.ListForGoalAsync(OperatorIntentScopes.Workspace));
-            Xunit.Assert.Contains("SPEC_REFINEMENT_PENDING", intent.Outcome);
+        const string key = "follow-up-key";
 
-            var replay = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-                args, repository, workspace, ref agents,
-                new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]),
-                ref profiles, ref currentGoal));
-            Xunit.Assert.Contains("\"state\":\"created\"", replay);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, previous);
-        }
+        var error = Xunit.Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+            [command, "Add a durable goal", flag, confirmation, "--request-key", key],
+            repository, workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal));
 
-        var goal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
-        Xunit.Assert.Null(goal.Tasks.Single().LastDispatch);
+        Xunit.Assert.StartsWith("GOAL_INTAKE_FOLLOW_UP_UNSUPPORTED ", error.Message);
+        Xunit.Assert.Null(new GoalIntakeRequestStore(workspace.SqliteStatePath).Get(key));
+        var inbox = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+        Xunit.Assert.Empty(await inbox.ListForGoalAsync(OperatorIntentScopes.Workspace));
+        Xunit.Assert.Empty(await repository.ListGoalMetadataAsync());
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_creation_returns_before_refinement_and_allows_concurrent_writer")]

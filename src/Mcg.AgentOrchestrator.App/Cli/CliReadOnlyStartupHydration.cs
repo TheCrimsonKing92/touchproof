@@ -54,6 +54,15 @@ internal static class CliKeyedGoalCreationSubmission
         CliPersistentStateRunner.IsGoalCreateCommand(args) && CliPersistentStateRunner.HasRequestKey(args) &&
         !CliCommandHelp.IsCommandSpecificHelp(args);
 
+    internal static void ValidateCreationOnly(IReadOnlyList<string> args)
+    {
+        if (CliCommandHandlers.HasCliConfirmation(args, "--run") || CliCommandHandlers.HasCliConfirmation(args, "--dispatch"))
+        {
+            throw new ArgumentException("GOAL_INTAKE_FOLLOW_UP_UNSUPPORTED --run and --dispatch cannot be combined with --request-key. " +
+                "Submit creation without the follow-up flag to let the conductor schedule the goal.");
+        }
+    }
+
     internal static bool Submit(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository repository,
@@ -63,6 +72,7 @@ internal static class CliKeyedGoalCreationSubmission
         CliPersistentStateRunner.OperatorIntentSubmissionSource submissionSource,
         bool allowTerminalSourceClaimTakeover)
     {
+        ValidateCreationOnly(args);
         var request = GoalIntakeRequestMapper.Map(args, workspace, agents)!;
         var arguments = PrepareGoalCreationArguments(args, request, out var briefFileValueIndex);
         var summary = GoalCreationSummaryView.IsRequested(args);
