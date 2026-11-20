@@ -47,6 +47,16 @@ public sealed class ProviderUsageToolCallTests
     }
 
     [Fact]
+    public void ClaudeCountsDistinctToolsAcrossSplitMessageLines()
+    {
+        var reader = new ClaudeTranscriptUsageReader([Path.Combine(Fixtures, "ClaudeTranscript")]);
+
+        var result = reader.Read("split-tool-call-count-session");
+
+        Assert.Equal(new ProviderReportedUsage(13, 5, 3, TurnCount: 1, ToolCallCount: 2), result.Usage);
+    }
+
+    [Fact]
     public void LegacyReceiptPreservesUsage()
     {
         var input = ProviderUsageValue.Reported(80);
