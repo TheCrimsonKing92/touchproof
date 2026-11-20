@@ -40,7 +40,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     internal Action? Invalidate { get; set; }
     private OwnerConsoleProviderRowModel? Selected => _rows.Length == 0 ? null : _rows[_selected];
     internal const string TabTitle = "Provider connections";
-    internal const string HelpKeys = "Up/Down profile  " + CheckKey + "  " + SignInKey + "  " + DeviceCodeKey + "  " +
+    internal const string HelpKeys = BrowseKey + "  " + CheckKey + "  " + SignInKey + "  " + DeviceCodeKey + "  " +
         ReturnKey + "  " + StopWaitingKey + "  " + ReloadKey;
     public string Title => TabTitle;
     public bool Editing => false;
