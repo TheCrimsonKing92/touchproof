@@ -121,11 +121,12 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             killed.Add(pid);
             return true;
         });
-        var stopFile = ExistingStopPath();
+        var stopFile = NoStopPath();
 
         try
         {
             var summary = new ConductorBatchLoop(
+                loadTrxCoherenceVerdicts: _ => File.WriteAllText(stopFile, "stop"),
                 detachGoalRunningDispatches: (loopKernel, goal) => runner.DetachRunningProcessesForGoal(loopKernel, goal.Id)).Run(
                     kernel,
                     MakeDriver(),
@@ -167,10 +168,11 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             var attempts = 0;
             // A fabricated pid can alias an unrelated live Windows process.
             var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
-            var stopFile = ExistingStopPath();
+            var stopFile = NoStopPath();
             try
             {
                 var summary = new ConductorBatchLoop(
+                    loadTrxCoherenceVerdicts: _ => File.WriteAllText(stopFile, "stop"),
                     detachGoalRunningDispatches: (loopKernel, loopGoal) =>
                         runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
                         kernel,
@@ -244,12 +246,13 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var delays = new List<TimeSpan>();
         // A fabricated pid can alias an unrelated live Windows process.
         var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
-        var stopFile = ExistingStopPath();
+        var stopFile = NoStopPath();
         try
         {
             BatchLoopSummary? summary = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
                 summary = new ConductorBatchLoop(
+                    loadTrxCoherenceVerdicts: _ => File.WriteAllText(stopFile, "stop"),
                     detachGoalRunningDispatches: (loopKernel, loopGoal) =>
                         runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     utcNow: () => now,
@@ -330,10 +333,11 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 now, null, null, OwnedProcessIds: [444]));
 
         var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
-        var stopFile = ExistingStopPath();
+        var stopFile = NoStopPath();
         try
         {
             new ConductorBatchLoop(
+                loadTrxCoherenceVerdicts: _ => File.WriteAllText(stopFile, "stop"),
                 detachGoalRunningDispatches: (loopKernel, loopGoal) => runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
                     kernel,
                     MakeDriver(),
