@@ -213,13 +213,13 @@ private static void ApplySourceBacklogItemLink(CliExecutionContext context, Goal
     ApplyBacklogPromotionDependencies(context, goal, link.Item);
 }
 
-private static void ValidateBacklogPromotionPrerequisites(CliExecutionContext context, BacklogItem item)
+internal static void ValidateBacklogPromotionPrerequisites(CliExecutionContext context, BacklogItem item)
 {
     foreach (var dependency in item.Dependencies)
         ResolvePromotedDependencyGoal(context, dependency);
 }
 
-private static void ApplyBacklogPromotionDependencies(
+internal static void ApplyBacklogPromotionDependencies(
     CliExecutionContext context,
     Goal goal,
     BacklogItem item)
@@ -318,9 +318,9 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         throw new ArgumentException("--pipeline requires --create-goal for backlog intake.");
     }
 
-    var sourceBacklogCoverage = ResolveSourceBacklogCoverage(
-        parts,
-        sourceLinkDeclared: createGoal || createSimpleGoal);
+    var sourceBacklogCoverage = createGoal && forceReclaim && !HasCliConfirmation(parts, "--backlog-coverage")
+        ? null
+        : ResolveSourceBacklogCoverage(parts, sourceLinkDeclared: createGoal || createSimpleGoal);
 
     // Batch submission (a3f6b536): multiple positional filters each create one goal in a single command.
     // Single-filter behaviour below is unchanged; batch only engages with 2+ filters and a create flag.
@@ -362,8 +362,17 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             var batchBacklogItem = new BacklogStore(context.Workspace.BacklogStorePath)
                 .GetByExactIdAsync(batchItem.Id).GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException($"Backlog item '{batchItem.Id}' disappeared during intake.");
-            if (TryReuseBacklogIntakeGoal(context, batchItem, out var reusedBatchGoal) ||
-                TryReuseBacklogIntakeRecord(context, batchItem, out reusedBatchGoal))
+            if (createGoal && BacklogIntakeContinuation.TryExecute(context, batchItem, batchBacklogItem, batchGoalPlan!,
+                    pipelineRequest, sourceBacklogCoverage, forceReclaim, out var createdSuccessor,
+                    () => BuildGoalObjectivePlan(context, batchItem.SuggestedObjective, simple: false, GoalIntakePipelineRequest.Scout)))
+            {
+                if (createdSuccessor)
+                    created++;
+                continue;
+            }
+            RequireOrdinaryIntakeCoverage(sourceBacklogCoverage);
+            if (BacklogIntakeGoalReuse.TryResolveClaimOwner(context, batchItem, out var reusedBatchGoal) ||
+                BacklogIntakeGoalReuse.TryResolveIntakeOwner(context, batchItem, out reusedBatchGoal))
             {
                 if (reusedBatchGoal is not null && BacklogIntakeGoalReuse.Execute(
                         context, batchItem, batchBacklogItem, reusedBatchGoal, batchGoalPlan,
@@ -463,8 +472,13 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     var sourceBacklogItem = new BacklogStore(context.Workspace.BacklogStorePath)
         .GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult()
         ?? throw new InvalidOperationException($"Backlog item '{backlogItemId}' disappeared during intake.");
-    if (TryReuseBacklogIntakeGoal(context, item, out var existingGoal) ||
-        TryReuseBacklogIntakeRecord(context, item, out existingGoal))
+    if (createGoal && BacklogIntakeContinuation.TryExecute(context, item, sourceBacklogItem, goalObjectivePlan!,
+            pipelineRequest, sourceBacklogCoverage, forceReclaim, out _,
+            () => BuildGoalObjectivePlan(context, item.SuggestedObjective, simple: false, GoalIntakePipelineRequest.Scout)))
+        return false;
+    RequireOrdinaryIntakeCoverage(sourceBacklogCoverage);
+    if (BacklogIntakeGoalReuse.TryResolveClaimOwner(context, item, out var existingGoal) ||
+        BacklogIntakeGoalReuse.TryResolveIntakeOwner(context, item, out existingGoal))
     {
         if (existingGoal is not null && BacklogIntakeGoalReuse.Execute(
                 context, item, sourceBacklogItem, existingGoal, goalObjectivePlan,
@@ -518,6 +532,12 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     return true;
 }
 
+private static void RequireOrdinaryIntakeCoverage(SourceBacklogCoverage? coverage)
+{
+    if (coverage is null)
+        throw new ArgumentException("A source backlog item link requires --backlog-coverage full or slice.");
+}
+
 private static void ThrowIfAmbiguousBacklogIntakeMatch(string? filter, BacklogIntakePlan plan)
 {
     if (plan.Items.Count <= 1)
@@ -528,17 +548,6 @@ private static void ThrowIfAmbiguousBacklogIntakeMatch(string? filter, BacklogIn
     var label = string.IsNullOrWhiteSpace(filter) ? "<empty>" : filter;
     var matches = string.Join(Environment.NewLine, plan.Items.Select(item => $"  {item.Id} - {item.Heading}"));
     throw new InvalidOperationException($"Backlog filter '{label}' matched multiple items; narrow the filter or use an exact id:{Environment.NewLine}{matches}");
-}
-
-private static bool TryReuseBacklogIntakeGoal(
-    CliExecutionContext context,
-    BacklogIntakeItem item,
-    [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Goal? existingGoal)
-{
-    existingGoal = string.IsNullOrWhiteSpace(item.Id)
-        ? null
-        : FindAuthoritativeSourceGoal(context, item.Id);
-    return existingGoal is not null;
 }
 
 private static SourceBacklogClaimOwner? FindAuthoritativeSourceClaim(CliExecutionContext context, string backlogItemId)
@@ -563,7 +572,7 @@ private static SourceBacklogClaimOwner? FindAuthoritativeSourceClaim(CliExecutio
         context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId));
 }
 
-private static Goal? FindAuthoritativeSourceGoal(CliExecutionContext context, string backlogItemId) =>
+internal static Goal? FindAuthoritativeSourceGoal(CliExecutionContext context, string backlogItemId) =>
     FindAuthoritativeSourceClaim(context, backlogItemId)?.Owner;
 
 internal static SourceBacklogSiblingFacts BuildSourceBacklogSiblingFacts(
@@ -596,24 +605,6 @@ private static InvalidOperationException SourceBacklogSiblingRefused(
         $"ownerStatus={facts.OwnerStatus} ownerState={facts.OwnerLifecycleState} coverage={facts.Coverage.ToString().ToLowerInvariant()}");
 
 private sealed record SourceBacklogClaimOwner(SourceBacklogClaimSnapshot Claim, Goal? Owner);
-
-private static bool TryReuseBacklogIntakeRecord(
-    CliExecutionContext context,
-    BacklogIntakeItem item,
-    [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Goal? existingGoal)
-{
-    existingGoal = null;
-    if (string.IsNullOrWhiteSpace(item.Id))
-        return false;
-
-    var record = new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath).Get(item.Id);
-    if (record is null || string.IsNullOrWhiteSpace(record.GoalId))
-        return false;
-
-    existingGoal = context.Kernel.Goals.FirstOrDefault(goal =>
-        goal.Id.Value.Equals(record.GoalId, StringComparison.Ordinal));
-    return existingGoal is not null;
-}
 
 private static BacklogIntakeReservation ReserveBacklogIntake(
     CliExecutionContext context,
