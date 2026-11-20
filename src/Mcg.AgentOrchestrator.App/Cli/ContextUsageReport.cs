@@ -65,7 +65,7 @@ internal static class ContextUsageReport
         return new(since, role, rows);
     }
 
-    private static long? RecordedTurns(TaskDispatchRecord dispatch)
+    internal static long? RecordedTurns(TaskDispatchRecord dispatch)
     {
         var turns = dispatch.ContextPackageReceipt is { } receipt ? receipt.Turns : dispatch.ProviderUsage?.Turns;
         return turns is null ? null : ContextUsageFigures.Provider(turns).Value;

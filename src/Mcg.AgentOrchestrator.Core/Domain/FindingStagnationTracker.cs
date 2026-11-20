@@ -31,7 +31,7 @@ public static class FindingStagnationTracker
         {
             var resetAt = GetResetAt(goal, humanInputRequests, stableId);
             var observations = reports.Where(item => item.Record.CompletedAt > resetAt)
-                .SelectMany(item => ReadRaisedFindings(item.Record)
+                .SelectMany(item => ReadRaisedFindings(item.Record, item.Task.RequiredRole)
                     .Where(finding => finding.StableId == stableId && finding.State == ReviewFindingState.Open &&
                         finding.Severity == FindingSeverity.Blocking)
                     .Select(finding => (item.Task, item.Record, Finding: finding,
@@ -127,8 +127,8 @@ public static class FindingStagnationTracker
         return new[] { GetCriterionResetAt(goal), rulingAt, resolvedAt }.Max();
     }
 
-    private static IReadOnlyList<ReviewFinding> ReadRaisedFindings(TaskVerificationRecord record) =>
-        WorkerResultBlockers.TryFindReviewFindingRound(record, out var round, out _) ? round.Findings : [];
+    private static IReadOnlyList<ReviewFinding> ReadRaisedFindings(TaskVerificationRecord record, AgentRole role) =>
+        WorkerResultBlockers.TryFindReviewFindingRound(record, out var round, out _, role) ? round.Findings : [];
 
     private static string NormalizeFile(string? file) => (file ?? string.Empty).Replace('\\', '/').Trim();
 

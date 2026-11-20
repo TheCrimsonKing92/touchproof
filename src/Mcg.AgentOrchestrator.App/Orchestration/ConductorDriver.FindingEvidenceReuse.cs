@@ -90,7 +90,7 @@ internal sealed partial class ConductorDriver
         }
 
         if (!WorkerResultBlockers.TryFindReviewFindingRound(
-                trigger.TriggeringTask.LastVerification, out var round, out _))
+                trigger.TriggeringTask.LastVerification, out var round, out _, trigger.TriggeringTask.RequiredRole))
         {
             throw new InvalidOperationException("Pending finding evidence has no review finding round.");
         }
@@ -331,7 +331,7 @@ internal sealed partial class ConductorDriver
         }
         foreach (var verification in requestingTask.VerificationHistory)
         {
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var receiptRound, out _))
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var receiptRound, out _, requestingTask.RequiredRole))
             {
                 continue;
             }

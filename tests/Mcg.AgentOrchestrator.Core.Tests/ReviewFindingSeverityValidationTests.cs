@@ -370,6 +370,52 @@ public sealed class ReviewFindingSeverityValidationTests
         Assert.Null(Assert.Single(round.Findings).EvidenceOutcome);
     }
 
+    [Fact]
+    public void RestoredUnmarkedRoundRetainsFindingWithClassNone()
+    {
+        const string findings = """
+            [{"stable_id":"old","state":"open","severity":"advisory","category":"code-quality","location":{"file":"src/Target.cs","region":"Run"},"description":"Clarify the guard."}]
+            """;
+        var (kernel, goal, reviewer) = ReviewGoal();
+        RecordJson(kernel, goal, reviewer, findings, "pass");
+        var snapshotJson = JsonSerializer.Serialize(kernel.ExportSnapshot());
+        Assert.DoesNotContain("FindingContractVersion", snapshotJson, StringComparison.Ordinal);
+        var restored = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(snapshotJson)!);
+        var task = restored.GetTask(goal.Id, reviewer.Id);
+        var verification = Assert.Single(task.VerificationHistory);
+        Assert.Null(task.LastDispatch!.FindingContractVersion);
+        Assert.Null(verification.FindingContractVersion);
+
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var diagnostic),
+            diagnostic);
+        var finding = Assert.Single(round.Findings);
+        Assert.Equal("old", finding.StableId);
+        Assert.Equal(FindingClass.None, finding.ClassId);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(1)]
+    public void RegisteredBlockingClassRequiresBlockingSeverity(int? contractVersion)
+    {
+        const string findings = """
+            [{"stable_id":"decision","state":"open","severity":"blocking","class_id":"dispositive-misclassification","category":"correctness","location":{"file":"src/Target.cs","region":"Run"},"description":"Correct the rejected decision."}]
+            """;
+        var output = "WORKER_RESULT:\nfindings: " + findings + "\ntouched_anchors: []\nEND_WORKER_RESULT";
+        var verification = new TaskVerificationRecord("review", @"C:\repo", 0, output, "", DateTimeOffset.UnixEpoch,
+            FindingContractVersion: contractVersion);
+        var advisoryOutput = output.Replace("\"severity\":\"blocking\"", "\"severity\":\"advisory\"", StringComparison.Ordinal);
+        var advisory = verification with { StandardOutput = advisoryOutput, AuthoritativeStandardOutput = advisoryOutput };
+
+        Assert.False(WorkerResultBlockers.TryFindReviewFindingRound(advisory, out _, out var advisoryDiagnostic));
+        Assert.Contains("A registered blocking class_id cannot have advisory severity.", advisoryDiagnostic);
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var diagnostic),
+            diagnostic);
+        var finding = Assert.Single(round.Findings);
+        Assert.Equal(FindingClass.DispositiveMisclassification, finding.ClassId);
+        Assert.Equal(FindingSeverity.Blocking, finding.Severity);
+    }
+
     private static (AgentOrchestratorKernel, Goal, TaskSpec) ReviewGoal()
     {
         var kernel = new AgentOrchestratorKernel();
