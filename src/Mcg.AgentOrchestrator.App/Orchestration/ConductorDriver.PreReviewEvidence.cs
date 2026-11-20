@@ -146,19 +146,19 @@ internal sealed partial class ConductorDriver
                 return true;
             }
 
+            string? insertionFailure = null;
             if (!context.RequiresSourceCleanup && TryRoutePreReviewEvidenceToTester(
                     goal,
                     reviewerTask,
                     goalPrefix,
                     policy,
                     $"pre-review mapping requires Tester selection for candidate {context.CandidateSha}: {context.MappingReason}",
-                    out result))
+                    out result, out insertionFailure))
             {
                 return true;
             }
 
-            var routingRequirement = context.RequiresSourceCleanup
-                ? "source cleanup requires a writable Developer"
+            var routingRequirement = context.RequiresSourceCleanup ? "source cleanup requires a writable Developer"
                 : "deterministic test-impact mapping requires typed operator/Tester selection";
             result = Escalate(
                 goal,
@@ -170,7 +170,7 @@ internal sealed partial class ConductorDriver
                 (context.RequiresSourceCleanup
                     ? $"Remove and commit these paths before retrying: {FormatSourceCleanupPaths(context.SourceCleanupPaths)}. "
                     : string.Empty) +
-                $"Receipt round={receipt.ReviewerRound}.");
+                $"Receipt round={receipt.ReviewerRound}.{insertionFailure}");
             return true;
         }
 
@@ -280,7 +280,7 @@ internal sealed partial class ConductorDriver
                     goalPrefix,
                     policy,
                     $"pre-review focused-evidence request was rejected for candidate {context.CandidateSha}: {FormatFocusedEvidenceResult(evidence)}",
-                    out result))
+                    out result, out var insertionFailure))
             {
                 return true;
             }
@@ -291,7 +291,7 @@ internal sealed partial class ConductorDriver
                 policy,
                 fromState,
                 $"PRE_REVIEW_MAPPING_NEEDS_INPUT: mapped focused evidence request was rejected; Reviewer dispatch is blocked. " +
-                $"{FormatFocusedEvidenceResult(evidence)}");
+                $"{FormatFocusedEvidenceResult(evidence)}.{insertionFailure}");
             return true;
         }
 
@@ -328,7 +328,7 @@ internal sealed partial class ConductorDriver
                         goalPrefix,
                         policy,
                         mismatch,
-                        out result))
+                        out result, out var insertionFailure))
                 {
                     return true;
                 }
@@ -338,7 +338,7 @@ internal sealed partial class ConductorDriver
                     goalPrefix,
                     policy,
                     fromState,
-                    $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}; no Tester task is available. " +
+                    $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}.{insertionFailure} " +
                     $"Enqueue the insertion and poll operator-intent-status <returned-id> until Applied before re-evaluating. Add one with: {BuildAddTesterCommand(goalPrefix, context.CandidateSha)}");
                 return true;
             }
@@ -388,7 +388,7 @@ internal sealed partial class ConductorDriver
                     goalPrefix,
                     policy,
                     apparatusDetail,
-                    out result))
+                    out result, out var insertionFailure))
             {
                 return true;
             }
@@ -398,7 +398,7 @@ internal sealed partial class ConductorDriver
                 goalPrefix,
                 policy,
                 fromState,
-                $"PRE_REVIEW_SELECTION_APPARATUS_FAILURE: {apparatusDetail}; no Tester task is available.");
+                $"PRE_REVIEW_SELECTION_APPARATUS_FAILURE: {apparatusDetail}.{insertionFailure}");
             return true;
         }
 
