@@ -1040,6 +1040,11 @@ internal static class CliCommandHelp
             if (!IsCommandSpecificHelp(args)) _ = CliFleetAttentionQueryCommand.Parse(args);
             return;
         }
+        if (RecordControlReceiptCommand.IsCommand(args))
+        {
+            if (!IsCommandSpecificHelp(args)) _ = RecordControlReceiptCommand.Parse(args);
+            return;
+        }
         if (args.Count > 0 && args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
             GoalCreationSummaryView.IsRequested(args) &&
             args.Skip(1).Any(arg => arg.Equals("--simple", StringComparison.OrdinalIgnoreCase) ||

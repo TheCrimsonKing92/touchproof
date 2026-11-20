@@ -15,7 +15,7 @@ internal static class RecordControlReceiptCommand
     internal static bool IsCommand(IReadOnlyList<string> parts) =>
         parts.Count > 0 && parts[0].Equals(Name, StringComparison.OrdinalIgnoreCase);
 
-    internal static void Execute(IReadOnlyList<string> parts, AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
+    internal static Options Parse(IReadOnlyList<string> parts)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var trxPaths = new List<string>();
@@ -49,12 +49,11 @@ internal static class RecordControlReceiptCommand
         var selector = values["--goal"];
         if (!OperatorControlReceiptStore.IsSafeIdentifier(selector))
             throw new ArgumentException("--goal requires a goal id or unique prefix.");
-        var goal = OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal: null, selector);
-        var receipt = new OperatorControlReceiptStore(workspace.OrchestratorDirectory).Record(
-            goal.Id, values["--obligation"], values["--kind"], values["--command"], ParseInteger("--exit-status"),
+
+        return new Options(
+            selector, values["--obligation"], values["--kind"], values["--command"], ParseInteger("--exit-status"),
             ParseInteger("--passed", nonNegative: true), ParseInteger("--failed", nonNegative: true),
             trxPaths, values["--candidate-sha"]);
-        Console.WriteLine(receipt.ReceiptId);
 
         void AddOption(string option, string value)
         {
@@ -70,4 +69,25 @@ internal static class RecordControlReceiptCommand
             return value;
         }
     }
+
+    internal static void Execute(IReadOnlyList<string> parts, AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
+    {
+        var options = Parse(parts);
+        var goal = OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal: null, options.GoalSelector);
+        var receipt = new OperatorControlReceiptStore(workspace.OrchestratorDirectory).Record(
+            goal.Id, options.ObligationId, options.Kind, options.Command, options.ExitStatus,
+            options.PassedCount, options.FailedCount, options.TrxPaths, options.CandidateSha);
+        Console.WriteLine(receipt.ReceiptId);
+    }
+
+    internal sealed record Options(
+        string GoalSelector,
+        string ObligationId,
+        string Kind,
+        string Command,
+        int ExitStatus,
+        int PassedCount,
+        int FailedCount,
+        IReadOnlyList<string> TrxPaths,
+        string CandidateSha);
 }
