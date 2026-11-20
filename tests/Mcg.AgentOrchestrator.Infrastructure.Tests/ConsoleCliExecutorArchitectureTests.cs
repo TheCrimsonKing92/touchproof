@@ -1,9 +1,5 @@
-using ArchUnitNET.Domain;
-using ArchUnitNET.Fluent;
-using ArchUnitNET.Fluent.Extensions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
-using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
 public sealed class ConsoleCliExecutorArchitectureTests
 {
@@ -16,52 +12,38 @@ public sealed class ConsoleCliExecutorArchitectureTests
         typeof(CliCommandHandlers).FullName!
     ];
 
-    // Parallel-safe: immutable inputs and one published architecture; no mutable external state.
-    private static readonly Lazy<Architecture> SharedArchitecture = new(
-        () => SharedArchitectureCache.Get(typeof(AttentionAnswerHandlerAdapter).Assembly),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static DependencyIndex Index => DependencyIndexCache.Get(typeof(AttentionAnswerHandlerAdapter).Assembly);
 
     [Fact]
     public void Console_types_Executor_boundary_Has_no_dependencies()
     {
-        var (subjects, rule) = NoExecutorDependencyRule(ConsoleNamespace);
-        var consoleTypes = subjects.GetObjects(SharedArchitecture.Value).ToArray();
+        var index = Index;
+        var consoleTypes = Subjects(index, ConsoleNamespace);
 
         Assert.Contains(consoleTypes, type => type.FullName == typeof(AttentionAnswerHandlerAdapter).FullName);
         Assert.Contains(consoleTypes, type => type.FullName == typeof(OwnerConsoleScreenController).FullName);
         Assert.Contains(consoleTypes, type => type.FullName == typeof(ExperimentDecideIntentSubmitter).FullName);
-        Assert.All(consoleTypes, type => Assert.Equal(ConsoleNamespace, type.Namespace.FullName));
+        Assert.All(consoleTypes, type => Assert.Equal(ConsoleNamespace, type.Namespace));
 
-        var failures = Failures(rule);
+        var failures = NoExecutorDependencyRule(index, consoleTypes);
         Assert.True(failures.Length == 0, failures.ToErrorMessage());
     }
 
     [Fact]
     public void Cli_types_Executor_dependency_Control_names_persistent_runner()
     {
-        var (_, rule) = NoExecutorDependencyRule(CliNamespace);
-        var failures = Failures(rule);
+        var index = Index;
+        var failures = NoExecutorDependencyRule(index, Subjects(index, CliNamespace));
 
         Assert.NotEmpty(failures);
-        Assert.True(failures.Any(result => result.EvaluatedObject is IType type
-                && type.FullName == typeof(CliPersistentStateRunner).FullName),
+        Assert.True(failures.Any(result => result.Subject.FullName == typeof(CliPersistentStateRunner).FullName),
             failures.ToErrorMessage());
     }
 
-    private static (IObjectProvider<IType> Subjects, ICanBeEvaluated Rule) NoExecutorDependencyRule(
-        string subjectNamespace)
-    {
-        var subjects = Types().That().FollowCustomPredicate(
-            type => type.Namespace.FullName.Equals(subjectNamespace, StringComparison.Ordinal),
-            $"reside exactly in {subjectNamespace}");
-        var forbidden = Types().That().FollowCustomPredicate(
-            type => ExecutorNames.Any(name => type.FullName.Equals(name, StringComparison.Ordinal)
-                || type.FullName.StartsWith(name + "+", StringComparison.Ordinal)
-                || type.FullName.StartsWith(name + "/", StringComparison.Ordinal)),
-            "are CLI executor types or their nested types");
-        return (subjects, subjects.Should().NotDependOnAny(forbidden));
-    }
+    private static DependencyDeclaration[] Subjects(DependencyIndex index, string subjectNamespace) =>
+        index.Types.Where(type => type.Namespace == subjectNamespace).ToArray();
 
-    private static EvaluationResult[] Failures(ICanBeEvaluated rule) =>
-        rule.Evaluate(SharedArchitecture.Value).Where(result => !result.Passed).ToArray();
+    private static DependencyViolation[] NoExecutorDependencyRule(DependencyIndex index, DependencyDeclaration[] subjects) =>
+        DependencyIndexRules.ForbiddenTypes(index, subjects,
+            target => ExecutorNames.Contains(target.OutermostName, StringComparer.Ordinal));
 }

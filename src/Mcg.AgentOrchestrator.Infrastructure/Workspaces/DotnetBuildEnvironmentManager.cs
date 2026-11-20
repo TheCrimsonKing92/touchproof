@@ -84,7 +84,7 @@ public abstract record DotnetBuildLeaseAcquisition
 public sealed class DotnetBuildSlotsBusyException : IOException
 {
     public DotnetBuildSlotsBusyException(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
-        : base($"Stable dotnet build slots busy for {slotsBusy.WantedBy}.")
+        : base(DotnetBuildEnvironmentManager.FormatSlotsBusyMessage(slotsBusy))
     {
         SlotsBusy = slotsBusy;
     }
@@ -99,9 +99,15 @@ public static class DotnetBuildEnvironmentManager
     // Supported escape hatch for tests that need lease-root isolation.
     public const string IsolatedRootOverrideVariable = DotnetBuildStorageLayout.IsolatedRootOverrideVariable;
     public const string ForceCleanStaleLeaseArtifactsVariable = "MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS";
+    // Invoke-WorkerBuildCheck.ps1 and Invoke-IsolatedDotnet.ps1 parse this literal.
     public const int BuildConcurrencySlotCount = 2;
-    // Compatibility name for callers migrating from the former artifact-slot grid.
-    public const int StableSlotCount = BuildConcurrencySlotCount;
+
+    // Share host cores across concurrent MSBuild invocations and bound their aggregate memory demand.
+    public const int BuildThrottleLimit = BuildConcurrencySlotCount;
+
+    // Fixed artifact slot grid. Its capacity must cover every build permit.
+    public const int ArtifactRootCapacity = 2;
+    public const int StableSlotCount = ArtifactRootCapacity;
     public static readonly TimeSpan DefaultSlotBusyPollTimeout = TimeSpan.FromSeconds(20);
     private const string LeaseDirectoryName = DotnetBuildStorageLayout.LeaseDirectoryName;
     private const string LeaseMetadataFileName = DotnetBuildStorageLayout.LeaseMetadataFileName;
@@ -889,7 +895,7 @@ public static class DotnetBuildEnvironmentManager
         var waitTimeout = timeout ?? DefaultSlotBusyPollTimeout;
         var timeoutAt = clock.GetUtcNow().Add(waitTimeout);
         var waitingReported = false;
-        var priorityReservations = new FileStream?[BuildConcurrencySlotCount];
+        var priorityReservations = new FileStream?[BuildThrottleLimit];
         using var queue = claimant is null ? null : BuildPermitWaitQueue.CreateWaiter(claimant,
             new DotnetBuildStorageRoot(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(environment.ExecutionLockPath)))!),
             clock, IsExecutionLockHeld, path => DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(path)?.LeaseId);
@@ -898,16 +904,16 @@ public static class DotnetBuildEnvironmentManager
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var admitted = queue?.CanScan(() => Enumerable.Range(0, BuildConcurrencySlotCount).Count(permit =>
+                var admitted = queue?.CanScan(() => Enumerable.Range(0, BuildThrottleLimit).Count(permit =>
                     !IsExecutionLockHeld(WithBuildPermit(environment, permit).ExecutionLockPath))) ?? true;
                 if (!admitted)
                 {
                     ReleaseAcceptancePriorityReservations(priorityReservations);
                     Array.Clear(priorityReservations);
                 }
-                for (var offset = 0; admitted && offset < BuildConcurrencySlotCount; offset++)
+                for (var offset = 0; admitted && offset < BuildThrottleLimit; offset++)
                 {
-                    var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
+                    var permit = (preferredPermit + offset) % BuildThrottleLimit;
                     var candidate = WithBuildPermit(environment, permit);
                     var priorityPath = candidate.ExecutionLockPath + ".acceptance-priority.lock";
                     if (priorityReservations[permit] is null)
@@ -960,7 +966,7 @@ public static class DotnetBuildEnvironmentManager
                 if (clock.GetUtcNow() >= timeoutAt)
                 {
                     return EmitSlotsBusy(environment.LeaseId,
-                        permit => CreatePermitDiagnosticEnvironment(environment, permit), BuildConcurrencySlotCount);
+                        permit => CreatePermitDiagnosticEnvironment(environment, permit), BuildThrottleLimit);
                 }
 
                 delay(SlotBusyPollDelay);
@@ -1081,7 +1087,7 @@ public static class DotnetBuildEnvironmentManager
             return value;
         }
 
-        return Math.Max(2, Environment.ProcessorCount / BuildConcurrencySlotCount);
+        return Math.Max(2, Environment.ProcessorCount / BuildThrottleLimit);
     }
 
     private static string LeaseDirectory(GoalId goalId, DotnetBuildStorageRoot storageRoot) => DotnetBuildStorageLayout.LeaseDirectory(goalId, storageRoot);
@@ -1107,7 +1113,7 @@ public static class DotnetBuildEnvironmentManager
         var owner = $"p{Environment.ProcessId}-build-{slotIndex}";
         var root = Path.Combine(storageRoot.RootPath, "runs", owner);
         var artifactsPath = Path.Combine(root, "artifacts");
-        var executionLockPath = BuildSlotExecutionLockPath(slotIndex % BuildConcurrencySlotCount, storageRoot);
+        var executionLockPath = BuildSlotExecutionLockPath(slotIndex % BuildThrottleLimit, storageRoot);
         IOwnedRunRootRegistrar? registrar = null;
         if (createArtifactsDirectory)
         {
@@ -1122,8 +1128,8 @@ public static class DotnetBuildEnvironmentManager
             artifactsPath,
             executionLockPath,
             BuildArguments(artifactsPath),
-            $"build-{slotIndex % BuildConcurrencySlotCount}",
-            BuildPermitIndex: slotIndex % BuildConcurrencySlotCount)
+            $"build-{slotIndex % BuildThrottleLimit}",
+            BuildPermitIndex: slotIndex % BuildThrottleLimit)
         {
             OwnedRootRegistrar = registrar
         };
@@ -1142,20 +1148,20 @@ public static class DotnetBuildEnvironmentManager
 
     private static void ValidateStableSlotIndex(int slotIndex)
     {
-        if (slotIndex < 0 || slotIndex >= StableSlotCount)
+        if (slotIndex < 0 || slotIndex >= ArtifactRootCapacity)
         {
-            throw new ArgumentOutOfRangeException(nameof(slotIndex), slotIndex, $"Stable slot index must be 0 through {StableSlotCount - 1}.");
+            throw new ArgumentOutOfRangeException(nameof(slotIndex), slotIndex, $"Stable slot index must be 0 through {ArtifactRootCapacity - 1}.");
         }
     }
 
     private static void ValidateRequestedSlotCount(int slotCount)
     {
-        if (slotCount is < 1 or > StableSlotCount)
+        if (slotCount is < 1 or > ArtifactRootCapacity)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(slotCount),
                 slotCount,
-                $"Requested stable slot count must be 1 through {StableSlotCount}.");
+                $"Requested stable slot count must be 1 through {ArtifactRootCapacity}.");
         }
     }
 
@@ -1181,7 +1187,7 @@ public static class DotnetBuildEnvironmentManager
     internal static IReadOnlyList<string> ReadHeldBuildPermitHolderLabels(DotnetBuildStorageRoot storageRoot)
     {
         var labels = new List<string>();
-        for (var slot = 0; slot < BuildConcurrencySlotCount; slot++)
+        for (var slot = 0; slot < BuildThrottleLimit; slot++)
         {
             var path = BuildSlotExecutionLockPath(slot, storageRoot);
             if (IsExecutionLockHeld(path) && DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(path)?.HolderLabel is { } label &&
@@ -1205,7 +1211,7 @@ public static class DotnetBuildEnvironmentManager
         return owner
             .Select(char.ToLowerInvariant)
             .Sum(ch => (int)ch) %
-            BuildConcurrencySlotCount;
+            BuildThrottleLimit;
     }
 
     private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(
@@ -1227,7 +1233,7 @@ public static class DotnetBuildEnvironmentManager
         if (emitReceipt)
         {
             return EmitSlotsBusy(environment.LeaseId,
-                permit => CreatePermitDiagnosticEnvironment(environment, permit), BuildConcurrencySlotCount);
+                permit => CreatePermitDiagnosticEnvironment(environment, permit), BuildThrottleLimit);
         }
 
         var busySlots = environment.BuildPermitIndex is { } permitIndex
@@ -1342,6 +1348,14 @@ public static class DotnetBuildEnvironmentManager
         {
             return true;
         }
+    }
+
+    internal static string FormatSlotsBusyMessage(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
+    {
+        var holders = slotsBusy.BusySlots.Count == 0
+            ? "no holder labels available"
+            : $"held by {FormatBusySlots(slotsBusy.BusySlots)}";
+        return $"Stable dotnet build slots busy ({holders}). Requested by {slotsBusy.WantedBy}.";
     }
 
     internal static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>

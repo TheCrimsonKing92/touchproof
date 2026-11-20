@@ -1,4 +1,3 @@
-using ArchUnitNET.Domain;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -9,9 +8,8 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
 {
     private const string InfrastructureSourceRoot = "src/Mcg.AgentOrchestrator.Execution/";
     private static readonly string[] ExecutionFolders = ["Processes", "Workers", "Persistence", "Verification"];
-    private static readonly Lazy<Architecture> InfrastructureArchitecture = new(
-        () => SharedArchitectureCache.Get(typeof(CohortAcceptanceStore).Assembly, typeof(GoalWorktrees).Assembly),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static DependencyIndex Index => DependencyIndexCache.Get(
+        typeof(CohortAcceptanceStore).Assembly, typeof(GoalWorktrees).Assembly);
     private static readonly Lazy<IReadOnlyDictionary<string, string[]>> DeclarationIndex = new(
         BuildDeclarationIndex, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -29,21 +27,17 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
     [Fact]
     public void ExecutionTypes_DependOnlyOnExecutionDeclarations()
     {
-        var assemblyName = typeof(CohortAcceptanceStore).Assembly.FullName;
-        var types = InfrastructureArchitecture.Value.Types
-            .Where(type => type.Assembly.FullName == assemblyName).ToArray();
+        var assemblyName = typeof(CohortAcceptanceStore).Assembly.GetName().Name;
+        var workspaceAssembly = typeof(GoalWorktrees).Assembly.GetName().Name;
+        var types = Index.Types.Where(type => type.AssemblyName == assemblyName).ToArray();
         var declarations = DeclarationIndex.Value;
         Assert.NotEmpty(types);
         Assert.Contains(types, type => type.FullName == typeof(CohortAcceptanceStore).FullName);
         // Generic parameters are variables, not independently declared types. Keep their constraint
         // dependencies attributed to the owning type, including parameters declared by its methods.
-        var pairs = types.SelectMany(type => type.Dependencies
-                .Concat(type.GenericParameters.Concat(type.Members.SelectMany(member => member.GenericParameters))
-                    .SelectMany(parameter => parameter.Dependencies))
-                .Where(dependency => !dependency.Target.IsGenericParameter &&
-                    (dependency.Target.Assembly?.FullName == assemblyName ||
-                     dependency.Target.Assembly?.FullName == typeof(GoalWorktrees).Assembly.FullName))
-                .Select(dependency => (Source: type.FullName, Target: dependency.Target.FullName)))
+        var pairs = types.SelectMany(type => type.References
+                .Where(target => target.AssemblyName == assemblyName || target.AssemblyName == workspaceAssembly)
+                .Select(target => (Source: type.FullName, Target: target.FullName)))
             .ToArray();
         Assert.NotEmpty(pairs);
         Assert.Contains(pairs, pair => pair.Source == typeof(CohortAcceptanceStore).FullName &&
