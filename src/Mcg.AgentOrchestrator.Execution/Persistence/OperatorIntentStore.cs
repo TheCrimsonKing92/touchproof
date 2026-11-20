@@ -43,7 +43,8 @@ public sealed record OperatorIntentRecord(
     DateTimeOffset? CompletedAt = null,
     string? Outcome = null,
     OperatorActorKind ActorKind = OperatorActorKind.Human,
-    DateTimeOffset? AdmissionExpiresAt = null);
+    DateTimeOffset? AdmissionExpiresAt = null,
+    string? DriverSessionId = null);
 
 public sealed record ActionableOperatorIntentSummary(
     string GoalId,
@@ -224,15 +225,18 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
                 INSERT OR IGNORE INTO operator_intents (
                     id, idempotency_key, verb, goal_id, task_id, payload_json,
                     payload_file_references_json, actor, channel, authentication_assurance,
-                    created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind, admission_expires_at
+                    created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind, admission_expires_at,
+                    driver_session_id
                 )
                 VALUES (
                     $id, $idempotency_key, $verb, $goal_id, $task_id, $payload_json,
                     $payload_file_references_json, $actor, $channel, $authentication_assurance,
-                    $created_at, $status, $claim_owner, $claimed_at, $completed_at, $outcome, $actor_kind, $admission_expires_at
+                    $created_at, $status, $claim_owner, $claimed_at, $completed_at, $outcome, $actor_kind, $admission_expires_at,
+                    $driver_session_id
                 )
                 """;
             BindIntent(cmd, intent);
+            cmd.Parameters.AddWithValue("$driver_session_id", (object?)intent.DriverSessionId ?? DBNull.Value);
             if (await cmd.ExecuteNonQueryAsync(cancellationToken) == 1 && HasTaskTarget(intent))
                 AdvanceAdmissionRevision(conn, tx, intent);
         }
@@ -567,6 +571,7 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
             """);
             AddColumnIfMissing(conn, "operator_intents", "actor_kind", "TEXT");
             AddColumnIfMissing(conn, "operator_intents", "admission_expires_at", "TEXT");
+            AddColumnIfMissing(conn, "operator_intents", "driver_session_id", "TEXT");
             SetupTaskAdmission(conn);
             AddColumnIfMissing(conn, "task_intent_launches", "dispatched_at", "TEXT");
             AddColumnIfMissing(conn, "task_intent_preparations", "graph_identity", "TEXT");
@@ -668,7 +673,8 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
             !string.Equals(requested.Actor, persisted.Actor, StringComparison.Ordinal) ||
             requested.ActorKind != persisted.ActorKind ||
             !string.Equals(requested.Channel, persisted.Channel, StringComparison.Ordinal) ||
-            !string.Equals(requested.AuthenticationAssurance, persisted.AuthenticationAssurance, StringComparison.Ordinal))
+            !string.Equals(requested.AuthenticationAssurance, persisted.AuthenticationAssurance, StringComparison.Ordinal) ||
+            !string.Equals(requested.DriverSessionId, persisted.DriverSessionId, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"Operator intent idempotency key '{requested.IdempotencyKey}' was already used for a different intent.");
@@ -718,12 +724,14 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
             ActorKind: reader.IsDBNull(16)
                 ? OperatorActorKind.Human
                 : Enum.Parse<OperatorActorKind>(reader.GetString(16), ignoreCase: true),
-            AdmissionExpiresAt: reader.IsDBNull(17) ? null : DateTimeOffset.Parse(reader.GetString(17)));
+            AdmissionExpiresAt: reader.IsDBNull(17) ? null : DateTimeOffset.Parse(reader.GetString(17)),
+            DriverSessionId: reader.IsDBNull(18) ? null : reader.GetString(18));
 
     private const string SelectColumns = """
         SELECT id, idempotency_key, verb, goal_id, task_id, payload_json,
                payload_file_references_json, actor, channel, authentication_assurance,
-               created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind, admission_expires_at
+               created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind, admission_expires_at,
+               driver_session_id
         FROM operator_intents
         """;
 

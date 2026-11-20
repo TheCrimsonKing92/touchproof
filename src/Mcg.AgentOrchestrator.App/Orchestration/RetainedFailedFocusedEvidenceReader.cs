@@ -26,7 +26,7 @@ internal static class RetainedFailedFocusedEvidenceReader
             // Unavailable settings cannot establish reuse authority. Execution retains its failure path.
             basis = null;
         }
-        const string fingerprint = "pre-review-stage";
+        const string fingerprint = PreReviewEvidenceReceipts.FindingRoundFingerprint;
         return (ConductorParallelAcceptanceCandidate.Create(goal, 0, [], context.CandidateSha, null),
             new(fingerprint, ConductorDriver.CreateFindingEvidenceBatchId(
                 context.CandidateSha!, fingerprint, policy.Name, context.FocusedRequest!), [], ExecutionBasisIdentity: basis));
