@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -137,39 +138,39 @@ public sealed class CliGoalReplacementExecutionTests
     [Fact]
     public void KeyedSubmissionHasNoKernelLoadOrGoalWriterAndWorkspaceApplyOwnsTheCommit()
     {
-        const BindingFlags hidden = BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
         static IEnumerable<MethodBase> References(MethodBase method)
         {
-            var stateMachine = method.GetCustomAttribute<System.Runtime.CompilerServices.AsyncStateMachineAttribute>();
-            var moveNext = stateMachine?.StateMachineType.GetMethod("MoveNext",
-                BindingFlags.NonPublic | BindingFlags.Instance);
             var references = CliWriterPersistenceBoundaryTests.References(method);
-            return moveNext is null ? references : references.Concat(CliWriterPersistenceBoundaryTests.References(moveNext));
+            var stateMachine = method.GetCustomAttribute<AsyncStateMachineAttribute>();
+            if (stateMachine is null) return references;
+
+            var map = stateMachine.StateMachineType.GetInterfaceMap(typeof(IAsyncStateMachine));
+            var moveNextIndex = Array.FindIndex(map.InterfaceMethods,
+                interfaceMethod => interfaceMethod.Name == nameof(IAsyncStateMachine.MoveNext));
+            return references.Concat(CliWriterPersistenceBoundaryTests.References(map.TargetMethods[moveNextIndex]));
         }
 
         var runner = typeof(CliPersistentStateRunner);
-        var entry = runner.GetMethod(nameof(CliPersistentStateRunner.ExecuteCommand))!;
-        var submissionType = typeof(CliKeyedGoalCreationSubmission);
-        var predicate = submissionType.GetMethod(nameof(CliKeyedGoalCreationSubmission.IsCommand), hidden)!;
-        var submission = submissionType.GetMethod(nameof(CliKeyedGoalCreationSubmission.Submit), hidden)!;
-        var legacy = runner.GetMethod("ExecuteGoalCreateOutsideTransaction", hidden)!;
-        var dispatch = References(entry).ToArray();
-        Assert.Contains(predicate, dispatch);
-        Assert.Contains(submission, dispatch);
-        Assert.Contains(legacy, dispatch);
+        var entry = CliPersistentStateRunner.ExecuteCommand;
+        var predicate = CliKeyedGoalCreationSubmission.IsCommand;
+        var submission = CliKeyedGoalCreationSubmission.Submit;
+        var dispatch = References(entry.Method).ToArray();
+        Assert.Contains(predicate.Method, dispatch);
+        Assert.Contains(submission.Method, dispatch);
+        var legacy = Assert.Single(dispatch, method =>
+            method.DeclaringType == runner && method.Name == "ExecuteGoalCreateOutsideTransaction");
         var legacyCalls = References(legacy).ToArray();
         var legacyFinalizers = legacyCalls.Where(method => method.DeclaringType?.Assembly == runner.Assembly &&
             method.Name.Contains(legacy.Name, StringComparison.Ordinal));
         Assert.Contains(legacyCalls.Concat(legacyFinalizers.SelectMany(References)),
             method => method.Name == "CommitGoalCreationAsync");
-        foreach (var name in new[] { "PrepareStartupAsync", "ExecuteStartupCommand" })
-        {
-            var method = typeof(CliReadOnlyStartupHydration).GetMethod(name, hidden)!;
-            Assert.Contains(predicate, References(method));
-        }
+        var prepare = CliReadOnlyStartupHydration.PrepareStartupAsync;
+        var execute = CliReadOnlyStartupHydration.ExecuteStartupCommand;
+        Assert.Contains(predicate.Method, References(prepare.Method));
+        Assert.Contains(predicate.Method, References(execute.Method));
 
         var seen = new HashSet<MethodBase>();
-        var pending = new Queue<MethodBase>([submission]);
+        var pending = new Queue<MethodBase>([submission.Method]);
         var reached = new List<MethodBase>();
         while (pending.TryDequeue(out var method))
         {
@@ -188,14 +189,20 @@ public sealed class CliGoalReplacementExecutionTests
             (method.DeclaringType == typeof(AgentOrchestratorKernel) && method.Name == nameof(AgentOrchestratorKernel.FromSnapshot)) ||
             method == legacy || method.DeclaringType == typeof(GoalCreationOperatorIntentHandler));
 
-        var workspaceDispatch = typeof(OperatorIntentCoordinator).GetMethod(nameof(OperatorIntentCoordinator.ExecuteWorkspacePending),
-            hidden, [typeof(AgentOrchestratorKernel), typeof(bool).MakeByRefType()])!;
+        var workspaceApply = (OperatorIntentCoordinator coordinator, AgentOrchestratorKernel kernel) =>
+            coordinator.ExecuteWorkspacePending(kernel, out _);
+        var workspaceDispatch = Assert.Single(References(workspaceApply.Method), method =>
+            method.DeclaringType == typeof(OperatorIntentCoordinator) &&
+            method.Name == nameof(OperatorIntentCoordinator.ExecuteWorkspacePending));
         var handler = typeof(GoalCreationOperatorIntentHandler);
-        var apply = handler.GetMethod("Apply", hidden)!;
-        var bind = handler.GetMethod("BuildAndBind", hidden)!;
-        Assert.Contains(apply, CliWriterPersistenceBoundaryTests.References(workspaceDispatch));
-        Assert.Contains(CliWriterPersistenceBoundaryTests.References(apply), method => method.Name == "TransactGoalCreationWithOutboxAsync");
-        Assert.Contains(CliWriterPersistenceBoundaryTests.References(bind), method => method.Name == nameof(AgentOrchestratorKernel.ReplaceGoalWithSnapshot));
-        Assert.Contains(CliWriterPersistenceBoundaryTests.References(bind), method => method.Name == nameof(GoalIntakeRequestStore.MarkCreated));
+        var apply = Assert.Single(References(workspaceDispatch), method =>
+            method.DeclaringType == handler && method.Name == nameof(GoalCreationOperatorIntentHandler.Apply));
+        var applyCalls = References(apply).ToArray();
+        Assert.Contains(applyCalls, method => method.Name == "TransactGoalCreationWithOutboxAsync");
+        var bind = Assert.Single(applyCalls.Where(method => method.DeclaringType?.DeclaringType == handler)
+            .SelectMany(References), method => method.DeclaringType == handler && method.Name == "BuildAndBind");
+        var bindCalls = References(bind).ToArray();
+        Assert.Contains(bindCalls, method => method.Name == nameof(AgentOrchestratorKernel.ReplaceGoalWithSnapshot));
+        Assert.Contains(bindCalls, method => method.Name == nameof(GoalIntakeRequestStore.MarkCreated));
     }
 }

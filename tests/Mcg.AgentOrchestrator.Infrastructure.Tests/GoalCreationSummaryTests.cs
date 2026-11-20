@@ -330,7 +330,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         var probeDirectory = FixtureProbeLocator.FindDirectory(typeof(GoalCreationSummaryTests), probeName, probeName + ".dll");
         Assert.True(probeDirectory is not null, "CLI encoding startup hook missing. Tried: " + string.Join(", ",
             FixtureProbeLocator.TriedPaths(typeof(GoalCreationSummaryTests), probeName, probeName + ".dll")));
-        var encodingReceipt = Path.Combine(root, "cli-output-encoding.txt");
+        var encodingReceipt = Path.Combine(root, $"cli-output-encoding-{Guid.NewGuid():N}.txt");
         var start = new ProcessStartInfo(ResolveDotnetHostPath())
         {
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,

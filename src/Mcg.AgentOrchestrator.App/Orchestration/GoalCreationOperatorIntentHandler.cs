@@ -132,7 +132,8 @@ internal sealed class GoalCreationOperatorIntentHandler(
             // nothing from a failed build can enter the live conductor's working set.
             var constructionKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
             var args = payload.CreationArguments.ToArray();
-            var briefPath = payload.BriefFileValueIndex is null ? null : Path.GetTempFileName();
+            var briefPath = payload.BriefFileValueIndex is null ? null :
+                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("goal-creation"), $"{Guid.NewGuid():N}.txt");
             try
             {
                 if (payload.BriefFileValueIndex is { } index)
