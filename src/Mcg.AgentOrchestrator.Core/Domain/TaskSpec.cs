@@ -280,7 +280,7 @@ public sealed partial class TaskSpec
                     LastVerification.EvidenceSource,
                     LastVerification.DispatchAttemptAt,
                     LastVerification.FindingEvidenceRequestDispositions, LastVerification.PlannerEvidenceBatch, LastVerification.OrchestratorFailureReason,
-                    LastVerification.FindingContractVersion),
+                    LastVerification.FindingContractVersion, LastVerification.PendingPlannerArtifact),
             _verificationHistory
                 .Select(verification =>
                 {
@@ -332,7 +332,7 @@ public sealed partial class TaskSpec
                         verification.EvidenceSource,
                         verification.DispatchAttemptAt,
                         verification.FindingEvidenceRequestDispositions, verification.PlannerEvidenceBatch, verification.OrchestratorFailureReason,
-                        verification.FindingContractVersion);
+                        verification.FindingContractVersion, verification.PendingPlannerArtifact);
                 })
                 .ToList(),
             LastDispatch is null
@@ -492,7 +492,8 @@ public sealed partial class TaskSpec
                     EvidenceSource: verification.EvidenceSource,
                     DispatchAttemptAt: verification.DispatchAttemptAt,
                     FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: verification.PlannerEvidenceBatch, OrchestratorFailureReason: verification.OrchestratorFailureReason,
-                    FindingContractVersion: verification.FindingContractVersion)
+                    FindingContractVersion: verification.FindingContractVersion,
+                    PendingPlannerArtifact: verification.PendingPlannerArtifact)
                 {
                     AuthoritativeStandardOutput = output.Text,
                     AuthoritativeStandardError = error.Text
@@ -548,7 +549,8 @@ public sealed partial class TaskSpec
                 EvidenceSource: snapshot.LastVerification.EvidenceSource,
                 DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt,
                 FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: snapshot.LastVerification.PlannerEvidenceBatch, OrchestratorFailureReason: snapshot.LastVerification.OrchestratorFailureReason,
-                FindingContractVersion: snapshot.LastVerification.FindingContractVersion)
+                FindingContractVersion: snapshot.LastVerification.FindingContractVersion,
+                PendingPlannerArtifact: snapshot.LastVerification.PendingPlannerArtifact)
             {
                 AuthoritativeStandardOutput = output.Text,
                 AuthoritativeStandardError = error.Text
@@ -570,7 +572,9 @@ public sealed partial class TaskSpec
                 task._verificationHistory[historyIndex] = mergedVerification with
                 {
                     FullStandardOutput = latestVerification.FullStandardOutput ?? task._verificationHistory[historyIndex].FullStandardOutput,
-                    FullStandardError = latestVerification.FullStandardError ?? task._verificationHistory[historyIndex].FullStandardError
+                    FullStandardError = latestVerification.FullStandardError ?? task._verificationHistory[historyIndex].FullStandardError,
+                    PendingPlannerArtifact = PendingPlannerArtifact.Merge(
+                        latestVerification.PendingPlannerArtifact, task._verificationHistory[historyIndex].PendingPlannerArtifact)
                 };
             }
 
@@ -786,8 +790,11 @@ public sealed partial class TaskSpec
             // Merge monotonically so a stale plain copy cannot erase a receipt or verdict from
             // an earlier copy. When both copies carry a later non-null enrichment, the incoming
             // history occurrence is the causal authority.
-            _verificationHistory[historyIndex] =
-                _verificationHistory[historyIndex].MergeSameRoundEnrichment(verification);
+            var prior = _verificationHistory[historyIndex];
+            _verificationHistory[historyIndex] = prior.MergeSameRoundEnrichment(verification) with
+            {
+                PendingPlannerArtifact = PendingPlannerArtifact.Merge(prior.PendingPlannerArtifact, verification.PendingPlannerArtifact)
+            };
             return;
         }
 
@@ -795,6 +802,14 @@ public sealed partial class TaskSpec
     }
 
     internal void ClearLatestVerification() => LastVerification = null;
+
+    internal void RecordPlannerArtifact(TaskVerificationRecord verification, PendingPlannerArtifact artifact)
+    {
+        var index = _verificationHistory.FindLastIndex(item => item.HasSameRoundIdentity(verification));
+        if (LastVerification is not { } latest || !latest.HasSameRoundIdentity(verification) || index < 0)
+            throw new InvalidOperationException("Planner artifact must enrich the current recorded verification round.");
+        LastVerification = _verificationHistory[index] = latest with { PendingPlannerArtifact = artifact };
+    }
 
     internal void RestoreFindingEvidenceVerification(TaskVerificationRecord verification)
     {

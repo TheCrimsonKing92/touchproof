@@ -227,7 +227,9 @@ public sealed record TaskVerificationSnapshot(
     IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null,
     string? OrchestratorFailureReason = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    int? FindingContractVersion = null)
+    int? FindingContractVersion = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    PendingPlannerArtifact? PendingPlannerArtifact = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

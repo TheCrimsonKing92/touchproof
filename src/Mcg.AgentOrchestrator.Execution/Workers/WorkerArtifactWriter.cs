@@ -935,7 +935,7 @@ internal sealed partial class WorkerArtifactWriter
         return resolutions;
     }
 
-    private static bool TryResolveLatestDurablePlannerPlan(
+    internal static bool TryResolveLatestDurablePlannerPlan(
         TaskSpec task,
         out string plan,
         out string diagnostic)
@@ -949,6 +949,10 @@ internal sealed partial class WorkerArtifactWriter
             }
 
             diagnostic = candidateDiagnostic;
+            if (verification.PendingPlannerArtifact is not null)
+            {
+                break;
+            }
         }
 
         plan = string.Empty;
@@ -1018,6 +1022,25 @@ internal sealed partial class WorkerArtifactWriter
     {
         plan = string.Empty;
         diagnostic = string.Empty;
+        if (verification.PendingPlannerArtifact is { } artifact)
+        {
+            if (!artifact.IsPromoted || !artifact.MatchesRound(verification))
+            {
+                diagnostic = "recorded Planner artifact is pending or has inconsistent round or digest evidence";
+                return false;
+            }
+
+            // Citations were resolved against the Planner's checkout at capture. Structural
+            // validation here must survive later implementation edits to that checkout.
+            if (!PlannerOutputContract.TryValidate(artifact.Plan, out _, out diagnostic))
+            {
+                return false;
+            }
+
+            plan = artifact.Plan;
+            return true;
+        }
+
         if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath) &&
             File.Exists(verification.StandardOutputPath))
         {
@@ -1047,6 +1070,25 @@ internal sealed partial class WorkerArtifactWriter
             ? verificationDiagnostic
             : $"{diagnostic}; verification snapshot: {verificationDiagnostic}";
         return false;
+    }
+
+    internal static PendingPlannerArtifact? CapturePendingPlannerArtifact(
+        Goal goal,
+        TaskDispatchRecord dispatch,
+        HumanInputDirectiveParseResult batch,
+        TaskProcessRecord process,
+        string? completedOutput)
+    {
+        if (batch.IsMalformed || !batch.Directives.Any(PendingPlannerArtifact.IsBlockingDirective) ||
+            dispatch.BriefVersion != goal.AuthoritativeBrief.Version)
+            return null;
+
+        var output = completedOutput ?? PlannerOutputContract.ReadCapturedOutputTail(process.StandardOutputPath);
+        if (!TryExtractAndRevalidateDurablePlannerPlan(output, process.WorkingDirectory, out var plan, out _) ||
+            !PlannerOutputContract.TryValidate(plan, out _, out _, goal.RefinedSpec?.AcceptanceCriteria))
+            return null;
+
+        return new PendingPlannerArtifact(plan, PendingPlannerArtifact.ComputeSha256(plan), dispatch.DispatchedAt, dispatch.BriefVersion);
     }
 
     private static bool TryExtractAndRevalidateDurablePlannerPlan(

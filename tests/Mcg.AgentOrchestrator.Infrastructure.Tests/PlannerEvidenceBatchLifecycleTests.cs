@@ -29,13 +29,27 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         Assert.Contains("café", plan, StringComparison.Ordinal);
         var expectedHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plan))).ToLowerInvariant();
         var request = Assert.Single(f.Kernel.GetPendingBlockingHumanInput(f.Goal.Id));
+        var pending = Assert.IsType<PendingPlannerArtifact>(round.PendingPlannerArtifact);
+        Assert.Equal(plan, pending.Plan);
+        Assert.Equal(expectedHash, pending.Sha256);
+        Assert.Equal(request.Id.Value, Assert.Single(pending.RequestIds!));
+        Assert.Equal(f.Planner.LastDispatch!.DispatchedAt, pending.DispatchAttemptAt);
+        Assert.Equal(f.Goal.AuthoritativeBrief.Version, pending.BriefVersion);
+        Assert.Null(pending.AnswerId);
+        Assert.False(WorkerArtifactWriter.TryResolveDurablePlannerPlan(round, out _, out _));
 
         await f.Reload();
         Assert.Equal(request.Id, Assert.Single(f.Kernel.GetPendingBlockingHumanInput(f.Goal.Id)).Id);
         Assert.Equal(round.CompletedAt, f.Planner.LastVerification!.CompletedAt);
+        Assert.Equal(JsonSerializer.Serialize(pending), JsonSerializer.Serialize(f.Planner.LastVerification.PendingPlannerArtifact));
+        Assert.Equal(HumanInputAnswerEffect.CompletesTask, f.Kernel.PredictHumanInputAnswerOutcome(request.Id).Effect);
         f.Kernel.SubmitHumanInput(request.Id, "Retrieved the historical receipt.");
-        Assert.Equal(HumanInputAnswerOrigin.Operator, f.Kernel.GetHumanInputRequest(request.Id).AuthoritativeAnswer!.Origin);
+        var answer = f.Kernel.GetHumanInputRequest(request.Id).AuthoritativeAnswer!;
+        Assert.Equal(HumanInputAnswerOrigin.Operator, answer.Origin);
         Assert.Equal(WorkTaskStatus.Completed, f.Planner.Status);
+        Assert.Equal(answer.Id, f.Planner.LastVerification!.PendingPlannerArtifact!.AnswerId);
+        Assert.Equal(request.Id.Value, f.Planner.LastVerification.PendingPlannerArtifact.AnsweredRequestId);
+        Assert.Throws<InvalidOperationException>(() => f.Kernel.SubmitHumanInput(request.Id, "Repeated answer."));
 
         var developer = f.Kernel.GetTask(f.Goal.Id, f.DeveloperId);
         f.Kernel.RecordTaskDispatch(f.Goal.Id, developer.Id, new("developer", "implement", f.Root, DateTimeOffset.UtcNow));
@@ -47,8 +61,15 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         await f.Reload();
         var restored = Assert.Single(f.Planner.VerificationHistory);
         Assert.Equal(round.CompletedAt, restored.CompletedAt);
+        var promoted = Assert.IsType<PendingPlannerArtifact>(restored.PendingPlannerArtifact);
+        Assert.Equal(JsonSerializer.Serialize(pending with { AnsweredRequestId = request.Id.Value, AnswerId = answer.Id }),
+            JsonSerializer.Serialize(promoted));
+        Assert.Equal(answer.Id, f.Kernel.GetHumanInputRequest(request.Id).AuthoritativeAnswer!.Id);
         Assert.True(WorkerArtifactWriter.TryResolveDurablePlannerPlan(restored, out var reloadedPlan, out diagnostic), diagnostic);
         Assert.Equal(plan, reloadedPlan);
+        Assert.False(WorkerArtifactWriter.TryResolveDurablePlannerPlan(
+            restored with { PendingPlannerArtifact = promoted with { Sha256 = "bad-digest" } }, out _, out diagnostic));
+        Assert.Contains("inconsistent", diagnostic, StringComparison.Ordinal);
         if (removeCitedFile)
         {
             File.Delete(Path.Combine(f.Root, citedPath));
@@ -73,7 +94,56 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         Assert.DoesNotContain(preflight.Findings, finding => finding.Contains(WorkerProfileDispatcher.MissingPlannerArtifactErrorCode, StringComparison.Ordinal));
         Assert.Equal(WorkTaskStatus.Completed, f.Planner.Status);
         Assert.Single(f.Planner.DispatchHistory);
+        Assert.Single(f.Goal.Timeline, item => item.TaskId == f.Planner.Id && item.Kind == ProgressKind.TaskCompleted);
         Assert.DoesNotContain(f.Goal.Timeline, item => item.TaskId == f.Planner.Id && item.Kind == ProgressKind.TaskRetried);
+    }
+
+    [Fact]
+    public async Task SnapshotWithoutPendingArtifactRestoresLegacyVerification()
+    {
+        using var f = new Fixture();
+        f.Record(PlannerMultipleEvidenceRequestMergeTests.HistoricalRequest);
+        var snapshot = Assert.Single(f.Kernel.ExportSnapshot().Goals).Tasks.Single(task => task.Id == f.Planner.Id.Value);
+        Assert.False(JsonSerializer.SerializeToElement(snapshot.LastVerification)
+            .TryGetProperty(nameof(TaskVerificationSnapshot.PendingPlannerArtifact), out _));
+
+        await f.Reload();
+
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, f.Planner.Status);
+        Assert.Null(f.Planner.LastVerification!.PendingPlannerArtifact);
+        Assert.Null(Assert.Single(f.Planner.VerificationHistory).PendingPlannerArtifact);
+        Assert.Single(f.Kernel.GetPendingBlockingHumanInput(f.Goal.Id));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("malformed")]
+    [InlineData("incomplete")]
+    public void InvalidProcessPlanCannotBeCompletedByAnAnswer(string defect)
+    {
+        using var f = new Fixture(researchFirst: true);
+        f.Refresh(PlannerMultipleEvidenceRequestMergeTests.HistoricalRequest, changePlan: plan => defect switch
+        {
+            "missing" => "",
+            "malformed" => plan.Replace("## Target seams and symbols", "## Invalid heading", StringComparison.Ordinal),
+            "incomplete" => plan.Replace("2. disposition=planned; plan=Operator observes the candidate", "", StringComparison.Ordinal),
+            _ => throw new ArgumentOutOfRangeException(nameof(defect))
+        });
+        var round = f.Planner.LastVerification!;
+        Assert.False(round.Succeeded);
+        Assert.Null(round.PendingPlannerArtifact);
+        Assert.False(WorkerArtifactWriter.TryResolveDurablePlannerPlan(round, out _, out _));
+        var request = Assert.Single(f.Kernel.GetPendingBlockingHumanInput(f.Goal.Id));
+        f.Kernel.SubmitHumanInput(request.Id, WorkerDispatchTestSupport.PlannerContractPlanFixture());
+
+        Assert.Equal(WorkTaskStatus.Assigned, f.Planner.Status);
+        Assert.All(f.Planner.VerificationHistory, verification => Assert.Null(verification.PendingPlannerArtifact));
+        var tester = f.Kernel.GetTask(f.Goal.Id, f.TesterId!);
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(f.Goal, tester, f.Agents, Fixture.Profiles,
+            f.Root, DateTimeOffset.UtcNow, commandExists: _ => true, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
+        Assert.Contains(preflight.Findings, finding => finding.StartsWith("ok: research-artifact:", StringComparison.Ordinal));
+        Assert.Contains(preflight.Findings, finding => finding.StartsWith(
+            $"blocked: {WorkerProfileDispatcher.MissingPlannerArtifactErrorCode}:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -515,7 +585,7 @@ public sealed class PlannerEvidenceBatchLifecycleTests
                 dispatch.Command, Root, 0, batch + "\n" + WorkerResult, "", DateTimeOffset.UtcNow.AddTicks(++_round),
                 WorkerResultPresent: true, DispatchAttemptAt: correlated ? dispatch.DispatchedAt : null));
         }
-        internal void Refresh(string batch, string citedPath = "seed.txt")
+        internal void Refresh(string batch, string citedPath = "seed.txt", Func<string, string>? changePlan = null)
         {
             var sourceFile = Path.Combine(Root, citedPath);
             Directory.CreateDirectory(Path.GetDirectoryName(sourceFile)!);
@@ -527,6 +597,7 @@ public sealed class PlannerEvidenceBatchLifecycleTests
                 WorkerDispatchTestSupport.PlannerContractAcceptanceMappingBody,
                 "1. disposition=planned; plan=Acceptance executes the café candidate tests\n2. disposition=planned; plan=Operator observes the candidate", StringComparison.Ordinal)
                 .Replace("seed.txt", citedPath, StringComparison.Ordinal);
+            if (changePlan is not null) plan = changePlan(plan);
             File.WriteAllText(stdout, WorkerDispatchTestSupport.ResearcherContractFixture() + "\n" + plan + "\n" + batch + "\n" + WorkerResult);
             File.WriteAllText(stderr, "");
             File.WriteAllText(exit, "0");

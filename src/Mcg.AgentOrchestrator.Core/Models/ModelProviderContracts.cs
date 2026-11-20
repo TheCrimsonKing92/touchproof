@@ -105,7 +105,9 @@ public sealed record TaskVerificationRecord(
     IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null,
     // Bound by the host to the dispatch that produced this result.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    int? FindingContractVersion = null)
+    int? FindingContractVersion = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    PendingPlannerArtifact? PendingPlannerArtifact = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);

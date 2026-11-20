@@ -750,7 +750,12 @@ internal sealed class CompletedProcessOutcomeBuilder
             // Planner evidence binds its brief through host dispatch provenance as well.
             // Developer write observations carry their own attempt binding without changing shared evidence readers.
             DispatchAttemptAt: requiresTerminalContract || task.RequiredRole == AgentRole.Planner
-                ? dispatchAttempt?.DispatchedAt : null),
+                ? dispatchAttempt?.DispatchedAt : null,
+            PendingPlannerArtifact: task.RequiredRole == AgentRole.Planner && exitCode == 0 &&
+                completionContractSucceeded && orchestratorFailureReason is null && dispatchAttempt is not null
+                ? WorkerArtifactWriter.CapturePendingPlannerArtifact(
+                    goal, dispatchAttempt, humanInputDirective, processRecord, fullStandardOutput.Content)
+                : null),
             hasChildExitRecord ? childExitRecord.WorkerIntegrity : null);
 
         var outcome = new DispatchRefreshOutcome(
