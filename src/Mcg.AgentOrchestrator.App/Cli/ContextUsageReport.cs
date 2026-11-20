@@ -15,6 +15,7 @@ internal sealed record ContextUsageRow(
     ContextUsageStat Uncached,
     ContextUsageStat Output,
     ContextUsageStat Turns,
+    ContextUsageStat ToolCalls,
     ContextUsageStat HarnessOverhead,
     int MissingUsageCount,
     IReadOnlyDictionary<string, int> MissingUsageReasons);
@@ -55,6 +56,7 @@ internal static class ContextUsageReport
                 Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Uncached(value.InputTokens, value.CachedInputTokens).Value)),
                 Stat(usage.Select(value => DispatchUsageValues.ReportedCount(value?.OutputTokens))),
                 Stat(group.Select(item => RecordedTurns(item.Dispatch))),
+                Stat(group.Select(item => RecordedToolCalls(item.Dispatch))),
                 Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.HarnessOverhead(receipt).Value)),
                 missing.Length,
                 reasons);
@@ -67,6 +69,15 @@ internal static class ContextUsageReport
     }
 
     internal static long? RecordedTurns(TaskDispatchRecord dispatch) => DispatchUsageValues.RecordedTurns(dispatch);
+
+    private static long? RecordedToolCalls(TaskDispatchRecord dispatch)
+    {
+        var receiptValue = dispatch.ContextPackageReceipt?.ToolCalls;
+        var toolCalls = receiptValue is { State: ProviderUsageState.Reported }
+            ? receiptValue
+            : dispatch.ProviderUsage?.ToolCalls;
+        return toolCalls is null ? null : ContextUsageFigures.Provider(toolCalls).Value;
+    }
 
     private static ContextUsageStat Stat(IEnumerable<long?> values) => ContextUsageFigures.Stat(values);
 }
