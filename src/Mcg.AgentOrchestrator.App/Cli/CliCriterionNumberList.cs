@@ -54,7 +54,8 @@ internal static class CliCriterionNumberList
             var intent = new OperatorIntentRecord(id, key is null ? id : $"{key}-{number}",
                 OperatorIntentVerbs.CriterionEvidenceMap, goal.Id.Value, null,
                 JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [], attribution.Actor,
-                attribution.Channel, attribution.AuthenticationAssurance, DateTimeOffset.UtcNow);
+                attribution.Channel, attribution.AuthenticationAssurance, DateTimeOffset.UtcNow,
+                DriverSessionId: attribution.DriverSessionId);
             return (Intent: intent, Target: target);
         }).ToArray();
 

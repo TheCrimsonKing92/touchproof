@@ -1993,6 +1993,32 @@ function Invoke-MtpBuild {
         [switch]$RequireManagedClosure
     )
 
+    try {
+        $fullRoot = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepositoryRoot))
+        $pathRoot = [IO.Path]::GetPathRoot($fullRoot)
+        if ($fullRoot.Length -gt $pathRoot.Length) {
+            $fullRoot = $fullRoot.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar))
+        }
+        $lockKey = $fullRoot
+        $mutexPrefix = 'Mcg.MtpBuild.'
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+            $lockKey = $fullRoot.ToUpperInvariant()
+            $mutexPrefix = "Global\$mutexPrefix"
+        }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockKey))).Replace('-', '')
+            $mutexName = "$mutexPrefix$hash"
+        }
+        finally {
+            $sha.Dispose()
+        }
+    }
+    catch {
+        Write-Host "BUILD FAILURE - could not prepare the worktree lock for '$RepositoryRoot': $($_.Exception.Message)"
+        return $false
+    }
+
     foreach ($project in $Projects) {
         $buildTarget = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$project.project)))
         $projectName = Get-MtpProjectName -Invocation $project
@@ -2025,24 +2051,75 @@ function Invoke-MtpBuild {
             '-nodeReuse:false',
             "-p:McgBuildReceiptProject=$buildTarget"
         )
+        $worktreeLock = $null
+        $lockOwned = $false
+        $lockWait = $null
+        $retryStatus = 'not-attempted'
         try {
-            $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $captureLogPath -WorkingDirectory $RepositoryRoot -StartupHookPath $StartupHookPath
-            if (-not $build.Started -or -not [string]::IsNullOrWhiteSpace([string]$build.StartFailureMessage)) {
-                Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($build.StartFailureMessage)"
+            try {
+                $worktreeLock = [System.Threading.Mutex]::new($false, $mutexName)
+                $lockOwned = $worktreeLock.WaitOne(0)
+                if (-not $lockOwned) {
+                    $lockWait = [System.Diagnostics.Stopwatch]::StartNew()
+                    $lockOwned = $worktreeLock.WaitOne()
+                }
+            }
+            catch [System.Threading.AbandonedMutexException] {
+                $lockOwned = $true
+            }
+            catch {
+                Write-Host "BUILD FAILURE - could not acquire the worktree lock for '$fullRoot': $($_.Exception.Message)"
                 return $false
             }
-            if (-not [string]::IsNullOrWhiteSpace([string]$build.MonitoringFailureMessage)) {
-                Write-Host "BUILD MONITOR FAILURE - PID $($build.ProcessId) ('$DotnetPath build'): $($build.MonitoringFailureMessage)"
-                return $false
+            finally {
+                if ($null -ne $lockWait) {
+                    $lockWait.Stop()
+                }
             }
-            if (-not $build.CleanupConfirmed) {
-                Write-Host "BUILD CLEANUP FAILURE - exact owned process lifetime rooted at PID $($build.ProcessId) ('$DotnetPath build') was not fully terminated."
-                return $false
-            }
-            if (-not $build.DrainConfirmed) {
-                Write-Host "BUILD OUTPUT DRAIN INCOMPLETE - continuing with exit code $($build.ExitCode). Captured stderr/stdout: $captureLogPath"
-            }
-            if ($build.ExitCode -ne 0) {
+
+            for ($attempt = 1; $attempt -le 2; $attempt++) {
+                try {
+                    # The file logger may never open its log on an early failure.
+                    [IO.File]::Delete($buildLogPath)
+                    [IO.File]::Delete($captureLogPath)
+                }
+                catch {
+                    Write-Host "BUILD FAILURE - could not clear the build logs for '$buildTarget': $($_.Exception.Message)"
+                    return $false
+                }
+
+                if ($attempt -eq 2) {
+                    $retryStatus = 'failed'
+                }
+                $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $captureLogPath -WorkingDirectory $RepositoryRoot -StartupHookPath $StartupHookPath
+                if (-not $build.Started -or -not [string]::IsNullOrWhiteSpace([string]$build.StartFailureMessage)) {
+                    Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($build.StartFailureMessage)"
+                    return $false
+                }
+                if (-not [string]::IsNullOrWhiteSpace([string]$build.MonitoringFailureMessage)) {
+                    Write-Host "BUILD MONITOR FAILURE - PID $($build.ProcessId) ('$DotnetPath build'): $($build.MonitoringFailureMessage)"
+                    return $false
+                }
+                if (-not $build.CleanupConfirmed) {
+                    Write-Host "BUILD CLEANUP FAILURE - exact owned process lifetime rooted at PID $($build.ProcessId) ('$DotnetPath build') was not fully terminated."
+                    return $false
+                }
+                if (-not $build.DrainConfirmed) {
+                    Write-Host "BUILD OUTPUT DRAIN INCOMPLETE - continuing with exit code $($build.ExitCode). Captured stderr/stdout: $captureLogPath"
+                }
+                if ($build.ExitCode -eq 0) {
+                    if ($attempt -eq 2) {
+                        $retryStatus = 'succeeded'
+                    }
+                    break
+                }
+                if ($attempt -eq 1) {
+                    $attemptLogs = @($captureLogPath, $buildLogPath) | Where-Object { [IO.File]::Exists($_) }
+                    if ($attemptLogs -and (Select-String -LiteralPath $attemptLogs -Pattern '\bCS2012\b' -Quiet -ErrorAction SilentlyContinue)) {
+                        Start-Sleep -Milliseconds 500
+                        continue
+                    }
+                }
                 Write-Host "BUILD FAILURE - '$DotnetPath build' exited $($build.ExitCode). The managed MTP runner was not launched."
                 return $false
             }
@@ -2059,8 +2136,29 @@ function Invoke-MtpBuild {
             }
         }
         finally {
-            if ($null -ne $outputDirectory -and (Test-Path -LiteralPath $outputDirectory)) {
-                Remove-Item -LiteralPath $outputDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            try {
+                try {
+                    if ($lockOwned) {
+                        $worktreeLock.ReleaseMutex()
+                    }
+                }
+                finally {
+                    if ($null -ne $worktreeLock) {
+                        $worktreeLock.Dispose()
+                    }
+                }
+            }
+            finally {
+                if ($null -ne $lockWait -or $retryStatus -ne 'not-attempted') {
+                    $waitMilliseconds = 0
+                    if ($null -ne $lockWait) {
+                        $waitMilliseconds = $lockWait.ElapsedMilliseconds
+                    }
+                    Write-Host "BUILD LOCK RECEIPT - worktree='$fullRoot' project='$buildTarget' waitMs=$waitMilliseconds retry=$retryStatus"
+                }
+                if ($null -ne $outputDirectory -and (Test-Path -LiteralPath $outputDirectory)) {
+                    Remove-Item -LiteralPath $outputDirectory -Recurse -Force -ErrorAction SilentlyContinue
+                }
             }
         }
     }

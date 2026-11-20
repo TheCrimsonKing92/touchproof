@@ -264,7 +264,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Retry = new(
         RetryUsage,
         "Retry a task with operator feedback.",
-        ["--goal", "--text-file", "--cause", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+        ["--goal", "--text-file", "--cause", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Note = new(
         NoteUsage,
@@ -274,17 +274,17 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Progress = new(
         ProgressUsage,
         "Record task progress.",
-        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry VerifyManual = new(
         VerifyManualUsage,
         "Record manual verification evidence for a task.",
-        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Adjudicate = new(
         AdjudicateUsage,
         "Atomically close, reopen for a gate, or route a task with decision evidence. Evidence may be ref or id=hash.",
-        ["--goal", "--text-file", "--ruling-text-file", "--evidence", "--cause", "--reversibility", "--precedent", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+        ["--goal", "--text-file", "--ruling-text-file", "--evidence", "--cause", "--reversibility", "--precedent", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--json", "--help", "-h"]);
 
     public const string IntegrationScopeUsage = "Usage: integration-scope <goal-prefix> <round-id> <full-original-sha> <full-main-sha> <approve|original-only|revoke> --text-file <reason-path> --idempotency-key <key> [--path <exact-file> ...] [--approval <intent-id>] [--json]";
     private static readonly CommandHelpEntry IntegrationScope = new(IntegrationScopeUsage,
@@ -305,22 +305,22 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry CriterionEvidenceMap = new(
         CriterionEvidenceMapUsage,
         "Queue a candidate-bound criterion ownership mapping for the conductor.",
-        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--help", "-h", "--json"]);
+        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--driver-session", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRecord = new(
         CriterionEvidenceRecordUsage,
         "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor. For a post-landing duty add --observation-json with GoalId, ObligationId, PromotedMainRevision, Scope (Kind, Condition, Target), ActivationIdentity, ActivationEvidence, ActivatedAt, ObservedAt and ActivationAttested. Runtime activation requires the human operator's explicit ActivationAttested=true attestation of verified activation; a timestamp or path alone is insufficient.",
-        ["--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--observation-json", "--help", "-h", "--json"]);
+        ["--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--observation-json", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRepair = new(
         CriterionEvidenceRepairUsage,
         "Queue an attributed repair that rebinds one malformed Unknown claim; the replacement remains pending until valid evidence arrives.",
-        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--help", "-h", "--json"]);
+        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--driver-session", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRephase = new(
         CriterionEvidenceRephaseUsage,
         "Queue an attributed decision to move one pending Operator obligation to PostLanding with an explicit observation scope.",
-        ["--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h", "--json"]);
+        ["--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry Recover = new(
         RecoverUsage,
@@ -907,7 +907,7 @@ internal static class CliCommandHelp
             ["start-dispatches"] = BatchStartFlags(includeGoal: true),
             ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
             ["logs"] = GoalScopedTaskFlags(),
-            ["cancel-dispatch"] = Flags("--goal", "--completion-build-operation", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
+            ["cancel-dispatch"] = Flags("--goal", "--completion-build-operation", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--json"),
             ["goal-priority"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["goal-branch-commit"] = Flags("--message", "--resume", "--wait", "--operator-actor", "--actor-kind"),
             ["provider-reset"] = Flags("--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),

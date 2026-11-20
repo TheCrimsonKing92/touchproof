@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -174,6 +175,191 @@ public sealed class OperatorIntentStoreTests
             var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
                 () => store.EnqueueAsync(collision));
             Xunit.Assert.Contains("different intent", ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("  Session / MixedCase  ")]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(null)]
+    public async Task Enqueue_DriverSessionId_RoundTripsExactly(string? driverSessionId)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var store = SqliteOperatorIntentStore.ForDirectories(root, Path.Combine(root, "logs"));
+            var intent = CreateRetryIntent("goal", "task", "intent", "key");
+            if (driverSessionId is not null)
+                intent = intent with { DriverSessionId = driverSessionId };
+
+            var persisted = await store.EnqueueAsync(intent);
+
+            Xunit.Assert.Equal(driverSessionId, persisted.DriverSessionId);
+            var read = Xunit.Assert.Single(await store.ListForGoalAsync(intent.GoalId));
+            Xunit.Assert.Equal(intent.Id, read.Id);
+            Xunit.Assert.Equal(driverSessionId, read.DriverSessionId);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("session-A")]
+    [Xunit.InlineData(null)]
+    public async Task Enqueue_ReplayedKeyWithDifferentDriverSessionId_IsRejected(string? differentId)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var store = SqliteOperatorIntentStore.ForDirectories(root, Path.Combine(root, "logs"));
+            var original = CreateRetryIntent("goal", "task", "first", "stable-key") with
+            {
+                DriverSessionId = "Session-A"
+            };
+            await store.EnqueueAsync(original);
+
+            var replay = original with { Id = "replay" };
+            Xunit.Assert.Equal(original.Id, (await store.EnqueueAsync(replay)).Id);
+
+            var error = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() =>
+                store.EnqueueAsync(replay with { DriverSessionId = differentId }));
+
+            Xunit.Assert.Contains("different intent", error.Message, StringComparison.Ordinal);
+            var persisted = Xunit.Assert.Single(await store.ListForGoalAsync(original.GoalId));
+            Xunit.Assert.Equal(original.DriverSessionId, persisted.DriverSessionId);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task Setup_VersionFourStore_PreservesLegacyIntentWithNullDriverSessionId()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var dbPath = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
+            var logs = Path.Combine(root, "logs");
+            var writer = SqliteOperatorIntentStore.ForDirectories(root, logs);
+            var legacy = await writer.EnqueueAsync(CreateRetryIntent("goal", "task", "legacy", "legacy-key"));
+            using (var connection = writer.OpenConnection())
+            {
+                using var command = connection.CreateCommand();
+                // Reconstruct the v4 schema around the existing intent row.
+                command.CommandText = """
+                    ALTER TABLE operator_intents DROP COLUMN driver_session_id;
+                    UPDATE store_schema_versions SET version = 4 WHERE store_name = 'operator-intents';
+                    """;
+                command.ExecuteNonQuery();
+                Xunit.Assert.Equal(StoreSchemaState.Older,
+                    StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.OperatorIntents, out var recorded));
+                Xunit.Assert.Equal(4, recorded);
+            }
+
+            SqliteOperatorIntentStore.Setup(dbPath);
+
+            var reader = SqliteOperatorIntentStore.OpenExisting(root, logs);
+            var read = Xunit.Assert.Single(await reader.ListForGoalAsync(legacy.GoalId));
+            Xunit.Assert.Equal(legacy.Id, read.Id);
+            Xunit.Assert.Equal(legacy.PayloadJson, read.PayloadJson);
+            Xunit.Assert.Null(read.DriverSessionId);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    // Parallel-safe: private SQLite roots, captured console output, and no running worker process.
+    [Xunit.Theory]
+    [Xunit.InlineData(OperatorIntentVerbs.Progress, "", ProviderKind.OpenAICodexCli, "Claude Code")]
+    [Xunit.InlineData(OperatorIntentVerbs.CriterionEvidenceMap, "1", ProviderKind.AnthropicClaudeCli, "Codex")]
+    [Xunit.InlineData(OperatorIntentVerbs.CriterionEvidenceMap, "1,2", ProviderKind.OpenAICodexCli, "Claude Code")]
+    [Xunit.InlineData(OperatorIntentVerbs.CancelDispatch, "", ProviderKind.AnthropicClaudeCli, "Codex")]
+    public async Task CliSubmission_DriverSessionFlag_RecordsOnlyExplicitId(
+        string verb, string criterionNumbers, ProviderKind workerProvider, string operatorActor)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = InfrastructureTestSupport.CreateSetUpWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Test an intent submission", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Store attribution", [task]);
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Check intent attribution",
+                ["First requirement", "Second requirement"], VerificationClass.TestVerifiable, [], []));
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            kernel.ActivateGoal(goal.Id, agents);
+            var dispatch = new TaskDispatchRecord("fixture", "fixture", root,
+                new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero),
+                WorkerProviderKind: workerProvider, ProviderSessionId: "worker-session");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+            // Exercise cancel-dispatch's never-started path with no process to stop.
+            DispatchStartFailureEvidence.Record(kernel, goal.Id, task.Id, dispatch.DispatchedAt, "Fixture start failure");
+            var state = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await state.SaveAsync(kernel);
+            var savedGoal = await state.LoadGoalAsync(goal.Id);
+            Xunit.Assert.NotNull(savedGoal);
+            var savedTask = Xunit.Assert.Single(savedGoal.Tasks);
+            Xunit.Assert.Equal(workerProvider, savedTask.LastDispatch?.WorkerProviderKind);
+            Xunit.Assert.Null(savedTask.LastProcess);
+
+            string[] operands = verb switch
+            {
+                OperatorIntentVerbs.Progress => ["1", "running", "Still working"],
+                OperatorIntentVerbs.CriterionEvidenceMap =>
+                    ["--criterion", criterionNumbers, "operator", "observation", "finding", new string('a', 40)],
+                OperatorIntentVerbs.CancelDispatch => ["1"],
+                _ => throw new ArgumentOutOfRangeException(nameof(verb))
+            };
+            var goalPrefix = goal.Id.Value[..8];
+            string[] command = [verb, "--goal", goalPrefix, .. operands, "--operator-actor", operatorActor];
+            var expectedTaskId = verb == OperatorIntentVerbs.CriterionEvidenceMap ? null : task.Id.Value;
+            var store = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            void Submit(string[] args)
+            {
+                var parts = CliArgumentParser.NormalizeArgs(args);
+                CliCommandHelp.ThrowIfInvalidFlags(parts);
+                InfrastructureTestSupport.CaptureConsole(() =>
+                {
+                    if (verb == OperatorIntentVerbs.CriterionEvidenceMap)
+                        Xunit.Assert.Equal(0, CliOperatorIntentRoute.Run(parts, workspace));
+                    else
+                        Xunit.Assert.False(CliPersistentStateRunner.ExecuteCommand(parts, state, workspace,
+                            ref agents, providers, ref profiles, ref currentGoal));
+                });
+            }
+
+            const string sessionId = "  Driver / MixedCase  ";
+            Submit([.. command, "--driver-session", sessionId, "--idempotency-key", "explicit"]);
+            Submit([.. command, "--idempotency-key", "omitted"]);
+
+            var rows = await store.ListForGoalAsync(goal.Id.Value);
+            string[] expectedKeys = criterionNumbers == "1,2"
+                ? ["explicit-1", "explicit-2", "omitted-1", "omitted-2"]
+                : ["explicit", "omitted"];
+            Xunit.Assert.Equal(expectedKeys, rows.Select(row => row.IdempotencyKey).Order(StringComparer.Ordinal));
+            foreach (var row in rows)
+            {
+                Xunit.Assert.Equal(verb, row.Verb);
+                Xunit.Assert.Equal(expectedTaskId, row.TaskId);
+                Xunit.Assert.Equal(operatorActor, row.Actor);
+                Xunit.Assert.Equal(OperatorIntentStatus.Pending, row.Status);
+                Xunit.Assert.Equal(row.IdempotencyKey.StartsWith("explicit", StringComparison.Ordinal) ? sessionId : null,
+                    row.DriverSessionId);
+            }
         }
         finally
         {
