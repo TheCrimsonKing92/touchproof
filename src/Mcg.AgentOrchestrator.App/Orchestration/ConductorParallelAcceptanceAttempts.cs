@@ -2042,7 +2042,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             : Path.GetFileNameWithoutExtension(environment.ExecutionLockPath);
 
     private static string AllBuildPermitNames() =>
-        BuildPermitNames(Enumerable.Range(0, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount));
+        BuildPermitNames(Enumerable.Range(0, DotnetBuildEnvironmentManager.BuildThrottleLimit));
 
     private static string BuildPermitNames(IEnumerable<int> permitIndexes) =>
         string.Join("|", permitIndexes.Select(index => $"build-{index}"));

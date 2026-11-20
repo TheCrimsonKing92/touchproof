@@ -8,6 +8,29 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel : DotnetBuildEnvironmentManagerRootedTestBase
 {
     [Fact]
+    public void SlotsBusyExceptionMessageNamesEveryHolderAndTheRequester()
+    {
+        const string firstHolder = "worker-build:goal-aaaaaaaa";
+        const string secondHolder = "cohort-gate:goal-bbbbbbbb+cccccccc";
+        const string requester = "waiting-build";
+        var busySlots = new DotnetBuildLeaseAcquisition.SlotsBusy(requester,
+            [new(0, 123) { HolderLabel = firstHolder }, new(1, 456) { HolderLabel = secondHolder }]);
+
+        var message = new DotnetBuildSlotsBusyException(busySlots).Message;
+
+        Assert.Contains("Stable dotnet build slots busy", message, StringComparison.Ordinal);
+        Assert.Contains(firstHolder, message, StringComparison.Ordinal);
+        Assert.Contains(secondHolder, message, StringComparison.Ordinal);
+        Assert.Contains(requester, message, StringComparison.Ordinal);
+        Assert.True(message.IndexOf(firstHolder, StringComparison.Ordinal) < message.IndexOf(secondHolder, StringComparison.Ordinal));
+        Assert.True(message.IndexOf(secondHolder, StringComparison.Ordinal) < message.IndexOf(requester, StringComparison.Ordinal));
+
+        var emptyMessage = new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(requester, [])).Message;
+        Assert.Contains("no holder labels available", emptyMessage, StringComparison.Ordinal);
+        Assert.Contains(requester, emptyMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CohortAndGoalAttemptWriteLabelsAndBusyLineNamesBoth()
     {
         using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
