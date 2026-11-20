@@ -7,9 +7,9 @@ internal static class GoalIntakeReplayReceipt
 {
     public static void Print(
         GoalIntakeRequestRecord record,
-        string requestKey,
+        GoalIntakeRequestDescriptor request,
         IOrchestratorStateRepository stateRepository,
-        string portfolioPath,
+        OrchestratorWorkspace workspace,
         bool summary,
         ref Goal? currentGoal)
     {
@@ -22,10 +22,17 @@ internal static class GoalIntakeReplayReceipt
             if (currentGoal is null)
             {
                 throw new InvalidOperationException(
-                    $"GOAL_INTAKE_RECEIPT_INVALID requestKey={requestKey} reason=created-goal-missing");
+                    $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
+            }
+            if (request.RequestedEpicId is { } epicId)
+            {
+                var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+                var goalId = currentGoal.Id.Value;
+                if (portfolio.GetGoalMembershipAsync(goalId).GetAwaiter().GetResult() is null)
+                    EpicAtCreation.AssignAfterCommit(workspace, PortfolioMemberKind.Goal, goalId, epicId);
             }
             if (summary)
-                GoalCreationSummaryView.Print(currentGoal, "replayed", portfolioPath);
+                GoalCreationSummaryView.Print(currentGoal, "replayed", workspace.PortfolioStorePath);
             else
                 GoalTextView.PrintGoal(currentGoal);
             return;
@@ -34,7 +41,7 @@ internal static class GoalIntakeReplayReceipt
         if (record.State == GoalIntakeRequestStates.Failed)
         {
             throw new InvalidOperationException(
-                $"GOAL_INTAKE_REPLAY_FAILED requestKey={requestKey} " +
+                $"GOAL_INTAKE_REPLAY_FAILED requestKey={request.RequestKey} " +
                 $"failureCode={record.FailureCode} detail={record.FailureDetail}");
         }
     }
