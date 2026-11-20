@@ -2,9 +2,13 @@ using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Collection(TestCollections.EnvMutation)]
+[Collection("GateReplayEnvironment")]
 public sealed class GateReplayEnvironmentAllowlistTests
 {
+    [CollectionDefinition("GateReplayEnvironment", DisableParallelization = true)]
+    [ProcessLocalTestCollection("Ambient environment seeding is restored within the test process; all replay artifacts use private temporary roots.")]
+    public sealed class SerialCollection;
+
     [Fact]
     public void InheritedInputsSurviveGateCompositionButStayOutOfPersistedReplay()
     {
