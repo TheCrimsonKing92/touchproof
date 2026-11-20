@@ -112,6 +112,50 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
     }
 
     [Xunit.Fact]
+    public async Task Policy_ReportsLaneMedianFromThreePriorFilters()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-a", 80, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-b", 100, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-c", 300, samples: 1);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Contains(" R=100 Rn=3 ", Assert.Single(scenario.Progress, line =>
+            line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
+    public async Task Policy_PrefersQualifyingExactHistoryOverPooledHistory()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 100, samples: 3);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-filter", 40, samples: 3);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Contains(" R=100 Rn=3 ", Assert.Single(scenario.Progress, line =>
+            line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
+    public async Task Policy_PoolsTwoExactSamplesWithOnePriorFilterSample()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 80, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 300, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-filter", 100, samples: 1);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Contains(" R=100 Rn=3 ", Assert.Single(scenario.Progress, line =>
+            line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
     public async Task Policy_TwoRemoteSamplesWithinSlackKeepLaneLocal()
     {
         using var scenario = CreateScenario([45, 300, 200]);
