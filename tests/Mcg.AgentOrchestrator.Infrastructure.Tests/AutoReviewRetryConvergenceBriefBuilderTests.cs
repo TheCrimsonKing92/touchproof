@@ -1279,6 +1279,54 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
     }
 
     [Xunit.Fact]
+    public void ContractRepairBriefCarriesTesterClaimedResolutionWithoutClassId()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Repair Tester finding contract");
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var violation = new ReviewFindingContractViolation(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            "F-1 moved.",
+            "F-1",
+            "F-1",
+            new ReviewFindingLocation("src/A.cs", "A.Run"),
+            new ReviewFindingLocation("src/C.cs", "C.Run"));
+        const string rejectedOutput = """
+            WORKER_RESULT:
+            files: none
+            commands: verify
+            tests: fail - F-1 remains open
+            blockers: F-1 remains open
+            findings: [{"stable_id":"F-1","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/C.cs","region":"C.Run"},"description":"First blocker."},{"stable_id":"F-2","state":"resolved","severity":"blocking","category":"correctness","location":{"file":"src/B.cs","region":"B.Run"},"description":"Second blocker fixed."}]
+            touched_anchors: []
+            END_WORKER_RESULT
+            """;
+        const string outputArtifact = @"C:\tmp\tester.out.log";
+        kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+            "test",
+            @"C:\tmp",
+            1,
+            rejectedOutput,
+            string.Empty,
+            DateTimeOffset.Parse("2026-07-30T10:01:00Z"),
+            StandardOutputPath: outputArtifact,
+            WorkerResultPresent: true,
+            ReviewFindingContractViolation: violation));
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
+            goal, tester, violation, 1, 2, outputArtifact);
+
+        Assert.Contains(
+            "## PREVIOUSLY_CLAIMED_RESOLUTIONS (not applied; re-assert if still true)" + Environment.NewLine +
+            "- stable_id: F-2" + Environment.NewLine,
+            brief,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void AggregateRepairBriefContainsAllDiagnosticsAndCanonicalAnchors()
     {
         var kernel = new AgentOrchestratorKernel();
