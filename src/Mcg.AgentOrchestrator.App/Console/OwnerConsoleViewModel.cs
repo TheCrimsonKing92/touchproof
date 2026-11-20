@@ -56,6 +56,8 @@ internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string
     OwnerConsoleLineSpans? Spans = null, string? GoalId = null, string? Question = null,
     IReadOnlyList<string>? GoalPrefixes = null, IReadOnlyList<OwnerConductEvent>? Evidence = null)
 {
+    internal string? SignInProvider { get; init; }
+
     internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create($"{Timestamp:O}/{Kind}/{GoalId ?? GoalPrefix}/{Detail}",
         new("goal", "Goal ID", GoalId), new("timestamp", "Timestamp", Timestamp.ToString("O")),
         new("kind", "Kind", Kind), new("tag", "Tag", Tag), new("title", "Goal title", GoalTitle),

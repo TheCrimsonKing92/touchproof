@@ -261,12 +261,13 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 var agreement = RemoteShadowAgreement.Decide(observation.Code, observation.FailingTests, local);
                 var request = run.Request;
                 var observed = observation.Result;
+                var faultOwner = observation.Code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.CancelledAfterGrace or
+                    RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.PreemptedByGate or
+                    RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ExecutorBusy or
+                    RemoteLaneOutcomeCode.NotEligibleExclusiveResource ? null : "executor";
                 RemoteExecutorHealthLedger.Append(_ledgerPath!, new(_clock.GetUtcNow(), request.ExecutorId,
                     request.AttemptId, request.Lane, observation.Code,
-                    observation.Code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.CancelledAfterGrace or
-                        RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.PreemptedByGate or
-                        RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ExecutorBusy or
-                        RemoteLaneOutcomeCode.NotEligibleExclusiveResource ? null : "executor",
+                    RemoteLaneFaultOwner.Resolve(faultOwner, run.LastStatus, request.AttemptId),
                     Binding(request), observed is null ? null : new(observed.ExecutorId, observed.Lane,
                         observed.VerifyingCommitSha, observed.ObservedTreeSha, observed.MainSha, observed.FilterHash,
                         observed.ManifestIdentity), observation.Reason, EvidenceShadow: true, GoalId: request.GoalId,
