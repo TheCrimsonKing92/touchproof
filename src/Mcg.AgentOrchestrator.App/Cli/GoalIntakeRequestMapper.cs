@@ -11,7 +11,24 @@ internal sealed record GoalIntakeRequestDescriptor(
     string RequestKey,
     string Fingerprint,
     string Mode,
-    string Objective);
+    string Objective,
+    string? RequestedEpicId)
+{
+    public GoalIntakeReservation Reserve(GoalIntakeRequestStore store)
+    {
+        try
+        {
+            return store.Reserve(RequestKey, Fingerprint);
+        }
+        catch (InvalidOperationException ex)
+            when (RequestedEpicId is not null &&
+                  ex.Message.StartsWith("GOAL_INTAKE_PAYLOAD_CONFLICT ", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{ex.Message} requestedEpic={RequestedEpicId} detail=stored fingerprint differs from the request including this epic", ex);
+        }
+    }
+}
 
 internal static class GoalIntakeRequestMapper
 {
@@ -48,6 +65,10 @@ internal static class GoalIntakeRequestMapper
         var mode = fromBacklog
             ? simple ? "backlog-simple" : "backlog-full"
             : simple ? "simple" : "full";
+        var requestedEpicId = command == "goal" && mode == "full" && !HasFlag(args, "--run") &&
+            EpicAtCreation.HasArgument(args)
+            ? EpicAtCreation.ResolveRequested(workspace, CliCommandHandlers.GetFlagValue(args, "--epic") ?? "")?.Id
+            : null;
         var objective = fromBacklog
             ? ResolveBacklogObjective(args, workspace)
             : ResolveObjective(args);
@@ -98,8 +119,14 @@ internal static class GoalIntakeRequestMapper
             repositoryPayload["repositories"] = JsonSerializer.SerializeToNode(repositories);
             canonical = repositoryPayload.ToJsonString();
         }
+        if (requestedEpicId is not null)
+        {
+            var epicPayload = JsonNode.Parse(canonical)!.AsObject();
+            epicPayload["epicId"] = requestedEpicId;
+            canonical = epicPayload.ToJsonString();
+        }
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
-        return new GoalIntakeRequestDescriptor(requestKey, fingerprint, mode, objective);
+        return new GoalIntakeRequestDescriptor(requestKey, fingerprint, mode, objective, requestedEpicId);
     }
 
     private static string ResolveObjective(IReadOnlyList<string> args)
