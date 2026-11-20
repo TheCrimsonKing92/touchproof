@@ -298,10 +298,7 @@ public static partial class WorkerProfileDispatcher
         try
         {
             budgetedBrief = WorkerPromptInputBudget.Apply(
-                packagedBrief,
-                providerName,
-                modelName,
-                workerProfileName: profile.Name).Brief;
+                packagedBrief, providerName, modelName, workerProfileName: profile.Name).Brief;
         }
         catch (WorkerPromptInputBudgetExceededException error)
             when (UsesResearchFirstArtifactHandoff(goal, task))
@@ -315,18 +312,19 @@ public static partial class WorkerProfileDispatcher
                 ArtifactTooLargeErrorCode,
                 findings);
         }
-        var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions, providerName);
+        var findingContractVersion = AgentOutputDirectives.GetFindingContractVersion(briefSource, budgetedBrief);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         var preparation = WorkerDispatchPromptPreparation.Prepare(
-            budgetedBrief, profile, workerProviderKind, promptRoot, dispatchVariables, dispatchedAt, retainedDispatch);
+            budgetedBrief, profile, workerProviderKind, promptRoot,
+            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions, providerName), dispatchedAt, retainedDispatch);
         contextPackageReceipt = WorkerRetryFeedbackPromptGuard.Validate(goal, task, contextPackage, contextPackageReceipt, preparation.PromptPath);
-        var retryContextFingerprint = FindingEvidenceDispatchContext.RetryFingerprint(goal, task, providerName, modelName, paidRoute,
-            priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
-            targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
-            currentMainIdentity, kernel.HumanInputRequests);
         WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
         if (retainedDispatch is not null)
-            return WorkerDispatchPromptPreparation.RecordRestoredReceipt(kernel, goal, task, retainedDispatch, contextPackageReceipt, preparation);
+        {
+            var restored = WorkerDispatchPromptPreparation.RecordRestoredReceipt(kernel, goal, task, retainedDispatch, contextPackageReceipt, preparation);
+            task.RecordRestoredFindingContract(retainedDispatch.DispatchedAt, findingContractVersion);
+            return restored;
+        }
         var reviewEvidenceContext = FindingEvidenceDispatchContext.Capture(goal, task, targetContext?.HeadCommit, dispatchedAt, usesTypedContextPackage);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
@@ -339,7 +337,7 @@ public static partial class WorkerProfileDispatcher
             taskComplexity,
             preparation.PromptCharacterCount,
             usesComplexModel,
-            PromptPath: preparation.PromptPath,
+            PromptPath: preparation.PromptPath, FindingContractVersion: findingContractVersion,
             WorkerProviderKind: workerProviderKind,
             ReasoningEffortReason: reasoningEffortReason,
             DispatchLane: dispatchLane ?? profile.Name,
@@ -350,7 +348,9 @@ public static partial class WorkerProfileDispatcher
             ContextPackageReceipt: contextPackageReceipt,
             SelectedSkills: WorkerContextArtifacts.SelectSkillRequirements(goal, task, workingDirectory, orchestratorSkillDirectory, targetHome).Select(s => s.Name).ToArray(),
             PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount),
-            RetryContextFingerprint: retryContextFingerprint,
+            RetryContextFingerprint: FindingEvidenceDispatchContext.RetryFingerprint(goal, task, providerName, modelName, paidRoute,
+                priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
+                targetContext?.HeadCommit ?? priorDispatch?.BaseCommit, currentMainIdentity, kernel.HumanInputRequests),
             PaidRoute: paidRoute,
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,

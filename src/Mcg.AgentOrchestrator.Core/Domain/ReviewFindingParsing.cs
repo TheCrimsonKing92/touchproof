@@ -22,7 +22,8 @@ public static partial class ReviewFindingConvergence
     public const string NoFileAnchor = "(no file anchor)";
 
     public static ReviewFindingParseResult ParseJson(
-        string findingsJson, string touchedAnchorsJson, string? workingDirectory = null)
+        string findingsJson, string touchedAnchorsJson, string? workingDirectory = null,
+        AgentRole role = AgentRole.Reviewer, bool requireFindingClass = false)
     {
         var accepted = new List<ReviewFinding>();
         var warnings = new List<ReviewFindingParseDiagnostic>();
@@ -32,6 +33,7 @@ public static partial class ReviewFindingConvergence
         {
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             options.Converters.Add(new FindingSeverityJsonConverter());
+            options.Converters.Add(new FindingClassJsonConverter());
             options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
             using var document = JsonDocument.Parse(findingsJson);
             var anchors = JsonSerializer.Deserialize<List<ReviewFindingLocation>>(touchedAnchorsJson, options);
@@ -50,7 +52,14 @@ public static partial class ReviewFindingConvergence
                 .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
             foreach (var item in items)
             {
-                string? rejection = null;
+                var classRejection = GetClassRejection(item.Element, item.Severity, role, requireFindingClass, options);
+                if (classRejection is not null && role == AgentRole.Reviewer)
+                {
+                    fatal ??= new(item.Index, item.StableId, item.Severity, classRejection);
+                    continue;
+                }
+
+                string? rejection = classRejection;
                 if (item.StableId is not null && duplicates.TryGetValue(item.StableId, out var group))
                 {
                     rejection = $"Duplicate stable_id '{item.StableId}' in reviewer review findings.";
@@ -61,7 +70,7 @@ public static partial class ReviewFindingConvergence
                         continue;
                     }
                 }
-                else
+                else if (rejection is null)
                 {
                     try
                     {
@@ -92,6 +101,32 @@ public static partial class ReviewFindingConvergence
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
             return new(empty, warnings, new(null, null, null, ex.Message));
+        }
+    }
+
+    private static string? GetClassRejection(
+        JsonElement element, FindingSeverity severity, AgentRole role, bool requireFindingClass, JsonSerializerOptions options)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var properties = element.EnumerateObject()
+            .Where(property => string.Equals(property.Name, "class_id", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (properties.Length == 0 && (!requireFindingClass || role != AgentRole.Reviewer))
+            return null;
+        if (properties.Length != 1)
+            return "Every review finding requires one unambiguous class_id.";
+
+        try
+        {
+            var findingClass = properties[0].Value.Deserialize<FindingClass>(options);
+            return role == AgentRole.Reviewer && findingClass.IsRegisteredBlocking && severity == FindingSeverity.Advisory
+                ? "A registered blocking class_id cannot have advisory severity."
+                : null;
+        }
+        catch (JsonException ex)
+        {
+            return ex.Message;
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -36,6 +37,9 @@ internal sealed partial class ConductorContinuitySupervisor
     private CostGoalOutcomeSweep? _costGoalOutcomeSweep;
     internal Func<FleetBuildRollingRestartTrigger>? FleetRollingRestartTriggerFactory { get; init; }
     internal Func<FleetBuildAdoptionSummary>? FleetAdoptionSummaryFactory { get; init; }
+    internal Func<OrchestratorWorkspace>? ActivationRevertWorkspaceFactory { get; init; }
+    internal Func<string, string, string, ActivationFailedMainRevert.Result>? RevertFailedActivation { get; init; }
+    internal Func<string, string, string, bool>? PushActivationRevert { get; init; }
 
     internal const string ActivationHealthyTicksEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_HEALTHY_TICKS";
     internal const int DefaultActivationHealthyTicks = 3;
@@ -325,7 +329,7 @@ internal sealed partial class ConductorContinuitySupervisor
         }
     }
 
-    private void RecordActivation(
+    internal void RecordActivation(
         string status,
         int attempt,
         ConductorActivationBuild primaryBuild,
@@ -349,6 +353,8 @@ internal sealed partial class ConductorContinuitySupervisor
                 SerializeActivationPayload(status, primaryBuild, secondaryBuild, reason, detail, attempt, now),
                 now))
             .GetAwaiter().GetResult();
+        if (status == "reverted")
+            CompensateFailedActivation(primaryBuild.CommitSha);
         try { homeBuildPublisher?.Record(status, primaryBuild); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
@@ -380,6 +386,58 @@ internal sealed partial class ConductorContinuitySupervisor
                 TryAppendConductEvent($"FLEET_ROLLING_RESTART_FAILED commit={primaryBuild.CommitSha} reason={Sanitize(ex.Message)}");
             }
         }
+    }
+
+    private void CompensateFailedActivation(string failedCommit)
+    {
+        OrchestratorWorkspace workspace;
+        try
+        {
+            workspace = ActivationRevertWorkspaceFactory?.Invoke()
+                ?? AdoptedBuildPushTrigger.ResolveHomeWorkspace(OrchestratorProjectRegistry.CreateDefault());
+        }
+        catch (Exception)
+        {
+            return; // Without a resolved home workspace there is no compensation target.
+        }
+
+        var root = workspace.ExecutionDirectory;
+        var branch = workspace.IntegrationBranch;
+        ActivationFailedMainRevert.Result result;
+        try
+        {
+            result = (RevertFailedActivation ?? ActivationFailedMainRevert.Revert)(root, branch, failedCommit);
+        }
+        catch (Exception ex)
+        {
+            result = new(ActivationFailedMainRevert.Outcome.Held, Reason: $"compensation failed ({ex.GetType().Name})");
+        }
+
+        var outcome = result.Status switch
+        {
+            ActivationFailedMainRevert.Outcome.Reverted =>
+                $"ACTIVATION_MAIN_REVERTED failedCommit={failedCommit} revertCommit={result.RevertCommit}",
+            ActivationFailedMainRevert.Outcome.Held =>
+                $"ACTIVATION_MAIN_REVERT_HELD failedCommit={failedCommit} reason={result.Reason}",
+            _ => null
+        };
+        if (outcome is not null)
+            AdoptedBuildPublicationReporting.Try(() => TryAppendConductEvent(Sanitize(outcome)), "activation-main-revert-event");
+
+        if (result.Status != ActivationFailedMainRevert.Outcome.Reverted || result.RevertCommit is not { } revert)
+            return;
+
+        AdoptedBuildPublicationReporting.Try(() =>
+        {
+            var policy = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory));
+            if (!policy.AdoptedBuildPushEnabled)
+                return;
+
+            // The push service reports a false return as held. The local revert still stands.
+            _ = PushActivationRevert is { } push
+                ? push(root, revert, branch)
+                : AdoptedBuildPushService.CreateDefault(root, TryAppendConductEvent).Push(revert, branch: branch);
+        }, "activation-main-revert-push");
     }
 
     private void AppendAdoptedBuildEvent(string detail)
