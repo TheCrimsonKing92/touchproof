@@ -39,7 +39,7 @@ internal sealed partial class ConductorBatchLoop
             return;
         }
 
-        if (IsRetryableAcceptanceRun(run))
+        if (run.Acceptance is not { Passed: false } && IsRetryableAcceptanceRun(run))
         {
             return;
         }
@@ -53,6 +53,19 @@ internal sealed partial class ConductorBatchLoop
 
         if (run.Acceptance is null && WorkspaceProbeFaultClassifier.Classify(run.Exception?.Message) == WorkspaceProbeFaultKind.HostContentionTimeout)
             return;
+
+        if (run.Acceptance is null &&
+            ProcessHandleFaultClassifier.Classify(run.Exception) == ProcessHandleFaultDisposition.BoundedRetry)
+        {
+            if (ConductorParallelAcceptanceAttemptCoordinator.CanRegateProcessHandleFault(attempt))
+            {
+                kernel.ReconcileGoalAcceptanceVerified(
+                    goal.Id,
+                    $"Batch loop reconciled background acceptance gate {attempt.AttemptId} process-handle fault; goal returned to Verified for re-gating.");
+            }
+
+            return;
+        }
 
         kernel.ReconcileGoalAcceptanceFailed(
             goal.Id,
@@ -163,7 +176,7 @@ internal sealed partial class ConductorBatchLoop
         out bool evidenceMutationLeaseHeld)
     {
         evidenceMutationLeaseHeld = false;
-        if (run.Exception is not null)
+        if (run.Exception is not null && run.Acceptance is not { Passed: false })
         {
             if (IsIdentityStaleRun(run))
             {
@@ -246,7 +259,8 @@ internal sealed partial class ConductorBatchLoop
                         $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(buildLock.Attribution)}"));
             }
 
-            return ParallelAcceptanceFault(driver, run.Candidate, policy, attempt, run.Exception);
+            return ParallelAcceptanceFault(driver, run.Candidate, policy, attempt, run.Exception,
+                allowProcessHandleRegate: run.Acceptance is null);
         }
 
         if (run.EarlyResult is not null)
@@ -288,7 +302,7 @@ internal sealed partial class ConductorBatchLoop
         driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(attempt);
     }
 
-    private static ConductorAdvanceResult ParallelAcceptanceHeld(
+    internal static ConductorAdvanceResult ParallelAcceptanceHeld(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         string reason,
@@ -378,43 +392,22 @@ internal sealed partial class ConductorBatchLoop
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceAttempt attempt,
-        Exception exception)
+        Exception exception,
+        bool allowProcessHandleRegate = false)
     {
-        var registrationFault =
-            ConductorParallelAcceptanceAttemptCoordinator.WorkerRegistrationFaultMessage(exception);
-        var disposition =
-            ConductorParallelAcceptanceAttemptCoordinator.ClassifyWorkerRegistrationFault(registrationFault);
-        if (disposition == WorkerRegistrationFaultDisposition.BoundedRetry &&
-            attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap)
+        if (ConductorParallelAcceptanceAttemptCoordinator.WorkerRegistrationFaultMessage(exception) is { } registrationFault)
         {
-            return ParallelAcceptanceHeld(
-                candidate,
-                policy,
-                $"Transient worker-process registration fault ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {registrationFault}");
-        }
-
-        if (disposition is WorkerRegistrationFaultDisposition.BoundedRetry or WorkerRegistrationFaultDisposition.Terminal)
-        {
-            return driver.EscalateParallelLandingAcceptance(
-                candidate,
-                policy,
-                $"background acceptance worker-process registration fault: {registrationFault}",
-                ConductorEscalationKind.BackgroundAcceptanceFailed);
+            return ParallelAcceptanceFaultCompletion.Registration(driver, candidate, policy, attempt, registrationFault);
         }
 
         if (WorkspaceProbeFaultClassifier.Classify(exception.Message) == WorkspaceProbeFaultKind.HostContentionTimeout)
         {
-            if (attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap)
-            {
-                var notBefore = WorkspaceProbeFaultClassifier.NotBefore(
-                    attempt.CompletedAt ?? throw new InvalidOperationException("Terminal workspace-probe fault requires CompletedAt."),
-                    attempt.TransientFailureCount).ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
-                return ParallelAcceptanceHeld(candidate, policy,
-                    $"Transient workspace-probe timeout ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); not_before={notBefore} attempt={attempt.AttemptId}: {BoundSingleLine(exception.Message)}");
-            }
-            return driver.EscalateParallelLandingAcceptance(candidate, policy,
-                $"background acceptance workspace-probe timeout: {BoundSingleLine(exception.Message)}",
-                ConductorEscalationKind.BackgroundAcceptanceFailed);
+            return ParallelAcceptanceFaultCompletion.WorkspaceProbe(driver, candidate, policy, attempt, exception.Message);
+        }
+
+        if (allowProcessHandleRegate && ProcessHandleFaultClassifier.FindFault(exception) is { } processHandleFault)
+        {
+            return ParallelAcceptanceFaultCompletion.ProcessHandle(driver, candidate, policy, attempt, processHandleFault);
         }
 
         return ParallelAcceptanceUnclassifiedFault(driver, candidate, policy, exception);
@@ -428,7 +421,7 @@ internal sealed partial class ConductorBatchLoop
         driver.EscalateParallelLandingAcceptance(
             candidate,
             policy,
-            $"parallel acceptance fault: {SanitizeReason(exception.Message)}");
+            ParallelAcceptanceFaultCompletion.FormatReason("parallel acceptance fault: ", exception));
 
     internal static string AcceptanceRunDisposition(ConductorParallelAcceptanceRunResult run)
     {

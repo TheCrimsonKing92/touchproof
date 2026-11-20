@@ -44,6 +44,60 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
     }
 
     [Fact]
+    public async Task TargetedOpen_PendingList_SelectsProviderIgnoringCase()
+    {
+        var list = new TaskCompletionSource<IReadOnlyList<OwnerConsoleProviderConnection>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var fixture = new Fixture
+        {
+            Initial = [Fixture.Connection("codex-cli"), Fixture.Connection("grok-cli")],
+            PendingList = list.Task
+        };
+        using var view = new OwnerConsoleSettingsView([fixture.Tab]);
+
+        view.Open(OwnerConsolePane.Activity, "xai");
+        await TestHangGuard.WaitAsync(fixture.ListStarted.Task, "targeted provider list request");
+        Assert.True(view.IsOpen);
+        Assert.Equal(["Reading configured profiles and readiness evidence…"], view.Lines);
+        Assert.Equal(0, fixture.Tab.SelectedLine);
+        Assert.Equal("Reading provider connections…", fixture.Tab.StatusText);
+
+        list.SetResult(fixture.Initial);
+        await fixture.ApplyAsync();
+
+        Assert.Equal(1, fixture.Tab.SelectedLine);
+        Assert.StartsWith("xAI |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.Contains("  Profiles: grok-cli", view.Lines);
+        Assert.DoesNotContain("No configured profile", fixture.Tab.StatusText);
+        Assert.False(fixture.Launches.Reader.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task MissingProviderOpen_ListLoaded_KeepsDefaultSelectionAndNamesProvider()
+    {
+        var list = new TaskCompletionSource<IReadOnlyList<OwnerConsoleProviderConnection>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var fixture = new Fixture
+        {
+            Initial = [Fixture.Connection("codex-cli"), Fixture.Connection("grok-cli")],
+            PendingList = list.Task
+        };
+        using var view = new OwnerConsoleSettingsView([fixture.Tab]);
+
+        view.Open(OwnerConsolePane.Activity, "anthropic");
+        await TestHangGuard.WaitAsync(fixture.ListStarted.Task, "missing provider list request");
+        Assert.Equal("Reading provider connections…", fixture.Tab.StatusText);
+        list.SetResult(fixture.Initial);
+        await fixture.ApplyAsync();
+
+        Assert.True(view.IsOpen);
+        Assert.Equal(0, fixture.Tab.SelectedLine);
+        Assert.StartsWith("OpenAI |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.Contains("  Profiles: codex-cli", view.Lines);
+        Assert.Equal("No configured profile found for provider anthropic.", fixture.Tab.StatusText);
+    }
+
+    [Fact]
     public async Task SelectedRowDetailIsPlainLanguageWithLocalTimesAndOneNextStep()
     {
         var connection = Fixture.Connection("codex-cli", at: new(2026, 1, 1, 0, 3, 0, TimeSpan.Zero));
@@ -267,6 +321,8 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         internal bool RosterUnavailable { get; set; }
         internal int CheckCalls => Volatile.Read(ref _checkCalls);
         internal Task<IReadOnlyList<OwnerConsoleProviderConnection>>? PendingList { get; set; }
+        internal TaskCompletionSource<bool> ListStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal ProviderSignInLaunch Launch { get; set; } = new(null, ProviderSignInOutcome.LaunchFailed);
         internal Channel<(ProviderSignInTarget Target, bool DeviceCode)> Launches { get; } =
             Channel.CreateUnbounded<(ProviderSignInTarget, bool)>();
@@ -327,8 +383,11 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         internal Task<CheckRequest> TakeCheckAsync() =>
             TestHangGuard.WaitAsync(_checks.Reader.ReadAsync(_stop.Token).AsTask(), "provider connection check request");
 
-        public Task<IReadOnlyList<OwnerConsoleProviderConnection>> ListAsync(CancellationToken token) =>
-            PendingList?.WaitAsync(token) ?? Task.FromResult(Initial);
+        public Task<IReadOnlyList<OwnerConsoleProviderConnection>> ListAsync(CancellationToken token)
+        {
+            ListStarted.TrySetResult(true);
+            return PendingList?.WaitAsync(token) ?? Task.FromResult(Initial);
+        }
 
         public Task<OwnerConsoleProviderConnection> CheckAsync(string profileId, CancellationToken token)
         {
