@@ -47,7 +47,8 @@ internal static partial class CliCriterionEvidenceIntents
             Channel: attribution.Channel,
             AuthenticationAssurance: attribution.AuthenticationAssurance,
             CreatedAt: DateTimeOffset.UtcNow,
-            ActorKind: attribution.ActorKind);
+            ActorKind: attribution.ActorKind,
+            DriverSessionId: attribution.DriverSessionId);
         var persisted = SqliteOperatorIntentStore
             .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .EnqueueAsync(intent)
@@ -132,6 +133,7 @@ internal static partial class CliCriterionEvidenceIntents
         {
             var flag = args[index].ToLowerInvariant();
             if (args[index] is "--goal" or "--operator-actor" or "--actor-kind" or "--idempotency-key" ||
+                flag == "--driver-session" ||
                 (args[0].ToLowerInvariant() == OperatorIntentVerbs.CriterionEvidenceRecord && flag == "--observation-json") ||
                 (args[0].ToLowerInvariant() is OperatorIntentVerbs.CriterionEvidenceMap or OperatorIntentVerbs.CriterionEvidenceRepair &&
                  flag is "--criterion" or "--version"))
