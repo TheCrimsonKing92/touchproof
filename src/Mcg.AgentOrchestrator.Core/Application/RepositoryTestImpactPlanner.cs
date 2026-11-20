@@ -520,13 +520,14 @@ public static partial class RepositoryTestImpactPlanner
         foreach (var file in changedTestSources)
         {
             var fileName = Path.GetFileName(file.Path);
-            var baseName = Path.GetFileNameWithoutExtension(file.Path);
+            var baseName = TestIdentityFilenameAssumption.GetClassNameCandidate(file.Path);
             var declarations = declarationReader.ReadFile(file.Path);
             if (declarations.Outcome == TestClassDeclarationOutcome.Resolved)
             {
                 classFilters.AddRange(declarations.ClassNames.Select(name => $"FullyQualifiedName~{name}"));
 
-                if (!baseName.Contains('.', StringComparison.Ordinal) &&
+                if (baseName is not null &&
+                    !baseName.Contains('.', StringComparison.Ordinal) &&
                     !declarations.ClassNames.Contains(baseName, StringComparer.OrdinalIgnoreCase))
                 {
                     projectDeclarations ??= declarationReader.ReadProject(testProjectPrefix);
@@ -567,7 +568,7 @@ public static partial class RepositoryTestImpactPlanner
                     []);
             }
 
-            if (baseName.Contains('.', StringComparison.Ordinal))
+            if (baseName?.Contains('.', StringComparison.Ordinal) == true)
             {
                 return new TestClassFilterBuildResult(
                     null,
@@ -642,17 +643,19 @@ public static partial class RepositoryTestImpactPlanner
             {
                 var orchestrationBaseNames = summary.Files
                     .Where(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.App/Orchestration/"))
-                    .Select(file => Path.GetFileNameWithoutExtension(file.Path))
-                    .Where(name => !string.IsNullOrWhiteSpace(name))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(file => TestIdentityFilenameAssumption.GetClassNameCandidate(file.Path))
                     .ToArray();
-                if (orchestrationBaseNames.Length == 0 ||
-                    orchestrationBaseNames.Any(name => name.Contains('.', StringComparison.Ordinal)))
+                if (orchestrationBaseNames.Any(name => name is null || name.Contains('.', StringComparison.Ordinal)))
                     return null;
 
                 var derivedClassNames = orchestrationBaseNames
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Select(name => $"{name}Tests")
                     .ToArray();
+                if (derivedClassNames.Length == 0)
+                    return null;
+
                 var projectDeclarations = declarationReader.ReadProject(
                     "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/");
                 if (projectDeclarations.Outcome is not (

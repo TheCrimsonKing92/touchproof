@@ -284,7 +284,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 continue;
             }
 
-            var name = Path.GetFileNameWithoutExtension(normalized);
+            var name = TestIdentityFilenameAssumption.GetClassNameCandidate(normalized);
             if (string.IsNullOrWhiteSpace(name))
             {
                 continue;

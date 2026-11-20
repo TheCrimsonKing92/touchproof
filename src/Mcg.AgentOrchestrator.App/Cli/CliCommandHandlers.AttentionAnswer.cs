@@ -15,10 +15,7 @@ internal static partial class CliCommandHandlers
         var answerParts = AttentionAnswerMetadata.WithoutAnswerMetadataFlags(parts);
         var route = GetFlagValue(parts, "--route");
         var cause = GetFlagValue(parts, "--cause");
-        var amendmentFlag = GetFlagValue(parts, "--amendment");
-        if (amendmentFlag is not null && !amendmentFlag.Equals("decline", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("--amendment accepts only decline.");
-        var amendmentDisposition = amendmentFlag is null ? (PlannerBriefAmendmentDisposition?)null : PlannerBriefAmendmentDisposition.Decline;
+        var amendmentDisposition = PlannerBriefAmendmentDispositions.ParseFlag(GetFlagValue(parts, "--amendment"));
         if (route is null && cause is not null)
             throw new ArgumentException("--cause requires --route developer.");
         if (route is not null)

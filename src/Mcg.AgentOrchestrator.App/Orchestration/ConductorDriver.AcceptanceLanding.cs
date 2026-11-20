@@ -144,10 +144,16 @@ internal sealed partial class ConductorDriver
         }
         facts = facts with { ApparatusHold = false };
 
-        var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified);
+        var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified, out var fallbackFacts, out var declineReason);
         if (sharedAcceptance is not null)
-        {
             return sharedAcceptance;
+        if (_isConductorTick && _parallelAcceptanceEnabled)
+        {
+            var cause = declineReason ?? "no candidate available";
+            var reason = $"No background acceptance attempt could be scheduled ({cause}).";
+            var decision = new PolicyDecisionRecord("solo-landing-admission", "Hold", 1, "no-parallel-acceptance-candidate", reason,
+                [.. fallbackFacts.ToRecordedFacts(), new("candidateDeclineReason", cause)]);
+            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason) { Decision = decision });
         }
 
         using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
@@ -255,7 +261,7 @@ internal sealed partial class ConductorDriver
                     decision.Reason) { Decision = decision.ToRecord() });
         }
 
-        var fallback = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verifying, out var facts);
+        var fallback = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verifying, out var facts, out _);
         if (fallback is not null)
             return fallback;
 
@@ -273,18 +279,13 @@ internal sealed partial class ConductorDriver
         Goal goal,
         string goalPrefix,
         ConductorAutonomyPolicy policy,
-        GoalLifecycleState callerState)
-        => TryRunFallbackAcceptance(goal, goalPrefix, policy, callerState, out _);
-
-    private ConductorAdvanceResult? TryRunFallbackAcceptance(
-        Goal goal,
-        string goalPrefix,
-        ConductorAutonomyPolicy policy,
         GoalLifecycleState callerState,
-        out VerifyingStageFacts facts)
+        out VerifyingStageFacts facts,
+        out string? declineReason)
     {
         facts = new(callerState, _isConductorTick, goal.Status,
             ParallelAcceptanceEnabled: _parallelAcceptanceEnabled);
+        declineReason = null;
 
         ConductorAdvanceResult Hold(GoalLifecycleState state, VerifyingStageFacts observed,
             ConductorHoldOwner owner = ConductorHoldOwner.None)
@@ -298,9 +299,7 @@ internal sealed partial class ConductorDriver
             return repeatHold;
 
         if (!_parallelAcceptanceEnabled)
-        {
             return null;
-        }
 
         if (goal.Status == GoalStatus.Completed)
         {
@@ -310,7 +309,7 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceCandidate? candidate;
         try
         {
-            candidate = TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex: 0, out _);
+            candidate = TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex: 0, out declineReason);
         }
         catch (EvidenceMutationLeaseUnavailableException)
         {

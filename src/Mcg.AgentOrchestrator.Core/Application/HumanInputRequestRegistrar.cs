@@ -30,7 +30,7 @@ internal sealed class HumanInputRequestRegistrar(
         string? evidenceOwner = null,
         PlannerEvidenceStoreReference? storeReference = null,
         IReadOnlyList<string>? testNames = null, PlannerEvidenceIdentity? plannerIdentity = null, PlannerEvidencePayload? plannerEvidence = null,
-        int? amendmentCriterionIndex = null)
+        int? amendmentCriterionIndex = null, string? amendmentProposedText = null)
     {
         var goalId = goal.Id;
         if (HumanWaitPolicyDefaults.BlocksActiveWork(kind))
@@ -149,7 +149,8 @@ internal sealed class HumanInputRequestRegistrar(
                 storeReference: storeReference,
                 testNames: testNames, plannerIdentity: plannerIdentity, plannerEvidence: plannerEvidence,
                 amendment: kind == HumanWaitKind.PlannerBriefAmendment
-                    ? new PlannerBriefAmendmentPayload(amendmentCriterionIndex!.Value, goal.AuthoritativeBrief.Version) : null);
+                    ? new PlannerBriefAmendmentPayload(amendmentCriterionIndex!.Value, goal.AuthoritativeBrief.Version, amendmentProposedText)
+                    : null);
             requests.Add(request.Id, request);
 
             holdTask(goal, taskId, request.Kind);

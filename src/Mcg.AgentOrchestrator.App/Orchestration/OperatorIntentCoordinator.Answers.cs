@@ -29,11 +29,11 @@ internal sealed partial class OperatorIntentCoordinator
             request.Id.Value == payload.TargetId && request.GoalId == goal.Id && ConductorConflictIntegration.IsScopeRequirement(request)))
             throw new InvalidOperationException("Use the typed integration-scope command to resolve this requirement.");
         if (payload.AmendmentDisposition is not null &&
-            (payload.AmendmentDisposition != PlannerBriefAmendmentDisposition.Decline ||
+            (!PlannerBriefAmendmentDispositions.IsSupported(payload.AmendmentDisposition) ||
              payload.TargetKind != OperatorAnswerTargetKind.HumanInput ||
              !kernel.HumanInputRequests.Any(request => request.Id.Value == payload.TargetId &&
-                 request.GoalId == goal.Id && request.Amendment is not null)))
-            throw new InvalidOperationException("--amendment requires a request carrying a Planner brief amendment payload and accepts only decline.");
+                 request.GoalId == goal.Id && request.Kind == HumanWaitKind.PlannerBriefAmendment && request.Amendment is not null)))
+            throw new InvalidOperationException("--amendment requires a request carrying a Planner brief amendment payload and accepts only accept or decline.");
         var decisions = _decisions ?? throw new InvalidOperationException("Answer decision store is not configured.");
         TaskSpec? developer = null;
         AdjudicateOperatorIntentPayload? route = null;
@@ -64,6 +64,12 @@ internal sealed partial class OperatorIntentCoordinator
             {
                 if (replayRequest is { IsCompleted: false })
                     kernel.SubmitHumanInput(replayRequest.Id, payload.Text, amendmentDisposition: payload.AmendmentDisposition);
+                else if (replayRequest is not null && payload.AmendmentDisposition == PlannerBriefAmendmentDisposition.Accept)
+                {
+                    if (!TrySupersedeHeldAmendment(kernel, replayRequest, payload) &&
+                        replayRequest.AuthoritativeAnswer?.AmendmentDisposition != PlannerBriefAmendmentDisposition.Accept)
+                        throw new PlannerBriefAmendmentAcceptRejectedException($"Human-input request '{payload.TargetId}' is already answered.");
+                }
                 var effect = decisions.TryApplyDecisionEffectAsync(priorDecision.Request.Id,
                     priorReceipt.Id, priorReceipt.Response.ActionRef, null,
                     $"answered {payload.TargetKind}:{payload.TargetId}", _utcNow()).GetAwaiter().GetResult();
@@ -74,7 +80,7 @@ internal sealed partial class OperatorIntentCoordinator
                 RecordAnswerTimeline(kernel, goal, intent, payload, priorReceipt,
                     route is null ? "applied" : "applied; routed developer");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not PlannerBriefAmendmentAcceptRejectedException)
             {
                 throw new AnswerApplicationRetryException("Answer replay could not finish; the intent remains claimed.", ex);
             }
@@ -139,14 +145,11 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new KeyNotFoundException($"Human-input request '{payload.TargetId}' was not found for goal '{goal.Id.Value}'.");
                 if (request.IsCompleted)
                 {
-                    if (payload.AmendmentDisposition == PlannerBriefAmendmentDisposition.Decline &&
-                        request.AuthoritativeAnswer?.AmendmentDisposition != PlannerBriefAmendmentDisposition.Decline &&
-                        kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id)?.RequestId == request.Id)
-                    {
-                        kernel.SupersedeHumanInput(goal.Id, request.Id, payload.Text, HumanInputAnswerOrigin.Operator,
-                            payload.AmendmentDisposition);
+                    if (TrySupersedeHeldAmendment(kernel, request, payload))
                         break;
-                    }
+                    if (payload.AmendmentDisposition == PlannerBriefAmendmentDisposition.Accept &&
+                        request.AuthoritativeAnswer?.AmendmentDisposition != PlannerBriefAmendmentDisposition.Accept)
+                        throw new PlannerBriefAmendmentAcceptRejectedException($"Human-input request '{payload.TargetId}' is already answered.");
                     if (route is not null)
                     {
                         routeOnly = true;
@@ -160,7 +163,7 @@ internal sealed partial class OperatorIntentCoordinator
                 if (request.TaskId is { } requestTaskId && !goal.Tasks.Any(task => task.Id == requestTaskId))
                     throw new InvalidOperationException($"Human-input request '{payload.TargetId}' no longer has a waiting task.");
                 try { kernel.SubmitHumanInput(request.Id, payload.Text, amendmentDisposition: payload.AmendmentDisposition); }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not PlannerBriefAmendmentAcceptRejectedException)
                 {
                     throw new AnswerApplicationRetryException("Human-input resolution could not finish; the intent remains claimed.", ex);
                 }
@@ -182,6 +185,19 @@ internal sealed partial class OperatorIntentCoordinator
         {
             throw new AnswerApplicationRetryException("Answer decision could not finish; the intent remains claimed.", ex);
         }
+    }
+
+    private static bool TrySupersedeHeldAmendment(
+        AgentOrchestratorKernel kernel, HumanInputRequest request, AnswerOperatorIntentPayload payload)
+    {
+        if (payload.AmendmentDisposition is null ||
+            request.AuthoritativeAnswer?.AmendmentDisposition == payload.AmendmentDisposition ||
+            kernel.GetPlannerBriefAmendmentRevisionPending(request.GoalId)?.RequestId != request.Id)
+            return false;
+
+        kernel.SupersedeHumanInput(request.GoalId, request.Id, payload.Text, HumanInputAnswerOrigin.Operator,
+            payload.AmendmentDisposition);
+        return true;
     }
 
     private void ApplyAnswerRoute(AgentOrchestratorKernel kernel, Goal goal, TaskSpec developer,
