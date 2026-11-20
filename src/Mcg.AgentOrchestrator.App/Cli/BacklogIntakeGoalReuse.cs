@@ -51,18 +51,8 @@ internal static class BacklogIntakeGoalReuse
         Action<BacklogItem> validatePromotion,
         Action<Goal, BacklogItem> applyDependencies)
     {
-        if (!forceReclaim)
+        if (!forceReclaim || !HasPipelineMismatch(plan, owner))
             return false;
-
-        try
-        {
-            GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(plan, owner);
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            // Only the existing explicit-pipeline mismatch is eligible for correction.
-        }
 
         var claim = new SourceBacklogClaimStore(context.Workspace.SqliteStatePath)
             .ResolveClaim(context.Kernel, item.Id) ?? throw new InvalidOperationException(
@@ -95,5 +85,47 @@ internal static class BacklogIntakeGoalReuse
         Console.WriteLine($"Created goal from backlog slice '{item.Heading}'.");
         GoalObjectivePlanTextView.PrintGoalObjectivePlan(plan);
         return true;
+    }
+
+    internal static bool HasPipelineMismatch(GoalObjectivePlan plan, Goal owner)
+    {
+        try
+        {
+            GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(plan, owner);
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    internal static bool TryResolveClaimOwner(
+        CliExecutionContext context,
+        BacklogIntakeItem item,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Goal? existingGoal)
+    {
+        existingGoal = string.IsNullOrWhiteSpace(item.Id)
+            ? null
+            : CliCommandHandlers.FindAuthoritativeSourceGoal(context, item.Id);
+        return existingGoal is not null;
+    }
+
+    internal static bool TryResolveIntakeOwner(
+        CliExecutionContext context,
+        BacklogIntakeItem item,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Goal? existingGoal)
+    {
+        existingGoal = null;
+        if (string.IsNullOrWhiteSpace(item.Id))
+            return false;
+
+        var record = new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath).Get(item.Id);
+        if (record is null || string.IsNullOrWhiteSpace(record.GoalId))
+            return false;
+
+        existingGoal = context.Kernel.Goals.FirstOrDefault(goal =>
+            goal.Id.Value.Equals(record.GoalId, StringComparison.Ordinal));
+        return existingGoal is not null;
     }
 }
