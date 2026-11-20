@@ -145,6 +145,8 @@ public sealed partial class AgentOrchestratorKernel
                 HumanInputAnswerOrigin.Operator);
         }
 
+        PlannerRoundRecovery.RequeueAfterRevision(goal, _humanInputRequests.Values, _eventWriter, _clock);
+
         var notYetStarted = goal.Tasks
             .Where(task => task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned)
             .Select(task => task.Id)
@@ -2185,14 +2187,11 @@ public sealed partial class AgentOrchestratorKernel
     private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)
     {
         if (RouteAnsweredPlannerBriefAmendment(goal, task, out var amendmentPending) || amendmentPending) return;
-        if (PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task) && task.LastProcess is not { IsRunning: true })
-        {
-            task.ClearLatestVerification();
-            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleRestoreTaskAfterHumanInputObsoletePlanner);
-            Append(goal, task.Id, ProgressKind.TaskNote, "Historical Planner evidence retained; planning must run against the current brief.");
+        if (PlannerRoundRecovery.TryRequeueAfterAnswer(goal, task, _eventWriter, _clock, out var premiseInvalidPlanner))
             return;
-        }
-        if (TryCompleteTaskWithPassingVerification(goal, task, "Task completed after required human input was answered."))
+
+        if (!premiseInvalidPlanner &&
+            TryCompleteTaskWithPassingVerification(goal, task, "Task completed after required human input was answered."))
         {
             return;
         }
