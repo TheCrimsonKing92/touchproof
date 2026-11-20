@@ -754,7 +754,7 @@ public sealed class RetryAdmissionTests
         Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
         Assert.Equal(receipt.Cause, developer.PendingRetryCause);
         Assert.Equal(WorkTaskStatus.Failed, tester.Status);
-        Assert.Null(tester.PendingRetryCause);
+        Assert.Equal(RetryCause.Unknown, tester.PendingRetryCause);
         var retried = Assert.Single(goal.Timeline, entry => entry.Kind == ProgressKind.TaskRetried);
         Assert.Equal(developer.Id, retried.TaskId);
         Assert.DoesNotContain(kernel.HumanInputRequests, request => request.GoalId == goal.Id);
