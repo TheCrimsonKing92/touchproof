@@ -286,6 +286,12 @@ internal static class CliCommandHelp
         "Atomically close, reopen for a gate, or route a task with decision evidence. Evidence may be ref or id=hash.",
         ["--goal", "--text-file", "--ruling-text-file", "--evidence", "--cause", "--reversibility", "--precedent", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry RecordControlReceipt = new(
+        RecordControlReceiptCommand.Usage,
+        "Record an operator control result and print its receipt id.",
+        new HashSet<string>(["--goal", "--obligation", "--kind", "--command", "--exit-status", "--passed", "--failed", "--candidate-sha", "--trx", "--json", "--help", "-h"], StringComparer.OrdinalIgnoreCase),
+        [], ValidateFlags: false);
+
     public const string IntegrationScopeUsage = "Usage: integration-scope <goal-prefix> <round-id> <full-original-sha> <full-main-sha> <approve|original-only|revoke> --text-file <reason-path> --idempotency-key <key> [--path <exact-file> ...] [--approval <intent-id>] [--json]";
     private static readonly CommandHelpEntry IntegrationScope = new(IntegrationScopeUsage,
         "Confirm exact integration scope for one open round; revoke names an approval intent id.",
@@ -1007,6 +1013,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  epic-bar          Set or clear the epic's completion bar.");
         Console.WriteLine("  retry             Retry a task with operator feedback.");
         Console.WriteLine("  recover           Recover a goal with an operator note.");
+        Console.WriteLine("  record-control-receipt  Record an operator control result.");
         Console.WriteLine("  repair-multi-repository-landing");
         Console.WriteLine("                    Repair a compensated tuple landing.");
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
@@ -1242,6 +1249,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("adjudicate", StringComparison.OrdinalIgnoreCase))
         {
             entry = Adjudicate;
+            return true;
+        }
+
+        if (RecordControlReceiptCommand.IsCommand(args))
+        {
+            entry = RecordControlReceipt;
             return true;
         }
 
@@ -1953,6 +1966,10 @@ internal static class CliCommandHelp
 
     private static bool HasHelpFlag(IReadOnlyList<string> args)
     {
+        // A token such as "--help" can be the exact command text or a TRX path.
+        if (RecordControlReceiptCommand.IsCommand(args))
+            return args.Count == 2 && IsHelpFlag(args[1]);
+
         return args.Any(IsHelpFlag) ||
             ((IsGoalsSubscribeHelpTarget(args) || IsGoalsBoardHelpTarget(args)) && SplitCompositeToken(args[1]).Any(IsHelpFlag));
     }

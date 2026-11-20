@@ -13,15 +13,17 @@ internal sealed partial class AdjudicationEvidenceResolver
         var colon = reference.IndexOf(':');
         var kind = colon > 0 ? reference[..colon].ToLowerInvariant() : string.Empty;
         var value = colon > 0 ? reference[(colon + 1)..] : string.Empty;
-        if (kind is "focused-evidence" or "acceptance-attempt")
+        if (kind is "focused-evidence" or "acceptance-attempt" or "control-receipt")
         {
             if (goal is null)
             {
                 rejection = $"evidence-reference-requires-goal {reference}";
                 return false;
             }
-            return TryResolve(reference, goal,
+            var resolved = TryResolve(reference, goal,
                 new AdjudicateOperatorIntentPayload("lesson", "", [], 0, workingDirectory), out entry);
+            if (resolved && kind == "control-receipt") rejection = string.Empty;
+            return resolved;
         }
         if (kind is not ("operator-evidence" or "trx"))
         {
