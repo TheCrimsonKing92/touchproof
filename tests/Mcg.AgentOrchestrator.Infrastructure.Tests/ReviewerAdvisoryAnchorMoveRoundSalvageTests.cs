@@ -280,8 +280,10 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
         fixture.Record(priorFindings, resolvedOnly ? "needs-work" : "pass", ReviewedSha);
         fixture.Kernel.RetryTask(fixture.Goal.Id, fixture.Reviewer.Id, "Recheck current delivery");
         var findings = resolvedOnly ? priorFindings.Replace("\"open\"", "\"resolved\"") : priorFindings;
+        // The verdict parser can derive retry prose only from open findings.
         fixture.Record(findings, "needs-work", ReviewedSha,
-            ReviewRetryCapReceipt.Create(fixture.Goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier));
+            ReviewRetryCapReceipt.Create(fixture.Goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier),
+            blockers: resolvedOnly ? "Recheck delivery correctness." : "none");
 
         var prior = fixture.Reviewer.VerificationHistory[0];
         var current = fixture.Reviewer.LastVerification!;
@@ -493,14 +495,14 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
             }, writeEscalation: writeEscalation);
 
         internal void Record(string findings, string verdict, string? commit,
-            ReviewRetryCapReceipt? reviewRetryCap = null)
+            ReviewRetryCapReceipt? reviewRetryCap = null, string blockers = "none")
         {
             Dispatch(Reviewer, reviewRetryCap);
             if (commit is not null)
                 Kernel.RecordDispatchBaseCommit(Goal.Id, Reviewer.Id, commit);
             var stdout = string.Join(Environment.NewLine,
                 "WORKER_RESULT:", "files: none", "commands: review", "tests: pass - fixture",
-                "commit: none", "blockers: none", $"findings: {findings}", "touched_anchors: []",
+                "commit: none", $"blockers: {blockers}", $"findings: {findings}", "touched_anchors: []",
                 $"verdict: {verdict}", "model_fit: fixture/model - adequate - review - fixture",
                 "skills: none", "confidence: high", "END_WORKER_RESULT");
             Kernel.RecordDispatchExecutionResult(Goal.Id, Reviewer.Id,
