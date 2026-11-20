@@ -43,9 +43,9 @@ public sealed class DecisionSnapshotCliTests : CliCommandTestBase
                     Assert.Equal(0L, row.GetInt64(0));
                 }
                 var mainBefore = SHA256.HashData(ReadFixtureStoreBytes(db));
-                var completed = new GoalSnapshot(WalId.Value, "Cancelled goal committed only to WAL", GoalStatus.Cancelled, [], []);
-                await repository.SaveAsync(AgentOrchestratorKernel.FromSnapshot(
-                    kernel.ExportSnapshot() with { Goals = [.. kernel.ExportSnapshot().Goals, completed] }));
+                kernel.CreateGoal(WalId, "Cancelled goal committed only to WAL");
+                kernel.CancelGoal(WalId, "Terminal goal for WAL coverage");
+                await repository.SaveAsync(kernel);
                 Assert.Equal(mainBefore, SHA256.HashData(ReadFixtureStoreBytes(db)));
                 Assert.True(new FileInfo(db + "-wal").Length > 32, "WAL must contain frames before the copy.");
                 File.WriteAllBytes(copiedDb + "-wal", ReadFixtureStoreBytes(db + "-wal"));
