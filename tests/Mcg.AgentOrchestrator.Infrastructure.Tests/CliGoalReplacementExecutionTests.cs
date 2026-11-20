@@ -4,8 +4,10 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-// Parallel-safe: pure helper calls and read-only reflection; no hook mutation or external state.
+// Parallel-safe: pure helper calls, source reads, and reflection.
 public sealed class CliGoalReplacementExecutionTests
 {
     [Fact]
@@ -154,7 +156,12 @@ public sealed class CliGoalReplacementExecutionTests
         var entry = CliPersistentStateRunner.ExecuteCommand;
         var predicate = CliKeyedGoalCreationSubmission.IsCommand;
         var submission = CliKeyedGoalCreationSubmission.Submit;
+        AssertKeyedRunnerDispatch();
+        Assert.True(predicate(["goal", "Objective", "--request-key", "key"]));
+        Assert.True(predicate(["simple-goal", "Objective", "--request-key", "key"]));
         var dispatch = References(entry.Method).ToArray();
+        var validation = Assert.Single(dispatch, method => method.DeclaringType == typeof(CliCommandHelp) &&
+            method.Name == nameof(CliCommandHelp.ValidateGoalCreationOptions));
         Assert.Contains(predicate.Method, dispatch);
         Assert.Contains(submission.Method, dispatch);
         var legacy = Assert.Single(dispatch, method =>
@@ -170,7 +177,7 @@ public sealed class CliGoalReplacementExecutionTests
         Assert.Contains(predicate.Method, References(execute.Method));
 
         var seen = new HashSet<MethodBase>();
-        var pending = new Queue<MethodBase>([submission.Method]);
+        var pending = new Queue<MethodBase>([validation, predicate.Method, submission.Method]);
         var reached = new List<MethodBase>();
         while (pending.TryDequeue(out var method))
         {
@@ -204,5 +211,38 @@ public sealed class CliGoalReplacementExecutionTests
         var bindCalls = References(bind).ToArray();
         Assert.Contains(bindCalls, method => method.Name == nameof(AgentOrchestratorKernel.ReplaceGoalWithSnapshot));
         Assert.Contains(bindCalls, method => method.Name == nameof(GoalIntakeRequestStore.MarkCreated));
+    }
+
+    private static void AssertKeyedRunnerDispatch()
+    {
+        var path = Path.Combine(VerifiedRepositoryRoot.Find(),
+            "src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs");
+        var root = CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot();
+        var runner = Assert.Single(root.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            type => type.Identifier.ValueText == nameof(CliPersistentStateRunner));
+        var entry = Assert.Single(runner.Members.OfType<MethodDeclarationSyntax>(),
+            method => method.Identifier.ValueText == nameof(CliPersistentStateRunner.ExecuteCommand));
+        var body = Assert.IsType<BlockSyntax>(entry.Body);
+
+        // The keyed route must return before the shared runner can reach any other dispatch or writer.
+        var allowed = (BlockSyntax)SyntaxFactory.ParseStatement("""
+            {
+                CliCommandHelp.ValidateGoalCreationOptions(args);
+                if (CliKeyedGoalCreationSubmission.IsCommand(args))
+                    return CliKeyedGoalCreationSubmission.Submit(args, stateRepository, workspace, agents, ref currentGoal,
+                        operatorIntentSubmissionSource, allowTerminalSourceClaimTakeover);
+            }
+            """);
+        bool MatchesKeyedPrefix(BlockSyntax candidate) =>
+            allowed.IsEquivalentTo(SyntaxFactory.Block(candidate.Statements.Take(allowed.Statements.Count)));
+
+        Assert.True(MatchesKeyedPrefix(body),
+            "ExecuteCommand must validate options and immediately return the keyed submission before other dispatch.");
+
+        var fullLoad = SyntaxFactory.ParseStatement("stateRepository.LoadAsync().GetAwaiter().GetResult();");
+        Assert.False(MatchesKeyedPrefix(body.WithStatements(body.Statements.Insert(1, fullLoad))));
+        var keyedBranch = Assert.IsType<IfStatementSyntax>(body.Statements[1]);
+        var branchWithLoad = keyedBranch.WithStatement(SyntaxFactory.Block(fullLoad, keyedBranch.Statement));
+        Assert.False(MatchesKeyedPrefix(body.WithStatements(body.Statements.Replace(keyedBranch, branchWithLoad))));
     }
 }
