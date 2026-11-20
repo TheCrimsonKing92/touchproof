@@ -30,8 +30,9 @@ public static partial class ProviderLimitEvidenceParser
     public static string? GetCliRefusalModelName(string line)
     {
         var match = CliLimitSentenceShape().Match(line);
-        return match.Success
-            ? string.Join(" ", match.Groups["model"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant()
+        var model = match.Groups["model"];
+        return model.Success
+            ? string.Join(" ", model.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant()
             : null;
     }
 
@@ -54,6 +55,7 @@ public static partial class ProviderLimitEvidenceParser
              value.StartsWith("Your credit balance is too low", StringComparison.OrdinalIgnoreCase) ||
              value.StartsWith("You're out of usage credits", StringComparison.OrdinalIgnoreCase) ||
              value.StartsWith("You\u2019re out of usage credits", StringComparison.OrdinalIgnoreCase) ||
+             CliMonthlySpendLimitShape().IsMatch(value) ||
              (value.StartsWith("API Error: 400", StringComparison.OrdinalIgnoreCase) &&
               value.Contains("credit balance is too low", StringComparison.OrdinalIgnoreCase)))))
         {
@@ -64,8 +66,12 @@ public static partial class ProviderLimitEvidenceParser
         return true;
     }
 
-    private const string CliLimitSentence =
-        @"You['\u2019]ve hit your (?<model>(?:(?=\S*[\p{L}\p{N}])\S+ ){1,3})limit\b";
+    private const string CliMonthlySpendLimit = @"(?i:You['\u2019]ve hit your monthly spend limit)";
+    private const string CliLimitSentence = "(?:" + CliMonthlySpendLimit +
+        @"|You['\u2019]ve hit your (?<model>(?:(?=\S*[\p{L}\p{N}])\S+ ){1,3})limit\b)";
+
+    [GeneratedRegex("^" + CliMonthlySpendLimit, RegexOptions.CultureInvariant)]
+    private static partial Regex CliMonthlySpendLimitShape();
 
     [GeneratedRegex("^(?:" + CliLimitSentence + @"|Failed to authenticate\b|API Error:?\s*[1-5]\d{2}\b)", RegexOptions.CultureInvariant)]
     private static partial Regex CliRefusalShape();
