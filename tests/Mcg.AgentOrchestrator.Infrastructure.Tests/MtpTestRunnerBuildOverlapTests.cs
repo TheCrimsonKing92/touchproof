@@ -347,12 +347,13 @@ public sealed class MtpTestRunnerBuildOverlapTests
             if ($Observe -eq 'observe') {
                 # Observe the blocking branch without substituting the OS mutex.
                 $build = (Get-Command Invoke-MtpBuild).ScriptBlock
+                # The function definition AST encloses the body in a nested script block.
                 $blockingWait = $build.Ast.Find({
                     param($node)
                     $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
                         $node.Member.Extent.Text -eq 'WaitOne' -and
                         ($null -eq $node.Arguments -or $node.Arguments.Count -eq 0)
-                }, $false)
+                }, $true)
                 if ($null -eq $blockingWait) { throw 'Could not locate the contended mutex wait.' }
                 $null = Set-PSBreakpoint -Script $build.File -Line $blockingWait.Extent.StartLineNumber -Action {
                     [Console]::WriteLine('event:contended')
