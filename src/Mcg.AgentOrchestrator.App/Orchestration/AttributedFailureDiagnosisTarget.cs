@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
@@ -11,6 +13,9 @@ internal static class AttributedFailureDiagnosisTarget
     private const string FailingTestsPrefix = "failing_tests=";
     private const string LegacyFinding = "**The candidate didn't cause these failures, and they don't show anything wrong with it.**";
     private const string ExplicitFinding = "The candidate did not cause these failures.";
+    // The operator supplied this specific legacy note as conclusive evidence (goal cfda6f88, event 149).
+    // Fingerprint its header and entire body with LF line endings. Other free-form advice can retract an opening claim.
+    private const string ReviewedLegacyNoteHash = "FFB6A57A4115B66A80409806C60B568F97E059E2532DE9302C5BFC0D98A98514";
     private static readonly Regex RouteHeaderPattern = new(
         @"\AATTRIBUTED_FAILURE_ROUTE source=(?<source>\S+) candidate_sha=(?<candidate>\S+) receipt_id=(?<receipt>\S+) signature=(?<signature>\S+)\z");
 
@@ -132,14 +137,20 @@ internal static class AttributedFailureDiagnosisTarget
             // Only the latest matching record controls, regardless of its conclusion.
             if (diagnosis.Groups["status"].Value != "cause-found") return null;
             var advice = AttributedFailureDiagnosisOutcome.Lines(entry.Message);
-            if (advice.Skip(1).Any(line => !line.StartsWith("| ", StringComparison.Ordinal))) return null;
-            var opening = advice.ElementAtOrDefault(1)?[2..];
-            var finding = new[] { LegacyFinding, ExplicitFinding }.FirstOrDefault(statement =>
-                opening == statement || opening?.StartsWith(statement + " ", StringComparison.Ordinal) == true);
+            var finding = advice switch
+            {
+                [_, "| " + ExplicitFinding] => ExplicitFinding,
+                [_, "| " + LegacyFinding] => LegacyFinding,
+                _ when legacy is not null && IsReviewedLegacyNote(advice) => LegacyFinding,
+                _ => null
+            };
             return finding is null ? null : (entry, candidate, signature, legacy?.Receipt, finding);
         }
         return null;
     }
+
+    private static bool IsReviewedLegacyNote(string[] lines) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', lines)))) == ReviewedLegacyNoteHash;
 
     private static Match? ReadDiagnosis(GoalId goal, ProgressEvent entry)
     {
