@@ -68,6 +68,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
     internal readonly Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> _retryTask;
+    internal Func<GoalId, string, TaskSpec> AddPreReviewTester { get; set; } = PreReviewTesterInsertion.Unconfigured;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly AgentOrchestratorKernel? _findingStagnationKernel;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
@@ -703,13 +704,11 @@ internal sealed partial class ConductorDriver
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
             kernel.RetryTaskAutomatically(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
+        AddPreReviewTester = (goalId, reason) => PreReviewTesterInsertion.Add(kernel, agents, goalId, reason);
         _findingStagnationKernel = kernel;
         _workerBuildRecoveryRetry = kernel.RetryTaskAfterWorkerBuildCheckRecovery;
         ConfigureDeveloperCompletionStructuralPreflightRetry(kernel);
-        _recordTaskNote = (goalId, taskId, message) =>
-        {
-            kernel.RecordTaskNote(goalId, taskId, message);
-        };
+        _recordTaskNote = (goalId, taskId, message) => kernel.RecordTaskNote(goalId, taskId, message);
         _recordFindingEvidenceRequest = (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
         _recordFindingEvidenceRun = (goalId, taskId, message) => kernel.RecordFindingEvidenceRun(goalId, taskId, message);
         _checkpointFindingEvidenceRun = persistCriticalDispatchStart is null

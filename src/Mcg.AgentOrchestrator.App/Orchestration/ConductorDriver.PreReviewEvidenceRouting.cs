@@ -101,22 +101,22 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy,
         string reason,
-        out ConductorAdvanceResult result)
+        out ConductorAdvanceResult result,
+        out string? insertionFailure)
     {
         var testerTask = TasksBefore(goal, reviewerTask)
             .LastOrDefault(task => task.RequiredRole == AgentRole.Tester);
-        if (testerTask is null)
+        insertionFailure = null;
+        if (testerTask is not null)
+        {
+            _retryTask(goal.Id, testerTask.Id, reason, RetryRoundKind.Mechanical, RetryCause.NewTestFinding);
+        }
+        else if (!PreReviewTesterInsertion.TryInsert(AddPreReviewTester, goal.Id, reason, out insertionFailure))
         {
             result = default!;
             return false;
         }
 
-        _retryTask(
-            goal.Id,
-            testerTask.Id,
-            reason,
-            RetryRoundKind.Mechanical,
-            RetryCause.NewTestFinding);
         var refreshedGoal = GetCurrentGoal(goal);
         var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
         result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);

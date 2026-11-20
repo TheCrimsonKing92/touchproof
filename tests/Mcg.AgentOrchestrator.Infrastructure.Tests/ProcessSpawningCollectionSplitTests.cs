@@ -40,12 +40,14 @@ public sealed class ProcessSpawningCollectionSplitTests
     ];
 
     // Parallel safe: reads the manifest and resolves class membership without starting processes.
-    [Xunit.Fact]
-    public void PreReviewCapacityDriver_RequiredSelector_HasExplicitParallelMembership()
+    [Xunit.Theory]
+    [Xunit.InlineData(typeof(ConductorDriverTestsPreReviewEvidenceBuildSlotsBusy))]
+    [Xunit.InlineData(typeof(ConductorDriverTestsPreReviewTesterInsertion))]
+    public void PreReviewDriver_RequiredSelector_HasExplicitParallelMembership(Type testClass)
     {
         var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot())
             .InfrastructureTestLanes;
-        var className = typeof(ConductorDriverTestsPreReviewEvidenceBuildSlotsBusy).FullName!;
+        var className = testClass.FullName!;
         var lane = Xunit.Assert.Single(AcceptanceLaneMembership.LanesIncluding(lanes, className));
 
         Xunit.Assert.Equal("Process spawning parallel", lane.Name);
