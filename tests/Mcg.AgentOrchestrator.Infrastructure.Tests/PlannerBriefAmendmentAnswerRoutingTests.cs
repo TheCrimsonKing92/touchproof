@@ -244,6 +244,36 @@ public sealed class PlannerBriefAmendmentAnswerRoutingTests : WorkerDispatchTest
         Assert.Single(f.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
     }
 
+    private const string ProposedCriterion = "Preserve the existing behavior.";
+    private const string OriginalCriterion = "Allow the existing behavior to change.\n   Keep the supporting check.";
+    private const string DeclaredCriteriaObjective = "Implement the current brief.\r\n\r\n## Acceptance criteria\r\n" +
+        "1. " + OriginalCriterion + "\r\n\r\n2. Retain the regression tests.\r\n3. Keep the public API stable." +
+        "\r\n\r\n## Scope\r\nPreserve the rest of the brief.";
+
+    [Fact]
+    public void TypedAccept_AppliesProposedTextAsBriefVersionTwoAndReplansOnce()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+        const string note = "Accept the Planner's proposed replacement.";
+        var originalCriteria = AcceptanceCriteriaParser.ParseDeclared(f.Goal.AuthoritativeBrief.Text);
+        Assert.Equal(ProposedCriterion, f.Request.Amendment!.ProposedText);
+
+        f.Kernel.SubmitHumanInput(f.Request.Id, note, amendmentDisposition: PlannerBriefAmendmentDisposition.Accept);
+
+        var brief = f.Goal.AuthoritativeBrief;
+        var revisedCriteria = AcceptanceCriteriaParser.ParseDeclared(brief.Text);
+        Assert.Equal(2, brief.Version);
+        Assert.Equal(ProposedCriterion, revisedCriteria[0]);
+        Assert.Equal(originalCriteria.Skip(1), revisedCriteria.Skip(1));
+        Assert.Equal(DeclaredCriteriaObjective.Replace(OriginalCriterion, ProposedCriterion, StringComparison.Ordinal), brief.Text);
+        Assert.Equal(note, brief.Reason);
+        Assert.True(f.Request.IsCompleted);
+        Assert.Equal(PlannerBriefAmendmentDisposition.Accept, f.Request.AuthoritativeAnswer!.AmendmentDisposition);
+        Assert.Equal(WorkTaskStatus.Assigned, f.Planner.Status);
+        Assert.Null(f.Kernel.GetPlannerBriefAmendmentRevisionPending(f.Goal.Id));
+        Assert.Single(f.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+    }
+
     private sealed class Fixture : IDisposable
     {
         internal string Root { get; } = CreateTempDirectory();
@@ -257,11 +287,11 @@ public sealed class PlannerBriefAmendmentAnswerRoutingTests : WorkerDispatchTest
         internal int Dispatches { get; private set; }
         internal int Escalations { get; private set; }
 
-        internal Fixture(bool blocker = false)
+        internal Fixture(bool blocker = false, string? objective = null)
         {
             var planner = new TaskSpec(TaskId.New(), "Plan the implementation.", AgentRole.Planner);
             plannerId = planner.Id;
-            var goal = Kernel.CreateGoal("Hold an answered amendment until revision or typed decline", [planner,
+            var goal = Kernel.CreateGoal(objective ?? "Hold an answered amendment until revision or typed decline", [planner,
                 new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             goalId = goal.Id;
             Kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Preserve behavior pending ruling.", ["Preserve the existing behavior."],

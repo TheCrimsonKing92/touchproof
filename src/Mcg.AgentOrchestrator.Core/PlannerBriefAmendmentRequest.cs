@@ -78,7 +78,8 @@ internal sealed record PlannerBriefAmendmentRequest(
         var fingerprint = HumanInputRequest.BuildQuestionFingerprint(
             $"planner-brief-amendment\ncriterion:{CriterionIndex.ToString(CultureInfo.InvariantCulture)}\ndefect:{Defect}");
         return new(new HumanInputDirective(question, fingerprint,
-            fingerprint, HumanWaitKind.PlannerBriefAmendment, AmendmentCriterionIndex: CriterionIndex), null);
+            fingerprint, HumanWaitKind.PlannerBriefAmendment, AmendmentCriterionIndex: CriterionIndex,
+            AmendmentProposedText: ProposedText), null);
     }
 
     private static string? ReadRequiredString(JsonElement root, string name) =>
