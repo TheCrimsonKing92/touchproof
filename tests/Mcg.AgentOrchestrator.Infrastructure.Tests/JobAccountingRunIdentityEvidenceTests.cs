@@ -846,7 +846,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         RequireMethod(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
             "TryAcquireFirstAvailableStableSlotExecutionLock", "storageRoot ??= CaptureStorageRoot()", "CreateStableSlotEnvironment(slot, storageRoot)");
         RequireMethod(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
-            "CreateStableSlotEnvironment", "BuildSlotExecutionLockPath(slotIndex % BuildConcurrencySlotCount, storageRoot)");
+            "CreateStableSlotEnvironment", "BuildSlotExecutionLockPath(slotIndex % BuildThrottleLimit, storageRoot)");
         RequireMethod(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
             "BuildSlotExecutionLockPath", "Path.Combine(storageRoot.RootPath, \"build-slots\", $\"build-{slotIndex}.lock\")");
         RequireMethod(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteExecutorOccupancy.cs",

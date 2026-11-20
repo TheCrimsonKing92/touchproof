@@ -35,7 +35,7 @@ internal static class WorkerBuildCapacityGate
                     ticket.FirstWaitedAt == default || ticket.LastRefreshedAt < ticket.FirstWaitedAt)
                     return WorkerBuildCapacitySnapshot.Unreadable;
             }
-            var total = DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
+            var total = DotnetBuildEnvironmentManager.BuildThrottleLimit;
             var unheld = Enumerable.Range(0, total).Count(index => !isExecutionLockHeld(
                 DotnetBuildEnvironmentManager.BuildSlotExecutionLockPath(index, storageRoot)));
             // A retained claimant waits only for tickets ahead of its existing queue position.
