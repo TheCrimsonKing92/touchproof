@@ -316,70 +316,7 @@ public sealed partial class AgentOrchestratorKernel
 
         segments.AddRange(GoalIntakeBriefSections.Build(goal, task.RequiredRole, declarationContext, HumanInputRequests));
 
-        if (goal.RefinedSpec is { } refinedSpec)
-        {
-            var specLines = new List<string>
-            {
-                "## Refined Spec",
-                $"Behavioral contract: {declarationContext.RenderBehavioralContract(refinedSpec.BehavioralContract)}",
-                string.Empty,
-                declarationContext.HasAuthoritativePlannerCriteria
-                    ? "Acceptance criteria (authoritative list validated by PlannerOutputContract):"
-                    : "Acceptance criteria:"
-            };
-            for (var criterionIndex = 0; criterionIndex < refinedSpec.AcceptanceCriteria.Count; criterionIndex++)
-            {
-                var criterion = refinedSpec.AcceptanceCriteria[criterionIndex];
-                var normalizedCriterion = criterion.Trim();
-                var waiver = goal.EffectiveAcceptanceCriteriaCorrections
-                    .Where(correction =>
-                        correction.IsWaiver &&
-                        string.Equals(correction.SupersededCriterion, normalizedCriterion, StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(correction => correction.RecordedAt)
-                    .FirstOrDefault();
-                if (waiver is null)
-                {
-                    specLines.Add(declarationContext.HasAuthoritativePlannerCriteria
-                        ? $"{criterionIndex + 1}. {criterion}"
-                        : $"- {criterion}");
-                    continue;
-                }
-
-                specLines.Add(declarationContext.HasAuthoritativePlannerCriteria
-                    ? $"{criterionIndex + 1}. [WAIVED] {normalizedCriterion}"
-                    : $"- [WAIVED] {normalizedCriterion}");
-                specLines.Add($"  Reason: {PromptContextFormatter.TrimPromptBlock(waiver.WaiverReason!)}");
-                specLines.Add($"  Waived by {PromptContextFormatter.TrimPromptBlock(waiver.Actor)} at {waiver.RecordedAt:u}.");
-            }
-            if (refinedSpec.OperatorOwnedAcceptanceCriteria.Count > 0)
-            {
-                specLines.Add(string.Empty);
-                specLines.Add("OPERATOR-OWNED / post-landing criteria (not part of worker acceptance):");
-                foreach (var criterion in refinedSpec.OperatorOwnedAcceptanceCriteria)
-                    specLines.Add($"- {criterion}");
-            }
-            var acceptanceGateOwnedCriteria = refinedSpec.AcceptanceGateOwnedAcceptanceCriteria
-                .Concat(goal.CriterionEvidenceObligations.Where(item =>
-                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion?.Version &&
-                    item.Owner == CriterionEvidenceOwner.Acceptance && item.PlannerSources is { Count: > 0 } &&
-                    goal.HasCurrentPlannerExecutionAuthority(item))
-                    .Select(item => item.Criterion))
-                .Distinct(StringComparer.Ordinal)
-                .Where(criterion => ReviewerExecutedCriterionPresentation.ShowAsGateOwned(
-                    task.RequiredRole, criterion, refinedSpec.OperatorOwnedAcceptanceCriteria))
-                .ToArray();
-            if (acceptanceGateOwnedCriteria.Length > 0)
-            {
-                specLines.Add(string.Empty);
-                specLines.Add("ACCEPTANCE-GATE-OWNED criteria (the acceptance gate, not the worker, produces this evidence):");
-                foreach (var criterion in acceptanceGateOwnedCriteria)
-                    specLines.Add($"- {criterion}");
-                if (goal.CriterionEvidenceObligations.Any(item => item.PlannerSources is { Count: > 0 }))
-                    specLines.Add("Only execution evidence is deferred. Reviewer must independently pass source, safety and preserved-behavior review, including compound criteria; any source defect remains blocking.");
-            }
-            CurrentSpecificationBriefDetails.AppendTo(specLines, refinedSpec, goal.AuthoritativeBrief.Version);
-            segments.Add(TaskBriefSegment.Projected("goal/refined-spec.json", specLines));
-        }
+        RefinedSpecBriefSection.AppendTo(segments, goal, task.RequiredRole, declarationContext);
 
         var roleLines = new List<string>();
         roleLines.AddRange(RoleRequirementIntegrationBranch.Apply(RoleRequirementManifestPath.Apply(RoleRequirementStackGuidance.Apply(isScoutPlanner
