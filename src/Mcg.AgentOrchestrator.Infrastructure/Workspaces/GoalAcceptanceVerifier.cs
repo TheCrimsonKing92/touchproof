@@ -2548,7 +2548,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             arguments,
             worktreePath,
             AcceptanceLaneCheckTimeout.Resolve(check, EngineSettings),
-            CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
+            CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment, true, telemetry.Paths),
             cancellationToken, isMtpLane: true).ConfigureAwait(false);
 
         elapsed.Stop();
@@ -2707,7 +2707,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ? null : AcquireCheckPermit(environment, goalId, wait: false, cancellationToken),
                 arguments => RunLaneTestHostWithShardPermitAsync(arguments, worktreePath,
                     EngineSettings.ResolveBuildPhaseTimeout(check.TimeoutMinutes),
-                    CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
+                    CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment, true),
                     cancellationToken), _testOverrides.ResolveBaseBuildIdentityForTests),
             ReceiptSite: BuildReceiptSite.Create(_executionContext, worktreePath, goalId?.Value)));
 
@@ -2977,7 +2977,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             effectiveArguments,
             worktreePath,
             timeout,
-            CreateGateHeartbeatContext(check, effectiveArguments, worktreePath, goalId, stableSlotIndex, environment),
+            CreateGateHeartbeatContext(check, effectiveArguments, worktreePath, goalId, stableSlotIndex, environment, true, telemetry?.Paths),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -3562,23 +3562,23 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         GoalId? goalId,
         int? stableSlotIndex,
-        DotnetBuildEnvironment? environment)
+        DotnetBuildEnvironment? environment,
+        bool requiresAcceptanceLease = false, IReadOnlyList<string>? declaredTestResultPaths = null)
     {
-        var heartbeatPath = ResolveGateHeartbeatPath(
-            check,
-            environment,
-            stableSlotIndex,
-            worktreePath);
+        var heartbeatPath = ResolveGateHeartbeatPath(check, environment, stableSlotIndex, worktreePath);
 
         return new GateHeartbeatContext(
-            goalId?.Value,
-            "verification-check",
-            check.Name,
-            stableSlotIndex,
-            heartbeatPath,
-            ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath, _storageRoot),
+            goalId?.Value, "verification-check", check.Name, stableSlotIndex,
+            heartbeatPath, ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath, _storageRoot),
             string.Join(' ', arguments.Select(QuoteForDisplay)),
-            environment?.RootPath) { RunClass = GateHeartbeatRunClass.Classify(_executionContext), RunId = GateHeartbeatRunClass.ResolveRunId(_executionContext) };
+            environment?.RootPath)
+        {
+            RunClass = GateHeartbeatRunClass.Classify(_executionContext),
+            RunId = GateHeartbeatRunClass.ResolveRunId(_executionContext),
+            AttemptIdentity = (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity,
+            RequiresAcceptanceLease = requiresAcceptanceLease,
+            DeclaredTestResultPaths = declaredTestResultPaths
+        };
     }
 
     // An attempt can run several checks after releasing its build permit, and unrelated goals can hash to
