@@ -71,6 +71,12 @@ blockers: none
 That result does not claim the named tests passed. It proves the Tester completed the evidence available to
 the role and routed the remaining execution correctly; deferral alone is not a worker failure.
 
+## Pre-review evidence in Developer-plus-Reviewer goals
+
+The Developer supplies named focused-evidence requests and reports `tests: deferred`. When pre-review
+routing needs a Tester, the conductor inserts one before the Reviewer. The Tester requests the focused
+tests and the acceptance gate executes them. Neither the Developer nor the Reviewer is asked to run tests.
+
 ## Branch integration ownership
 
 Branch integration against `main` is conductor-owned whenever `main` advances during a goal. Before an
