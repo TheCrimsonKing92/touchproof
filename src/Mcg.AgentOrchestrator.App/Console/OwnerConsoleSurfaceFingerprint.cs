@@ -7,15 +7,16 @@ internal static class OwnerConsoleSurfaceFingerprint
 {
     private const string Prefix = "sha256:";
 
-    internal static string Compute(IEnumerable<OwnerConsoleBinding> rows)
+    internal static string Compute(IEnumerable<OwnerConsoleBinding> rows, IEnumerable<OwnerConsoleSurfaceText.Entry> surfaceText)
     {
-        var canonical = string.Join("\u001e", rows.Select(row =>
+        var encodedRows = rows.Select(row =>
         {
             string?[] fields = [row.Command, row.Usage, row.Key?.ToString(), row.Ctrl ? "True" : "False",
                 row.Scope.ToString(), row.Effect.ToString(), row.Owner.ToString(), row.Confirms ? "True" : "False",
                 row.Noun, row.HintLabel, row.KeyHelp, row.CommandHelp];
             return string.Join("\u001f", fields.Select(Encode));
-        }));
+        });
+        var canonical = string.Join("\u001e", encodedRows.Concat(surfaceText.Select(entry => Encode(entry.Text))));
         return Prefix + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
@@ -25,9 +26,10 @@ internal static class OwnerConsoleSurfaceFingerprint
         fingerprint.Skip(Prefix.Length).All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
 
     internal static string? FindMismatch(IEnumerable<OwnerConsoleBinding> rows,
+        IEnumerable<OwnerConsoleSurfaceText.Entry> surfaceText,
         IReadOnlyList<OwnerConsoleChangelogEntry>? entries)
     {
-        var current = Compute(rows);
+        var current = Compute(rows, surfaceText);
         var recorded = entries is { Count: > 0 } ? entries[^1].Fingerprint : null;
         return recorded == current ? null :
             $"Console command surface fingerprint is {current} (recorded: {recorded ?? "missing or invalid"}). " +
