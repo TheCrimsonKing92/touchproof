@@ -11,13 +11,14 @@ internal sealed class OwnerConsoleAlertsSettingsTab(OwnerConsoleSoundCommand sou
     private string _input = "";
     internal const string TabTitle = "Alerts & sounds";
     internal const string HelpKeys = "Up/Down highlight  p preview  Enter select/edit  s system sound  m mute";
+    internal const string EditingKeyHint = "Enter save  Esc cancel  Backspace edit";
+    internal const string BrowsingKeyHint = HelpKeys + "  Left/Right tab  Esc/q back";
     public string Title => TabTitle;
     public bool Editing => _editingKey is not null;
     public int SelectedLine { get; private set; }
     internal string Message { get; private set; } = "";
     public string StatusText => Editing ? $"{_editingKey}: {_input}_  {Message}" : Message;
-    public string KeyHint => Editing ? "Enter save  Esc cancel  Backspace edit" :
-        HelpKeys + "  Left/Right tab  Esc/q back";
+    public string KeyHint => Editing ? EditingKeyHint : BrowsingKeyHint;
     public IReadOnlyList<string> Lines { get { Refresh(); return _lines; } }
 
     public void Refresh()

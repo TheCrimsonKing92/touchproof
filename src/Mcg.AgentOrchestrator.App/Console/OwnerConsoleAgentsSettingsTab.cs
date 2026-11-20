@@ -20,13 +20,14 @@ internal sealed class OwnerConsoleAgentsSettingsTab(string agentsPath, string mo
     private string _message = "";
     internal const string TabTitle = "Agents & models";
     internal const string HelpKeys = "Up/Down highlight  Enter edit  r reload";
+    internal const string EditingKeyHint =
+        "Up/Down field  type/Backspace edit  Left/Right choices  Enter save  Esc discard  Ctrl+r discard/reload";
+    internal const string BrowsingKeyHint = HelpKeys + "  Left/Right tab  Esc/q back";
     public string Title => TabTitle;
     public bool Editing => _editing is not null;
     public int SelectedLine { get; private set; }
     public string StatusText => _message;
-    public string KeyHint => Editing
-        ? "Up/Down field  type/Backspace edit  Left/Right choices  Enter save  Esc discard  Ctrl+r discard/reload"
-        : HelpKeys + "  Left/Right tab  Esc/q back";
+    public string KeyHint => Editing ? EditingKeyHint : BrowsingKeyHint;
     public IReadOnlyList<string> Lines
     {
         get
