@@ -105,17 +105,22 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
     public Task<PostLandingCanaryOutcome> RunAsync(
         PostLandingCanaryRequest request,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken) => RunAsync(request, cancellationToken, null);
+
+    internal Task<PostLandingCanaryOutcome> RunAsync(
+        PostLandingCanaryRequest request,
+        CancellationToken cancellationToken,
+        CanaryExecution.Runner? runner) =>
         _override is null
-            ? RunCoreAsync(request, cancellationToken)
+            ? RunCoreAsync(request, new RunLifetime(cancellationToken, runner))
             : _override(request, cancellationToken);
 
     private async Task<PostLandingCanaryOutcome> RunCoreAsync(
         PostLandingCanaryRequest request,
-        CancellationToken cancellationToken)
+        RunLifetime lifetime)
     {
         var logs = new PostLandingCanaryLogSession(_logDirectory, request.LandingSha);
-        var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, logs, cancellationToken)
+        var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, logs, lifetime)
             .ConfigureAwait(false);
         var canaryBuildEnvironmentRoot = Path.Combine(
             OrchestratorTempRoot.GetPurposeDirectory("pc"),
@@ -131,7 +136,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         {
             Directory.CreateDirectory(canaryBuildEnvironmentRoot);
             Directory.CreateDirectory(canaryBuildOutputRoot);
-            var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
+            var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, lifetime)
                 .ConfigureAwait(false);
             if (!baseline.HeadSha.Equals(request.LandingSha, StringComparison.OrdinalIgnoreCase))
             {
@@ -152,19 +157,19 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             }
 
             using var fixture = PostLandingCanaryFixture.Materialize(canaryRepositoryRoot, request.LandingSha);
-            await InitializeFixtureRepositoryAsync(fixture.RootPath, logs, cancellationToken).ConfigureAwait(false);
+            await InitializeFixtureRepositoryAsync(fixture.RootPath, logs, lifetime).ConfigureAwait(false);
             var appDllPath = _applicationBinaryResolver is null
                 ? await BuildMainBinaryAsync(
                         canaryRepositoryRoot,
                         baseline.HeadSha,
                         canaryBuildOutputRoot,
                         logs,
-                        cancellationToken)
+                        lifetime)
                     .ConfigureAwait(false)
                 : await _applicationBinaryResolver.ResolveAsync(
                         canaryRepositoryRoot,
                         baseline.HeadSha,
-                        cancellationToken)
+                        lifetime.Token)
                     .ConfigureAwait(false);
             var process = await RunProcessAsync(
                 _dotnetPath,
@@ -176,18 +181,18 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 canaryRepositoryRoot,
                 logs,
                 "run-canary-probe",
-                cancellationToken,
+                lifetime,
                 logs.ReceiptPrefix,
                 canaryBuildEnvironmentRoot).ConfigureAwait(false);
 
-            var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
+            var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, lifetime)
                 .ConfigureAwait(false);
             var currentIsDescendant = await IsAncestorAsync(
                 canaryRepositoryRoot,
                 baseline.HeadSha,
                 current.HeadSha,
                 logs,
-                cancellationToken).ConfigureAwait(false);
+                lifetime).ConfigureAwait(false);
             var repositoryVerdict = PostLandingCanaryRepositoryInvariant.Evaluate(
                 baseline.HeadSha,
                 current.HeadSha,
@@ -244,7 +249,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         {
             try
             {
-                await RemoveIsolatedWorktreeAsync(canaryRepositoryRoot, logs).ConfigureAwait(false);
+                await RemoveIsolatedWorktreeAsync(canaryRepositoryRoot, logs, lifetime.ForCleanup()).ConfigureAwait(false);
             }
             catch when (runFailure is not null)
             {
@@ -295,7 +300,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     private async Task<string> CreateIsolatedWorktreeAsync(
         string landingSha,
         PostLandingCanaryLogSession logs,
-        CancellationToken cancellationToken)
+        RunLifetime lifetime)
     {
         var worktreeRoot = Path.Combine(
             OrchestratorTempRoot.GetPurposeDirectory("post-landing-canary-worktrees"),
@@ -308,13 +313,14 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             ["-c", "core.longpaths=true", "-C", _repositoryRoot, "worktree", "add", "--detach", "--quiet", worktreeRoot, landingSha],
             _repositoryRoot,
             logs,
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
         return worktreeRoot;
     }
 
     private async Task RemoveIsolatedWorktreeAsync(
         string worktreeRoot,
-        PostLandingCanaryLogSession logs)
+        PostLandingCanaryLogSession logs,
+        RunLifetime lifetime)
     {
         await EnsureSucceededAsync(
             "remove isolated landing worktree",
@@ -322,13 +328,13 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             ["-c", "core.longpaths=true", "-C", _repositoryRoot, "worktree", "remove", "--force", worktreeRoot],
             _repositoryRoot,
             logs,
-            CancellationToken.None).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
     }
 
     private async Task InitializeFixtureRepositoryAsync(
         string fixtureRoot,
         PostLandingCanaryLogSession logs,
-        CancellationToken cancellationToken)
+        RunLifetime lifetime)
     {
         await EnsureSucceededAsync(
             "initialize fixture repository",
@@ -336,14 +342,14 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             ["-c", "core.longpaths=true", "init", "--quiet"],
             fixtureRoot,
             logs,
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
         await EnsureSucceededAsync(
             "stage fixture repository",
             "git",
             ["-c", "core.longpaths=true", "add", "--all"],
             fixtureRoot,
             logs,
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
         await EnsureSucceededAsync(
             "commit fixture repository",
             "git",
@@ -354,7 +360,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             ],
             fixtureRoot,
             logs,
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
     }
 
     private async Task<string> BuildMainBinaryAsync(
@@ -362,7 +368,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string sourceSha,
         string outputDirectory,
         PostLandingCanaryLogSession logs,
-        CancellationToken cancellationToken)
+        RunLifetime lifetime)
     {
         var appDllPath = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.App.dll");
         var markerPath = appDllPath + ".git-head";
@@ -382,7 +388,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             ],
             sourceRoot,
             logs,
-            cancellationToken,
+            lifetime,
             evaluatedArtifactFailure: true).ConfigureAwait(false);
         File.WriteAllText(markerPath, sourceSha + Environment.NewLine);
         return appDllPath;
@@ -391,7 +397,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     private async Task<PostLandingCanaryRepositoryState> ReadRepositoryStateAsync(
         string repositoryRoot,
         PostLandingCanaryLogSession logs,
-        CancellationToken cancellationToken)
+        RunLifetime lifetime)
     {
         var head = await RunProcessAsync(
             "git",
@@ -399,7 +405,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             repositoryRoot,
             logs,
             "read-repository-head",
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
         if (head.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -412,7 +418,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             repositoryRoot,
             logs,
             "read-repository-status",
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
         if (status.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -429,7 +435,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string expectedAncestor,
         string currentSha,
         PostLandingCanaryLogSession logs,
-        CancellationToken cancellationToken)
+        RunLifetime lifetime)
     {
         var ancestry = await RunProcessAsync(
             "git",
@@ -437,7 +443,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             repositoryRoot,
             logs,
             "check-repository-ancestry",
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
         if (ancestry.ExitCode is 0 or 1)
         {
             return ancestry.ExitCode == 0;
@@ -454,7 +460,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         IReadOnlyList<string> arguments,
         string workingDirectory,
         PostLandingCanaryLogSession logs,
-        CancellationToken cancellationToken,
+        RunLifetime lifetime,
         bool evaluatedArtifactFailure = false)
     {
         var result = await RunProcessAsync(
@@ -463,7 +469,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             workingDirectory,
             logs,
             operation,
-            cancellationToken).ConfigureAwait(false);
+            lifetime).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
             var detail =
@@ -494,7 +500,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 workingDirectory,
                 new PostLandingCanaryLogSession(logDirectory, "test-candidate"),
                 operation,
-                cancellationToken,
+                new RunLifetime(cancellationToken, null),
                 descendantObservation: descendantObservation,
                 inheritableWindowObserver: inheritableWindowObserver)
             .ConfigureAwait(false);
@@ -507,12 +513,13 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string workingDirectory,
         PostLandingCanaryLogSession logs,
         string operation,
-        CancellationToken cancellationToken,
+        RunLifetime lifetime,
         string? acceptanceAttemptResultsPrefix = null,
         string? dotnetIsolatedRoot = null,
         Action<IReadOnlyList<int>>? descendantObservation = null,
         Action? inheritableWindowObserver = null)
     {
+        lifetime.ThrowIfCancellationRequested();
         var nativeFileCapture = OperatingSystem.IsWindows();
         var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
         var startInfo = BuildFileCaptureStartInfo(
@@ -537,6 +544,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 Path.GetFullPath(dotnetIsolatedRoot);
         }
         GitExecutable.Prepare(startInfo);
+        lifetime.ThrowIfCancellationRequested();
         using var process = nativeFileCapture
             ? WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
                 startInfo,
@@ -563,43 +571,25 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             descendantObservationTask = nativeFileCapture
                 ? ObserveIdentityBoundDescendantsUntilExitAsync(processId, processExitTask, descendantObservation)
                 : null;
-            // Do not cancel pipe drains before the killed process tree closes its handles.
-            // Completion of this method is the coordinator's termination confirmation.
+            using var outputCancellation = new CancellationTokenSource();
             var stdoutTask = nativeFileCapture
                 ? Task.CompletedTask
-                : CopyCapturedOutputAsync(process.StandardOutput, stdoutPath);
+                : CopyCapturedOutputAsync(process.StandardOutput, stdoutPath, outputCancellation.Token);
             var stderrTask = nativeFileCapture
                 ? Task.CompletedTask
-                : CopyCapturedOutputAsync(process.StandardError, stderrPath);
-            try
+                : CopyCapturedOutputAsync(process.StandardError, stderrPath, outputCancellation.Token);
+            await AwaitProcessCompletionAsync(
+                descendantObservationTask is null ? processExitTask : Task.WhenAll(processExitTask, descendantObservationTask),
+                stdoutTask,
+                stderrTask,
+                lifetime,
+                () => TerminateProcessTree(process, processExitTask),
+                outputCancellation.Cancel).ConfigureAwait(false);
+            if (descendantObservationTask is not null)
             {
-                await processExitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                if (descendantObservationTask is not null)
-                {
-                    observedDescendantIdentities = await descendantObservationTask.ConfigureAwait(false);
-                }
-
-                exitCode = process.ExitCode;
+                observedDescendantIdentities = await descendantObservationTask.ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-                var killed = false;
-                try { killed = WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { }
-                if (!killed)
-                {
-                    try { process.Kill(entireProcessTree: true); } catch { }
-                }
-
-                await processExitTask.ConfigureAwait(false);
-                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                if (descendantObservationTask is not null)
-                {
-                    observedDescendantIdentities = await descendantObservationTask.ConfigureAwait(false);
-                }
-
-                throw;
-            }
+            exitCode = process.ExitCode;
         }
         finally
         {
@@ -643,6 +633,66 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var stderr = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(stderrPath, false)
             .ConfigureAwait(false);
         return new PostLandingCanaryProcessResult(exitCode, stdout, stderr);
+    }
+
+    internal static async Task AwaitProcessCompletionAsync(
+        Task processTermination,
+        Task stdout,
+        Task stderr,
+        RunLifetime lifetime,
+        Action terminate,
+        Action cancelOutput)
+    {
+        var output = Task.WhenAll(stdout, stderr);
+        var complete = Task.WhenAll(processTermination, output);
+        try
+        {
+            if (lifetime is { IsCleanup: true, Runner: { } cleanupRunner } &&
+                !await cleanupRunner.WaitThroughGraceAsync(complete).ConfigureAwait(false))
+            {
+                lifetime.ThrowIfCancellationRequested();
+            }
+            await complete.WaitAsync(lifetime.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            terminate();
+            if (lifetime.Runner is not { } runner)
+            {
+                await complete.ConfigureAwait(false);
+            }
+            else
+            {
+                CanaryTaskDrain.ObserveFault(complete);
+                try
+                {
+                    await runner.WaitForOutputAsync(output, cancelOutput).ConfigureAwait(false);
+                }
+                finally
+                {
+                    // The caller still owns the job and the lease until the process exits.
+                    await processTermination.ConfigureAwait(false);
+                }
+            }
+            throw;
+        }
+    }
+
+    private static void TerminateProcessTree(Process process, Task processExit)
+    {
+        // An output wait can be cancelled after exit. The registered job is released by
+        // the caller, and an exited root must not trigger a PID-based fallback kill.
+        if (processExit.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        var killed = false;
+        try { killed = WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { }
+        if (!killed)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+        }
     }
 
     /// <summary>
@@ -851,7 +901,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         return startInfo;
     }
 
-    private static async Task CopyCapturedOutputAsync(StreamReader source, string destinationPath)
+    private static async Task CopyCapturedOutputAsync(
+        StreamReader source, string destinationPath, CancellationToken cancellationToken)
     {
         await using var destination = new FileStream(
             destinationPath,
@@ -863,8 +914,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 BufferSize = 1,
                 Options = FileOptions.Asynchronous | FileOptions.WriteThrough
             });
-        await source.BaseStream.CopyToAsync(destination, CancellationToken.None).ConfigureAwait(false);
-        await destination.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        await source.BaseStream.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+        await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static string Tail(string value)
@@ -874,6 +925,25 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     }
 
     private sealed record PostLandingCanaryProcessResult(int ExitCode, string Stdout, string Stderr);
+
+    internal readonly record struct RunLifetime(CancellationToken Token, CanaryExecution.Runner? Runner, bool IsCleanup = false)
+    {
+        internal bool IsCancellationRequested => Token.IsCancellationRequested || CleanupDeadlineElapsed;
+
+        private bool CleanupDeadlineElapsed => IsCleanup && Runner is { TerminationDeadlineElapsed: true };
+
+        internal void ThrowIfCancellationRequested()
+        {
+            Token.ThrowIfCancellationRequested();
+            if (CleanupDeadlineElapsed)
+            {
+                throw new OperationCanceledException("Canary worktree cleanup exceeded termination grace.");
+            }
+        }
+
+        // Cleanup can start after the stop signal and shares the runner's existing grace deadline.
+        internal RunLifetime ForCleanup() => new(CancellationToken.None, Runner, IsCleanup: true);
+    }
 
     private sealed record PostLandingCanaryRepositoryState(
         string HeadSha,
