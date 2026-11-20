@@ -7,6 +7,10 @@ public sealed record RepositoryTestImpactCheck(
     RepositoryTestProject? TestProject = null,
     IReadOnlyList<string>? TestClassSelections = null)
 {
+    // The project-wide command still owns acceptance selection. Pre-review can use these classes for focused evidence.
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal IReadOnlyList<string> ChangedTestClasses { get; init; } = [];
+
     public string CommandLine => Command.Count == 0
         ? "(no command)"
         : string.Join(" ", Command);
@@ -261,7 +265,10 @@ public static partial class RepositoryTestImpactPlanner
                     "core tests",
                     CoreTests,
                     coreTestFilter.AbandonReason ?? "Core contracts changed or core tests changed.",
-                    RepositoryTestProject.Core));
+                    RepositoryTestProject.Core)
+                {
+                    ChangedTestClasses = coreTestFilter.TestClasses
+                });
             }
         }
 
@@ -347,7 +354,10 @@ public static partial class RepositoryTestImpactPlanner
                     : touchesApp
                     ? "App behavior lacks a focused test-impact mapping; run the full Infrastructure test suite."
                     : "Infrastructure, script, or configuration behavior changed."),
-                RepositoryTestProject.Infrastructure));
+                RepositoryTestProject.Infrastructure)
+            {
+                ChangedTestClasses = infrastructureTestFilter.TestClasses
+            });
         }
 
         if (cliTestSources.Length > 0)
