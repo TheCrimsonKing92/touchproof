@@ -1,7 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
-// A frozen file inventory with one lazily materialized text, line index view and tree per file.
+// A frozen file inventory with retained text and line views. Collected trees are reparsed from that text.
 internal sealed class RepositorySourceSnapshot
 {
     private readonly IReadOnlyDictionary<string, SourceFile> filesByPath;
@@ -40,7 +40,7 @@ internal sealed class RepositorySourceSnapshot
 
     public string GetText(string path) => FindFile(path).Text.Value;
     public IReadOnlyList<string> GetLines(string path) => FindFile(path).Lines.Value;
-    public SyntaxTree GetSyntaxTree(string path) => FindFile(path).Tree.Value;
+    public SyntaxTree GetSyntaxTree(string path) => FindFile(path).GetTree();
 
     private string FullPath(string path) => Path.Combine(Root, path.Replace('/', Path.DirectorySeparatorChar));
 
@@ -55,26 +55,43 @@ internal sealed class RepositorySourceSnapshot
 
     private sealed class SourceFile
     {
+        private readonly string root;
+        private readonly string relativePath;
+        private readonly string fullPath;
+        private readonly ISourceSnapshotObserver observer;
+        private readonly object treeGate = new();
+        private WeakReference<SyntaxTree>? treeReference;
+
         public readonly Lazy<string> Text;
         public readonly Lazy<IReadOnlyList<string>> Lines;
-        public readonly Lazy<SyntaxTree> Tree;
 
         public SourceFile(string root, string relativePath, ISourceSnapshotObserver observer)
         {
-            var fullPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            this.root = root;
+            this.relativePath = relativePath;
+            this.observer = observer;
+            fullPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Text = new Lazy<string>(() =>
             {
                 var text = File.ReadAllText(fullPath);
-                observer.OnTextRead(root, relativePath);
+                this.observer.OnTextRead(this.root, this.relativePath);
                 return text;
             }, LazyThreadSafetyMode.ExecutionAndPublication);
             Lines = new Lazy<IReadOnlyList<string>>(() => new SourceSnapshotLineView(Text.Value), LazyThreadSafetyMode.ExecutionAndPublication);
-            Tree = new Lazy<SyntaxTree>(() =>
+        }
+
+        public SyntaxTree GetTree()
+        {
+            lock (treeGate)
             {
+                if (treeReference is not null && treeReference.TryGetTarget(out var liveTree))
+                    return liveTree;
+
                 var tree = CSharpSyntaxTree.ParseText(Text.Value, path: fullPath);
                 observer.OnParsed(root, relativePath);
+                treeReference = new WeakReference<SyntaxTree>(tree);
                 return tree;
-            }, LazyThreadSafetyMode.ExecutionAndPublication);
+            }
         }
     }
 }
