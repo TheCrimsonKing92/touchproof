@@ -1,5 +1,21 @@
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
+
 public sealed class DependencyIndexCacheTests
 {
+    [Fact]
+    public void Process_cache_reuses_one_file_backed_index_for_the_App_assembly()
+    {
+        var app = typeof(GoalMonitoringQuery).Assembly;
+        var index = DependencyIndexCache.Get(app);
+
+        Assert.Same(index, DependencyIndexCache.Get(typeof(BoardFillCliGoalIntake).Assembly));
+        Assert.Same(index, DependencyIndexCache.Get(typeof(AttentionAnswerHandlerAdapter).Assembly));
+        Assert.Same(index, DependencyIndexCache.Get(typeof(OrphanFixtureReaper).Assembly));
+        Assert.Equal(1, DependencyIndexCache.Process.BuildCount(app));
+    }
+
     [Fact]
     public async Task Concurrent_callers_build_one_index_and_reuse_its_instance()
     {
