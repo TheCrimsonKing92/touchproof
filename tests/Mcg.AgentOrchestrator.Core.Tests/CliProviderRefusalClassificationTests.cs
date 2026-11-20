@@ -107,6 +107,27 @@ public sealed class CliProviderRefusalClassificationTests
     }
 
     [Theory]
+    [InlineData("Failed to authenticate: OAuth session expired and could not be refreshed", "", DispatchOutcomeKind.ProviderAuthentication)]
+    [InlineData("API Error: 500", "", DispatchOutcomeKind.UnknownFailure)]
+    [InlineData("", "ERROR: connection refused", DispatchOutcomeKind.ProviderConnectivity)]
+    [InlineData("Unrecognized response.", "", DispatchOutcomeKind.UnknownFailure)]
+    public void ClaudeNonBudgetFailuresKeepTheirOutcomes(string stdout, string stderr, DispatchOutcomeKind expected)
+    {
+        var task = CliTask(role: AgentRole.Developer);
+        var attemptAt = task.LastDispatch!.DispatchedAt;
+        var verification = Verification(stdout, stderr, exitCode: 1) with
+        {
+            EvidenceSource = VerificationEvidenceSource.Dispatch,
+            DispatchStartedAt = attemptAt,
+            DispatchAttemptAt = attemptAt
+        };
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Assert.Equal(expected, outcome.Kind);
+    }
+
+    [Theory]
     [InlineData("API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}")]
     [InlineData("API Error 529 Overloaded")]
     [InlineData("API Error: 529")]
@@ -207,6 +228,23 @@ public sealed class CliProviderRefusalClassificationTests
         Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit,
             DispatchFailureClassifier.Classify(CliTask(), verification).Kind);
         Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out _));
+    }
+
+    [Theory]
+    [InlineData("You've hit your monthly spend limit")]
+    [InlineData("You\u2019ve hit your monthly spend limit")]
+    [InlineData("you've hit your monthly spend limit")]
+    public void MonthlySpendRefusalHasNoModelOrReset(string stdout)
+    {
+        Assert.Equal(stdout, Assert.Single(ProviderLimitEvidenceParser.GetCliRefusalLines(1, [stdout])));
+        Assert.Null(ProviderLimitEvidenceParser.GetCliRefusalModelName(stdout));
+        Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(Verification(stdout), out _));
+    }
+
+    [Fact]
+    public void NamedLimitSentenceReturnsModelName()
+    {
+        Assert.Equal("fable", ProviderLimitEvidenceParser.GetCliRefusalModelName("You've hit your Fable limit"));
     }
 
     [Fact]

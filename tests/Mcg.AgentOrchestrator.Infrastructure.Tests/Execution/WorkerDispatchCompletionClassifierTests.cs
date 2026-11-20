@@ -29,6 +29,20 @@ public sealed class WorkerDispatchCompletionClassifierTests
         Xunit.Assert.Equal(ProviderFailureKind.BudgetExhausted, failure);
     }
 
+    [Xunit.Fact]
+    public void ClaudeCli_MonthlySpendRefusal_ReturnsBudgetExhausted()
+    {
+        const string output = "You've hit your monthly spend limit \u00B7 raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
+        var dispatch = new TaskDispatchRecord(
+            "claude-cli", "claude-cli", "worktree",
+            DateTimeOffset.Parse("2026-11-12T21:15:00Z"),
+            ProviderName: "Anthropic", WorkerProviderKind: ProviderKind.AnthropicClaudeCli);
+
+        var failure = CreateClassifier().ParseProviderFailureKind(dispatch, 1, output, string.Empty);
+
+        Xunit.Assert.Equal(ProviderFailureKind.BudgetExhausted, failure);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("Credit balance is too low", ProviderFailureKind.BudgetExhausted)]
     [Xunit.InlineData("Some other failure", ProviderFailureKind.Unknown)]
