@@ -1592,7 +1592,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearSubscriptionRetryAfter();
         task.SetInterruptedDispatchRecovery(null);
         task.RecordRetry(retryAt, retryCause, retryRoundKind, inherited);
-        TaskStatusTransitionRecorder.Record(_eventWriter, goalId, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleResetTaskForRetry);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goalId, task.SetStatus(HumanInputAnswerRouting.GetRetryResetStatus(task)), TaskStatusTransitionRecorder.GoalLifecycleResetTaskForRetry);
     }
 
     private bool ReopenTerminalGoalWithNonTerminalTasks(Goal goal, string reason)
@@ -1896,6 +1896,19 @@ public sealed partial class AgentOrchestratorKernel
         }
     }
 
+    /// <summary>Predicts a successful plain Operator answer using the current request state.</summary>
+    public HumanInputAnswerOutcome PredictHumanInputAnswerOutcome(HumanInputRequestId requestId)
+    {
+        lock (_humanInputRequestLock)
+        {
+            var request = HumanInputSubmission.GetPendingRequest(_humanInputRequests, requestId);
+            var goal = GetGoal(request.GoalId);
+            var task = request.TaskId is { } taskId ? goal.FindTask(taskId) : null;
+            return HumanInputAnswerOutcomePredictor.Predict(goal, task, request, _humanInputRequests.Values,
+                _clock.UtcNow, ShouldRequeueAnsweredTesterBlocker, GetRefusedUnstartedDispatch);
+        }
+    }
+
     public void SubmitHumanInput(
         HumanInputRequestId requestId,
         string answer,
@@ -1945,29 +1958,18 @@ public sealed partial class AgentOrchestratorKernel
             if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             {
                 var task = goal.FindTask(request.TaskId);
-                if (!_humanInputRequests.Values.Any(candidate =>
-                        candidate.GoalId == goal.Id &&
-                        candidate.TaskId == task.Id &&
-                        !candidate.IsCompleted &&
-                        candidate.IsCurrentForBrief(goal.AuthoritativeBrief.Version) &&
-                        HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
+                if (!HumanInputAnswerRouting.HasOpenBlockingRequest(goal, task, _humanInputRequests.Values))
                 {
-                    if (request.PlannerIdentity is not null && task.RequiredRole == AgentRole.Planner &&
-                        task.Status == WorkTaskStatus.Failed && task.LastVerification is { Succeeded: false })
+                    if (HumanInputAnswerRouting.RetainsRejectedPlannerFailure(task, request))
                     {
                         Append(goal, task.Id, ProgressKind.TaskNote,
                             "Planner answer recorded; the rejected Planner round remains failed and requires a planning retry.");
                     }
-                    else if (request.PlannerIdentity is { } identity &&
-                        identity.BriefVersion != goal.AuthoritativeBrief.Version &&
-                        task.RequiredRole == AgentRole.Planner &&
-                        task.Status is WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Failed &&
-                        (task.LastDispatch is null || task.LastDispatch.BriefVersion != goal.AuthoritativeBrief.Version) &&
-                        task.LastProcess is not { IsRunning: true })
+                    else if (HumanInputAnswerRouting.FailsHistoricalPlannerAnswer(goal, task, request))
                     {
                         TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Failed), TaskStatusTransitionRecorder.GoalLifecycleSubmitHumanInputCoreSuppressionThreshold);
                         Append(goal, task.Id, ProgressKind.TaskFailed,
-                            $"Historical Planner answer retained for brief v{identity.BriefVersion}; retry planning against current brief v{goal.AuthoritativeBrief.Version}.");
+                            $"Historical Planner answer retained for brief v{request.PlannerIdentity!.BriefVersion}; retry planning against current brief v{goal.AuthoritativeBrief.Version}.");
                     }
                     else if (ShouldRequeueAnsweredTesterBlocker(goal, task, request, answer))
                         answeredTesterToRequeue = task;
@@ -2201,10 +2203,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var refusedDispatch = GetRefusedUnstartedDispatch(task);
-        var restoredStatus = task.LastProcess is { IsRunning: true } ||
-            (task.LastDispatch is not null && task.LastProcess is null && refusedDispatch is null)
-            ? WorkTaskStatus.Running
-            : WorkTaskStatus.Assigned;
+        var restoredStatus = HumanInputAnswerRouting.GetRestoreStatus(task, refusedDispatch);
         if (restoredStatus == WorkTaskStatus.Assigned) ClearStaleVerificationForAnsweredRestore(task);
         if (task.Status == restoredStatus)
         {

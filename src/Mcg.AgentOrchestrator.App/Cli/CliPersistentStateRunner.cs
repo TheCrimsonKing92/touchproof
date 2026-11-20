@@ -17,7 +17,8 @@ internal static partial class CliPersistentStateRunner
         string Actor,
         string Channel,
         string AuthenticationAssurance,
-        OperatorActorKind ActorKind = OperatorActorKind.Human);
+        OperatorActorKind ActorKind = OperatorActorKind.Human,
+        string? DriverSessionId = null);
 
     // The conduct-loop fast path queries goal metadata every tick. Every fourth tick, hydrate
     // currently Parked goals as a safety-net sweep so non-metadata unpark side effects cannot strand
@@ -1673,7 +1674,8 @@ internal static partial class CliPersistentStateRunner
             Channel: attribution.Channel,
             AuthenticationAssurance: attribution.AuthenticationAssurance,
             CreatedAt: DateTimeOffset.UtcNow,
-            ActorKind: attribution.ActorKind);
+            ActorKind: attribution.ActorKind,
+            DriverSessionId: attribution.DriverSessionId);
         var persisted = SqliteOperatorIntentStore
             .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .EnqueueAsync(intent)
@@ -1707,12 +1709,10 @@ internal static partial class CliPersistentStateRunner
 
     internal static OperatorIntentAttribution ResolveOperatorIntentAttribution(
         IReadOnlyList<string> args,
-        OperatorIntentSubmissionSource submissionSource)
-    {
-        var actor = ResolveFlagValue(args, "--operator-actor");
-        var actorKind = CliCommandHandlers.ParseOperatorActorKind(ResolveFlagValue(args, "--actor-kind"));
-        return CliOperatorIntentAttributionResolver.Resolve(submissionSource, actor, actorKind);
-    }
+        OperatorIntentSubmissionSource submissionSource) =>
+        CliOperatorIntentAttributionResolver.Resolve(submissionSource, ResolveFlagValue(args, "--operator-actor"),
+            CliCommandHandlers.ParseOperatorActorKind(ResolveFlagValue(args, "--actor-kind")),
+            ResolveFlagValue(args, "--driver-session"));
 
     private static RetryOperatorIntentPayload BuildRetryPayload(
         CliCommandHandlers.GoalScopedTaskMutationCommand command)
@@ -1830,12 +1830,12 @@ internal static partial class CliPersistentStateRunner
         if (request is not null)
         {
             requestStore = new GoalIntakeRequestStore(workspace.SqliteStatePath);
-            var reservation = requestStore.Reserve(request.RequestKey, request.Fingerprint);
+            var reservation = request.Reserve(requestStore);
             intakeRecord = reservation.Record;
             if (reservation.Kind == GoalIntakeReservationKind.Replay)
             {
-                GoalIntakeReplayReceipt.Print(reservation.Record, request.RequestKey, stateRepository,
-                    workspace.PortfolioStorePath, GoalCreationSummaryView.IsRequested(args), ref currentGoal);
+                GoalIntakeReplayReceipt.Print(reservation.Record, request, stateRepository,
+                    workspace, GoalCreationSummaryView.IsRequested(args), ref currentGoal);
                 return false;
             }
         }
@@ -1903,7 +1903,7 @@ internal static partial class CliPersistentStateRunner
         try
         {
             shouldSave = CliCommandDispatcher.ExecuteCommand(
-                args,
+                request?.RequestedEpicId is { } epicId ? EpicAtCreation.UseResolvedArgument(args, epicId) : args,
                 kernel,
                 workspace,
                 ref agents,

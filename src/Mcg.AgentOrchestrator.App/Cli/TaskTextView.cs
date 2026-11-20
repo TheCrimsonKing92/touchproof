@@ -186,9 +186,18 @@ public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
     {
         var task = request.TaskId is null ? "goal" : request.TaskId.Value[..8];
         var counts = kernel.GetHumanInputRequestCounts(request.GoalId, request.TaskId);
+        var outcome = kernel.PredictHumanInputAnswerOutcome(request.Id);
+        var prediction = outcome.Effect switch
+        {
+            HumanInputAnswerEffect.CompletesTask => "completes the task",
+            HumanInputAnswerEffect.ReturnsTaskForAnotherRound => "returns the task for another round",
+            HumanInputAnswerEffect.NoTaskEffect => "no task effect",
+            _ => $"task status {outcome.ResultingStatus}"
+        };
         Console.WriteLine(
             $"{request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={task} " +
-            $"requests={counts.Open} open / {counts.Total} total: {OutputTextPreview.CreateSummary(request.Question).Text}");
+            $"requests={counts.Open} open / {counts.Total} total: {OutputTextPreview.CreateSummary(request.Question).Text} " +
+            $"| answer: {prediction}");
     }
 }
 
@@ -210,4 +219,23 @@ public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
         $"prompt-bytes={ContextUsageFigures.PromptBytes(receipt).Display}, " +
         $"estimate={ContextUsageFigures.Estimate(receipt).Display}, " +
         $"harness-overhead={ContextUsageFigures.HarnessOverhead(receipt).Display}";
+}
+
+internal static class AnswerHumanInputCommand
+{
+    internal static void SubmitAndPrint(CliExecutionContext context, HumanInputRequest request,
+        string answer, IReadOnlyList<string>? gateDeliverableIds)
+    {
+        var taskId = request.TaskId;
+        var beforeStatus = taskId is null ? (WorkTaskStatus?)null : context.Kernel.GetTask(request.GoalId, taskId).Status;
+        context.Kernel.SubmitHumanInput(request.Id, answer, gateDeliverableIds);
+        var goal = context.Kernel.GetGoal(request.GoalId);
+        context.CurrentGoal = goal;
+        if (taskId is not null)
+        {
+            var resultingStatus = goal.FindTask(taskId).Status;
+            Console.WriteLine($"Task {CliIdentifierText.ShortId(taskId.Value)} after answer: {resultingStatus} (was {beforeStatus})");
+        }
+        GoalTextView.PrintGoal(goal);
+    }
 }

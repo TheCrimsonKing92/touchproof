@@ -88,7 +88,7 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("merge-train-acceptance.db", StoreSchemaRegistry.MergeTrainAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);
         Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
-        Assert.Equal(4, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
+        Assert.Equal(5, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
         Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
         var replay = Assert.Single(entries.Where(entry => entry.StoreName == "impact-replay-checkpoint"));
         Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ImpactReplayCheckpointStore.cs", replay.SourceFile);

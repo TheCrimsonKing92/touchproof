@@ -192,7 +192,7 @@ public sealed partial class AgentOrchestratorKernel
                 NextActionKind.MonitorGoal,
                 null,
                 null,
-                "No immediate action is required; monitor the goal for new progress."));
+                AcceptanceFailedRecoveryPolicy.Decide(goal)?.MonitorMessage ?? "No immediate action is required; monitor the goal for new progress."));
         }
 
         return new GoalNextActions(goal.Id, goal.Objective, goal.Status, items);

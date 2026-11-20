@@ -1569,7 +1569,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
                     ? null
                     : new ConductEventLogWriter(attempt.ConductEventLogPath),
-                attemptLogWriters: attemptLogWriters);
+                attemptLogWriters: attemptLogWriters) { ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull };
             var activeAttempt = coordinator.TryPersistOwnerProcess(attempt, Environment.ProcessId);
             AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "owner-persisted");
             if (activeAttempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
@@ -1720,6 +1720,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunResult? run = null;
         (ConductorParallelAcceptanceAttemptOutcome Outcome, string Detail, bool Transient)? terminalWithoutResult = null;
         string? stderrDetail = null;
+        string? preReviewManifestIdentity = null;
         using var heartbeatTimer = new Timer(
             _ => WriteHeartbeat(attempt, "running"),
             null,
@@ -1738,7 +1739,14 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     attempt,
                     candidate,
                     policy,
-                    runAcceptance,
+                    (executionCandidate, executionPolicy, lease, cancellationToken, options) =>
+                    {
+                        if (attempt.FindingRoundFingerprint == PreReviewEvidenceReceipts.FindingRoundFingerprint &&
+                            executionCandidate.BranchHeadSha is { } candidateSha)
+                            preReviewManifestIdentity = PreReviewEvidenceReceipts.ResolveCandidateIdentity(
+                                _executionDirectory, executionCandidate.Goal.Id, candidateSha, _integrationBranch, ProjectHomeDirectory).ManifestIdentity;
+                        return runAcceptance(executionCandidate, executionPolicy, lease, cancellationToken, options);
+                    },
                     lease =>
                     {
                         stableSlotLease = lease;
@@ -1769,7 +1777,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             {
                 if (run is not null)
                 {
-                    CompleteWithRunResult(attempt, run, stderrDetail);
+                    CompleteWithRunResult(attempt, run, stderrDetail, preReviewManifestIdentity);
                 }
                 else if (terminalWithoutResult is { } terminal)
                 {
@@ -1809,7 +1817,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private void CompleteWithRunResult(
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceRunResult run,
-        string? stderrDetail)
+        string? stderrDetail,
+        string? preReviewManifestIdentity)
     {
         try
         {
@@ -1829,6 +1838,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 Detail = AcceptanceRunDetail(run),
                 TestResultPaths = ResultTestPaths(run),
                 ReplayResultFingerprint = resultFingerprint,
+                EffectiveManifestIdentity = preReviewManifestIdentity ?? current.EffectiveManifestIdentity,
                 OriginalFocusedReceipt = originalFocusedReceipt
             }, run));
             WriteTerminalExitReceipt(
@@ -1983,7 +1993,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 ResultsPrefix: prefix,
                 LivenessCheckHint: attempt.MetadataPath, AttemptMemberGoalIds: [candidate.Goal.Id],
                 MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers([(candidate.Goal.Id, candidate.Goal.Objective)]),
-                LaneWaitSink: observations => PersistLaneWaits(attempt, observations)));
+                LaneWaitSink: observations => PersistLaneWaits(attempt, observations),
+                PreReviewEvidenceReceipts: attempt.Kind == GateDispatchKind
+                    ? SoloLandingGateExecutionOptions.SnapshotPreReviewEvidence(candidate.Goal) : null));
     }
 
     internal static void PersistLaneWaits(ConductorParallelAcceptanceAttempt attempt,

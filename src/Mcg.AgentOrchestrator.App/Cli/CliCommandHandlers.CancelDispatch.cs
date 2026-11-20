@@ -52,10 +52,10 @@ internal static partial class CliCommandHandlers
             attribution.Channel,
             attribution.AuthenticationAssurance,
             DateTimeOffset.UtcNow,
-            ActorKind: attribution.ActorKind);
-        var persisted = (intentStore ?? SqliteOperatorIntentStore.ForDirectories(
-                context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory))
-            .EnqueueAsync(intent).GetAwaiter().GetResult();
+            ActorKind: attribution.ActorKind,
+            DriverSessionId: attribution.DriverSessionId);
+        intentStore ??= SqliteOperatorIntentStore.ForDirectories(context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory);
+        var persisted = intentStore.EnqueueAsync(intent).GetAwaiter().GetResult();
 
         if (operation is null && process is not null) (stopProcessTree ?? new BackgroundDispatchRunner().StopProcessTree)(process);
         OperatorIntentSubmissionOutput.PrintCancelDispatch(persisted, context.Workspace.OrchestratorDirectory,

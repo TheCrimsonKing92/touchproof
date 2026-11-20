@@ -8,6 +8,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // The driver supplies its authoritative recording callback; this helper owns no kernel state.
 internal static class PreReviewEvidenceReceipts
 {
+    internal const string FindingRoundFingerprint = "pre-review-stage";
+
     private static readonly Regex ClassTokenPattern = new(
         @"(?<![A-Za-z0-9_!])FullyQualifiedName\s*~\s*([A-Za-z_][A-Za-z0-9_.]*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -22,7 +24,9 @@ internal static class PreReviewEvidenceReceipts
         IReadOnlyList<AcceptanceCheckResult> checks,
         IReadOnlyList<string> failingTests,
         string? evidencePointer,
-        IReadOnlyList<string>? evidenceTimeoutChecks = null)
+        IReadOnlyList<string>? evidenceTimeoutChecks = null,
+        (string? TreeSha, string? ManifestIdentity) candidateIdentity = default,
+        string? sourceAttemptId = null)
     {
         var receipt = new PreReviewEvidenceReceipt(
             goal.Id.Value,
@@ -44,9 +48,57 @@ internal static class PreReviewEvidenceReceipts
             evidencePointer,
             DateTimeOffset.UtcNow,
             Advisories: FindExtraneousChecks(context, checks),
-            EvidenceTimeoutChecks: evidenceTimeoutChecks);
+            EvidenceTimeoutChecks: evidenceTimeoutChecks,
+            CandidateTreeSha: candidateIdentity.TreeSha,
+            ManifestIdentity: candidateIdentity.ManifestIdentity,
+            SourceAttemptId: sourceAttemptId);
         record(goal.Id, reviewerTask.Id, receipt);
         return receipt;
+    }
+
+    internal static (string? TreeSha, string? ManifestIdentity) ResolveCandidateIdentity(
+        string? executionDirectory, GoalId goalId, string candidateSha, string integrationBranch, string? projectHomeDirectory)
+    {
+        if (executionDirectory is null)
+            return default;
+
+        try
+        {
+            var worktree = GoalWorktrees.TryResolve(executionDirectory, goalId);
+            if (worktree is null || !string.Equals(GoalAcceptanceVerifier.ResolveGitScalar(worktree, "rev-parse", "HEAD"),
+                    candidateSha, StringComparison.OrdinalIgnoreCase))
+                return default;
+
+            var tree = GoalAcceptanceVerifier.ResolveGitScalar(worktree, "rev-parse", candidateSha + "^{tree}");
+            if (string.IsNullOrWhiteSpace(tree))
+                return default;
+
+            var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree, integrationBranch);
+            var settings = AcceptanceGateEngineSettings.Load(worktree, projectHomeDirectory);
+            // The focused VSTest builder can intersect the displayed selector with a declared filter.
+            var focusedFilterIsConstrained = VstestFocusedEvidenceCheckShape.TryResolve(
+                    AcceptancePolicyShardPlanner.InfrastructureTestsProject, settings, out var declaration) &&
+                declaration.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase) ||
+                    argument.StartsWith("--filter=", StringComparison.OrdinalIgnoreCase));
+            var manifest = focusedFilterIsConstrained ? null :
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(worktree, changedFiles, projectHomeDirectory);
+            return string.Equals(GoalAcceptanceVerifier.ResolveGitScalar(worktree, "rev-parse", "HEAD"),
+                candidateSha, StringComparison.OrdinalIgnoreCase) ? (tree, manifest) : default;
+        }
+        catch (Exception)
+        {
+            // An unresolved identity leaves the receipt usable for pre-review's existing checks.
+            return default;
+        }
+    }
+
+    internal static (string? TreeSha, string? ManifestIdentity) ResolveRecordedCandidateIdentity(
+        string? executionDirectory, GoalId goalId, string candidateSha, string integrationBranch,
+        string? projectHomeDirectory, string? executedManifestIdentity)
+    {
+        var identity = ResolveCandidateIdentity(executionDirectory, goalId, candidateSha, integrationBranch, projectHomeDirectory);
+        return string.Equals(identity.ManifestIdentity, executedManifestIdentity, StringComparison.Ordinal)
+            ? identity : (identity.TreeSha, null);
     }
 
     internal static bool TryReuse(
@@ -120,6 +172,11 @@ internal static class PreReviewEvidenceReceipts
         var checks = context.SelectedFocusedTests.Select(selection => constituents
             .SelectMany(constituent => constituent.Checks)
             .First(check => string.Equals(check.Command, selection, StringComparison.Ordinal))).ToArray();
+        var identity = constituents.FirstOrDefault();
+        var sharedIdentity = identity is not null &&
+            constituents.All(source =>
+                string.Equals(source.CandidateTreeSha, identity.CandidateTreeSha, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(source.ManifestIdentity, identity.ManifestIdentity, StringComparison.Ordinal));
         var receipt = new PreReviewEvidenceReceipt(
             goal.Id.Value,
             round,
@@ -135,7 +192,9 @@ internal static class PreReviewEvidenceReceipts
             MappingReason: context.MappingReason + "; reused green current-candidate evidence coverage.",
             EvidencePointer: evidencePointers.Length == 0 ? PreReviewEvidenceReceipt.SyntheticReuseAdvisory : string.Join(",", evidencePointers),
             RecordedAt: DateTimeOffset.UtcNow,
-            Advisories: [PreReviewEvidenceReceipt.SyntheticReuseAdvisory]);
+            Advisories: [PreReviewEvidenceReceipt.SyntheticReuseAdvisory],
+            CandidateTreeSha: sharedIdentity ? identity!.CandidateTreeSha : null,
+            ManifestIdentity: sharedIdentity ? identity!.ManifestIdentity : null);
         record(goal.Id, reviewerTask.Id, receipt);
     }
 
