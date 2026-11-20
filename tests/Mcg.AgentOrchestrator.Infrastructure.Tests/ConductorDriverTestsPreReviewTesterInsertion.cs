@@ -38,7 +38,7 @@ public sealed class ConductorDriverTestsPreReviewTesterInsertion
         Assert.Empty(scenario.Escalations);
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(true)]
     [InlineData(false)]
     [Trait("Category", "CrossTick")]
@@ -129,8 +129,13 @@ public sealed class ConductorDriverTestsPreReviewTesterInsertion
 
     private sealed class RoutingScenario
     {
+        private readonly ConductorAutonomyPolicy _policy;
+
         internal RoutingScenario(string routingOutcome)
         {
+            _policy = routingOutcome == CoverageMismatch
+                ? ConductorAutonomyPolicy.Conservative
+                : ConductorAutonomyPolicy.Permissive;
             (Kernel, Goal) = ReviewGoalWithoutTester();
             Developer = Goal.Tasks[0];
             Reviewer = Goal.Tasks[1];
@@ -161,7 +166,8 @@ public sealed class ConductorDriverTestsPreReviewTesterInsertion
                 },
                 dispatchAndStart: goal =>
                 {
-                    var selected = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents);
+                    var selected = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(
+                        goal, agents, approveHighRiskOwnership: _policy.AllowsAutonomousHighRiskOwnership);
                     var task = goal.Tasks.Single(task => selected.TaskIds.Contains(task.Id));
                     Dispatched.Add((task.Id, task.Status));
                     DispatchTask(Kernel, goal, task);
@@ -186,6 +192,6 @@ public sealed class ConductorDriverTestsPreReviewTesterInsertion
         internal List<(TaskId, RetryRoundKind?, RetryCause)> Retried { get; } = [];
         internal List<string> Escalations { get; } = [];
 
-        internal ConductorAdvanceResult Advance() => Driver.AdvanceOnce(Goal, ConductorAutonomyPolicy.Permissive);
+        internal ConductorAdvanceResult Advance() => Driver.AdvanceOnce(Goal, _policy);
     }
 }

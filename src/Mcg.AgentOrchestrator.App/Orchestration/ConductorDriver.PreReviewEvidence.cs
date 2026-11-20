@@ -308,7 +308,7 @@ internal sealed partial class ConductorDriver
                     evidence.Checks,
                     [],
                     evidencePointer);
-                var mismatch = $"pre-review evidence mapping failure for candidate {context.CandidateSha}: {mappingFailure}";
+                var mismatch = $"pre-review evidence mapping failure for candidate {context.CandidateSha}";
                 if (TryStopRepeatedPreReviewMappingRetry(
                         goal,
                         reviewerTask,
@@ -327,7 +327,7 @@ internal sealed partial class ConductorDriver
                         reviewerTask,
                         goalPrefix,
                         policy,
-                        mismatch,
+                        $"{mismatch}: identify and request the missing tests for this focused selection: {context.FocusedRequest}",
                         out result, out var insertionFailure))
                 {
                     return true;
@@ -338,7 +338,7 @@ internal sealed partial class ConductorDriver
                     goalPrefix,
                     policy,
                     fromState,
-                    $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}.{insertionFailure} " +
+                    $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}: {mappingFailure}.{insertionFailure} " +
                     $"Enqueue the insertion and poll operator-intent-status <returned-id> until Applied before re-evaluating. Add one with: {BuildAddTesterCommand(goalPrefix, context.CandidateSha)}");
                 return true;
             }
