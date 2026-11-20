@@ -126,7 +126,7 @@ public sealed class ReviewerFindingsLineBlockerTests
     }
 
     private static string BuildFindings(string state) => $$"""
-        findings: [{"stable_id":"markdown-emphasis-main-control","state":"{{state}}","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"src/Parser.cs","region":"Normalize"},"description":"Main control."},{"stable_id":"markdown-emphasis-blocker-prefix-widening","state":"open","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"src/Parser.cs","region":"Classify"},"description":"Keep the severity: blocker' checks scoped."}]
+        findings: [{"stable_id":"markdown-emphasis-main-control","state":"{{state}}","severity":"blocking","category":"correctness","location":{"file":"src/Parser.cs","region":"Normalize"},"description":"Main control."},{"stable_id":"markdown-emphasis-blocker-prefix-widening","state":"open","severity":"advisory","category":"correctness","location":{"file":"src/Parser.cs","region":"Classify"},"description":"Keep the severity: blocker' checks scoped."}]
         """;
 
     private static string BuildBlock(string line, string blockers = "none") => $$"""

@@ -52,7 +52,7 @@ public sealed partial class AgentOrchestratorKernel
             .SelectMany(candidate => candidate.VerificationHistory)
             .OrderBy(candidate => candidate.CompletedAt))
         {
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic, role))
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
             {
                 // RECORD the parse failure instead of discarding it. This used to be `out _` plus a bare
                 // continue, which made a reviewer whose findings could not be parsed indistinguishable from a

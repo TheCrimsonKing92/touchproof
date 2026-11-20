@@ -16,7 +16,7 @@ internal static class FindingEvidenceRefusalRecorder
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
         Action<GoalId, TaskId, string> recordRequest, Func<string, string> trim)
     {
-        if (WorkerResultBlockers.TryFindReviewFindingRound(requestingTask.LastVerification, out var round, out _, requestingTask.RequiredRole))
+        if (WorkerResultBlockers.TryFindReviewFindingRound(requestingTask.LastVerification, out var round, out _))
         {
             var hasCandidate = ConductorGitRevisionReader.IsValid(candidateSha);
             recordDispositions(goalId, requestingTask.Id,

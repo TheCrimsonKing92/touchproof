@@ -273,7 +273,7 @@ public sealed class VerificationAndProcessLogTests
     var exitPath = Path.Combine(root, "exit.txt");
 
     var findingsJson =
-        "findings: [{\"stable_id\":\"budget-straddling-finding\",\"state\":\"open\",\"class_id\":\"none\",\"severity\":\"blocking\"," +
+        "findings: [{\"stable_id\":\"budget-straddling-finding\",\"state\":\"open\",\"severity\":\"blocking\"," +
         "\"category\":\"correctness\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
         "\"description\":\"" + new string('D', 6_500) + "\"}]";
     var stdout =
@@ -320,7 +320,7 @@ public sealed class VerificationAndProcessLogTests
             "files: none" + Environment.NewLine +
             "commands: prior review" + Environment.NewLine +
             "tests: pass - prior review passed" + Environment.NewLine +
-            "findings: [{\"stable_id\":\"over-cap-finding\",\"state\":\"open\",\"class_id\":\"none\",\"severity\":\"blocking\"," +
+            "findings: [{\"stable_id\":\"over-cap-finding\",\"state\":\"open\",\"severity\":\"blocking\"," +
             "\"category\":\"operator-owned\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
             "\"description\":\"Prior category must be replaced.\"}]" + Environment.NewLine +
             "touched_anchors: []" + Environment.NewLine +
@@ -353,7 +353,7 @@ public sealed class VerificationAndProcessLogTests
             "files: src/Some/File.cs" + Environment.NewLine +
             "commands: focused review" + Environment.NewLine +
             "tests: pass - focused review passed" + Environment.NewLine +
-            "findings: [{\"stable_id\":\"over-cap-finding\",\"state\":\"open\",\"class_id\":\"none\",\"severity\":\"blocking\"," +
+            "findings: [{\"stable_id\":\"over-cap-finding\",\"state\":\"open\",\"severity\":\"blocking\"," +
             "\"category\":\"correctness\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
             "\"description\":\"" + new string('D', 20_100) + "\"}]" + Environment.NewLine +
             "touched_anchors: []" + Environment.NewLine +

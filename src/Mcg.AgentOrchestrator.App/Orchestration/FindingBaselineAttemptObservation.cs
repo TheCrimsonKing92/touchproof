@@ -20,7 +20,7 @@ internal static class FindingBaselineAttemptObservation
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Failed && task.LastVerification is not null))
         {
             if (!WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification!).AllowsCompletion ||
-                !WorkerResultBlockers.TryFindReviewFindingRound(task.LastVerification, out var round, out _, task.RequiredRole) ||
+                !WorkerResultBlockers.TryFindReviewFindingRound(task.LastVerification, out var round, out _) ||
                 !VerifyingFindingCurrency.IsCurrent(goal, task, task.LastVerification!)) continue;
             var fingerprint = ConductorDriver.BuildFindingRoundFingerprint(task, round);
             var attempt = driver._focusedEvidenceAttemptCoordinator.ReadLiveFindingBaselineAttempt(

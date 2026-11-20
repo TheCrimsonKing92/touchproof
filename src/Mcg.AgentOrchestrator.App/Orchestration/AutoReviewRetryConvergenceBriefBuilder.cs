@@ -350,8 +350,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             WorkerResultBlockers.TryFindReviewFindingRound(
                 reviewerTask.LastVerification,
                 out var rejectedRound,
-                out _,
-                reviewerTask.RequiredRole)
+                out _)
                 ? rejectedRound.Findings
                     .Where(finding => finding.State == ReviewFindingState.Resolved)
                     .Select(finding => finding.StableId)

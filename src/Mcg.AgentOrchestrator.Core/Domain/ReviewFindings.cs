@@ -468,10 +468,7 @@ public sealed record ReviewFinding(
     [property: JsonConverter(typeof(FindingCategoryJsonConverter))]
     FindingCategory Category = FindingCategory.Unspecified,
     [property: JsonPropertyName("evidence_request")] FindingEvidenceRequest? EvidenceRequest = null,
-    [property: JsonPropertyName("evidence_outcome")] FindingEvidenceOutcome? EvidenceOutcome = null,
-    [property: JsonPropertyName("class_id")]
-    [property: JsonConverter(typeof(FindingClassJsonConverter))]
-    FindingClass ClassId = FindingClass.None);
+    [property: JsonPropertyName("evidence_outcome")] FindingEvidenceOutcome? EvidenceOutcome = null);
 
 public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,

@@ -234,7 +234,7 @@ public sealed class OwnerConsoleGoalReturnExplanationTests
     private static string FindingOutput(string description) => "WORKER_RESULT:\nfindings: " +
         System.Text.Json.JsonSerializer.Serialize(new[] { new
         {
-            stable_id = "recorded", state = "open", severity = "blocking", category = "correctness", class_id = "none",
+            stable_id = "recorded", state = "open", severity = "blocking", category = "correctness",
             location = new { file = "src/example.cs", region = "Example" }, description
         } }) + "\ntouched_anchors: []\nEND_WORKER_RESULT";
 
