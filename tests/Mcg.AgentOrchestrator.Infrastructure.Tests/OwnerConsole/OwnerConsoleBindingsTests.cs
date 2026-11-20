@@ -372,7 +372,7 @@ public sealed class OwnerConsoleBindingsTests
         "Settings tab Conductor policy: Up/Down highlight  Enter edit  r reload",
         "Settings tab Executors: Up/Down highlight  Space enable/disable",
         "Settings tab Projects: Up/Down highlight  Enter edit scope",
-        "Settings tab Provider connections: Up/Down profile  c check  s sign in  d device code  t return  x stop waiting  r reload"
+        "Settings tab Provider connections: Up/Down provider  c check  s sign in  d device code  t return  x stop waiting  r reload"
     ];
 
     [Fact]

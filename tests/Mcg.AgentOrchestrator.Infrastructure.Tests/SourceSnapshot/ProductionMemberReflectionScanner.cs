@@ -161,20 +161,36 @@ internal static class ProductionMemberReflectionScanner
     }
 
     internal static Result ScanRepository(RepositorySourceSnapshot snapshot, IEnumerable<string> testFiles,
-        IReadOnlyList<Exemption> exemptions)
+        IReadOnlyList<Exemption> exemptions) =>
+        ScanRepository(snapshot, testFiles, exemptions, CreateRuntimeBase());
+
+    internal static Result ScanRepository(RepositorySourceSnapshot snapshot, IEnumerable<string> testFiles,
+        IReadOnlyList<Exemption> exemptions, CSharpCompilation baseCompilation)
     {
-        // Candidate assemblies supply symbol/assembly identity, not runtime target execution. TPA
-        // includes framework references; output references include project and third-party libraries.
-        var referencePaths = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Concat(Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var references = referencePaths.Select(path => MetadataReference.CreateFromFile(path)).ToArray();
         // Exclusions describe content inside this repository, not its parent checkout location.
         var files = testFiles.Where(path => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(
             Path.GetRelativePath(snapshot.Root, path))).ToArray();
         var trees = files.Select(path => snapshot.GetSyntaxTree(path).WithFilePath(
             Path.GetRelativePath(snapshot.Root, path).Replace('\\', '/'))).ToArray();
+        var compilation = baseCompilation.AddSyntaxTrees(trees);
+        // Names come from actual production projects, never a namespace spelling heuristic.
+        var assemblies = Directory.EnumerateFiles(Path.Combine(snapshot.Root, "src"), "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(Path.GetRelativePath(snapshot.Root, path)))
+            .Select(path => System.Xml.Linq.XDocument.Load(path).Descendants().FirstOrDefault(element =>
+                element.Name.LocalName == "AssemblyName")?.Value ?? Path.GetFileNameWithoutExtension(path))
+            .ToHashSet(StringComparer.Ordinal);
+        if (assemblies.Count == 0 || trees.Length == 0) throw new InvalidDataException("Reflection guard requires production projects and test sources.");
+        return Scan(compilation, trees, assemblies, exemptions);
+    }
+
+    private static CSharpCompilation CreateRuntimeBase()
+    {
+        // The repository fixtures exercise classification against the runtime core-library identity.
+        var referencePaths = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Concat(Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var references = referencePaths.Select(path => MetadataReference.CreateFromFile(path)).ToArray();
         var globals = CSharpSyntaxTree.ParseText("""
             global using System;
             global using System.IO;
@@ -186,16 +202,8 @@ internal static class ProductionMemberReflectionScanner
             """);
         // Preserve the existing friend-assembly contract so inferred return types from internal
         // production APIs bind just as they do in the test project (including non-reflection APIs).
-        var compilation = CSharpCompilation.Create(typeof(ProductionMemberReflectionScanner).Assembly.GetName().Name!,
-            trees.Append(globals), references,
+        return CSharpCompilation.Create(typeof(ProductionMemberReflectionScanner).Assembly.GetName().Name!,
+            [globals], references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        // Names come from actual production projects, never a namespace spelling heuristic.
-        var assemblies = Directory.EnumerateFiles(Path.Combine(snapshot.Root, "src"), "*.csproj", SearchOption.AllDirectories)
-            .Where(path => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(Path.GetRelativePath(snapshot.Root, path)))
-            .Select(path => System.Xml.Linq.XDocument.Load(path).Descendants().FirstOrDefault(element =>
-                element.Name.LocalName == "AssemblyName")?.Value ?? Path.GetFileNameWithoutExtension(path))
-            .ToHashSet(StringComparer.Ordinal);
-        if (assemblies.Count == 0 || trees.Length == 0) throw new InvalidDataException("Reflection guard requires production projects and test sources.");
-        return Scan(compilation, trees, assemblies, exemptions);
     }
 }
