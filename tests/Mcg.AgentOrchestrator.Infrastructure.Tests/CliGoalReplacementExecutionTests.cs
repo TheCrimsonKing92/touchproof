@@ -1,6 +1,8 @@
 using System.Reflection;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: pure helper calls and read-only reflection; no hook mutation or external state.
 public sealed class CliGoalReplacementExecutionTests
@@ -125,8 +127,75 @@ public sealed class CliGoalReplacementExecutionTests
             method => method.Name == "ExecuteGoalReplacementOutsideTransaction").IsAssembly);
         var runnerMethods = runner.GetMethods(flags);
         Assert.Single(runnerMethods, method => method.Name == "ExecuteGoalCreateOutsideTransaction");
+        Assert.Single(typeof(CliKeyedGoalCreationSubmission).GetMethods(flags),
+            method => method.Name == nameof(CliKeyedGoalCreationSubmission.Submit));
         Assert.True(Assert.Single(runnerMethods, method => method.Name == "ResolveCurrentGoal").IsAssembly);
         Assert.True(Assert.Single(runnerMethods,
             method => method.Name == "DeliverGoalCreationSideEffects").IsAssembly);
+    }
+
+    [Fact]
+    public void KeyedSubmissionHasNoKernelLoadOrGoalWriterAndWorkspaceApplyOwnsTheCommit()
+    {
+        const BindingFlags hidden = BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
+        static IEnumerable<MethodBase> References(MethodBase method)
+        {
+            var stateMachine = method.GetCustomAttribute<System.Runtime.CompilerServices.AsyncStateMachineAttribute>();
+            var moveNext = stateMachine?.StateMachineType.GetMethod("MoveNext",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            var references = CliWriterPersistenceBoundaryTests.References(method);
+            return moveNext is null ? references : references.Concat(CliWriterPersistenceBoundaryTests.References(moveNext));
+        }
+
+        var runner = typeof(CliPersistentStateRunner);
+        var entry = runner.GetMethod(nameof(CliPersistentStateRunner.ExecuteCommand))!;
+        var submissionType = typeof(CliKeyedGoalCreationSubmission);
+        var predicate = submissionType.GetMethod(nameof(CliKeyedGoalCreationSubmission.IsCommand), hidden)!;
+        var submission = submissionType.GetMethod(nameof(CliKeyedGoalCreationSubmission.Submit), hidden)!;
+        var legacy = runner.GetMethod("ExecuteGoalCreateOutsideTransaction", hidden)!;
+        var dispatch = References(entry).ToArray();
+        Assert.Contains(predicate, dispatch);
+        Assert.Contains(submission, dispatch);
+        Assert.Contains(legacy, dispatch);
+        var legacyCalls = References(legacy).ToArray();
+        var legacyFinalizers = legacyCalls.Where(method => method.DeclaringType?.Assembly == runner.Assembly &&
+            method.Name.Contains(legacy.Name, StringComparison.Ordinal));
+        Assert.Contains(legacyCalls.Concat(legacyFinalizers.SelectMany(References)),
+            method => method.Name == "CommitGoalCreationAsync");
+        foreach (var name in new[] { "PrepareStartupAsync", "ExecuteStartupCommand" })
+        {
+            var method = typeof(CliReadOnlyStartupHydration).GetMethod(name, hidden)!;
+            Assert.Contains(predicate, References(method));
+        }
+
+        var seen = new HashSet<MethodBase>();
+        var pending = new Queue<MethodBase>([submission]);
+        var reached = new List<MethodBase>();
+        while (pending.TryDequeue(out var method))
+        {
+            if (!seen.Add(method)) continue;
+            foreach (var called in References(method))
+            {
+                reached.Add(called);
+                if (called.DeclaringType?.Assembly == runner.Assembly)
+                    pending.Enqueue(called);
+            }
+        }
+
+        Assert.Contains(reached, method => method.Name == nameof(ITransactionalOrchestratorStateRepository.LoadGoalAsync));
+        Assert.DoesNotContain(reached, method => method.Name is "LoadAsync" or "CommitGoalCreationAsync" or
+            "ReplaceGoalWithSnapshot" or "TransactGoalCreationWithOutboxAsync" or "MarkCreated" ||
+            (method.DeclaringType == typeof(AgentOrchestratorKernel) && method.Name == nameof(AgentOrchestratorKernel.FromSnapshot)) ||
+            method == legacy || method.DeclaringType == typeof(GoalCreationOperatorIntentHandler));
+
+        var workspaceDispatch = typeof(OperatorIntentCoordinator).GetMethod(nameof(OperatorIntentCoordinator.ExecuteWorkspacePending),
+            hidden, [typeof(AgentOrchestratorKernel), typeof(bool).MakeByRefType()])!;
+        var handler = typeof(GoalCreationOperatorIntentHandler);
+        var apply = handler.GetMethod("Apply", hidden)!;
+        var bind = handler.GetMethod("BuildAndBind", hidden)!;
+        Assert.Contains(apply, CliWriterPersistenceBoundaryTests.References(workspaceDispatch));
+        Assert.Contains(CliWriterPersistenceBoundaryTests.References(apply), method => method.Name == "TransactGoalCreationWithOutboxAsync");
+        Assert.Contains(CliWriterPersistenceBoundaryTests.References(bind), method => method.Name == nameof(AgentOrchestratorKernel.ReplaceGoalWithSnapshot));
+        Assert.Contains(CliWriterPersistenceBoundaryTests.References(bind), method => method.Name == nameof(GoalIntakeRequestStore.MarkCreated));
     }
 }

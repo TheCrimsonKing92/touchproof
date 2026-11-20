@@ -72,7 +72,7 @@ internal static class CliConductorCommand
             switch (args[1].ToLowerInvariant())
             {
                 case "apply-intents" when args.Count == 3:
-                    return ApplyIntents(args, workspace, owner, stateRepository, output, error);
+                    return ApplyIntents(args, workspace, owner, stateRepository, output, error, verifyBinding);
                 case "start":
                     return Start(workspace, owner, args.Count == 3, launcher ?? (OperatingSystem.IsWindows()
                              ? new HandleListConductorProcessLauncher() : new SystemConductorProcessLauncher()),
@@ -138,13 +138,16 @@ internal static class CliConductorCommand
 
     private static int ApplyIntents(IReadOnlyList<string> args, OrchestratorWorkspace workspace, int? owner,
         Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository,
-        TextWriter output, TextWriter error)
+        TextWriter output, TextWriter error, Action? verifyBinding)
     {
         if (owner is not null)
         {
             error.WriteLine($"Refused: conductor running (pid {owner}); the running conductor applies pending intents on its next tick.");
             return 1;
         }
+
+        if (args[2].Equals("--workspace", StringComparison.OrdinalIgnoreCase))
+            return ApplyWorkspaceIntents(workspace, stateRepository, output, verifyBinding);
 
         ProgramStartupLifecycle.EnsureStateDbInitialized(args, workspace);
         var repository = stateRepository is null
@@ -188,6 +191,24 @@ internal static class CliConductorCommand
             default:
                 throw new InvalidOperationException($"Unexpected offline operator intent outcome: {outcome.GetType().Name}.");
         }
+    }
+
+    private static int ApplyWorkspaceIntents(OrchestratorWorkspace workspace,
+        Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository,
+        TextWriter output, Action? verifyBinding)
+    {
+        using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        verifyBinding?.Invoke();
+        if (!StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
+            WorkspaceStoreSetup.RunWithOwnership(workspace);
+        var repository = stateRepository?.Invoke(workspace) ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace, repository);
+        var lines = coordinator.ExecuteWorkspacePending(repository.LoadAsync().GetAwaiter().GetResult(), out var deferred);
+        if (lines.Count == 0)
+            output.WriteLine("No pending workspace operator intents.");
+        foreach (var line in lines)
+            output.WriteLine(line);
+        return deferred ? 1 : 0;
     }
 
     private static string? ResolveMainCommit(OrchestratorWorkspace workspace)

@@ -14,6 +14,9 @@ internal sealed class BoardFillCliGoalIntake(OrchestratorWorkspace workspace) : 
             ReadGoals().Any(goal => goal.Id.Value == id) ? id : null;
     }
 
+    public bool HasPendingCreation(string requestKey) =>
+        new GoalIntakeRequestStore(workspace.SqliteStatePath).Get(requestKey)?.State == GoalIntakeRequestStates.StillCommitting;
+
     public BoardFillIntakeResult File(BoardFillIntakeRequest request, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -39,8 +42,10 @@ internal sealed class BoardFillCliGoalIntake(OrchestratorWorkspace workspace) : 
                 failure.Message.StartsWith("GOAL_CREATE_DELIVERY_INCOMPLETE", StringComparison.Ordinal)))
             return new(before?.State == GoalIntakeRequestStates.Created ? "replayed" : "filed",
                 receipt!.GoalId, stdout, failure?.ToString() ?? "", 0, failure is null ? "ok" : "delivery-incomplete");
+        if (failure is null && receipt?.State == GoalIntakeRequestStates.StillCommitting)
+            return new("pending", null, stdout, "", 0, "intake-pending");
         return new("failed", null, stdout, failure?.ToString() ?? receipt?.FailureDetail ?? "No completed goal intake receipt.",
-            1, receipt?.State == GoalIntakeRequestStates.StillCommitting ? "intake-pending" : "intake-failed");
+            1, "intake-failed");
     }
 
     public BoardFillIntakeResult Depend(string goalId, string dependencyGoalId, CancellationToken token)

@@ -54,6 +54,9 @@ internal static partial class CliPersistentStateRunner
         bool allowTerminalSourceClaimTakeover = false)
     {
         CliCommandHelp.ValidateGoalCreationOptions(args);
+        if (CliKeyedGoalCreationSubmission.IsCommand(args))
+            return CliKeyedGoalCreationSubmission.Submit(args, stateRepository, workspace, agents, ref currentGoal,
+                operatorIntentSubmissionSource, allowTerminalSourceClaimTakeover);
         if (CliArgumentParser.IsAskGoal(args))
             return CliAskGoalCommand.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
@@ -666,7 +669,7 @@ internal static partial class CliPersistentStateRunner
     internal static bool IsGoalIntakeStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase);
 
-    private static bool HasRequestKey(IReadOnlyList<string> args) =>
+    internal static bool HasRequestKey(IReadOnlyList<string> args) =>
         args.Any(arg =>
             arg.Equals("--request-key", StringComparison.OrdinalIgnoreCase) ||
             arg.StartsWith("--request-key=", StringComparison.OrdinalIgnoreCase));
@@ -1939,7 +1942,7 @@ internal static partial class CliPersistentStateRunner
                 _ = requestStore!.MarkFailed(
                     request.RequestKey,
                     request.Fingerprint,
-                    ResolveGoalIntakeFailureCode(ex),
+                    CliKeyedGoalCreationSubmission.ResolveGoalIntakeFailureCode(ex),
                     ex.Message);
             }
             throw;
@@ -1949,7 +1952,7 @@ internal static partial class CliPersistentStateRunner
             _ = requestStore!.MarkFailed(
                 request.RequestKey,
                 request.Fingerprint,
-                ResolveGoalIntakeFailureCode(ex),
+                CliKeyedGoalCreationSubmission.ResolveGoalIntakeFailureCode(ex),
                 ex.Message);
             throw;
         }
@@ -1997,23 +2000,6 @@ internal static partial class CliPersistentStateRunner
         }
         catch (Exception ex) { custody.RecordException(ex, ex is CliExitException); throw; }
         finally { custody.RecordExit(); }
-    }
-
-    private static string ResolveGoalIntakeFailureCode(Exception exception)
-    {
-        var firstToken = exception.Message
-            .Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .FirstOrDefault();
-        if (firstToken is not null &&
-            firstToken.Length <= 100 &&
-            firstToken.All(character => char.IsAsciiLetterUpper(character) || char.IsAsciiDigit(character) || character == '_'))
-        {
-            return firstToken;
-        }
-
-        return exception is ArgumentException
-            ? "GOAL_INTAKE_ARGUMENT_INVALID"
-            : "GOAL_INTAKE_CREATE_FAILED";
     }
 
     private static bool ExecuteGoalCreateDeliveryRetry(
