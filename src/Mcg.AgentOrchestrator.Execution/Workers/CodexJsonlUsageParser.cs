@@ -97,6 +97,7 @@ public static class CodexJsonlUsageParser
         long? cached = null;
         long? output = null;
         long turnCount = 0;
+        long toolCallCount = 0;
         var workerOutputRecognized = false;
         var malformedUsage = false;
         var malformedLineCount = 0;
@@ -119,11 +120,18 @@ public static class CodexJsonlUsageParser
                 }
 
                 var type = GetString(root, "type");
-                if (type == "item.completed" && root.TryGetProperty("item", out var item) &&
-                    GetString(item, "type") == "agent_message" && GetString(item, "text") is { } text)
+                if (type == "item.completed" && root.TryGetProperty("item", out var item))
                 {
-                    messages.Add(text);
-                    workerOutputRecognized = true;
+                    var itemType = GetString(item, "type");
+                    if (itemType == "agent_message" && GetString(item, "text") is { } text)
+                    {
+                        messages.Add(text);
+                        workerOutputRecognized = true;
+                    }
+                    else if (itemType is "command_execution" or "file_change" or "mcp_tool_call" or "web_search")
+                    {
+                        toolCallCount++;
+                    }
                 }
 
                 if (type == "turn.completed")
@@ -152,7 +160,7 @@ public static class CodexJsonlUsageParser
         }
 
         var usageResult = input is not null || cached is not null || output is not null
-            ? new ProviderReportedUsage(input, output, cached, turnCount)
+            ? new ProviderReportedUsage(input, output, cached, turnCount, toolCallCount)
             : null;
         var usageContractRecognized = turnCount > 0;
         var reason = malformedUsage ? "malformed" : usageContractRecognized ? "absent" : "unsupported";

@@ -72,6 +72,7 @@ public sealed class ClaudeTranscriptUsageReader(
             using var reader = new StreamReader(stream);
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
             long input = 0, cached = 0, output = 0;
+            long toolCallCount = 0;
             while (reader.ReadLine() is { } line)
             {
                 try
@@ -97,6 +98,19 @@ public sealed class ClaudeTranscriptUsageReader(
                         cached += messageCached;
                         output += messageOutput;
                     }
+
+                    if (message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var block in content.EnumerateArray())
+                        {
+                            if (block.ValueKind == JsonValueKind.Object &&
+                                block.TryGetProperty("type", out var blockType) &&
+                                blockType.ValueKind == JsonValueKind.String && blockType.ValueEquals("tool_use"))
+                            {
+                                toolCallCount++;
+                            }
+                        }
+                    }
                 }
                 catch (JsonException)
                 {
@@ -106,7 +120,7 @@ public sealed class ClaudeTranscriptUsageReader(
 
             return seenIds.Count == 0
                 ? new(null, $"claude-transcript-no-usage: {fileName} reported no assistant usage")
-                : new(new ProviderReportedUsage(input, output, cached, seenIds.Count), string.Empty);
+                : new(new ProviderReportedUsage(input, output, cached, seenIds.Count, toolCallCount), string.Empty);
         }
         catch (Exception ex)
         {
