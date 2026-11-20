@@ -65,8 +65,10 @@ public sealed class CliExecutorScreenCommandTests
         Assert.False(File.Exists(fixture.ReceiptPath));
     }
 
-    [Fact]
-    public void LocalComparisonUsesLatestCompletedExactCandidateAndItsRecordedDuration()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LocalComparisonUsesExactAttemptDurationAndPreservesRecordedLaneFailure(bool recordLaneFailure)
     {
         using var fixture = new Fixture();
         const string laneName = "infrastructure tests: A";
@@ -84,7 +86,12 @@ public sealed class CliExecutorScreenCommandTests
         trx.Save(trxPath);
         var commit = fixture.Candidate.Commit;
         StoreAttempt("earlier", commit, baselineCutoff.AddMinutes(-3), ConductorParallelAcceptanceAttemptOutcome.Passed);
-        StoreAttempt("matching", commit, baselineCutoff.AddMinutes(-1), ConductorParallelAcceptanceAttemptOutcome.Failed);
+        var storedLaneFailure = recordLaneFailure
+            ? new AcceptanceCheckResult(laneName, false, 1, null, CompletionDecision: new(false,
+                AcceptanceShardCompletionPredicates.NonzeroExit, false, 1, 3, 3, "Completed"))
+            : null;
+        StoreAttempt("matching", commit, baselineCutoff.AddMinutes(-1), ConductorParallelAcceptanceAttemptOutcome.Failed,
+            storedLaneFailure);
         StoreAttempt("different-sha", fixture.Candidate.Tree, baselineCutoff, ConductorParallelAcceptanceAttemptOutcome.Passed);
         StoreAttempt("completed-after-start", commit, baselineCutoff.AddSeconds(1), ConductorParallelAcceptanceAttemptOutcome.Passed);
 
@@ -99,8 +106,15 @@ public sealed class CliExecutorScreenCommandTests
         var lane = Assert.Single(comparison.Lanes);
         Assert.Equal(laneName, lane.LaneName);
         Assert.Equal((60d, 3, 0), (lane.WallSeconds!.Value, lane.Passed!.Value, lane.Failed!.Value));
+        Assert.Equal(recordLaneFailure ? AcceptanceShardCompletionPredicates.NonzeroExit : null, lane.ExecutionFailure);
+        var trial = new ExecutorWholeGateTrialReceipt("trial", fixture.Candidate.GoalId, commit, "laptop", baselineCutoff,
+            600, ExecutorWholeGateTrialStatus.Complete, [new(laneName, 60, 3, 0, [])],
+            ExecutorWholeGateTrialMemory.Unavailable("fixture"), comparison, []);
+        var parity = recordLaneFailure ? $"different lanes=[{laneName}]" : "identical";
+        Assert.Equal($"TRIAL compare executor/local=0.50 parity={parity}", ExecutorWholeGateTrialComparison.Format(trial));
 
-        void StoreAttempt(string id, string sha, DateTimeOffset completedAt, ConductorParallelAcceptanceAttemptOutcome outcome)
+        void StoreAttempt(string id, string sha, DateTimeOffset completedAt, ConductorParallelAcceptanceAttemptOutcome outcome,
+            AcceptanceCheckResult? failure = null)
         {
             File.WriteAllText(Path.Combine(directory, id + ".attempt.json"), JsonSerializer.Serialize(new
             {
@@ -110,7 +124,9 @@ public sealed class CliExecutorScreenCommandTests
             }));
             File.WriteAllText(Path.Combine(directory, id + ".result.json"), JsonSerializer.Serialize(new
             {
-                Kind = "gate", BranchHeadSha = sha, MainHeadSha = fixture.Candidate.MainSha
+                Kind = "gate", BranchHeadSha = sha, MainHeadSha = fixture.Candidate.MainSha,
+                Acceptance = failure is null ? null : new AcceptanceVerificationSummary(false, [failure],
+                    FailedChecks: [laneName], CheckNames: [laneName])
             }));
         }
     }

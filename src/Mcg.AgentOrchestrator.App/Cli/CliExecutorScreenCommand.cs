@@ -225,9 +225,9 @@ internal static class CliExecutorScreenCommand
             var completion = metadata[path].CompletedAt!.Value;
             var duration = (completion - selected.StartedAt).TotalSeconds;
             var resultPath = path[..^".attempt.json".Length] + ".result.json";
-            var storedResult = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
-                File.ReadAllText(resultPath), new JsonSerializerOptions(JsonSerializerDefaults.Web));
-            var laneNames = plan.Lanes.Select(lane => lane.Name).Union(storedResult?.Acceptance?.CheckNames ?? [],
+            var acceptance = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
+                File.ReadAllText(resultPath), new JsonSerializerOptions(JsonSerializerDefaults.Web))?.Acceptance;
+            var laneNames = plan.Lanes.Select(lane => lane.Name).Union(acceptance?.CheckNames ?? [],
                 StringComparer.Ordinal).Except(plan.UnsupportedChecks.Select(check => check.LaneName),
                 StringComparer.Ordinal);
             var paths = selected.TestResultPaths.Select(raw => Path.GetFullPath(
@@ -235,6 +235,8 @@ internal static class CliExecutorScreenCommand
             var localLanes = new List<ExecutorWholeGateTrialLaneResult>();
             foreach (var name in laneNames)
             {
+                var storedFailure = acceptance?.UnmetCriteria?.FirstOrDefault(check => !check.Passed && check.Name == name);
+                var failedPredicate = storedFailure?.CompletionDecision?.FailedPredicate;
                 var slug = AcceptanceArtifactFileNames.Slug(name);
                 var pattern = new Regex(@"(?:^|\.)" + Regex.Escape(slug) + @"(?:-run-(\d+))?$",
                     RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -244,12 +246,23 @@ internal static class CliExecutorScreenCommand
                     .FirstOrDefault()?.Select(item => item.Path).ToArray();
                 if (lanePaths is not { Length: > 0 })
                 {
-                    if (storedResult?.Acceptance?.CheckNames?.Contains(name, StringComparer.Ordinal) == true)
-                        localLanes.Add(new(name, null, null, null, [], "local-trx-unavailable"));
+                    if (storedFailure is not null || acceptance?.CheckNames?.Contains(name, StringComparer.Ordinal) == true)
+                        localLanes.Add(new(name, null, null, null, storedFailure?.FailingTestIdentities ?? [],
+                            failedPredicate ?? "local-trx-unavailable"));
                     continue;
                 }
-                localLanes.Add(ExecutorWholeGateTrialLaneResult.ReadTrx(name, lanePaths,
-                    allowsEmptySelection: plan.Lanes.Any(lane => lane.Name == name && lane.AllowsEmptySelection)));
+                var laneResult = ExecutorWholeGateTrialLaneResult.ReadTrx(name, lanePaths,
+                    allowsEmptySelection: plan.Lanes.Any(lane => lane.Name == name && lane.AllowsEmptySelection));
+                // Complete TRX counts can coexist with a failed lane process.
+                if (storedFailure is not null && (laneResult is { Failed: 0, ExecutionFailure: null } ||
+                    failedPredicate is not null and not
+                        (AcceptanceShardCompletionPredicates.FailingTrx or AcceptanceShardCompletionPredicates.AssemblyCleanupFailure)))
+                {
+                    var reason = failedPredicate ?? (storedFailure.ExitCode.GetValueOrDefault() != 0
+                        ? AcceptanceShardCompletionPredicates.NonzeroExit : AcceptanceShardCompletionPredicates.CheckFailed);
+                    laneResult = laneResult with { ExecutionFailure = reason };
+                }
+                localLanes.Add(laneResult);
             }
             return new(selected.AttemptId, selected.BranchHeadSha, duration > 0 ? duration : null, localLanes);
         }
