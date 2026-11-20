@@ -274,6 +274,201 @@ public sealed class PlannerBriefAmendmentAnswerRoutingTests : WorkerDispatchTest
         Assert.Single(f.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
     }
 
+    [Fact]
+    public void TypedDecline_SameFixtureLeavesBriefUnchangedAndReplans()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+
+        f.Kernel.SubmitHumanInput(f.Request.Id, "Keep the current criterion.",
+            amendmentDisposition: PlannerBriefAmendmentDisposition.Decline);
+
+        Assert.Equal(1, f.Goal.AuthoritativeBrief.Version);
+        Assert.Equal(DeclaredCriteriaObjective, f.Goal.AuthoritativeBrief.Text);
+        Assert.Equal(PlannerBriefAmendmentDisposition.Decline, f.Request.AuthoritativeAnswer!.AmendmentDisposition);
+        Assert.Equal(WorkTaskStatus.Assigned, f.Planner.Status);
+        Assert.Null(f.Kernel.GetPlannerBriefAmendmentRevisionPending(f.Goal.Id));
+        var retry = Assert.Single(f.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+        Assert.Contains("typed decline recorded", retry.Message);
+    }
+
+    [Fact]
+    public void TypedAccept_WithoutStoredProposedTextIsRejectedUnanswered()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+        ReloadWithoutProposedText(f);
+        var brief = f.Goal.AuthoritativeBrief;
+
+        var error = Assert.Throws<PlannerBriefAmendmentAcceptRejectedException>(() =>
+            f.Kernel.SubmitHumanInput(f.Request.Id, "Apply the proposed criterion.",
+                amendmentDisposition: PlannerBriefAmendmentDisposition.Accept));
+
+        Assert.Contains("no stored proposed text", error.Message);
+        AssertAmendmentUnanswered(f, brief);
+    }
+
+    [Fact]
+    public void TypedAccept_CriterionIndexOutsideDeclaredCriteriaIsRejectedUnanswered()
+    {
+        using var f = new Fixture();
+        var brief = f.Goal.AuthoritativeBrief;
+
+        var error = Assert.Throws<PlannerBriefAmendmentAcceptRejectedException>(() =>
+            f.Kernel.SubmitHumanInput(f.Request.Id, "Apply the proposed criterion.",
+                amendmentDisposition: PlannerBriefAmendmentDisposition.Accept));
+
+        Assert.Contains("outside the brief's 0 declared criteria", error.Message);
+        AssertAmendmentUnanswered(f, brief);
+    }
+
+    [Fact]
+    public void TypedAccept_BriefAlreadyRevisedIsRejectedUnanswered()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+        f.Kernel.ReviseGoalBrief(f.Goal.Id, "Updated implementation context.\r\n\r\n" + DeclaredCriteriaObjective);
+        var brief = f.Goal.AuthoritativeBrief;
+        Assert.Equal(2, brief.Version);
+
+        var error = Assert.Throws<PlannerBriefAmendmentAcceptRejectedException>(() =>
+            f.Kernel.SubmitHumanInput(f.Request.Id, "Apply the proposal from brief version one.",
+                amendmentDisposition: PlannerBriefAmendmentDisposition.Accept));
+
+        Assert.Contains("current brief is v2", error.Message);
+        AssertAmendmentUnanswered(f, brief);
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task UnsupportedAmendmentValue_IsRejectedByKernelAndCli()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+        var brief = f.Goal.AuthoritativeBrief;
+        const string note = "Apply the proposed criterion.";
+        const string rejection = "accepts only accept or decline";
+        const PlannerBriefAmendmentDisposition unsupported = (PlannerBriefAmendmentDisposition)99;
+
+        var kernelError = Assert.Throws<ArgumentException>(() =>
+            f.Kernel.SubmitHumanInput(f.Request.Id, note, amendmentDisposition: unsupported));
+        Assert.Contains(rejection, kernelError.Message);
+        AssertAmendmentUnanswered(f, brief);
+
+        var workspace = CreateRefinedWorkspace(f.Root);
+        var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+        var cliError = Assert.Throws<ArgumentException>(() =>
+            ExecuteAttentionAnswer(f, workspace, ["--amendment", "maybe", note]));
+        Assert.Contains(rejection, cliError.Message);
+        Assert.Empty(await intents.ListForGoalAsync(f.Goal.Id.Value));
+        AssertAmendmentUnanswered(f, brief);
+
+        var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput, f.Request.Id.Value,
+            f.Goal.Id.Value, note, OperatorActorKind.Human, AmendmentDisposition: unsupported);
+        var id = Guid.NewGuid().ToString("N");
+        var queued = await intents.EnqueueAsync(new OperatorIntentRecord(id, id, OperatorIntentVerbs.Answer,
+            f.Goal.Id.Value, null, JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [], "operator", "cli",
+            "local-process", DateTimeOffset.UtcNow));
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace);
+
+        Assert.False(coordinator.ExecutePending(f.Kernel, f.Goal).MutatedGoalState);
+        var rejected = await intents.GetAsync(queued.Id);
+        Assert.Equal(OperatorIntentStatus.Rejected, rejected!.Status);
+        Assert.Contains(rejection, rejected.Outcome);
+        AssertAmendmentUnanswered(f, brief);
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task AcceptFlag_CliIntentAndCoordinatorApplyBriefVersionTwo()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+        var originalBrief = f.Goal.AuthoritativeBrief;
+        var workspace = CreateRefinedWorkspace(f.Root);
+        var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+        const string note = "Apply the proposed criterion.";
+        var notePath = Path.Combine(f.Root, "answer.txt");
+        await File.WriteAllTextAsync(notePath, note);
+
+        ExecuteAttentionAnswer(f, workspace, ["--amendment", "accept", "--text-file", notePath]);
+
+        var pending = Assert.Single(await intents.ListForGoalAsync(f.Goal.Id.Value));
+        Assert.Equal(OperatorIntentStatus.Pending, pending.Status);
+        var payload = JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(pending.PayloadJson, OperatorIntentJson.Options);
+        Assert.Equal(PlannerBriefAmendmentDisposition.Accept, payload!.AmendmentDisposition);
+        Assert.Equal(note, payload.Text);
+        AssertAmendmentUnanswered(f, originalBrief);
+
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace);
+        Assert.True(coordinator.ExecutePending(f.Kernel, f.Goal).MutatedGoalState);
+        coordinator.CompletePersisted([f.Goal.Id]);
+
+        Assert.Equal(OperatorIntentStatus.Applied, (await intents.GetAsync(pending.Id))!.Status);
+        Assert.Equal(2, f.Goal.AuthoritativeBrief.Version);
+        Assert.Equal(ProposedCriterion, AcceptanceCriteriaParser.ParseDeclared(f.Goal.AuthoritativeBrief.Text)[0]);
+        Assert.Equal(WorkTaskStatus.Assigned, f.Planner.Status);
+    }
+
+    [Fact]
+    public void Snapshot_RoundTripsProposedTextAndLoadsPayloadWithoutIt()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+        var json = JsonSerializer.Serialize(f.Kernel.ExportSnapshot());
+
+        f.Kernel = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!);
+        Assert.Equal(new PlannerBriefAmendmentPayload(1, 1, ProposedCriterion), f.Request.Amendment);
+
+        ReloadWithoutProposedText(f);
+        Assert.Equal(new PlannerBriefAmendmentPayload(1, 1), f.Request.Amendment);
+        Assert.False(f.Request.IsCompleted);
+    }
+
+    [Fact]
+    public void LateAccept_AppliesHeldAnswerThroughSupersede()
+    {
+        using var f = new Fixture(objective: DeclaredCriteriaObjective);
+        f.Kernel.SubmitHumanInput(f.Request.Id, "Apply the proposed criterion.");
+        var hold = f.Kernel.GetPlannerBriefAmendmentRevisionPending(f.Goal.Id);
+        Assert.NotNull(hold);
+        Assert.Contains("--amendment accept", hold.Render());
+        const string note = "Confirm the proposed criterion should be applied.";
+
+        f.Kernel.SupersedeHumanInput(f.Goal.Id, f.Request.Id, note, HumanInputAnswerOrigin.Operator,
+            PlannerBriefAmendmentDisposition.Accept);
+
+        Assert.Equal(2, f.Goal.AuthoritativeBrief.Version);
+        Assert.Equal(note, f.Goal.AuthoritativeBrief.Reason);
+        Assert.Equal(ProposedCriterion, AcceptanceCriteriaParser.ParseDeclared(f.Goal.AuthoritativeBrief.Text)[0]);
+        Assert.Equal(2, f.Request.AnswerHistory.Count);
+        Assert.Equal(PlannerBriefAmendmentDisposition.Accept, f.Request.AuthoritativeAnswer!.AmendmentDisposition);
+        Assert.Equal(WorkTaskStatus.Assigned, f.Planner.Status);
+        Assert.Null(f.Kernel.GetPlannerBriefAmendmentRevisionPending(f.Goal.Id));
+        Assert.Single(f.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+    }
+
+    private static void AssertAmendmentUnanswered(Fixture f, GoalBriefVersion brief)
+    {
+        Assert.False(f.Request.IsCompleted);
+        Assert.Empty(f.Request.AnswerHistory);
+        Assert.Equal(brief, f.Goal.AuthoritativeBrief);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, f.Planner.Status);
+        Assert.DoesNotContain(f.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried);
+    }
+
+    private static void ReloadWithoutProposedText(Fixture f)
+    {
+        var snapshot = JsonSerializer.SerializeToNode(f.Kernel.ExportSnapshot())!;
+        var request = snapshot[nameof(OrchestratorSnapshot.HumanInputRequests)]!.AsArray().Single(node =>
+            node![nameof(HumanInputRequestSnapshot.Id)]!.GetValue<string>() == f.Request.Id.Value);
+        var amendment = request![nameof(HumanInputRequestSnapshot.Amendment)]!.AsObject();
+        Assert.True(amendment.Remove(nameof(PlannerBriefAmendmentPayload.ProposedText)));
+        f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot.Deserialize<OrchestratorSnapshot>()!);
+    }
+
+    private static void ExecuteAttentionAnswer(Fixture f, OrchestratorWorkspace workspace, string[] answerArgs)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["attention", "answer", f.Goal.Id.Value[..8], f.Request.Id.Value[..8], .. answerArgs],
+            f.Kernel, workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal));
+    }
+
     private sealed class Fixture : IDisposable
     {
         internal string Root { get; } = CreateTempDirectory();
