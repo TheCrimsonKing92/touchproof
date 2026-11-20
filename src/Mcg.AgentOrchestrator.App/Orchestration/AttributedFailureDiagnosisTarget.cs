@@ -30,9 +30,11 @@ internal static class AttributedFailureDiagnosisTarget
             if (FindDispatch(task, verification) is not { } dispatch) continue;
             // InquiryDispatcher reads the parent from LastDispatch. Reconstruct only that view
             // so a historical inquiry never changes the task's live attempt or status.
-            var target = new TaskSpec(task.Id, task.Description, task.RequiredRole);
+            var target = TaskSpec.FromSnapshot(new TaskSnapshot(
+                task.Id.Value, task.Description, task.RequiredRole, WorkTaskStatus.Completed,
+                AssignedAgentId: null, LastExecution: null, LastVerification: null,
+                VerificationHistory: null, LastDispatch: null, LastProcess: null));
             target.RecordDispatch(dispatch);
-            target.SetStatus(WorkTaskStatus.Completed);
             return target;
         }
         return null;
