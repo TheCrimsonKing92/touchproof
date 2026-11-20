@@ -171,29 +171,28 @@ internal static class PlannerRoundRecovery
     internal static bool TryRequeueAfterAnswer(Goal goal, TaskSpec task, IGoalLifecycleEventWriter eventWriter,
         IClock clock, out bool premiseInvalid)
     {
+        var note = GetAnswerRequeueNote(goal, task, out premiseInvalid);
+        if (note is null) return false;
+        Requeue(goal, task, eventWriter, clock, note);
+        return true;
+    }
+
+    internal static string? GetAnswerRequeueNote(Goal goal, TaskSpec task, out bool premiseInvalid)
+    {
         premiseInvalid = false;
-        if (task.RequiredRole != AgentRole.Planner) return false;
+        if (task.RequiredRole != AgentRole.Planner) return null;
 
         var processRunning = task.LastProcess is { IsRunning: true };
         if (!processRunning && PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task))
-        {
-            Requeue(goal, task, eventWriter, clock,
-                "Historical Planner evidence retained; planning must run against the current brief.");
-            return true;
-        }
+            return "Historical Planner evidence retained; planning must run against the current brief.";
 
         if (PlannerEvidenceRecorder.IsSupersededBriefPlannerRound(goal, task))
-        {
-            Requeue(goal, task, eventWriter, clock, SupersededNote(goal, task));
-            return true;
-        }
+            return SupersededNote(goal, task);
 
         premiseInvalid = WorkerResultBlockers.TryFindPremiseInvalidEvidence(task.LastVerification, out _);
-        if (!premiseInvalid || processRunning) return false;
-
-        Requeue(goal, task, eventWriter, clock,
-            "Planner reported a premise-invalid blocker; planning must rerun with the human answer.");
-        return true;
+        return premiseInvalid && !processRunning
+            ? "Planner reported a premise-invalid blocker; planning must rerun with the human answer."
+            : null;
     }
 
     internal static void EnsureDispatchAllowed(Goal goal, TaskSpec task)
