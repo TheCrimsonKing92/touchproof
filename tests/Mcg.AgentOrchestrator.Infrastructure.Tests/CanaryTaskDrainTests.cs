@@ -184,6 +184,63 @@ public sealed class CanaryTaskDrainTests(ITestOutputHelper output) : ConductorBa
     }
 
     [Xunit.Fact]
+    public async Task StopCancelledRunnerRemovesIsolatedWorktree()
+    {
+        var root = CreateTempDirectory("mcg-canary-stop-cleanup");
+        var execution = new CanaryExecution();
+        var graceDeadline = NewSignal();
+        string? isolatedWorktree = null;
+        try
+        {
+            var fixture = Path.Combine(root, "tests", "canary-fixture");
+            Directory.CreateDirectory(fixture);
+            File.WriteAllText(Path.Combine(fixture, "fixture.txt"), "canary cleanup test");
+            RunGit(root, "init", "--quiet");
+            RunGit(root, "add", "--all");
+            RunGit(root, "-c", "user.name=Canary Test", "-c", "user.email=canary@localhost",
+                "commit", "--quiet", "--no-gpg-sign", "-m", "canary fixture");
+            var sha = LandingExecutorTests.ReadGit(root, "rev-parse", "HEAD");
+            var originalWorktrees = LandingExecutorTests.ReadGit(root, "worktree", "list", "--porcelain");
+            using var ownedRunner = execution.RegisterRunner(sha);
+            var resolver = new StopDuringBinaryResolution(sourceRoot =>
+            {
+                isolatedWorktree = sourceRoot;
+                Assert.True(Directory.Exists(sourceRoot));
+                Assert.NotEqual(originalWorktrees, LandingExecutorTests.ReadGit(root, "worktree", "list", "--porcelain"));
+                Assert.Same(ownedRunner, Assert.Single(execution.Stop(graceDeadline.Task)));
+            });
+            var runner = new PostLandingCanaryRunner(root,
+                buildCacheRoot: Path.Combine(root, "build"),
+                applicationBinaryResolver: resolver);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                runner.RunAsync(new PostLandingCanaryRequest(sha, [EnginePath]), execution.Token, ownedRunner)
+                    .WaitAsync(Watchdog));
+
+            Assert.True(execution.Token.IsCancellationRequested);
+            var removedWorktree = Assert.IsType<string>(isolatedWorktree);
+            Assert.False(Directory.Exists(removedWorktree), $"Canary worktree still exists at {removedWorktree}");
+            Assert.Equal(originalWorktrees, LandingExecutorTests.ReadGit(root, "worktree", "list", "--porcelain"));
+        }
+        finally
+        {
+            graceDeadline.TrySetResult();
+            execution.Retire();
+            try
+            {
+                if (isolatedWorktree is not null && Directory.Exists(isolatedWorktree))
+                {
+                    RunGit(root, "worktree", "remove", "--force", isolatedWorktree);
+                }
+            }
+            finally
+            {
+                TryDeleteDirectory(root);
+            }
+        }
+    }
+
+    [Xunit.Fact]
     public async Task EarlyCompletionIsSilent()
     {
         using var fixture = new Fixture();
@@ -302,6 +359,15 @@ public sealed class CanaryTaskDrainTests(ITestOutputHelper output) : ConductorBa
 
     private static bool IsTerminationExpiry(string line) =>
         line.StartsWith("CANARY_GATE result=termination-grace-expired ", StringComparison.Ordinal);
+
+    private sealed class StopDuringBinaryResolution(Action<string> stop) : IPostLandingCanaryApplicationBinaryResolver
+    {
+        public Task<string> ResolveAsync(string sourceRoot, string sourceSha, CancellationToken cancellationToken)
+        {
+            stop(sourceRoot);
+            return Task.FromCanceled<string>(cancellationToken);
+        }
+    }
 
     // Each test uses its own SQLite store, canary lease, stop file and progress sink.
     private sealed class Fixture : IDisposable

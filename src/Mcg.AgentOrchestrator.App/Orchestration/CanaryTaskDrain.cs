@@ -224,7 +224,6 @@ internal sealed class CanaryExecution
         private volatile bool _graceExpired;
 
         internal string LandingSha { get; } = landingSha;
-        internal CancellationToken StopToken => owner.Token;
         internal Task Completion => _completion.Task;
         internal bool GraceExpired => _graceExpired;
 

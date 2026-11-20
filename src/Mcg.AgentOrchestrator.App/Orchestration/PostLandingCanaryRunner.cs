@@ -925,7 +925,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
     private readonly record struct RunLifetime(CancellationToken Token, CanaryExecution.Runner? Runner)
     {
-        internal RunLifetime ForCleanup() => new(Runner?.StopToken ?? CancellationToken.None, Runner);
+        // The stop signal cancels canary work. The loop's grace period gives the runner time to remove its checkout.
+        internal RunLifetime ForCleanup() => new(CancellationToken.None, Runner);
     }
 
     private sealed record PostLandingCanaryRepositoryState(
