@@ -7,6 +7,7 @@ public sealed class DependencyIndexCensusProbeTests
     [Fact]
     public void Collect_namespace_cycles_and_dependency_model_differences()
     {
+        DependencyIndexMeasurementProbe.RequireCheckpointInput();
         var assemblies = new[]
         {
             typeof(AgentOrchestratorKernel).Assembly, typeof(GoalAcceptanceVerifier).Assembly,

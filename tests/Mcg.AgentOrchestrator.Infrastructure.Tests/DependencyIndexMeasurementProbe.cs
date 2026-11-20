@@ -6,8 +6,14 @@ using System.Text.Json;
 
 internal static class DependencyIndexMeasurementProbe
 {
+    public static void RequireCheckpointInput() =>
+        Assert.SkipUnless(
+            Environment.GetEnvironmentVariable("MCG_TEST_INPUT_DEPENDENCY_INDEX_CHECKPOINT") == "1",
+            "The Reviewer enables the dependency index checkpoint with Invoke-TestSummary.ps1 -TestInput MCG_TEST_INPUT_DEPENDENCY_INDEX_CHECKPOINT=1.");
+
     public static void Measure(string arm, Func<Assembly, int> evaluate)
     {
+        RequireCheckpointInput();
         var assembly = typeof(GoalMonitoringQuery).Assembly;
         var stopwatch = Stopwatch.StartNew();
         var violations = evaluate(assembly);
