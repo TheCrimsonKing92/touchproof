@@ -9,6 +9,7 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
 {
     private const string BlockerId = "reviewer-fresh-delivery-skips-reattachment";
     private const string AdvisoryId = "reviewer-correction-rework-unclassified";
+    private const string ReviewedSha = "0123456789abcdef0123456789abcdef01234567";
     private const string PriorFindings = """
         [{"stable_id":"reviewer-fresh-delivery-skips-reattachment","state":"open","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"87-95"},"description":"Reattach fresh delivery."},{"stable_id":"reviewer-correction-rework-unclassified","state":"open","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"120"},"description":"Classify correction rework."}]
         """;
@@ -265,16 +266,134 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
             evt.Message.Contains(BlockerId, StringComparison.Ordinal));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ZeroBlockerVerdictRetriesReviewer(bool resolvedOnly)
+    {
+        var testerAdvisory = new ReviewFinding("tester-advisory", ReviewFindingState.Open,
+            new ReviewFindingLocation("tests/Fixture.cs", "Fixture.Run"), "Consider another case.",
+            FindingSeverity.Advisory, FindingCategory.TestCoverage);
+        var fixture = new Fixture(resolvedOnly ? null : testerAdvisory);
+        var policy = ConductorAutonomyPolicy.Permissive;
+        var priorFindings = resolvedOnly ? PriorFindings.Replace("\"advisory\"", "\"blocking\"") : PriorFindings;
+        fixture.Record(priorFindings, resolvedOnly ? "needs-work" : "pass", ReviewedSha);
+        fixture.Kernel.RetryTask(fixture.Goal.Id, fixture.Reviewer.Id, "Recheck current delivery");
+        var findings = resolvedOnly ? priorFindings.Replace("\"open\"", "\"resolved\"") : priorFindings;
+        // The verdict parser can derive retry prose only from open findings.
+        fixture.Record(findings, "needs-work", ReviewedSha,
+            ReviewRetryCapReceipt.Create(fixture.Goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier),
+            blockers: resolvedOnly ? "Recheck delivery correctness." : "none");
+
+        var prior = fixture.Reviewer.VerificationHistory[0];
+        var current = fixture.Reviewer.LastVerification!;
+        Assert.Equal(ReviewedSha, prior.ReviewedCommit);
+        Assert.Equal(prior.ReviewedCommit, current.ReviewedCommit);
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Reviewer.Status);
+        Assert.True(WorkerResultBlockers.TryFindNeedsWorkVerdict(current, out _));
+        Assert.Null(current.ReviewFindingContractViolation);
+        Assert.NotNull(current.MergedReviewFindings);
+        Assert.Equal(2, current.MergedReviewFindings.Count);
+        var expectedState = resolvedOnly ? ReviewFindingState.Resolved : ReviewFindingState.Open;
+        var expectedSeverity = resolvedOnly ? FindingSeverity.Blocking : FindingSeverity.Advisory;
+        Assert.All(current.MergedReviewFindings, finding =>
+        {
+            Assert.Equal(expectedState, finding.State);
+            Assert.Equal(expectedSeverity, finding.Severity);
+        });
+        if (resolvedOnly)
+        {
+            Assert.Equal(2, prior.MergedReviewFindings!.Count);
+            Assert.All(prior.MergedReviewFindings, finding => Assert.Equal(ReviewFindingState.Open, finding.State));
+        }
+
+        var driver = fixture.MakeReviewerRetryDriver();
+        Assert.True(driver.TryObserveVerifyingFindingRecovery(fixture.Goal, policy, [], out var observation));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingRouteObserved, observation.Kind);
+        Assert.Equal(fixture.Reviewer.Id, observation.TargetTaskId);
+        Assert.Equal($"verification:{current.CompletedAt.UtcTicks}:none", observation.AttemptIdentity);
+        Assert.Equal(RetryRoundKind.Mechanical, observation.RoundKind);
+        Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, observation.ObservedCause);
+        Assert.Contains("Return pass or record at least one open blocking finding", observation.Evidence, StringComparison.Ordinal);
+        Assert.Contains($"{AdvisoryId}: {expectedState}/{expectedSeverity}", observation.Evidence, StringComparison.Ordinal);
+        Assert.Contains($"{BlockerId}: {expectedState}/{expectedSeverity}", observation.Evidence, StringComparison.Ordinal);
+        if (!resolvedOnly)
+            Assert.Contains("tester-advisory: Open/Advisory", observation.Evidence, StringComparison.Ordinal);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Reviewer.Status);
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Developer.Status);
+        var retry = Assert.Single(fixture.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.StartsWith("auto-review-retry", StringComparison.Ordinal));
+        Assert.Equal(fixture.Reviewer.Id, retry.TaskId);
+        Assert.Equal(observation.Evidence, retry.Message);
+    }
+
     [Xunit.Fact]
-    public void NeedsWorkWhoseMergedLedgerHasNoOpenBlockerStillRaisesNeedsWorkWithoutOpenFindings()
+    public void ZeroBlockerRetriesStopAtCap()
     {
         var fixture = new Fixture();
-        fixture.Record(PriorFindings, "needs-work", "current-commit");
+        var escalations = new List<string>();
+        var driver = fixture.MakeReviewerRetryDriver((_, _, message) => escalations.Add(message));
+        var policy = ConductorAutonomyPolicy.Permissive with
+        {
+            ReviewAutoRetryStopRound = 3,
+            ReviewAutoRetryWarningRound = 2
+        };
 
-        Assert.NotNull(fixture.Reviewer.LastVerification!.MergedReviewFindings);
-        Assert.Null(fixture.Reviewer.LastVerification.ReviewFindingContractViolation);
-        var error = Assert.Throws<ReviewFindingConvergenceException>(() => fixture.BuildBrief());
-        Assert.Equal(ReviewFindingConvergence.NeedsWorkWithoutOpenFindingsViolationCode, error.Code);
+        for (var round = 1; round < policy.ReviewAutoRetryStopRound; round++)
+        {
+            var receipt = ReviewRetryCapReceipt.Create(fixture.Goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
+            Assert.Equal(round, receipt.Round);
+            Assert.Equal(round, receipt.LifetimeRound);
+            fixture.Record(PriorFindings, "needs-work", ReviewedSha, receipt);
+            Assert.True(driver.TryObserveVerifyingFindingRecovery(fixture.Goal, policy, [], out var observation));
+            Assert.Equal(FailedGoalFindingObservationKind.FindingRouteObserved, observation.Kind);
+            Assert.StartsWith($"auto-review-retry round {round}:", observation.Evidence, StringComparison.Ordinal);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+            Assert.Empty(escalations);
+            Assert.Equal(WorkTaskStatus.Assigned, fixture.Reviewer.Status);
+            Assert.Equal(WorkTaskStatus.Completed, fixture.Developer.Status);
+            var retries = fixture.Goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskRetried).ToArray();
+            Assert.Equal(round, retries.Length);
+            Assert.Equal(fixture.Reviewer.Id, retries[^1].TaskId);
+            Assert.Equal(observation.Evidence, retries[^1].Message);
+        }
+
+        var cap = ReviewRetryCapReceipt.Create(fixture.Goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
+        Assert.Equal(policy.ReviewAutoRetryStopRound, cap.Round);
+        Assert.Equal(policy.ReviewAutoRetryStopRound, cap.LifetimeRound);
+        fixture.Record(PriorFindings, "needs-work", ReviewedSha, cap);
+        Assert.True(driver.TryObserveVerifyingFindingRecovery(fixture.Goal, policy, [], out var stopped));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingRetryCapReached, stopped.Kind);
+        var outcome = Assert.IsType<ConductorAdvanceOutcome.Escalated>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+        Assert.Equal(stopped.Evidence, outcome.Reason);
+        Assert.Contains("blocked-at-cap for Reviewer", Assert.Single(escalations), StringComparison.Ordinal);
+        Assert.Equal(cap.Round - 1, fixture.Goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried));
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Reviewer.Status);
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Developer.Status);
+    }
+
+    [Xunit.Fact]
+    public void OtherConvergenceCodeStillEscalates()
+    {
+        var testerBlocker = new ReviewFinding("fixture-test-evidence", ReviewFindingState.Open,
+            new ReviewFindingLocation("tests/Fixture.cs", "Fixture.Run"), "Focused evidence is required.",
+            FindingSeverity.Blocking, FindingCategory.TestEvidence,
+            new FindingEvidenceRequest([new FindingEvidenceSelection("Infrastructure.Tests", "FixtureTests")]));
+        var fixture = new Fixture(testerBlocker);
+        fixture.Record(PriorFindings, "needs-work", ReviewedSha);
+        var driver = MakeDriver(retryTaskWithCause: (_, _, _, _, _) =>
+            throw new InvalidOperationException("The sibling convergence violation must not retry a task."));
+        var policy = ConductorAutonomyPolicy.Permissive;
+
+        Assert.True(driver.TryObserveVerifyingFindingRecovery(fixture.Goal, policy, [], out var observation));
+        Assert.Equal(FailedGoalFindingObservationKind.FindingConvergenceViolation, observation.Kind);
+        Assert.Contains($"code={ReviewFindingConvergence.NoOpenFindingsForTargetViolationCode}", observation.Evidence, StringComparison.Ordinal);
+        var outcome = Assert.IsType<ConductorAdvanceOutcome.Escalated>(driver.AdvanceOnce(fixture.Goal, policy).Outcome);
+        Assert.Equal(observation.Evidence, outcome.Reason);
+        Assert.DoesNotContain(fixture.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
     }
 
     [Xunit.Fact]
@@ -348,7 +467,7 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
         internal TaskSpec Reviewer { get; }
         internal TaskSpec Developer { get; }
 
-        internal Fixture()
+        internal Fixture(ReviewFinding? testerFinding = null)
         {
             Kernel = new AgentOrchestratorKernel(_clock);
             Goal = GoalLifecycleCommands.CreateAndActivateGoal(Kernel, DefaultAgents(), "Salvage advisory anchor drift");
@@ -357,20 +476,33 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
             foreach (var task in Goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
             {
                 Dispatch(task);
+                IReadOnlyList<ReviewFinding>? findings = task.RequiredRole == AgentRole.Tester && testerFinding is not null
+                    ? [testerFinding]
+                    : null;
                 Kernel.RecordTaskVerification(Goal.Id, task.Id,
-                    new TaskVerificationRecord("fixture", @"C:\fixture", 0, "ok", "", _clock.UtcNow));
+                    new TaskVerificationRecord("fixture", @"C:\fixture", 0, "ok", "", _clock.UtcNow,
+                        MergedReviewFindings: findings));
             }
         }
 
+        internal ConductorDriver MakeReviewerRetryDriver(Action<Goal, GoalLifecycleState, string>? writeEscalation = null) =>
+            MakeDriver(retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                Assert.Equal(Reviewer.Id, taskId);
+                Assert.Equal(RetryRoundKind.Mechanical, roundKind);
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return Kernel.RetryTask(goalId, taskId, message, cause, retryRoundKind: roundKind);
+            }, writeEscalation: writeEscalation);
+
         internal void Record(string findings, string verdict, string? commit,
-            ReviewRetryCapReceipt? reviewRetryCap = null)
+            ReviewRetryCapReceipt? reviewRetryCap = null, string blockers = "none")
         {
             Dispatch(Reviewer, reviewRetryCap);
             if (commit is not null)
                 Kernel.RecordDispatchBaseCommit(Goal.Id, Reviewer.Id, commit);
             var stdout = string.Join(Environment.NewLine,
                 "WORKER_RESULT:", "files: none", "commands: review", "tests: pass - fixture",
-                "commit: none", "blockers: none", $"findings: {findings}", "touched_anchors: []",
+                "commit: none", $"blockers: {blockers}", $"findings: {findings}", "touched_anchors: []",
                 $"verdict: {verdict}", "model_fit: fixture/model - adequate - review - fixture",
                 "skills: none", "confidence: high", "END_WORKER_RESULT");
             Kernel.RecordDispatchExecutionResult(Goal.Id, Reviewer.Id,
