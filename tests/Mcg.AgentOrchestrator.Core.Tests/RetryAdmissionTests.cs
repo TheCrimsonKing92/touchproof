@@ -624,6 +624,148 @@ public sealed class RetryAdmissionTests
         Assert.Equal(RetryAdmissionRoute.UpstreamImplementation, reviewer.RetryAdmissionHoldRoute);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false, WorkTaskStatus.Failed)]
+    [Xunit.InlineData(false, WorkTaskStatus.Completed)]
+    [Xunit.InlineData(true, WorkTaskStatus.Failed)]
+    [Xunit.InlineData(true, WorkTaskStatus.Completed)]
+    public void UpstreamRoute_UnavailableDeveloper_RetriesTester(
+        bool cancelledDeveloper, WorkTaskStatus testerStatus)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement correction", AgentRole.Developer);
+        var tester = new TaskSpec(TaskId.New(), "Verify correction", AgentRole.Tester);
+        var heldTask = cancelledDeveloper
+            ? new TaskSpec(TaskId.New(), "Review correction", AgentRole.Reviewer)
+            : developer;
+        TaskSpec[] tasks = cancelledDeveloper ? [developer, tester, heldTask] : [developer, tester];
+        var goal = kernel.CreateGoal("Fall through unavailable Developer to Tester", tasks);
+        kernel.ActivateGoal(goal.Id,
+        [
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("tester"), "Tester", AgentRole.Tester,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
+        if (cancelledDeveloper)
+            developer.SetStatus(WorkTaskStatus.Cancelled);
+        tester.SetStatus(testerStatus);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = heldTask.RequiredRole });
+        kernel.RecordTaskDispatch(goal.Id, heldTask.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "route-fallthrough", RetryCause.UnchangedContextRepeat, fingerprint,
+            RetryAdmissionDecision.Prevented, RetryAdmissionRoute.UpstreamImplementation,
+            PaidRouteClassification.Paid, attempt, attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id, heldTask.Id, new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(receipt.Cause, tester.PendingRetryCause);
+        Assert.Contains(goal.Timeline, entry => entry.Kind == ProgressKind.TaskRetried && entry.TaskId == tester.Id);
+        Assert.DoesNotContain(kernel.HumanInputRequests, request => request.GoalId == goal.Id);
+        Assert.Equal(WorkTaskStatus.Running, heldTask.Status);
+        Assert.Equal(RetryAdmissionRoute.UpstreamImplementation, heldTask.RetryAdmissionHoldRoute);
+        if (cancelledDeveloper)
+            Assert.Equal(WorkTaskStatus.Cancelled, developer.Status);
+        var progress = Assert.Single(goal.Timeline, entry => entry.Kind == ProgressKind.GoalPolicyDecision &&
+            entry.Message.Contains($"receipt={receipt.ReceiptId};", StringComparison.Ordinal));
+        Assert.Contains("requestedRole=Developer; usedRole=Tester;", progress.Message);
+        Assert.Contains($"targetTask={tester.Id.Value};", progress.Message);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void UpstreamRoute_NoActionableTarget_PreservesDeveloperRequest(bool cancelledTester)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var heldTask = new TaskSpec(TaskId.New(), "Implement correction", AgentRole.Developer);
+        var tester = new TaskSpec(TaskId.New(), "Verify correction", AgentRole.Tester);
+        TaskSpec[] tasks = cancelledTester ? [heldTask, tester] : [heldTask];
+        var goal = kernel.CreateGoal("Preserve missing Developer request", tasks);
+        kernel.ActivateGoal(goal.Id,
+        [
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("tester"), "Tester", AgentRole.Tester,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
+        if (cancelledTester)
+            tester.SetStatus(WorkTaskStatus.Cancelled);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        kernel.RecordTaskDispatch(goal.Id, heldTask.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "route-missing-upstream", RetryCause.UnchangedContextRepeat, fingerprint,
+            RetryAdmissionDecision.Prevented, RetryAdmissionRoute.UpstreamImplementation,
+            PaidRouteClassification.Paid, attempt, attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id, heldTask.Id, new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, heldTask.Status);
+        Assert.Equal(RetryAdmissionRoute.HumanClarification, heldTask.RetryAdmissionHoldRoute);
+        var request = Assert.Single(kernel.HumanInputRequests, request => request.GoalId == goal.Id && !request.IsCompleted);
+        Assert.Equal($"retry-admission:{fingerprint.Value}:missing-Developer", request.QuestionFingerprint);
+        Assert.Equal(fingerprint.Value, request.BlockerFingerprint);
+        Assert.Equal("Retry admission requires Developer work, but no actionable role-feasible target task exists. " +
+            $"retry-admission-route={receipt.Route} receipt={receipt.ReceiptId}", request.Question);
+        Assert.DoesNotContain(goal.Timeline, entry => entry.Kind == ProgressKind.TaskRetried);
+        if (cancelledTester)
+            Assert.Equal(WorkTaskStatus.Cancelled, tester.Status);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(WorkTaskStatus.Failed)]
+    [Xunit.InlineData(WorkTaskStatus.Completed)]
+    public void UpstreamRoute_ActionableDeveloper_DoesNotRetryTester(WorkTaskStatus developerStatus)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement correction", AgentRole.Developer);
+        var tester = new TaskSpec(TaskId.New(), "Verify correction", AgentRole.Tester);
+        var reviewer = new TaskSpec(TaskId.New(), "Review correction", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Prefer actionable Developer over Tester", [developer, tester, reviewer]);
+        kernel.ActivateGoal(goal.Id,
+        [
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("tester"), "Tester", AgentRole.Tester,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
+        developer.SetStatus(developerStatus);
+        tester.SetStatus(WorkTaskStatus.Failed);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = AgentRole.Reviewer });
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "route-prefer-upstream", RetryCause.UnchangedContextRepeat, fingerprint,
+            RetryAdmissionDecision.Prevented, RetryAdmissionRoute.UpstreamImplementation,
+            PaidRouteClassification.Paid, attempt, attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id, reviewer.Id, new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Equal(receipt.Cause, developer.PendingRetryCause);
+        Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        Assert.Equal(RetryCause.Unknown, tester.PendingRetryCause);
+        var retried = Assert.Single(goal.Timeline, entry => entry.Kind == ProgressKind.TaskRetried);
+        Assert.Equal(developer.Id, retried.TaskId);
+        Assert.DoesNotContain(kernel.HumanInputRequests, request => request.GoalId == goal.Id);
+        Assert.Equal(WorkTaskStatus.Running, reviewer.Status);
+        Assert.Equal(RetryAdmissionRoute.UpstreamImplementation, reviewer.RetryAdmissionHoldRoute);
+        var progress = Assert.Single(goal.Timeline, entry => entry.Kind == ProgressKind.GoalPolicyDecision &&
+            entry.Message.Contains($"receipt={receipt.ReceiptId};", StringComparison.Ordinal));
+        Assert.Contains("requestedRole=Developer; usedRole=Developer;", progress.Message);
+        Assert.Contains($"targetTask={developer.Id.Value};", progress.Message);
+    }
+
     [Xunit.Fact]
     public void CancelledRoleTargetEscalatesToHumanInsteadOfSilentlyHolding()
     {

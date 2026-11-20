@@ -5,13 +5,15 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class RemoteLaneAdmissionHistory(IReadOnlyList<RemoteExecutorHealthRecord> records)
 {
+    internal const int LineLimit = 500;
+
     internal IReadOnlyList<RemoteExecutorHealthRecord> Records { get; } = records;
 
     internal static RemoteLaneAdmissionHistory Read(string path)
     {
         try
         {
-            return new(SharedJsonlFile.ReadLines(path).TakeLast(RemoteLaneOfferHistoryReader.LineLimit)
+            return new(SharedJsonlFile.ReadLines(path).TakeLast(LineLimit)
                 .Select(RemoteExecutorHealthLedger.TryParse).OfType<RemoteExecutorHealthRecord>().ToArray());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new([]); }
