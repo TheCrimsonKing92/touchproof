@@ -226,32 +226,38 @@ internal sealed class CanaryExecution
         internal string LandingSha { get; } = landingSha;
         internal Task Completion => _completion.Task;
         internal bool GraceExpired => _graceExpired;
+        internal bool TerminationDeadlineElapsed =>
+            owner._terminationDeadline.Task is { IsCompletedSuccessfully: true } signal && signal.Result.IsCompleted;
+
+        internal async Task<bool> WaitThroughGraceAsync(Task work)
+        {
+            var signal = owner._terminationDeadline.Task;
+            if (!work.IsCompleted && await Task.WhenAny(work, signal).ConfigureAwait(false) == signal)
+            {
+                var deadline = await signal.ConfigureAwait(false);
+                await Task.WhenAny(work, deadline).ConfigureAwait(false);
+            }
+            return work.IsCompleted;
+        }
 
         internal async Task WaitForOutputAsync(Task output, Action cancelOutput)
         {
-            var signal = owner._terminationDeadline.Task;
-            if (!output.IsCompleted && await Task.WhenAny(output, signal).ConfigureAwait(false) == signal)
+            if (await WaitThroughGraceAsync(output).ConfigureAwait(false))
             {
-                var deadline = await signal.ConfigureAwait(false);
-                await Task.WhenAny(output, deadline).ConfigureAwait(false);
-                if (!output.IsCompleted)
-                {
-                    _graceExpired = true;
-                    CanaryTaskDrain.ObserveFault(output);
-                    cancelOutput();
-                    return;
-                }
+                await output.ConfigureAwait(false);
+                return;
             }
 
-            await output.ConfigureAwait(false);
+            _graceExpired = true;
+            CanaryTaskDrain.ObserveFault(output);
+            cancelOutput();
         }
 
         public void Dispose()
         {
             lock (owner._gate)
             {
-                var signal = owner._terminationDeadline.Task;
-                if (signal.IsCompletedSuccessfully && signal.Result.IsCompleted)
+                if (TerminationDeadlineElapsed)
                 {
                     _graceExpired = true;
                 }

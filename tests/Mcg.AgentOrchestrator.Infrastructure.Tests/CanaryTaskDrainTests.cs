@@ -155,9 +155,8 @@ public sealed class CanaryTaskDrainTests(ITestOutputHelper output) : ConductorBa
             Task.CompletedTask,
             holdStdout ? heldOutput.Task : Task.CompletedTask,
             holdStdout ? Task.CompletedTask : heldOutput.Task,
-            execution.Token,
+            new PostLandingCanaryRunner.RunLifetime(execution.Token, runner),
             () => terminationRequested.SetResult(),
-            runner,
             () => outputCancelled.SetResult());
         var wait = Task.Run(() => drain.Wait([process]));
         try
@@ -179,6 +178,52 @@ public sealed class CanaryTaskDrainTests(ITestOutputHelper output) : ConductorBa
         {
             heldOutput.TrySetResult();
             runner.Dispose();
+            execution.Retire();
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public async Task CleanupOutputDrainsShareTerminationGrace(bool holdStdout)
+    {
+        var clock = new ManualStewardTimeProvider();
+        var execution = new CanaryExecution();
+        using var runner = execution.RegisterRunner(LandingSha);
+        var heldOutput = NewSignal();
+        var terminationRequested = NewSignal();
+        var outputCancelled = NewSignal();
+        var deadline = Task.Delay(Grace, clock);
+        Assert.Same(runner, Assert.Single(execution.Stop(deadline)));
+        Assert.True(execution.Token.IsCancellationRequested);
+        var cleanup = new PostLandingCanaryRunner.RunLifetime(execution.Token, runner).ForCleanup();
+        cleanup.ThrowIfCancellationRequested();
+
+        var process = PostLandingCanaryRunner.AwaitProcessCompletionAsync(
+            Task.CompletedTask,
+            holdStdout ? heldOutput.Task : Task.CompletedTask,
+            holdStdout ? Task.CompletedTask : heldOutput.Task,
+            cleanup,
+            () => terminationRequested.SetResult(),
+            () => outputCancelled.SetResult());
+        try
+        {
+            var lastSecond = TimeSpan.FromSeconds(1);
+            clock.Advance(Grace - lastSecond);
+            Assert.False(process.IsCompleted);
+            Assert.False(terminationRequested.Task.IsCompleted);
+            Assert.False(outputCancelled.Task.IsCompleted);
+
+            clock.Advance(lastSecond);
+            await outputCancelled.Task.WaitAsync(Watchdog);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => process.WaitAsync(Watchdog));
+            Assert.True(terminationRequested.Task.IsCompletedSuccessfully);
+            Assert.False(heldOutput.Task.IsCompleted);
+            Assert.True(runner.GraceExpired);
+        }
+        finally
+        {
+            heldOutput.TrySetResult();
             execution.Retire();
         }
     }

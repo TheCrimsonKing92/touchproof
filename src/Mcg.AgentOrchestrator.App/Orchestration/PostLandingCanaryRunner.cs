@@ -519,7 +519,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         Action<IReadOnlyList<int>>? descendantObservation = null,
         Action? inheritableWindowObserver = null)
     {
-        lifetime.Token.ThrowIfCancellationRequested();
+        lifetime.ThrowIfCancellationRequested();
         var nativeFileCapture = OperatingSystem.IsWindows();
         var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
         var startInfo = BuildFileCaptureStartInfo(
@@ -544,7 +544,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 Path.GetFullPath(dotnetIsolatedRoot);
         }
         GitExecutable.Prepare(startInfo);
-        lifetime.Token.ThrowIfCancellationRequested();
+        lifetime.ThrowIfCancellationRequested();
         using var process = nativeFileCapture
             ? WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
                 startInfo,
@@ -582,9 +582,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 descendantObservationTask is null ? processExitTask : Task.WhenAll(processExitTask, descendantObservationTask),
                 stdoutTask,
                 stderrTask,
-                lifetime.Token,
+                lifetime,
                 () => TerminateProcessTree(process, processExitTask),
-                lifetime.Runner,
                 outputCancellation.Cancel).ConfigureAwait(false);
             if (descendantObservationTask is not null)
             {
@@ -640,21 +639,25 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         Task processTermination,
         Task stdout,
         Task stderr,
-        CancellationToken cancellationToken,
+        RunLifetime lifetime,
         Action terminate,
-        CanaryExecution.Runner? runner,
         Action cancelOutput)
     {
         var output = Task.WhenAll(stdout, stderr);
         var complete = Task.WhenAll(processTermination, output);
         try
         {
-            await complete.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (lifetime is { IsCleanup: true, Runner: { } cleanupRunner } &&
+                !await cleanupRunner.WaitThroughGraceAsync(complete).ConfigureAwait(false))
+            {
+                lifetime.ThrowIfCancellationRequested();
+            }
+            await complete.WaitAsync(lifetime.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
         {
             terminate();
-            if (runner is null)
+            if (lifetime.Runner is not { } runner)
             {
                 await complete.ConfigureAwait(false);
             }
@@ -923,10 +926,23 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
     private sealed record PostLandingCanaryProcessResult(int ExitCode, string Stdout, string Stderr);
 
-    private readonly record struct RunLifetime(CancellationToken Token, CanaryExecution.Runner? Runner)
+    internal readonly record struct RunLifetime(CancellationToken Token, CanaryExecution.Runner? Runner, bool IsCleanup = false)
     {
-        // The stop signal cancels canary work. The loop's grace period gives the runner time to remove its checkout.
-        internal RunLifetime ForCleanup() => new(CancellationToken.None, Runner);
+        internal bool IsCancellationRequested => Token.IsCancellationRequested || CleanupDeadlineElapsed;
+
+        private bool CleanupDeadlineElapsed => IsCleanup && Runner is { TerminationDeadlineElapsed: true };
+
+        internal void ThrowIfCancellationRequested()
+        {
+            Token.ThrowIfCancellationRequested();
+            if (CleanupDeadlineElapsed)
+            {
+                throw new OperationCanceledException("Canary worktree cleanup exceeded termination grace.");
+            }
+        }
+
+        // Cleanup can start after the stop signal and shares the runner's existing grace deadline.
+        internal RunLifetime ForCleanup() => new(CancellationToken.None, Runner, IsCleanup: true);
     }
 
     private sealed record PostLandingCanaryRepositoryState(
