@@ -32,6 +32,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
     internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
     internal RemoteWorkerBuildCheckSettings WorkerBuildCheck { get; init; } = new();
     internal ExecutorScreeningSettings Screening { get; init; } = new();
+    internal double GateWallGrowthThreshold { get; init; } = RemoteLaneOfferPolicy.DefaultGateWallGrowthThreshold;
     internal bool AllInfrastructureLanes { get; init; }
     internal RemoteLaneExecutorConfiguration ResolveLanes(IEnumerable<string> infrastructureLaneNames) =>
         AllInfrastructureLanes ? this with { Lanes = infrastructureLaneNames.Distinct(StringComparer.Ordinal).ToArray() } : this;
@@ -61,6 +62,11 @@ internal sealed record RemoteLaneExecutorConfiguration(
             if (root.ValueKind != JsonValueKind.Object ||
                 !root.TryGetProperty("executors", out var executors) || executors.ValueKind != JsonValueKind.Array ||
                 !root.TryGetProperty("lanes", out var lanes) || lanes.ValueKind != JsonValueKind.Array)
+                return Disabled("invalid");
+            var gateWallGrowthThreshold = RemoteLaneOfferPolicy.DefaultGateWallGrowthThreshold;
+            if (root.TryGetProperty("gateWallGrowthThreshold", out var growth) &&
+                (growth.ValueKind != JsonValueKind.Number || !growth.TryGetDouble(out gateWallGrowthThreshold) ||
+                 !double.IsFinite(gateWallGrowthThreshold) || gateWallGrowthThreshold < 0))
                 return Disabled("invalid");
             var entries = new List<RemoteLaneExecutorEntry>();
             var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -197,7 +203,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
                 MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes,
                 ExecutorSerializedResourceKeys = serializedKeys.ToArray(),
                 FocusedEvidence = ParseFocusedEvidence(root), Screening = ExecutorScreeningSettings.Parse(root),
-                WorkerBuildCheck = ParseWorkerBuildCheck(root)
+                WorkerBuildCheck = ParseWorkerBuildCheck(root), GateWallGrowthThreshold = gateWallGrowthThreshold
             };        }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }

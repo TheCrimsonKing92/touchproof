@@ -108,13 +108,16 @@ internal static class RemoteExecutorOccupancy
         start == marker.OwnerStartUtc;
 
     internal static IReadOnlyList<(string Attempt, string? Class)> LiveMarkers(string root, string executor,
-        Func<int, DateTimeOffset?>? startTimeOf = null)
+        Func<int, DateTimeOffset?>? startTimeOf = null, bool requireReadableDirectory = false)
     {
         var markers = new List<(string, string?)>();
         try
         {
-            if (!SafeName(executor) || !Directory.Exists(Folder(root, executor))) return markers;
-            foreach (var path in Directory.EnumerateFiles(Folder(root, executor), "*.json"))
+            if (!SafeName(executor))
+                throw new ArgumentException("Invalid executor id.", nameof(executor));
+            var folder = Folder(root, executor);
+            if (!requireReadableDirectory && !Directory.Exists(folder)) return markers;
+            foreach (var path in Directory.EnumerateFiles(folder, "*.json"))
             {
                 try
                 {
@@ -126,7 +129,8 @@ internal static class RemoteExecutorOccupancy
                 catch (Exception) { }
             }
         }
-        catch (Exception) { }
+        catch (DirectoryNotFoundException) { }
+        catch (Exception) when (!requireReadableDirectory) { }
         return markers;
     }
 }

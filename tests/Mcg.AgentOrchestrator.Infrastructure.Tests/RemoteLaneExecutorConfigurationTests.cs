@@ -10,6 +10,7 @@ public sealed class RemoteLaneExecutorConfigurationTests
         {
             var configuration = RemoteLaneExecutorConfiguration.Load(path);
             Assert.True(configuration.Enabled);
+            Assert.Equal(0.10, configuration.GateWallGrowthThreshold);
             Assert.Equal(new[] { new RemoteLaneExecutorEntry("one", 90), new RemoteLaneExecutorEntry("two", 60) }, configuration.Executors);
             Assert.Equal(new[] { "infrastructure tests: Cli", "infrastructure tests: Shell" }, configuration.Lanes);
         });
@@ -47,6 +48,36 @@ public sealed class RemoteLaneExecutorConfigurationTests
             var configuration = RemoteLaneExecutorConfiguration.Load(path);
             Assert.True(configuration.Enabled);
             Assert.Equal(60, Assert.Single(configuration.Executors).LeaseSeconds);
+        });
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("0", 0d)]
+    [Xunit.InlineData("0.25", 0.25)]
+    [Xunit.InlineData("1.5", 1.5)]
+    public void GateWallGrowthThreshold_AcceptsFiniteNonnegativeNumbers(string jsonValue, double expected)
+    {
+        WithFile($$"""{"executors":[{"id":"one"}],"lanes":["lane"],"gateWallGrowthThreshold":{{jsonValue}}}""", path =>
+        {
+            var configuration = RemoteLaneExecutorConfiguration.Load(path);
+            Assert.True(configuration.Enabled);
+            Assert.Equal(expected, configuration.GateWallGrowthThreshold);
+        });
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("-0.01")]
+    [Xunit.InlineData("1e400")]
+    [Xunit.InlineData("\"0.10\"")]
+    [Xunit.InlineData("true")]
+    [Xunit.InlineData("null")]
+    public void GateWallGrowthThreshold_InvalidValueDisablesRemoteLanes(string jsonValue)
+    {
+        WithFile($$"""{"executors":[{"id":"one"}],"lanes":["lane"],"gateWallGrowthThreshold":{{jsonValue}}}""", path =>
+        {
+            var configuration = RemoteLaneExecutorConfiguration.Load(path);
+            Assert.False(configuration.Enabled);
+            Assert.Equal("invalid", configuration.DisabledReason);
         });
     }
 
