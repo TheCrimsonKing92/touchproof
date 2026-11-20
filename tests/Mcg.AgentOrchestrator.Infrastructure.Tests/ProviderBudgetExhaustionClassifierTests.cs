@@ -49,6 +49,91 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         Assert.Null(schedule.ResetAt);
     }
 
+    [Xunit.Fact]
+    public void ClaudeReviewerMonthlySpendRefusal_HoldsRedispatchOnSameBinding()
+    {
+        const string output = "You've hit your monthly spend limit \u00B7 raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
+        var repository = CreateSeededDispatchRepository();
+        try
+        {
+            var dispatchedAt = DateTimeOffset.Parse("2026-11-12T21:15:00Z");
+            var completedAt = dispatchedAt.AddSeconds(12);
+            var clock = new BudgetTestClock(dispatchedAt);
+            var kernel = new AgentOrchestratorKernel(clock);
+            var goal = kernel.CreateGoal(
+                "Hold the Claude Reviewer binding after monthly spend exhaustion",
+                [new TaskSpec(TaskId.New(), "Review the candidate.", AgentRole.Reviewer)]);
+            var agent = ClaudeDeveloperAgent() with
+            {
+                Id = new AgentId("claude-reviewer"),
+                Name = "Claude Reviewer",
+                Role = AgentRole.Reviewer
+            };
+            kernel.ActivateGoal(goal.Id, [agent]);
+            var task = Assert.Single(goal.Tasks);
+            var worktree = GoalWorktrees.Ensure(repository, goal.Id);
+            var dispatch = new TaskDispatchRecord(
+                "claude-cli", "claude", worktree, dispatchedAt,
+                ProviderName: agent.Model.ProviderName, WorkerProviderKind: ProviderKind.AnthropicClaudeCli,
+                ClaudeCredentialSourceDirectory: CredentialBinding, ClaudeCredentialSourceIsExplicit: true,
+                GoalId: goal.Id, ModelName: agent.Model.ModelName);
+            kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+
+            var catalog = WorkerProviderCatalog.Default();
+            var completion = new WorkerDispatchCompletionClassifier(
+                record => catalog.ResolveProfile(record.WorkerName), clock,
+                _ => false, _ => throw new FileNotFoundException());
+            var failure = completion.ParseProviderFailureKind(dispatch, 1, output, string.Empty);
+            var verification = new TaskVerificationRecord(
+                dispatch.Command, dispatch.WorkingDirectory, 1, output, string.Empty, completedAt,
+                ProviderFailureKind: failure, DispatchStartedAt: dispatchedAt, DispatchAttemptAt: dispatchedAt,
+                EvidenceSource: VerificationEvidenceSource.Dispatch);
+            var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+            Assert.Equal(DispatchOutcomeKind.ProviderBudgetExhausted, outcome.Kind);
+            Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+            Assert.Contains(output, outcome.EvidenceSummary, StringComparison.Ordinal);
+
+            clock.UtcNow = completedAt;
+            kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+
+            Assert.Equal(WorkTaskStatus.Failed, task.Status);
+            var recorded = Assert.IsType<TaskVerificationRecord>(task.LastVerification);
+            Assert.Equal(dispatchedAt, recorded.DispatchAttemptAt);
+            Assert.Equal(output, recorded.StandardOutput);
+            Assert.False(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, clock.UtcNow, out _));
+            Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
+                kernel.Goals, agent.Model.ProviderName, CredentialBinding, out var hold));
+            Assert.Equal(agent.Model.ProviderName, hold.ProviderName);
+            Assert.Equal("anthropic::c:\\profiles\\funded-a", hold.BindingKey);
+            Assert.Equal(goal.Id, hold.SourceGoalId);
+            Assert.Equal(task.Id, hold.SourceTaskId);
+            Assert.Equal(recorded.CompletedAt, hold.PlacedAt);
+            Assert.Equal($"verification:{recorded.CompletedAt:O}", hold.EvidenceReceipt);
+            Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
+                kernel.Goals, agent.Model.ProviderName, @"C:\profiles\funded-b", out _));
+
+            clock.UtcNow = completedAt.AddMinutes(1);
+            var retry = kernel.RetryTaskAutomatically(
+                goal.Id, task.Id, "Retry the failed provider attempt.", RetryCause.ProviderInterruption);
+            Assert.Equal(WorkTaskStatus.Assigned, retry.Status);
+
+            var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+                kernel, goal, [agent], WorkerProfileCatalog.Default(),
+                Path.Combine(repository, ".test-prompts"), worktree, clock.UtcNow,
+                commandExists: _ => true, sandboxOptions: EnabledSandbox, claudeAuthProbe: CredentialAuthProbe);
+
+            Assert.Empty(batch.Dispatches);
+            var blocked = Assert.Single(batch.Blocked);
+            Assert.Equal(task.Id.Value, blocked.TaskId);
+            Assert.Equal("provider-budget-exhausted", blocked.Reason);
+        }
+        finally
+        {
+            try { Directory.Delete(repository, recursive: true); } catch { }
+        }
+    }
+
     private static (AgentOrchestratorKernel Kernel, TaskSpec Task, TaskVerificationRecord Verification)
         RecordedReviewerCreditRefusal(string standardError)
     {
