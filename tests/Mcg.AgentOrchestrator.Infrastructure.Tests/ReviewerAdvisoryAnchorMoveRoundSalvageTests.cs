@@ -10,13 +10,13 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
     private const string BlockerId = "reviewer-fresh-delivery-skips-reattachment";
     private const string AdvisoryId = "reviewer-correction-rework-unclassified";
     private const string PriorFindings = """
-        [{"stable_id":"reviewer-fresh-delivery-skips-reattachment","state":"open","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"87-95"},"description":"Reattach fresh delivery."},{"stable_id":"reviewer-correction-rework-unclassified","state":"open","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"120"},"description":"Classify correction rework."}]
+        [{"stable_id":"reviewer-fresh-delivery-skips-reattachment","state":"open","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"87-95"},"description":"Reattach fresh delivery."},{"stable_id":"reviewer-correction-rework-unclassified","state":"open","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"120"},"description":"Classify correction rework."}]
         """;
     private const string CurrentFindings = """
-        [{"stable_id":"reviewer-fresh-delivery-skips-reattachment","state":"open","severity":"blocking","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"87-95"},"description":"Reattach fresh delivery."},{"stable_id":"reviewer-correction-rework-unclassified","state":"open","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"125"},"description":"Unchanged: classify correction rework."}]
+        [{"stable_id":"reviewer-fresh-delivery-skips-reattachment","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"87-95"},"description":"Reattach fresh delivery."},{"stable_id":"reviewer-correction-rework-unclassified","state":"open","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"125"},"description":"Unchanged: classify correction rework."}]
         """;
     private const string UnprovenResolutionFindings = """
-        [{"stable_id":"reviewer-fresh-delivery-skips-reattachment","state":"resolved","severity":"blocking","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"87-95"},"description":"Claimed resolved without proof."},{"stable_id":"reviewer-correction-rework-unclassified","state":"open","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"125"},"description":"Unchanged: classify correction rework."},{"stable_id":"new-blocker","state":"open","severity":"blocking","category":"correctness","location":{"file":"Other.cs","region":"10"},"description":"New independent blocker."}]
+        [{"stable_id":"reviewer-fresh-delivery-skips-reattachment","state":"resolved","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"87-95"},"description":"Claimed resolved without proof."},{"stable_id":"reviewer-correction-rework-unclassified","state":"open","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"125"},"description":"Unchanged: classify correction rework."},{"stable_id":"new-blocker","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"Other.cs","region":"10"},"description":"New independent blocker."}]
         """;
 
     [Xunit.Theory]
@@ -141,7 +141,7 @@ public sealed class ReviewerAdvisoryAnchorMoveRoundSalvageTests
     {
         var fixture = new Fixture();
         fixture.Record("""
-            [{"stable_id":"reviewer-correction-rework-unclassified","state":"open","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"120"},"description":"Classify correction rework."}]
+            [{"stable_id":"reviewer-correction-rework-unclassified","state":"open","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"ReviewerPassingFindingEvidenceRouter.cs","region":"120"},"description":"Classify correction rework."}]
             """, "pass", null);
         fixture.Kernel.RetryTask(fixture.Goal.Id, fixture.Reviewer.Id, "Recheck delivery");
         fixture.Record(CurrentFindings, "needs-work", null);

@@ -4,10 +4,10 @@ public sealed class ReviewFindingParseRejectionJournalTests
 {
     [Xunit.Theory]
     [Xunit.InlineData(
-        "findings: [{\"stable_id\":\"missing-anchor\",\"state\":\"open\",\"severity\":\"blocking\",\"category\":\"correctness\",\"location\":{\"file\":\"src/Target.cs\",\"region\":\"Run\"},\"description\":\"broken\"}]",
+        "findings: [{\"stable_id\":\"missing-anchor\",\"state\":\"open\",\"class_id\":\"none\",\"severity\":\"blocking\",\"category\":\"correctness\",\"location\":{\"file\":\"src/Target.cs\",\"region\":\"Run\"},\"description\":\"broken\"}]",
         "touched_anchors_fragment=<missing>")]
     [Xunit.InlineData(
-        "findings: [{\"stable_id\":\"missing-description\",\"state\":\"open\",\"severity\":\"blocking\",\"category\":\"correctness\",\"location\":{\"file\":\"src/Target.cs\",\"region\":\"Run\"}}]\ntouched_anchors: []",
+        "findings: [{\"stable_id\":\"missing-description\",\"state\":\"open\",\"class_id\":\"none\",\"severity\":\"blocking\",\"category\":\"correctness\",\"location\":{\"file\":\"src/Target.cs\",\"region\":\"Run\"}}]\ntouched_anchors: []",
         "missing-description")]
     public void RejectedFindingRoundRecordsDiagnosticAndFragment(string fields, string expectedFragment)
     {

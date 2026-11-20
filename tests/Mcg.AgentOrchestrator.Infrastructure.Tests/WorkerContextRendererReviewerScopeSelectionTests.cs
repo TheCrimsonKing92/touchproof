@@ -289,7 +289,7 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
         tests: not-run - fixture
         commit: none
         blockers: exact-blocker - recheck scope
-        findings: [{"stable_id":"scope","state":"open","severity":"blocking","location":{"file":"src/A.cs","region":"A.Run"},"description":"Recheck A"}]
+        findings: [{"stable_id":"scope","state":"open","class_id":"none","severity":"blocking","location":{"file":"src/A.cs","region":"A.Run"},"description":"Recheck A"}]
         touched_anchors: []
         verdict: needs-work
         model_fit: OpenAI/gpt-6.1-sol - adequate - fixture - deterministic

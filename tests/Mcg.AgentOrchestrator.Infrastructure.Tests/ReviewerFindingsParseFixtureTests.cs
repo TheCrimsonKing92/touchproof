@@ -97,7 +97,7 @@ public sealed class ReviewerFindingsParseFixtureTests
     [Xunit.InlineData(
         "ae54b5eb-e9ea0560-20260905170025.out.txt",
         "57085A40E6DA99AFECC7B22C04E01798408A3DEE5C5A22997710A46DF0AA08D6")]
-    public void RetainedReviewerStdoutParsesOrRecordsTheRejectedFragment(
+    public void RetainedReviewerStdoutWithoutClassIdRecordsTheRejectedFragment(
         string fileName,
         string expectedSourceSha256)
     {
@@ -118,17 +118,15 @@ public sealed class ReviewerFindingsParseFixtureTests
             StandardOutputPath: path,
             WorkerResultPresent: true);
 
-        if (WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _))
-        {
-            Xunit.Assert.Contains(round.Findings, finding =>
-                finding.State == ReviewFindingState.Open && finding.Severity == FindingSeverity.Blocking);
-            return;
-        }
-
         Xunit.Assert.False(WorkerResultBlockers.TryFindReviewFindingRound(
             verification,
             out _,
-            out var diagnostic));
+            out var diagnostic,
+            out _,
+            out var violation,
+            AgentRole.Reviewer));
+        Xunit.Assert.Equal(ReviewFindingConvergence.FindingFormatViolationCode, violation?.Code);
+        Xunit.Assert.Contains("class_id", diagnostic, StringComparison.Ordinal);
         Xunit.Assert.True(WorkerResultBlockers.TryReadReviewFindingFragments(
             verification,
             out var findingsFragment,

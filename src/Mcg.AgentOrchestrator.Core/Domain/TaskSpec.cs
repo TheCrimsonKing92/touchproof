@@ -896,7 +896,7 @@ public sealed partial class TaskSpec
         var index = Array.FindIndex(findings, finding =>
             string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
         if (index < 0 &&
-            WorkerResultBlockers.TryFindReviewFindingRound(LastVerification, out var reportedRound, out _))
+            WorkerResultBlockers.TryFindReviewFindingRound(LastVerification, out var reportedRound, out _, RequiredRole))
         {
             var reportedFinding = reportedRound.Findings.FirstOrDefault(finding =>
                 string.Equals(finding.StableId, stableId, StringComparison.Ordinal));

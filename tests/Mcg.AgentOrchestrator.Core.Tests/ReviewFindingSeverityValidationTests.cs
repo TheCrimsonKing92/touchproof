@@ -8,6 +8,98 @@ public sealed class ReviewFindingSeverityValidationTests
             FindingCategory.Correctness,
             malformed ? new FindingEvidenceRequest([], Mutation: new("src/Target.cs", "true", "false")) : null);
 
+    [Theory]
+    [InlineData("\"severity\":\"advisory\",", false)]
+    [InlineData("\"severity\":\"blocking\",", true)]
+    [InlineData("", true)]
+    [InlineData("\"severity\":\"advisory\",\"Severity\":\"advisory\",", true)]
+    public void ReviewerRegisteredClassRequiresEffectiveBlockingSeverity(string severity, bool accepted)
+    {
+        const string classProperty = "\"class_id\":\"dispositive-misclassification\"";
+        var record = ClassifiedResult(classProperty, severity);
+
+        Assert.Equal(accepted, WorkerResultBlockers.TryFindReviewFindingRound(record, out var round,
+            out _, out var warnings, out var violation, AgentRole.Reviewer));
+        Assert.Empty(warnings);
+        if (accepted)
+        {
+            Assert.Null(violation);
+            var finding = Assert.Single(round.Findings);
+            Assert.Equal(FindingSeverity.Blocking, finding.Severity);
+            Assert.Equal(FindingClass.DispositiveMisclassification, finding.ClassId);
+            Assert.Equal("dispositive-misclassification",
+                JsonSerializer.SerializeToElement(finding).GetProperty("class_id").GetString());
+        }
+        else
+        {
+            Assert.NotNull(violation);
+            Assert.Equal(ReviewFindingConvergence.FindingFormatViolationCode, violation.Code);
+            Assert.Equal("typed-class", violation.SubmittedStableId);
+            Assert.Empty(round.Findings);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\"class_id\":\"unknown\"")]
+    [InlineData("\"class_id\":null")]
+    [InlineData("\"class_id\":0")]
+    [InlineData("\"class_id\":true")]
+    [InlineData("\"class_id\":[]")]
+    [InlineData("\"class_id\":{}")]
+    [InlineData("\"class_id\":\"\"")]
+    [InlineData("\"class_id\":\"NONE\"")]
+    [InlineData("\"class_id\":\" none \"")]
+    [InlineData("\"class_id\":\"dispositive_misclassification\"")]
+    [InlineData("\"class_id\":\"none\",\"CLASS_ID\":\"none\"")]
+    public void ReviewerRequiresOneCanonicalClassEvenForResolvedAdvisories(string classProperty)
+    {
+        var record = ClassifiedResult(classProperty, "\"severity\":\"advisory\",", state: "resolved");
+
+        Assert.False(WorkerResultBlockers.TryFindReviewFindingRound(record, out var round,
+            out _, out var warnings, out var violation, AgentRole.Reviewer));
+        Assert.NotNull(violation);
+        Assert.Equal(ReviewFindingConvergence.FindingFormatViolationCode, violation.Code);
+        Assert.Equal("typed-class", violation.SubmittedStableId);
+        Assert.Empty(warnings);
+        Assert.Empty(round.Findings);
+    }
+
+    [Theory]
+    [InlineData("", FindingClass.None)]
+    [InlineData("\"class_id\":\"dispositive-misclassification\"", FindingClass.DispositiveMisclassification)]
+    public void TesterAllowsOmittedClassAndRegisteredAdvisory(string classProperty, FindingClass expected)
+    {
+        var record = ClassifiedResult(classProperty, "\"severity\":\"advisory\",");
+
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(record, out var round,
+            out var diagnostic, out var warnings, out var violation, AgentRole.Tester), diagnostic);
+        Assert.Null(violation);
+        Assert.Empty(warnings);
+        var finding = Assert.Single(round.Findings);
+        Assert.Equal(FindingSeverity.Advisory, finding.Severity);
+        Assert.Equal(expected, finding.ClassId);
+    }
+
+    [Fact]
+    public void TesterRejectsUnknownClassOnBlockingFinding()
+    {
+        var record = ClassifiedResult("\"class_id\":\"unknown\"", "\"severity\":\"blocking\",");
+
+        Assert.False(WorkerResultBlockers.TryFindReviewFindingRound(record, out _,
+            out _, out _, out var violation, AgentRole.Tester));
+        Assert.NotNull(violation);
+        Assert.Equal(ReviewFindingConvergence.FindingFormatViolationCode, violation.Code);
+    }
+
+    private static TaskVerificationRecord ClassifiedResult(string classProperty, string severity, string state = "open")
+    {
+        var classFragment = classProperty.Length == 0 ? "" : classProperty + ",";
+        var json = $$"""[{"stable_id":"typed-class","state":"{{state}}",{{classFragment}}{{severity}}"location":{"file":"src/Target.cs","region":"Run"},"description":"Check the guard"}]""";
+        return new("review", "", 0, $"WORKER_RESULT:\nfindings: {json}\ntouched_anchors: []\nEND_WORKER_RESULT",
+            "", DateTimeOffset.UnixEpoch, WorkerResultPresent: true);
+    }
+
     [Fact]
     public void AdvisoryMutationIsDroppedWhileValidBlockingFindingSurvives()
     {
@@ -42,7 +134,7 @@ public sealed class ReviewFindingSeverityValidationTests
     [InlineData("\"severity\":\"blocking\",\"Severity\":\"advisory\",", true)]
     public void InvalidItemRequiresUnambiguousAdvisorySeverity(string severity, bool fatal)
     {
-        var json = "[{" + severity + "\"stable_id\":\"invalid\",\"state\":\"bogus\"}]";
+        var json = "[{" + severity + "\"stable_id\":\"invalid\",\"state\":\"bogus\",\"class_id\":\"none\"}]";
         var result = ReviewFindingConvergence.ParseJson(json, "[]");
         Assert.Equal(fatal, result.FatalDiagnostic is not null);
         Assert.Equal(fatal ? 0 : 1, result.AdvisoryRejections.Count);

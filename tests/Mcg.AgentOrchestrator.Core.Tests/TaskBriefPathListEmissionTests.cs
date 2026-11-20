@@ -68,7 +68,7 @@ public sealed class TaskBriefPathListEmissionTests
             "review", "C:\\fixture", 1,
             """
             WORKER_RESULT:
-            findings: [{"stable_id":"scope","state":"open","severity":"blocking","location":{"file":"src/A.cs","region":"A.Run"},"description":"Recheck A"}]
+            findings: [{"stable_id":"scope","state":"open","class_id":"none","severity":"blocking","location":{"file":"src/A.cs","region":"A.Run"},"description":"Recheck A"}]
             touched_anchors: []
             END_WORKER_RESULT
             """, string.Empty, DateTimeOffset.UnixEpoch,

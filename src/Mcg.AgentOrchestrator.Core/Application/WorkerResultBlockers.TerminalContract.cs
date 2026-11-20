@@ -113,7 +113,7 @@ public static partial class WorkerResultBlockers
             var verdict = fields["verdict"].ToLowerInvariant();
             if (verdict is not ("pass" or "needs-work" or "fail" or "blocked-at-cap"))
                 return Malformed($"Reviewer field verdict must be pass, needs-work, fail or blocked-at-cap; got {QuoteTerminalFieldValue(fields["verdict"])}.");
-            if (!TryFindReviewFindingRound(terminal, out var round, out var findingsDiagnostic))
+            if (!TryFindReviewFindingRound(terminal, out var round, out var findingsDiagnostic, role))
                 return Malformed("Reviewer field findings is malformed: " + findingsDiagnostic);
             if (!TryFindCriteriaVerdicts(terminal, out _, out var criteriaDiagnostic))
                 return Malformed("Reviewer field criteria_verdicts is malformed: " + criteriaDiagnostic);

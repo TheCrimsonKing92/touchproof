@@ -1213,7 +1213,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             commands: review
             tests: pass - inspected evidence
             blockers: none
-            findings: [{"stable_id":"F-1","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"First blocker."},{"stable_id":"F-2","state":"open","severity":"advisory","category":"correctness","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Second advisory."}]
+            findings: [{"stable_id":"F-1","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"First blocker."},{"stable_id":"F-2","state":"open","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Second advisory."}]
             touched_anchors: []
             verdict: needs-work
             END_WORKER_RESULT
@@ -1224,7 +1224,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             commands: review
             tests: pass - inspected evidence
             blockers: none
-            findings: [{"stable_id":"F-1","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/C.cs","region":"C.Run","hunk":"guard"},"description":"First blocker."},{"stable_id":"F-2","state":"resolved","severity":"advisory","category":"correctness","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Second advisory."}]
+            findings: [{"stable_id":"F-1","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"src/C.cs","region":"C.Run","hunk":"guard"},"description":"First blocker."},{"stable_id":"F-2","state":"resolved","class_id":"none","severity":"advisory","category":"correctness","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Second advisory."}]
             touched_anchors: []
             verdict: needs-work
             END_WORKER_RESULT
