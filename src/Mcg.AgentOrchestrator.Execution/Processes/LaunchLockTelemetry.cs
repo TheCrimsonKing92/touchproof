@@ -281,6 +281,7 @@ internal static class LaunchLockTelemetry
             {
                 LaunchLockChildCpuTracker.Live.FlushExited();
                 foreach (var line in LaunchLockClassCpuLedger.Live.FormatCpuByClass(processId)) yield return line;
+                foreach (var line in LaunchLockClassMemoryLedger.Live.FormatMemoryByClass(processId)) yield return line;
                 yield return GitAncestryMemo.FormatSummary(processId);
             }
         }
