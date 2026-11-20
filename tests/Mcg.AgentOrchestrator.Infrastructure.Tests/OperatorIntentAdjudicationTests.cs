@@ -84,6 +84,138 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Tester)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public async Task RouteCancelsRunningDownstream(AgentRole downstreamRole)
+    {
+        var cancellations = new List<TaskId>();
+        await WithHarness(async harness =>
+        {
+            var (kernel, goal, developer) = RouteGoal(harness.Root, downstreamRole);
+            var downstream = goal.Tasks.Single(task => task.RequiredRole == downstreamRole);
+            Assert.True(downstream.LastProcess?.IsRunning);
+            var payload = RoutePayload();
+            var intent = await harness.Enqueue(goal, developer, payload);
+
+            var result = harness.Coordinator.ExecutePending(kernel, goal);
+            harness.Coordinator.CompletePersisted([goal.Id]);
+
+            Assert.True(result.MutatedGoalState);
+            var completed = await harness.Store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Applied, completed!.Status);
+            Assert.Equal(downstream.Id, Assert.Single(cancellations));
+            Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+            Assert.Equal(RetryCause.ContractClarification, developer.PendingRetryCause);
+            Assert.Equal(payload.Text, developer.AcceptedRetryFeedback?.Message);
+            Assert.Null(downstream.LastProcess);
+            Assert.Null(downstream.LastDispatch);
+            Assert.Single(goal.Timeline, item => item.TaskId == downstream.Id && item.Kind == ProgressKind.TaskCancelled);
+            AssertSupersessionNote(goal, downstream.Id, developer.Id);
+            await AssertDecision(harness.Decisions, goal, intent, "applied", OperatorActorKind.Human);
+
+            kernel.RecordTaskDispatch(goal.Id, developer.Id,
+                new TaskDispatchRecord("retry-worker", "retry-developer", harness.Root, DateTimeOffset.UtcNow));
+            Assert.Equal(WorkTaskStatus.Running, developer.Status);
+        }, (kernel, goalId, taskId) =>
+        {
+            cancellations.Add(taskId);
+            return RecordCancellation(kernel, goalId, taskId);
+        });
+    }
+
+    [Xunit.Fact]
+    public async Task RouteRetainsEarlierCancellationOnFailure()
+    {
+        const string failure = "second downstream cancellation failed";
+        var cancellations = new List<TaskId>();
+        await WithHarness(async harness =>
+        {
+            var (kernel, goal, developer) = RouteGoal(harness.Root, AgentRole.Reviewer, AgentRole.Tester);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+            var workspace = OrchestratorWorkspace.ForDirectory(harness.Root);
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await repository.SaveAsync(kernel);
+            var attempts = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
+                TrunkBranchName.Default, workspace.ExecutionDirectory);
+            var intent = await harness.Enqueue(goal, developer, RoutePayload());
+
+            var outcome = await OperatorIntentGoalApplication.ApplyOffline(
+                workspace, repository, harness.Coordinator, attempts, goal.Id);
+
+            var processed = Assert.IsType<OperatorIntentOfflineOutcome.Applied>(outcome);
+            Assert.Contains(processed.Lines, line => line.Contains(failure, StringComparison.Ordinal));
+            Assert.Equal(new[] { reviewer.Id, tester.Id }, cancellations);
+            var rejected = await harness.Store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Rejected, rejected!.Status);
+            Assert.Contains(failure, rejected.Outcome, StringComparison.Ordinal);
+            var restored = (await repository.LoadGoalsAsync([goal.Id])).GetGoal(goal.Id);
+            Assert.Equal(WorkTaskStatus.Completed, restored.FindTask(developer.Id).Status);
+            Assert.Null(restored.FindTask(developer.Id).LatestRetryAt);
+            Assert.Equal(WorkTaskStatus.Cancelled, restored.FindTask(reviewer.Id).Status);
+            Assert.True(restored.FindTask(reviewer.Id).LastProcess?.WasCancelled);
+            Assert.True(restored.FindTask(tester.Id).LastProcess?.IsRunning);
+            AssertSupersessionNote(restored, reviewer.Id, developer.Id);
+            Assert.DoesNotContain(restored.Timeline, item => item.OperatorIntentApplied?.IntentId == intent.Id);
+        }, (kernel, goalId, taskId) =>
+        {
+            cancellations.Add(taskId);
+            if (kernel.GetTask(goalId, taskId).RequiredRole == AgentRole.Tester)
+                throw new InvalidOperationException(failure);
+            return RecordCancellation(kernel, goalId, taskId);
+        });
+    }
+
+    [Xunit.Fact]
+    public async Task DirectRetryRefusesRunningDownstream()
+    {
+        await WithHarness(harness =>
+        {
+            var (kernel, goal, developer) = RouteGoal(harness.Root, AgentRole.Tester);
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+
+            var error = Assert.Throws<InvalidOperationException>(() => kernel.RetryTaskWithAuthoritativeFeedback(
+                goal.Id, developer.Id, RoutePayload().Text, RetryCause.ContractClarification, invalidateDownstream: true));
+
+            Assert.Equal($"Cannot retry Developer task '{developer.Id}' while downstream Tester task '{tester.Id}' has a running process.", error.Message);
+            Assert.True(tester.LastProcess?.IsRunning);
+            Assert.Null(developer.LatestRetryAt);
+            return Task.CompletedTask;
+        });
+    }
+
+    [Xunit.Fact]
+    public async Task WaitingForHumanRouteRefusesBeforeCancellation()
+    {
+        var cancellations = new List<TaskId>();
+        await WithHarness(async harness =>
+        {
+            var (kernel, goal, developer) = RouteGoal(harness.Root, AgentRole.Tester);
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+            kernel.RequestHumanInput(goal.Id, developer.Id, "Which contract should this implement?");
+            Assert.Equal(WorkTaskStatus.WaitingForHuman, developer.Status);
+            var intent = await harness.Enqueue(goal, developer, RoutePayload());
+
+            var result = harness.Coordinator.ExecutePending(kernel, goal);
+
+            Assert.True(result.RejectedAdjudication);
+            var rejected = await harness.Store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Rejected, rejected!.Status);
+            Assert.Contains("task-not-retryable", rejected.Outcome, StringComparison.Ordinal);
+            Assert.Empty(cancellations);
+            Assert.True(tester.LastProcess?.IsRunning);
+            Assert.Equal(WorkTaskStatus.WaitingForHuman, developer.Status);
+            Assert.Null(developer.LatestRetryAt);
+        }, (kernel, goalId, taskId) =>
+        {
+            cancellations.Add(taskId);
+            return RecordCancellation(kernel, goalId, taskId);
+        });
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData(OperatorActorKind.Agent, false)]
     [Xunit.InlineData(OperatorActorKind.Human, true)]
     public async Task AdjudicationCorrectionUsesIntentActorKind(OperatorActorKind actorKind, bool applies)
@@ -173,6 +305,47 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
     private static AdjudicateOperatorIntentPayload Payload(string shape) =>
         new(shape, "Operator explanation", ["receipt-1"], Harness.Version, "C:\\tmp");
 
+    private static AdjudicateOperatorIntentPayload RoutePayload() =>
+        Payload("route") with { Cause = nameof(RetryCause.ContractClarification), Text = "Apply the clarified contract." };
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Developer) RouteGoal(
+        string root, params AgentRole[] downstreamRoles)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Fix the candidate", AgentRole.Developer);
+        var downstream = downstreamRoles.Select(role => new TaskSpec(TaskId.New(), $"Check as {role}", role)).ToArray();
+        var goal = kernel.CreateGoal("Route an upstream correction", [developer, .. downstream]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Completed, "Candidate ready for downstream work.");
+
+        var startedAt = DateTimeOffset.UtcNow;
+        for (var index = 0; index < downstream.Length; index++)
+        {
+            var task = downstream[index];
+            var command = $"check-{task.RequiredRole}";
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("check-worker", command, root, startedAt));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(
+                index + 1, command, root, Path.Combine(root, $"{command}.out"),
+                Path.Combine(root, $"{command}.err"), Path.Combine(root, $"{command}.exit"), startedAt, null, null));
+        }
+        return (kernel, goal, developer);
+    }
+
+    private static TaskProcessRecord RecordCancellation(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
+    {
+        var running = kernel.GetTask(goalId, taskId).LastProcess;
+        Assert.True(running?.IsRunning);
+        var cancelled = running! with { CompletedAt = running.StartedAt.AddSeconds(1), WasCancelled = true };
+        kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+        return cancelled;
+    }
+
+    private static void AssertSupersessionNote(Goal goal, TaskId cancelledTask, TaskId upstream) =>
+        Assert.Single(goal.Timeline, item =>
+            item.TaskId == cancelledTask && item.Kind == ProgressKind.TaskNote &&
+            item.Message.Contains("cancelled because an upstream route superseded it", StringComparison.Ordinal) &&
+            item.Message.Contains(upstream.Value, StringComparison.Ordinal));
+
     private static TaskVerificationRecord PassingVerification(string root) =>
         new("focused test", root, 0, "passed", "", DateTimeOffset.UtcNow);
 
@@ -196,18 +369,21 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
             item.OperatorIntentApplied.Outcome == outcome));
     }
 
-    private static async Task WithHarness(Func<Harness, Task> action)
+    private static async Task WithHarness(
+        Func<Harness, Task> action,
+        Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelLatestProcess = null)
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-adjudicate-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
-        try { await action(new Harness(root)); }
+        try { await action(new Harness(root, cancelLatestProcess)); }
         finally { try { Directory.Delete(root, recursive: true); } catch { } }
     }
 
     private sealed class Harness
     {
         internal const long Version = 7;
-        internal Harness(string root)
+        internal Harness(
+            string root, Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelLatestProcess)
         {
             Root = root;
             Store = new SqliteOperatorIntentStore(Path.Combine(root, "operator-intents.db"), Path.Combine(root, "logs"));
@@ -215,7 +391,11 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
             Coordinator = new OperatorIntentCoordinator(
                 Store,
                 decisions: Decisions,
-                goalStateVersionResolver: _ => Version);
+                goalStateVersionResolver: _ => Version)
+            {
+                CancelLatestProcess = cancelLatestProcess ??
+                    ((_, _, _) => throw new InvalidOperationException("Unexpected dispatch cancellation in adjudication test."))
+            };
         }
 
         internal string Root { get; }
