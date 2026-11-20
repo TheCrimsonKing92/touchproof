@@ -1881,7 +1881,7 @@ internal static partial class CliPersistentStateRunner
         try
         {
             shouldSave = CliCommandDispatcher.ExecuteCommand(
-                args,
+                intake.Request?.RequestedEpicId is { } epicId ? EpicAtCreation.UseResolvedArgument(args, epicId) : args,
                 kernel,
                 workspace,
                 ref agents,

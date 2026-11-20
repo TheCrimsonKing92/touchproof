@@ -8,9 +8,9 @@ internal static class GoalIntakeReplayReceipt
 {
     public static void Print(
         GoalIntakeRequestRecord record,
-        string requestKey,
+        GoalIntakeRequestDescriptor request,
         IOrchestratorStateRepository stateRepository,
-        string portfolioPath,
+        OrchestratorWorkspace workspace,
         bool summary,
         ref Goal? currentGoal)
     {
@@ -23,10 +23,17 @@ internal static class GoalIntakeReplayReceipt
             if (currentGoal is null)
             {
                 throw new InvalidOperationException(
-                    $"GOAL_INTAKE_RECEIPT_INVALID requestKey={requestKey} reason=created-goal-missing");
+                    $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
+            }
+            if (request.RequestedEpicId is { } epicId)
+            {
+                var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+                var goalId = currentGoal.Id.Value;
+                if (portfolio.GetGoalMembershipAsync(goalId).GetAwaiter().GetResult() is null)
+                    EpicAtCreation.AssignAfterCommit(workspace, PortfolioMemberKind.Goal, goalId, epicId);
             }
             if (summary)
-                GoalCreationSummaryView.Print(currentGoal, "replayed", portfolioPath);
+                GoalCreationSummaryView.Print(currentGoal, "replayed", workspace.PortfolioStorePath);
             else
                 GoalTextView.PrintGoal(currentGoal);
             return;
@@ -35,7 +42,7 @@ internal static class GoalIntakeReplayReceipt
         if (record.State == GoalIntakeRequestStates.Failed)
         {
             throw new InvalidOperationException(
-                $"GOAL_INTAKE_REPLAY_FAILED requestKey={requestKey} " +
+                $"GOAL_INTAKE_REPLAY_FAILED requestKey={request.RequestKey} " +
                 $"failureCode={record.FailureCode} detail={record.FailureDetail}");
         }
     }
@@ -62,9 +69,10 @@ internal sealed class GoalIntakeCommandReceipt
         if (request is null)
             return;
 
+        Request = request;
         IsBacklogRequest = request.Mode.StartsWith("backlog-", StringComparison.Ordinal);
         _store = new GoalIntakeRequestStore(workspace.SqliteStatePath);
-        var reservation = _store.Reserve(request.RequestKey, request.Fingerprint);
+        var reservation = request.Reserve(_store);
         Record = reservation.Record;
         _isReplay = reservation.Kind == GoalIntakeReservationKind.Replay;
         _resumeContinuation = _useContinuation && _isReplay &&
@@ -73,6 +81,7 @@ internal sealed class GoalIntakeCommandReceipt
     }
 
     internal GoalIntakeRequestRecord? Record { get; private set; }
+    internal GoalIntakeRequestDescriptor? Request { get; }
     internal bool IsBacklogRequest { get; }
 
     internal BacklogIntakeContinuationHost? ContinuationHost(IOrchestratorStateOutboxRepository repository) =>
@@ -91,7 +100,7 @@ internal sealed class GoalIntakeCommandReceipt
             CliPersistentStateRunner.DeliverGoalCreationSideEffects(repository, _workspace, kernel, new GoalId(successorId));
             BacklogIntakeContinuation.PrintBacklogContinuationLineage(lineage);
         }
-        GoalIntakeReplayReceipt.Print(record, record.RequestKey, repository, _workspace.PortfolioStorePath, _showSummary, ref goal);
+        GoalIntakeReplayReceipt.Print(record, Request!, repository, _workspace, _showSummary, ref goal);
         return true;
     }
 
@@ -102,7 +111,7 @@ internal sealed class GoalIntakeCommandReceipt
             return false;
 
         if (receipt.State != GoalIntakeRequestStates.Created)
-            GoalIntakeReplayReceipt.Print(receipt, record.RequestKey, repository, _workspace.PortfolioStorePath, _showSummary, ref goal);
+            GoalIntakeReplayReceipt.Print(receipt, Request!, repository, _workspace, _showSummary, ref goal);
         else if (_showSummary && goal is not null && goal.Id.Value == receipt.GoalId)
             GoalCreationSummaryView.Print(goal, _resumeContinuation ? "replayed" : "created", _workspace.PortfolioStorePath);
         else

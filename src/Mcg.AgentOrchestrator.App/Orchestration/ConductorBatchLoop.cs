@@ -80,6 +80,9 @@ internal sealed partial class ConductorBatchLoop
     private readonly HomeBuildRelaunchCoordinator? _homeBuildRelaunchCoordinator;
     private readonly Func<IReadOnlyList<string>>? _homeBuildIdleBlockers;
     private readonly PostLandingCanaryCoordinator? _postLandingCanary;
+    private readonly TimeSpan _canaryDrainBound;
+    private readonly TimeSpan _canaryTerminationGrace;
+    private readonly TimeProvider _canaryDrainClock;
     private SelectedExecutionBackstopCoordinator? _selectedExecutionBackstop;
     private readonly PromptRolloutWatchCoordinator? _promptRolloutWatch;
     private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
@@ -142,7 +145,10 @@ internal sealed partial class ConductorBatchLoop
         HomeBuildAdoptionDetector? homeBuildAdoption = null,
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? homeBuildRelaunch = null,
         Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null,
-        Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? providerHoldProbe = null)
+        Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? providerHoldProbe = null,
+        TimeSpan? canaryDrainBound = null,
+        TimeSpan? canaryTerminationGrace = null,
+        TimeProvider? canaryDrainClock = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -171,6 +177,9 @@ internal sealed partial class ConductorBatchLoop
         _homeBuildIdleBlockers = homeBuildIdleBlockers;
         _providerHoldProbe = providerHoldProbe;
         _postLandingCanary = postLandingCanary;
+        _canaryDrainBound = canaryDrainBound ?? TimeSpan.FromSeconds(CanaryTaskDrain.DefaultBoundSeconds);
+        _canaryTerminationGrace = canaryTerminationGrace ?? TimeSpan.FromSeconds(CanaryTaskDrain.DefaultTerminationGraceSeconds);
+        _canaryDrainClock = canaryDrainClock ?? TimeProvider.System;
         _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
         _conductEventLogWriter = conductEventLogWriter;
         _lifecycleRecorder = lifecycleRecorder;
@@ -250,8 +259,8 @@ internal sealed partial class ConductorBatchLoop
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
         var previousDispatchRecordWriteSucceededSink = driver.DispatchRecordWriteSucceededSink;
         var previousLandingMutationBlocker = driver.LandingMutationBlocker;
-        var canaryTasks = new List<Task<PostLandingCanaryDisposition>>();
-        var canaryTasksGate = new object();
+        var canaryDrain = new CanaryLoopDrain(_postLandingCanary, _canaryDrainBound,
+            _canaryTerminationGrace, _canaryDrainClock, line => EmitProgress(line));
         CurrentRetryDiagnostics.Value = new RetryDiagnosticCoalescer(_utcNow);
         var totalTicks = 0;
         var blockedRecheckCycles = 0;
@@ -398,13 +407,7 @@ internal sealed partial class ConductorBatchLoop
                 deferredSelfRelaunch = null;
                 selfRelaunchRetryAfterTick = null;
                 selfRelaunchDrainStartedAt ??= _utcNow();
-            }, canaryTask =>
-            {
-                lock (canaryTasksGate)
-                {
-                    canaryTasks.Add(canaryTask);
-                }
-            }, line => EmitProgress(line), changedFilesAvailable);
+            }, canaryDrain.Track, line => EmitProgress(line), changedFilesAvailable);
         }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         _selectedExecutionBackstop ??= SelectedExecutionBackstopCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
@@ -434,7 +437,7 @@ internal sealed partial class ConductorBatchLoop
             {
                 // Follower reservations never enter the home drain-cap/detach path.
                 var followerResult = _homeBuildRelaunchCoordinator!.TryHandoff(pendingSelfRelaunch, tick,
-                    HomeBuildBlockers, () => AwaitCanaryTasks(canaryTasks, canaryTasksGate));
+                    HomeBuildBlockers, canaryDrain.Wait);
                 if (followerResult is not null)
                 {
                     handedOffHomeBuild = homeTarget;
@@ -443,6 +446,7 @@ internal sealed partial class ConductorBatchLoop
                     return new(SelfRelaunchDrainDisposition.BreakLoop);
                 }
                 pendingSelfRelaunch = null;
+                canaryDrain.ResetAfterDeclinedHandoff();
                 return new(SelfRelaunchDrainDisposition.Proceed);
             }
             var activeDispatches = RunJanitorialPhase<int?>(
@@ -515,7 +519,7 @@ internal sealed partial class ConductorBatchLoop
 
             var canaryAwaited = RunJanitorialPhase<bool?>("await-canary-tasks", tick, () =>
             {
-                AwaitCanaryTasks(canaryTasks, canaryTasksGate);
+                canaryDrain.Wait();
                 return true;
             });
             if (canaryAwaited != true)
@@ -577,6 +581,7 @@ internal sealed partial class ConductorBatchLoop
             pendingSelfRelaunch = null;
             selfRelaunchDrainStartedAt = null;
             selfRelaunchDrainCap.Reset();
+            canaryDrain.ResetAfterDeclinedHandoff();
             return new(SelfRelaunchDrainDisposition.Proceed);
         }
 
@@ -826,7 +831,7 @@ internal sealed partial class ConductorBatchLoop
 
             _promptRolloutWatch?.EvaluateTick(kernel);
             RunJanitorialPhase("main-suspect-release", nextTick,
-                () => ServiceMainSuspectRelease(driver, canaryTasks, canaryTasksGate));
+                () => ServiceMainSuspectRelease(driver, canaryDrain.Tasks, canaryDrain.Gate));
             var preWalkClock = StartDiagnosticTimer();
             var preWalkCpuStart = ReadProcessCpu();
             RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => ConductorTickStepLedger.Measure("retire-until-goal-lessons", () => RetireUntilGoalLessons(kernel)));
@@ -1752,7 +1757,7 @@ internal sealed partial class ConductorBatchLoop
             CompleteActivationTick(totalTicks);
         }
 
-        AwaitCanaryTasks(canaryTasks, canaryTasksGate);
+        canaryDrain.Wait();
         ConductorLoopHandoffResult? handoff = selfRelaunchHandoff;
         if (selfRelaunchHandoff is not null && stopReason is null)
         {
@@ -1802,7 +1807,7 @@ internal sealed partial class ConductorBatchLoop
         {
             StopStewardAndAuthor();
             driver.AdmissionFacts.Stop();
-            DrainCanaryTasks(canaryTasks, canaryTasksGate);
+            canaryDrain.DrainAndRetire();
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
             driver.LandingMutationBlocker = previousLandingMutationBlocker;
@@ -1947,34 +1952,6 @@ internal sealed partial class ConductorBatchLoop
             finishGoalWalk("advance-fault");
             result = null!;
             return false;
-        }
-    }
-
-    private static void AwaitCanaryTasks(
-        List<Task<PostLandingCanaryDisposition>> tasks,
-        object gate)
-    {
-        Task<PostLandingCanaryDisposition>[] snapshot;
-        lock (gate)
-        {
-            snapshot = tasks.ToArray();
-        }
-
-        Task.WhenAll(snapshot).GetAwaiter().GetResult();
-    }
-
-    private static void DrainCanaryTasks(
-        List<Task<PostLandingCanaryDisposition>> tasks,
-        object gate)
-    {
-        try
-        {
-            AwaitCanaryTasks(tasks, gate);
-        }
-        catch
-        {
-            // Preserve the primary loop exception. AwaitCanaryTasks already observed every
-            // worker and therefore still guarantees no canary process escapes this loop.
         }
     }
 
