@@ -13,7 +13,8 @@ internal static class CliBacklogIntakeExecution
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        BacklogIntakeContinuationHooks? continuationHooks = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
@@ -38,7 +39,11 @@ internal static class CliBacklogIntakeExecution
             ref currentGoal,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
             Persist,
-            finalizeGoalReplacement: correctionFinalizer);
+            finalizeGoalReplacement: correctionFinalizer,
+            recordDurableGoalBaseline: snapshot => initialGoalSnapshots[snapshot.Id] = snapshot,
+            backlogContinuation: stateRepository is IOrchestratorStateOutboxRepository outbox
+                ? new BacklogIntakeContinuationHost(outbox, Hooks: continuationHooks)
+                : null);
 
         if (shouldSave)
         {

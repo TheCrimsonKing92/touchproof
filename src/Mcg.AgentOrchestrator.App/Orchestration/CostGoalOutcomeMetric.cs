@@ -12,7 +12,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record OutcomeMetricGuard(string Name, string Rule);
 
 internal sealed record OutcomeMetricLine(string Name, string Direction, string Target, int Window,
-    OutcomeMetricGuard? Guard = null);
+    OutcomeMetricGuard? Guard = null, AgentRole? Role = null);
 
 internal sealed record OutcomeMetricSample(double? Value, int SampleSize);
 
@@ -66,19 +66,23 @@ internal static class CostGoalOutcomeMetric
     internal const string OverrideFlag = "--override-draft-checks";
     internal const string ReplaySelectedClasses = "replay-selected-classes";
     internal const string ReplayMissedFailures = "replay-missed-failures";
+    internal const string WorkerTurns = "worker-turns-per-session";
+    internal const string WorkerInput = "worker-input-volume-per-session";
     private const string TickStepPrefix = "tick-step-milliseconds:";
     internal static IReadOnlyList<string> MetricNames { get; } = Array.AsReadOnly(new[]
     {
         "selection-milliseconds", "executed-class-count", "gate-test-cpu-seconds",
         "full-gate-rate", "process-launches", ReplaySelectedClasses, ReplayMissedFailures,
-        "worker-turns-per-session", "worker-input-volume-per-session", TickStepPrefix + "<step>"
+        WorkerTurns, WorkerInput, TickStepPrefix + "<step>"
     });
     private const string LineFormat = "metric: <name>; direction: decrease|increase; target: <value or percent>; window: <N gates>" +
-        "; optional guard: <metric>; must-not-increase|must-not-decrease. Tick-step metrics require window: <N ticks> and omit the guard";
+        "; optional guard: <metric>; must-not-increase|must-not-decrease. Tick-step metrics require window: <N ticks> and omit the guard. " +
+        "Worker usage metrics accept window: <N sessions> and optional role: <worker role>";
     private static readonly Regex Heading = new(@"^##[ \t]+([^\r\n]+)", RegexOptions.CultureInvariant);
     private static readonly Regex Number = new(@"^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)%?$", RegexOptions.CultureInvariant);
     private static readonly Regex Gates = new(@"^([0-9]+)(?:[ \t]+gates?)?$", RegexOptions.CultureInvariant);
     private static readonly Regex Ticks = new(@"^([0-9]+)[ \t]+ticks$", RegexOptions.CultureInvariant);
+    private static readonly Regex Sessions = new(@"^([0-9]+)[ \t]+sessions$", RegexOptions.CultureInvariant);
     private static readonly Regex GateAttemptId = new(@"-(?<time>[0-9]{17})-[0-9a-f]{32}$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -151,8 +155,10 @@ internal static class CostGoalOutcomeMetric
             fields.TryGetValue("target", out var target);
             fields.TryGetValue("window", out var window);
             fields.TryGetValue("guard", out var guardName);
+            fields.TryGetValue("role", out var roleName);
             var start = defects.Count;
             var tickStep = TickStepName(name);
+            var workerMetric = IsWorkerUsageMetric(name);
             if (tickStep is not null)
             {
                 if (!TickStepLedgerReader.StepNames.Contains(tickStep, StringComparer.Ordinal))
@@ -164,6 +170,7 @@ internal static class CostGoalOutcomeMetric
                 !double.IsFinite(value)) defects.Add($"metric '{name}' has an invalid numeric target '{target}'");
             if (direction is not ("decrease" or "increase")) defects.Add($"metric '{name}' has an invalid direction '{direction}'");
             var windowMatch = (tickStep is null ? Gates : Ticks).Match(window ?? "");
+            if (workerMetric && !windowMatch.Success) windowMatch = Sessions.Match(window ?? "");
             var windowCount = 0;
             if (!windowMatch.Success || !int.TryParse(windowMatch.Groups[1].Value, out windowCount) || windowCount <= 0)
                 defects.Add($"metric '{name}' has an invalid window '{window}'");
@@ -178,11 +185,20 @@ internal static class CostGoalOutcomeMetric
                 if (guardRule is not ("must-not-increase" or "must-not-decrease"))
                     defects.Add($"metric '{name}' has an invalid guard rule '{guardRule}'");
             }
-            if (malformed || fields.Count != (guardName is null ? 4 : 5) || fields.Keys.Any(key =>
-                !new[] { "metric", "direction", "target", "window", "guard" }.Contains(key, StringComparer.OrdinalIgnoreCase)))
+            AgentRole? role = null;
+            if (workerMetric && roleName is not null)
+            {
+                if (Enum.TryParse<AgentRole>(roleName, ignoreCase: true, out var parsedRole) &&
+                    roleName.Equals(Enum.GetName(parsedRole), StringComparison.OrdinalIgnoreCase))
+                    role = parsedRole;
+                else defects.Add($"metric '{name}' has an invalid role '{roleName}'");
+            }
+            if (malformed || fields.Count != 4 + (guardName is null ? 0 : 1) + (workerMetric && roleName is not null ? 1 : 0) ||
+                fields.Keys.Any(key => !new[] { "metric", "direction", "target", "window", "guard", "role" }
+                    .Contains(key, StringComparer.OrdinalIgnoreCase)))
                 defects.Add($"metric '{name}' has malformed or unexpected fields");
             if (defects.Count == start)
-                metrics.Add(new(name!, direction!, target!, windowCount, guardName is null ? null : new(guardName, guardRule!)));
+                metrics.Add(new(name!, direction!, target!, windowCount, guardName is null ? null : new(guardName, guardRule!), role));
         }
         if (declarationCount == 0) defects.Add("no well-formed ## Outcome metric line");
         if (hasNoneDeclaration && declarationCount > 1) defects.Add("metric 'none' must be the only metric line");
@@ -271,6 +287,8 @@ internal static class CostGoalOutcomeMetric
                     sample.Value is null ? "baseline-unavailable" : null);
             }
             var (metric, guard) = window.Measure(Math.Min(line.Window, 3));
+            if (IsWorkerUsageMetric(line.Name))
+                return new OutcomeMetricBaseline(line, null, 0, "awaiting-integration", guard);
             var reason = metric.Value is not null ? null : HasGateSource(line.Name) ? "baseline-unavailable" :
                 IsReplayMetric(line.Name) ? "replay-reports-unavailable" : "no-gate-source";
             return new OutcomeMetricBaseline(line, metric.Value, metric.SampleSize, reason, guard);
@@ -293,6 +311,8 @@ internal static class CostGoalOutcomeMetric
 
     internal static bool IsReplayMetric(string? metric) =>
         metric is ReplaySelectedClasses or ReplayMissedFailures;
+
+    internal static bool IsWorkerUsageMetric(string? metric) => metric is WorkerTurns or WorkerInput;
 
     internal static double? Sample(string metric, OutcomeGateObservation gate)
     {
