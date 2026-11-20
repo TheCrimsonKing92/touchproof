@@ -139,17 +139,23 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
     }
 
-    [Xunit.Fact]
-    public async Task GoalIntake_same_key_replays_one_goal_and_task_graph()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task GoalIntake_same_key_replays_one_goal_and_task_graph(bool withEpic)
     {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var args = new[] { "simple-goal", "Implement one keyed task", "--request-key", "sequential-key" };
+        var args = new[] { withEpic ? "goal" : "simple-goal", "Implement one keyed task", "--request-key", "sequential-key" };
+        if (withEpic)
+        {
+            var epic = await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("Replay epic");
+            args = [..args, "--epic", epic.Id];
+        }
 
         var firstOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
@@ -171,8 +177,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
     [Xunit.Fact]
     public async Task GoalIntake_conflicting_payload_reuse_is_rejected()
     {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -194,8 +199,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
     [Xunit.Fact]
     public async Task GoalIntake_concurrent_same_key_creates_one_goal()
     {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         using var ready = new CountdownEvent(2);
         using var release = new ManualResetEventSlim(false);
 
@@ -232,8 +236,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
     [Xunit.Fact]
     public async Task GoalIntake_status_polls_without_retrying_creation()
     {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var store = new GoalIntakeRequestStore(workspace.SqliteStatePath);
         _ = store.Reserve("poll-key", "poll-fingerprint");
@@ -254,8 +257,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
     [Xunit.Fact]
     public async Task GoalIntake_unkeyed_duplicate_objectives_remain_distinct()
     {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -330,8 +332,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
     [Xunit.Fact]
     public async Task GoalIntake_keyed_backlog_replay_keeps_atomic_goal_binding()
     {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Keyed backlog source");
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -360,8 +361,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
     [Xunit.Fact]
     public async Task GoalIntake_keyed_backlog_existing_goal_records_terminal_failure()
     {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Already owned backlog source");
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;

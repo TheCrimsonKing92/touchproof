@@ -1830,12 +1830,12 @@ internal static partial class CliPersistentStateRunner
         if (request is not null)
         {
             requestStore = new GoalIntakeRequestStore(workspace.SqliteStatePath);
-            var reservation = requestStore.Reserve(request.RequestKey, request.Fingerprint);
+            var reservation = request.Reserve(requestStore);
             intakeRecord = reservation.Record;
             if (reservation.Kind == GoalIntakeReservationKind.Replay)
             {
-                GoalIntakeReplayReceipt.Print(reservation.Record, request.RequestKey, stateRepository,
-                    workspace.PortfolioStorePath, GoalCreationSummaryView.IsRequested(args), ref currentGoal);
+                GoalIntakeReplayReceipt.Print(reservation.Record, request, stateRepository,
+                    workspace, GoalCreationSummaryView.IsRequested(args), ref currentGoal);
                 return false;
             }
         }
@@ -1903,7 +1903,7 @@ internal static partial class CliPersistentStateRunner
         try
         {
             shouldSave = CliCommandDispatcher.ExecuteCommand(
-                args,
+                request?.RequestedEpicId is { } epicId ? EpicAtCreation.UseResolvedArgument(args, epicId) : args,
                 kernel,
                 workspace,
                 ref agents,
