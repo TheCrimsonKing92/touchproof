@@ -1,12 +1,14 @@
 # Dependency index measurement
 
-The checkpoint is incomplete. On the measured App build, three baseline runs and three index runs alternated, and two floor runs completed. Completing the checkpoint requires two more runs per measured arm, three more floor runs, and the namespace census. Capture them with both implementations present in the same Windows worktree and use one build for the full comparison.
+On the matched App build, the dependency index reduced median peak private bytes above the process floor by **96.62%**, exceeding the 75% threshold. Median wall time for construction and rule evaluation was 8,573.1887 ms with ArchUnitNET and 471.7694 ms with the index.
+
+On 2026-11-19 at 22:50 local time, the owner ended the checkpoint early. The recorded series contains four baseline runs, three index runs, and two floor runs. Three of the baseline runs match the App build used by the index and floor runs.
 
 ## Candidate and host
 
 | Field | Value |
 | --- | --- |
-| Checkpoint commit | |
+| Probe source revision | `ee12fc77225cc2c15a17e1d5e34bbc2045c7e3f8` |
 | App module version ID | `caed4c45-abd2-48bc-b25c-946cf6098a66` |
 | Machine | SEVENTHSON |
 | Windows version | Microsoft Windows 10.0.26200 |
@@ -16,36 +18,17 @@ The checkpoint is incomplete. On the measured App build, three baseline runs and
 
 ## Measurement protocol
 
-Build the Infrastructure test project once in the gate configuration. Use that build for every run. Each command launches a fresh managed test process with one selected probe. Run the probes on the same machine with no warm-up. The floor loads the App assembly without building a model. Each measured arm builds its model for the App assembly alone and evaluates the Application layer rule forbidding dependencies on the CLI and Rendering namespaces.
+The operator ran one probe per fresh managed test process with `Invoke-TestSummary.ps1` and `-TestInput MCG_TEST_INPUT_DEPENDENCY_INDEX_CHECKPOINT=1`, with no warm-up. The floor probe loaded the App assembly without building a model. The two measured arms each built their model for App alone and evaluated the rule forbidding types in the Application namespace from depending on types in the CLI and Rendering namespaces.
 
-The commands below start a fresh series. To resume the series in this note, use its existing build, confirm the App module version ID, and run only the outstanding probes. If that build is unavailable, start a fresh series.
-
-```powershell
-$project = 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj'
-$configuration = 'Debug'
-$runs = @('Floor', 'Baseline', 'Index')
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-WorkerBuildCheck.ps1 $project -Configuration $configuration
-if ($LASTEXITCODE -ne 0) { throw "Checkpoint build failed ($LASTEXITCODE)." }
-
-foreach ($round in 1..5) {
-    foreach ($arm in $runs) {
-        .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-TestSummary.ps1 -Target $project -Configuration $configuration -NoBuild -Filter "FullyQualifiedName~DependencyIndexMeasure${arm}ProbeTests" -TestInput 'MCG_TEST_INPUT_DEPENDENCY_INDEX_CHECKPOINT=1'
-        if ($LASTEXITCODE -ne 0) { throw "Checkpoint ${arm} round $round failed ($LASTEXITCODE)." }
-    }
-}
-
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-TestSummary.ps1 -Target $project -Configuration $configuration -NoBuild -Filter 'FullyQualifiedName~DependencyIndexCensusProbeTests' -TestInput 'MCG_TEST_INPUT_DEPENDENCY_INDEX_CHECKPOINT=1'
-if ($LASTEXITCODE -ne 0) { throw "Namespace census failed ($LASTEXITCODE)." }
-```
-
-Use the new JSON receipts in `.scratch/dependency-index-checkpoint`. Check the run order, host, configuration, App module version ID, and rule violation counts. The probe reads Windows `PeakPagefileUsage` after evaluation. The stopwatch covers model construction and rule evaluation after the test process has started.
+The probes read Windows `PeakPagefileUsage` after evaluation. The stopwatch covered model construction and rule evaluation, excluding test process startup. The comparison uses medians from runs with the App module version ID above.
 
 ## Run receipts
 
-All eight runs below used the App module version ID above and reported zero violations. The earlier `baseline-32956-20c277f7fe674f24b2e9994a5ff459de.json` receipt used App module version ID `2aa3632a-ecac-4c78-8345-bbfeb5daa461` and is excluded.
+The eight matched runs all recorded zero violations. The earlier baseline is included for provenance. Its App module version ID was `2aa3632a-ecac-4c78-8345-bbfeb5daa461`, so it is excluded from the medians.
 
 | Collected UTC | Arm | Peak private bytes | Wall time (ms) | Receipt |
 | --- | --- | ---: | ---: | --- |
+| 2026-11-20 03:29:25 | Baseline (earlier build) | 715,071,488 | 10,111.5393 | `baseline-32956-20c277f7fe674f24b2e9994a5ff459de.json` |
 | 2026-11-20 04:07:26 | Baseline | 710,680,576 | 8,573.1887 | `baseline-34876-35ed69c4d8d5495e965fcd6fcb5f680a.json` |
 | 2026-11-20 04:12:27 | Index | 150,822,912 | 518.2318 | `index-16844-1139456538e34823bd9d1250fa052f49.json` |
 | 2026-11-20 04:17:21 | Floor | 131,289,088 | 0.0237 | `floor-29236-b68c52ae39f748e8bc837ce416dbfe76.json` |
@@ -57,25 +40,17 @@ All eight runs below used the App module version ID above and reported zero viol
 
 | Comparison | Value |
 | --- | ---: |
-| Median floor peak (bytes) | Pending full series |
-| Median baseline peak (bytes) | Pending full series |
-| Median index peak (bytes) | Pending full series |
-| Median baseline wall time (ms) | Pending full series |
-| Median index wall time (ms) | Pending full series |
-| Baseline median peak minus median floor (bytes) | Pending full series |
-| Index median peak minus median floor (bytes) | Pending full series |
-| Index peak reduction (percent) | Pending full series |
+| Median floor peak (bytes) | 131,227,648 |
+| Median baseline peak (bytes) | 710,680,576 |
+| Median index peak (bytes) | 150,822,912 |
+| Median baseline wall time (ms) | 8,573.1887 |
+| Median index wall time (ms) | 471.7694 |
+| Baseline median peak minus median floor (bytes) | 579,452,928 |
+| Index median peak minus median floor (bytes) | 19,595,264 |
+| Index peak reduction (percent) | 96.62% |
 
-Subtract the median floor from each median peak. The index passes the memory criterion if its adjusted median is at most 25% of the adjusted baseline.
+The floor-adjusted index median was 3.38% of the floor-adjusted baseline median. The memory criterion allows up to 25%.
 
 ## Namespace cycles
 
-The census counts elementary directed cycles independently in each assembly. It uses references between distinct namespaces in the same assembly and counts each rotation of a path as the same cycle.
-
-| Assembly | Count | Cycles |
-| --- | ---: | --- |
-| App | | |
-| Core | | |
-| Infrastructure | | |
-
-List each cycle from the receipt and repeat its first namespace at the end to show the closing edge. Add the cycle-free guard only if all three counts are zero. After recording the results, remove the probes, legacy cache and its tests, and the package reference.
+Namespace cycle counts for App, Core, and Infrastructure are unmeasured by owner decision on 2026-11-19 and left for a follow-up.
