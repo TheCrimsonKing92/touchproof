@@ -58,7 +58,7 @@ internal static class OwnerConsoleBindings
     internal static bool RequiresSelectedBoardRow(OwnerConsoleBinding row) => row == Goal || row == Gate || row == Accept || row == Answer;
     internal static OwnerConsoleBinding Epics => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "epics");
     internal static OwnerConsoleBinding Gate => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "gate");
-    private static OwnerConsoleBinding Settings => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == SettingsCommand);
+    internal static OwnerConsoleBinding Settings => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == SettingsCommand);
     internal static OwnerConsoleBinding Help => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "help");
     internal static OwnerConsoleBinding Quit => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "quit");
     internal static OwnerConsoleBinding Follow => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "follow");
@@ -117,7 +117,7 @@ internal static class OwnerConsoleBindings
         row.Key is { } key ? $"[{key}] {row.Usage}" : row.Usage).ToArray();
     internal static string CommandPrompt => string.Join(" | ", PromptEntries);
 
-    internal static string PaneHint(OwnerConsolePane pane, bool answerable = true, bool following = true)
+    internal static string PaneHint(OwnerConsolePane pane, bool answerable = true, bool following = true, bool signIn = false)
     {
         var prefix = pane switch
         {
@@ -129,7 +129,8 @@ internal static class OwnerConsoleBindings
         };
         return string.Join("  ", new[] { prefix, OwnerActivityLinePresentation.JumpKeyHint, "Tab/Shift+Tab pane" }
             .Concat(All.Where(row => row.Scope == OwnerConsoleScope.Global && row.Key.HasValue)
-                .SelectMany(row => row == Help ? new[] { ": command", Hint(row) } : [Hint(row)])));
+                .SelectMany(row => row == Help ? new[] { ": command", Hint(row) } :
+                    [pane == OwnerConsolePane.Activity && signIn && row == Settings ? "s sign-in" : Hint(row)])));
     }
 
     private static string Hint(OwnerConsoleBinding row) => $"{row.Key} {row.HintLabel}";
@@ -154,6 +155,7 @@ internal static class OwnerConsoleBindings
 
     private static readonly string[] SettingsHelp =
     [
+        "ACTIVITY s on a sign-in-required provider row: Open Settings on Provider connections for that provider.",
         "Settings Left/Right: Switch to the previous or next tab.",
         "Settings Esc or q: Close Settings and return to the previous pane.",
         $"Settings tab {OwnerConsoleAlertsSettingsTab.TabTitle}: {OwnerConsoleAlertsSettingsTab.HelpKeys}",
