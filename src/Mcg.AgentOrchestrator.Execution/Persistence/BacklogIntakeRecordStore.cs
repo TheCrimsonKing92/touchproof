@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -23,6 +24,23 @@ public sealed record BacklogIntakeRecord(
 public sealed record BacklogIntakeReservation(
     BacklogIntakeReservationKind Kind,
     BacklogIntakeRecord Record);
+
+internal enum BacklogContinuationPhase
+{
+    Prepared,
+    Transferred,
+    Rearmed
+}
+
+internal sealed record BacklogIntakeContinuationReservation(
+    string ItemId,
+    string PredecessorId,
+    long ClaimVersion,
+    string SuccessorId,
+    BacklogContinuationPhase Phase,
+    BacklogIntakeRecord? ExpectedIntake,
+    string? RequestKey,
+    string? RequestFingerprint);
 
 public sealed class BacklogIntakeRecordStore
 {
@@ -58,6 +76,8 @@ public sealed class BacklogIntakeRecordStore
         try
         {
             var existing = LoadRecord(conn, sourceBacklogItemId);
+            if (existing?.GoalId is null && ReadContinuation(conn, sourceBacklogItemId) is not null)
+                throw new InvalidOperationException($"BACKLOG_INTAKE_CONTINUATION_IN_PROGRESS backlogItem={sourceBacklogItemId}");
             if (existing is null)
             {
                 var inserted = new BacklogIntakeRecord(
@@ -159,6 +179,10 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(sourceBacklogItemId))
             return null;
 
+        BacklogIntakeRecord? current = null;
+        if (StateDbWriteSession.TryExecute(_dbPath, connection => current = LoadRecord(connection, sourceBacklogItemId)))
+            return current;
+
         if (!File.Exists(_dbPath))
             return null;
 
@@ -171,6 +195,174 @@ public sealed class BacklogIntakeRecordStore
         {
             return null;
         }
+    }
+
+    internal BacklogIntakeContinuationReservation? GetContinuation(string itemId)
+    {
+        BacklogIntakeContinuationReservation? result = null;
+        if (StateDbWriteSession.TryExecute(_dbPath, connection => result = ReadContinuation(connection, itemId)))
+            return result;
+        if (!File.Exists(_dbPath))
+            return null;
+        using var connection = OpenReadConnection();
+        return ReadContinuation(connection, itemId);
+    }
+
+    internal bool HasPendingContinuation(string requestKey)
+    {
+        using var connection = OpenReadConnection();
+        if (!HasContinuationTable(connection))
+            return false;
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM backlog_intake_continuations WHERE request_key = $key LIMIT 1";
+        command.Parameters.AddWithValue("$key", requestKey);
+        return command.ExecuteScalar() is not null;
+    }
+
+    internal void PrepareContinuation(BacklogIntakeContinuationReservation reservation)
+    {
+        WriteContinuation(connection =>
+        {
+            if (LoadRecord(connection, reservation.ItemId) != reservation.ExpectedIntake ||
+                ReadContinuation(connection, reservation.ItemId) is not null)
+                throw InvalidContinuationTransition(reservation);
+
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS backlog_intake_continuations (
+                    item_id TEXT PRIMARY KEY,
+                    predecessor_id TEXT NOT NULL,
+                    claim_version INTEGER NOT NULL,
+                    successor_id TEXT NOT NULL UNIQUE,
+                    phase TEXT NOT NULL,
+                    expected_intake TEXT NOT NULL,
+                    request_key TEXT,
+                    request_fingerprint TEXT
+                );
+                INSERT INTO backlog_intake_continuations
+                    (item_id, predecessor_id, claim_version, successor_id, phase,
+                     expected_intake, request_key, request_fingerprint)
+                VALUES ($item, $predecessor, $version, $successor, $phase,
+                        $intake, $request_key, $request_fingerprint);
+                """;
+            AddContinuationIdentity(command, reservation);
+            command.Parameters.AddWithValue("$intake", JsonSerializer.Serialize(reservation.ExpectedIntake));
+            command.Parameters.AddWithValue("$request_key", (object?)reservation.RequestKey ?? DBNull.Value);
+            command.Parameters.AddWithValue("$request_fingerprint", (object?)reservation.RequestFingerprint ?? DBNull.Value);
+            command.ExecuteNonQuery();
+        });
+    }
+
+    internal void MarkContinuationTransferred(BacklogIntakeContinuationReservation expected) =>
+        AdvanceContinuation(expected, BacklogContinuationPhase.Prepared, BacklogContinuationPhase.Transferred,
+            (_, intake) => intake);
+
+    internal void RearmContinuation(BacklogIntakeContinuationReservation expected, string heading) =>
+        AdvanceContinuation(expected, BacklogContinuationPhase.Transferred, BacklogContinuationPhase.Rearmed,
+            (connection, previous) =>
+            {
+                var now = DateTimeOffset.UtcNow;
+                var record = new BacklogIntakeRecord(expected.ItemId, heading, "InProgress",
+                    GoalId: null, now, now, Environment.ProcessId, StdoutPath: null, StderrPath: null);
+                if (previous is null)
+                    InsertRecord(connection, record);
+                else
+                    UpdateRecord(connection, record);
+                return record;
+            });
+
+    internal void CompleteContinuation(BacklogIntakeContinuationReservation expected)
+    {
+        WriteContinuation(connection =>
+        {
+            ValidateContinuation(connection, expected, BacklogContinuationPhase.Rearmed);
+            MarkGoalCreated(connection, expected.ItemId, expected.SuccessorId);
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                DELETE FROM backlog_intake_continuations
+                WHERE item_id = $item AND predecessor_id = $predecessor AND claim_version = $version
+                  AND successor_id = $successor AND phase = $phase
+                """;
+            AddContinuationIdentity(command, expected);
+            if (command.ExecuteNonQuery() != 1)
+                throw InvalidContinuationTransition(expected);
+        });
+    }
+
+    private void AdvanceContinuation(
+        BacklogIntakeContinuationReservation expected, BacklogContinuationPhase from, BacklogContinuationPhase to,
+        Func<SqliteConnection, BacklogIntakeRecord?, BacklogIntakeRecord?> updateIntake)
+    {
+        WriteContinuation(connection =>
+        {
+            ValidateContinuation(connection, expected, from);
+            var intake = updateIntake(connection, expected.ExpectedIntake);
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE backlog_intake_continuations SET phase = $next, expected_intake = $intake
+                WHERE item_id = $item AND predecessor_id = $predecessor AND claim_version = $version
+                  AND successor_id = $successor AND phase = $phase
+                """;
+            AddContinuationIdentity(command, expected);
+            command.Parameters.AddWithValue("$next", to.ToString());
+            command.Parameters.AddWithValue("$intake", JsonSerializer.Serialize(intake));
+            if (command.ExecuteNonQuery() != 1)
+                throw InvalidContinuationTransition(expected);
+        });
+    }
+
+    private void WriteContinuation(Action<SqliteConnection> action)
+    {
+        if (!StateDbWriteSession.TryExecute(_dbPath, action))
+            throw new InvalidOperationException("Backlog continuation writes must join the active state transaction.");
+    }
+
+    private static void ValidateContinuation(SqliteConnection connection,
+        BacklogIntakeContinuationReservation expected, BacklogContinuationPhase phase)
+    {
+        // The snapshot comparison and the record write share the same SQLite writer.
+        if (expected.Phase != phase || ReadContinuation(connection, expected.ItemId) != expected ||
+            LoadRecord(connection, expected.ItemId) != expected.ExpectedIntake)
+            throw InvalidContinuationTransition(expected);
+    }
+
+    private static InvalidOperationException InvalidContinuationTransition(BacklogIntakeContinuationReservation expected) =>
+        new($"BACKLOG_INTAKE_CONTINUATION_REFUSED reason=SnapshotChanged backlogItem={expected.ItemId} phase={expected.Phase}");
+
+    private static void AddContinuationIdentity(SqliteCommand command, BacklogIntakeContinuationReservation reservation)
+    {
+        command.Parameters.AddWithValue("$item", reservation.ItemId);
+        command.Parameters.AddWithValue("$predecessor", reservation.PredecessorId);
+        command.Parameters.AddWithValue("$version", reservation.ClaimVersion);
+        command.Parameters.AddWithValue("$successor", reservation.SuccessorId);
+        command.Parameters.AddWithValue("$phase", reservation.Phase.ToString());
+    }
+
+    private static BacklogIntakeContinuationReservation? ReadContinuation(SqliteConnection connection, string itemId)
+    {
+        if (!HasContinuationTable(connection))
+            return null;
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT predecessor_id, claim_version, successor_id, phase, expected_intake, request_key, request_fingerprint
+            FROM backlog_intake_continuations WHERE item_id = $item
+            """;
+        command.Parameters.AddWithValue("$item", itemId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return null;
+        return new(itemId, reader.GetString(0), reader.GetInt64(1), reader.GetString(2),
+            Enum.Parse<BacklogContinuationPhase>(reader.GetString(3)),
+            JsonSerializer.Deserialize<BacklogIntakeRecord>(reader.GetString(4)),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6));
+    }
+
+    private static bool HasContinuationTable(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_schema WHERE name = 'backlog_intake_continuations' AND type = 'table'";
+        return command.ExecuteScalar() is not null;
     }
 
     private SqliteConnection OpenConnection() =>
