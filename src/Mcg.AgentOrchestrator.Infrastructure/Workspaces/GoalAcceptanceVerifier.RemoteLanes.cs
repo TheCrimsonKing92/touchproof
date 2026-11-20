@@ -144,8 +144,8 @@ public sealed partial class GoalAcceptanceVerifier
     {
         remote.Occupancy ??= new(goal?.Value, slot, _storageRoot, GateHeartbeatRunClass.Classify(_executionContext), GateHeartbeatRunClass.ResolveRunId(_executionContext));
         var plan = _remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."));
-        return new(lane => plan.Decide(lane, shards.All(UsesMicrosoftTestingPlatform) ? concurrency : 1,
-                AcceptanceLaneCheckTimeout.Resolve(shards.FirstOrDefault(check => check.Name == lane), EngineSettings), ReportRemoteLanePolicy).Offer,
+        return new(lane => plan.ShouldOffer(lane, shards.All(UsesMicrosoftTestingPlatform) ? concurrency : 1,
+                AcceptanceLaneCheckTimeout.Resolve(shards.FirstOrDefault(check => check.Name == lane), EngineSettings), ReportRemoteLanePolicy, remote.OfferOutcomes),
             (check, entry) => AcceptanceGateLaneProgress.RemoteStarted(goal, check.Name, entry.Id, slot, _storageRoot, EmitGateProgress),
             check => AcceptanceLaneCheckTimeout.Resolve(check, EngineSettings),
             check => plan.Deadline(check.Name, AcceptanceLaneCheckTimeout.Resolve(check, EngineSettings)), cache, _timeProvider);

@@ -21,6 +21,15 @@ internal sealed class RemoteLaneOfferPlan(IReadOnlyDictionary<string, RemoteLane
         IReadOnlyList<int> freeSlots, Func<string, bool> isCandidate)
         : this(inputs, () => freeSlots, isCandidate, RemoteLaneOfferPolicy.DefaultGateWallGrowthThreshold) { }
 
+    internal bool ShouldOffer(string lane, int concurrency, TimeSpan checkTimeout, Action<string> report,
+        GateLaneOfferOutcomeCollector? offerOutcomes)
+    {
+        var decision = Decide(lane, concurrency, checkTimeout, report);
+        if (!decision.Offer)
+            offerOutcomes?.Record(lane, "keep-local", decision.Reason);
+        return decision.Offer;
+    }
+
     internal RemoteLaneOfferDecision Decide(string lane, int concurrency, TimeSpan checkTimeout, Action<string> report)
     {
         lock (_sync)
