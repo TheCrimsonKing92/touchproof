@@ -77,18 +77,69 @@ public sealed class OperatorIntentAppliedBlockedTests
         await AssertBlockedApplication(fixture, intent, "AppliedBlocked retry", VerdictRule, VerdictGuidance);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer, "unknown-failure; exit code 42", DispatchGuidance)]
+    [Xunit.InlineData(AgentRole.Reviewer, "unknown-failure", VerdictGuidance)]
+    public async Task RetryLeavingUnknownFailureUsesRecordedExitAndVerdictEvidence(
+        AgentRole blockerRole, string reason, string guidance)
+    {
+        using var fixture = new Fixture(blockerRole);
+        var blockerTask = fixture.Goal.Tasks[0];
+        var at = DateTimeOffset.UtcNow;
+        var provider = blockerRole == AgentRole.Reviewer ? ProviderKind.XaiGrokCli : ProviderKind.Unknown;
+        var output = blockerRole == AgentRole.Reviewer
+            ? """
+              WORKER_RESULT:
+              files: none
+              commands: inspected candidate
+              tests: deferred - AcceptanceTests
+              commit: none
+              blockers: none
+              model_fit: fixture
+              skills: none
+              confidence: high
+              findings: []
+              touched_anchors: []
+              criteria_verdicts: []
+              verdict: fail
+              END_WORKER_RESULT
+              """
+            : string.Empty;
+        const string command = "exit 42";
+        fixture.Kernel.RecordTaskDispatch(fixture.Goal.Id, blockerTask.Id,
+            new TaskDispatchRecord("fixture-worker", command, fixture.Root, at, WorkerProviderKind: provider));
+        fixture.Kernel.RecordDispatchExecutionResult(fixture.Goal.Id, blockerTask.Id,
+            new TaskVerificationRecord(command, fixture.Root, 42, output, "failed", at, DispatchStartedAt: at));
+        var failure = Assert.Single(fixture.Goal.Timeline.Where(item =>
+            item.TaskId == blockerTask.Id && item.Kind == ProgressKind.TaskFailed));
+        Assert.Equal("unknown-failure", failure.Failure?.Rule);
+        Assert.StartsWith("Dispatch failed: rule=unknown-failure; exit code 42:", failure.Message);
+
+        fixture.Fail(fixture.Tester, VerdictRule);
+        var intent = await fixture.Enqueue(fixture.Tester, OperatorIntentVerbs.Retry,
+            new RetryOperatorIntentPayload("Retry the Tester work.", null, RetryCause: RetryCause.NewSourceFinding));
+
+        await AssertBlockedApplication(fixture, intent, "AppliedBlocked retry", reason, guidance);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot()).GetGoal(fixture.Goal.Id);
+        var persisted = Assert.Single(OperatorIntentEffectCheck.PendingBlocked(restored));
+        Assert.Equal($"blocked by Failed {blockerRole} task {blockerTask.Id.Value} ({reason}); {guidance}",
+            OperatorIntentEffectCheck.Describe(persisted.BlockedBy!));
+    }
+
     private static async Task AssertBlockedApplication(
-        Fixture fixture, OperatorIntentRecord intent, string outcomePrefix, string rule, string guidance)
+        Fixture fixture, OperatorIntentRecord intent, string outcomePrefix, string reason, string guidance)
     {
         fixture.Coordinator.ExecutePending(fixture.Kernel, fixture.Goal);
         fixture.Coordinator.CompletePersisted([fixture.Goal.Id]);
 
-        Assert.Equal(WorkTaskStatus.Failed, fixture.Developer.Status);
+        var blockerTask = fixture.Goal.Tasks[0];
+        Assert.Equal(WorkTaskStatus.Failed, blockerTask.Status);
         Assert.Equal(GoalLifecycleState.Failed, GoalLifecycle.ResolveState(fixture.Goal));
         var stored = (await fixture.Store.GetAsync(intent.Id))!;
         Assert.Equal(OperatorIntentStatus.Applied, stored.Status);
         Assert.StartsWith(outcomePrefix + " to goal ", stored.Outcome);
-        var detail = $"blocked by Failed Developer task {fixture.Developer.Id.Value} ({rule}); {guidance}";
+        var detail = $"blocked by Failed {blockerTask.RequiredRole} task {blockerTask.Id.Value} ({reason}); {guidance}";
         Assert.Equal(
             $"{outcomePrefix} to goal {fixture.Goal.Id.Value[..8]} task {fixture.Tester.Id.Value[..8]}. {detail}",
             stored.Outcome);
@@ -98,9 +149,9 @@ public sealed class OperatorIntentAppliedBlockedTests
         Assert.Equal("applied-blocked", applied.Outcome);
         Assert.Equal($"operator-intent:{intent.Id} outcome=AppliedBlocked; {detail}", record.Message);
         var blocker = applied.BlockedBy!;
-        Assert.Equal(AgentRole.Developer, blocker.Role);
-        Assert.Equal(fixture.Developer.Id.Value, blocker.TaskId);
-        Assert.Equal(rule, blocker.Reason);
+        Assert.Equal(blockerTask.RequiredRole, blocker.Role);
+        Assert.Equal(blockerTask.Id.Value, blocker.TaskId);
+        Assert.Equal(reason, blocker.Reason);
         Assert.Equal(1, blocker.TaskNumber);
     }
 
@@ -238,11 +289,11 @@ public sealed class OperatorIntentAppliedBlockedTests
         internal SqliteOperatorIntentStore Store { get; }
         internal OperatorIntentCoordinator Coordinator { get; }
 
-        internal Fixture()
+        internal Fixture(AgentRole blockerRole = AgentRole.Developer)
         {
             Directory.CreateDirectory(Root);
             Goal = Kernel.CreateGoal("Report task intent effectiveness", [
-                new(TaskId.New(), "Implement", AgentRole.Developer),
+                new(TaskId.New(), blockerRole == AgentRole.Developer ? "Implement" : "Review", blockerRole),
                 new(TaskId.New(), "Test", AgentRole.Tester)]);
             Kernel.ActivateGoal(Goal.Id, AgentCatalog.Default().Agents);
             Store = new SqliteOperatorIntentStore(Path.Combine(Root, "intents.db"), Path.Combine(Root, "logs"));
