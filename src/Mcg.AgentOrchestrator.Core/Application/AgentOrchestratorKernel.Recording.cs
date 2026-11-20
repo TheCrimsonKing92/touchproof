@@ -46,7 +46,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-        verification = verification with { EvidenceSource = VerificationEvidenceSource.Manual };
+        verification = verification with { EvidenceSource = VerificationEvidenceSource.Manual, FindingContractVersion = null };
         verification = PrepareReviewFindingRecord(
             goal,
             task,
@@ -163,7 +163,7 @@ public sealed partial class AgentOrchestratorKernel
         // An old process may finish after a retry with the identical command and directory.
         // Reject it before assigning current candidate context, recording findings or verdicts.
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
-            SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task) &&
+            (task.LastDispatch.FindingContractVersion is not null || SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task)) &&
             ((verification.DispatchAttemptAt is { } attemptAt && attemptAt != task.LastDispatch.DispatchedAt) ||
              (verification.DispatchStartedAt is { } startedAt && startedAt < task.LastDispatch.DispatchedAt) ||
              (task.LastProcess is { } currentProcess && verification.StandardOutputPath is not null &&
@@ -175,7 +175,7 @@ public sealed partial class AgentOrchestratorKernel
         }
         verification = verification with
         {
-            EvidenceSource = VerificationEvidenceSource.Dispatch,
+            EvidenceSource = VerificationEvidenceSource.Dispatch, FindingContractVersion = task.LastDispatch.FindingContractVersion,
             DispatchAttemptAt = task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
                 SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task) && verification.DispatchStartedAt is not null
                 ? verification.DispatchAttemptAt ?? task.LastDispatch.DispatchedAt : verification.DispatchAttemptAt,
@@ -677,7 +677,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        ReviewFinding[] roundFindings = WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)
+        ReviewFinding[] roundFindings = WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _, task.RequiredRole)
             ? round.Findings.Where(finding => finding.State == ReviewFindingState.Open &&
                                                HasTypedEvidenceRequest(finding)).ToArray()
             : [];
@@ -1135,7 +1135,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.RequiredRole == AgentRole.Tester &&
-            !WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out _))
+            !WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out _, task.RequiredRole))
         {
             // Structured Tester findings are opt-in so existing Tester workers remain compatible.
             // When present they use the same stable-identity ledger as Reviewer findings.
@@ -1143,7 +1143,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         WorkerResultBlockers.TryFindReviewFindingRound(
-            verification, out var submittedRound, out _, out var advisoryRejections, out _);
+            verification, out var submittedRound, out _, out var advisoryRejections, out _, task.RequiredRole);
         foreach (var rejection in advisoryRejections)
         {
             var warning = ReviewFindingParseRejectionNote.BuildAdvisoryWarning(task.RequiredRole, rejection);
@@ -1238,7 +1238,7 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             if (!WorkerResultBlockers.TryFindReviewFindingRound(
-                    verification, out var round, out var parseDiagnostic, out var advisoryRejections, out var formatViolation))
+                    verification, out var round, out var parseDiagnostic, out var advisoryRejections, out var formatViolation, role))
             {
                 if (isCurrentRound)
                 {

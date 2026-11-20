@@ -8,6 +8,97 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsDeferredEvidenceTicks
 {
+    [Fact]
+    public void RestoredLegacyReviewerGoalSchedulesBackgroundAcceptance()
+    {
+        var (kernel, goal) = ReviewGoalWithoutTester();
+        PassVerification(kernel, goal, goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer));
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var at = DateTimeOffset.UnixEpoch;
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var dispatch = new TaskDispatchRecord("codex-cli", "review", root, at,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli);
+            kernel.RecordTaskDispatch(goal.Id, reviewer.Id, dispatch);
+            const string output = """
+                WORKER_RESULT:
+                files: none
+                commands: inspected candidate
+                tests: deferred - AcceptanceTests
+                commit: none
+                blockers: none
+                model_fit: fixture
+                skills: none
+                confidence: high
+                findings: [{"stable_id":"old","state":"open","severity":"advisory","category":"code-quality","location":{"file":"src/Target.cs","region":"Run"},"description":"Clarify the guard."}]
+                touched_anchors: []
+                criteria_verdicts: []
+                verdict: pass
+                END_WORKER_RESULT
+                """;
+            kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id,
+                new TaskVerificationRecord(dispatch.Command, root, 0, output, "", at.AddSeconds(1),
+                    WorkerResultPresent: true, DispatchStartedAt: at, DispatchAttemptAt: at));
+
+            var restoredKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            var restoredGoal = Assert.Single(restoredKernel.Goals);
+            Assert.Equal(GoalStatus.Verified, restoredGoal.Status);
+            Assert.True(AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(restoredGoal));
+
+            const string candidateSha = "1111111111111111111111111111111111111111";
+            const string mainSha = "2222222222222222222222222222222222222222";
+            var launches = 0;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "acceptance-attempts"), TrunkBranchName.Default,
+                isProcessAlive: _ => true, launchOwnedProcess: _ =>
+                {
+                    launches++;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(4242);
+                });
+            var driver = new ConductorDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningPaidWorkerCount: () => 0,
+                createWorkspace: _ => throw new InvalidOperationException("The candidate already has a workspace."),
+                dispatchAndStart: _ => throw new InvalidOperationException("All worker tasks are complete."),
+                startRecordedDispatches: null,
+                buildServerShutdown: null,
+                runAcceptanceVerification: _ => throw new InvalidOperationException("Expected background acceptance."),
+                runAdvisorySemanticAcceptance: null,
+                retryTask: null,
+                recordTaskNote: null,
+                recordCriterionRetryFeedback: null,
+                clearCriterionRetryFeedback: null,
+                rebaseOntoMain: _ => new(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
+                land: (_, _) => throw new InvalidOperationException("Acceptance has not run yet."),
+                afterSuccessfulLanding: null,
+                record: _ => { },
+                cleanup: _ => throw new InvalidOperationException("Acceptance has not run yet."),
+                writeEscalation: (_, _, _) => { },
+                classifyChangeRisk: _ => null,
+                runAcceptanceVerificationWithSlot: (_, _) => throw new InvalidOperationException("Expected background acceptance."),
+                parallelAcceptanceAttemptCoordinator: coordinator,
+                getAcceptanceSlotCount: _ => 1,
+                resolveAcceptanceHeads: _ => (candidateSha, mainSha),
+                getLandingFileScopes: _ => ["src/Target.cs"]);
+
+            Assert.Empty(coordinator.GetUnreconciledAttempts([restoredGoal.Id.Value]));
+            driver.BeginTick();
+            var result = driver.AdvanceOnce(restoredGoal, ConductorAutonomyPolicy.Conservative);
+            Assert.Equal(GoalLifecycleState.Verifying, Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome).State);
+            Assert.Equal(1, launches);
+            var attempt = Assert.Single(coordinator.GetUnreconciledAttempts([restoredGoal.Id.Value]));
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, attempt.Outcome);
+            Assert.Equal(restoredGoal.Id.Value, attempt.GoalId);
+            Assert.Equal(candidateSha, attempt.BranchHeadSha);
+            Assert.Equal(mainSha, attempt.MainHeadSha);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(false, false)]
     [Xunit.InlineData(true, false)]
