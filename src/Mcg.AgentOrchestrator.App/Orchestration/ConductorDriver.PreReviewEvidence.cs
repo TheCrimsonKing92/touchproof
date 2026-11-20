@@ -351,7 +351,7 @@ internal sealed partial class ConductorDriver
                 PreReviewEvidenceDisposition.Green,
                 evidence.Checks,
                 [],
-                evidencePointer);
+                evidencePointer, candidateIdentity: PreReviewEvidenceReceipts.ResolveRecordedCandidateIdentity(_executionDirectory, goal.Id, context.CandidateSha!, _integrationBranch, _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory, attemptDecision.Attempt.EffectiveManifestIdentity), sourceAttemptId: attemptDecision.Attempt.AttemptId);
             return false;
         }
 

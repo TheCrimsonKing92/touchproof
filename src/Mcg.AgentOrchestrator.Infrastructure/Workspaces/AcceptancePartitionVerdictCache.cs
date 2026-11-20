@@ -78,7 +78,8 @@ internal sealed record PartitionVerdictReuseReceipt(
     string SourceAttemptId,
     string CacheKey,
     string ReuseRule = "pair",
-    string? ClosureHash = null);
+    string? ClosureHash = null,
+    IReadOnlyList<string>? SourceEvidencePointers = null);
 
 internal sealed record PartitionVerdictExecutionReceipt(
     string PartitionId,
@@ -103,7 +104,8 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null,
     Func<DisjointLandingFactsRequest, DisjointLandingFacts?>? ResolveDisjointLandingFacts = null,
     IReadOnlyList<string>? MemberGoalIds = null,
-    Action<string>? EmitDiagnostic = null);
+    Action<string>? EmitDiagnostic = null,
+    Func<IReadOnlyList<PreReviewEvidenceReceipt>?>? ResolvePreReviewEvidenceReceipts = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
 {
@@ -139,6 +141,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private AcceptanceLaneFlakeLedger LaneFlakeLedger { get; init; } = null!;
     private string WorktreePath { get; init; } = null!;
     private IReadOnlyList<string>? MemberGoalIds { get; init; }
+    private Func<IReadOnlyList<PreReviewEvidenceReceipt>?>? ResolvePreReviewEvidenceReceipts { get; init; }
     private Func<string, string, string, IReadOnlyList<string>> ResolveChangedFiles { get; init; } = null!;
     private Action<string> EmitDiagnostic { get; init; } = Console.WriteLine;
     private bool _shadowsPending;
@@ -304,6 +307,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
             LaneFlakeLedger = new AcceptanceLaneFlakeLedger(options.WorktreePath),
             WorktreePath = options.WorktreePath,
             MemberGoalIds = options.MemberGoalIds?.ToArray(),
+            ResolvePreReviewEvidenceReceipts = options.ResolvePreReviewEvidenceReceipts,
             ResolveChangedFiles = options.ResolveChangedFiles ?? AcceptanceTestReuseShadow.ResolveChangedFilesFromGit,
             EmitDiagnostic = options.EmitDiagnostic ?? Console.WriteLine,
             DisjointLandingReuse = new AcceptanceDisjointLandingLaneReuse.Session(
@@ -349,6 +353,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
             {
                 if (TryReuseDisjointLanding(check, partitionId, filterHash, cacheKey, closureHash) is { } reused)
                     return reused;
+                if (TryReusePreReviewEvidence(check, partitionId, cacheKey, closureHash) is { } preReview)
+                    return preReview;
                 RecordMiss(partitionId, PartitionVerdictMissReasons.ClosureHashUnavailable);
                 return null;
             }
@@ -356,6 +362,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
             {
                 if (TryReuseDisjointLanding(check, partitionId, filterHash, cacheKey, closureHash) is { } reused)
                     return reused;
+                if (TryReusePreReviewEvidence(check, partitionId, cacheKey, closureHash) is { } preReview)
+                    return preReview;
                 RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForClosure, closureHash,
                     ClosureMissReasonCode(_closureIndex.FindLatestForFilter(filterHash), closureHash));
                 return null;
@@ -385,6 +393,39 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 $"reuse_rule={reuseRule} closure_hash={closureHash ?? "not-applicable"}",
             TestResultPaths: cached.TestResultPaths,
             TestResultAttemptId: cached.AttemptId,
+            TestResultIsExplicitCrossAttemptReuse: true);
+    }
+
+    private AcceptanceCheckResult? TryReusePreReviewEvidence(
+        AcceptanceManifestCheck check, string partitionId, string cacheKey, string? closureHash)
+    {
+        IReadOnlyList<PreReviewEvidenceReceipt>? receipts;
+        try
+        {
+            receipts = ResolvePreReviewEvidenceReceipts?.Invoke();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        if (receipts is not { Count: > 0 } ||
+            AcceptancePreReviewEvidenceCoverage.Match(check, GoalId, CandidateTreeSha, ManifestIdentity, receipts) is not { } match)
+            return null;
+        if (!HasReusableStructuralCoverageEvidence(match.TestResultPaths))
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.MissingStructuralCoverageEvidence, closureHash);
+            return null;
+        }
+
+        const string rule = "pre-review-evidence";
+        var sourceAttempts = string.Join(",", match.AttemptIds);
+        RecordReuse(new PartitionVerdictReuseReceipt(partitionId, sourceAttempts, cacheKey, rule,
+            SourceEvidencePointers: match.EvidencePointers));
+        return new AcceptanceCheckResult(check.Name, true, 0, null,
+            ResultSummary: $"partition-verdict-cache reused source_attempt_id={sourceAttempts} cache_key={cacheKey} " +
+                $"reuse_rule={rule} closure_hash=not-applicable evidence_pointers={string.Join(",", match.EvidencePointers)}",
+            TestResultPaths: match.TestResultPaths, TestResultAttemptId: sourceAttempts,
             TestResultIsExplicitCrossAttemptReuse: true);
     }
 
@@ -1130,16 +1171,21 @@ internal sealed partial class AcceptancePartitionVerdictCache
     }
 
     private bool HasReusableStructuralCoverageEvidence(PartitionVerdictRecord cached) =>
+        HasReusableStructuralCoverageEvidence(cached.TestResultPaths);
+
+    private bool HasReusableStructuralCoverageEvidence(IReadOnlyList<string> paths) =>
         !_enforceStructuralCoverage() ||
-        cached.TestResultPaths is { Count: > 0 } &&
-        cached.TestResultPaths.All(path => AcceptanceBestEffortFileOperations.TryGetFileLength(path) > 0);
+        paths is { Count: > 0 } && paths.All(path => AcceptanceBestEffortFileOperations.TryGetFileLength(path) > 0);
 
     private static string FormatPartitionReuseReceipt(IReadOnlyList<PartitionVerdictReuseReceipt> reused) =>
         reused.Count == 0
             ? "[]"
             : "[" + string.Join("|", reused.Select(receipt =>
                 $"{{partition_id={receipt.PartitionId},source_attempt_id={receipt.SourceAttemptId},cache_key={receipt.CacheKey}," +
-                $"reuse_rule={receipt.ReuseRule},closure_hash={receipt.ClosureHash ?? "not-applicable"}}}")) + "]";
+                $"reuse_rule={receipt.ReuseRule},closure_hash={receipt.ClosureHash ?? "not-applicable"}" +
+                (receipt.SourceEvidencePointers is { Count: > 0 } pointers
+                    ? ",evidence_pointers=" + string.Join(",", pointers.Select(Uri.EscapeDataString))
+                    : "") + "}")) + "]";
 
     private static string FormatPartitionExecutionReceipt(IReadOnlyList<PartitionVerdictExecutionReceipt> executed) =>
         executed.Count == 0
