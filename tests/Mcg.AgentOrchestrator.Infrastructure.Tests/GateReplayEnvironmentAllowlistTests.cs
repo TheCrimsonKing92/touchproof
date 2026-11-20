@@ -2,8 +2,57 @@ using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Collection(TestCollections.EnvMutation)]
 public sealed class GateReplayEnvironmentAllowlistTests
 {
+    [Fact]
+    public void InheritedInputsSurviveGateCompositionButStayOutOfPersistedReplay()
+    {
+        const string sensitiveName = "DOTNET_GATE_REPLAY_TEST_SECRET";
+        const string sensitiveValue = "Bearer synthetic-ambient-gate-replay";
+        const string ordinaryName = "DOTNET_GATE_REPLAY_TEST_MARKER";
+        const string ordinaryValue = "ordinary-ambient-gate-replay";
+
+        var (receipt, json, validation) = Publish(startInfo =>
+        {
+            var previousSensitive = Environment.GetEnvironmentVariable(sensitiveName);
+            var previousOrdinary = Environment.GetEnvironmentVariable(ordinaryName);
+            IDictionary<string, string?> environment;
+            try
+            {
+                Environment.SetEnvironmentVariable(sensitiveName, sensitiveValue);
+                Environment.SetEnvironmentVariable(ordinaryName, ordinaryValue);
+                environment = startInfo.Environment;
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(sensitiveName, previousSensitive);
+                Environment.SetEnvironmentVariable(ordinaryName, previousOrdinary);
+            }
+
+            var root = startInfo.WorkingDirectory;
+            AcceptanceShellProcessStartInfo.ConfigureCheckEnvironment(environment, [startInfo.FileName], root,
+                new AcceptanceProcessRequest
+                {
+                    GateInvocationId = "ambient-replay-fixture",
+                    ChildEnvironmentOverrides = new Dictionary<string, string?> { ["TEMP"] = root, ["TMP"] = root }
+                });
+
+            Assert.Equal(sensitiveValue, environment[sensitiveName]);
+            Assert.Equal(ordinaryValue, environment[ordinaryName]);
+        });
+
+        Assert.Equal(GateReplayDiagnostic.Ready, validation.Diagnostic);
+        var replay = Assert.IsType<GateReplayDescription>(validation.Replay);
+        Assert.False(receipt.Environment.ContainsKey(sensitiveName));
+        Assert.False(receipt.Environment.ContainsKey(ordinaryName));
+        foreach (var excluded in new[] { sensitiveName, sensitiveValue, ordinaryName, ordinaryValue })
+        {
+            Assert.DoesNotContain(excluded, json, StringComparison.Ordinal);
+            Assert.DoesNotContain(excluded, replay.Command, StringComparison.Ordinal);
+        }
+    }
+
     [Theory]
     [InlineData("ghp_", 20)]
     [InlineData("GHO_", 20)]
@@ -74,7 +123,20 @@ public sealed class GateReplayEnvironmentAllowlistTests
         Assert.Null(validation.Replay);
     }
 
-    private static (GateReplayReceipt Receipt, string Json, GateReplayValidationResult Validation) Publish(string name, string value)
+    private static (GateReplayReceipt Receipt, string Json, GateReplayValidationResult Validation) Publish(string name, string value) =>
+        Publish(startInfo =>
+        {
+            startInfo.Environment.Clear();
+            startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = startInfo.WorkingDirectory;
+            startInfo.Environment["TEMP"] = startInfo.WorkingDirectory;
+            startInfo.Environment["TMP"] = startInfo.WorkingDirectory;
+            startInfo.Environment["PATH"] = "ambient-path-sentinel";
+            startInfo.Environment["PROVIDER_API_KEY"] = "ambient-credential-sentinel";
+            startInfo.Environment[name] = value;
+        });
+
+    private static (GateReplayReceipt Receipt, string Json, GateReplayValidationResult Validation) Publish(
+        Action<ProcessStartInfo> configureEnvironment)
     {
         var root = SharedTestSupport.CreateTempDirectory();
         try
@@ -88,13 +150,7 @@ public sealed class GateReplayEnvironmentAllowlistTests
                 WorkingDirectory = root,
                 CreateNoWindow = true
             };
-            startInfo.Environment.Clear();
-            startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
-            startInfo.Environment["TEMP"] = root;
-            startInfo.Environment["TMP"] = root;
-            startInfo.Environment["PATH"] = "ambient-path-sentinel";
-            startInfo.Environment["PROVIDER_API_KEY"] = "ambient-credential-sentinel";
-            startInfo.Environment[name] = value;
+            configureEnvironment(startInfo);
 
             var launch = Assert.IsType<GateReplayReceipt.Launch>(
                 GateReplayReceipt.CaptureLaunch(new() { HeartbeatContext = context }, startInfo, directLaunch: true, [image]));

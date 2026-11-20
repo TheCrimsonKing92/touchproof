@@ -81,13 +81,17 @@ public sealed class GateReplayReceiptTests
             Assert.Equal(root, receipt.WorkingDirectory);
             Assert.Equal(executable, receipt.ExecutablePath);
             Assert.Equal(arguments.Skip(1), receipt.Arguments.AsEnumerable());
-            Assert.Equal(candidateRoot, receipt.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"]);
-            Assert.Equal(root, receipt.Environment["TEMP"]);
-            Assert.Equal(root, receipt.Environment["TMP"]);
-            Assert.Equal(attempt.AttemptId, receipt.Environment[TempRootApparatusLossReceiptStore.GateInvocationIdVariable]);
-            Assert.Equal("true", receipt.Environment["MCG_ACCEPTANCE_CHANGE_SCOPED"]);
-            Assert.Equal(timing, receipt.Environment[LaneSlotTimingReader.VariableName]);
-            Assert.False(receipt.Environment.ContainsKey(TempRootApparatusLossReceiptStore.ReceiptPathVariable));
+            var expectedEnvironment = new Dictionary<string, string>
+            {
+                ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = candidateRoot,
+                ["TEMP"] = root,
+                ["TMP"] = root,
+                [TempRootApparatusLossReceiptStore.GateInvocationIdVariable] = attempt.AttemptId,
+                ["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "true",
+                [LaneSlotTimingReader.VariableName] = timing
+            };
+            var removedName = TempRootApparatusLossReceiptStore.ReceiptPathVariable;
+            Assert.False(receipt.Environment.ContainsKey(removedName));
             Assert.Equal(
                 [
                     new GateReplayArtifact(GateReplayArtifactRole.Stdout, final.StdoutPath!),
@@ -108,9 +112,14 @@ public sealed class GateReplayReceiptTests
                     ]));
             Assert.Equal(GateReplayDiagnostic.Ready, validation.Diagnostic);
             var replay = Assert.IsType<GateReplayDescription>(validation.Replay);
-            Assert.Contains($"['MCG_ORCHESTRATOR_REPOSITORY_ROOT'] = '{candidateRoot.Replace("'", "''")}'",
-                replay.Command, StringComparison.Ordinal);
-            Assert.Contains("['MCG_ACCEPTANCE_CHANGE_SCOPED'] = 'true'", replay.Command, StringComparison.Ordinal);
+            foreach (var (name, value) in expectedEnvironment)
+            {
+                Assert.Equal(value, receipt.Environment[name]);
+                Assert.Contains($"$launch.Environment['{name}'] = '{value.Replace("'", "''", StringComparison.Ordinal)}'",
+                    replay.Command, StringComparison.Ordinal);
+            }
+            Assert.Contains($"[void]$launch.Environment.Remove('{removedName}')", replay.Command, StringComparison.Ordinal);
+            Assert.DoesNotContain($"$launch.Environment['{removedName}']", replay.Command, StringComparison.Ordinal);
         }
         finally
         {
