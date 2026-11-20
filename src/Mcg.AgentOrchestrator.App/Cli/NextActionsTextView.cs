@@ -3,8 +3,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
-
+namespace Mcg.AgentOrchestrator.App.Cli
+{
 internal static class NextActionsTextView
 {
 public static void Print(
@@ -15,7 +15,8 @@ public static void Print(
     GoalHealthReport? health = null,
     GoalOperatorDisposition? conductorDisposition = null,
     Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
-    IClock? diagnosticsClock = null)
+    IClock? diagnosticsClock = null,
+    string? executionDirectory = null)
 {
     var processInspection = new ProcessInspectionSnapshotScope(
         processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation);
@@ -31,7 +32,8 @@ public static void Print(
         goal,
         pendingHumanInputCount: 0,
         verificationSatisfied,
-        commandLineSnapshot: processInspection.Get());
+        commandLineSnapshot: processInspection.Get(),
+        acceptanceGateInFlight: HasLiveReplacementGate(executionDirectory, goal));
     PrintOperatorDisposition(operatorDisposition);
 
     Console.WriteLine("Next actions:");
@@ -67,12 +69,68 @@ public static void Print(
     Console.WriteLine();
 }
 
+internal static bool HasLiveReplacementGate(string? executionDirectory, Goal goal)
+{
+    if (goal.Status != GoalStatus.AcceptanceFailed || string.IsNullOrWhiteSpace(executionDirectory))
+    {
+        return false;
+    }
+
+    try
+    {
+        // Conductor outcomes are appended after Begin but carry the attempt start time.
+        var latest = GoalOperationJournal.ReadLatestActiveEntryInAppendOrder(executionDirectory, goal.Id,
+            entry => entry.GoalId == goal.Id &&
+                (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+                 entry.Operation.Equals("conductor:acceptance", StringComparison.OrdinalIgnoreCase) ||
+                 entry.Operation.Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase)));
+        return latest is { Status: GoalOperationStatus.Begin } &&
+            (goal.LatestAcceptanceFailure is null || latest.At > goal.LatestAcceptanceFailure.OccurredAt);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+    {
+        return false;
+    }
+}
+
 public static void PrintOperatorDisposition(GoalOperatorDisposition disposition)
 {
     var blockers = disposition.Blockers.Count == 0
         ? "none"
         : string.Join(",", disposition.Blockers);
-    Console.WriteLine($"Disposition: state='{disposition.State}' confidence='{disposition.Confidence}' action='{disposition.NextSafeCommand}' blockers='{blockers}' reason='{OutputTextPreview.CreateTimeline(disposition.Reason).Text}' fresh='{disposition.FreshAt:u}'");
+    var failedGate = disposition.Blockers.Contains(AcceptanceFailedRecoveryPolicy.FailedGateBlocker);
+    var reason = failedGate ? OutputTextPreview.Create(disposition.Reason) : OutputTextPreview.CreateTimeline(disposition.Reason);
+    Console.WriteLine($"Disposition: state='{disposition.State}' confidence='{disposition.Confidence}' action='{disposition.NextSafeCommand}' blockers='{blockers}' reason='{reason.Text}' fresh='{disposition.FreshAt:u}'");
+    if (failedGate)
+    {
+        foreach (var pointer in disposition.Evidence.Where(pointer => pointer.Kind is "acceptance-attempt" or "solo-failure-receipt"))
+        {
+            Console.WriteLine($"  {pointer.Kind} {pointer.Path} ({pointer.Detail})");
+        }
+    }
 }
 
+}
+}
+
+namespace Mcg.AgentOrchestrator.App.Orchestration
+{
+    internal static partial class GoalOperationJournal
+    {
+        internal static GoalOperationJournalEntry? ReadLatestActiveEntryInAppendOrder(
+            string executionDirectory,
+            GoalId goalId,
+            Func<GoalOperationJournalEntry, bool> matches)
+        {
+            var path = PathFor(executionDirectory, goalId);
+            // Plain entries are either a full copy of the journal or appends after compression.
+            return ReadLatest(path) ?? ReadLatest(path + ".gz");
+
+            GoalOperationJournalEntry? ReadLatest(string journalPath) =>
+                File.Exists(journalPath)
+                    ? ReadJournalLines(journalPath).Select(line => TryDeserialize(line, out _))
+                        .LastOrDefault(entry => entry is not null && matches(entry))
+                    : null;
+        }
+    }
 }

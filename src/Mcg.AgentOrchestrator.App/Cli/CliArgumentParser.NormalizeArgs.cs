@@ -548,7 +548,8 @@ private static (IReadOnlyList<string> CommandArgs, IReadOnlyList<string> Metadat
         var option = separator > 0 ? token[..separator] : token;
         if (!option.Equals("--idempotency-key", StringComparison.OrdinalIgnoreCase) &&
             !option.Equals("--operator-actor", StringComparison.OrdinalIgnoreCase) &&
-            !option.Equals("--actor-kind", StringComparison.OrdinalIgnoreCase))
+            !option.Equals("--actor-kind", StringComparison.OrdinalIgnoreCase) &&
+            !option.Equals("--driver-session", StringComparison.OrdinalIgnoreCase))
         {
             commandArgs.Add(token);
             continue;
