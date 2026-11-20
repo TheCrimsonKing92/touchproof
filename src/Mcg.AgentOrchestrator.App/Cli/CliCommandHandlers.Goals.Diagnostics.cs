@@ -32,7 +32,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
         goal,
         pendingHumanInputCount: context.Kernel.BuildHumanInputWorklist(goal.Id).OpenCount,
         verificationSatisfied,
-        commandLineSnapshot: processSnapshot);
+        commandLineSnapshot: processSnapshot, acceptanceGateInFlight: NextActionsTextView.HasLiveReplacementGate(context.Workspace.ExecutionDirectory, goal));
     NextActionsTextView.PrintOperatorDisposition(disposition);
 
     Console.WriteLine("Dispatches:");

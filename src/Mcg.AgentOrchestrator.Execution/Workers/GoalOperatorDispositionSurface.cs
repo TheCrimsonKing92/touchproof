@@ -64,7 +64,8 @@ public sealed class GoalOperatorDispositionSurface
         string? executionDirectory = null,
         ProcessCommandLineSnapshot? commandLineSnapshot = null,
         bool skipTerminalDispatchEvaluation = false,
-        bool skipInactiveDispatchEvaluation = false)
+        bool skipInactiveDispatchEvaluation = false,
+        bool acceptanceGateInFlight = false)
     {
         var operationallyTerminal = IsTerminal(goal.Status);
         var dispatches = operationallyTerminal && skipTerminalDispatchEvaluation
@@ -72,6 +73,26 @@ public sealed class GoalOperatorDispositionSurface
             : goal.Tasks.Select(task => EvaluateTask(goal, task, commandLineSnapshot, skipInactiveDispatchEvaluation)).ToList();
         var blockers = new List<string>();
         var evidence = new List<OperatorEvidencePointer>();
+
+        var recovery = AcceptanceFailedRecoveryPolicy.Decide(goal, acceptanceGateInFlight);
+        if (recovery is not null)
+        {
+            blockers.AddRange(recovery.Blockers);
+            if (recovery.Failure is { } failure)
+            {
+                evidence.Add(new("acceptance-failure", goal.Id.Value, recovery.FailureDetails));
+                if (!string.IsNullOrWhiteSpace(failure.AttemptId))
+                {
+                    evidence.Add(new("acceptance-attempt", failure.AttemptId, "latest failed gate attempt"));
+                }
+
+                if (failure.SoloFailureReceipt is { } receipt)
+                {
+                    evidence.Add(new("solo-failure-receipt", receipt.Evidence.Path,
+                        $"sha256={receipt.Evidence.Sha256}, results root={receipt.ResultsRoot}"));
+                }
+            }
+        }
 
         if (operationallyTerminal && pendingHumanInputCount > 0)
         {
@@ -82,23 +103,42 @@ public sealed class GoalOperatorDispositionSurface
                 $"terminal-goal-sweep {goal.Id.Value[..8]}", blockers, evidence, dispatches);
         }
 
+        (string Reason, string NextAction)? holdDisposition = null;
         if (goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded) &&
             OwnerQuestionHoldBlocker.TryRead(goal) is { } hold)
         {
             blockers.Add(hold.State);
             evidence.Add(new OperatorEvidencePointer("goal-hold", hold.Identity,
                 $"started={hold.StartedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}"));
-            return Build(goal, OperatorDispositionState.Blocked, OperatorDispositionConfidence.High,
+            holdDisposition = (
                 $"{hold.State} hold excludes this goal from every conductor walk: {hold.Question}",
-                hold.NextAction, blockers, evidence, dispatches);
+                hold.NextAction);
         }
-
-        if (!operationallyTerminal && goal.CurrentHold?.State == EnvironmentHold.State)
+        else if (!operationallyTerminal && goal.CurrentHold is { State: EnvironmentHold.State } environmentHold)
         {
             blockers.Add(EnvironmentHold.State);
-            evidence.Add(new("goal-hold", goal.CurrentHold.Identity, goal.CurrentHold.Blocker));
+            evidence.Add(new("goal-hold", environmentHold.Identity, environmentHold.Blocker));
+            holdDisposition = (environmentHold.Blocker, AcceptanceFailedRecoveryPolicy.EnvironmentHoldNextAction);
+        }
+
+        if (recovery is not null && acceptanceGateInFlight)
+        {
+            return Build(goal, OperatorDispositionState.Wait, OperatorDispositionConfidence.High,
+                recovery.Reason, recovery.NextSafeCommand, blockers, evidence, dispatches);
+        }
+
+        if (holdDisposition is { } held)
+        {
+            var reason = recovery is null ? held.Reason : $"{recovery.Reason} {held.Reason}";
             return Build(goal, OperatorDispositionState.Blocked, OperatorDispositionConfidence.High,
-                goal.CurrentHold.Blocker, "Restore the contracted tool; the conductor retries automatically.", blockers, evidence, dispatches);
+                reason, held.NextAction, blockers, evidence, dispatches);
+        }
+
+        if (recovery is not null)
+        {
+            var state = recovery.OffersAcceptanceRetry ? OperatorDispositionState.Recover : OperatorDispositionState.Blocked;
+            return Build(goal, state, OperatorDispositionConfidence.High,
+                recovery.Reason, recovery.NextSafeCommand, blockers, evidence, dispatches);
         }
 
         if (TryFindCleanupDebt(goal, executionDirectory, operationallyTerminal, out var cleanupReason, out var cleanupEvidence))
