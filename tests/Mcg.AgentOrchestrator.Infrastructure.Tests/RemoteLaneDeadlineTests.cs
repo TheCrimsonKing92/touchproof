@@ -129,7 +129,7 @@ public sealed class RemoteLaneDeadlineTests
 
         var line = Assert.Single(scenario.Progress, value => value.StartsWith("REMOTE_LANE_POLICY ", StringComparison.Ordinal));
         var remoteField = remote == 600 ? "600" : "600.125";
-        Assert.Equal($"REMOTE_LANE_POLICY lane=\"infrastructure tests: Lane 0\" decision=offer reason=fits L=1000 Ln=0 R={remoteField} Rn=3 F=1000 Fn=0 DeadlineSeconds={deadline} CheckTimeoutSeconds=2400", line);
+        Assert.Equal($"REMOTE_LANE_POLICY lane=\"infrastructure tests: Lane 0\" decision=offer reason=fits L=1000 Ln=0 R={remoteField} Rn=3 F=1000 Fn=0 DeadlineSeconds={deadline} CheckTimeoutSeconds=2400 projectedLocalSeconds=1000 projectedMixedSeconds={remoteField}", line);
     }
 
     private static RemoteLaneOfferDecision Decision(double remote, int localSamples = 0, int remoteSamples = 3) =>

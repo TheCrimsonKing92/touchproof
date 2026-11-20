@@ -94,7 +94,10 @@ public sealed class MtpManagedFilterDiscoveryTests
         {
             Assert.All(group, item => Assert.Equal(group.First().Arguments, item.Arguments));
         }
-        var universe = DiscoverManagedTestCatalog(allowEmpty: false);
+        var discovery = LaunchManagedDiscovery([]);
+        Assert.True(discovery.ExitCode == 0, $"exit={discovery.ExitCode}\n{discovery.Stdout}{discovery.Stderr}");
+        var universe = MtpFilterArgumentSemantics.ReadHostCatalog(discovery.Stdout);
+        Assert.NotEmpty(universe);
         var signatures = cases.Select(item => MtpFilterArgumentSemantics.KindSignature(item.Arguments))
             .Distinct(StringComparer.Ordinal).ToArray();
         var representatives = cases.GroupBy(item => MtpFilterArgumentSemantics.KindSignature(item.Arguments), StringComparer.Ordinal)
@@ -118,10 +121,19 @@ public sealed class MtpManagedFilterDiscoveryTests
         Assert.Contains(representatives, item => item.Signature.Contains("|nested", StringComparison.Ordinal));
         foreach (var representative in representatives)
         {
-            var expectedReal = MtpFilterArgumentSemantics.Select(representative.Arguments, universe)
-                .Select(test => test.Uid).Order(StringComparer.Ordinal);
-            var actualReal = DiscoverManagedTests(allowEmpty: true, representative.Arguments)
-                .Keys.Order(StringComparer.Ordinal);
+            var selected = MtpFilterArgumentSemantics.Select(representative.Arguments, universe);
+            var discovered = DiscoverManagedTests(allowEmpty: true, representative.Arguments);
+            var expectedReal = selected.Select(test => test.Uid).Order(StringComparer.Ordinal).ToArray();
+            var actualReal = discovered.Keys.Order(StringComparer.Ordinal).ToArray();
+            if (!expectedReal.SequenceEqual(actualReal, StringComparer.Ordinal))
+            {
+                var modelOnly = selected.Where(test => !discovered.ContainsKey(test.Uid))
+                    .Select(test => $"{test.Uid} {test.DisplayName}");
+                var hostOnly = actualReal.Except(expectedReal, StringComparer.Ordinal)
+                    .Select(uid => $"{uid} {discovered[uid]}");
+                Assert.Fail($"Filter: {representative.Filter}\nArguments: {string.Join(" ", representative.Arguments)}\n" +
+                    $"Model only:\n{string.Join("\n", modelOnly)}\nHost only:\n{string.Join("\n", hostOnly)}");
+            }
             Assert.Equal(expectedReal, actualReal);
         }
         foreach (var item in cases.Take(configuredCount))

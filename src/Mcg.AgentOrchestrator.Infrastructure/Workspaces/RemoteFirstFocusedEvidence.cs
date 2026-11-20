@@ -319,12 +319,14 @@ internal static class RemoteFirstFocusedEvidence
                 run.Verdict = verdict;
                 reason = verdict is null ? "remote-first-fallback: " + reason : reason;
                 var request = run.Request;
-                var usage = RemoteLaneResourceUsage.TryRead(run.LastStatus());
+                var lastStatus = run.LastStatus();
+                var usage = RemoteLaneResourceUsage.TryRead(lastStatus);
+                var faultOwner = code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
+                    RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ExecutorBusy or
+                    RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.CancelledAfterGrace ? null : "executor";
                 RemoteExecutorHealthLedger.Append(RemoteExecutorHealthLedger.ResolveStorePath(worktreePath), new(clock.GetUtcNow(),
                     request.ExecutorId, request.AttemptId, request.Lane, code,
-                    code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
-                        RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ExecutorBusy or
-                        RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.CancelledAfterGrace ? null : "executor",
+                    RemoteLaneFaultOwner.Resolve(faultOwner, lastStatus, request.AttemptId),
                     new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha, request.MainSha, request.FilterHash, request.ManifestIdentity),
                     result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha, result.MainSha, result.FilterHash, result.ManifestIdentity),
                     reason, GoalId: request.GoalId, RemoteExecutedCount: verdict?.ExecutedTestCount,
