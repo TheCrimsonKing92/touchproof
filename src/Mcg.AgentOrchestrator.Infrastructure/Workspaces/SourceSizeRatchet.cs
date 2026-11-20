@@ -171,7 +171,7 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
             // holds new acceptance/landing work where candidate and terminal evidence meet.
             // Goal 350ad330: exclude multi-repository goals from gate-ready projection before I/O.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 560), // def5cd48: planner conflict probe and existing-policy escalation.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 516), // def5cd48: planner conflict probe and existing-policy escalation.
             // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 345),
