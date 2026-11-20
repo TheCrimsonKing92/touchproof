@@ -258,6 +258,105 @@ public sealed class FocusedReverseDependentLaneSplitterTests
         Assert.Contains("cannot be assigned within the available lane budgets", expansion.FullGateReason);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProjectInventoryResolvesConstantsFromSeparateLaneSourceRoot(bool shareSourceTexts)
+    {
+        var root = Directory.CreateTempSubdirectory("focused-lane-constants-").FullName;
+        try
+        {
+            WriteLaneConstantFixture(root, "Shared");
+            using var cache = AcceptanceTestClassSourceCache.Use(new AcceptanceTestClassSourceCache(null));
+            var sourceTexts = shareSourceTexts ? new SelectionSourceTexts() : null;
+            var focused = Focused("AlphaTests", "BetaTests");
+            var history = new AcceptanceClassDurationHistoryAdapter(new Dictionary<string, double>
+            {
+                ["Tests.AlphaTests"] = 36,
+                ["Tests.BetaTests"] = 36
+            });
+            var layout = new AcceptanceBalancedLaneLayout(5, 1,
+                Pool.Select(lane => new AcceptanceBalancedLanePrediction(lane.Name, 50, [])).ToArray(), "Residual", []);
+            var settings = new AcceptanceGateEngineSettings { Timeouts = new() { DefaultMinutes = 1 } };
+            using var parses = AcceptanceTestClassSourceScanner.CountParsesForTests();
+            var expansion = FocusedReverseDependentLaneSplitter.Resolve([focused], [Broad], Policy,
+                new AcceptanceBalancedLaneExpansion(Pool, layout), settings, root,
+                sourceTexts: sourceTexts, history: history);
+
+            Assert.NotNull(expansion);
+            Assert.Null(expansion.FullGateReason);
+            var shards = Schedule(focused, expansion);
+            Assert.Equal(Pool.Select(lane => $"{FocusedName}: {lane.Name}"), shards.Select(shard => shard.Name));
+            Assert.Equal(new[] { "Tests.AlphaTests", "Tests.BetaTests" },
+                shards.SelectMany(Classes).Order(StringComparer.Ordinal));
+            Assert.Equal(4, parses.Count);
+
+            var inventory = FocusedReverseDependentLaneSplitter.ReadProjectInventory(root, InfrastructureTestsProject, sourceTexts);
+            Assert.Equal(new AcceptanceTestClassDescriptor[]
+            {
+                new("Tests.AlphaTests", "fixture-collection"),
+                new("Tests.BetaTests", null, "fixture-isolation")
+            }, inventory);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectInventoryFaultsWhenCollectionConstantIsDefinedNowhere()
+    {
+        var root = Directory.CreateTempSubdirectory("focused-missing-collection-").FullName;
+        try
+        {
+            WriteLaneConstantFixture(root, "Other");
+            var settings = new AcceptanceGateEngineSettings { Timeouts = new() { DefaultMinutes = 1 } };
+            var error = Assert.Throws<InvalidDataException>(() => FocusedReverseDependentLaneSplitter.Resolve(
+                [Focused("AlphaTests")], [Broad], Policy, new AcceptanceBalancedLaneExpansion(Pool, null), settings, root));
+
+            Assert.Equal("Cannot resolve test collection on 'Tests.AlphaTests'.", error.Message);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
+    private static void WriteLaneConstantFixture(string root, string collectionMember)
+    {
+        const string testSupport = "tests/Mcg.AgentOrchestrator.TestSupport";
+        var projectPath = Path.Combine(root, InfrastructureTestsProject);
+        var projectDirectory = Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!).FullName;
+        var supportDirectory = Directory.CreateDirectory(Path.Combine(root, testSupport)).FullName;
+        var configDirectory = Directory.CreateDirectory(Path.Combine(root, "config")).FullName;
+        File.WriteAllText(Path.Combine(configDirectory, "acceptance-manifest.json"), $$"""
+            { "engine": { "laneTestSourceRoots": [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests", "{{testSupport}}"
+            ] } }
+            """);
+        File.WriteAllText(projectPath, """<Project Sdk="Microsoft.NET.Sdk" />""");
+        File.WriteAllText(Path.Combine(projectDirectory, "AlphaTests.cs"), """
+            namespace Tests;
+            [Xunit.Collection(TestCollections.Shared)]
+            public class AlphaTests { [Fact] public void Case() { } }
+            """);
+        File.WriteAllText(Path.Combine(projectDirectory, "BetaTests.cs"), """
+            namespace Tests;
+            [Xunit.Trait("Isolation", TestIsolation.Host)]
+            public class BetaTests { [Fact] public void Case() { } }
+            """);
+        File.WriteAllText(Path.Combine(supportDirectory, "TestConstants.cs"), $$"""
+            public static class TestCollections { public const string {{collectionMember}} = "fixture-collection"; }
+            public static class TestIsolation { public const string Host = "fixture-isolation"; }
+            """);
+        File.WriteAllText(Path.Combine(supportDirectory, "AlphaTestsOther.cs"), """
+            namespace Tests;
+            [Xunit.Collection(TestCollections.Undefined)]
+            public class AlphaTestsOther { [Fact] public void Case() { } }
+            """);
+    }
+
     private static void AssertFullGate(
         Check focused, IClassDurationHistory history, IReadOnlyDictionary<string, double>? occupied, params string[] reasonParts)
     {
