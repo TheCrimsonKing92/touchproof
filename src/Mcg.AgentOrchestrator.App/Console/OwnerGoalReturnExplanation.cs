@@ -25,7 +25,7 @@ internal static class OwnerGoalReturnExplanation
             .OrderByDescending(item => item.RecordedAt).FirstOrDefault();
         // The shared parser can fall back to a log; restrict it to retained goal state.
         var retainedCheck = check with { StandardOutputPath = null };
-        var findings = (WorkerResultBlockers.TryFindReviewFindingRound(retainedCheck, out var round, out _, previous.RequiredRole)
+        var findings = (WorkerResultBlockers.TryFindReviewFindingRound(retainedCheck, out var round, out _)
                 ? round.Findings : [])
             .Concat(check.MergedReviewFindings ?? [])
             .Where(finding => finding.State == ReviewFindingState.Open).ToArray();

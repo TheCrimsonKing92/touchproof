@@ -20,8 +20,6 @@ public sealed class AgentOutputDirectivesTests
             line =>
                 line.StartsWith("findings:", StringComparison.Ordinal) &&
                 line.Contains("severity:blocking|advisory", StringComparison.Ordinal) &&
-                line.Contains("class_id:none|dispositive-misclassification", StringComparison.Ordinal) &&
-                line.Contains("Reviewer findings require class_id and a registered blocking class cannot be advisory", StringComparison.Ordinal) &&
                 line.Contains("severity is required", StringComparison.Ordinal));
         Assert.Contains(
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),

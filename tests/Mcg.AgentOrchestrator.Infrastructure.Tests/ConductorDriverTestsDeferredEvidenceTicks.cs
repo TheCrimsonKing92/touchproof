@@ -34,7 +34,7 @@ public sealed class ConductorDriverTestsDeferredEvidenceTicks
             tests: not-run - modeled read-only reviewer
             commit: none
             blockers: Full acceptance evidence is pending at its owner.
-            findings: [{"stable_id":"missing-full-gate","state":"open","class_id":"none","location":{"file":"config/acceptance-manifest.json","region":"full-gate"},"description":"The acceptance executor has not produced its receipt.","severity":"blocking","category":"acceptance-owned"}]
+            findings: [{"stable_id":"missing-full-gate","state":"open","location":{"file":"config/acceptance-manifest.json","region":"full-gate"},"description":"The acceptance executor has not produced its receipt.","severity":"blocking","category":"acceptance-owned"}]
             touched_anchors: []
             criteria_verdicts: [{"criterion_index":0,"verdict":"not-verifiable","evidence":"Acceptance executor owns this receipt"},{"criterion_index":1,"verdict":"not-verifiable","evidence":"Operator owns native observation"}]
             verdict: needs-work

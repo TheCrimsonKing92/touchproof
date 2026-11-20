@@ -30,8 +30,8 @@ internal sealed partial class ConductorDriver
                 !ConductorGitRevisionReader.IsValid(deliveredCandidate)) continue;
 
             var verification = requester.VerificationHistory.LastOrDefault(record =>
-                WorkerResultBlockers.TryFindReviewFindingRound(record, out _, out _, requester.RequiredRole));
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _, requester.RequiredRole)) continue;
+                WorkerResultBlockers.TryFindReviewFindingRound(record, out _, out _));
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)) continue;
             var blockers = ReviewFindings.GetOpenBlockingFindings(
                 verification?.MergedReviewFindings is { Count: > 0 } merged ? merged : round.Findings,
                 goal.EffectiveAcceptanceCriteriaCorrections);

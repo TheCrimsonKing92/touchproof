@@ -2092,7 +2092,7 @@ public sealed class ProgressiveReviewGlanceTests
             model_fit: fixture - adequate
             skills: none
             confidence: high
-            findings: [{"stable_id":"criterion-b-missing","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"src/Feature.cs","region":"CriterionB"},"description":"Acceptance criterion B remains unimplemented."}]
+            findings: [{"stable_id":"criterion-b-missing","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/Feature.cs","region":"CriterionB"},"description":"Acceptance criterion B remains unimplemented."}]
             touched_anchors: []
             criteria_verdicts: []
             verdict: needs-work

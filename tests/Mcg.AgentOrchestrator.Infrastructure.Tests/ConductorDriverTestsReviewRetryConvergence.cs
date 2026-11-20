@@ -266,7 +266,7 @@ public sealed class ConductorDriverTestsReviewRetryConvergence
             "commands: review",
             "tests: pass - inspected evidence",
             "blockers: none",
-            """findings: [{"stable_id":"F-OPEN","state":"open","class_id":"none","location":{"file":"src/Test.cs","region":"Test.Run","hunk":"guard"},"description":"Developer must restore the guard."}]""",
+            """findings: [{"stable_id":"F-OPEN","state":"open","location":{"file":"src/Test.cs","region":"Test.Run","hunk":"guard"},"description":"Developer must restore the guard."}]""",
             "touched_anchors: []",
             "verdict: needs-work",
             "END_WORKER_RESULT");
@@ -316,7 +316,7 @@ public sealed class ConductorDriverTestsReviewRetryConvergence
             "commands: review",
             "tests: pass - inspected evidence",
             "blockers: focused receipt is missing",
-            """findings: [{"stable_id":"F-TEST","state":"open","class_id":"none","severity":"blocking","category":"test-evidence","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt is missing.","evidence_request":{"selections":[]}}]""",
+            """findings: [{"stable_id":"F-TEST","state":"open","severity":"blocking","category":"test-evidence","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt is missing.","evidence_request":{"selections":[]}}]""",
             "touched_anchors: []",
             "verdict: needs-work",
             "END_WORKER_RESULT");

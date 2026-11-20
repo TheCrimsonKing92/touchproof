@@ -1492,7 +1492,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
         var round1 = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]""",
+            """[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 1, round1, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -1530,7 +1530,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
         var open = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-CAP","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -1547,7 +1547,7 @@ public sealed class DispatchExecutionTests
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var claimedResolved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"F-CAP","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1579,7 +1579,7 @@ public sealed class DispatchExecutionTests
             1,
             StructuredReviewerResult(
                 "needs-work",
-                """[{"stable_id":"F-CAP","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"},{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"},{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
                 "Missing guard."),
             string.Empty,
             clock.UtcNow,
@@ -1601,7 +1601,7 @@ public sealed class DispatchExecutionTests
             0,
             StructuredReviewerResult(
                 "pass",
-                """[{"stable_id":"F-CAP","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"},{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/C.cs","region":"C.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"},{"stable_id":"A-1","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
                 "none"),
             string.Empty,
             clock.UtcNow,
@@ -1640,7 +1640,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
         var open = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-CAP","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -1657,7 +1657,7 @@ public sealed class DispatchExecutionTests
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var claimedResolved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"F-CAP","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -1703,7 +1703,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
         var open = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-LEGACY-CAP","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-LEGACY-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -1719,7 +1719,7 @@ public sealed class DispatchExecutionTests
             ReviewFindingTouchedAnchors: []));
         var claimedResolved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"F-LEGACY-CAP","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-LEGACY-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1749,7 +1749,7 @@ public sealed class DispatchExecutionTests
             ReviewRetryCap: new ReviewRetryCapReceipt(6, 7)));
         var blocked = StructuredReviewerResult(
             "blocked-at-cap",
-            """[{"stable_id":"F-EARLY-CAP","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-EARLY-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"}]""",
             "F-EARLY-CAP - Missing guard.");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1776,7 +1776,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
         var open = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-CAP","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -1793,7 +1793,7 @@ public sealed class DispatchExecutionTests
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var resolved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"F-CAP","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1823,7 +1823,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
         var open = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-WAIVE","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking","category":"spec-compliance"}]""",
+            """[{"stable_id":"F-WAIVE","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking","category":"spec-compliance"}]""",
             "Missing guard.",
             """[{"criterion_index":0,"verdict":"not-met","evidence":"src/A.cs:10"}]""");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1841,7 +1841,7 @@ public sealed class DispatchExecutionTests
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var waivedPass = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"F-WAIVE","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking","category":"spec-compliance"}]""",
+            """[{"stable_id":"F-WAIVE","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking","category":"spec-compliance"}]""",
             "none",
             """[{"criterion_index":0,"verdict":"not-met","evidence":"Explicit operator waiver recorded."}]""");
 
@@ -1939,7 +1939,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-needs-work", "C:\\repo", clock.UtcNow));
         var needsWork = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-CRITERION","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Guard is missing.","severity":"blocking"}]""",
+            """[{"stable_id":"F-CRITERION","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Guard is missing.","severity":"blocking"}]""",
             "F-CRITERION - Guard is missing.",
             """[{"criterion_index":0,"verdict":"not-met","evidence":"src/A.cs has no guard."}]""");
 
@@ -2018,7 +2018,7 @@ public sealed class DispatchExecutionTests
 
         var result = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"acceptance-core-tests-not-dispositioned","state":"open","class_id":"none","location":{"file":"config/acceptance-manifest.json","region":"full-core"},"description":"Current candidate has no full-core receipt.","severity":"blocking","category":"acceptance-owned"}]""",
+            """[{"stable_id":"acceptance-core-tests-not-dispositioned","state":"open","location":{"file":"config/acceptance-manifest.json","region":"full-core"},"description":"Current candidate has no full-core receipt.","severity":"blocking","category":"acceptance-owned"}]""",
             "Acceptance evidence is pending for the authoritative full-gate obligation.",
             role == AgentRole.Reviewer
                 ? """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"The acceptance owner must run acceptance:full-core."}]"""
@@ -2292,7 +2292,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
         var round1 = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."}]""",
+            """[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."}]""",
             "Missing guard.");
         var firstDispatchAt = reviewer.LastDispatch!.DispatchedAt;
         // Keep completion timestamps equal while giving each dispatch its own identity.
@@ -2340,7 +2340,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review", "C:\\repo", clock.UtcNow));
         var result = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Consider simplifying this branch.","severity":"advisory"},{"stable_id":"A-2","state":"resolved","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"Resolved advisory.","severity":"advisory"},{"stable_id":"A-3","state":"open","class_id":"none","location":{"file":"src/C.cs","region":"C.Run"},"description":"Obsolete readability suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Consider simplifying this branch.","severity":"advisory"},{"stable_id":"A-2","state":"resolved","location":{"file":"src/B.cs","region":"B.Run"},"description":"Resolved advisory.","severity":"advisory"},{"stable_id":"A-3","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Obsolete readability suggestion.","severity":"advisory"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -2351,7 +2351,6 @@ public sealed class DispatchExecutionTests
         var advisory = Assert.Single(kernel.GetOpenAdvisoryReviewFindings(goal.Id));
         Assert.Equal("A-1", advisory.StableId);
         Assert.Equal(FindingSeverity.Advisory, advisory.Severity);
-        Assert.Equal(FindingClass.None, advisory.ClassId);
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
         Assert.Equal("A-1", Assert.Single(restored.GetOpenAdvisoryReviewFindings(goal.Id)).StableId);
@@ -2375,7 +2374,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review", "C:\\repo", clock.UtcNow));
         var result = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Suggestion 1.","severity":"advisory"},{"stable_id":"A-2","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"Suggestion 2.","severity":"advisory"},{"stable_id":"A-3","state":"open","class_id":"none","location":{"file":"src/C.cs","region":"C.Run"},"description":"Suggestion 3.","severity":"advisory"},{"stable_id":"A-4","state":"open","class_id":"none","location":{"file":"src/D.cs","region":"D.Run"},"description":"Suggestion 4.","severity":"advisory"},{"stable_id":"A-5","state":"open","class_id":"none","location":{"file":"src/E.cs","region":"E.Run"},"description":"Suggestion 5.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Suggestion 1.","severity":"advisory"},{"stable_id":"A-2","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Suggestion 2.","severity":"advisory"},{"stable_id":"A-3","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Suggestion 3.","severity":"advisory"},{"stable_id":"A-4","state":"open","location":{"file":"src/D.cs","region":"D.Run"},"description":"Suggestion 4.","severity":"advisory"},{"stable_id":"A-5","state":"open","location":{"file":"src/E.cs","region":"E.Run"},"description":"Suggestion 5.","severity":"advisory"}]""",
             "none",
             """[{"criterion_index":0,"verdict":"met","evidence":"src/A.cs:1"},{"criterion_index":1,"verdict":"met","evidence":"src/B.cs:2"},{"criterion_index":2,"verdict":"met","evidence":"src/C.cs:3"},{"criterion_index":3,"verdict":"met","evidence":"src/D.cs:4"},{"criterion_index":4,"verdict":"met","evidence":"src/E.cs:5"}]""");
 
@@ -2403,7 +2402,7 @@ public sealed class DispatchExecutionTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, "same-commit");
         var accepted = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -2415,7 +2414,7 @@ public sealed class DispatchExecutionTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, "same-commit");
         var moved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","class_id":"none","location":{"file":"src/C.cs","region":"C.Run"},"description":"Second suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Second suggestion.","severity":"advisory"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -2462,7 +2461,7 @@ public sealed class DispatchExecutionTests
             0,
             StructuredReviewerResult(
                 "pass",
-                """[{"stable_id":"A-1","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Resolved suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"A-1","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Resolved suggestion.","severity":"advisory"}]""",
                 "none"),
             string.Empty,
             clock.UtcNow,
@@ -2479,7 +2478,7 @@ public sealed class DispatchExecutionTests
             0,
             StructuredReviewerResult(
                 "pass",
-                """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Reopened suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Reopened suggestion.","severity":"advisory"}]""",
                 "none"),
             string.Empty,
             clock.UtcNow,
@@ -2518,7 +2517,7 @@ public sealed class DispatchExecutionTests
             0,
             StructuredReviewerResult(
                 "pass",
-                """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Open suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"resolved","class_id":"none","location":{"file":"src/C.cs","region":"C.Run"},"description":"Resolved suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Open suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"resolved","location":{"file":"src/C.cs","region":"C.Run"},"description":"Resolved suggestion.","severity":"advisory"}]""",
                 "none"),
             string.Empty,
             clock.UtcNow,
@@ -2535,7 +2534,7 @@ public sealed class DispatchExecutionTests
             0,
             StructuredReviewerResult(
                 "pass",
-                """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"Moved suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","class_id":"none","location":{"file":"src/C.cs","region":"C.Run"},"description":"Reopened suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Moved suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Reopened suggestion.","severity":"advisory"}]""",
                 "none"),
             string.Empty,
             clock.UtcNow,
@@ -2584,7 +2583,7 @@ public sealed class DispatchExecutionTests
             0,
             StructuredReviewerResult(
                 "pass",
-                """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
                 "none"),
             string.Empty,
             clock.UtcNow,
@@ -2601,7 +2600,7 @@ public sealed class DispatchExecutionTests
             0,
             StructuredReviewerResult(
                 "pass",
-                """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","class_id":"none","location":{"file":"src/C.cs","region":"C.Run"},"description":"Second suggestion.","severity":"advisory"}]""",
+                """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Second suggestion.","severity":"advisory"}]""",
                 "none"),
             string.Empty,
             clock.UtcNow,
@@ -2647,7 +2646,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
         var accepted = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -2658,7 +2657,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
         var resolved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-NEW","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion resolved.","severity":"advisory"}]""",
+            """[{"stable_id":"A-NEW","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion resolved.","severity":"advisory"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -2686,7 +2685,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
         var accepted = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
@@ -2730,7 +2729,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review", "C:\\repo", clock.UtcNow));
         var result = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"B-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Correctness defect.","severity":"blocking"},{"stable_id":"A-1","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"B-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Correctness defect.","severity":"blocking"},{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -2759,7 +2758,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review", "C:\\repo", clock.UtcNow));
         var result = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"W-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing full Infrastructure suite before review.","severity":"blocking"}]""",
+            """[{"stable_id":"W-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing full Infrastructure suite before review.","severity":"blocking"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -2807,7 +2806,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review", "C:\\repo", clock.UtcNow));
         var result = StructuredReviewerResult(
             verdict,
-            """[{"stable_id":"F-open","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]""",
+            """[{"stable_id":"F-open","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -2879,7 +2878,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "prior-commit"));
         var firstRound = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-A","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Original issue.","severity":"blocking"}]""",
+            """[{"stable_id":"F-A","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Original issue.","severity":"blocking"}]""",
             "F-A - Original issue.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1",
@@ -2901,7 +2900,7 @@ public sealed class DispatchExecutionTests
             ReviewFindingTouchedAnchors: [anchor]));
         var secondRound = StructuredReviewerResult(
             "needs-work",
-            """[{"stable_id":"F-A","state":"resolved","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Original issue resolved.","severity":"blocking"},{"stable_id":"F-B","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Different issue at the same anchor.","severity":"blocking"}]""",
+            """[{"stable_id":"F-A","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Original issue resolved.","severity":"blocking"},{"stable_id":"F-B","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Different issue at the same anchor.","severity":"blocking"}]""",
             "F-B - Different issue at the same anchor.");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -3402,7 +3401,7 @@ private static string WorkerResultStdout(string files, string tests, string bloc
         "commit: none",
         $"blockers: {blockers}",
         hasBlocker
-            ? """findings: [{"stable_id":"test-review-finding","state":"open","class_id":"none","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Reviewer blocker."}]"""
+            ? """findings: [{"stable_id":"test-review-finding","state":"open","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Reviewer blocker."}]"""
             : "findings: []",
         "touched_anchors: []",
         "criteria_verdicts: []",

@@ -2411,7 +2411,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
             Environment.NewLine,
             "WORKER_RESULT:",
             "blockers: exact-blocker - focused receipt required",
-            """findings: [{"stable_id":"truncated-finding","state":"open","class_id":"none","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt required.","evidence_request":{"selections":[{"test_project":"Core.Tests","test_class":"GoalLifecycleTests"}]}}]""",
+            """findings: [{"stable_id":"truncated-finding","state":"open","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt required.","evidence_request":{"selections":[{"test_project":"Core.Tests","test_class":"GoalLifecycleTests"}]}}]""",
             "touched_anchors: []",
             "END_WORKER_RESULT");
         kernel.RecordDispatchExecutionResult(
@@ -2471,7 +2471,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
                 "tests: pass - deterministic fixture",
                 "commit: none",
                 "blockers: exact-blocker - focused receipt required",
-                $"findings: [{{\"stable_id\":\"{stableId}\",\"state\":\"open\",\"class_id\":\"none\",\"location\":{{\"file\":\"tests/Test.cs\",\"region\":\"Test.Run\",\"hunk\":\"focused\"}},\"description\":\"Focused receipt required.\"{request}}}]",
+                $"findings: [{{\"stable_id\":\"{stableId}\",\"state\":\"open\",\"location\":{{\"file\":\"tests/Test.cs\",\"region\":\"Test.Run\",\"hunk\":\"focused\"}},\"description\":\"Focused receipt required.\"{request}}}]",
                 "touched_anchors: []",
                 "criteria_verdicts: []",
                 "verdict: needs-work",

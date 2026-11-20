@@ -2014,7 +2014,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         tests: fail - retry requested for unrelated operator feedback
         commit: none
         blockers: retry requested for unrelated operator feedback
-        findings: [{"stable_id":"F-RETRY","state":"open","class_id":"none","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Retry requested for unrelated operator feedback."}]
+        findings: [{"stable_id":"F-RETRY","state":"open","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Retry requested for unrelated operator feedback."}]
         touched_anchors: []
         criteria_verdicts: []
         verdict: needs-work
