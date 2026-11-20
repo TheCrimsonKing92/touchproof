@@ -31,6 +31,7 @@ public sealed class CanaryTaskDrainTests(ITestOutputHelper output) : ConductorBa
             Assert.Equal("CANARY_GATE result=drain-bound-hit pending=2 boundSeconds=2.5", Assert.Single(progress));
 
             firstWork.SetResult();
+            // test-design-discipline: allow-negative-wait - The manual clock already expired the shared deadline, and the watchdog throws if the wait fails to return.
             Assert.False(await Task.Run(() => drain.Wait(snapshot)).WaitAsync(Watchdog));
             Assert.Equal(2, progress.Count);
             Assert.Equal("CANARY_GATE result=drain-bound-hit pending=1 boundSeconds=2.5", progress.Last());
