@@ -85,8 +85,8 @@ internal static class BriefPlannedTestLaneReadiness
                 var path = match.Value.Replace('\\', '/');
                 if (path.Split('/').Any(part => part is "." or ".." or "bin" or "obj") ||
                     File.Exists(Path.Combine(root, path))) continue;
-                var name = Path.GetFileNameWithoutExtension(path);
-                if (Regex.IsMatch(name, @"^[A-Za-z_]\w*$", RegexOptions.CultureInvariant))
+                var name = TestIdentityFilenameAssumption.GetClassNameCandidate(path);
+                if (name is not null && Regex.IsMatch(name, @"^[A-Za-z_]\w*$", RegexOptions.CultureInvariant))
                     result.TryAdd(name, PlacementFor(match, name));
             }
             foreach (Match match in Regex.Matches(line, NewClass, Options))

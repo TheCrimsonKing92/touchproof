@@ -11,7 +11,8 @@ public sealed record HumanInputDirective(
     PlannerEvidenceStoreReference? StoreReference = null,
     IReadOnlyList<string>? TestNames = null,
     PlannerEvidencePayload? PlannerEvidence = null,
-    int? AmendmentCriterionIndex = null);
+    int? AmendmentCriterionIndex = null,
+    string? AmendmentProposedText = null);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {

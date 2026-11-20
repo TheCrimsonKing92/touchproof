@@ -1833,7 +1833,7 @@ public sealed partial class AgentOrchestratorKernel
         string? evidenceOwner = null,
         PlannerEvidenceStoreReference? storeReference = null,
         IReadOnlyList<string>? testNames = null, PlannerEvidenceIdentity? plannerIdentity = null, PlannerEvidencePayload? plannerEvidence = null,
-        int? amendmentCriterionIndex = null)
+        int? amendmentCriterionIndex = null, string? amendmentProposedText = null)
     {
         var registrar = new HumanInputRequestRegistrar(_humanInputRequestLock, _humanInputRequests, _clock,
             EnsureGoalCanResumeWork, HoldTaskForExistingHumanInput, ResetAnsweredHumanInputSuppressionStreaks,
@@ -1842,7 +1842,7 @@ public sealed partial class AgentOrchestratorKernel
         return registrar.Request(GetGoal(goalId), taskId, question, kind, isAutoDefaultable, isDismissible,
             isAnswerRequired, isExternallyBlocked, suggestedDefaultAnswer, resumeCommand, questionFingerprint,
             blockerFingerprint, completedRound, workerResultLogReference, recordDuplicateSuppression,
-            evidenceOwner, storeReference, testNames, plannerIdentity, plannerEvidence, amendmentCriterionIndex);
+            evidenceOwner, storeReference, testNames, plannerIdentity, plannerEvidence, amendmentCriterionIndex, amendmentProposedText);
     }
 
     private void AppendContradictoryRecordAdvisoryIfNeeded(Goal goal, HumanInputRequest request) =>
@@ -1918,10 +1918,12 @@ public sealed partial class AgentOrchestratorKernel
         lock (_humanInputRequestLock)
         {
             var request = HumanInputSubmission.GetPendingRequest(_humanInputRequests, requestId);
-            ValidateAmendmentDisposition(request, amendmentDisposition);
+            PlannerBriefAmendmentAnswer.ValidateDisposition(request, amendmentDisposition);
             var goal = GetGoal(request.GoalId);
             if (!PlannerHumanInputAnswerAuthorization.IsAuthorized(request, goal, origin, supersedeSiblings, isAutoDefaulted, hasCurrentSelectorlessGateReceipt))
                 throw new UnauthorizedAccessException("Typed Planner human-input evidence requires an authorized explicit Operator answer.");
+            if (amendmentDisposition == PlannerBriefAmendmentDisposition.Accept)
+                PlannerBriefAmendmentAnswer.Apply(this, goal, request, answer, origin);
             var answeredAt = _clock.UtcNow;
             if (HumanInputSubmission.TryCompleteGateEvidence(request, goal, answer, answeredAt,
                     gatedDeliverableIds, origin, supersedeSiblings, _eventWriter, () => RefreshGoalStatus(goal)))
@@ -2001,11 +2003,10 @@ public sealed partial class AgentOrchestratorKernel
                     $"Human input request '{requestId}' was not found on goal '{goal.Id.Value}'.");
             }
 
-            ValidateAmendmentDisposition(request, amendmentDisposition);
+            PlannerBriefAmendmentAnswer.ValidateDisposition(request, amendmentDisposition);
             var previousAnswer = request.AuthoritativeAnswer
                 ?? throw new InvalidOperationException(
                     $"Human input request '{requestId}' has no answered clarification to supersede.");
-            var supersededAt = _clock.UtcNow;
             var matchingRequests = _humanInputRequests.Values
                 .Where(candidate =>
                     candidate.GoalId == goal.Id &&
@@ -2040,6 +2041,9 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(candidate => candidate.TaskId is not null)
                 .Select(candidate => candidate.TaskId!)
                 .ToArray();
+            if (amendmentDisposition == PlannerBriefAmendmentDisposition.Accept)
+                PlannerBriefAmendmentAnswer.Apply(this, goal, request, replacementAnswer, origin);
+            var supersededAt = _clock.UtcNow;
             var replacement = request.Supersede(
                 replacementAnswer,
                 supersededAt,
@@ -2212,14 +2216,6 @@ public sealed partial class AgentOrchestratorKernel
             ? $"Human input resolved; returned task to Assigned for redispatch; abandoned unstarted dispatch {refusedDispatch.LinkedDispatchAt:O} whose start retry admission refused."
             : $"Human input resolved; restored task status to {restoredStatus}.";
         Append(goal, task.Id, ProgressKind.TaskUpdated, message);
-    }
-
-    private static void ValidateAmendmentDisposition(HumanInputRequest request, PlannerBriefAmendmentDisposition? disposition)
-    {
-        if (disposition is not null && (request.Amendment is null || request.Kind != HumanWaitKind.PlannerBriefAmendment))
-            throw new ArgumentException("--amendment requires a request carrying a Planner brief amendment payload.");
-        if (disposition is not null && disposition != PlannerBriefAmendmentDisposition.Decline)
-            throw new ArgumentException("--amendment accepts only decline.");
     }
 
     private bool RouteAnsweredPlannerBriefAmendment(Goal goal, TaskSpec task, out bool pending)
