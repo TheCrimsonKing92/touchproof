@@ -109,6 +109,96 @@ public sealed class SourceBacklogClaimStore(string databasePath)
     public GoalReplacementAuditSnapshot? FindAudit(Guid requestId) =>
         WithReadConnection(connection => ReadAudit(connection, requestId));
 
+    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/SourceBacklogClaimStore.cs")]
+    internal SourceBacklogContinuationLineage? TransferContinuation(
+        SourceBacklogClaimSnapshot expected, string successorGoalId)
+    {
+        SourceBacklogContinuationLineage? result = null;
+        WithWriteConnection(connection =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            using var update = connection.CreateCommand();
+            update.CommandText = """
+                UPDATE source_backlog_claims
+                SET owner_goal_id = $successor, version = version + 1, updated_at = $time
+                WHERE backlog_item_id = $item AND owner_goal_id = $predecessor
+                  AND version = $version AND coverage = 'Slice'
+                """;
+            update.Parameters.AddWithValue("$item", expected.BacklogItemId);
+            update.Parameters.AddWithValue("$predecessor", expected.OwnerGoalId);
+            update.Parameters.AddWithValue("$successor", successorGoalId);
+            update.Parameters.AddWithValue("$version", expected.Version);
+            update.Parameters.AddWithValue("$time", now.ToString("O", CultureInfo.InvariantCulture));
+            if (update.ExecuteNonQuery() != 1)
+                return;
+
+            using var insert = connection.CreateCommand();
+            insert.CommandText = """
+                CREATE TABLE IF NOT EXISTS source_backlog_continuation_lineage (
+                    backlog_item_id TEXT NOT NULL,
+                    predecessor_goal_id TEXT NOT NULL,
+                    successor_goal_id TEXT NOT NULL UNIQUE,
+                    claim_version_before INTEGER NOT NULL,
+                    claim_version_after INTEGER NOT NULL,
+                    transferred_at TEXT NOT NULL,
+                    PRIMARY KEY (backlog_item_id, claim_version_after)
+                );
+                INSERT INTO source_backlog_continuation_lineage
+                    (backlog_item_id, predecessor_goal_id, successor_goal_id,
+                     claim_version_before, claim_version_after, transferred_at)
+                VALUES ($item, $predecessor, $successor, $version, $version + 1, $time);
+                """;
+            foreach (SqliteParameter parameter in update.Parameters)
+                insert.Parameters.AddWithValue(parameter.ParameterName, parameter.Value!);
+            insert.ExecuteNonQuery();
+            result = new(expected.BacklogItemId, expected.OwnerGoalId, successorGoalId,
+                expected.Version, expected.Version + 1, now);
+        });
+        return result;
+    }
+
+    public IReadOnlyList<SourceBacklogContinuationLineage> ListContinuationLineage(string backlogItemId) =>
+        ReadContinuationLineage(backlogItemId, claimVersionAfter: null);
+
+    internal SourceBacklogContinuationLineage? FindContinuationLineage(SourceBacklogClaimSnapshot claim) =>
+        ReadContinuationLineage(claim.BacklogItemId, claim.Version)
+            .SingleOrDefault(row => row.SuccessorGoalId == claim.OwnerGoalId);
+
+    private IReadOnlyList<SourceBacklogContinuationLineage> ReadContinuationLineage(
+        string backlogItemId, long? claimVersionAfter)
+    {
+        if (!File.Exists(_databasePath))
+            return [];
+        return WithReadConnection<IReadOnlyList<SourceBacklogContinuationLineage>>(connection =>
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT 1 FROM sqlite_schema WHERE name = 'source_backlog_continuation_lineage' AND type = 'table'
+                """;
+            if (command.ExecuteScalar() is null)
+                return [];
+            command.CommandText = """
+                SELECT predecessor_goal_id, successor_goal_id, claim_version_before,
+                       claim_version_after, transferred_at
+                FROM source_backlog_continuation_lineage
+                WHERE backlog_item_id = $item
+                """;
+            command.Parameters.AddWithValue("$item", backlogItemId);
+            if (claimVersionAfter is long version)
+            {
+                command.CommandText += " AND claim_version_after = $version";
+                command.Parameters.AddWithValue("$version", version);
+            }
+            command.CommandText += " ORDER BY claim_version_after";
+            using var reader = command.ExecuteReader();
+            var rows = new List<SourceBacklogContinuationLineage>();
+            while (reader.Read())
+                rows.Add(new(backlogItemId, reader.GetString(0), reader.GetString(1),
+                    reader.GetInt64(2), reader.GetInt64(3), ParseDate(reader.GetString(4))));
+            return rows;
+        });
+    }
+
     public GoalReplacementAuditSnapshot? FindAuditInCurrentTransaction(Guid requestId)
     {
         GoalReplacementAuditSnapshot? result = null;

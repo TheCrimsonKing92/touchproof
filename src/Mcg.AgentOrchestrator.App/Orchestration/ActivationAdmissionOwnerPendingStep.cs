@@ -6,5 +6,6 @@ internal enum ActivationAdmissionOwnerPendingStep
     SurvivorsGate,
     Attribution,
     FocusedPartition,
-    PassedReceipt
+    PassedReceipt,
+    AwaitingReceipt
 }
