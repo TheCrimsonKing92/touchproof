@@ -110,6 +110,7 @@ internal static class DeferredNoChangeEvidenceContextProjector
         var separator = selection.LastIndexOf(':');
         if (separator < 0) return selection;
         var project = selection[..separator].Replace('\\', '/').Trim();
+        // ordinary file naming: use the project filename as the project key.
         if (project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             project = Path.GetFileNameWithoutExtension(project);
         const string assemblyPrefix = "Mcg.AgentOrchestrator.";

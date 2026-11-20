@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -31,6 +32,7 @@ internal static class AcceptanceLaneCarryShadowReach
         foreach (var path in paths.Where(IsSource))
         {
             if (sources.TryGetValue(path, out var source)) first.UnionWith(source.Types);
+            // ordinary file naming: use an unindexed production file stem as a production type proxy.
             else first.Add(Path.GetFileNameWithoutExtension(path));
         }
         var second = new HashSet<string>(StringComparer.Ordinal);
@@ -41,8 +43,12 @@ internal static class AcceptanceLaneCarryShadowReach
             paths.Any(path => MarkerRoots
                 .Any(prefix => path.StartsWith(prefix, StringComparison.Ordinal))),
             first, second,
+            // ordinary file naming: match non-C# file stems as substrings in lane text.
             paths.Where(path => !IsCs(path)).Select(Path.GetFileNameWithoutExtension).ToArray()!,
-            paths.Where(path => IsCs(path) && !IsSource(path)).Select(Path.GetFileNameWithoutExtension).ToArray()!);
+            paths.Where(path => IsCs(path) && !IsSource(path))
+                .Select(TestIdentityFilenameAssumption.GetClassNameCandidate)
+                .OfType<string>()
+                .ToArray());
     }
 
     internal static Result Evaluate(ChangeSet changes, IReadOnlyList<string> lanePaths, string laneText,
