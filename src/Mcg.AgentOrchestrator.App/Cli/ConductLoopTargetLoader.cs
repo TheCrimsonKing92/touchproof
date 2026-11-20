@@ -51,93 +51,87 @@ internal static class ConductLoopTargetLoader
         IReadOnlyCollection<string>? additionalHydratedGoalIds = null,
         string? executionDirectory = null, GoalReloadMemory? reloadMemory = null)
     {
+        var requestedGoalIds = additionalHydratedGoalIds ?? [];
         var summaries = ConductorTickStepLedger.CountMetadataRows(
             ConductorTickStepLedger.MeasureKernelReload(ConductorTickStepLedger.GoalMetadataList,
-                () => stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult()));
-        var terminalDependencyMetadata = ConductorTickStepLedger.MeasureKernelReload(
-            ConductorTickStepLedger.TerminalDependencyMetadataRead, () => summaries
-                .Where(summary => ConductLoopGoalStatus.IsTerminal(summary.Status))
-                .Select(summary => ReadConductLoopDependencyMetadata(summary, executionDirectory))
-                .ToDictionary(metadata => metadata.GoalId, StringComparer.Ordinal));
+                () => stateRepository.ListLiveConductLoopGoalMetadataAsync(requestedGoalIds).GetAwaiter().GetResult()));
         var hydratedIds = summaries
             .Where(summary =>
                 !ConductLoopGoalStatus.IsTerminal(summary.Status) &&
                 !summary.Status.Equals(GoalStatus.Parked.ToString(), StringComparison.OrdinalIgnoreCase))
             .Select(summary => new GoalId(summary.Id))
-            .Concat((additionalHydratedGoalIds ?? [])
-                .Select(id => new GoalId(id)))
+            .Concat(requestedGoalIds.Select(id => new GoalId(id)))
             .Distinct()
             .ToArray();
         var kernel = ConductorTickStepLedger.CountGoalReload(
             GoalReloadMemory.LoadAsync(stateRepository, hydratedIds, reloadMemory,
                 ConductorTickStepLedger.KernelReloadTimingSink()).GetAwaiter().GetResult());
+        var dependencyMetadata = ConductorTickStepLedger.MeasureKernelReload(
+            ConductorTickStepLedger.TerminalDependencyMetadataRead,
+            () => LoadConductLoopDependencyMetadata(stateRepository, kernel, executionDirectory));
         return ConductorTickStepLedger.MeasureKernelReload(ConductorTickStepLedger.KernelMerge,
-            () => MergeConductLoopDependencyStatuses(kernel, summaries, terminalDependencyMetadata, hydratedIds, executionDirectory));
+            () => MergeConductLoopDependencyStatuses(kernel, summaries, dependencyMetadata));
+    }
+
+    private static ConductLoopDependencyMetadata[] LoadConductLoopDependencyMetadata(
+        IOrchestratorStateQueries stateRepository,
+        AgentOrchestratorKernel kernel,
+        string? executionDirectory)
+    {
+        var hydratedNonTerminalIds = kernel.Goals
+            .Where(goal => !ConductLoopGoalStatus.IsTerminal(goal.Status.ToString()))
+            .Select(goal => goal.Id)
+            .ToHashSet();
+        var dependencyIds = kernel.Goals
+            .SelectMany(goal => goal.DependsOn)
+            .Where(id => !hydratedNonTerminalIds.Contains(id))
+            .Select(id => id.Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (dependencyIds.Length == 0)
+            return [];
+
+        var statuses = stateRepository.ListConductLoopGoalStatusesByIdAsync(dependencyIds).GetAwaiter().GetResult();
+        return statuses.Select(goal => ConductLoopGoalStatus.IsTerminal(goal.Value)
+                ? ReadConductLoopDependencyMetadata(goal.Key, goal.Value, executionDirectory)
+                : new ConductLoopDependencyMetadata(goal.Key, goal.Value, IsLanded: false))
+            .ToArray();
     }
 
     private static AgentOrchestratorKernel MergeConductLoopDependencyStatuses(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<GoalSummary> summaries,
-        Dictionary<string, ConductLoopDependencyMetadata> terminalDependencyMetadata,
-        GoalId[] hydratedIds,
-        string? executionDirectory)
+        IReadOnlyList<ConductLoopDependencyMetadata> dependencyMetadata)
     {
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
-            new KeyValuePair<GoalId, string>(
-                new GoalId(summary.Id),
-                terminalDependencyMetadata.TryGetValue(summary.Id, out var metadata)
-                    ? metadata.Status
-                    : summary.Status)));
-        kernel.MarkKnownCompletedDependencyGoals(terminalDependencyMetadata.Values
+            new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
+        kernel.MarkKnownDependencyGoalStatuses(dependencyMetadata.Select(metadata =>
+            new KeyValuePair<GoalId, string>(new GoalId(metadata.GoalId), metadata.Status)));
+        kernel.MarkKnownCompletedDependencyGoals(dependencyMetadata
             .Where(metadata => metadata.IsLanded)
             .Select(metadata => new GoalId(metadata.GoalId)));
-
-        var loadedIds = hydratedIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-        var missingDependencyIds = kernel.Goals
-            .SelectMany(goal => goal.DependsOn)
-            .Select(id => id.Value)
-            .Where(id => !loadedIds.Contains(id))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (missingDependencyIds.Length == 0)
-        {
-            return kernel;
-        }
-
-        var missingDependencySet = missingDependencyIds.ToHashSet(StringComparer.Ordinal);
-        var missingDependencySummaries = summaries
-            .Where(summary => missingDependencySet.Contains(summary.Id))
-            .ToArray();
-        var missingDependencyMetadata = missingDependencySummaries
-            .Select(summary => ReadConductLoopDependencyMetadata(summary, executionDirectory))
-            .ToArray();
-        kernel.MarkKnownDependencyGoalStatuses(missingDependencyMetadata.Select(metadata =>
-            new KeyValuePair<GoalId, string>(new GoalId(metadata.GoalId), metadata.Status)));
-        var completedDependencyIds = missingDependencyMetadata
-            .Where(metadata => metadata.IsLanded)
-            .Select(metadata => new GoalId(metadata.GoalId))
-            .ToArray();
-        kernel.MarkKnownCompletedDependencyGoals(completedDependencyIds);
         return kernel;
     }
 
     private static ConductLoopDependencyMetadata ReadConductLoopDependencyMetadata(
-        GoalSummary summary,
+        string goalId,
+        string goalStatus,
         string? executionDirectory)
     {
-        if (executionDirectory is null || !ConductLoopGoalStatus.IsTerminal(summary.Status))
+        if (executionDirectory is null)
         {
-            return new ConductLoopDependencyMetadata(summary.Id, summary.Status, IsLanded: false);
+            return new ConductLoopDependencyMetadata(goalId, goalStatus, IsLanded: false);
         }
 
-        var journal = ConductorTickStepLedger.CountTerminalJournalCheck(() => TerminalGoalJournalMetadataCache.Read(executionDirectory, new GoalId(summary.Id)));
+        var journal = ConductorTickStepLedger.CountTerminalJournalCheck(
+            () => TerminalGoalJournalMetadataCache.Read(executionDirectory, new GoalId(goalId)));
         var isLanded = journal.IsLanded;
         var status = !isLanded &&
             journal.IsRetiredDisposition &&
-            !IsConductLoopTerminalWithoutLandingStatus(summary.Status)
+            !IsConductLoopTerminalWithoutLandingStatus(goalStatus)
                 ? "Retired"
-                : summary.Status;
-        return new ConductLoopDependencyMetadata(summary.Id, status, isLanded);
+                : goalStatus;
+        return new ConductLoopDependencyMetadata(goalId, status, isLanded);
     }
 
     private static bool IsConductLoopTerminalWithoutLandingStatus(string status) =>

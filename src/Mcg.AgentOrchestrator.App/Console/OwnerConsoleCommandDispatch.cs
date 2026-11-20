@@ -7,7 +7,8 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
     Func<OwnerFleetViewModel>? fleet, Func<string, OwnerLandingsPage>? landings, OwnerConsoleSoundCommand? sound,
     OwnerGoalDetailQuery goalDetail, OwnerFleetViewKeys fleetKeys, object notificationGate, OwnerConsoleBellCommand bell,
     Func<bool> settingsRequested, Action requestSettings, Func<string?> requestedEpicId, Func<string?> requestedGateGoalId,
-    Func<string, OwnerConsoleScreenOperation?, CancellationToken, Task> showGoalDetail, Func<Action<string>?> commandNotice)
+    Func<string, OwnerConsoleScreenOperation?, CancellationToken, Task> showGoalDetail, Func<Action<string>?> commandNotice,
+    Func<OwnerConsoleNewsRecord?> news)
 {
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail;
     private readonly OwnerFleetViewKeys _fleetKeys = fleetKeys;
@@ -21,6 +22,11 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
         var line = raw.Trim().TrimStart(OwnerConsoleBindings.CommandLineKey).Trim();
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return;
+        if (parts[0].Equals(OwnerConsoleBindings.NewsCommand, StringComparison.OrdinalIgnoreCase))
+        {
+            await ShowNewsAsync(parts.Length, operation, cancellationToken);
+            return;
+        }
         var output = new OwnerConsoleCapturedOutput();
         string? goalId = null;
         OwnerFleetViewModel? fleetModel = null;
@@ -52,8 +58,8 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
         OwnerLandingsPage? landingsPage = null;
         switch (parts[0].ToLowerInvariant())
         {
-            case "conductor": control.HandleConductor(line); break;
-            case "digest":
+            case OwnerConsoleDispatchVerbs.Conductor: control.HandleConductor(line); break;
+            case OwnerConsoleDispatchVerbs.Digest:
                 if (parts.Length != 1) output.WriteLine("usage: digest");
                 else
                 {
@@ -62,30 +68,30 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
                     output.Structured = result.Fields;
                 }
                 break;
-            case "metrics": control.HandleMetrics(line); break;
-            case "fleet":
+            case OwnerConsoleDispatchVerbs.Metrics: control.HandleMetrics(line); break;
+            case OwnerConsoleDispatchVerbs.Fleet:
                 if (parts.Length != 1) output.WriteLine("usage: fleet");
                 else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
                 else fleetModel = fleet();
                 break;
-            case "landings":
+            case OwnerConsoleDispatchVerbs.Landings:
                 if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
                 else if (landings is null) output.WriteLine("landings view unavailable in this session");
                 else landingsPage = landings(parts.Length == 2 ? parts[1] : "");
                 break;
-            case "sound":
+            case OwnerConsoleDispatchVerbs.Sound:
                 if (sound is null) output.WriteLine("sound unavailable in this session");
                 else sound.Run(line, output);
                 break;
-            case OwnerConsoleBindings.SettingsCommand:
+            case OwnerConsoleDispatchVerbs.Settings:
                 if (parts.Length != 1) output.WriteLine("usage: settings");
                 else if (sound is null) output.WriteLine("settings unavailable in this session");
                 else requestSettings();
                 break;
-            case "bell":
+            case OwnerConsoleDispatchVerbs.Bell:
                 lock (_notificationGate) _bell.Run(parts.Skip(1).ToArray(), output);
                 break;
-            case var verb when verb == OwnerConsoleBindings.Goal.Command:
+            case OwnerConsoleDispatchVerbs.Goal:
                 if (parts.Length != 2) { output.WriteLine("usage: " + OwnerConsoleBindings.Goal.Usage); break; }
                 goalId = await _goalDetail.ResolveGoalIdAsync(parts[1], output, stepToken);
                 break;
@@ -95,6 +101,21 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
                 break;
         }
         return (goalId, fleetModel, landingsPage);
+    }
+
+    private async Task ShowNewsAsync(int argumentCount, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
+    {
+        var session = news();
+        if (argumentCount != 1) await dialogs.ShowTextAsync("Command result", "usage: news");
+        else if (session is null) await dialogs.ShowTextAsync("Console news", "Console news is unavailable in this session.");
+        else if (!session.Loaded.IsCompleted) await dialogs.ShowTextAsync("Console news", "Console news is loading. Try :news again.");
+        else if (session.Unseen is not { Count: > 0 } unseen)
+            await dialogs.ShowTextAsync("Console news", "No unseen console changes.");
+        else
+        {
+            await dialogs.ShowTextAsync("Console news", OwnerConsoleChangelog.FormatDetails(unseen));
+            await RunDependencyAsync(OwnerConsoleBindings.NewsCommand, session.AcknowledgeAsync, operation, cancellationToken);
+        }
     }
 
     private async Task ShowLandingsAsync(OwnerLandingsPage page, OwnerConsoleScreenOperation? operation,

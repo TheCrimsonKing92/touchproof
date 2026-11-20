@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -285,13 +286,23 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         Assert.Equal(2, focusedRuns);
     }
 
-    [Xunit.Fact]
-    public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper()
+    [Xunit.Theory]
+    [Xunit.InlineData("none")]
+    [Xunit.InlineData("green")]
+    [Xunit.InlineData("unsupported")]
+    [Xunit.InlineData("inherited-red")]
+    [Xunit.InlineData("missing-baseline")]
+    [Xunit.InlineData("resumed-missing-baseline")]
+    [Xunit.InlineData("missing-baseline-green")]
+    [Xunit.InlineData("resumed-missing-baseline-green")]
+    [Xunit.InlineData("missing-baseline-green-with-pending")]
+    public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper(string siblingOutcome)
     {
         const string candidateSha = "abc1234";
         const string failingTest =
             "ConductorDriverTestsFindingEvidenceReuse.ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper";
         var (kernel, goal) = SoftwareGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single(task => task.RequiredRole == AgentRole.Planner));
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         PassVerification(kernel, goal, developer, hasCommittedChanges: true);
@@ -300,20 +311,38 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             id: "reused-red-needs-baseline",
             category: FindingCategory.TestEvidence,
             classes: ["ConductorDriverTestsFindingEvidenceReuse"]);
-        var focusedRuns = 0;
+        var focusedRequests = new List<string>();
         TaskId? retriedTaskId = null;
+        var retries = 0;
         string? escalation = null;
+        var hasPendingSibling = siblingOutcome == "missing-baseline-green-with-pending";
+        var greenRerun = hasPendingSibling || siblingOutcome is "missing-baseline-green" or "resumed-missing-baseline-green";
+        var missingBaseline = greenRerun || siblingOutcome is "missing-baseline" or "resumed-missing-baseline";
+        var resumeRerun = siblingOutcome is "resumed-missing-baseline" or "resumed-missing-baseline-green";
+        var interruptBeforeRerun = resumeRerun;
         FocusedEvidenceRunResult RunEvidence(string request)
         {
-            focusedRuns++;
-            return focusedRuns == 1
-                ? CandidateOnlyRedWithExecutedClasses(
-                    _artifactRoot,
-                    request,
-                    candidateSha,
-                    failingTest,
-                    ["ConductorDriverTestsFindingEvidenceReuse"])
-                : CandidateRedFindingEvidence(request, candidateSha, failingTest);
+            focusedRequests.Add(request);
+            return focusedRequests.Count switch
+            {
+                1 => CandidateOnlyRedWithExecutedClasses(_artifactRoot, request, candidateSha, failingTest,
+                    ["ConductorDriverTestsFindingEvidenceReuse"]),
+                2 => CandidateRedFindingEvidence(request, candidateSha, failingTest),
+                3 when siblingOutcome == "unsupported" => new FocusedEvidenceRunResult(
+                    request, Accepted: false, Passed: false, Summary: "Unsupported advisory project", Checks: [],
+                    Rejection: new(FocusedEvidenceRejectionCode.UnsupportedProject, request, "Unsupported advisory project")),
+                3 when siblingOutcome == "inherited-red" => InheritedRed(request),
+                3 or 4 when missingBaseline => CandidateOnlyRedWithExecutedCount(request, candidateSha, "SiblingTests.Fails"),
+                5 when missingBaseline && !greenRerun => new(request, false, false, "Advisory rerun produced no usable evidence", []),
+                _ => RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha)
+            };
+        }
+
+        FocusedEvidenceRunResult InheritedRed(string request)
+        {
+            var red = CandidateRedFindingEvidence(request, candidateSha, "SiblingTests.Fails");
+            var candidate = red.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
+            return red with { Arms = [candidate, candidate with { Arm = FindingEvidenceArm.Baseline, Sha = "baseline-sha" }] };
         }
 
         RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
@@ -329,36 +358,123 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             getLandingFileScopes: _ =>
                 ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidenceReuse.cs"],
             executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+        var seedBatch = FindingRoundBatchCoordinator.Identity(seedDriver, goal, tester)!;
         seedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         PassVerification(kernel, goal, developer, hasCommittedChanges: false);
         kernel.RetryTask(goal.Id, tester.Id, "Replay the historical red receipt without changing the candidate.");
-        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        var sibling = EvidenceFindingWithRequest("An unrelated focused request is still pending.", id: "green-sibling",
+            category: FindingCategory.TestEvidence, project: "Core.Tests", classes: ["SiblingTests"])
+            with { Severity = FindingSeverity.Advisory };
+        var pendingSibling = EvidenceFindingWithRequest("Another distinct request needs a later tick.", id: "pending-sibling",
+            classes: ["PendingSiblingTests"]) with { Severity = FindingSeverity.Advisory };
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, siblingOutcome switch
+        {
+            "none" => [finding],
+            "missing-baseline-green-with-pending" => [finding, sibling, pendingSibling],
+            _ => [finding, sibling]
+        });
         var replayDriver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
             runFocusedEvidence: (_, request) => RunEvidence(request),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
+                retries++;
                 retriedTaskId = taskId;
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             },
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
-                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            {
+                if (interruptBeforeRerun && message.Contains("disposition=candidate-rerun-requested;", StringComparison.Ordinal))
+                {
+                    interruptBeforeRerun = false;
+                    throw new IOException("Interrupted before advisory candidate rerun.");
+                }
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
+            },
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
-            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"],
+            getLandingFileScopes: _ => missingBaseline ? [] : ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"],
             writeEscalation: (_, _, message) => escalation = message,
-            executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+            executionDirectory: missingBaseline ? _artifactRoot : InfrastructureTestSupport.FindRepositoryRoot());
+        var replayBatch = FindingRoundBatchCoordinator.Identity(replayDriver, goal, tester)!;
 
+        if (resumeRerun)
+        {
+            var interrupted = Assert.Throws<IOException>(() => replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive));
+            Assert.Equal("Interrupted before advisory candidate rerun.", interrupted.Message);
+            Assert.Equal(4, focusedRequests.Count);
+            Assert.Equal(0, retries);
+            Assert.Null(escalation);
+            Assert.Contains(goal.Timeline, item => item.Message.Contains("disposition=baseline-arm-absent;", StringComparison.Ordinal));
+        }
         replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(2, focusedRuns);
+        if (hasPendingSibling)
+        {
+            Assert.Equal(5, focusedRequests.Count);
+            Assert.Equal(0, retries);
+            Assert.Null(escalation);
+            Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, tester));
+            var observations = FindingRoundBatchAccounting.Read(goal, replayBatch);
+            Assert.DoesNotContain(observations, item => item.Kind == "executed" && item.FindingIds.Contains(pendingSibling.StableId));
+            var green = Assert.Single(observations, item => item.Kind == "executed" && item.FindingIds.Contains(sibling.StableId));
+            Assert.NotNull(green.ReceiptId);
+            Assert.True(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(tester, candidateSha, [green.ReceiptId!]));
+            var witness = Assert.Single(observations, item => item.Kind == "suppressed-selection" && item.ReceiptId == green.ReceiptId);
+            Assert.Equal(AgentRole.Developer, witness.Role);
+
+            replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            Assert.Contains("PendingSiblingTests", focusedRequests[^1], StringComparison.Ordinal);
+        }
+
+        Assert.Equal(hasPendingSibling ? 6 : missingBaseline ? 5 : siblingOutcome == "none" ? 2 : 3, focusedRequests.Count);
+        if (missingBaseline)
+            Assert.Equal(focusedRequests[2], focusedRequests[4]);
         Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Equal(1, retries);
         Assert.Null(escalation);
+        if (greenRerun)
+        {
+            Assert.Single(goal.Timeline, item => item.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal));
+            Assert.Single(FindingRoundBatchAccounting.Read(goal, replayBatch),
+                item => item.Kind == "executed" && item.FindingIds.Contains(sibling.StableId));
+            var closure = Assert.Single(goal.Timeline.Where(item => item.TaskId == tester.Id &&
+                item.Message.StartsWith($"finding-evidence batch-closed; batch_key={replayBatch.Key};", StringComparison.Ordinal)));
+            Assert.Contains("Developer:", closure.Message, StringComparison.Ordinal);
+            Assert.Contains(hasPendingSibling ? "\"NewlyExecuted\":2" : "\"NewlyExecuted\":1", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Covered\":1", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Unavailable\":0", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"TesterCallsAvoided\":0", closure.Message, StringComparison.Ordinal);
+        }
+        if (!greenRerun && (missingBaseline || siblingOutcome is "unsupported" or "inherited-red"))
+        {
+            if (siblingOutcome == "unsupported")
+            {
+                var outcome = tester.VerificationHistory.Last().MergedReviewFindings!.Single(item => item.StableId == sibling.StableId);
+                Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, outcome.EvidenceOutcome?.Reason);
+            }
+            else
+            {
+                var unavailable = Assert.Single(FindingRoundBatchAccounting.Read(goal, replayBatch),
+                    item => item.Kind == "unavailable" && item.FindingIds.Contains(sibling.StableId));
+                Assert.Contains(missingBaseline ? "Baseline execution failure" : "inherited from a RED Baseline arm", unavailable.Eligibility);
+                if (missingBaseline)
+                    Assert.Single(goal.Timeline, item => item.Message.Contains("disposition=candidate-rerun-unusable;", StringComparison.Ordinal));
+            }
+            Assert.NotEqual(seedBatch.RoundFingerprint, replayBatch.RoundFingerprint);
+            Assert.True(FindingRoundBatchAccounting.IsClosed(goal, seedBatch));
+            var closure = Assert.Single(goal.Timeline.Where(item => item.TaskId == tester.Id &&
+                item.Message.StartsWith($"finding-evidence batch-closed; batch_key={replayBatch.Key};", StringComparison.Ordinal)));
+            Assert.Contains("Developer:", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"BatchSize\":2", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Covered\":1", closure.Message, StringComparison.Ordinal);
+            Assert.Contains("\"Unavailable\":1", closure.Message, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact]
-    public void ThirdEvidenceDeliveryRetryEscalatesWithoutDispatchingWorker()
+    public void MissingExecutor_EscalatesOnceWithoutDispatchingWorker()
     {
         const string candidateSha = "abc1234";
         var (kernel, goal) = SoftwareGoal();
@@ -367,12 +483,18 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         PassVerification(kernel, goal, developer, hasCommittedChanges: true);
         var finding = EvidenceFindingWithRequest(
             "The executor is unavailable for the same request.",
-            id: "capped-delivery",
+            id: "missing-executor",
             category: FindingCategory.TestEvidence);
         var retries = 0;
-        string? escalation = null;
+        var starts = 0;
+        var escalations = new List<string>();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            dispatchAndStart: _ =>
+            {
+                starts++;
+                return DispatchStartOutcome.Started();
+            },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
                 retries++;
@@ -382,18 +504,17 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
-            writeEscalation: (_, _, message) => escalation = message);
+            writeEscalation: (_, _, message) => escalations.Add(message));
 
-        for (var occurrence = 0; occurrence < 3; occurrence++)
-        {
-            RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
-            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-        }
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        var identity = FindingRoundBatchCoordinator.Identity(driver, goal, tester)!;
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
 
-        Assert.Equal(2, retries);
-        Assert.Contains("retry cap reached", escalation, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("capped-delivery", escalation, StringComparison.Ordinal);
-        Assert.Contains(candidateSha, escalation, StringComparison.Ordinal);
+        Assert.Equal(0, retries);
+        Assert.Equal(0, starts);
+        Assert.True(FindingRoundBatchAccounting.IsClosed(goal, identity));
+        Assert.Contains("No focused evidence executor was configured", Assert.Single(escalations), StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -760,7 +881,13 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         FailReviewerNeedsWork(kernel, goal, reviewer, "first constituent", findings: [first]);
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
         FailReviewerNeedsWork(kernel, goal, reviewer, "second constituent", findings: [second]);
+        Assert.Contains(reviewer.LastVerification!.MergedReviewFindings!, finding =>
+            finding.StableId == first.StableId && finding.State == ReviewFindingState.Open);
+        var secondBatch = FindingRoundBatchCoordinator.Identity(driver, goal, reviewer)!;
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var member = Assert.Single(FindingRoundBatchAccounting.Read(goal, secondBatch).Where(item => item.Kind == "member"));
+        Assert.Equal(second.StableId, Assert.Single(member.FindingIds));
+        Assert.True(FindingRoundBatchAccounting.IsClosed(goal, secondBatch));
         FailReviewerNeedsWork(kernel, goal, reviewer, "union request", findings: [union]);
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -953,18 +1080,13 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceRun: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRun(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-        FailReviewerNeedsWork(
-            kernel,
-            goal,
-            reviewer,
-            "same request after apparatus failure",
-            findings: [finding with { Description = "The unchanged request must be reissued." }]);
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
 
         Assert.Equal(2, focusedRuns);
         Assert.All(
@@ -1398,7 +1520,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec tester,
-        ReviewFinding finding)
+        params ReviewFinding[] findings)
     {
         DispatchTask(kernel, goal, tester, "test");
         var output = string.Join(
@@ -1408,7 +1530,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             "commands: test",
             "tests: deferred - focused evidence requested",
             "blockers: exact-blocker - focused evidence requested",
-            $"findings: {System.Text.Json.JsonSerializer.Serialize(new[] { finding })}",
+            $"findings: {System.Text.Json.JsonSerializer.Serialize(findings)}",
             "touched_anchors: []",
             "model_fit: test/test - adequate - fixture - fixture",
             "skills: none",

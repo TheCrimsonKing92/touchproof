@@ -4,18 +4,26 @@ using Xunit.v3;
 
 [assembly: TestClassCpuActivity]
 
-// Only in-memory membership changes; the assembly fixture owns the sampler and output.
+// Track class activity and memory boundaries. The assembly fixture owns teardown output.
 internal sealed class TestClassCpuActivityAttribute : BeforeAfterTestAttribute
 {
     public override void Before(MethodInfo methodUnderTest, IXunitTest test)
     {
         if (LaunchLockTelemetry.Attribution.IsActive)
-            LaunchLockClassCpuLedger.Live.Enter(Xunit.TestContext.Current.TestClass?.TestClassName);
+        {
+            var key = Xunit.TestContext.Current.TestClass?.TestClassName;
+            LaunchLockClassCpuLedger.Live.Enter(key);
+            LaunchLockClassMemoryLedger.Live.Enter(key);
+        }
     }
 
     public override void After(MethodInfo methodUnderTest, IXunitTest test)
     {
         if (LaunchLockTelemetry.Attribution.IsActive)
-            LaunchLockClassCpuLedger.Live.Exit(Xunit.TestContext.Current.TestClass?.TestClassName);
+        {
+            var key = Xunit.TestContext.Current.TestClass?.TestClassName;
+            LaunchLockClassMemoryLedger.Live.Exit(key);
+            LaunchLockClassCpuLedger.Live.Exit(key);
+        }
     }
 }

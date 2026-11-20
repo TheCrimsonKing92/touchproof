@@ -3,9 +3,9 @@ using System.Text.RegularExpressions;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record TempArtifactReapResult(int RemovedFiles, int RemovedFolders, long BytesReclaimed,
-    int RetainedFresh, int RetainedHeld, int Failed)
+    int RetainedFresh, int RetainedHeld, int Failed, int EntriesEnumerated = 0)
 {
-    internal string SummaryLine => $"temp-artifact-janitor removed_files={RemovedFiles} removed_folders={RemovedFolders} bytes={BytesReclaimed} retained_fresh={RetainedFresh} retained_held={RetainedHeld} failed={Failed}";
+    internal string SummaryLine => $"temp-artifact-janitor entries_enumerated={EntriesEnumerated} removed_files={RemovedFiles} removed_folders={RemovedFolders} bytes={BytesReclaimed} retained_fresh={RetainedFresh} retained_held={RetainedHeld} failed={Failed}";
 }
 
 internal static partial class TempRootJanitor
@@ -28,6 +28,8 @@ internal static partial class TempRootJanitor
         var fresh = 0;
         var held = 0;
         var failed = 0;
+        var entriesEnumerated = 0;
+        Action countEntry = () => entriesEnumerated++;
         var locations = new[] { tempRoot, orchestratorTempParent,
             Path.Combine(orchestratorTempParent, "acceptance-capture"),
             Path.Combine(orchestratorTempParent, "worktree-digest") }
@@ -40,6 +42,7 @@ internal static partial class TempRootJanitor
             {
                 foreach (var path in Directory.EnumerateFiles(location, "*", SearchOption.TopDirectoryOnly))
                 {
+                    entriesEnumerated++;
                     if (!CaptureName.IsMatch(Path.GetFileName(path))) continue;
                     try
                     {
@@ -58,6 +61,7 @@ internal static partial class TempRootJanitor
                 }
                 foreach (var path in Directory.EnumerateDirectories(location, "*", SearchOption.TopDirectoryOnly))
                 {
+                    entriesEnumerated++;
                     if (!DigestName.IsMatch(Path.GetFileName(path))) continue;
                     try
                     {
@@ -66,7 +70,7 @@ internal static partial class TempRootJanitor
                         var newest = NewestTime(info.CreationTimeUtc, info.LastWriteTimeUtc);
                         long folderBytes = 0;
                         var files = new List<string>();
-                        foreach (var entry in EnumerateSafeDescendants(path))
+                        foreach (var entry in EnumerateSafeDescendants(path, countEntry))
                         {
                             var attributes = File.GetAttributes(entry);
                             if ((attributes & FileAttributes.Directory) != 0)
@@ -111,7 +115,7 @@ internal static partial class TempRootJanitor
             }
             catch (Exception) { failed++; }
         }
-        return new TempArtifactReapResult(removedFiles, removedFolders, bytes, fresh, held, failed);
+        return new TempArtifactReapResult(removedFiles, removedFolders, bytes, fresh, held, failed, entriesEnumerated);
     }
 
     private static DateTime NewestTime(params DateTime[] times) => times.Max();
@@ -119,7 +123,7 @@ internal static partial class TempRootJanitor
     private static bool IsSharingViolation(int? hresult) =>
         hresult is { } value && (value & 0xffff) is 32 or 33;
 
-    private static IEnumerable<string> EnumerateSafeDescendants(string root)
+    private static IEnumerable<string> EnumerateSafeDescendants(string root, Action countEntry)
     {
         var pending = new Stack<string>();
         pending.Push(root);
@@ -127,6 +131,7 @@ internal static partial class TempRootJanitor
         {
             foreach (var entry in Directory.EnumerateFileSystemEntries(pending.Pop(), "*", SearchOption.TopDirectoryOnly))
             {
+                countEntry();
                 var attributes = File.GetAttributes(entry);
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                     throw new IOException("Digest folder contains a reparse point.");

@@ -205,7 +205,7 @@ try {
                     $retainedDirectory = $retained.Groups[1].Value.Trim()
                 }
                 if ($diagnosis.Count -lt 8 -and ($retained.Success -or
-                    $line -cmatch 'RUNNER/TOOLING FAILURE|COMPLETED WITH MISSING TRX|CLEANUP FAILURE|TEST HOST TIMED OUT')) {
+                    $line -cmatch 'RUNNER/TOOLING FAILURE|COMPLETED WITH MISSING TRX|CLEANUP FAILURE|TEST HOST TIMED OUT|FILTER FAILURE')) {
                     $diagnosis.Add($line.Substring(0, [math]::Min(300, $line.Length)))
                 }
             }

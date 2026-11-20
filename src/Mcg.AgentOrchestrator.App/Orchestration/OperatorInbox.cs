@@ -80,6 +80,8 @@ internal sealed record LandingEscalationWriteResult(
     long CollaborationElapsedMilliseconds,
     string CollaborationOutcome)
 {
+    internal bool Delivered => JsonOutcome == "ok" || CollaborationOutcome == "ok";
+
     internal static LandingEscalationWriteResult CompletedWithoutExternalSinks { get; } =
         new(0, "ok", 0, "skipped");
 

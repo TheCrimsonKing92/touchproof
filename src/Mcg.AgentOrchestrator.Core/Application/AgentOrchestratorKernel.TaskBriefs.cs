@@ -957,7 +957,7 @@ public sealed partial class AgentOrchestratorKernel
         var recipientIndex = FindTaskIndex(goal, task.Id);
         var feedbackEvents = goal.Timeline
             .Where(evt =>
-                IsAccumulatedRetryFeedbackEvent(evt) &&
+                IsAccumulatedRetryFeedbackEvent(evt) && !FindingEvidenceBriefProjection.IsBatchAccounting(evt) &&
                 (evt.Kind != ProgressKind.FindingEvidenceRunRecorded || evt.TaskId == task.Id) &&
                 (!IsAccumulatedRetryRoundEvent(evt) ||
                  IsUpstreamRetryEvent(goal, task.Id, recipientIndex, evt)))

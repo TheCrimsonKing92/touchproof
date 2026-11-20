@@ -3,7 +3,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal static class OwnerConsoleBindings
 {
     internal const char CommandLineKey = ':';
-    internal const string SettingsCommand = "settings";
+    internal const string SettingsCommand = OwnerConsoleDispatchVerbs.Settings;
+    internal const string NewsCommand = "news";
     internal const char SettingsPreviewKey = 'p';
     internal const char SettingsSystemKey = 's';
     internal const char SettingsMuteKey = 'm';
@@ -31,6 +32,8 @@ internal static class OwnerConsoleBindings
         Row("filter <text>", "Show only ACTIVITY rows whose goal id starts with <text> or whose line contains <text>; filter with no text shows every row.", '/', "Filter ACTIVITY by goal id prefix or text (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("landings", "Show delivered goals: landing commit, integration kind and acceptance (landings today|30)", 'l', "Show delivered goals (any pane)."),
         Row("gate", "Open the GATE view (gate <goal-id-prefix> opens the gate that goal is in)", 'g', "Open the GATE view (any pane).", owner: OwnerConsoleCommandOwner.View),
+        Row(SettingsCommand, "Open Settings. Use Left/Right to switch tabs.", 's', "Open Settings (any pane)."),
+        Row(NewsCommand, "Show and acknowledge unseen console changes.", effect: OwnerConsoleEffect.ConsoleLocal),
         Row("help", "Open this help dialog", '?', "Open this help dialog (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("quit", "Quit the console", 'q', "Quit the console (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("accept", "Accept the selected default in DECISIONS after confirmation", 'a', "Accept the selected default in DECISIONS after confirmation.",
@@ -55,6 +58,7 @@ internal static class OwnerConsoleBindings
     internal static bool RequiresSelectedBoardRow(OwnerConsoleBinding row) => row == Goal || row == Gate || row == Accept || row == Answer;
     internal static OwnerConsoleBinding Epics => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "epics");
     internal static OwnerConsoleBinding Gate => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "gate");
+    internal static OwnerConsoleBinding Settings => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == SettingsCommand);
     internal static OwnerConsoleBinding Help => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "help");
     internal static OwnerConsoleBinding Quit => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "quit");
     internal static OwnerConsoleBinding Follow => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "follow");
@@ -113,7 +117,7 @@ internal static class OwnerConsoleBindings
         row.Key is { } key ? $"[{key}] {row.Usage}" : row.Usage).ToArray();
     internal static string CommandPrompt => string.Join(" | ", PromptEntries);
 
-    internal static string PaneHint(OwnerConsolePane pane, bool answerable = true, bool following = true)
+    internal static string PaneHint(OwnerConsolePane pane, bool answerable = true, bool following = true, bool signIn = false)
     {
         var prefix = pane switch
         {
@@ -125,7 +129,8 @@ internal static class OwnerConsoleBindings
         };
         return string.Join("  ", new[] { prefix, OwnerActivityLinePresentation.JumpKeyHint, "Tab/Shift+Tab pane" }
             .Concat(All.Where(row => row.Scope == OwnerConsoleScope.Global && row.Key.HasValue)
-                .SelectMany(row => row == Help ? new[] { ": command", Hint(row) } : [Hint(row)])));
+                .SelectMany(row => row == Help ? new[] { ": command", Hint(row) } :
+                    [pane == OwnerConsolePane.Activity && signIn && row == Settings ? "s sign-in" : Hint(row)])));
     }
 
     private static string Hint(OwnerConsoleBinding row) => $"{row.Key} {row.HintLabel}";
@@ -148,7 +153,20 @@ internal static class OwnerConsoleBindings
         "Esc: Cancel command entry or close a dialog."
     ];
 
-    private static string[] ExtraHelp(OwnerConsoleBinding row) => row == Epics ?
+    private static readonly string[] SettingsHelp =
+    [
+        "ACTIVITY s on a sign-in-required provider row: Open Settings on Provider connections for that provider.",
+        "Settings Left/Right: Switch to the previous or next tab.",
+        "Settings Esc or q: Close Settings and return to the previous pane.",
+        $"Settings tab {OwnerConsoleAlertsSettingsTab.TabTitle}: {OwnerConsoleAlertsSettingsTab.HelpKeys}",
+        $"Settings tab {OwnerConsoleAgentsSettingsTab.TabTitle}: {OwnerConsoleAgentsSettingsTab.HelpKeys}",
+        $"Settings tab {OwnerConsolePolicySettingsTab.TabTitle}: {OwnerConsolePolicySettingsTab.HelpKeys}",
+        $"Settings tab {OwnerConsoleExecutorsSettingsTab.TabTitle}: {OwnerConsoleExecutorsSettingsTab.HelpKeys}",
+        $"Settings tab {OwnerConsoleProjectsSettingsTab.TabTitle}: {OwnerConsoleProjectsSettingsTab.HelpKeys}",
+        $"Settings tab {OwnerConsoleProviderConnectionsTab.TabTitle}: {OwnerConsoleProviderConnectionsTab.HelpKeys}"
+    ];
+
+    private static string[] ExtraHelp(OwnerConsoleBinding row) => row == Settings ? SettingsHelp : row == Epics ?
     [
         "Epic list Up: Select the previous epic.",
         "Epic list Down: Select the next epic.",

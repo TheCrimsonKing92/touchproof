@@ -23,7 +23,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(TimeSpan.FromSeconds(laneSeconds), scenario.LocalTimeouts[1]);
         Assert.Equal(TimeSpan.FromSeconds(shortLaneSeconds), scenario.LocalTimeouts[0]);
         Assert.Equal(
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=2068.631 Ln=3 R=4152.262 Rn=0 F=2068.631 Fn=0 DeadlineSeconds={laneSeconds} CheckTimeoutSeconds={laneSeconds}",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=2068.631 Ln=3 R=4152.262 Rn=0 F=2068.631 Fn=0 DeadlineSeconds={laneSeconds} CheckTimeoutSeconds={laneSeconds} projectedLocalSeconds=2068.631 projectedMixedSeconds=2068.631",
             Assert.Single(scenario.Progress.Where(line =>
                 line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" ", StringComparison.Ordinal))));
     }
@@ -41,9 +41,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-probe L=150 Ln=3 R=315 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-probe L=150 Ln=3 R=315 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
     }
 
@@ -51,7 +51,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
     public async Task Policy_OffersPriorWithinProbeBandWithTwoRemoteSamples()
     {
         using var scenario = CreateScenario([45, 300, 150]);
-        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 999, samples: 2);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 999, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-filter", 999, samples: 1);
         scenario.HoldRemoteUntilLocalStarts = true;
 
         var result = await scenario.RunAsync();
@@ -61,14 +62,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-probe L=150 Ln=3 R=315 Rn=2 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-probe L=150 Ln=3 R=315 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
     }
 
     [Xunit.Fact]
-    public async Task Policy_SingleRemoteFailureBlocksProbeAndRunsLaneLocally()
+    public async Task Policy_OffersPriorAfterOneFailureWithinGateGrowthLimit()
     {
         using var scenario = CreateScenario([45, 300, 150]);
         var binding = new RemoteLaneBinding("seed-executor", Lane(2), "commit", "tree", "main",
@@ -80,18 +81,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         var result = await scenario.RunAsync();
 
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
-        Assert.Empty(scenario.Fake.Requests);
-        Assert.Equal(new[] { 0, 1, 2 }, scenario.LocalStarts.Order().ToArray());
+        Assert.Equal(Lane(2), Assert.Single(scenario.Fake.Requests).Lane);
+        Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=150 Ln=3 R=315 Rn=0 F=300 Fn=1 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-growth L=150 Ln=3 R=315 Rn=0 F=300 Fn=1 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
     }
 
     [Xunit.Fact]
-    public async Task Policy_OffersMeasuredLaneWithinSlackAndKeepsSlowerLaneLocal()
+    public async Task Policy_OffersMeasuredLaneAtGateGrowthLimitAndKeepsSlowerLaneLocal()
     {
         using var scenario = CreateScenario([45, 300, 200]);
         RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(1), Filter(1), 330);
@@ -100,22 +101,66 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         var result = await scenario.RunAsync();
 
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
-        Assert.Empty(scenario.Fake.Requests);
-        Assert.DoesNotContain(scenario.Fake.Requests, request => request.Lane == Lane(2));
-        Assert.Equal(new[] { 0, 1, 2 }, scenario.LocalStarts.Order().ToArray());
+        Assert.Equal(Lane(1), Assert.Single(scenario.Fake.Requests).Lane);
+        Assert.Equal(new[] { 0, 2 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=330 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=200 Ln=3 R=400 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=330",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=offer reason=fits-slack L=300 Ln=3 R=330 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=330",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=200 Ln=3 R=400 Rn=3 F=200 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=330"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [Xunit.Fact]
+    public async Task Policy_ReportsLaneMedianFromThreePriorFilters()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-a", 80, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-b", 100, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-c", 300, samples: 1);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Contains(" R=100 Rn=3 ", Assert.Single(scenario.Progress, line =>
+            line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
+    public async Task Policy_PrefersQualifyingExactHistoryOverPooledHistory()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 100, samples: 3);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-filter", 40, samples: 3);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Contains(" R=100 Rn=3 ", Assert.Single(scenario.Progress, line =>
+            line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
+    public async Task Policy_PoolsTwoExactSamplesWithOnePriorFilterSample()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 80, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 300, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), "previous-filter", 100, samples: 1);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Contains(" R=100 Rn=3 ", Assert.Single(scenario.Progress, line =>
+            line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" ", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact]
     public async Task Policy_TwoRemoteSamplesWithinSlackKeepLaneLocal()
     {
         using var scenario = CreateScenario([45, 300, 200]);
-        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(1), Filter(1), 330, samples: 2);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(1), Filter(1), 330, samples: 1);
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(1), "previous-filter", 330, samples: 1);
         RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(2), Filter(2), 250);
         scenario.HoldRemoteUntilLocalStarts = true;
 
@@ -127,9 +172,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=2 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits L=200 Ln=3 R=250 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=300",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=300",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits L=200 Ln=3 R=250 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=300"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
     }
 
@@ -150,9 +195,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(2, scenario.SlotChecks);
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=700 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits L=200 Ln=3 R=250 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=300",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=700 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=300",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits L=200 Ln=3 R=250 Rn=3 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=300"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
         var rows = RemoteExecutorHealthLedger.ReadAll(scenario.History);
         Assert.Equal(7, rows.Count);
@@ -180,9 +225,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(new[] { 0, 2 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=remote-failing L=120 Ln=3 R=255 Rn=0 F=120 Fn=3 Fage=1.0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=offer reason=fits L=120 Ln=3 R=100 Rn=3 F=120 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=120 Ln=3 R=255 Rn=0 F=120 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=remote-failing L=120 Ln=3 R=255 Rn=0 F=120 Fn=3 Fage=1.0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=120 projectedMixedSeconds=120",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=offer reason=fits L=120 Ln=3 R=100 Rn=3 F=120 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=120 projectedMixedSeconds=120",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=120 Ln=3 R=255 Rn=0 F=120 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=120 projectedMixedSeconds=120"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(3, RemoteExecutorHealthLedger.ReadAll(scenario.History).Count(row => row.Lane == Lane(0)));
     }
@@ -206,14 +251,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-reprobe L=150 Ln=3 R=315 Rn=0 F=300 Fn=3 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-reprobe L=150 Ln=3 R=315 Rn=0 F=300 Fn=3 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
     }
 
     [Xunit.Fact]
-    public async Task Policy_TwoExpiredFailuresKeepPriorLocal()
+    public async Task Policy_OffersPriorAfterTwoExpiredFailuresWithinGateGrowthLimit()
     {
         using var scenario = CreateScenario([45, 300, 150]);
         var binding = new RemoteLaneBinding("seed-executor", Lane(2), "commit", "tree", "main",
@@ -226,13 +271,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         var result = await scenario.RunAsync();
 
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
-        Assert.Empty(scenario.Fake.Requests);
-        Assert.Equal(new[] { 0, 1, 2 }, scenario.LocalStarts.Order().ToArray());
+        Assert.Equal(Lane(2), Assert.Single(scenario.Fake.Requests).Lane);
+        Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=150 Ln=3 R=315 Rn=0 F=300 Fn=2 DeadlineSeconds=300 CheckTimeoutSeconds=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-growth L=150 Ln=3 R=315 Rn=0 F=300 Fn=2 DeadlineSeconds=300 CheckTimeoutSeconds=300 projectedLocalSeconds=300 projectedMixedSeconds=315"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
     }
 
@@ -272,18 +317,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
     {
         using var scenario = CreateScenario([120, 120, 120]);
         RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(0), Filter(0), 999, samples: 3);
-        File.AppendAllLines(scenario.History, Enumerable.Repeat("malformed", 494));
+        File.AppendAllLines(scenario.History, Enumerable.Repeat("malformed", GoalAcceptanceVerifier.RemoteLaneOfferHistoryLineLimit - 7));
         RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(0), Filter(0), 100, samples: 1);
         RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(0), Filter(0), 200, samples: 1);
         RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(0), Filter(0), 300, samples: 1);
         RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(0), "changed-filter", 800, samples: 3);
         File.AppendAllLines(scenario.History,
             [File.ReadLines(scenario.History).First().Replace("\"outcome\":\"accepted\"", "\"outcome\":\"remote-red\"", StringComparison.Ordinal)]);
-        var rows = GoalAcceptanceVerifier.ReadRemoteLaneOfferHistory(scenario.History);
+        var (rows, laneNames) = RemoteLaneOfferHistoryReader.ReadWithLaneNames(scenario.History);
         var matching = rows[(Lane(0), GoalAcceptanceVerifier.ShortHash(Filter(0)))];
         Assert.Equal(3, matching.Samples);
         Assert.Equal(200, matching.MedianSeconds);
         Assert.Equal(800, rows[(Lane(0), GoalAcceptanceVerifier.ShortHash("changed-filter"))].MedianSeconds);
+        var pooled = laneNames.Select(rows, (Lane(0), GoalAcceptanceVerifier.ShortHash("unseen-filter")));
+        var inputs = new RemoteLaneOfferInputs(Lane(0), 120, 3, 120, pooled?.MedianSeconds, pooled?.Samples ?? 0, 120);
+        Assert.Equal(6, inputs.RemoteSamples);
+        Assert.Equal(550, RemoteLaneOfferPolicy.Decide(inputs).RemoteSeconds);
     }
 
     private Scenario CreateScenario(double[] local, bool keyed = false, string[]? lanes = null,

@@ -9,13 +9,16 @@ internal sealed class OwnerConsoleProjectsSettingsTab(OrchestratorProjectRegistr
 {
     private IReadOnlyList<string> _lines = [];
     private string _input = "";
-    public string Title => "Projects";
+    internal const string TabTitle = "Projects";
+    internal const string HelpKeys = "Up/Down highlight  Enter edit scope";
+    internal const string EditingKeyHint = "Enter apply  Esc cancel  Backspace edit";
+    internal const string BrowsingKeyHint = HelpKeys + "  Left/Right tab  Esc/q back";
+    public string Title => TabTitle;
     public bool Editing { get; private set; }
     public int SelectedLine { get; private set; }
     internal string Message { get; private set; } = "";
     public string StatusText => Editing ? $"scope: {_input}_  {Message}" : Message;
-    public string KeyHint => Editing ? "Enter apply  Esc cancel  Backspace edit" :
-        "Up/Down highlight  Enter edit scope  Left/Right tab  Esc/q back";
+    public string KeyHint => Editing ? EditingKeyHint : BrowsingKeyHint;
     public IReadOnlyList<string> Lines { get { Refresh(); return _lines; } }
 
     public void Refresh()

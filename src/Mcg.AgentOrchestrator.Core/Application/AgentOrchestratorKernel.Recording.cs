@@ -1596,6 +1596,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; retry or assign it before dispatching it again.");
         }
 
+        PlannerRoundRecovery.EnsureDispatchAllowed(goal, task);
         dispatch.BriefVersion = goal.AuthoritativeBrief.Version;
         dispatch.BriefSnapshot = goal.Objective;
         dispatch.AssignedAgentId ??= task.AssignedAgentId?.Value;
@@ -1832,16 +1833,19 @@ public sealed partial class AgentOrchestratorKernel
         RetryAdmissionReceipt receipt,
         string marker)
     {
-        var target = goal.Tasks
-            .Where(candidate => candidate.Id != heldTask.Id && candidate.RequiredRole == targetRole)
+        TaskSpec? SelectTarget(AgentRole role) => goal.Tasks
+            .Where(candidate => candidate.Id != heldTask.Id && candidate.RequiredRole == role)
             .OrderBy(candidate => candidate.Status is WorkTaskStatus.Failed or WorkTaskStatus.Completed ? 0 : 1)
             .FirstOrDefault();
+        var target = SelectTarget(targetRole);
+        if (targetRole == AgentRole.Developer && (target is null || target.Status == WorkTaskStatus.Cancelled))
+            target = SelectTarget(AgentRole.Tester);
+        var usedRole = target is null || target.Status == WorkTaskStatus.Cancelled ? "unavailable" : target.RequiredRole.ToString();
         if (target is not null && target.Status is WorkTaskStatus.Failed or WorkTaskStatus.Completed)
         {
             ResetTaskForRetry(goal.Id, target, _clock.UtcNow, retryCause: receipt.Cause);
             Append(goal, target.Id, ProgressKind.TaskRetried, $"{marker}; routed from held task {heldTask.Id.Value}.");
         }
-
         else if (target is null || target.Status == WorkTaskStatus.Cancelled)
         {
             heldTask.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
@@ -1857,11 +1861,8 @@ public sealed partial class AgentOrchestratorKernel
                 recordDuplicateSuppression: false);
         }
 
-        Append(
-            goal,
-            null,
-            ProgressKind.GoalPolicyDecision,
-            $"{marker}; targetRole={targetRole}; targetTask={target?.Id.Value ?? "unavailable"}; heldTask={heldTask.Id.Value}.");
+        Append(goal, null, ProgressKind.GoalPolicyDecision,
+            $"{marker}; requestedRole={targetRole}; usedRole={usedRole}; targetTask={target?.Id.Value ?? "unavailable"}; heldTask={heldTask.Id.Value}.");
     }
 
     public void ReplacePreparedTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)

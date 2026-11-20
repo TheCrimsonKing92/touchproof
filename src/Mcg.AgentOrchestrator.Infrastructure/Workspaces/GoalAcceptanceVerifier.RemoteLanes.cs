@@ -93,7 +93,7 @@ public sealed partial class GoalAcceptanceVerifier
         var lanes = effectiveChecks.Where(check => TryGetInfrastructurePartitionId(check, out _, out _)).ToArray();
         configuration = configuration.ResolveLanes(lanes.Select(check => check.Name));
         var historyPath = _testOverrides.RemoteLaneOfferHistoryPathForTests ?? RemoteExecutorHealthLedger.ResolveStorePath(worktreePath);
-        var history = ReadRemoteLaneOfferHistory(historyPath);
+        var (history, laneNames) = RemoteLaneOfferHistoryReader.ReadWithLaneNames(historyPath);
         var failures = new RemoteLaneFailureHistory().Read(historyPath);
         var clock = _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider;
         var decisionTime = clock.GetUtcNow();
@@ -101,7 +101,7 @@ public sealed partial class GoalAcceptanceVerifier
         {
             var local = AcceptanceLaneDurationStore.ResolveLocalEstimate(check);
             TryGetInfrastructurePartitionId(check, out _, out var filter);
-            history.TryGetValue((check.Name, ShortHash(filter)), out var remote);
+            var remote = laneNames.Select(history, (check.Name, ShortHash(filter)));
             failures.TryGetValue((check.Name, ShortHash(filter)), out var streak);
             return new RemoteLaneOfferInputs(check.Name, local.MedianSeconds, local.Samples,
                 check.EstimatedSerialSeconds, remote?.MedianSeconds, remote?.Samples ?? 0, 0,
@@ -121,7 +121,7 @@ public sealed partial class GoalAcceptanceVerifier
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
             }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector, HostTestSettings = hostTestSettings, OfferOutcomes = new() };
-        _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs, configuration.Executors.Select(entry => entry.Slots).ToArray(), lane => coordinator.IsCandidate(lanes.First(check => check.Name == lane))));
+        _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs, configuration, worktreePath, lane => coordinator.IsCandidate(lanes.First(check => check.Name == lane))));
         if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
         else _cachelessRemoteLaneCoordinator = coordinator;
         return coordinator;

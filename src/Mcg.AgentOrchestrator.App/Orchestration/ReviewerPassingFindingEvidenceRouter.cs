@@ -81,6 +81,7 @@ internal static class ReviewerPassingFindingEvidenceRouter
                 fresh.Add((finding, receipts, requestId, coverageReason));
                 continue;
             }
+            reattachCoveredEvidence?.Invoke(finding, receipts, requestId, coverageReason);
             var receiptIds = receipts.Select(receipt => receipt.ReceiptId).Order(StringComparer.Ordinal).ToArray();
             var key = FindingEvidenceReviewContext.Hash($"{task.Id}:{candidate.ToLowerInvariant()}:{finding.StableId}:" +
                 requestId + ":" + string.Join(',', receiptIds));

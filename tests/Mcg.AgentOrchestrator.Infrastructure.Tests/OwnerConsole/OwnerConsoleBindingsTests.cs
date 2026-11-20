@@ -1,10 +1,269 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using Terminal.Gui.App;
+using Terminal.Gui.Input;
+using Terminal.Gui.Views;
 
-// Parallel-safe: immutable registry and per-test synthetic rows.
+// Parallel-safe: immutable registry and isolated Settings contexts.
 public sealed class OwnerConsoleBindingsTests
 {
     [Fact]
     public void RegistrySatisfiesBindingSafetyRules() => Assert.Empty(OwnerConsoleBindings.Validate(OwnerConsoleBindings.All));
+
+    [Fact]
+    public void SettingsResolvesByKeyInEveryPaneAndAsATypedCommand()
+    {
+        var row = Assert.Single(OwnerConsoleBindings.Commands, row => row.Command == "settings");
+        Assert.Equal(OwnerConsoleScope.Global, row.Scope);
+        Assert.Equal('s', row.Key);
+        Assert.Single(OwnerConsoleBindings.Commands, binding => binding.Key == 's');
+        foreach (var pane in Enum.GetValues<OwnerConsolePane>())
+        {
+            Assert.Same(row, OwnerConsoleBindings.ForKey('s', pane));
+            Assert.Same(row, OwnerConsoleBindings.ForKey('S', pane));
+        }
+        Assert.Same(row, OwnerConsoleBindings.ForLine("settings"));
+        Assert.Same(row, OwnerConsoleBindings.ForLine(":settings"));
+    }
+
+    [Theory]
+    [InlineData("provider-hold-placed")]
+    [InlineData("provider-hold-check")]
+    [InlineData("provider-hold-overdue")]
+    public void SignInRequiredHoldRowCarriesProviderAndSKeySentence(string kind)
+    {
+        var evt = HoldEvent(kind, "xai::<provider-default>", "last confirmed: authentication-required");
+        var row = Assert.Single(OwnerActivityNarrator.Narrate([evt], _ => ""));
+
+        Assert.Equal("xai", row.SignInProvider);
+        Assert.EndsWith("Press s to open sign-in for xai.", row.Act);
+        Assert.True(OwnerProviderHoldNarration.TryNarrate(evt, out _, out _, out _, out var originalAction));
+        Assert.Equal(originalAction + " Press s to open sign-in for xai.", row.Act);
+    }
+
+    [Theory]
+    [InlineData("provider-hold-placed", "xai::<provider-default>", "last confirmed: usage-exhausted")]
+    [InlineData("provider-hold-overdue", "xai::<provider-default>", "last confirmed: usage-exhausted")]
+    [InlineData("provider-hold-restored", "xai::<provider-default>", "last confirmed: authentication-required")]
+    [InlineData("provider-hold-check", "::profile", "last confirmed: authentication-required")]
+    [InlineData("provider-hold-check", "  ::profile", "last confirmed: authentication-required")]
+    [InlineData("provider-hold-check", "xai", "last confirmed: authentication-required")]
+    public void OtherHoldRowsKeepTheirActionWithoutSignInTarget(string kind, string binding, string diagnosis)
+    {
+        var evt = HoldEvent(kind, binding, diagnosis);
+        var row = Assert.Single(OwnerActivityNarrator.Narrate([evt], _ => ""));
+
+        Assert.Null(row.SignInProvider);
+        Assert.DoesNotContain("Press s", row.Act);
+        Assert.True(OwnerProviderHoldNarration.TryNarrate(evt, out _, out _, out _, out var originalAction));
+        Assert.Equal(originalAction, row.Act);
+    }
+
+    [Fact]
+    public void MissingBindingCannotOfferSignIn()
+    {
+        var evt = HoldEvent("provider-hold-check", "", "last confirmed: authentication-required");
+        Assert.Null(OwnerProviderHoldNarration.SignInProvider(evt));
+        Assert.Empty(OwnerActivityNarrator.Narrate([evt], _ => ""));
+    }
+
+    [Fact]
+    public void ActivityHintLabelsSAsSignInOnASignInRow()
+    {
+        Assert.Contains("s sign-in", OwnerConsoleBindings.PaneHint(OwnerConsolePane.Activity, signIn: true));
+        Assert.DoesNotContain("s sign-in", OwnerConsoleBindings.PaneHint(OwnerConsolePane.Activity));
+        Assert.DoesNotContain("s sign-in", OwnerConsoleBindings.PaneHint(OwnerConsolePane.Board, signIn: true));
+        using var context = new OwnerConsoleSettingsTestContext();
+        using IApplication app = Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, context.Controller, () => Task.CompletedTask);
+        var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "xai::<provider-default>", "last confirmed: authentication-required")], _ => ""));
+        var ordinary = signIn with { Timestamp = signIn.Timestamp.AddSeconds(-1), SignInProvider = null };
+        view.Render(OwnerConsoleSettingsTestContext.Model() with { Activity = [signIn, ordinary] });
+        view.FocusPane(OwnerConsolePane.Activity);
+        view.ActivityPane.SelectedItem = view.ActivityModel.Rows.ToList().FindIndex(row => row.ItemIndex == 0);
+        view.RenderHints();
+        Assert.Contains("s sign-in", view.HintText);
+
+        view.ActivityPane.SelectedItem = view.ActivityModel.Rows.ToList().FindIndex(row => row.ItemIndex == 1);
+        view.RenderHints();
+        Assert.DoesNotContain("s sign-in", view.HintText);
+        Assert.Contains("s settings", view.HintText);
+    }
+
+    private static OwnerConductEvent HoldEvent(string kind, string binding, string diagnosis) =>
+        new(DateTimeOffset.Parse("2026-11-19T12:00:00Z"), kind, "11111111222233334444555566667777",
+            $"PROVIDER_HOLD diagnosis={Uri.EscapeDataString(diagnosis)} binding={binding}");
+
+    [Fact]
+    public void DispatchVerbsHaveTopLevelBindingRows()
+    {
+        var verbs = OwnerConsoleDispatchVerbs.All;
+        Assert.Contains("settings", verbs);
+        Assert.Contains("goal", verbs);
+        Assert.Equal(verbs.Count, verbs.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(verbs, verb => Assert.Equal(verb.ToLowerInvariant(), verb));
+        Assert.Empty(MissingBindingCommands(verbs));
+    }
+
+    [Fact]
+    public void BindingCoverageReportsMissingVerbByName() =>
+        Assert.Equal(["frobnicate"], MissingBindingCommands(OwnerConsoleDispatchVerbs.All.Append("frobnicate")));
+
+    private static string[] MissingBindingCommands(IEnumerable<string> verbs)
+    {
+        var commands = OwnerConsoleBindings.Commands.Select(row => row.Command).ToHashSet(StringComparer.Ordinal);
+        return verbs.Where(verb => !commands.Contains(verb)).ToArray();
+    }
+
+    public static IEnumerable<object[]> DispatchVerbs => OwnerConsoleDispatchVerbs.All.Select(verb => new object[] { verb });
+
+    [Theory]
+    [MemberData(nameof(DispatchVerbs))]
+    public async Task DispatchRecognizesEachVerbAndSettingsRequestsTheView(string verb)
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        var usage = OwnerConsoleBindings.Commands.First(row => row.Command == verb).Usage;
+        var command = usage.Split('[', 2)[0].TrimEnd().Replace("<id-prefix>", "11111111", StringComparison.Ordinal);
+
+        await context.Controller.RunCommandAsync(command);
+
+        Assert.DoesNotContain(context.Output.Texts, text => text.Contains("unknown command", StringComparison.Ordinal));
+        Assert.Equal(verb == "settings", context.Controller.TakeSettingsRequested());
+        if (verb == "settings") Assert.Empty(context.Output.Texts);
+    }
+
+    [Fact]
+    public async Task DispatchReportsUnknownVerb()
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        await context.Controller.RunCommandAsync("frobnicate");
+        Assert.Contains(context.Output.Texts, text => text.Contains("unknown command", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SettingsKeyOpensTheViewAndQuitReturnsToThePane()
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        using IApplication app = Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, context.Controller, () => Task.CompletedTask);
+        view.Render(OwnerConsoleSettingsTestContext.Model());
+        await view.HandleKeyAsync(Key.Tab);
+        Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
+
+        await view.HandleKeyAsync(new Key('s'));
+        Assert.True(view.SettingsView.IsOpen);
+        Assert.Equal(OwnerConsolePane.Board, view.SettingsView.ReturnPane);
+        await view.HandleKeyAsync(new Key('s'));
+        Assert.True(view.SettingsView.IsOpen);
+        await view.HandleKeyAsync(new Key('q'));
+        Assert.False(view.SettingsView.IsOpen);
+        Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
+        Assert.False(context.Controller.QuitRequested);
+    }
+
+    [Fact]
+    public async Task SettingsKey_SignInRow_OpensProviderConnectionsWhileListIsPending()
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        var list = new TaskCompletionSource<IReadOnlyList<OwnerConsoleProviderConnection>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var provider = new OwnerConsoleProviderConnectionsTabTests.Fixture { PendingList = list.Task };
+        var harness = new OwnerConsoleHarness();
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, context.Output,
+            harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            sound: context.Sound, providerConnections: provider, providerSignIn: provider);
+        using IApplication app = Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "xai::<provider-default>", "last confirmed: authentication-required")], _ => ""));
+        view.Render(OwnerConsoleSettingsTestContext.Model() with { Activity = [signIn] });
+        view.FocusPane(OwnerConsolePane.Activity);
+        var row = view.ActivityModel.Rows.ToList().FindIndex(item => item.ItemIndex == 0);
+        Assert.True(row >= 0);
+        view.ActivityPane.SelectedItem = row;
+        Assert.False(view.SettingsView.IsOpen);
+
+        await TestHangGuard.WaitAsync(view.HandleKeyAsync(new Key('s')), "sign-in Settings key");
+
+        Assert.True(view.SettingsView.IsOpen);
+        Assert.Equal(OwnerConsolePane.Activity, view.SettingsView.ReturnPane);
+        Assert.Equal(1, view.SettingsView.ActiveTab);
+        Assert.Equal("xai", view.SettingsView.TargetProvider);
+        Assert.Equal(["Reading configured profiles and readiness evidence…"], view.SettingsView.Lines);
+        await TestHangGuard.WaitAsync(provider.ListStarted.Task, "sign-in provider list request");
+        Assert.False(list.Task.IsCompleted);
+        Assert.False(provider.Launches.Reader.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData((int)OwnerConsolePane.Board, false)]
+    [InlineData((int)OwnerConsolePane.Board, true)]
+    [InlineData((int)OwnerConsolePane.Activity, false)]
+    [InlineData((int)OwnerConsolePane.Activity, true)]
+    public async Task SettingsKey_UntargetedRow_PreservesLastTabAndProviderSelection(
+        int paneValue, bool providerTabWasActive)
+    {
+        var pane = (OwnerConsolePane)paneValue;
+        using var workspace = new OwnerConsoleExecutorsSettingsTestContext();
+        using var context = new OwnerConsoleSettingsTestContext();
+        using var provider = new OwnerConsoleProviderConnectionsTabTests.Fixture
+        {
+            Initial = [OwnerConsoleProviderConnectionsTabTests.Fixture.Connection("codex-cli"),
+                OwnerConsoleProviderConnectionsTabTests.Fixture.Connection("grok-cli")],
+            Roster = [OwnerConsoleProviderConnectionsTabTests.Fixture.Agent("codex-cli", AgentRole.Developer),
+                OwnerConsoleProviderConnectionsTabTests.Fixture.Agent("grok-cli", AgentRole.Reviewer)]
+        };
+        AgentCatalogStore.Save(workspace.Workspace.AgentCatalogPath, new AgentCatalog(provider.Roster));
+        var harness = new OwnerConsoleHarness();
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, context.Output,
+            harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            sound: context.Sound, workspace: workspace.Workspace, providerConnections: provider, providerSignIn: provider);
+        using IApplication app = Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask, clock: context.Clock);
+        var signIn = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "openai::<provider-default>", "last confirmed: authentication-required")], _ => ""));
+        var ordinary = Assert.Single(OwnerActivityNarrator.Narrate(
+            [HoldEvent("provider-hold-check", "openai::<provider-default>", "last confirmed: usage-exhausted")], _ => ""));
+        Assert.Null(ordinary.SignInProvider);
+        view.Render(OwnerConsoleSettingsTestContext.Model() with { Activity = [signIn, ordinary] });
+        var frame = view.SettingsView;
+        // The workspace also contributes an Executors tab; target the provider tab rather than assuming its index.
+        frame.Open(OwnerConsolePane.Board, "openai");
+        Assert.Equal("openai", frame.TargetProvider);
+        var providerTab = frame.ActiveTab;
+        Assert.True(providerTab > 0);
+        await provider.TakeCheckAsync();
+        await provider.TakeCheckAsync();
+        Assert.Contains("  Profiles: codex-cli", frame.Lines);
+        frame.HandleKey(Key.CursorDown);
+        Assert.Contains("  Profiles: grok-cli", frame.Lines);
+        var lastTab = providerTabWasActive ? providerTab : 0;
+        for (var tab = providerTab; tab > lastTab; tab--) frame.HandleKey(Key.CursorLeft);
+        Assert.Equal(lastTab, frame.ActiveTab);
+        await view.HandleKeyAsync(new Key('q'));
+        Assert.False(frame.IsOpen);
+        view.FocusPane(pane);
+        // A selected sign-in row in another pane must not supply a Settings target.
+        var activityIndex = pane == OwnerConsolePane.Activity ? 1 : 0;
+        var row = view.ActivityModel.Rows.ToList().FindIndex(item => item.ItemIndex == activityIndex);
+        Assert.True(row >= 0);
+        view.ActivityPane.SelectedItem = row;
+
+        await view.HandleKeyAsync(new Key('s'));
+
+        Assert.True(frame.IsOpen);
+        Assert.Equal(pane, frame.ReturnPane);
+        Assert.Equal(lastTab, frame.ActiveTab);
+        Assert.Null(frame.TargetProvider);
+        for (var tab = lastTab; tab < providerTab; tab++) frame.HandleKey(Key.CursorRight);
+        Assert.Contains("  Profiles: grok-cli", frame.Lines);
+        Assert.DoesNotContain("  Profiles: codex-cli", frame.Lines);
+        Assert.DoesNotContain(frame.SubViews.OfType<Label>(),
+            label => label.Text.ToString().Contains("No configured profile", StringComparison.Ordinal));
+        Assert.False(provider.Launches.Reader.TryRead(out _));
+    }
 
     [Theory]
     [InlineData(0)]
@@ -95,10 +354,34 @@ public sealed class OwnerConsoleBindingsTests
     [Fact]
     public void PromptPreservesCommandOrderAndAdvertisesAliases()
     {
-        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [s] settings | news | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(expected, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(expected.Split(" | "), OwnerConsoleBindings.PromptEntries);
         Assert.Equal(expected, OwnerConsoleKeyHints.CommandPrompt);
+    }
+
+    private static readonly string[] SettingsHelpLines =
+    [
+        "s: Open Settings (any pane).",
+        ":settings: Open Settings. Use Left/Right to switch tabs (same as s).",
+        "ACTIVITY s on a sign-in-required provider row: Open Settings on Provider connections for that provider.",
+        "Settings Left/Right: Switch to the previous or next tab.",
+        "Settings Esc or q: Close Settings and return to the previous pane.",
+        "Settings tab Alerts & sounds: Up/Down highlight  p preview  Enter select/edit  s system sound  m mute",
+        "Settings tab Agents & models: Up/Down highlight  Enter edit  r reload",
+        "Settings tab Conductor policy: Up/Down highlight  Enter edit  r reload",
+        "Settings tab Executors: Up/Down highlight  Space enable/disable",
+        "Settings tab Projects: Up/Down highlight  Enter edit scope",
+        "Settings tab Provider connections: Up/Down provider  c check  s sign in  d device code  t return  x stop waiting  r reload"
+    ];
+
+    [Fact]
+    public void SettingsHelpListsNavigationAndEveryTabInOrder()
+    {
+        var lines = OwnerConsoleBindings.HelpText.Split('\n');
+        var settingsKeyLine = Array.IndexOf(lines, SettingsHelpLines[0]);
+        Assert.NotEqual(-1, settingsKeyLine);
+        Assert.Equal(SettingsHelpLines, lines.Skip(settingsKeyLine).Take(SettingsHelpLines.Length));
     }
 
     [Fact]
@@ -138,6 +421,7 @@ public sealed class OwnerConsoleBindingsTests
             "Goal detail e: Open the goal's epic.",
             "Goal detail g: Open the GATE view on this goal's gate (same as :gate <goal-id-prefix>).",
             "Goal detail q: Back out of goal detail.",
+            .. SettingsHelpLines,
             "?: Open this help dialog (any pane).",
             ":help: Open this help dialog (same as ?).",
             "q: Quit the console (any pane).",
@@ -165,6 +449,7 @@ public sealed class OwnerConsoleBindingsTests
             ":fleet: Show the fleet diagram: host and executor boxes.",
             ":scope [<name>[,<name>...]|all]: Show or change the BOARD project scope.",
             ":follow: Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).",
+            ":news: Show and acknowledge unseen console changes.",
             "Fleet view x: Toggle between the top five lanes and all lanes for every executor."
         ];
         Assert.Equal(string.Join("\n", expected.Concat(unkeyed)), OwnerConsoleBindings.HelpText);
@@ -185,7 +470,7 @@ public sealed class OwnerConsoleBindingsTests
     [InlineData(2, false, "Following latest  Up/Down scroll  Enter what this means")]
     public void PaneHintsCombineSelectionActionsAndGlobalViews(int pane, bool answerable, string prefix)
     {
-        const string suffix = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  : command  ? help  q quit";
+        const string suffix = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  s settings  : command  ? help  q quit";
         Assert.Equal(prefix + suffix, OwnerConsoleBindings.PaneHint((OwnerConsolePane)pane, answerable));
         Assert.Equal(prefix + suffix, OwnerConsoleKeyHints.Hint((OwnerConsolePane)pane, answerable));
     }

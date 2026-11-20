@@ -38,6 +38,111 @@ internal enum WorkerRegistrationFaultDisposition
     Terminal
 }
 
+internal enum ProcessHandleFaultDisposition
+{
+    NotEnvironmental,
+    BoundedRetry
+}
+
+internal sealed class RecordedAcceptanceFault(
+    string message,
+    string? originalType,
+    string? originalStack,
+    bool isProcessHandleFault) : InvalidOperationException(message)
+{
+    internal string? OriginalType { get; } = originalType;
+    internal string? OriginalStack { get; } = originalStack;
+    internal bool IsProcessHandleFault { get; } = isProcessHandleFault;
+}
+
+internal static class ParallelAcceptanceFaultCompletion
+{
+    private const int RetryCap = ConductorBatchLoop.ParallelAcceptanceTransientFailureCap;
+
+    internal static ConductorAdvanceResult Registration(
+        ConductorDriver driver,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceAttempt attempt,
+        string message)
+    {
+        if (ConductorParallelAcceptanceAttemptCoordinator.ClassifyWorkerRegistrationFault(message) ==
+                WorkerRegistrationFaultDisposition.BoundedRetry &&
+            attempt.TransientFailureCount < RetryCap)
+        {
+            return ConductorBatchLoop.ParallelAcceptanceHeld(candidate, policy,
+                $"Transient worker-process registration fault ({attempt.TransientFailureCount}/{RetryCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {message}");
+        }
+
+        return driver.EscalateParallelLandingAcceptance(candidate, policy,
+            $"background acceptance worker-process registration fault: {message}",
+            ConductorEscalationKind.BackgroundAcceptanceFailed);
+    }
+
+    internal static ConductorAdvanceResult WorkspaceProbe(
+        ConductorDriver driver,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceAttempt attempt,
+        string message)
+    {
+        var detail = ConductorDiagnosticText.BoundSingleLine(message);
+        if (attempt.TransientFailureCount < RetryCap)
+        {
+            var notBefore = WorkspaceProbeFaultClassifier.NotBefore(
+                attempt.CompletedAt ?? throw new InvalidOperationException("Terminal workspace-probe fault requires CompletedAt."),
+                attempt.TransientFailureCount).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+            return ConductorBatchLoop.ParallelAcceptanceHeld(candidate, policy,
+                $"Transient workspace-probe timeout ({attempt.TransientFailureCount}/{RetryCap}); not_before={notBefore} attempt={attempt.AttemptId}: {detail}");
+        }
+
+        return driver.EscalateParallelLandingAcceptance(candidate, policy,
+            $"background acceptance workspace-probe timeout: {detail}",
+            ConductorEscalationKind.BackgroundAcceptanceFailed);
+    }
+
+    internal static ConductorAdvanceResult ProcessHandle(
+        ConductorDriver driver,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception fault)
+    {
+        if (ConductorParallelAcceptanceAttemptCoordinator.CanRegateProcessHandleFault(attempt))
+        {
+            return ConductorBatchLoop.ParallelAcceptanceHeld(candidate, policy, FormatReason(
+                $"Transient process-handle fault ({attempt.TransientFailureCount}/{RetryCap}); " +
+                $"retry on next conduct tick. attempt={attempt.AttemptId}: ", fault));
+        }
+
+        return driver.EscalateParallelLandingAcceptance(candidate, policy,
+            FormatReason("background acceptance process-handle fault: ", fault),
+            ConductorEscalationKind.BackgroundAcceptanceFailed);
+    }
+
+    internal static string FormatReason(string leadIn, Exception exception)
+    {
+        const string Unavailable = "<unavailable>";
+        var recorded = exception as RecordedAcceptanceFault;
+        var type = recorded is null ? exception.GetType().FullName ?? exception.GetType().Name
+            : recorded.OriginalType ?? Unavailable;
+        var firstFrame = (recorded is null ? exception.StackTrace : recorded.OriginalStack).AsSpan();
+        var lineEnd = firstFrame.IndexOfAny('\r', '\n');
+        if (lineEnd >= 0)
+        {
+            firstFrame = firstFrame[..lineEnd];
+        }
+
+        firstFrame = firstFrame.TrimStart();
+        var parameters = firstFrame.IndexOf('(');
+        var method = parameters > 3 && firstFrame.StartsWith("at ", StringComparison.Ordinal)
+            ? firstFrame[3..parameters].TrimEnd().ToString()
+            : Unavailable;
+        return ConductorDiagnosticText.BoundSingleLine(
+            $"{leadIn}{type} {method} {ConductorDiagnosticText.SanitizeReason(exception.Message)}");
+    }
+}
+
 internal enum ConductorEvidenceAttemptOutcome
 {
     Passed,
@@ -886,11 +991,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             string.IsNullOrWhiteSpace(attempt.Kind) ? GateDispatchKind : attempt.Kind,
             dispatchKind,
             StringComparison.Ordinal) &&
-        string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) &&
-        attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
-        FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) &&
-        FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) &&
-        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal) &&
+        SameFocusedEvidenceRequest(attempt, focusedEvidenceRequest, requestContext) &&
         string.Equals(
             attempt.FindingRoundFingerprint,
             requestContext?.FindingRoundFingerprint,
@@ -953,7 +1054,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
         FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) &&
         FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) &&
-        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal);
+        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal) &&
+        string.Equals(attempt.FocusedExecutionBasisIdentity, requestContext?.ExecutionBasisIdentity, StringComparison.Ordinal);
 
     private PreReviewEvidenceRelaunchProvenance? BuildRelaunchProvenance(
         ConductorParallelAcceptanceAttempt prior,
@@ -1717,7 +1819,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var originalFocusedReceipt = CaptureOriginalFocusedReceipt(attempt, run);
             _resultPublishedForTests?.Invoke(attempt);
             var outcome = OutcomeFor(run, attempt.Kind);
-            var claimedTerminal = TryPersistTerminal(attempt, current => current with
+            var claimedTerminal = TryPersistTerminal(attempt, current => WithTerminalTransientFailure(current, current with
             {
                 BranchHeadSha = run.Candidate.BranchHeadSha,
                 MainHeadSha = run.Candidate.MainHeadSha,
@@ -1727,11 +1829,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 Detail = AcceptanceRunDetail(run),
                 TestResultPaths = ResultTestPaths(run),
                 ReplayResultFingerprint = resultFingerprint,
-                OriginalFocusedReceipt = originalFocusedReceipt,
-                TransientFailureCount = IsBoundedTransientFailure(outcome, AcceptanceRunDetail(run))
-                    ? CountConsecutiveTransientFailures(current) + 1
-                    : current.TransientFailureCount
-            });
+                OriginalFocusedReceipt = originalFocusedReceipt
+            }, run));
             WriteTerminalExitReceipt(
                 attempt,
                 claimedTerminal,
@@ -2265,7 +2364,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var outcome = current.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running
                 ? OutcomeFor(run, current.Kind)
                 : current.Outcome;
-            var updated = current with
+            var updated = WithTerminalTransientFailure(current, current with
             {
                 BranchHeadSha = run.Candidate.BranchHeadSha,
                 MainHeadSha = run.Candidate.MainHeadSha,
@@ -2273,17 +2372,49 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 CompletedAt = current.CompletedAt ?? _utcNow(),
                 LastHeartbeatAt = _utcNow(),
                 Detail = current.Detail ?? AcceptanceRunDetail(run),
-                TestResultPaths = ResultTestPaths(run) ?? current.TestResultPaths,
-                TransientFailureCount = IsBoundedTransientFailure(outcome, current.Detail ?? AcceptanceRunDetail(run))
-                    ? current.TransientFailureCount > 0
-                        ? current.TransientFailureCount
-                        : CountConsecutiveTransientFailures(current) + 1
-                    : current.TransientFailureCount
-            };
+                TestResultPaths = ResultTestPaths(run) ?? current.TestResultPaths
+            }, run);
             WriteAttemptFile(updated);
             return updated;
         }
     }
+
+    private const string ProcessHandleFaultKind = "process-handle-fault";
+    private const string ProcessHandleRetryDetailPrefix = ProcessHandleFaultKind + " (re-gate): ";
+    private const string ProcessHandleExhaustedDetailPrefix = ProcessHandleFaultKind + " (retry cap reached): ";
+
+    private ConductorParallelAcceptanceAttempt WithTerminalTransientFailure(
+        ConductorParallelAcceptanceAttempt current,
+        ConductorParallelAcceptanceAttempt terminal,
+        ConductorParallelAcceptanceRunResult run)
+    {
+        if (current.TransientFailureCount > 0)
+        {
+            return terminal;
+        }
+
+        if (terminal.Outcome == ConductorParallelAcceptanceAttemptOutcome.Failed &&
+            run.Acceptance is null && ProcessHandleFaultFor(run.Exception) is { } fault)
+        {
+            var prior = CountConsecutiveTransientFailures(current);
+            var canRegate = prior < ConductorBatchLoop.ParallelAcceptanceTransientFailureCap;
+            return terminal with
+            {
+                // Keep the pre-charge decision available when a result is replayed.
+                Detail = (canRegate ? ProcessHandleRetryDetailPrefix : ProcessHandleExhaustedDetailPrefix) + fault.Message,
+                TransientFailureCount = canRegate ? prior + 1 : prior
+            };
+        }
+
+        return IsBoundedTransientFailure(terminal.Outcome, terminal.Detail)
+            ? terminal with { TransientFailureCount = CountConsecutiveTransientFailures(current) + 1 }
+            : terminal;
+    }
+
+    internal static bool CanRegateProcessHandleFault(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.TransientFailureCount < ConductorBatchLoop.ParallelAcceptanceTransientFailureCap ||
+        attempt.TransientFailureCount == ConductorBatchLoop.ParallelAcceptanceTransientFailureCap &&
+            attempt.Detail?.StartsWith(ProcessHandleRetryDetailPrefix, StringComparison.Ordinal) == true;
 
     private ConductorParallelAcceptanceAttemptDecision MarkCorrupt(
         ConductorParallelAcceptanceAttempt attempt,
@@ -2995,11 +3126,26 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private static ConductorParallelAcceptanceRunArtifact ToArtifact(ConductorParallelAcceptanceRunResult run)
     {
-        if (run.Exception is not null)
+        if (run.Exception is { } exception && run.Acceptance is not { Passed: false })
         {
-            return AcceptanceAttemptResultRecord.ForFault(run.Exception,
-                WorkerRegistrationFaultMessage(run.Exception) ?? run.Exception.Message,
+            var registrationMessage = WorkerRegistrationFaultMessage(exception);
+            var artifact = AcceptanceAttemptResultRecord.ForFault(exception,
+                registrationMessage ?? exception.Message,
                 run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha);
+            if (artifact.FaultKind != "exception")
+            {
+                return artifact;
+            }
+
+            var processHandleFault = run.Acceptance is null ? ProcessHandleFaultFor(exception) : null;
+            var diagnosticFault = processHandleFault ?? exception;
+            return artifact with
+            {
+                FaultKind = processHandleFault is null ? artifact.FaultKind : ProcessHandleFaultKind,
+                FaultMessage = processHandleFault?.Message ?? artifact.FaultMessage,
+                FaultType = diagnosticFault.GetType().FullName,
+                FaultStack = diagnosticFault.StackTrace
+            };
         }
 
         if (run.EarlyResult is { Outcome: var outcome })
@@ -3153,7 +3299,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 artifact.GatePhase,
                 artifact.GateTarget),
             "cancelled" => new OperationCanceledException(artifact.FaultMessage),
-            _ => new InvalidOperationException(artifact.FaultMessage ?? "background acceptance failed")
+            _ => new RecordedAcceptanceFault(
+                artifact.FaultMessage ?? "background acceptance failed",
+                artifact.FaultType,
+                artifact.FaultStack,
+                artifact.FaultKind == ProcessHandleFaultKind)
         };
 
     private static GoalLifecycleState ParseState(string? value) =>
@@ -3163,6 +3313,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunResult run,
         string dispatchKind)
     {
+        if (run.Acceptance is { Passed: false })
+        {
+            return ConductorParallelAcceptanceAttemptOutcome.Failed;
+        }
+
         if (run.Exception is DotnetBuildSlotsBusyException)
         {
             return ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot;
@@ -3240,7 +3395,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private static string AcceptanceRunDetail(ConductorParallelAcceptanceRunResult run)
     {
-        if (run.Exception is not null)
+        if (run.Exception is not null && run.Acceptance is not { Passed: false })
         {
             return WorkerRegistrationFaultMessage(run.Exception) ?? run.Exception.Message;
         }
@@ -3468,7 +3623,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.LaunchFailed ||
             attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts ||
             attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.ProcessDied ||
-            IsBoundedTransientFailure(attempt.Outcome, attempt.Detail));
+            IsBoundedTransientFailure(attempt.Outcome, attempt.Detail) ||
+            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Failed &&
+                (attempt.Detail?.StartsWith(ProcessHandleRetryDetailPrefix, StringComparison.Ordinal) == true ||
+                 attempt.Detail?.StartsWith(ProcessHandleExhaustedDetailPrefix, StringComparison.Ordinal) == true));
+
+    private static Exception? ProcessHandleFaultFor(Exception? exception) =>
+        exception is not AcceptanceExecutionIdentityChangedException { IsChangedIdentity: true } &&
+        WorkerRegistrationFaultMessage(exception) is null &&
+        WorkspaceProbeFaultClassifier.Classify(exception?.Message) != WorkspaceProbeFaultKind.HostContentionTimeout
+            ? ProcessHandleFaultClassifier.FindFault(exception)
+            : null;
 
     internal static bool IsBoundedInfrastructureOutcome(ConductorParallelAcceptanceAttemptOutcome outcome) =>
         outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or

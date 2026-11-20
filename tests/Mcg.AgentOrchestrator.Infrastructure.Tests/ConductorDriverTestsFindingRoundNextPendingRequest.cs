@@ -61,12 +61,15 @@ public sealed class ConductorDriverTestsFindingRoundNextPendingRequest
     [Fact]
     public void InconclusiveFirstRequestRemainsEligibleOnSameCandidate()
     {
-        using var scenario = new FindingRoundScenario(outcomeReason: FindingEvidenceOutcomeReason.VacuousEvidence);
+        using var scenario = new FindingRoundScenario(outcomeReason: FindingEvidenceOutcomeReason.CandidateInconclusive);
 
         scenario.Advance();
         var receipt = Assert.Single(scenario.Receipts);
         Assert.True(receipt.Accepted);
         Assert.False(receipt.Passed);
+        var candidateArm = Assert.Single(receipt.Arms ?? []);
+        Assert.Equal(FindingEvidenceArm.Candidate, candidateArm.Arm);
+        Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, candidateArm.Disposition);
         scenario.Advance();
 
         Assert.Equal(
@@ -147,11 +150,21 @@ public sealed class ConductorDriverTestsFindingRoundNextPendingRequest
                 _root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
             runFocusedEvidence: (_, request) =>
             {
+                Runs.Add((CandidateSha, request));
+                if (_outcomeReason == FindingEvidenceOutcomeReason.CandidateInconclusive)
+                {
+                    return new FocusedEvidenceRunResult(
+                        request, Accepted: true, Passed: false, "Focused evidence was inconclusive", [],
+                        Arms: [new FocusedEvidenceArmRunResult(
+                            FindingEvidenceArm.Candidate, CandidateSha, FindingEvidenceArmDisposition.Inconclusive,
+                            Accepted: true, Passed: false, "No candidate test verdict", [])],
+                        OutcomeReason: FindingEvidenceOutcomeReason.CandidateInconclusive);
+                }
+
                 // Keep the configured outcome across retries: the receipt store retains
                 // the first receipt for each id, so a later pass cannot replace it.
                 var passed = _passed;
                 var outcomeReason = _outcomeReason;
-                Runs.Add((CandidateSha, request));
                 var check = new AcceptanceCheckResult(
                     "candidate focused evidence", passed, passed ? 0 : 1, "Executed: 1",
                     TestResultPaths: [TrxPath], ExecutedTestCount: 1);

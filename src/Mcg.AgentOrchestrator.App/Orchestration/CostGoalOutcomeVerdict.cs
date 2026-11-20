@@ -96,7 +96,8 @@ internal static class CostGoalOutcomeVerdict
 {
     internal static IReadOnlyList<CostGoalOutcomeResult> Evaluate(CostGoalOutcomeRecord record,
         IEnumerable<OutcomeGateObservation> gates, string landedHomeCommit, Func<string, string, bool> containsCommit,
-        DateTimeOffset adoptedAt, DateTimeOffset evaluatedAt, CostGoalOutcomeReplay? replay = null)
+        DateTimeOffset adoptedAt, DateTimeOffset evaluatedAt, CostGoalOutcomeReplay? replay = null,
+        IEnumerable<TickStepObservation>? ticks = null)
     {
         if (record.FinalVerdicts.Count == record.Filing.Baselines.Count) return record.FinalVerdicts;
         ArgumentException.ThrowIfNullOrWhiteSpace(landedHomeCommit);
@@ -110,13 +111,20 @@ internal static class CostGoalOutcomeVerdict
                 (string.Equals(landedHomeCommit, gate.LaunchMainCommit, StringComparison.OrdinalIgnoreCase) ||
                  containsCommit(landedHomeCommit, gate.LaunchMainCommit)))
             .ToArray();
+        var eligibleTicks = (ticks ?? []).Where(tick => tick.Timestamp >= adoptedAt &&
+                tick.Timestamp < deadline && tick.Timestamp <= evaluatedAt)
+            .OrderBy(tick => tick.Timestamp).ToArray();
         var finals = record.FinalVerdicts.ToDictionary(result => result.LineIndex);
         return record.Filing.Baselines.Select((baseline, index) => finals.TryGetValue(index, out var final)
-            ? final : EvaluateLine(index, baseline, eligible, evaluatedAt >= deadline, replay)).ToArray();
+            ? final : EvaluateLine(index, baseline, eligible, evaluatedAt >= deadline, replay,
+                CostGoalOutcomeMetric.TickStepName(baseline.Line.Name) is { } step
+                    ? CostGoalOutcomeMetric.MeasureTickStep(baseline.Line, step, eligibleTicks, baseline.Line.Window)
+                    : null)).ToArray();
     }
 
     private static CostGoalOutcomeResult EvaluateLine(int index, OutcomeMetricBaseline baseline,
-        IReadOnlyList<OutcomeGateObservation> eligible, bool expired, CostGoalOutcomeReplay? replay)
+        IReadOnlyList<OutcomeGateObservation> eligible, bool expired, CostGoalOutcomeReplay? replay,
+        OutcomeMetricSample? tickSample)
     {
         var line = baseline.Line;
         var window = new OutcomeGateWindow(line);
@@ -133,7 +141,7 @@ internal static class CostGoalOutcomeVerdict
         var replayGuard = CostGoalOutcomeMetric.IsReplayMetric(line.Guard?.Name);
         var usesReplay = replayMetric || replayGuard;
         var (before, after) = replayMetric ? MeasureReplay(line.Name) :
-            (new OutcomeMetricSample(baseline.Value, baseline.SampleSize), gateSample);
+            (new OutcomeMetricSample(baseline.Value, baseline.SampleSize), tickSample ?? gateSample);
         var guard = line.Guard is null ? null : replayGuard
             ? ReplayGuard(line.Guard.Name)
             : new OutcomeGuardResult(baseline.Guard ?? new(null, 0), gateGuard ?? new(null, 0));

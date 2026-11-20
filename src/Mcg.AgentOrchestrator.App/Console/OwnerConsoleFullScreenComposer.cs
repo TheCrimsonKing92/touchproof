@@ -1,4 +1,5 @@
 using System.Data;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -61,7 +62,17 @@ internal static class OwnerConsoleFullScreenComposer
             settingsTabs.Add(new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)));
         if (boardSource?.Registry is { } registry)
             settingsTabs.Add(new OwnerConsoleProjectsSettingsTab(registry, boardSource.HandleScope));
+        OwnerConsoleProviderConnectionsTab? providerTab = null;
+        if (controller.ProviderConnections is { } connections && controller.ProviderSignIn is { } signIn)
+        {
+            var catalogPath = controller.Workspace?.AgentCatalogPath;
+            providerTab = new(connections, signIn, () => catalogPath is not null
+                ? AgentCatalogStore.Load(catalogPath).Agents
+                : throw new InvalidOperationException("The agent catalog path is unavailable."), view.Invoke, clock, lifetimeToken);
+            settingsTabs.Add(providerTab);
+        }
         var settingsView = new OwnerConsoleSettingsView(settingsTabs);
+        if (providerTab is not null) providerTab.Invalidate = settingsView.Refresh;
         return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
     }
 
@@ -113,6 +124,24 @@ internal static class OwnerConsoleFullScreenComposer
         var keyboard = app.Initialized ? app.Keyboard : null;
         if (keyboard is not null) keyboard.KeyDown += keys.OnKeyDown;
         if (diagnostics is not null) app.LayoutAndDrawComplete += trace.OnLayoutAndDrawComplete;
+        StartNews(view, controller, token);
         return (keys, bindingRunner, keyboard);
+    }
+
+    private static void StartNews(OwnerConsoleFullScreenView view, OwnerConsoleScreenController controller, CancellationToken token)
+    {
+        if (controller.Workspace is not { } workspace) return;
+        controller.News = OwnerConsoleNewsRecord.Start(
+            Path.Combine(AppContext.BaseDirectory, "docs", OwnerConsoleChangelog.FileName),
+            Path.Combine(workspace.OrchestratorDirectory, OwnerConsoleNewsRecord.FileName),
+            text => Post(() => view.ShowNotice(text, OwnerConsoleNoticeSeverity.Announcement, OwnerConsoleNoticeSource.Announcement)),
+            () => Post(() => { view.NoticeStrip.DismissAnnouncement(); view.RenderNotices(); }),
+            text => Post(() => view.ShowNotice(text, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action)));
+
+        void Post(Action action)
+        {
+            if (token.IsCancellationRequested) return;
+            view.Invoke(() => { if (!token.IsCancellationRequested) action(); });
+        }
     }
 }

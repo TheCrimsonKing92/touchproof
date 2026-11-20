@@ -8,7 +8,9 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
     Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
-    OwnerConsoleSoundCommand? sound = null, string? conductorPolicyPath = null, OrchestratorWorkspace? workspace = null, OwnerConsoleAgentsSettingsTab? agentsSettings = null) : IDisposable
+    OwnerConsoleSoundCommand? sound = null, string? conductorPolicyPath = null, OrchestratorWorkspace? workspace = null,
+    OwnerConsoleAgentsSettingsTab? agentsSettings = null, IProviderConnectionsConsoleGateway? providerConnections = null,
+    IProviderSignInLauncher? providerSignIn = null) : IDisposable
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
     private readonly OwnerFleetViewKeys _fleetKeys = new();
@@ -22,6 +24,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerConsoleBellTiers EffectiveBellTiers => _bell.Tiers;
     internal OwnerConsoleSoundCommand? Sound => sound;
     internal OwnerConsoleAgentsSettingsTab? AgentsSettings => agentsSettings;
+    internal IProviderConnectionsConsoleGateway? ProviderConnections => providerConnections;
+    internal IProviderSignInLauncher? ProviderSignIn => providerSignIn;
     internal string? ConductorPolicyPath => conductorPolicyPath;
     internal OrchestratorWorkspace? Workspace => workspace;
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
@@ -43,6 +47,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private string? _requestedEpicId;
     private string? _requestedGateGoalId;
     private bool _settingsRequested;
+    private string? _settingsTarget;
+    internal void SetSettingsTarget(string? provider) => _settingsTarget = provider;
+    internal string? TakeSettingsTarget()
+    { var provider = _settingsTarget; _settingsTarget = null; return provider; }
     internal bool TakeSettingsRequested()
     { var requested = _settingsRequested; _settingsRequested = false; return requested; }
     internal string? TakeRequestedEpicId()
@@ -160,5 +168,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerConsoleCommandDispatch NewCommandDispatch() => new(dialogs, conductor, digest, summary, clock,
         fleet, landings, sound, _goalDetail, _fleetKeys, _notificationGate, _bell, () => _settingsRequested,
         () => _settingsRequested = true, () => _requestedEpicId, () => _requestedGateGoalId, ShowGoalDetailAsync,
-        () => CommandNotice);
+        () => CommandNotice, () => News);
+
+    internal OwnerConsoleNewsRecord? News { get; set; }
 }

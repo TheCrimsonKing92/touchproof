@@ -12,7 +12,8 @@ internal sealed class CostGoalOutcomeSweep(
     Func<GoalId, string?> resolveLandedHomeCommit,
     Func<IEnumerable<(string Commit, DateTimeOffset At)>> readAdoptions,
     Func<string, string, bool> containsCommit,
-    Action<string> reportFailure)
+    Action<string> reportFailure,
+    Func<IReadOnlyList<TickStepObservation>>? readTicks = null)
 {
     private static readonly ConditionalWeakTable<ConductorBatchLoop, CostGoalOutcomeSweep> TickSweeps = new();
     private readonly object runGate = new();
@@ -48,6 +49,7 @@ internal sealed class CostGoalOutcomeSweep(
                 .Where(adoption => adoption.At <= evaluatedAt).Distinct().OrderBy(adoption => adoption.At).ToArray());
             var gates = new Lazy<OutcomeGateObservation[]>(() =>
                 CostGoalOutcomeMetric.ReadRecordedGates(orchestratorDirectory, evaluatedAt).ToArray());
+            var ticks = new Lazy<IReadOnlyList<TickStepObservation>>(() => readTicks?.Invoke() ?? []);
             var ancestry = new Dictionary<(string Ancestor, string Commit), bool>();
 
             bool Contains(string ancestor, string commit)
@@ -63,7 +65,7 @@ internal sealed class CostGoalOutcomeSweep(
             {
                 try
                 {
-                    store.WithGoalLock(goalId, () => SweepGoal(goalId, evaluatedAt, adoptions, gates, Contains));
+                    store.WithGoalLock(goalId, () => SweepGoal(goalId, evaluatedAt, adoptions, gates, ticks, Contains));
                     reportedFailures.Remove(goalId);
                 }
                 catch (Exception ex)
@@ -80,7 +82,7 @@ internal sealed class CostGoalOutcomeSweep(
 
     private void SweepGoal(GoalId goalId, DateTimeOffset evaluatedAt,
         Lazy<(string Commit, DateTimeOffset At)[]> adoptions, Lazy<OutcomeGateObservation[]> gates,
-        Func<string, string, bool> contains)
+        Lazy<IReadOnlyList<TickStepObservation>> ticks, Func<string, string, bool> contains)
     {
         var record = store.Read(goalId);
         if (record is null) return;
@@ -102,8 +104,12 @@ internal sealed class CostGoalOutcomeSweep(
 
         // A previous pass can have stored finals before a delivery failed. Resume those effects without reading gates.
         var results = allFinal ? record.FinalVerdicts.OrderBy(result => result.LineIndex).ToArray()
-            : CostGoalOutcomeVerdict.Evaluate(record, gates.Value, adoption.LandedHomeCommit, contains,
-                adoption.AdoptedAt, evaluatedAt);
+            : CostGoalOutcomeVerdict.Evaluate(record,
+                record.Filing.Baselines.Any(baseline => CostGoalOutcomeMetric.TickStepName(baseline.Line.Name) is null)
+                    ? gates.Value : [],
+                adoption.LandedHomeCommit, contains, adoption.AdoptedAt, evaluatedAt,
+                ticks: record.Filing.Baselines.Any(baseline => CostGoalOutcomeMetric.TickStepName(baseline.Line.Name) is not null)
+                    ? ticks.Value : null);
         var (backlog, events) = stores ??= openStores();
         CostGoalOutcomeVerdict.Apply(goalId, results, store, backlog, events);
     }
@@ -149,7 +155,7 @@ internal sealed class CostGoalOutcomeSweep(
                 var result = GitCli.Run(workspace.ExecutionDirectory, "merge-base", "--is-ancestor", "--", ancestor, commit);
                 if (result.ExitCode is 0 or 1) return result.ExitCode == 0;
                 throw new InvalidOperationException($"Unable to check cost goal ancestry for {ancestor} in {commit}.");
-            }, reportFailure);
+            }, reportFailure, () => TickStepLedgerReader.Read(workspace.ConductEventsLogPath));
     }
 
     private static string? ReadRecoveredLandingCommit(GoalOperationJournalSummary journal)
