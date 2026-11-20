@@ -2758,7 +2758,48 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         reason = "stored version advanced during tick; reapplied tick snapshot delta onto fresh goal row";
         if (obligationMerge.ConflictIds.Count > 0)
             reason += "; criterion evidence obligation conflict kept stored: " + string.Join(",", obligationMerge.ConflictIds);
+        var retainedFields = GetRetainedGoalFields(stored, current, merged);
+        if (retainedFields.Count > 0)
+            reason += "; stored value kept over differing tick value: " + string.Join(",", retainedFields);
         return true;
+    }
+
+    private static IReadOnlyList<string> GetRetainedGoalFields(
+        GoalSnapshot stored, GoalSnapshot current, GoalSnapshot merged)
+    {
+        try
+        {
+            var storedFields = SerializeMergeFields(stored);
+            var tickFields = SerializeMergeFields(current);
+            var mergedFields = SerializeMergeFields(merged);
+            return storedFields.EnumerateObject().Select(field => field.Name)
+                .Union(tickFields.EnumerateObject().Select(field => field.Name), StringComparer.Ordinal)
+                .Where(name =>
+                {
+                    var storedValue = FieldValue(storedFields, name);
+                    return storedValue == FieldValue(mergedFields, name) &&
+                        storedValue != FieldValue(tickFields, name);
+                })
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            return [];
+        }
+
+        // These collections merge by element and do not have a field-level winner.
+        static JsonElement SerializeMergeFields(GoalSnapshot goal) =>
+            JsonSerializer.SerializeToElement(goal with
+            {
+                Tasks = [],
+                Timeline = [],
+                GateTestObligations = null,
+                CriterionEvidenceObligations = null
+            }, SerializerOptions);
+
+        static string FieldValue(JsonElement fields, string name) =>
+            fields.TryGetProperty(name, out var value) ? value.GetRawText() : "null";
     }
 
     private static GoalSnapshot NormalizeStoredVerificationStatus(GoalSnapshot snapshot, out string? reason)

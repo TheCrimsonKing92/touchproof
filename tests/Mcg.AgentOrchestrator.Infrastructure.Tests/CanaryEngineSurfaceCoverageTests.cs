@@ -1,4 +1,3 @@
-using ArchUnitNET.Domain;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis.CSharp;
@@ -11,9 +10,7 @@ public class CanaryEngineSurfaceCoverageTests
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings";
 
     // Parallel-safe: read-only assembly/source inputs, each cached once; no shared mutations or writes.
-    private static readonly Lazy<Architecture> InfrastructureArchitecture = new(
-        () => SharedArchitectureCache.Get(typeof(GoalAcceptanceVerifier).Assembly),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static DependencyIndex Index => DependencyIndexCache.Get(typeof(GoalAcceptanceVerifier).Assembly);
     private static readonly Lazy<IReadOnlyDictionary<string, string[]>> DeclarationIndex = new(
         BuildDeclarationIndex, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -170,22 +167,20 @@ public class CanaryEngineSurfaceCoverageTests
 
     private static string[] UncoveredCollaboratorSourcePaths(Func<string, bool> isCovered)
     {
-        var assemblyName = typeof(GoalAcceptanceVerifier).Assembly.FullName;
+        var assemblyName = typeof(GoalAcceptanceVerifier).Assembly.GetName().Name;
         var verifierName = typeof(GoalAcceptanceVerifier).FullName!;
-        bool IsVerifierType(IType type) => type.FullName == verifierName ||
+        bool IsVerifierType(DependencyType type) => type.FullName == verifierName ||
             type.FullName.StartsWith(verifierName + "+", StringComparison.Ordinal) ||
             type.FullName.StartsWith(verifierName + "/", StringComparison.Ordinal);
 
-        // ArchUnitNET folds generated method bodies (closures/state machines) into declaring-type
-        // dependencies; also include every nested type exposed by its model as a direct root.
-        var roots = InfrastructureArchitecture.Value.Types
-            .Where(type => type.Assembly.FullName == assemblyName && IsVerifierType(type)).ToArray();
+        // Generated closure and state-machine bodies are attributed to their declaring type.
+        // Include directly declared nested verifier types as roots as well.
+        var roots = Index.Types
+            .Where(type => type.AssemblyName == assemblyName && IsVerifierType(type.Type)).ToArray();
         Assert.Contains(roots, type => type.FullName == verifierName);
 
-        var dependencies = roots.SelectMany(type => type.Dependencies)
-            .Select(dependency => dependency.Target)
-            // Targets without an assembly are not declared in the Infrastructure assembly.
-            .Where(type => type.Assembly?.FullName == assemblyName && !IsVerifierType(type))
+        var dependencies = roots.SelectMany(type => type.References)
+            .Where(type => type.AssemblyName == assemblyName && !IsVerifierType(type))
             .ToArray();
         Assert.NotEmpty(dependencies);
 

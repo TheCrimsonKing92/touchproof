@@ -7,7 +7,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class PreReviewEvidenceContextBuilder
 {
     internal static PreReviewEvidenceContext WithFailedGateClasses(
-        PreReviewEvidenceContext context, IReadOnlyList<(string Alias, string ClassName)> classes)
+        PreReviewEvidenceContext context, IReadOnlyList<(string Alias, string ClassName)> classes) =>
+        WithAdditionalClasses(context, classes, "failed-gate coverage");
+
+    private static PreReviewEvidenceContext WithAdditionalClasses(
+        PreReviewEvidenceContext context, IReadOnlyList<(string Alias, string ClassName)> classes, string reason)
     {
         if (classes.Count == 0 || context.MappingNeedsInput || context.RequiresSourceCleanup) return context;
 
@@ -34,18 +38,24 @@ internal static class PreReviewEvidenceContextBuilder
             FocusedRequest = string.Join("; ", new[] { context.FocusedRequest }.OfType<string>()
                 .Where(request => !string.IsNullOrWhiteSpace(request)).Concat(requests)),
             NoApplicableTests = false,
-            MappingReason = context.MappingReason + "; failed-gate coverage: " + string.Join("; ", requests)
+            MappingReason = context.MappingReason + $"; {reason}: " + string.Join("; ", requests)
         };
     }
 
     internal static PreReviewEvidenceContext Build(
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan,
-        Action<string>? log = null) =>
-        BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan, log ?? Console.WriteLine) with
+        Action<string>? log = null)
+    {
+        var context = BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan, log ?? Console.WriteLine);
+        return context with
         {
+            MappingReason = context.NoApplicableTests
+                ? DescribeUnmappedTestSources(context.MappingReason, changeSummary, plan)
+                : context.MappingReason,
             TestImpactDegradation = plan.ReverseDependencyDegradation,
             TestImpactHeadroom = plan.ReverseDependencyHeadroom
         };
+    }
 
     private static PreReviewEvidenceContext BuildMappedPreReviewEvidenceContext(
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan,
@@ -74,17 +84,33 @@ internal static class PreReviewEvidenceContextBuilder
         var focusedChecks = plan.Checks
             .Where(check => FindArgument(check.Command, "--filter") >= 0)
             .ToArray();
-        if (focusedChecks.Length == 0)
+        var context = focusedChecks.Length == 0
+            ? new PreReviewEvidenceContext(candidateSha, [], null, plan.Summary,
+                NoApplicableTests: true, MappingNeedsInput: false)
+            : BuildFocusedContext(candidateSha, plan.Summary, focusedChecks, log);
+
+        var changedClasses = new List<(string Alias, string ClassName)>();
+        foreach (var check in plan.Checks)
         {
-            return new PreReviewEvidenceContext(
-                candidateSha,
-                [],
-                null,
-                $"{plan.Summary} No filtered test target mapped; project-wide checks are deferred to the acceptance gate.",
-                NoApplicableTests: true,
-                MappingNeedsInput: false);
+            if (check.ChangedTestClasses.Count > 0 && ReadProject(check) is { } project &&
+                PreReviewFocusedRequestSplitter.TryResolveBrokerAlias(project, out var alias))
+            {
+                changedClasses.AddRange(check.ChangedTestClasses.Select(className => (alias!, className)));
+            }
         }
 
+        context = WithAdditionalClasses(context, changedClasses, "changed-test coverage");
+        return context.NoApplicableTests && focusedChecks.Length == 0
+            ? context with
+            {
+                MappingReason = $"{context.MappingReason} No filtered test target mapped; project-wide checks are deferred to the acceptance gate."
+            }
+            : context;
+    }
+
+    private static PreReviewEvidenceContext BuildFocusedContext(
+        string? candidateSha, string planSummary, IReadOnlyList<RepositoryTestImpactCheck> focusedChecks, Action<string> log)
+    {
         var selected = focusedChecks.Select(check => check.CommandLine).ToArray();
         var requests = new List<string>();
         var notApplicableChecks = new List<string>();
@@ -95,15 +121,14 @@ internal static class PreReviewEvidenceContextBuilder
         foreach (var check in focusedChecks)
         {
             var filterIndex = FindArgument(check.Command, "--filter");
-            var project = check.Command.FirstOrDefault(argument =>
-                argument.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+            var project = ReadProject(check);
             if (string.IsNullOrWhiteSpace(project))
             {
                 return new PreReviewEvidenceContext(
                     candidateSha,
                     selected,
                     null,
-                    WithNotApplicableChecks(plan.Summary),
+                    WithNotApplicableChecks(planSummary),
                     NoApplicableTests: false,
                     MappingNeedsInput: true);
             }
@@ -153,10 +178,38 @@ internal static class PreReviewEvidenceContextBuilder
             candidateSha,
             requests,
             noApplicableTests ? null : string.Join("; ", requests),
-            WithNotApplicableChecks(plan.Summary),
+            WithNotApplicableChecks(planSummary),
             NoApplicableTests: noApplicableTests,
             MappingNeedsInput: requests.Count == 0 && !noApplicableTests);
     }
+
+    private static string DescribeUnmappedTestSources(
+        string mappingReason, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan)
+    {
+        var paths = changeSummary.Files
+            .Where(file => file.Categories.Contains(RepositoryChangeCategory.Test) &&
+                file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            .Select(file => file.Path)
+            .ToArray();
+        if (paths.Length == 0) return mappingReason;
+
+        var reasons = plan.Checks
+            .Where(check => check.TestProject is not null && check.Reason != plan.Summary &&
+                FindArgument(check.Command, "--filter") < 0)
+            .Select(check => check.Reason)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var files = $"Changed test sources were present. Unmapped test sources include {FormatDiagnosticItems(paths, 5)}.";
+        return reasons.Length == 0
+            ? $"{mappingReason} {files}"
+            : $"{mappingReason} {files} Planner reasons include {FormatDiagnosticItems(reasons, 3)}";
+    }
+
+    private static string FormatDiagnosticItems(string[] items, int limit) =>
+        string.Join(" / ", items.Take(limit)) + (items.Length > limit ? $" (+{items.Length - limit} more)" : "");
+
+    private static string? ReadProject(RepositoryTestImpactCheck check) =>
+        check.Command.FirstOrDefault(argument => argument.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
 
     private static int FindArgument(IReadOnlyList<string> arguments, string value)
     {
