@@ -7,9 +7,23 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 // Portfolio membership is a separate-store side effect of an already committed creation.
 internal static class EpicAtCreation
 {
-    public static bool HasArgument(IReadOnlyList<string> parts) => parts.Skip(1).Any(part =>
+    public static bool HasArgument(IReadOnlyList<string> parts) => parts.Skip(1).Any(IsArgument);
+
+    private static bool IsArgument(string part) =>
         part.Equals("--epic", StringComparison.OrdinalIgnoreCase) ||
-        part.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase));
+        part.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase);
+
+    public static IReadOnlyList<string> UseResolvedArgument(IReadOnlyList<string> parts, string epicId)
+    {
+        // Dispatch creation with the same epic identity used to reserve the request.
+        var resolvedParts = parts.ToArray();
+        var index = Array.FindIndex(resolvedParts, 1, IsArgument);
+        if (resolvedParts[index].Equals("--epic", StringComparison.OrdinalIgnoreCase))
+            resolvedParts[index + 1] = epicId;
+        else
+            resolvedParts[index] = $"--epic={epicId}";
+        return resolvedParts;
+    }
 
     public static PortfolioEpic? ResolveRequested(OrchestratorWorkspace workspace, string? argument)
     {

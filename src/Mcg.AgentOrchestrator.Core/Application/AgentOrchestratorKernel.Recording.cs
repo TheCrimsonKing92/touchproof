@@ -2066,36 +2066,13 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
     {
-        if (task.RequiredRole == AgentRole.Planner && task.LastVerification?.PlannerEvidenceBatch?.Directives
-                .Any(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment) == true) return false;
-        if (PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task)) return false;
-        if (task.Status == WorkTaskStatus.Completed ||
-            task.LastVerification is not { Succeeded: true } ||
-            !WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion ||
-            (WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).Status == VerificationTerminalContractStatus.Valid &&
-             DispatchFailureClassifier.Classify(task, task.LastVerification).Kind != DispatchOutcomeKind.VerifiedSuccess &&
-             !VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredOffWorkerFindings(goal, task, task.LastVerification)) ||
-            (task.RequiredRole == AgentRole.Developer &&
-             WorkerResultBlockers.GetAssignedScopeComplete(task.LastVerification) is false))
-        {
+        if (!PassingVerificationCompletion.IsEligible(goal, task, _humanInputRequests.Values, out var verification))
             return false;
-        }
 
-        if (_humanInputRequests.Values.Any(request =>
-                request.GoalId == goal.Id &&
-                request.TaskId == task.Id &&
-                !request.IsCompleted &&
-                request.IsCurrentForBrief(goal.AuthoritativeBrief.Version) &&
-                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
+        if (PassingVerificationCompletion.GetPlannerEvidenceBatch(task, verification) is { } acceptedBatch)
         {
-            return false;
-        }
-
-        if (task.RequiredRole == AgentRole.Planner && task.LastVerification.PlannerEvidenceBatch is { } acceptedBatch &&
-            acceptedBatch.Directives.Any(item => item.PlannerEvidence is not null))
-        {
-            var diagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, task.LastVerification, out var acceptedBrief);
-            diagnostic ??= ProjectAcceptedPlannerOwnership(goal, task, acceptedBatch, acceptedBrief, task.LastVerification.CompletedAt);
+            var diagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, verification, out var acceptedBrief);
+            diagnostic ??= ProjectAcceptedPlannerOwnership(goal, task, acceptedBatch, acceptedBrief, verification.CompletedAt);
             if (diagnostic is not null)
             {
                 ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);

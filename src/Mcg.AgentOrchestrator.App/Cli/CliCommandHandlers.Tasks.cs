@@ -591,12 +591,8 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var answerParts = RemoveFlagWithValue(parts, "--gate-deliverable");
             CliArgumentParser.RequirePartCount(answerParts, 3, answerUsage);
             var resolvedRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, answerParts[1]);
-            context.Kernel.SubmitHumanInput(
-                resolvedRequest.Id,
-                ResolveTextArgument(answerParts, inlineIndex: 2, answerUsage, "--text-file"),
-                answerGateIds);
-            context.CurrentGoal = context.Kernel.GetGoal(resolvedRequest.GoalId);
-            GoalTextView.PrintGoal(context.CurrentGoal);
+            AnswerHumanInputCommand.SubmitAndPrint(context, resolvedRequest,
+                ResolveTextArgument(answerParts, inlineIndex: 2, answerUsage, "--text-file"), answerGateIds);
             return true;
 
         case "supersede":
