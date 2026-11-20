@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -395,7 +396,7 @@ internal static class TestCoverageInvariant
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             var deletedTestFilesByClass = normalizedDeletedTestFiles
-                .Select(file => (File: file, ClassName: Path.GetFileNameWithoutExtension(file)))
+                .Select(file => (File: file, ClassName: TestIdentityFilenameAssumption.GetClassNameCandidate(file)))
                 .Where(item => !string.IsNullOrWhiteSpace(item.ClassName))
                 .ToArray();
             // A deleted file reduces the floor only when a qualified discovered identity or

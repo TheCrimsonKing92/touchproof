@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -256,7 +257,7 @@ internal static class TestTamperAnalysis
             ? containingIdentity[(containingSeparatorIndex + 1)..]
             : containingIdentity;
         return declaredClass.Equals(
-            containingType ?? Path.GetFileNameWithoutExtension(filePath),
+            containingType ?? TestIdentityFilenameAssumption.GetClassNameCandidate(filePath),
             StringComparison.OrdinalIgnoreCase);
     }
 
