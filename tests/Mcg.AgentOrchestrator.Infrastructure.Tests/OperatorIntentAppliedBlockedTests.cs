@@ -5,6 +5,102 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class OperatorIntentAppliedBlockedTests
 {
+    private const string DispatchRule = DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing;
+    private const string VerdictRule = "succeeded-worker-result-failing-tests";
+    private const string VerdictGuidance = "close or route task 1 to proceed";
+    private const string DispatchGuidance = VerdictGuidance + ", or run recover for this goal";
+
+    [Xunit.Fact]
+    public async Task KnownCauseRetryLeavingDispatchFailureReportsAppliedBlocked()
+    {
+        using var fixture = new Fixture();
+        fixture.Fail(fixture.Developer, DispatchRule);
+        fixture.Fail(fixture.Tester, VerdictRule);
+        var intent = await fixture.Enqueue(fixture.Tester, OperatorIntentVerbs.Retry,
+            new RetryOperatorIntentPayload("Retry the Tester work.", null, RetryCause: RetryCause.NewSourceFinding));
+
+        await AssertBlockedApplication(fixture, intent, "AppliedBlocked retry", DispatchRule, DispatchGuidance);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Tester.Status);
+    }
+
+    [Xunit.Fact]
+    public async Task ClarifiedRetryLeavingDispatchFailureReportsContinuationWithBlocker()
+    {
+        using var fixture = new Fixture();
+        fixture.Fail(fixture.Developer, DispatchRule);
+        fixture.Fail(fixture.Tester, VerdictRule);
+        var intent = await fixture.Enqueue(fixture.Tester, OperatorIntentVerbs.Retry,
+            new RetryOperatorIntentPayload("Retry the Tester work.", null));
+
+        fixture.Coordinator.ExecutePending(fixture.Kernel, fixture.Goal);
+        var clarification = Assert.Single(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id));
+        Assert.Equal(fixture.Tester.Id, clarification.TaskId);
+        Assert.Equal(OperatorIntentStatus.Claimed, (await fixture.Store.GetAsync(intent.Id))!.Status);
+        fixture.Kernel.SubmitHumanInput(clarification.Id, nameof(RetryCause.NewSourceFinding));
+
+        await AssertBlockedApplication(fixture, intent, "Applied retry continuation", DispatchRule, DispatchGuidance);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Tester.Status);
+    }
+
+    [Xunit.Fact]
+    public async Task RetryClearingOnlyVerdictFailureReportsPlainApplied()
+    {
+        using var fixture = new Fixture();
+        fixture.Fail(fixture.Developer, VerdictRule);
+        var intent = await fixture.Enqueue(fixture.Developer, OperatorIntentVerbs.Retry,
+            new RetryOperatorIntentPayload("Retry the Developer work.", null, RetryCause: RetryCause.NewSourceFinding));
+
+        fixture.Coordinator.ExecutePending(fixture.Kernel, fixture.Goal);
+        fixture.Coordinator.CompletePersisted([fixture.Goal.Id]);
+
+        var stored = (await fixture.Store.GetAsync(intent.Id))!;
+        Assert.Equal(OperatorIntentStatus.Applied, stored.Status);
+        Assert.Equal($"Applied retry to goal {fixture.Goal.Id.Value[..8]} task {fixture.Developer.Id.Value[..8]}.",
+            stored.Outcome);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Developer.Status);
+        Assert.NotEqual(GoalLifecycleState.Failed, GoalLifecycle.ResolveState(fixture.Goal));
+        Assert.Empty(fixture.BlockedRecords(intent));
+    }
+
+    [Xunit.Fact]
+    public async Task RetryLeavingVerdictFailureKeepsCloseOrRouteGuidance()
+    {
+        using var fixture = new Fixture();
+        fixture.Fail(fixture.Developer, VerdictRule);
+        fixture.Fail(fixture.Tester, VerdictRule);
+        var intent = await fixture.Enqueue(fixture.Tester, OperatorIntentVerbs.Retry,
+            new RetryOperatorIntentPayload("Retry the Tester work.", null, RetryCause: RetryCause.NewSourceFinding));
+
+        await AssertBlockedApplication(fixture, intent, "AppliedBlocked retry", VerdictRule, VerdictGuidance);
+    }
+
+    private static async Task AssertBlockedApplication(
+        Fixture fixture, OperatorIntentRecord intent, string outcomePrefix, string rule, string guidance)
+    {
+        fixture.Coordinator.ExecutePending(fixture.Kernel, fixture.Goal);
+        fixture.Coordinator.CompletePersisted([fixture.Goal.Id]);
+
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Developer.Status);
+        Assert.Equal(GoalLifecycleState.Failed, GoalLifecycle.ResolveState(fixture.Goal));
+        var stored = (await fixture.Store.GetAsync(intent.Id))!;
+        Assert.Equal(OperatorIntentStatus.Applied, stored.Status);
+        Assert.StartsWith(outcomePrefix + " to goal ", stored.Outcome);
+        var detail = $"blocked by Failed Developer task {fixture.Developer.Id.Value} ({rule}); {guidance}";
+        Assert.Equal(
+            $"{outcomePrefix} to goal {fixture.Goal.Id.Value[..8]} task {fixture.Tester.Id.Value[..8]}. {detail}",
+            stored.Outcome);
+
+        var record = Assert.Single(fixture.BlockedRecords(intent));
+        var applied = record.OperatorIntentApplied!;
+        Assert.Equal("applied-blocked", applied.Outcome);
+        Assert.Equal($"operator-intent:{intent.Id} outcome=AppliedBlocked; {detail}", record.Message);
+        var blocker = applied.BlockedBy!;
+        Assert.Equal(AgentRole.Developer, blocker.Role);
+        Assert.Equal(fixture.Developer.Id.Value, blocker.TaskId);
+        Assert.Equal(rule, blocker.Reason);
+        Assert.Equal(1, blocker.TaskNumber);
+    }
+
     [Xunit.Fact]
     public async Task RouteOnTesterWhileDeveloperFailedReportsAppliedBlockedNamingDeveloper()
     {

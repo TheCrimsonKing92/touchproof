@@ -8,7 +8,8 @@ internal static class OperatorIntentEffectCheck
     internal static OperatorIntentBlocker? Evaluate(Goal goal, OperatorIntentRecord intent)
     {
         if (intent.TaskId is null || intent.Verb is not
-            (OperatorIntentVerbs.Adjudicate or OperatorIntentVerbs.Progress or OperatorIntentVerbs.VerifyManual))
+            (OperatorIntentVerbs.Adjudicate or OperatorIntentVerbs.Progress or
+             OperatorIntentVerbs.Retry or OperatorIntentVerbs.VerifyManual))
             return null;
 
         var state = GoalLifecycle.ResolveState(goal);
@@ -35,7 +36,27 @@ internal static class OperatorIntentEffectCheck
 
     internal static string Describe(OperatorIntentBlocker blocker) =>
         $"blocked by Failed {blocker.Role} task {blocker.TaskId} ({blocker.Reason}); " +
-        $"close or route task {blocker.TaskNumber} to proceed";
+        $"close or route task {blocker.TaskNumber} to proceed" +
+        (IsDispatchFailure(blocker.Reason) ? ", or run recover for this goal" : "");
+
+    private static bool IsDispatchFailure(string reason)
+    {
+        var classification = TaskOutcomeClassifier.Classify(WorkTaskStatus.Failed, reason);
+        return classification.Class is TaskOutcomeClass.Environmental or TaskOutcomeClass.ManufacturedFixed ||
+            classification.Rule is
+                DispatchFailureDiagnosticMarker.ResearcherOutputContractRejected or
+                DispatchFailureDiagnosticMarker.ResearcherArtifactPersistenceFailed or
+                DispatchFailureDiagnosticMarker.PlannerOutputContractRejected or
+                DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed or
+                DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed or
+                DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing or
+                DispatchFailureDiagnosticMarker.WorkerBuildReceiptStale or
+                DispatchFailureDiagnosticMarker.WrapperProcessExitFailure or
+                DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing or
+                DispatchFailureDiagnosticMarker.InScopeFileIgnored or
+                DispatchFailureDiagnosticMarker.WorktreeInspectionFailed ||
+            classification.Rule == TaskOutcomeRules.VerificationTerminalContractIncomplete.Token;
+    }
 
     internal static IEnumerable<OperatorIntentAppliedPayload> PendingBlocked(Goal goal)
     {
