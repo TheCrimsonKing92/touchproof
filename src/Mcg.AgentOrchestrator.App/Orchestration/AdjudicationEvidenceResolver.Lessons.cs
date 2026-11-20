@@ -5,15 +5,17 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class AdjudicationEvidenceResolver
 {
+    internal static bool LessonReferenceRequiresGoal(string reference) =>
+        reference.StartsWith("focused-evidence:", StringComparison.OrdinalIgnoreCase) ||
+        reference.StartsWith("acceptance-attempt:", StringComparison.OrdinalIgnoreCase) ||
+        reference.StartsWith("control-receipt:", StringComparison.OrdinalIgnoreCase);
+
     public bool TryResolveForLesson(string reference, string workingDirectory, Goal? goal,
         out EvidenceManifestEntry entry, out string rejection)
     {
         entry = new EvidenceManifestEntry(reference, string.Empty);
         rejection = $"evidence-reference-unresolved {reference}";
-        var colon = reference.IndexOf(':');
-        var kind = colon > 0 ? reference[..colon].ToLowerInvariant() : string.Empty;
-        var value = colon > 0 ? reference[(colon + 1)..] : string.Empty;
-        if (kind is "focused-evidence" or "acceptance-attempt" or "control-receipt")
+        if (LessonReferenceRequiresGoal(reference))
         {
             if (goal is null)
             {
@@ -22,9 +24,12 @@ internal sealed partial class AdjudicationEvidenceResolver
             }
             var resolved = TryResolve(reference, goal,
                 new AdjudicateOperatorIntentPayload("lesson", "", [], 0, workingDirectory), out entry);
-            if (resolved && kind == "control-receipt") rejection = string.Empty;
+            if (resolved) rejection = string.Empty;
             return resolved;
         }
+        var colon = reference.IndexOf(':');
+        var kind = colon > 0 ? reference[..colon].ToLowerInvariant() : string.Empty;
+        var value = colon > 0 ? reference[(colon + 1)..] : string.Empty;
         if (kind is not ("operator-evidence" or "trx"))
         {
             rejection = $"evidence-reference-free-text-refused {reference}";

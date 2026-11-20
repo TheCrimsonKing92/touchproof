@@ -96,8 +96,7 @@ internal static class CliLessonCommands
             {
                 Goal? goal = null;
                 if (lesson.GoalId is { } id &&
-                    (recorded.ReceiptId.StartsWith("focused-evidence:", StringComparison.OrdinalIgnoreCase) ||
-                     recorded.ReceiptId.StartsWith("acceptance-attempt:", StringComparison.OrdinalIgnoreCase)) &&
+                    AdjudicationEvidenceResolver.LessonReferenceRequiresGoal(recorded.ReceiptId) &&
                     File.Exists(workspace.SqliteStatePath))
                     goal = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
                         .LoadGoalsAsync([new GoalId(id)]).GetAwaiter().GetResult().Goals.FirstOrDefault();

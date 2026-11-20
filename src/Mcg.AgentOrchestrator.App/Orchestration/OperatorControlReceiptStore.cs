@@ -30,6 +30,7 @@ internal sealed class OperatorControlReceiptStore(string orchestratorDirectory)
             using (stream)
             {
                 JsonSerializer.Serialize(stream, receipt, JsonOptions);
+                stream.Flush(flushToDisk: true);
             }
             File.Move(temporaryPath, ReceiptPath(receipt.ReceiptId), overwrite: false);
         }
