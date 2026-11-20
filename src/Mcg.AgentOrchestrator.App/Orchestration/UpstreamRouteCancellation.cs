@@ -28,8 +28,13 @@ internal static class UpstreamRouteCancellation
             {
                 // Checkpoint this cancellation even if a later cancellation or the retry fails.
                 markGoalMutated?.Invoke();
+                var preservation = string.IsNullOrWhiteSpace(cancelled.WorkingDirectory)
+                    ? "skipped-no-working-directory"
+                    : WorktreeEditPreservation.Preserve(
+                        cancelled.WorkingDirectory,
+                        $"upstream-route-cancel-{goal.Id.Value}-{taskId.Value}-{cancelled.ProcessId}");
                 kernel.RecordTaskNote(goal.Id, taskId,
-                    $"Dispatch cancelled because an upstream route superseded it (task '{upstream.Id}').");
+                    $"Dispatch cancelled because an upstream route superseded it (task '{upstream.Id}'). preservation={preservation}");
             }
         }
     }

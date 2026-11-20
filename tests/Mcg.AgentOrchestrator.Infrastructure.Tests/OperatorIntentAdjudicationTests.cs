@@ -91,7 +91,13 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
         var cancellations = new List<TaskId>();
         await WithHarness(async harness =>
         {
-            var (kernel, goal, developer) = RouteGoal(harness.Root, downstreamRole);
+            using var repository = new InProcessGitFixture("linked");
+            const string editFile = "worker-edit.txt";
+            const string editContent = "unfinished downstream edit";
+            File.WriteAllText(Path.Combine(repository.Worktree, editFile), editContent);
+            Assert.Equal($"?? {editFile}", repository.Git("status", "--porcelain", "--untracked-files=all"));
+
+            var (kernel, goal, developer) = RouteGoal(repository.Worktree, downstreamRole);
             var downstream = goal.Tasks.Single(task => task.RequiredRole == downstreamRole);
             Assert.True(downstream.LastProcess?.IsRunning);
             var payload = RoutePayload();
@@ -110,11 +116,16 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
             Assert.Null(downstream.LastProcess);
             Assert.Null(downstream.LastDispatch);
             Assert.Single(goal.Timeline, item => item.TaskId == downstream.Id && item.Kind == ProgressKind.TaskCancelled);
-            AssertSupersessionNote(goal, downstream.Id, developer.Id);
+            var note = AssertSupersessionNote(goal, downstream.Id, developer.Id);
+            Assert.Empty(repository.Git("status", "--porcelain", "--untracked-files=all"));
+            var stash = repository.Git("stash", "list", "-1", "--format=%H");
+            Assert.NotEmpty(stash);
+            Assert.EndsWith($"preservation=preserved={stash}", note);
+            Assert.Equal(editContent, repository.Git("show", $"{stash}^3:{editFile}"));
             await AssertDecision(harness.Decisions, goal, intent, "applied", OperatorActorKind.Human);
 
             kernel.RecordTaskDispatch(goal.Id, developer.Id,
-                new TaskDispatchRecord("retry-worker", "retry-developer", harness.Root, DateTimeOffset.UtcNow));
+                new TaskDispatchRecord("retry-worker", "retry-developer", repository.Worktree, DateTimeOffset.UtcNow));
             Assert.Equal(WorkTaskStatus.Running, developer.Status);
         }, (kernel, goalId, taskId) =>
         {
@@ -340,11 +351,11 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
         return cancelled;
     }
 
-    private static void AssertSupersessionNote(Goal goal, TaskId cancelledTask, TaskId upstream) =>
+    private static string AssertSupersessionNote(Goal goal, TaskId cancelledTask, TaskId upstream) =>
         Assert.Single(goal.Timeline, item =>
             item.TaskId == cancelledTask && item.Kind == ProgressKind.TaskNote &&
             item.Message.Contains("cancelled because an upstream route superseded it", StringComparison.Ordinal) &&
-            item.Message.Contains(upstream.Value, StringComparison.Ordinal));
+            item.Message.Contains(upstream.Value, StringComparison.Ordinal)).Message;
 
     private static TaskVerificationRecord PassingVerification(string root) =>
         new("focused test", root, 0, "passed", "", DateTimeOffset.UtcNow);
