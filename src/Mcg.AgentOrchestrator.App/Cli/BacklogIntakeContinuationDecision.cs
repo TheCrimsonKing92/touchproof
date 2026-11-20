@@ -35,11 +35,20 @@ internal sealed record BacklogIntakeContinuationSnapshot(
     GoalLifecycleState? OwnerLifecycle,
     bool OwnerTerminal,
     BacklogIntakeRecord? Intake,
+    IReadOnlyList<GoalReplacementLineageSnapshot> IntakeReplacementPath,
     BacklogIntakeContinuationReservation? Reservation,
     SourceBacklogContinuationLineage? Lineage)
 {
     internal bool OwnerLanded => OwnerLifecycle is
         GoalLifecycleState.Merged or GoalLifecycleState.Recorded or GoalLifecycleState.CleanedUp;
+
+    internal bool IntakeMatchesOwner => Intake is null ||
+        (Intake.Status == "GoalCreated" &&
+            (Intake.GoalId == Claim?.OwnerGoalId || IntakeReplacementPath.Count != 0));
+
+    internal bool Matches(BacklogIntakeContinuationSnapshot expected) =>
+        (this with { IntakeReplacementPath = expected.IntakeReplacementPath }) == expected &&
+        IntakeReplacementPath.SequenceEqual(expected.IntakeReplacementPath);
 }
 
 internal readonly record struct BacklogIntakeContinuationDecision(
@@ -73,8 +82,7 @@ internal readonly record struct BacklogIntakeContinuationDecision(
             return Refuse(BacklogIntakeContinuationRefusal.OwnerNotLanded);
         if (snapshot.ItemStatus != BacklogItemStatus.Open)
             return Refuse(BacklogIntakeContinuationRefusal.ItemNotOpen);
-        if (snapshot.Intake is { } existing &&
-            (existing.Status != "GoalCreated" || existing.GoalId != snapshot.Claim.OwnerGoalId))
+        if (!snapshot.IntakeMatchesOwner)
             return Refuse(BacklogIntakeContinuationRefusal.StaleIntake);
         return CheckOptions(BacklogIntakeContinuationAction.Continue, pipeline, coverage);
     }
@@ -128,9 +136,7 @@ internal static class BacklogIntakeContinuation
         var owner = context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == snapshot.Claim?.OwnerGoalId);
         var hasMismatch = owner is not null && !snapshot.OwnerLanded && pipeline is not null &&
             BacklogIntakeGoalReuse.HasPipelineMismatch(plan, owner);
-        var correctionReplay = !snapshot.OwnerTerminal && !hasMismatch && snapshot.Intake?.GoalId is { } priorGoal &&
-            priorGoal != owner?.Id.Value && claims.ListLineage(item.Id).Any(row =>
-                row.PredecessorGoalId == priorGoal && row.SuccessorGoalId == owner?.Id.Value);
+        var correctionReplay = !snapshot.OwnerTerminal && !hasMismatch && snapshot.IntakeReplacementPath.Count != 0;
         var decision = BacklogIntakeContinuationDecision.Evaluate(
             snapshot, forceReclaim, hasMismatch, correctionReplay, pipeline, coverage);
         if (decision.Action == BacklogIntakeContinuationAction.OrdinaryIntake)
@@ -196,7 +202,7 @@ internal static class BacklogIntakeContinuation
             var expected = snapshot;
             snapshot = host.Repository.TransactGoalCreationWithOutboxAsync(scope, (current, cancellationToken) =>
             {
-                if (CaptureBacklogContinuation(workspace, current, item.Id, itemStatus, claims, intake) != expected)
+                if (!CaptureBacklogContinuation(workspace, current, item.Id, itemStatus, claims, intake).Matches(expected))
                     throw BacklogIntakeSnapshotChanged(item.Id);
                 if (refusal is { } stableRefusal)
                     throw new BacklogIntakeContinuationException(item.Id, stableRefusal);
@@ -215,7 +221,7 @@ internal static class BacklogIntakeContinuation
                         case BacklogContinuationPhase.Prepared:
                             if (expected.Claim is not { Coverage: SourceBacklogCoverage.Slice } predecessor ||
                                 predecessor.OwnerGoalId != pending.PredecessorId || predecessor.Version != pending.ClaimVersion ||
-                                !expected.OwnerTerminal || !expected.OwnerLanded)
+                                !expected.OwnerTerminal || !expected.OwnerLanded || !expected.IntakeMatchesOwner)
                                 throw BacklogIntakeSnapshotChanged(item.Id);
                             _ = claims.TransferContinuation(predecessor, pending.SuccessorId)
                                 ?? throw BacklogIntakeSnapshotChanged(item.Id);
@@ -291,8 +297,32 @@ internal static class BacklogIntakeContinuation
         var claim = claims.ResolveClaim(kernel, itemId);
         var owner = kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim?.OwnerGoalId);
         var lifecycle = owner is null ? (GoalLifecycleState?)null : ReadOwnerLifecycle(workspace, owner);
-        return new(itemStatus, claim, owner?.Status, lifecycle, owner?.IsTerminal == true, intake.Get(itemId),
+        var record = intake.Get(itemId);
+        var replacementPath = ReadIntakeReplacementPath(kernel, claims, itemId, owner, record?.GoalId);
+        return new(itemStatus, claim, owner?.Status, lifecycle, owner?.IsTerminal == true, record, replacementPath,
             intake.GetContinuation(itemId), claim is null ? null : claims.FindContinuationLineage(claim));
+    }
+
+    private static IReadOnlyList<GoalReplacementLineageSnapshot> ReadIntakeReplacementPath(
+        AgentOrchestratorKernel kernel, SourceBacklogClaimStore claims, string itemId, Goal? owner, string? intakeGoalId)
+    {
+        if (owner is null || intakeGoalId is null || intakeGoalId == owner.Id.Value ||
+            !kernel.Goals.Any(goal => goal.Id.Value == intakeGoalId))
+            return [];
+
+        var replacements = claims.ListLineage(itemId).ToDictionary(row => row.SuccessorGoalId, StringComparer.Ordinal);
+        var path = new List<GoalReplacementLineageSnapshot>();
+        var successor = owner.Id.Value;
+        // A replacement keeps the intake record on the original goal. Trace from the
+        // current owner back to that goal, including each row in the write-boundary check.
+        while (replacements.Remove(successor, out var change))
+        {
+            path.Add(change);
+            if (change.PredecessorGoalId == intakeGoalId)
+                return path;
+            successor = change.PredecessorGoalId;
+        }
+        return [];
     }
 
     private static GoalLifecycleState ReadOwnerLifecycle(OrchestratorWorkspace workspace, Goal owner)
