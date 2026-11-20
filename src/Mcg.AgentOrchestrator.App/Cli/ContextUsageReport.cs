@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Usage;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -40,7 +41,7 @@ internal static class ContextUsageReport
         var rows = groups.Select(group =>
         {
             var receipts = group.Select(item => item.Dispatch.ContextPackageReceipt).ToArray();
-            var usage = group.Select(item => ContextUsageFigures.RecordedUsage(item.Dispatch)).ToArray();
+            var usage = group.Select(item => DispatchUsageValues.RecordedUsage(item.Dispatch)).ToArray();
             var missing = usage.Where(value => value?.InputTokens.State != ProviderUsageState.Reported).ToArray();
             var reasons = missing.GroupBy(ContextUsageFigures.MissingReasonCode, StringComparer.Ordinal)
                 .OrderBy(reason => reason.Key, StringComparer.Ordinal)
@@ -50,10 +51,10 @@ internal static class ContextUsageReport
                 group.Key.Model,
                 group.Count(),
                 usage.Count(value => value?.InputTokens.State == ProviderUsageState.Reported),
-                Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.InputTokens).Value)),
-                Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.CachedInputTokens).Value)),
+                Stat(usage.Select(value => DispatchUsageValues.ReportedCount(value?.InputTokens))),
+                Stat(usage.Select(value => DispatchUsageValues.ReportedCount(value?.CachedInputTokens))),
                 Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Uncached(value.InputTokens, value.CachedInputTokens).Value)),
-                Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.OutputTokens).Value)),
+                Stat(usage.Select(value => DispatchUsageValues.ReportedCount(value?.OutputTokens))),
                 Stat(group.Select(item => RecordedTurns(item.Dispatch))),
                 Stat(group.Select(item => RecordedToolCalls(item.Dispatch))),
                 Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.HarnessOverhead(receipt).Value)),
@@ -67,11 +68,7 @@ internal static class ContextUsageReport
         return new(since, role, rows);
     }
 
-    private static long? RecordedTurns(TaskDispatchRecord dispatch)
-    {
-        var turns = dispatch.ContextPackageReceipt is { } receipt ? receipt.Turns : dispatch.ProviderUsage?.Turns;
-        return turns is null ? null : ContextUsageFigures.Provider(turns).Value;
-    }
+    internal static long? RecordedTurns(TaskDispatchRecord dispatch) => DispatchUsageValues.RecordedTurns(dispatch);
 
     private static long? RecordedToolCalls(TaskDispatchRecord dispatch)
     {
