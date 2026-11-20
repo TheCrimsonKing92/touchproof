@@ -3,12 +3,16 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Accepted durations from the bounded history tail, keyed by exact lane and filter.
+// Accepted durations from the bounded history tail, grouped by exact key and lane name.
 internal static class RemoteLaneOfferHistoryReader
 {
-    internal const int LineLimit = 500;
+    internal const int LineLimit = 10_000;
 
-    internal static IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds> Read(string path)
+    internal static IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds> Read(string path) =>
+        ReadWithLaneNames(path).Exact;
+
+    internal static (IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds> Exact,
+        RemoteLaneNameDurationHistory LaneNames) ReadWithLaneNames(string path)
     {
         var rows = new List<RemoteExecutorOutcomeRow>();
         var keys = new Dictionary<string, (string Lane, string Filter)>(StringComparer.Ordinal);
@@ -61,19 +65,44 @@ internal static class RemoteLaneOfferHistoryReader
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        var timed = rows.Where(HasInterval).ToArray();
-        return rows.Where(row => row.Outcome == "accepted" && row.RemoteSeconds.HasValue).GroupBy(row => row.Lane)
-            .ToDictionary(group => keys[group.Key], group =>
+        var concurrent = FindConcurrentRows(rows);
+        var accepted = rows.Where(row => row.Outcome == "accepted" && row.RemoteSeconds.HasValue).ToArray();
+        var exact = accepted.GroupBy(row => row.Lane, StringComparer.Ordinal)
+            .ToDictionary(group => keys[group.Key], Summarize);
+        var byLaneName = accepted.GroupBy(row => keys[row.Lane].Lane, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, Summarize, StringComparer.Ordinal);
+        return (exact, new(byLaneName));
+
+        RemoteExecutorLaneSeconds Summarize(IGrouping<string, RemoteExecutorOutcomeRow> group)
+        {
+            var samples = group.ToArray();
+            // LastSeconds historically uses the first sample in ledger order.
+            return new(group.Key, samples.Length,
+                Median(samples.Select(row => row.RemoteSeconds!.Value), 1)!.Value, samples[0].RemoteSeconds!.Value,
+                Median(samples.Where(row => HasInterval(row) && !concurrent.Contains(row)).Select(row => row.RemoteSeconds!.Value)),
+                Median(samples.Where(concurrent.Contains).Select(row => row.RemoteSeconds!.Value)));
+        }
+    }
+
+    private static HashSet<RemoteExecutorOutcomeRow> FindConcurrentRows(IEnumerable<RemoteExecutorOutcomeRow> rows)
+    {
+        var concurrent = new HashSet<RemoteExecutorOutcomeRow>(ReferenceEqualityComparer.Instance);
+        foreach (var executor in rows.Where(HasInterval).GroupBy(row => row.ExecutorId, StringComparer.Ordinal))
+        {
+            var timed = executor.OrderBy(row => row.StartedAt).ToArray();
+            var latestEarlierEnd = DateTimeOffset.MinValue;
+            for (var index = 0; index < timed.Length; index++)
             {
-                var samples = group.ToArray();
-                bool Concurrent(RemoteExecutorOutcomeRow row) => timed.Any(other => !ReferenceEquals(row, other) &&
-                    other.ExecutorId == row.ExecutorId && other.StartedAt < row.ObservedAt && row.StartedAt < other.ObservedAt);
-                // Preserve the aggregate reader's first-sample LastSeconds while adding interval subsets.
-                return new RemoteExecutorLaneSeconds(group.Key, samples.Length,
-                    Median(samples.Select(row => row.RemoteSeconds!.Value), 1)!.Value, samples[0].RemoteSeconds!.Value,
-                    Median(samples.Where(row => HasInterval(row) && !Concurrent(row)).Select(row => row.RemoteSeconds!.Value)),
-                    Median(samples.Where(row => HasInterval(row) && Concurrent(row)).Select(row => row.RemoteSeconds!.Value)));
-            });
+                var row = timed[index];
+                // A prior interval overlaps if it still runs at this start. A later one overlaps
+                // if the very next start precedes this end.
+                if (row.StartedAt < latestEarlierEnd ||
+                    (index + 1 < timed.Length && timed[index + 1].StartedAt < row.ObservedAt))
+                    concurrent.Add(row);
+                if (row.ObservedAt > latestEarlierEnd) latestEarlierEnd = row.ObservedAt;
+            }
+        }
+        return concurrent;
     }
 
     private static bool HasInterval(RemoteExecutorOutcomeRow row) =>
