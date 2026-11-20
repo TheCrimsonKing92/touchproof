@@ -39,7 +39,7 @@ internal sealed partial class ConductorBatchLoop
 
     internal static string FormatWatchWake(int tick, string stopFilePath, IConductorWakeSignal? wakeSignal)
     {
-        var reason = IsStopRequested(stopFilePath)
+        var reason = ConductorWatchSleep.IsStopRequested(stopFilePath)
             ? ConductorWakeReason.StopFile
             : (wakeSignal as IConductorAttemptExitWakeSignal)?.LastWakeReason ?? ConductorWakeReason.Unknown;
         var token = reason switch
