@@ -11,6 +11,13 @@ public sealed class DependencyIndexNegativeControlTests
                 {
                     public static void Launch() { }
                 }
+                public static class Outer
+                {
+                    public static class Middle
+                    {
+                        public sealed class Nested<T> { }
+                    }
+                }
                 public interface Constraint { }
             }
             namespace Subject
@@ -19,6 +26,12 @@ public sealed class DependencyIndexNegativeControlTests
                 {
                     public Forbidden.Target? Value;
                 }
+                public sealed class TypeDependencyAttribute : Attribute
+                {
+                    public TypeDependencyAttribute(Type type) { }
+                }
+                [TypeDependency(typeof(Forbidden.Outer.Middle.Nested<Forbidden.Target>))]
+                public sealed class AttributeOwner { }
                 public sealed class ConstraintOwner<T> where T : Forbidden.Constraint { }
                 public static class Caller
                 {
@@ -51,6 +64,19 @@ public sealed class DependencyIndexNegativeControlTests
 
         Assert.Equal("Subject.FieldOwner", violation.Subject.FullName);
         Assert.Contains("Forbidden.Target", violation.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Forbidden_type_rule_reports_the_nested_generic_attribute_target_and_argument()
+    {
+        var index = Fixture.Value;
+        var subjects = ApplicationLayerArchitectureTests.Subjects(index, "Subject")
+            .Where(type => type.FullName == "Subject.AttributeOwner").ToArray();
+
+        var violation = Assert.Single(ApplicationLayerArchitectureTests.NoDependencyRule(index, subjects, "Forbidden"));
+        Assert.Equal("Subject.AttributeOwner", violation.Subject.FullName);
+        Assert.Equal("Subject.AttributeOwner depends on forbidden types: Forbidden.Outer+Middle+Nested`1, Forbidden.Target",
+            violation.Description);
     }
 
     [Fact]

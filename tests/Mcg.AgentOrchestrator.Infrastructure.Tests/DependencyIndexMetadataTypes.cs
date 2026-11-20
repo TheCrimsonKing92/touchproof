@@ -66,11 +66,11 @@ internal sealed class MetadataTypes : ISignatureTypeProvider<DependencyType?, ob
             name = name.GetGenericTypeDefinition();
         }
 
-        var fullName = name.FullName;
-        var separator = fullName.LastIndexOf('+');
-        var simpleName = separator >= 0 ? fullName[(separator + 1)..] :
-            fullName[(name.Namespace.Length == 0 ? 0 : name.Namespace.Length + 1)..];
-        Add(new DependencyType(name.AssemblyName?.Name ?? AssemblyName, name.Namespace, simpleName, fullName));
+        var outermost = name;
+        while (outermost.IsNested)
+            outermost = outermost.DeclaringType;
+
+        Add(new DependencyType(name.AssemblyName?.Name ?? AssemblyName, outermost.Namespace, name.Name, name.FullName));
     }
 
     public TypeDefinitionHandle FindDefinition(string fullName)
