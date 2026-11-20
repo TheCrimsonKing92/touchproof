@@ -82,7 +82,12 @@ public sealed class GateReplayEnvironmentAllowlistTests
             var context = GateReplayReceiptTests.CreateContext(root);
             var image = Path.Combine(root, "fixture.exe");
             File.WriteAllText(image, "fixture image");
-            var startInfo = new ProcessStartInfo { FileName = image, WorkingDirectory = root };
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = image,
+                WorkingDirectory = root,
+                CreateNoWindow = true
+            };
             startInfo.Environment.Clear();
             startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
             startInfo.Environment["TEMP"] = root;
