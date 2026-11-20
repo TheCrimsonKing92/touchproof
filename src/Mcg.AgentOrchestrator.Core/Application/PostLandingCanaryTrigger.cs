@@ -203,6 +203,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutor",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutorConfiguration",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneFailureHistory",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneNameDurationHistory",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneOfferHistoryReader",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneOfferPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneOfferPolicy",
