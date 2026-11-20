@@ -573,11 +573,12 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         AcceptanceLaneWaitCollector.Occurrence? wait;
         lock (_gate) _waits.TryGetValue(request.Lane, out wait);
         if (result is null || BindingMismatch(request, result) is null) wait?.RemotePhases(phases);
+        var faultOwner = code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
+            RemoteLaneOutcomeCode.ExecutorBusy or RemoteLaneOutcomeCode.OfferSkippedNoExecutor or
+            RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ShadowPreemptRequested ? null : "executor";
         RemoteExecutorHealthLedger.Append(_ledgerPath, new(_clock.GetUtcNow(), request.ExecutorId,
             request.AttemptId, request.Lane, code,
-            code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
-                RemoteLaneOutcomeCode.ExecutorBusy or RemoteLaneOutcomeCode.OfferSkippedNoExecutor or
-                RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ShadowPreemptRequested ? null : "executor",
+            RemoteLaneFaultOwner.Resolve(faultOwner, attempt?.LastStatus, request.AttemptId),
             new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha,
                 request.MainSha, request.FilterHash, request.ManifestIdentity),
             result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha,

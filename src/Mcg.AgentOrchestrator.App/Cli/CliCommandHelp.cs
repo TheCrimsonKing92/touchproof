@@ -110,7 +110,7 @@ internal static class CliCommandHelp
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
-    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
+    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>] [--whole-gate (requires --executor)]";
     public const string ImpactReplayStatusUsage = "Usage: impact-replay --status --checkpoint-file <path>";
     public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] [--attempts-file <path>] --out <directory> [--floor <name> ...]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -725,8 +725,8 @@ internal static class CliCommandHelp
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
     private static readonly CommandHelpEntry ExecutorScreen = new(
-        ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
-        ["--max-candidates", "--executor", "--help", "-h"]);
+        ExecutorScreenUsage, "Screen a candidate on an idle executor, or use --whole-gate to measure the full test lane plan on a named executor.",
+        ["--max-candidates", "--executor", "--whole-gate", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
         ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor. Use --attempts-file to select listed attempt ids. It cannot be combined with --since or --limit.",
         ["--since", "--limit", "--attempts-file", "--out", "--floor", "--status", "--checkpoint-file", "--help", "-h"]);
