@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -146,7 +147,7 @@ public sealed class IsolatedRootSetterCollectionGuardTests
         var source = "using System; using Xunit; using Mcg.AgentOrchestrator.Infrastructure; " + body + collection +
             " public class ProbeLane" + (shape == "collection-fixture" ? " : ICollectionFixture<Setter>" : "") + " { } " +
             (shape == "duplicate" ? "[CollectionDefinition(\"ProbeLane\", DisableParallelization = true)] public class DuplicateLane { }" : "");
-        var compilation = IsolatedRootSetterCollectionScanner.CreateCompilation([CSharpSyntaxTree.ParseText(source)]);
+        var compilation = IsolatedRootSetterCollectionScanner.CreateFixtureCompilation(CSharpSyntaxTree.ParseText(source));
         Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var result = IsolatedRootSetterCollectionScanner.Scan(compilation);
         Assert.Equal(shape == "wrapper" ? 0 : 1, result.SetterCount);
@@ -154,36 +155,79 @@ public sealed class IsolatedRootSetterCollectionGuardTests
         if (violations != 0)
             Assert.Contains("Probe", Assert.Single(result.Violations));
     }
+
+    [Fact]
+    public void Shared_base_is_one_instance_with_bounded_explicit_references()
+    {
+        static CSharpCompilation GetBase() => SharedTestSourcesCompilation.Base;
+
+        var shared = GetBase();
+        Assert.Same(shared, GetBase());
+        Assert.Single(shared.SyntaxTrees);
+        Assert.Equal("System.Runtime", shared.GetSpecialType(SpecialType.System_Object).ContainingAssembly.Identity.Name);
+
+        var referenceCount = shared.References.Count();
+        var platformCount = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Length;
+        var outputCount = Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll").Count();
+        var counts = $"Shared references: {referenceCount}, trusted-platform assemblies: {platformCount}, output DLLs: {outputCount}.";
+        Assert.True(referenceCount < 256, counts);
+        Assert.True(referenceCount < platformCount + outputCount, counts);
+        Assert.DoesNotContain(shared.References.OfType<PortableExecutableReference>(), reference =>
+            string.Equals(Path.GetFileName(reference.FilePath), Path.GetFileName(typeof(object).Assembly.Location),
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Fixture_compilation_is_small_and_independent_of_the_shared_base()
+    {
+        var tree = CSharpSyntaxTree.ParseText("class CompilationProbe { }");
+        var fixture = IsolatedRootSetterCollectionScanner.CreateFixtureCompilation(tree);
+        var shared = SharedTestSourcesCompilation.Base;
+
+        Assert.NotSame(shared, fixture);
+        var referenceCount = fixture.References.Count();
+        Assert.True(referenceCount < 10, $"Fixture references: {referenceCount}.");
+        Assert.Same(tree, Assert.Single(fixture.SyntaxTrees));
+        Assert.All(fixture.References, reference => Assert.DoesNotContain(shared.References,
+            sharedReference => ReferenceEquals(reference, sharedReference)));
+    }
 }
 
 internal static class IsolatedRootSetterCollectionScanner
 {
     private const string RootVariable = "MCG_DOTNET_ISOLATED_ROOT";
-    private static readonly Lazy<CSharpCompilation> ReferenceCompilation = new(() =>
+    private static readonly Lazy<CSharpCompilation> FixtureBase = new(() =>
     {
-        var paths = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Concat(Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-        var globals = CSharpSyntaxTree.ParseText("""
-            global using System;
-            global using System.IO;
-            global using System.Linq;
-            global using System.Collections.Generic;
-            global using System.Threading;
-            global using System.Threading.Tasks;
-            global using Xunit;
-            """);
+        var coreLibrary = typeof(object).Assembly.Location;
+        var runtimeDirectory = Path.GetDirectoryName(coreLibrary)!;
+        string[] paths =
+        [
+            coreLibrary,
+            typeof(Environment).Assembly.Location,
+            Path.Combine(runtimeDirectory, "System.Runtime.dll"),
+            Path.Combine(runtimeDirectory, "netstandard.dll"),
+            typeof(FactAttribute).Assembly.Location,
+            typeof(CollectionAttribute).Assembly.Location,
+            typeof(CollectionDefinitionAttribute).Assembly.Location,
+            typeof(IClassFixture<>).Assembly.Location,
+            typeof(ICollectionFixture<>).Assembly.Location,
+            typeof(Xunit.Sdk.IMessageSink).Assembly.Location,
+            typeof(DotnetBuildEnvironmentManager).Assembly.Location,
+        ];
         return CSharpCompilation.Create(typeof(IsolatedRootSetterCollectionGuardTests).Assembly.GetName().Name!,
-            [globals], paths.Select(path => MetadataReference.CreateFromFile(path)),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            references: paths.Distinct(StringComparer.OrdinalIgnoreCase).Select(path => MetadataReference.CreateFromFile(path)),
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
     });
 
     internal sealed record Result(int SetterCount, int ExemptedCount, List<string> Violations,
         Dictionary<string, string?> Collections);
 
     internal static CSharpCompilation CreateCompilation(IEnumerable<SyntaxTree> trees) =>
-        ReferenceCompilation.Value.AddSyntaxTrees(trees);
+        SharedTestSourcesCompilation.Base.AddSyntaxTrees(trees);
+
+    internal static CSharpCompilation CreateFixtureCompilation(SyntaxTree tree) =>
+        FixtureBase.Value.AddSyntaxTrees(tree);
 
     internal static Result Scan(CSharpCompilation compilation, bool requireFixtureExemption = false)
     {

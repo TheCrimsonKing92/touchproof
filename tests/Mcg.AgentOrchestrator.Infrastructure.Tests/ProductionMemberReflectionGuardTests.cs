@@ -15,7 +15,7 @@ public sealed class ProductionMemberReflectionGuardTests
         Assert.NotEmpty(production);
         var exemptions = ProductionMemberReflectionScanner.ReadExemptions(File.ReadAllText(
             Path.Combine(root, "config", "production-member-reflection-exemptions.json")));
-        var result = ProductionMemberReflectionScanner.ScanRepository(snapshot, tests, exemptions);
+        var result = ProductionMemberReflectionScanner.ScanRepository(snapshot, tests, exemptions, SharedTestSourcesCompilation.Base);
         Assert.NotEmpty(result.Lookups);
         Assert.True(result.Diagnostics.Count == 0, string.Join(Environment.NewLine, result.Diagnostics));
     }
