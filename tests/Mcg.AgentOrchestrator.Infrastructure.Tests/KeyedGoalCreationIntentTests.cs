@@ -46,7 +46,32 @@ public sealed class KeyedGoalCreationIntentTests : CliCommandTestBase
         Assert.Contains("\"state\":\"created\"", status);
         Assert.Contains($"\"goalId\":\"{created.Id}\"", status);
         Assert.Equal(OperatorIntentStatus.Applied, (await inbox.GetAsync(queued.Id))!.Status);
-        Assert.Contains("No pending workspace operator intents.", ApplyWorkspace(workspace));
+        Assert.Contains("No pending workspace goal-creation intents.", ApplyWorkspace(workspace));
+    }
+
+    [Fact]
+    public async Task OfflineWorkspaceApply_LeavesOtherWorkspaceIntentsPending()
+    {
+        using var root = new TemporaryDirectory();
+        var workspace = CreateRefinedWorkspace(root.Path);
+        const string key = "offline-scope";
+        Assert.Contains("\"state\":\"still-committing\"", Execute(workspace,
+            "goal", "Add scoped offline goal intake", "--request-key", key));
+
+        var inbox = OpenInbox(workspace);
+        var queued = Assert.Single(await inbox.ListForGoalAsync(OperatorIntentScopes.Workspace));
+        var payload = new FocusedEvidenceSetOperatorIntentPayload("off", null);
+        var unrelated = await inbox.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"),
+            "offline-scope-focused-evidence", OperatorIntentVerbs.FocusedEvidenceSet,
+            OperatorIntentScopes.Workspace, null, JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [],
+            "test", "cli", "local", queued.CreatedAt.AddSeconds(-1)));
+        Assert.Equal(OperatorIntentStatus.Pending, unrelated.Status);
+
+        var output = ApplyWorkspace(workspace);
+
+        Assert.Equal(OperatorIntentStatus.Pending, (await inbox.GetAsync(unrelated.Id))!.Status);
+        Assert.Contains($"id={queued.Id} verb={OperatorIntentVerbs.GoalCreate} scope=workspace result=applied", output);
+        Assert.Equal(OperatorIntentStatus.Applied, (await inbox.GetAsync(queued.Id))!.Status);
     }
 
     [Fact]

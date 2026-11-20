@@ -32,14 +32,17 @@ internal sealed partial class OperatorIntentCoordinator
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel) =>
         ExecuteWorkspacePending(kernel, out _);
 
-    internal IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel, out bool deferred)
+    internal IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel, out bool deferred,
+        string? verb = null)
     {
         deferred = false;
         var lines = new List<string>();
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
-            var intent = _store.ClaimNextAsync(OperatorIntentScopes.Workspace, ClaimOwner)
-                .GetAwaiter().GetResult();
+            var claim = verb is null
+                ? _store.ClaimNextAsync(OperatorIntentScopes.Workspace, ClaimOwner)
+                : _store.ClaimNextByVerbAsync(OperatorIntentScopes.Workspace, verb, ClaimOwner);
+            var intent = claim.GetAwaiter().GetResult();
             if (intent is null) break;
             bool replayed;
             string? outcomeSummary = null;

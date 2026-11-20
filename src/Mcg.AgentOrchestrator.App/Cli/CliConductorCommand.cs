@@ -203,9 +203,10 @@ internal static class CliConductorCommand
             WorkspaceStoreSetup.RunWithOwnership(workspace);
         var repository = stateRepository?.Invoke(workspace) ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
         var coordinator = OperatorIntentCoordinator.CreateDefault(workspace, repository);
-        var lines = coordinator.ExecuteWorkspacePending(repository.LoadAsync().GetAwaiter().GetResult(), out var deferred);
+        var lines = coordinator.ExecuteWorkspacePending(repository.LoadAsync().GetAwaiter().GetResult(), out var deferred,
+            verb: OperatorIntentVerbs.GoalCreate);
         if (lines.Count == 0)
-            output.WriteLine("No pending workspace operator intents.");
+            output.WriteLine("No pending workspace goal-creation intents.");
         foreach (var line in lines)
             output.WriteLine(line);
         return deferred ? 1 : 0;
