@@ -103,7 +103,7 @@ internal static class RepositoryLayoutConventions
             }
 
             if (!TryReadTestSource(sourcePath, relativePath, getText, getSyntaxTree, violations,
-                    out var syntaxRoot, out var typeNames))
+                    out var typeNames, out var ambientRootFindings))
             {
                 unreadableFiles.Add(relativePath);
                 continue;
@@ -139,7 +139,6 @@ internal static class RepositoryLayoutConventions
                 }
             }
 
-            var ambientRootFindings = FindAmbientRepositoryRootResolution(syntaxRoot);
             if (ambientRootFindings.Count > 0)
             {
                 activeAmbientRootViolations.Add(relativePath);
@@ -187,8 +186,8 @@ internal static class RepositoryLayoutConventions
         Func<string, string> getText,
         Func<string, string, SyntaxTree> getSyntaxTree,
         ICollection<RepositoryLayoutViolation> violations,
-        out CompilationUnitSyntax syntaxRoot,
-        out IReadOnlyList<string> typeNames)
+        out IReadOnlyList<string> typeNames,
+        out IReadOnlyList<string> ambientRootFindings)
     {
         SyntaxTree syntaxTree;
         try
@@ -204,7 +203,7 @@ internal static class RepositoryLayoutConventions
                 $"Test source '{relativePath}' could not be read ({exception.GetType().Name}: {exception.Message}). " +
                 $"The layout guard cannot pass without checking it. See {DocumentationPath}."));
             typeNames = [];
-            syntaxRoot = SyntaxFactory.CompilationUnit();
+            ambientRootFindings = [];
             return false;
         }
 
@@ -220,17 +219,18 @@ internal static class RepositoryLayoutConventions
                 $"Test source '{relativePath}' could not be parsed: {string.Join(" | ", errors)}. " +
                 $"The layout guard cannot pass without checking it. See {DocumentationPath}."));
             typeNames = [];
-            syntaxRoot = SyntaxFactory.CompilationUnit();
+            ambientRootFindings = [];
             return false;
         }
 
-        syntaxRoot = syntaxTree.GetCompilationUnitRoot();
+        var syntaxRoot = syntaxTree.GetCompilationUnitRoot();
         typeNames = syntaxRoot.DescendantNodes()
             .OfType<MemberDeclarationSyntax>()
             .Where(IsTopLevelPublicType)
             .Select(GetTypeName)
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
+        ambientRootFindings = FindAmbientRepositoryRootResolution(syntaxRoot);
         return true;
     }
 
