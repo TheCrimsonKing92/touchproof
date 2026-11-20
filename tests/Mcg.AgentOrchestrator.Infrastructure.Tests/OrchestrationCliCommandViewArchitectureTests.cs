@@ -1,9 +1,5 @@
-using ArchUnitNET.Domain;
-using ArchUnitNET.Fluent;
-using ArchUnitNET.Fluent.Extensions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
-using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
 public sealed class OrchestrationCliCommandViewArchitectureTests
 {
@@ -15,25 +11,22 @@ public sealed class OrchestrationCliCommandViewArchitectureTests
     // Sanctioned in-process CLI intake, already exempt in ConductorCliExecutorArchitectureTests.
     private static readonly string[] ExemptRoots = [ExemptRootType];
 
-    // Parallel-safe: immutable inputs and one published architecture; no mutable external state.
-    private static readonly Lazy<Architecture> SharedArchitecture = new(
-        () => SharedArchitectureCache.Get(typeof(OrphanFixtureReaper).Assembly),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static DependencyIndex Index => DependencyIndexCache.Get(typeof(OrphanFixtureReaper).Assembly);
 
     [Fact]
     public void Orchestration_types_Cli_namespace_boundary_Has_no_dependencies()
     {
-        var (subjects, forbidden, rule) = CliBoundaryRule(ExemptRoots);
-        var subjectTypes = subjects.GetObjects(SharedArchitecture.Value).ToArray();
-        var forbiddenTypes = forbidden.GetObjects(SharedArchitecture.Value).ToArray();
+        var index = Index;
+        var subjectTypes = Subjects(index, ExemptRoots);
+        var forbiddenTypes = index.Types.Where(type => IsInCliNamespace(type.Type)).ToArray();
 
         Assert.Contains(subjectTypes, type => type.FullName == typeof(ConductorExperimentWatch).FullName);
         Assert.Contains(subjectTypes, type => type.FullName == typeof(StalledEpicAttention).FullName);
         Assert.Contains(subjectTypes, type => type.FullName == typeof(DefaultStateMover).FullName);
         Assert.Contains(subjectTypes, type => type.FullName == typeof(ConductorDriver).FullName);
         Assert.Contains(subjectTypes, type => type.FullName == typeof(OrphanFixtureReaper).FullName);
-        Assert.DoesNotContain(subjectTypes, type => OutermostTypeName(type) == ExemptRootType);
-        Assert.All(subjectTypes, type => Assert.Equal(OrchestrationNamespace, type.Namespace.FullName));
+        Assert.DoesNotContain(subjectTypes, type => type.OutermostName == ExemptRootType);
+        Assert.All(subjectTypes, type => Assert.Equal(OrchestrationNamespace, type.Namespace));
         Assert.Contains(forbiddenTypes, type => type.FullName == typeof(RepoProcessCliCommand).FullName);
         Assert.Contains(forbiddenTypes, type => type.FullName == typeof(GoalListTextView).FullName);
         Assert.Contains(forbiddenTypes, type => type.FullName == typeof(CliPersistentStateRunner).FullName);
@@ -43,20 +36,19 @@ public sealed class OrchestrationCliCommandViewArchitectureTests
         Assert.DoesNotContain(forbiddenTypes, type => type.FullName == typeof(ExperimentReading).FullName);
         Assert.DoesNotContain(forbiddenTypes, type => type.FullName == typeof(SystemConductorLockProbe).FullName);
 
-        var failures = Failures(rule);
+        var failures = CliBoundaryRule(index, subjectTypes);
         Assert.True(failures.Length == 0, failures.ToErrorMessage());
     }
 
     [Fact]
     public void Empty_exemptions_Control_names_exactly_board_fill_intake()
     {
-        var (_, _, rule) = CliBoundaryRule([]);
-        var failures = Failures(rule);
+        var index = Index;
+        var failures = CliBoundaryRule(index, Subjects(index, []));
 
         Assert.NotEmpty(failures);
         var failingSubjects = failures
-            .Select(result => Assert.IsAssignableFrom<IType>(result.EvaluatedObject))
-            .Select(OutermostTypeName)
+            .Select(result => result.Subject.OutermostName)
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.True(failingSubjects.SetEquals([ExemptRootType]), failures.ToErrorMessage());
@@ -90,11 +82,10 @@ public sealed class OrchestrationCliCommandViewArchitectureTests
     [Fact]
     public void ReadModels_types_Cli_dependencies_Residual_is_single_progress_call()
     {
-        var pairs = SharedArchitecture.Value.Types
-            .Where(type => type.Namespace.FullName.Equals(ReadModelsNamespace, StringComparison.Ordinal))
-            .SelectMany(type => type.Dependencies
-                .Where(dependency => IsInCliNamespace(dependency.Target))
-                .Select(dependency => (Source: OutermostTypeName(type), Target: OutermostTypeName(dependency.Target))))
+        var pairs = Index.Types
+            .Where(type => type.Namespace == ReadModelsNamespace)
+            .SelectMany(type => type.References.Where(IsInCliNamespace)
+                .Select(target => (Source: type.OutermostName, Target: target.OutermostName)))
             .ToHashSet();
 
         Assert.True(pairs.SetEquals(
@@ -103,26 +94,13 @@ public sealed class OrchestrationCliCommandViewArchitectureTests
                 .ThenBy(pair => pair.Target).Select(pair => $"{pair.Source} -> {pair.Target}")));
     }
 
-    private static (IObjectProvider<IType> Subjects, IObjectProvider<IType> Forbidden, ICanBeEvaluated Rule)
-        CliBoundaryRule(IReadOnlyCollection<string> exemptRoots)
-    {
-        var subjects = Types().That().FollowCustomPredicate(
-            type => type.Namespace.FullName.Equals(OrchestrationNamespace, StringComparison.Ordinal)
-                && !exemptRoots.Contains(OutermostTypeName(type), StringComparer.Ordinal),
-            "reside exactly in Orchestration outside the named exempt roots and their nested types");
-        var forbidden = Types().That().FollowCustomPredicate(
-            IsInCliNamespace,
-            "reside in Cli or its descendant namespaces");
-        return (subjects, forbidden, subjects.Should().NotDependOnAny(forbidden));
-    }
+    private static DependencyDeclaration[] Subjects(DependencyIndex index, IReadOnlyCollection<string> exemptRoots) =>
+        index.Types.Where(type => type.Namespace == OrchestrationNamespace
+            && !exemptRoots.Contains(type.OutermostName, StringComparer.Ordinal)).ToArray();
 
-    private static bool IsInCliNamespace(IType type) =>
-        type.Namespace.FullName.Equals(CliNamespace, StringComparison.Ordinal)
-        || type.Namespace.FullName.StartsWith(CliNamespace + ".", StringComparison.Ordinal);
+    private static DependencyViolation[] CliBoundaryRule(DependencyIndex index, DependencyDeclaration[] subjects) =>
+        DependencyIndexRules.ForbiddenTypes(index, subjects, IsInCliNamespace);
 
-    // Metadata separates declaring-type ancestors with '+' or '/'; use the exact root at any depth.
-    private static string OutermostTypeName(IType type) => type.FullName.Split('+', '/')[0];
-
-    private static EvaluationResult[] Failures(ICanBeEvaluated rule) =>
-        rule.Evaluate(SharedArchitecture.Value).Where(result => !result.Passed).ToArray();
+    private static bool IsInCliNamespace(DependencyType type) =>
+        type.Namespace == CliNamespace || type.Namespace.StartsWith(CliNamespace + ".", StringComparison.Ordinal);
 }
