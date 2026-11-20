@@ -102,7 +102,7 @@ public sealed class ConductorBoardFillHostDraftReasonsTests
         Assert.Equal(0, verifierCalls);
         Assert.Null(host.CurrentRound);
         Assert.True(Assert.Single(h.Store.ReadAll()).Reported);
-        using var entry = BoardFillTestHarness.Event(Assert.Single(File.ReadAllLines(h.EventPath)));
+        using var entry = BoardFillTestHarness.Event(Assert.Single(BoardFillTestHarness.LifecycleEvents(h.EventPath)));
         Assert.Equal("board-fill-draft", entry.RootElement.GetProperty("eventKind").GetString());
         return entry.RootElement.GetProperty("detail").GetString()!;
     }

@@ -55,7 +55,12 @@ internal sealed class BoardFillTestHarness : IDisposable
         Path.Combine(Root, "draft.md"), Path.Combine(Root, "receipt.json"),
         [new("sections", true, "ok"), new("citations", true, "ok")]);
     internal void Release() => _release.TrySetResult(true);
-    internal string[] Events() => File.Exists(EventsPath) ? File.ReadAllLines(EventsPath) : [];
+    internal string[] Events() => LifecycleEvents(EventsPath);
+    internal static string[] LifecycleEvents(string path) => File.Exists(path) ? File.ReadLines(path).Where(line =>
+    {
+        using var entry = Event(line);
+        return entry.RootElement.GetProperty("eventKind").GetString() != "BOARD_FILL_READINESS";
+    }).ToArray() : [];
     internal static JsonDocument Event(string text) => JsonDocument.Parse(text);
     public void Dispose()
     {
