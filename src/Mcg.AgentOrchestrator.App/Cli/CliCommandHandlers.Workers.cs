@@ -54,12 +54,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             if (workerTask.RequiredRole != AgentRole.Researcher || context.CurrentGoal.RefinedSpec is not null)
             {
                 GoalDispatchOperations.EnsureRefinedForSpecConsumer(
-                    context.Kernel,
-                    context.Workspace,
-                    context.Providers,
-                    context.CurrentGoal);
+                    context.Kernel, context.Workspace, context.Providers, context.CurrentGoal);
             }
-            var brief = context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
+            var briefSource = context.Kernel.BuildTaskBriefSource(
+                context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
+            var brief = briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
             var preparation = WorkerCommandTemplate.Prepare(
                 brief,
                 parts[2],
@@ -74,7 +73,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     preparation.Command,
                     workerExecutionDirectory,
                     DateTimeOffset.UtcNow,
-                    PromptCharacterCount: preparation.PromptCharacterCount));
+                    PromptCharacterCount: preparation.PromptCharacterCount,
+                    FindingContractVersion: AgentOutputDirectives.GetFindingContractVersion(briefSource, brief)));
             PrerequisiteEvidenceTrimNote.RecordIfTrimmed(
                 context.Kernel,
                 context.CurrentGoal.Id,

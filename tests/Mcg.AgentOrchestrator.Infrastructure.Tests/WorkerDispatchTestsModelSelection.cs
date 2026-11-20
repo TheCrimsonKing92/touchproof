@@ -1275,6 +1275,22 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains($"- Branch: {branch}", reviewerPrompt, StringComparison.Ordinal);
     Assert.Contains($"- HEAD commit: {head}", reviewerPrompt, StringComparison.Ordinal);
     Assert.Contains("latest developer retry feedback", reviewerPrompt, StringComparison.Ordinal);
+    Assert.Contains("class_id:none|dispositive-misclassification", reviewerPrompt, StringComparison.Ordinal);
+    var freshReview = reviewer.LastDispatch!;
+    Assert.Equal(1, freshReview.FindingContractVersion);
+
+    // Emulate an unstarted reservation persisted before the finding directive was introduced.
+    kernel.ReplacePreparedTaskDispatch(goal.Id, reviewer.Id, freshReview with { FindingContractVersion = null });
+    File.Delete(reviewerDispatch.PromptPath);
+    var restoredReview = WorkerProfileDispatcher.PrepareTask(
+        kernel, goal, reviewer, profile, promptRoot, worktree, freshReview.DispatchedAt,
+        allowPendingRecordedDispatchRefresh: true, restorePreparedContext: true);
+    Assert.Equal(reviewerDispatch.PromptPath, restoredReview.PromptPath);
+    Assert.Contains("class_id:none|dispositive-misclassification", File.ReadAllText(restoredReview.PromptPath), StringComparison.Ordinal);
+    Assert.Equal(freshReview.Command, reviewer.LastDispatch!.Command);
+    Assert.Equal(freshReview.DispatchedAt, reviewer.LastDispatch.DispatchedAt);
+    Assert.Equal(1, reviewer.LastDispatch.FindingContractVersion);
+    Assert.Equal(1, Assert.Single(reviewer.DispatchHistory).FindingContractVersion);
 
     kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
         "dotnet test",

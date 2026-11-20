@@ -112,7 +112,7 @@ internal static class OwnerConsoleGoalDetailFormatter
         var result = task.VerificationHistory.Where(record => record.CompletedAt <= item.Timestamp)
             .OrderByDescending(record => record.CompletedAt).FirstOrDefault();
         if (result is null) return null;
-        var findings = WorkerResultBlockers.TryFindReviewFindingRound(result, out var round, out _) ?
+        var findings = WorkerResultBlockers.TryFindReviewFindingRound(result, out var round, out _, task.RequiredRole) ?
             round.Findings : result.MergedReviewFindings;
         return OwnerHoldReason.FirstLine(findings?.FirstOrDefault()?.Description);
     }

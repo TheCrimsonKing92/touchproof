@@ -2,6 +2,37 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class AgentOutputDirectivesTests
 {
+    [Fact]
+    public void FindingMarkerRequiresTheDeliveredHostDirective()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review the candidate", AgentRole.Reviewer);
+        var markerText = "class_id:none|dispositive-misclassification";
+        var goal = kernel.CreateGoal("Review a compatibility change mentioning " + markerText, [reviewer]);
+        var source = kernel.BuildTaskBriefSource(goal.Id, reviewer.Id);
+        var prompt = source.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
+        var directive = Assert.Single(AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
+            line => line.StartsWith("findings:", StringComparison.Ordinal));
+        Assert.Contains(markerText, directive, StringComparison.Ordinal);
+        Assert.Contains("Reviewer findings require class_id", directive, StringComparison.Ordinal);
+        Assert.Equal(1, AgentOutputDirectives.GetFindingContractVersion(source, prompt));
+
+        var contentWithoutDirective = prompt.Content.Replace(directive, "", StringComparison.Ordinal);
+        Assert.Contains(markerText, contentWithoutDirective, StringComparison.Ordinal);
+        Assert.Null(AgentOutputDirectives.GetFindingContractVersion(source, prompt with { Content = contentWithoutDirective }));
+
+        var contentOnlySource = source with
+        {
+            Segments =
+            [
+                TaskBriefSegment.Fixed(["## Instructions", "Review the candidate"]),
+                TaskBriefSegment.Fixed(["## Prior output", directive])
+            ]
+        };
+        Assert.Null(AgentOutputDirectives.GetFindingContractVersion(contentOnlySource,
+            contentOnlySource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false)));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerResultTemplate_requires_structured_tests_and_blockers_tokens")]
     public void WorkerResultTemplateRequiresStructuredTestsAndBlockersTokens()
     {
