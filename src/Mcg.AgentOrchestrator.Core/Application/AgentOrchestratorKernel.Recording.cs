@@ -1596,6 +1596,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; retry or assign it before dispatching it again.");
         }
 
+        PlannerRoundRecovery.EnsureDispatchAllowed(goal, task);
         dispatch.BriefVersion = goal.AuthoritativeBrief.Version;
         dispatch.BriefSnapshot = goal.Objective;
         dispatch.AssignedAgentId ??= task.AssignedAgentId?.Value;

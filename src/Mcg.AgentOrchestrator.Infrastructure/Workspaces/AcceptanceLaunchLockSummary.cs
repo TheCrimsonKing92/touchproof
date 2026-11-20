@@ -58,7 +58,8 @@ internal static class AcceptanceLaunchLockSummary
                 if ((line.StartsWith(ByClassPrefix, StringComparison.Ordinal) ||
                      line.StartsWith(BySitePrefix, StringComparison.Ordinal) ||
                      line.StartsWith(ByImagePrefix, StringComparison.Ordinal) ||
-                     line.StartsWith("LAUNCH_LOCK_CPU_BY_CLASS ", StringComparison.Ordinal)) &&
+                     line.StartsWith("LAUNCH_LOCK_CPU_BY_CLASS ", StringComparison.Ordinal) ||
+                     line.StartsWith("LAUNCH_LOCK_MEMORY_BY_CLASS ", StringComparison.Ordinal)) &&
                     TryReadPid(line, out var classProcessId) && classProcessId == processId)
                     lines.Add(line);
         }

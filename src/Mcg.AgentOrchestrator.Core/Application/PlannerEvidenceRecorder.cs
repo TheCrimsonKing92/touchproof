@@ -23,6 +23,10 @@ internal sealed class PlannerEvidenceRecorder(
         task.LastVerification is { DispatchAttemptAt: not null, PlannerEvidenceBatch: { } batch } &&
         batch.Directives.Any(item => item.PlannerEvidence is not null);
 
+    internal static bool IsSupersededBriefPlannerRound(Goal goal, TaskSpec task) =>
+        task.RequiredRole == AgentRole.Planner && task.LastDispatch is { BriefSnapshot: not null } dispatch &&
+        dispatch.BriefVersion != goal.AuthoritativeBrief.Version && task.LastProcess is not { IsRunning: true };
+
     // Called by host execution paths only. Validation completes before any obligation is published.
     internal string? Record(Goal goal, TaskSpec task,
         HumanInputDirectiveParseResult batch, int? dispatchBriefVersion, out bool blocksActiveWork)
@@ -142,5 +146,88 @@ internal sealed class PlannerEvidenceRecorder(
             sources.Add(new(new(goal.Id.Value, task.Id.Value, briefVersion.Value, payload.CriterionIndex, payload.EvidenceKey), payload));
         }
         return goal.PlanPlannerAcceptanceOwnership(sources, recordedAt, out changes);
+    }
+}
+
+internal static class PlannerRoundRecovery
+{
+    internal static void RequeueAfterRevision(Goal goal, IEnumerable<HumanInputRequest> requests,
+        IGoalLifecycleEventWriter eventWriter, IClock clock)
+    {
+        var briefVersion = goal.AuthoritativeBrief.Version;
+        foreach (var task in goal.Tasks)
+        {
+            if (task.Status != WorkTaskStatus.WaitingForHuman ||
+                !PlannerEvidenceRecorder.IsSupersededBriefPlannerRound(goal, task) ||
+                task.LastDispatch!.BriefVersion >= briefVersion ||
+                HasPlannerEvidenceOrAmendmentWait(goal, task, requests))
+                continue;
+
+            Requeue(goal, task, eventWriter, clock, SupersededNote(goal, task));
+        }
+    }
+
+    internal static bool TryRequeueAfterAnswer(Goal goal, TaskSpec task, IGoalLifecycleEventWriter eventWriter,
+        IClock clock, out bool premiseInvalid)
+    {
+        premiseInvalid = false;
+        if (task.RequiredRole != AgentRole.Planner) return false;
+
+        var processRunning = task.LastProcess is { IsRunning: true };
+        if (!processRunning && PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task))
+        {
+            Requeue(goal, task, eventWriter, clock,
+                "Historical Planner evidence retained; planning must run against the current brief.");
+            return true;
+        }
+
+        if (PlannerEvidenceRecorder.IsSupersededBriefPlannerRound(goal, task))
+        {
+            Requeue(goal, task, eventWriter, clock, SupersededNote(goal, task));
+            return true;
+        }
+
+        premiseInvalid = WorkerResultBlockers.TryFindPremiseInvalidEvidence(task.LastVerification, out _);
+        if (!premiseInvalid || processRunning) return false;
+
+        Requeue(goal, task, eventWriter, clock,
+            "Planner reported a premise-invalid blocker; planning must rerun with the human answer.");
+        return true;
+    }
+
+    internal static void EnsureDispatchAllowed(Goal goal, TaskSpec task)
+    {
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer) ||
+            goal.AuthoritativeRefinedSpecVersion is not { } specification ||
+            specification.BriefVersion >= goal.AuthoritativeBrief.Version)
+            return;
+
+        var unfinishedPlanner = goal.Tasks.FirstOrDefault(planner => planner.RequiredRole == AgentRole.Planner &&
+            (planner.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman) &&
+            (planner.LastDispatch is not null || planner.DispatchHistory.Count > 0));
+        if (unfinishedPlanner is not null)
+        {
+            throw new InvalidOperationException(
+                $"Task '{task.Id}' cannot dispatch with specification brief v{specification.BriefVersion} and current brief v{goal.AuthoritativeBrief.Version} while Planner task '{unfinishedPlanner.Id}' is {unfinishedPlanner.Status}.");
+        }
+    }
+
+    private static bool HasPlannerEvidenceOrAmendmentWait(Goal goal, TaskSpec task, IEnumerable<HumanInputRequest> requests) =>
+        task.LastVerification?.PlannerEvidenceBatch?.Directives.Any(directive =>
+            directive.PlannerEvidence is not null || directive.Kind == HumanWaitKind.PlannerBriefAmendment) == true ||
+        requests.Any(request => request.GoalId == goal.Id && request.TaskId == task.Id &&
+            ((!request.IsCompleted && request.PlannerIdentity is not null) ||
+             (request.Kind == HumanWaitKind.PlannerBriefAmendment && !request.AmendmentReplanRouted)));
+
+    private static string SupersededNote(Goal goal, TaskSpec task) =>
+        $"Planner must re-plan: dispatch brief v{task.LastDispatch!.BriefVersion} was superseded by current brief v{goal.AuthoritativeBrief.Version}.";
+
+    private static void Requeue(Goal goal, TaskSpec task, IGoalLifecycleEventWriter eventWriter, IClock clock, string note)
+    {
+        task.ClearLatestVerification();
+        TaskStatusTransitionRecorder.Record(eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleRestoreTaskAfterHumanInputObsoletePlanner);
+        var progress = new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskNote, note, clock.UtcNow);
+        goal.Append(progress);
+        eventWriter.AppendTimelineEvent(progress);
     }
 }
