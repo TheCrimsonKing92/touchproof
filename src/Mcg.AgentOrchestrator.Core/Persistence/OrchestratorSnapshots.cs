@@ -225,7 +225,9 @@ public sealed record TaskVerificationSnapshot(
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
     DateTimeOffset? DispatchAttemptAt = null,
     IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null,
-    string? OrchestratorFailureReason = null)
+    string? OrchestratorFailureReason = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? FindingContractVersion = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -293,7 +295,9 @@ public sealed record TaskDispatchSnapshot(
     FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
     string? PlannerEvidenceCriteriaVersionHash = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    bool? BriefSnapshotFromVersion = null);
+    bool? BriefSnapshotFromVersion = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? FindingContractVersion = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

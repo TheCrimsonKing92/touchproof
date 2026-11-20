@@ -45,7 +45,7 @@ internal static class FindingEvidenceReceiptSelector
                     !string.Equals(record.ReviewedCommit, candidateSha, StringComparison.OrdinalIgnoreCase) ||
                     !CandidateIdentity.AreSameCandidate(record.CandidateIdentity, identity) ||
                     !source.DispatchHistory.Any(dispatch => dispatch.DispatchedAt == sourceDispatch && dispatch.GoalId == goal.Id) ||
-                    !WorkerResultBlockers.TryFindReviewFindingRound(record, out var round, out _)) continue;
+                    !WorkerResultBlockers.TryFindReviewFindingRound(record, out var round, out _, source.RequiredRole)) continue;
                 var sourceFinding = record.MergedReviewFindings?.SingleOrDefault(item => item.StableId == finding.StableId);
                 if (sourceFinding?.EvidenceRequest is null || normalize(sourceFinding.EvidenceRequest) is not { } sourceRequest ||
                     ConductorDriver.BuildFindingEvidenceIdentity(sourceRequest) != requestIdentity ||
@@ -132,7 +132,7 @@ internal static class FindingEvidenceReceiptSelector
             return origin is not null && source!.DispatchHistory.Any(dispatch =>
                     dispatch.GoalId == goal.Id && dispatch.DispatchedAt == selection.SourceDispatchAt) &&
                 CandidateIdentity.AreSameCandidate(origin.CandidateIdentity, claimed.CandidateIdentity) &&
-                WorkerResultBlockers.TryFindReviewFindingRound(origin, out var round, out _) &&
+                WorkerResultBlockers.TryFindReviewFindingRound(origin, out var round, out _, source.RequiredRole) &&
                 ConductorDriver.BuildFindingRoundFingerprint(source.Id, origin.CompletedAt, round) == selection.FindingRoundFingerprint &&
                 receipt is not null && executed is { Length: > 0 } && validatedReceipt is not null &&
                 ConductorDriver.BuildFindingEvidenceIdentity(receipt.Request) ==
@@ -170,7 +170,7 @@ internal static class FindingEvidenceReceiptSelector
             var origin = source.VerificationHistory.FirstOrDefault(record =>
                 CandidateIdentity.AreSameCandidate(record.CandidateIdentity, identity) &&
                 record.FindingEvidenceReceipts?.Any(item => item.ReceiptId == receipt.ReceiptId) == true &&
-                WorkerResultBlockers.TryFindReviewFindingRound(record, out var round, out _) &&
+                WorkerResultBlockers.TryFindReviewFindingRound(record, out var round, out _, source.RequiredRole) &&
                 ConductorDriver.BuildFindingRoundFingerprint(source.Id, record.CompletedAt, round) == receipt.FindingRoundFingerprint);
             if (origin?.DispatchStartedAt is not { } dispatchAt ||
                 !source.DispatchHistory.Any(dispatch => dispatch.DispatchedAt == dispatchAt && dispatch.GoalId == goal.Id)) return false;

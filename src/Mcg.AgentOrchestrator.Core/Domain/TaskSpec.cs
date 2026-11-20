@@ -279,7 +279,8 @@ public sealed partial class TaskSpec
                     LastVerification.HumanInputStoreReference,
                     LastVerification.EvidenceSource,
                     LastVerification.DispatchAttemptAt,
-                    LastVerification.FindingEvidenceRequestDispositions, LastVerification.PlannerEvidenceBatch, LastVerification.OrchestratorFailureReason),
+                    LastVerification.FindingEvidenceRequestDispositions, LastVerification.PlannerEvidenceBatch, LastVerification.OrchestratorFailureReason,
+                    LastVerification.FindingContractVersion),
             _verificationHistory
                 .Select(verification =>
                 {
@@ -330,7 +331,8 @@ public sealed partial class TaskSpec
                         verification.HumanInputStoreReference,
                         verification.EvidenceSource,
                         verification.DispatchAttemptAt,
-                        verification.FindingEvidenceRequestDispositions, verification.PlannerEvidenceBatch, verification.OrchestratorFailureReason);
+                        verification.FindingEvidenceRequestDispositions, verification.PlannerEvidenceBatch, verification.OrchestratorFailureReason,
+                        verification.FindingContractVersion);
                 })
                 .ToList(),
             LastDispatch is null
@@ -489,7 +491,8 @@ public sealed partial class TaskSpec
                     HumanInputStoreReference: verification.HumanInputStoreReference,
                     EvidenceSource: verification.EvidenceSource,
                     DispatchAttemptAt: verification.DispatchAttemptAt,
-                    FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: verification.PlannerEvidenceBatch, OrchestratorFailureReason: verification.OrchestratorFailureReason)
+                    FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: verification.PlannerEvidenceBatch, OrchestratorFailureReason: verification.OrchestratorFailureReason,
+                    FindingContractVersion: verification.FindingContractVersion)
                 {
                     AuthoritativeStandardOutput = output.Text,
                     AuthoritativeStandardError = error.Text
@@ -544,7 +547,8 @@ public sealed partial class TaskSpec
                 HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference,
                 EvidenceSource: snapshot.LastVerification.EvidenceSource,
                 DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt,
-                FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: snapshot.LastVerification.PlannerEvidenceBatch, OrchestratorFailureReason: snapshot.LastVerification.OrchestratorFailureReason)
+                FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: snapshot.LastVerification.PlannerEvidenceBatch, OrchestratorFailureReason: snapshot.LastVerification.OrchestratorFailureReason,
+                FindingContractVersion: snapshot.LastVerification.FindingContractVersion)
             {
                 AuthoritativeStandardOutput = output.Text,
                 AuthoritativeStandardError = error.Text
@@ -896,7 +900,7 @@ public sealed partial class TaskSpec
         var index = Array.FindIndex(findings, finding =>
             string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
         if (index < 0 &&
-            WorkerResultBlockers.TryFindReviewFindingRound(LastVerification, out var reportedRound, out _))
+            WorkerResultBlockers.TryFindReviewFindingRound(LastVerification, out var reportedRound, out _, RequiredRole))
         {
             var reportedFinding = reportedRound.Findings.FirstOrDefault(finding =>
                 string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
@@ -1203,6 +1207,16 @@ public sealed partial class TaskSpec
         LastProcess = null;
     }
 
+    public void RecordRestoredFindingContract(DateTimeOffset dispatchedAt, int? findingContractVersion)
+    {
+        var dispatch = LastDispatch;
+        if (dispatch is null || dispatch.DispatchedAt != dispatchedAt)
+            throw new InvalidOperationException("Finding contract restoration requires the originating prepared dispatch.");
+
+        if (dispatch.FindingContractVersion != findingContractVersion)
+            ReplacePreparedDispatch(dispatch with { FindingContractVersion = findingContractVersion });
+    }
+
     internal void ReplacePreparedDispatch(TaskDispatchRecord dispatch)
     {
         if (Status != WorkTaskStatus.Running || LastDispatch is null || LastProcess is not null)
@@ -1392,7 +1406,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash);
+        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1437,7 +1451,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash);
+        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
