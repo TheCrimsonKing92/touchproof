@@ -592,7 +592,7 @@ function Get-MtpFilterTokens {
 
         $fullyQualifiedName = [regex]::Match(
             $text,
-            '^FullyQualifiedName\s*(?<op>!~|~|!=|=)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$',
+            '^FullyQualifiedName\s*(?<op>!~|~|!=|=)\s*(?<value>[A-Za-z_][A-Za-z0-9_.+]*)$',
             [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if ($fullyQualifiedName.Success) {
             $tokens.Add([pscustomobject]@{

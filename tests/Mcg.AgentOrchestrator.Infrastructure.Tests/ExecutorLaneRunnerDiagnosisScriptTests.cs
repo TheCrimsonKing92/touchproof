@@ -15,6 +15,21 @@ public sealed class ExecutorLaneRunnerDiagnosisScriptTests : IDisposable
     private const string RetainedLine = "Retained diagnostic directory: " + RetainedPath;
 
     [Fact]
+    public async Task FilterFailureExit26_RecordsDiagnosisForTheHost()
+    {
+        const string line = "FILTER FAILURE - managed build/test processes were not launched: unsupported filter";
+        var sha = Seed($"Write-Output '{line}'\nexit 26");
+
+        var result = await Run(Job(sha));
+
+        Assert.True(result.Exit == 0, result.Error);
+        var status = Assert.IsType<SshRemoteLaneStatus>(SshRemoteLaneStatus.Read(Path.Combine(ResultFolder(sha), "status.json")));
+        Assert.Equal(26, status.Completion().ExitCode);
+        Assert.Equal(line, Assert.Single(status.Fields.GetProperty("runnerDiagnosis").EnumerateArray()).GetString());
+        Assert.Equal("runner", RemoteLaneFaultOwner.Resolve("executor", status.Fields, "diagnosis-fixture"));
+    }
+
+    [Fact]
     public async Task MissingTrxExit26_RecordsDiagnosisRetainedDirectoryAndFoundCount()
     {
         var sha = Seed($"""
