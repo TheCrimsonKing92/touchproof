@@ -454,6 +454,117 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Null(ReadOnlyAttempt(attemptRoot, goal).ReconciledAt);
     }
 
+    [Xunit.Fact]
+    public void Tick_ParallelAcceptanceDeclinesCandidate_HoldsWithoutInlineGate()
+    {
+        const string inlineLease = "conductor:acceptance-and-land";
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.True(AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal));
+        var leases = new RecordingEvidenceMutationLeases();
+        var lifecycleReads = 0;
+        var verifierRuns = 0;
+        var landings = 0;
+        var driver = MakeAcceptanceDriver(
+            // The goal enters ExecuteLanding as Verified. Admission sees the workspace block.
+            getFacts: _ => ++lifecycleReads == 1 ? GoalLifecycleFacts.None : new(IsBlocked: true),
+            runAcceptanceVerificationWithLease: (_, _, _, _) =>
+            {
+                verifierRuns++;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            tryAcquireEvidenceMutationLease: leases.Acquire,
+            onLand: () => landings++);
+        driver.BeginTick(kernel, 1);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.DoesNotContain(inlineLease, leases.Requests);
+        Assert.Equal(0, verifierRuns);
+        Assert.Equal(0, landings);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Verified, held.State);
+        Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+        var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+        Assert.Equal("Hold", decision.Action);
+        Assert.Equal("no-parallel-acceptance-candidate", decision.DiscriminatingEvidence);
+        Assert.Contains(ConductorDriver.CandidateDeclineLifecycleNotVerified, decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Tick_ParallelAcceptanceDisabled_RunsInlineGateAndLands()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var verifierRuns = 0;
+        var driver = MakeAcceptanceDriver(runAcceptanceVerification: _ =>
+        {
+            verifierRuns++;
+            return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+        });
+        driver.BeginTick(kernel, 1);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(1, verifierRuns);
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.StartsWith("Landed:", executed.Description, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Tick_ParallelAcceptanceVerifier_UsesItsOwnMutationLease()
+    {
+        const int ownerPid = 9804;
+        const string inlineLease = "conductor:acceptance-and-land";
+        var attemptRoot = CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SimpleGoal();
+            PassVerification(kernel, goal, goal.Tasks.Single());
+            var leases = new RecordingEvidenceMutationLeases();
+            string[]? outstandingDuringVerification = null;
+            ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default,
+                isProcessAlive: pid => pid == ownerPid,
+                launchOwnedProcess: launch =>
+                {
+                    ownedLaunch = launch;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(ownerPid);
+                },
+                acquireStableSlotLease: (_, _) => null);
+            var driver = MakeAcceptanceDriver(
+                runAcceptanceVerificationWithLease: (_, _, _, _) =>
+                {
+                    outstandingDuringVerification = leases.Outstanding.ToArray();
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                classifyRisk: _ => ChangeRiskTier.DocsOnly,
+                parallelAcceptanceAttemptCoordinator: coordinator,
+                tryAcquireEvidenceMutationLease: leases.Acquire);
+            driver.BeginTick(kernel, 1);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            Assert.Equal(GoalLifecycleState.Verifying, held.State);
+            Assert.Null(outstandingDuringVerification);
+            var launch = Assert.IsType<ConductorParallelAcceptanceOwnedProcessLaunch>(ownedLaunch);
+            launch.ExecuteInCurrentProcess(ownerPid);
+
+            Assert.NotNull(outstandingDuringVerification);
+            Assert.Equal("conductor:parallel-acceptance", Assert.Single(outstandingDuringVerification));
+            Assert.DoesNotContain(inlineLease, leases.Requests);
+            Assert.Empty(leases.Outstanding);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, ReadOnlyAttempt(attemptRoot, goal).Outcome);
+        }
+        finally
+        {
+            Directory.Delete(attemptRoot, recursive: true);
+        }
+    }
+
     private static ConductorDriver MakeAcceptanceDriver(
         Func<Goal, GoalLifecycleFacts>? getFacts = null,
         Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>?
@@ -468,7 +579,9 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
         string? executionDirectory = null,
         Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary>?
-            runAcceptanceVerificationWithOptions = null) =>
+            runAcceptanceVerificationWithOptions = null,
+        Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
+        Action? onLand = null) =>
         new(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             () => 0,
@@ -488,13 +601,17 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
                 "Already fast-forwardable",
                 [],
                 null),
-            (goal, _) => new LandingResult(
-                goal.Id.Value,
-                goal.Id.Value[..8],
-                new LandingDecision.Promote(),
-                "integration",
-                true,
-                "Landed"),
+            (goal, _) =>
+            {
+                onLand?.Invoke();
+                return new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            },
             null,
             _ => { },
             _ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null),
@@ -507,7 +624,26 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             noTickAcceptancePollTimeout: noTickAcceptancePollTimeout,
             utcNow: utcNow,
             executionDirectory: executionDirectory,
-            runAcceptanceVerificationWithOptions: runAcceptanceVerificationWithOptions);
+            runAcceptanceVerificationWithOptions: runAcceptanceVerificationWithOptions,
+            tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease);
+
+    private sealed class RecordingEvidenceMutationLeases
+    {
+        public List<string> Requests { get; } = [];
+        public List<string> Outstanding { get; } = [];
+
+        public IDisposable Acquire(Goal _, string reason)
+        {
+            Requests.Add(reason);
+            Outstanding.Add(reason);
+            return new Lease(Outstanding, reason);
+        }
+
+        private sealed class Lease(List<string> outstanding, string reason) : IDisposable
+        {
+            public void Dispose() => outstanding.Remove(reason);
+        }
+    }
 
     private static void WriteSourceSizeAuthority(
         string root,
