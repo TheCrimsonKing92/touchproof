@@ -198,7 +198,7 @@ public sealed class TaskBriefTests
             tests: not-run - Reviewer is read-only
             commit: none
             blockers: exact-blocker - B-1 correctness blocker
-            findings: [{"stable_id":"B-1","state":"open","severity":"blocking","location":{"file":"src/B.cs","region":"B.Run"},"description":"Correctness blocker fixed."}]
+            findings: [{"stable_id":"B-1","state":"open","class_id":"none","severity":"blocking","location":{"file":"src/B.cs","region":"B.Run"},"description":"Correctness blocker fixed."}]
             touched_anchors: []
             verdict: needs-work
             model_fit: Anthropic/claude-opus-5 - adequate - focused review - severity receipt
@@ -231,7 +231,7 @@ public sealed class TaskBriefTests
             tests: not-run - Reviewer is read-only
             commit: none
             blockers: none
-            findings: [{"stable_id":"A-1","state":"open","severity":"advisory","location":{"file":"src/A.cs","region":"A.Run"},"description":"Readability follow-up."},{"stable_id":"B-1","state":"resolved","severity":"blocking","location":{"file":"src/B.cs","region":"B.Run"},"description":"Correctness blocker fixed."}]
+            findings: [{"stable_id":"A-1","state":"open","class_id":"none","severity":"advisory","location":{"file":"src/A.cs","region":"A.Run"},"description":"Readability follow-up."},{"stable_id":"B-1","state":"resolved","class_id":"none","severity":"blocking","location":{"file":"src/B.cs","region":"B.Run"},"description":"Correctness blocker fixed."}]
             touched_anchors: []
             verdict: pass
             model_fit: Anthropic/claude-opus-5 - adequate - focused review - severity receipt

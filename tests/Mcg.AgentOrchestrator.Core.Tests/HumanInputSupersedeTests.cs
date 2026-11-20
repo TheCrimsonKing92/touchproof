@@ -207,7 +207,7 @@ public sealed class HumanInputSupersedeTests
         kernel.SubmitHumanInput(request.Id, "1 second");
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"},{"stable_id":"unrelated","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"{{unrelated}}"}]"""));
+            $$"""[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"},{"stable_id":"unrelated","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"{{unrelated}}"}]"""));
 
         clock.Advance();
         kernel.SupersedeHumanInput(goal.Id, request.Id, "5 seconds", HumanInputAnswerOrigin.Operator);
@@ -219,7 +219,7 @@ public sealed class HumanInputSupersedeTests
         clock.Advance();
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"},{"stable_id":"unrelated","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"{{unrelated}}"}]"""));
+            $$"""[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"},{"stable_id":"unrelated","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"{{unrelated}}"}]"""));
 
         Assert.Contains(kernel.GetReviewFindingState(goal.Id), finding => finding.StableId == "derived");
     }
@@ -239,7 +239,7 @@ public sealed class HumanInputSupersedeTests
         kernel.SubmitHumanInput(request.Id, "1 second");
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"}]"""));
+            $$"""[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"}]"""));
 
         clock.Advance();
         kernel.SupersedeHumanInput(goal.Id, request.Id, "5 seconds", HumanInputAnswerOrigin.Operator);
@@ -265,7 +265,7 @@ public sealed class HumanInputSupersedeTests
         var goal = kernel.CreateGoal("Prefer typed resolution evidence.", [reviewer]);
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."},{"stable_id":"unrelated","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Unrelated finding."}]"""));
+            """[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."},{"stable_id":"unrelated","state":"open","class_id":"none","location":{"file":"src/B.cs","region":"B.Run"},"description":"Unrelated finding."}]"""));
 
         clock.Advance();
         goal.Append(new ProgressEvent(
@@ -290,7 +290,7 @@ public sealed class HumanInputSupersedeTests
         var goal = kernel.CreateGoal("Read legacy resolution evidence.", [reviewer]);
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
+            """[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
 
         clock.Advance();
         goal.Append(new ProgressEvent(
@@ -312,7 +312,7 @@ public sealed class HumanInputSupersedeTests
         var goal = kernel.CreateGoal("Read legacy empty resolution evidence.", [reviewer]);
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
+            """[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
 
         clock.Advance();
         goal.Append(new ProgressEvent(
@@ -334,7 +334,7 @@ public sealed class HumanInputSupersedeTests
         var goal = kernel.CreateGoal("Ignore unrelated event messages.", [reviewer]);
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
+            """[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
 
         clock.Advance();
         goal.Append(new ProgressEvent(
@@ -362,7 +362,7 @@ public sealed class HumanInputSupersedeTests
         kernel.SubmitHumanInput(request.Id, "1 second");
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
             clock.UtcNow,
-            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{unresolvedFinding}}"}]"""));
+            $$"""[{"stable_id":"derived","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{unresolvedFinding}}"}]"""));
 
         clock.Advance();
         kernel.SupersedeHumanInput(goal.Id, request.Id, "5 seconds", HumanInputAnswerOrigin.Operator);

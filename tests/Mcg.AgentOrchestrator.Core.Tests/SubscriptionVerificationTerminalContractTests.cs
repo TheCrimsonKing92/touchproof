@@ -6,6 +6,24 @@ using Xunit;
 public sealed class SubscriptionVerificationTerminalContractTests
 {
     [Theory]
+    [InlineData("", "advisory", VerificationTerminalContractStatus.Malformed)]
+    [InlineData("\"class_id\":\"none\",", "advisory", VerificationTerminalContractStatus.Valid)]
+    [InlineData("\"class_id\":\"dispositive-misclassification\",", "advisory", VerificationTerminalContractStatus.Malformed)]
+    [InlineData("\"class_id\":\"dispositive-misclassification\",", "blocking", VerificationTerminalContractStatus.Valid)]
+    public void ReviewerTerminalContractValidatesFindingClass(
+        string classProperty, string severity, VerificationTerminalContractStatus expected)
+    {
+        var findings = $$"""[{"stable_id":"typed-class","state":"open",{{classProperty}}"severity":"{{severity}}","location":{"file":"src/Example.cs","region":"Run"},"description":"Check result."}]""";
+        var output = Contract(AgentRole.Reviewer).Replace("findings: []", "findings: " + findings);
+
+        var assessment = WorkerResultBlockers.AssessTerminalVerificationOutput(AgentRole.Reviewer, output);
+
+        Assert.Equal(expected, assessment.Status);
+        if (expected == VerificationTerminalContractStatus.Malformed)
+            Assert.Contains("class_id", assessment.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void LargeReviewerFindingsUseCompleteCapturedTerminalBlock(bool corruptJson)
@@ -13,7 +31,7 @@ public sealed class SubscriptionVerificationTerminalContractTests
         var mutationText = new string('x', VerificationTextBounds.MaxRetainedChars + 1024);
         var findings = JsonSerializer.Serialize(new[] { new
         {
-            stable_id = "large-mutation", state = "open", severity = "blocking", category = "test-evidence",
+            stable_id = "large-mutation", state = "open", severity = "blocking", category = "test-evidence", class_id = "none",
             location = new { file = "src/Example.cs", region = "Example" }, description = "Execute the requested control.",
             evidence_request = new
             {

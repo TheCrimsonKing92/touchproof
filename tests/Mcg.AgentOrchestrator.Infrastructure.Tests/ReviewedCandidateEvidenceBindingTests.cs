@@ -143,7 +143,7 @@ public sealed class ReviewedCandidateEvidenceBindingTests
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             "codex-cli", "review", "C:\\fixture", startedAt, BaseCommit: candidate));
         var findings = finding
-            ? """[{"stable_id":"gate-proof","state":"open","location":{"file":"docs/operator-runbook.md","region":"gate-proof"},"description":"Full acceptance evidence remains pending.","severity":"blocking","category":"acceptance-owned"}]"""
+            ? """[{"stable_id":"gate-proof","state":"open","class_id":"none","location":{"file":"docs/operator-runbook.md","region":"gate-proof"},"description":"Full acceptance evidence remains pending.","severity":"blocking","category":"acceptance-owned"}]"""
             : "[]";
         var output = string.Join(Environment.NewLine,
             "WORKER_RESULT:", "files: none", "commands: inspect", "tests: deferred - GateProofTests",

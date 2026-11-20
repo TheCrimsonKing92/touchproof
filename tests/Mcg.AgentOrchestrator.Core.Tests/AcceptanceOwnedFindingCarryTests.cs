@@ -173,7 +173,7 @@ public sealed class AcceptanceOwnedFindingCarryTests
 
     private static string Finding(string stableId, string category, string? request) =>
         "{\"stable_id\":" + JsonSerializer.Serialize(stableId) +
-        ",\"state\":\"open\",\"location\":{\"file\":\"tests/OtherCleanupTests.cs\",\"region\":" + JsonSerializer.Serialize(stableId) +
+        ",\"state\":\"open\",\"class_id\":\"none\",\"location\":{\"file\":\"tests/OtherCleanupTests.cs\",\"region\":" + JsonSerializer.Serialize(stableId) +
         "},\"description\":\"Acceptance cleanup requires a full gate receipt.\",\"severity\":\"blocking\",\"category\":" +
         JsonSerializer.Serialize(category) + (request is null ? "" : ",\"evidence_request\":" + request) + "}";
 }

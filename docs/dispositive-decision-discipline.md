@@ -124,6 +124,8 @@ document existing.
 
 ## Reviewer checklist
 
+- Set `class_id` to the registered class when a finding restates a documented failure class. A registered
+  blocking class is never filed advisory.
 - For each new or changed site that assigns a verdict, terminal state, circuit state, escalation, or
   retry-vs-fail disposition: confirm the justification is derivable from what is in scope, and that a typed
   reason is recorded.

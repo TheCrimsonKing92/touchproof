@@ -67,7 +67,7 @@ public sealed class ConductorDriverTestsUnchangedCandidateRejectedVerdict
         "tests: pass - focused fixture",
         "commit: none",
         "blockers: none",
-        """findings: [{"stable_id":"B-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Correctness defect.","severity":"blocking"}]""",
+        """findings: [{"stable_id":"B-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Correctness defect.","severity":"blocking"}]""",
         "touched_anchors: []",
         "criteria_verdicts: []",
         "verdict: pass",

@@ -68,10 +68,10 @@ public sealed class CriterionEvidenceWorkerRoutingTests
         task = Assert.Single(goal.Tasks);
         var category = scenario == "category-mismatch" ? "test-evidence"
             : owner == CriterionEvidenceOwner.Operator ? "operator-owned" : "acceptance-owned";
-        var findings = """{"stable_id":"STABLE","state":"open","location":{"file":"docs/operator-runbook.md","region":"owner-proof"},"description":"Current required owner proof is missing.","severity":"blocking","category":"CATEGORY"}"""
+        var findings = """{"stable_id":"STABLE","state":"open","class_id":"none","location":{"file":"docs/operator-runbook.md","region":"owner-proof"},"description":"Current required owner proof is missing.","severity":"blocking","category":"CATEGORY"}"""
             .Replace("STABLE", StableId).Replace("CATEGORY", category);
         if (scenario is "correctness" or "test-coverage")
-            findings += """,{"stable_id":"worker-blocker","state":"open","location":{"file":"src/Example.cs","region":"Execute"},"description":"The source failure path is unverified.","severity":"blocking","category":"CATEGORY"}"""
+            findings += """,{"stable_id":"worker-blocker","state":"open","class_id":"none","location":{"file":"src/Example.cs","region":"Execute"},"description":"The source failure path is unverified.","severity":"blocking","category":"CATEGORY"}"""
                 .Replace("CATEGORY", scenario == "correctness" ? "correctness" : "test-coverage");
         var verdict = scenario == "not-met" ? "not-met" : "not-verifiable";
         var output = string.Join(Environment.NewLine,
@@ -145,9 +145,9 @@ public sealed class CriterionEvidenceWorkerRoutingTests
         kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
         goal = kernel.GetGoal(goal.Id);
         task = Assert.Single(goal.Tasks);
-        var findings = """{"stable_id":"missing-full-gate","state":"open","location":{"file":"config/acceptance-manifest.json","region":"full-gate"},"description":"The acceptance executor has not produced a receipt.","severity":"blocking","category":"acceptance-owned"}""";
+        var findings = """{"stable_id":"missing-full-gate","state":"open","class_id":"none","location":{"file":"config/acceptance-manifest.json","region":"full-gate"},"description":"The acceptance executor has not produced a receipt.","severity":"blocking","category":"acceptance-owned"}""";
         if (scenario == "mixed")
-            findings += """,{"stable_id":"missing-failure-path","state":"open","location":{"file":"src/Example.cs","region":"Execute"},"description":"The failure path returns success.","severity":"blocking","category":"correctness"}""";
+            findings += """,{"stable_id":"missing-failure-path","state":"open","class_id":"none","location":{"file":"src/Example.cs","region":"Execute"},"description":"The failure path returns success.","severity":"blocking","category":"correctness"}""";
         var criterionVerdict = scenario == "not-met" ? "not-met" : "not-verifiable";
         var output = string.Join(Environment.NewLine,
             "WORKER_RESULT:", "files: none", "commands: inspect", "tests: pass - fixture source checks",
