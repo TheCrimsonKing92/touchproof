@@ -133,7 +133,8 @@ public sealed class ReviewerFindingsParseFixtureTests
             out _));
         var (kernel, goal) = SoftwareGoal("Retained Reviewer stdout diagnostic fixture");
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        DispatchTask(kernel, goal, reviewer, "review");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "test-worker", verification.Command, verification.WorkingDirectory, verification.CompletedAt.AddMinutes(-1)));
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
 
