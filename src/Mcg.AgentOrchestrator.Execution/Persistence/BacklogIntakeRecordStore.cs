@@ -219,6 +219,7 @@ public sealed class BacklogIntakeRecordStore
         return command.ExecuteScalar() is not null;
     }
 
+    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/BacklogIntakeRecordStore.cs")]
     internal void PrepareContinuation(BacklogIntakeContinuationReservation reservation)
     {
         WriteContinuation(connection =>

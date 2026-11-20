@@ -109,6 +109,7 @@ public sealed class SourceBacklogClaimStore(string databasePath)
     public GoalReplacementAuditSnapshot? FindAudit(Guid requestId) =>
         WithReadConnection(connection => ReadAudit(connection, requestId));
 
+    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/SourceBacklogClaimStore.cs")]
     internal SourceBacklogContinuationLineage? TransferContinuation(
         SourceBacklogClaimSnapshot expected, string successorGoalId)
     {
