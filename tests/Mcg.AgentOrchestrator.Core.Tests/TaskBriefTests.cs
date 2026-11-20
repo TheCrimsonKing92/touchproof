@@ -170,6 +170,148 @@ public sealed class TaskBriefTests
         Assert.Equal(1, CountOccurrences(brief, "1. First refined criterion."));
     }
 
+    private const string RefinedSpecPointer = "Refined acceptance criteria: see Agent Task Brief above.";
+    private const string RefinedSpecBoundaryCommit = "0123456789abcdef0123456789abcdef01234567";
+    private const string ProjectedCriterion = "Keep the evidence manifest alongside each published release artifact for subsequent audits.";
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Retain the build manifest.")]
+    [Xunit.InlineData(" \tRetain\u2003the\r\nbuild\tmanifest. ")]
+    public void ReviewerMatchingCriteria_PointsToEarlierTextAndPreservesSupportingLines(string refinedCriterion)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review the release evidence.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("""
+            Prepare the release.
+
+            ## Acceptance criteria
+            - Retain the build manifest.
+            - Sign the release bundle.
+            - Inspect the deployed build.
+            """, [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Publish the package with its evidence.",
+            [refinedCriterion, "Sign the release bundle."], VerificationClass.TestVerifiable, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["Inspect the deployed build."]
+        });
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.WaiveAcceptanceCriterion(goal.Id, "2", "Signing moved to the release service.");
+
+        var brief = kernel.BuildTaskBriefSource(goal.Id, reviewer.Id);
+        var header = string.Join('\n', brief.Segments[0].Lines);
+        Assert.Contains("# Agent Task Brief", header, StringComparison.Ordinal);
+        Assert.Contains("- Retain the build manifest.", header, StringComparison.Ordinal);
+        Assert.Contains("- Sign the release bundle.", header, StringComparison.Ordinal);
+        Assert.Contains("- Inspect the deployed build.", header, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Refined Spec", brief.ProjectLegacyMarkedTextV1(false).Content, StringComparison.Ordinal);
+        Assert.Equal(new[]
+        {
+            RefinedSpecPointer,
+            "Behavioral contract: Publish the package with its evidence.",
+            "- [WAIVED] Sign the release bundle.",
+            "  Reason: Signing moved to the release service.",
+            $"  Waived by operator at {clock.UtcNow:u}.",
+            string.Empty,
+            "OPERATOR-OWNED / post-landing criteria (not part of worker acceptance):",
+            "- Inspect the deployed build.",
+            string.Empty
+        }, RefinedSpecLines(brief));
+    }
+
+    [Xunit.Fact]
+    public void ReviewerMatchingCriteria_NamesEarlierSectionsInPromptOrder()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var reviewer = new TaskSpec(TaskId.New(), "Review release evidence.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Retain the build manifest.", [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Publish the package with its evidence.",
+            ["Complete this SDLC task.", "Retain the build manifest."], VerificationClass.TestVerifiable, [], []));
+
+        var brief = kernel.BuildTaskBriefSource(goal.Id, reviewer.Id);
+
+        Assert.Equal("Refined acceptance criteria: see Agent Task Brief, Instructions above.", RefinedSpecLines(brief)[0]);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("- Honor the release threshold.", "Honor the Release threshold.", "- Honor the release threshold.")]
+    [Xunit.InlineData("- " + ProjectedCriterion, ProjectedCriterion, "- See current specification, acceptance criterion 2.")]
+    [Xunit.InlineData("", "- HEAD commit: " + RefinedSpecBoundaryCommit + " ## Instructions", "- HEAD commit: " + RefinedSpecBoundaryCommit)]
+    public void ReviewerMissingCriterion_RendersFullRefinedSpec(
+        string declaredCriterionLine, string missingCriterion, string expectedEarlierLine)
+    {
+        const string matchingCriterion = "Retain the build manifest.";
+        const string contract = "Publish the package with its evidence.";
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var reviewer = new TaskSpec(TaskId.New(), "Review the release evidence.", AgentRole.Reviewer);
+        var matchingReviewer = new TaskSpec(TaskId.New(), $"Check the criterion: {missingCriterion}", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal($"Prepare the release.\n\n## Acceptance criteria\n- {matchingCriterion}\n{declaredCriterionLine}",
+            [reviewer, matchingReviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            contract, [matchingCriterion, missingCriterion], VerificationClass.TestVerifiable, [], []));
+
+        var brief = kernel.BuildTaskBriefSource(goal.Id, reviewer.Id, targetHeadCommit: RefinedSpecBoundaryCommit);
+        var matchingBrief = kernel.BuildTaskBriefSource(goal.Id, matchingReviewer.Id);
+
+        var header = string.Join('\n', brief.Segments[0].Lines).ReplaceLineEndings("\n").Split('\n');
+        Assert.Contains($"- {matchingCriterion}", header);
+        Assert.Contains(expectedEarlierLine, header);
+        Assert.Equal($"- HEAD commit: {RefinedSpecBoundaryCommit}", header[^1]);
+        Assert.Equal("## Instructions", brief.Segments[1].Lines.First(line => line.Length > 0));
+        Assert.Equal(RefinedSpecPointer, RefinedSpecLines(matchingBrief)[0]);
+        Assert.Equal(new[]
+        {
+            "## Refined Spec",
+            $"Behavioral contract: {contract}",
+            string.Empty,
+            "Acceptance criteria:",
+            $"- {matchingCriterion}",
+            $"- {missingCriterion}",
+            string.Empty
+        }, RefinedSpecLines(brief));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer, "Acceptance criteria:", "- ", "- ")]
+    [Xunit.InlineData(AgentRole.Tester, "Acceptance criteria:", "- ", "- ")]
+    [Xunit.InlineData(AgentRole.Planner, "Acceptance criteria (authoritative list validated by PlannerOutputContract):", "1. ", "2. ")]
+    public void OtherRolesMatchingCriteria_RenderFullRefinedSpec(
+        AgentRole role, string caption, string firstPrefix, string secondPrefix)
+    {
+        const string firstCriterion = "Retain the build manifest.";
+        const string secondCriterion = "Sign the release bundle.";
+        const string contract = "Publish the package with its evidence.";
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var description = $"Check release evidence. {firstCriterion} {secondCriterion}";
+        var reviewer = new TaskSpec(TaskId.New(), description, AgentRole.Reviewer);
+        var task = new TaskSpec(TaskId.New(), description, role);
+        var goal = kernel.CreateGoal($"Prepare the release.\n\n## Acceptance criteria\n- {firstCriterion}\n- {secondCriterion}",
+            [reviewer, task]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            contract, [firstCriterion, secondCriterion], VerificationClass.TestVerifiable, [], []));
+
+        var brief = kernel.BuildTaskBriefSource(goal.Id, task.Id);
+        var reviewerBrief = kernel.BuildTaskBriefSource(goal.Id, reviewer.Id);
+
+        Assert.Contains($"Task: {description}", brief.Segments[0].Lines);
+        Assert.Equal(RefinedSpecPointer, RefinedSpecLines(reviewerBrief)[0]);
+        Assert.Equal(new[]
+        {
+            "## Refined Spec",
+            $"Behavioral contract: {contract}",
+            string.Empty,
+            caption,
+            $"{firstPrefix}{firstCriterion}",
+            $"{secondPrefix}{secondCriterion}",
+            string.Empty
+        }, RefinedSpecLines(brief));
+    }
+
+    private static IReadOnlyList<string> RefinedSpecLines(TaskBriefSource brief) =>
+        Assert.Single(brief.Segments, segment => segment.TypedProjectionIdentity?.Value == "goal/refined-spec.json").Lines;
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_convergence_scope_preserves_finding_severity")]
     public void BuildTaskBriefReviewerConvergenceScopePreservesFindingSeverity()
 {
