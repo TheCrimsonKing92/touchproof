@@ -1189,7 +1189,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         using var fixture = new CanaryTestFixture();
         var busy = new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
             "run-cap-exhaustion",
-            [new DotnetBuildStableSlotWait(0, 100), new DotnetBuildStableSlotWait(1, 101)]));
+            [
+                new DotnetBuildStableSlotWait(0, 100) { HolderLabel = "worker-first" },
+                new DotnetBuildStableSlotWait(1, 101) { HolderLabel = "worker-second" }
+            ]));
         var (coordinator, circuit) = fixture.CreateCoordinator(
             new FakeRunner((_, _) => throw busy),
             maxAttempts: 1);
@@ -1207,9 +1210,12 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("sha-unverified", item.Subject, StringComparison.Ordinal);
         Assert.Contains("UNVERIFIED after 1 attempts", item.Body, StringComparison.Ordinal);
         Assert.Contains(
-            "DotnetBuildSlotsBusyException: Stable dotnet build slots busy for run-cap-exhaustion.",
+            "DotnetBuildSlotsBusyException: Stable dotnet build slots busy",
             item.Body,
             StringComparison.Ordinal);
+        Assert.Contains("worker-first", item.Body, StringComparison.Ordinal);
+        Assert.Contains("worker-second", item.Body, StringComparison.Ordinal);
+        Assert.Contains("run-cap-exhaustion", item.Body, StringComparison.Ordinal);
         Assert.Contains("run-event:", item.Body, StringComparison.Ordinal);
     }
 

@@ -79,7 +79,7 @@ internal sealed class ActivationAdmissionHealthTracker
         if (_ownerIdle.Observe(sample) is { } ownerIdle) return Verdict = ownerIdle;
         var failure = sample.CensusFailed;
         var occupied = !failure && sample.WaitingVerified >= 1 && sample.Occupied >= 1 && sample.LiveGates == 0 &&
-            sample.EvidenceHeldPermits < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount &&
+            sample.EvidenceHeldPermits < DotnetBuildEnvironmentManager.BuildThrottleLimit &&
             sample.PreparingAttempts == 0;
         if (!failure && !occupied)
         {
