@@ -161,10 +161,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     }
 
     internal Task HandleKeyAsync(Key key) => _keys.HandleKeyAsync(key);
-
     internal Task ObserveKeyAsync(Key key, bool routeToWindow, string boundary) => _keys.ObserveKeyAsync(key, routeToWindow, boundary);
 
-    public Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false) => _bindingRunner.RunAsync(binding, argument, fromKey);
+    public Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false) =>
+        SettingsView.RunBindingAsync(_controller, _bindingRunner, binding, argument, fromKey, ActionRunning, FocusedPane, _activityPane);
 
     public void OpenGate(string? goalId = null)
     {
@@ -189,8 +189,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             await EpicView.OpenAsync(FocusedPane, epicId);
         if (_controller.TakeRequestedGateGoalId() is { } gateGoalId && !_token.IsCancellationRequested)
             OpenGate(gateGoalId);
-        if (_controller.TakeSettingsRequested() && !_token.IsCancellationRequested)
-            SettingsView.Open(FocusedPane);
+        SettingsView.OpenRequested(_controller, FocusedPane, _token);
     }
 
     public void StartAction() { NoticeStrip.ActionStarted(); RenderNotices(); }
@@ -221,8 +220,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public void RenderHints() => _hints.Text = EditingCommand || _command.HasFocus
         ? _completionHint ?? OwnerConsoleKeyHints.CommandLineHint
         : (FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_controller.Model)
-            ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleKeyHints.Hint(FocusedPane,
-            _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _activityPane.Following);
+            ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleBindings.PaneHint(FocusedPane,
+            _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision),
+            _activityPane.Following, signIn: OwnerConsoleSettingsView.SelectedSignInProvider(_controller.Model, FocusedPane, _activityPane) is not null);
 
     public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false) =>
         _selection.Select(index, refresh, direction, allowHeader);
