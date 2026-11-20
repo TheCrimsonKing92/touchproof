@@ -318,7 +318,8 @@ public static class GoalReadinessPreflight
                 task.RequiredRole,
                 task.Status,
                 TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole),
-                task.AssignedAgentId is not null && agents.Any(agent => agent.Id == task.AssignedAgentId),
+                InventoryModelAssignment.IsInventoryId(task.AssignedAgentId) ||
+                    task.AssignedAgentId is not null && agents.Any(agent => agent.Id == task.AssignedAgentId),
                 InferFileScopes(goal, task)))
             .ToArray();
     }

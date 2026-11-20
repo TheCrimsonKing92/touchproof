@@ -381,6 +381,9 @@ public sealed class GoalAdvancementOperations
         var task = goal.Tasks.Single(task => task.Id == taskId);
         if (goal.RefinedSpec is not null || task.RequiredRole != AgentRole.Researcher)
             GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+        if (InventoryModelAssignment.IsInventoryId(task.AssignedAgentId))
+            return new GoalAdvanceDispatchPrepared(_dispatch.SubscriptionDispatchTask(
+                kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers: providers));
         var agent = AssignedAgentResolver.Resolve(task, agents);
         if (agent.ExecutionPolicy is AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription)
         {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -93,9 +94,12 @@ private static string Slug(string value)
 
 internal static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
     IReadOnlyList<string> parts,
-    IReadOnlyList<AgentDefinition> agents)
+    IReadOnlyList<AgentDefinition> agents,
+    OrchestratorWorkspace workspace,
+    WorkerProfileCatalog? profiles = null)
 {
     var catalog = new AgentCatalog(agents);
+    ModelInventory? inventory = null;
     foreach (var (flag, role) in GoalRoleAgentFlags)
     {
         var agentId = GetFlagValue(parts, flag);
@@ -107,6 +111,20 @@ internal static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
         if (string.IsNullOrWhiteSpace(agentId) || agentId.StartsWith("--", StringComparison.Ordinal))
         {
             throw new ArgumentException($"{flag} requires <agentId>.");
+        }
+
+        if (agentId.StartsWith("model:", StringComparison.OrdinalIgnoreCase))
+        {
+            var selection = agentId["model:".Length..].Split('@', 2);
+            var profile = GetFlagValue(parts, "--profile");
+            if (HasCliConfirmation(parts, "--profile") &&
+                (string.IsNullOrWhiteSpace(profile) || profile.StartsWith("--", StringComparison.Ordinal)))
+                throw new ArgumentException("--profile requires a worker profile name.");
+            catalog = catalog.UpsertRole(InventoryModelAssignmentResolver.Resolve(selection[0], profile,
+                selection.Length == 2 ? selection[1] : null, role,
+                inventory ??= ModelInventoryStore.Load(workspace.ModelInventoryPath),
+                profiles ??= WorkerProfileStore.Load(workspace.WorkerProfilePath)));
+            continue;
         }
 
         var agent = catalog.FindById(agentId)

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Rendering;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -139,7 +140,8 @@ public static class SubscriptionPlanBuilder
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
         IReadOnlyCollection<Goal>? providerHoldScope = null,
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null,
+        ModelInventory? inventory = null)
     {
         var validations = OrchestratorHealthInspector
             .InspectWorkerProfiles(profiles, commandExists)
@@ -164,7 +166,8 @@ public static class SubscriptionPlanBuilder
                 resolvedSandboxOptions,
                 commandExists,
                 providerHoldScope,
-                sharedClaudeAuthProbe))
+                sharedClaudeAuthProbe,
+                inventory))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -206,7 +209,8 @@ public static class SubscriptionPlanBuilder
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
         IReadOnlyCollection<Goal>? providerHoldScope = null,
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null,
+        ModelInventory? inventory = null)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -237,9 +241,16 @@ public static class SubscriptionPlanBuilder
                     ["Run delegate or re-delegate before subscription dispatch."]));
         }
 
-        var agent = agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
+        var explicitAssignment = InventoryModelAssignment.Parse(task.AssignedAgentId);
+        var inventoryBlocked = explicitAssignment is not null && inventory is not null &&
+            !InventoryAssignedDispatchAgents.IsEligible(task, explicitAssignment, inventory, profiles);
+        var agent = inventoryBlocked ? null
+            : explicitAssignment?.ToDispatchAgent() ?? agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
         if (agent is null)
         {
+            var detail = explicitAssignment is null
+                ? $"Assigned agent '{task.AssignedAgentId.Value}' was not found in the agent catalog."
+                : $"{DispatchAssignmentHoldCode.InventoryAssignmentIneligible}: {InventoryAssignedDispatchAgents.IneligibleMessage(explicitAssignment)}";
             return new SubscriptionPlanItem(
                 taskNumber,
                 task.Id.Value,
@@ -247,23 +258,24 @@ public static class SubscriptionPlanBuilder
                 task.Status,
                 OutputTextPreview.CreateSummary(task.Description).Text,
                 task.AssignedAgentId.Value,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                explicitAssignment?.Model,
+                explicitAssignment?.Provider,
+                explicitAssignment?.Model,
+                explicitAssignment is null ? null : AgentExecutionPolicy.SubscriptionOnly,
+                explicitAssignment?.Profile,
+                explicitAssignment?.Model,
                 false,
                 false,
                 false,
                 false,
                 false,
-                $"Assigned agent '{task.AssignedAgentId.Value}' was not found in the agent catalog.",
+                detail,
                 Route: new WorkerRouteDecision(
                     WorkerRouteDisposition.Blocked,
-                    "Restore the assigned agent or re-delegate the task before dispatch.",
-                    [$"assigned agent '{task.AssignedAgentId.Value}' missing from catalog"],
-                    ["Run delegate or add the missing agent profile."]));
+                    explicitAssignment is null ? "Restore the assigned agent or re-delegate the task before dispatch."
+                        : "Refresh the inventory or explicitly reassign the task.",
+                    [explicitAssignment is null ? $"assigned agent '{task.AssignedAgentId.Value}' missing from catalog" : detail],
+                    [explicitAssignment is null ? "Run delegate or add the missing agent profile." : "Run models refresh or reassign-agent."]));
         }
 
         var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(

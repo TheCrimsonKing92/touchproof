@@ -2335,7 +2335,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Goal? currentGoal = null;
 
         CliCommandDispatcher.ExecuteCommand(
-            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback"],
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback", "--allow-unlisted"],
             kernel,
             workspace,
             ref agents,

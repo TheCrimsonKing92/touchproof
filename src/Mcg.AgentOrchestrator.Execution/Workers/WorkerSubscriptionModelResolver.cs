@@ -12,7 +12,8 @@ internal static partial class WorkerSubscriptionModelResolver
         var modelName = selection.UsesSubscriptionLaunchProfile
             ? agent.Subscription?.ModelAlias ?? selection.Model.ModelName
             : selection.Model.ModelName;
-        return EffectiveModelAssignment.Normalize(providerName, modelName);
+        return InventoryModelAssignment.IsInventoryId(agent.Id)
+            ? modelName : EffectiveModelAssignment.Normalize(providerName, modelName);
     }
 
     internal static SubscriptionModelSelection ResolveEffectiveSubscriptionModelSelection(
@@ -28,6 +29,9 @@ internal static partial class WorkerSubscriptionModelResolver
         bool cascadeTesterCheapFirst = true,
         string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
     {
+        if (InventoryModelAssignment.IsInventoryId(agent.Id))
+            return new(TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role),
+                agent.Model, UsesComplexModel: false, Reason: "explicit inventory assignment");
         var fullSelection = ResolveSubscriptionModel(agent, goal, task);
         return modelOverride is not null
             ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }

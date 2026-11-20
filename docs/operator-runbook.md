@@ -1245,7 +1245,7 @@ On Windows, Codex Developer and Tester workers may write inside their worktree. 
 
 ### Changing which model a role uses
 
-`agent <role> <provider> <model> [name]` replaces the role's primary agent. `agent-add <role> <provider> <model> [name]` adds a second entry at `route=alternate` with a derived id, leaving the primary in place — that is the right verb when you want one goal's task moved to a different model via `reassign-agent` without switching the whole role.
+`agent <role> <provider> <model> [name]` replaces the role's primary agent. `agent-add <role> <provider> <model> [name]` adds an alternate roster seat eligible for automatic routing. Run `models refresh` to populate the inventory, or pass `--allow-unlisted` when adding an undiscovered seat. To assign a model to one task, use `reassign-agent <task-number> --model <provider>/<model>`.
 
 **Without subscription flags, both verbs set the API model and can leave the subscription half stale, and the subscription half is the one that dispatches.** They write `Model.ModelName`, while omitted subscription or complex-model values can retain values from whatever previously occupied that id or role. Under the default `ExecutionPolicy=PreferSubscription`, the worker CLI is invoked with `{subscriptionModelName}` and `{subscriptionReasoningEffort}` from `workers.json` templates — so verify both halves after every roster change.
 
