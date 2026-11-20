@@ -197,15 +197,17 @@ public static partial class WorkerResultBlockers
     public static bool TryFindReviewFindingRound(
         TaskVerificationRecord? verification,
         out ReviewFindingRound round,
-        out string diagnostic) =>
-        TryFindReviewFindingRound(verification, out round, out diagnostic, out _, out _);
+        out string diagnostic,
+        AgentRole role = AgentRole.Reviewer) =>
+        TryFindReviewFindingRound(verification, out round, out diagnostic, out _, out _, role);
 
     public static bool TryFindReviewFindingRound(
         TaskVerificationRecord? verification,
         out ReviewFindingRound round,
         out string diagnostic,
         out IReadOnlyList<ReviewFindingParseDiagnostic> advisoryRejections,
-        out ReviewFindingContractViolation? formatViolation)
+        out ReviewFindingContractViolation? formatViolation,
+        AgentRole role = AgentRole.Reviewer)
     {
         round = new ReviewFindingRound([], []);
         diagnostic = string.Empty;
@@ -227,7 +229,9 @@ public static partial class WorkerResultBlockers
             return false;
         }
 
-        var parsed = ReviewFindingConvergence.ParseJson(findingsJson, touchedAnchorsJson, verification.WorkingDirectory);
+        var parsed = ReviewFindingConvergence.ParseJson(
+            findingsJson, touchedAnchorsJson, verification.WorkingDirectory, role,
+            verification.FindingContractVersion == AgentOutputDirectives.FindingClassDirectiveVersion);
         advisoryRejections = parsed.AdvisoryRejections;
         if (parsed.FatalDiagnostic is { } fatal)
         {

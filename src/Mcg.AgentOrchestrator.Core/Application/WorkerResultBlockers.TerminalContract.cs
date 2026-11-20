@@ -52,7 +52,8 @@ public static partial class WorkerResultBlockers
         if (ProviderFailureSignals.IsProviderInterruptionFailure(verification))
             return new(VerificationTerminalContractStatus.Interrupted, "Provider terminal interruption evidence is present.");
 
-        return AssessTerminalVerificationOutput(task.RequiredRole, verification.AuthoritativeStandardOutput);
+        return AssessTerminalVerificationOutput(
+            task.RequiredRole, verification.AuthoritativeStandardOutput, verification.FindingContractVersion);
     }
 
     private static TaskDispatchRecord? FindVerificationDispatch(TaskSpec task, TaskVerificationRecord verification)
@@ -62,12 +63,18 @@ public static partial class WorkerResultBlockers
         return task.DispatchHistory
             .Where(dispatch => string.Equals(dispatch.Command, verification.Command, StringComparison.Ordinal) &&
                 string.Equals(dispatch.WorkingDirectory, verification.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
-                dispatch.DispatchedAt <= verification.CompletedAt)
+                (verification.DispatchAttemptAt is { } attemptAt
+                    ? attemptAt == dispatch.DispatchedAt
+                    : dispatch.DispatchedAt <= (verification.DispatchStartedAt ?? verification.CompletedAt)))
             .OrderByDescending(dispatch => dispatch.DispatchedAt)
             .FirstOrDefault();
     }
 
-    public static VerificationTerminalContractAssessment AssessTerminalVerificationOutput(AgentRole role, string? output)
+    public static VerificationTerminalContractAssessment AssessTerminalVerificationOutput(AgentRole role, string? output) =>
+        AssessTerminalVerificationOutput(role, output, findingContractVersion: null);
+
+    private static VerificationTerminalContractAssessment AssessTerminalVerificationOutput(
+        AgentRole role, string? output, int? findingContractVersion)
     {
         if (output is null)
             return new(VerificationTerminalContractStatus.Unreadable, "Authoritative current-attempt stdout is unavailable.");
@@ -103,7 +110,7 @@ public static partial class WorkerResultBlockers
         // Parse only the captured final block: no mutable artifact re-read or stderr fallback.
         var capturedBlock = string.Join('\n', lines[start..(end + 1)]);
         var terminal = new TaskVerificationRecord("contract", "", 0,
-            capturedBlock, "", DateTimeOffset.MinValue)
+            capturedBlock, "", DateTimeOffset.MinValue, FindingContractVersion: findingContractVersion)
         {
             // Transient parsing must not discard decision evidence through the preview retention bound.
             StandardOutput = capturedBlock
@@ -113,7 +120,7 @@ public static partial class WorkerResultBlockers
             var verdict = fields["verdict"].ToLowerInvariant();
             if (verdict is not ("pass" or "needs-work" or "fail" or "blocked-at-cap"))
                 return Malformed($"Reviewer field verdict must be pass, needs-work, fail or blocked-at-cap; got {QuoteTerminalFieldValue(fields["verdict"])}.");
-            if (!TryFindReviewFindingRound(terminal, out var round, out var findingsDiagnostic))
+            if (!TryFindReviewFindingRound(terminal, out var round, out var findingsDiagnostic, role))
                 return Malformed("Reviewer field findings is malformed: " + findingsDiagnostic);
             if (!TryFindCriteriaVerdicts(terminal, out _, out var criteriaDiagnostic))
                 return Malformed("Reviewer field criteria_verdicts is malformed: " + criteriaDiagnostic);
