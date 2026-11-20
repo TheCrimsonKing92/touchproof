@@ -21,6 +21,7 @@ internal static class RemoteLaneOfferPolicy
     internal const double MeasuredSlackFraction = 0.15;
     internal const double ProbeSlackFraction = 0.15;
     internal const double ReprobeSlackFraction = 0.5;
+    internal const double DefaultGateWallGrowthThreshold = 0.10;
     internal const int FailingThreshold = 3;
     internal static readonly TimeSpan FailingHold = TimeSpan.FromHours(6);
 

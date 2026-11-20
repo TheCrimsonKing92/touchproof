@@ -15,6 +15,9 @@ internal static class OwnerConsoleProviderConnectionRows
     internal const string ReloadKey = "r reload";
     private const string TabNavigation = "Left/Right tab  Esc/q back";
 
+    internal static IReadOnlyList<string?> HintActions { get; } =
+        Array.AsReadOnly<string?>([null, CheckKey, SignInKey, ReturnKey]);
+
     internal static string FormatKeyHint(string? action, bool deviceCodeAvailable)
     {
         if (action is null) return $"{ReloadKey}  {TabNavigation}";

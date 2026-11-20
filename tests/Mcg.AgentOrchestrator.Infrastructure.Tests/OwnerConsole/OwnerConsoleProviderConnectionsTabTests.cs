@@ -2,9 +2,32 @@ using System.Threading.Channels;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Terminal.Gui.Input;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleProviderConnectionRows;
 
 public sealed class OwnerConsoleProviderConnectionsTabTests
 {
+    [Fact]
+    public void HelpRowListsProviderKeysPresentInTheFooters()
+    {
+        const string prefix = "Settings tab Provider connections: ";
+        var help = Assert.Single(OwnerConsoleBindings.HelpText.Split('\n'),
+            line => line.StartsWith(prefix, StringComparison.Ordinal))[prefix.Length..];
+
+        Assert.Contains(BrowseKey, help);
+        Assert.DoesNotContain("profile", help, StringComparison.OrdinalIgnoreCase);
+        var keys = help.Split("  ");
+        string[] expected = [BrowseKey, CheckKey, SignInKey, DeviceCodeKey, ReturnKey, StopWaitingKey, ReloadKey];
+        Assert.Equal(expected, keys);
+
+        var footers = HintActions.SelectMany(action => new[]
+        {
+            FormatKeyHint(action, deviceCodeAvailable: false),
+            FormatKeyHint(action, deviceCodeAvailable: true)
+        }).Select(footer => footer.Split("  ")).ToArray();
+        foreach (var key in keys)
+            Assert.Contains(footers, footer => footer.Contains(key, StringComparer.Ordinal));
+    }
+
     [Fact]
     public async Task RendersOneRowPerProviderInUseAndCollapsesTheRest()
     {
