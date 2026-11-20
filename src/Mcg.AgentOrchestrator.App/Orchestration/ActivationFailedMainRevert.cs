@@ -47,12 +47,24 @@ internal static class ActivationFailedMainRevert
             if (result.RevertCommit is not { } revert)
                 return result;
 
+            var checkout = RootCheckoutLandingGuard.Inspect(LandingExecutor.GitRunner, root, branch, tip, revert);
+            if (checkout.Outcome == RootCheckoutLandingGuard.Outcome.Hold)
+                return Held(checkout.Reason!);
+
             // The duplicate check and the revert both used this tip. Only one attempt
             // can publish from it, even if another process prepared the same revert.
             var publish = LandingExecutor.UpdateRef(root, branch, revert, tip);
-            return publish.Succeeded && publish.ProcessStarted
-                ? result
-                : Held("could not update the integration branch from the prepared tip");
+            if (!publish.Succeeded || !publish.ProcessStarted)
+                return Held("could not update the integration branch from the prepared tip");
+
+            // The successful ref update fixes the local outcome even if checkout sync fails.
+            if (checkout.Outcome == RootCheckoutLandingGuard.Outcome.FastForward)
+                AdoptedBuildPublicationReporting.Try(() =>
+                {
+                    if (RootCheckoutLandingGuard.IsOnBranch(LandingExecutor.GitRunner, root, branch))
+                        RepositoryIntegrationLanding.Git(root, "read-tree", "-m", "-u", tip, revert);
+                }, "activation-main-revert-checkout-sync");
+            return result;
         }
         catch (Exception ex)
         {

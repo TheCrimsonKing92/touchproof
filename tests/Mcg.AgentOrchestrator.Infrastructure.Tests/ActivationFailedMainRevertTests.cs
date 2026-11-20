@@ -9,7 +9,8 @@ public sealed class ActivationFailedMainRevertTests
     {
         using var repo = new Repository();
         var worktrees = repo.Worktrees;
-        var checkout = repo.MakeCheckoutDirty();
+        Assert.Empty(repo.Git("status", "--porcelain"));
+        Assert.Equal("after", File.ReadAllText(Path.Combine(repo.Root, "change.txt")));
 
         repo.RecordReverted(repo.Supervisor());
 
@@ -21,7 +22,56 @@ public sealed class ActivationFailedMainRevertTests
         Assert.Collection(repo.Lines,
             line => Assert.StartsWith("ACTIVATION_REVERTED ", line),
             line => Assert.Equal($"ACTIVATION_MAIN_REVERTED failedCommit={repo.Merge} revertCommit={revert}", line));
-        repo.AssertCheckoutPreserved(checkout, worktrees);
+        Assert.Empty(repo.Git("status", "--porcelain"));
+        Assert.Equal("before", File.ReadAllText(Path.Combine(repo.Root, "change.txt")));
+        repo.AssertRevertCleanedUp(worktrees);
+    }
+
+    [Fact]
+    public void DirtyIntegrationCheckoutHoldsWithoutMovingBranch()
+    {
+        using var repo = new Repository();
+        var worktrees = repo.Worktrees;
+        repo.MakeCheckoutDirty();
+        var stagedEntries = repo.Git("ls-files", "--stage");
+        var status = repo.Git("status", "--porcelain");
+
+        repo.RecordReverted(repo.Supervisor());
+
+        Assert.Equal(repo.Merge, repo.Tip);
+        Assert.Contains("root checkout", repo.HeldEvent(repo.Merge), StringComparison.Ordinal);
+        Assert.Equal(stagedEntries, repo.Git("ls-files", "--stage"));
+        Assert.Equal(status, repo.Git("status", "--porcelain"));
+        Assert.Equal("after", File.ReadAllText(Path.Combine(repo.Root, "change.txt")));
+        Assert.Equal("unstaged", File.ReadAllText(Path.Combine(repo.Root, "staged.txt")));
+        Assert.Equal("untracked", File.ReadAllText(Path.Combine(repo.Root, "untracked.txt")));
+        repo.AssertRevertCleanedUp(worktrees);
+    }
+
+    [Fact]
+    public void CheckoutSyncFailureKeepsPublishedRevertOutcome()
+    {
+        using var repo = new Repository();
+        var worktrees = repo.Worktrees;
+        var syncAttempted = false;
+        using var runner = LandingExecutor.UseGitRunner((directory, args) =>
+        {
+            if (directory == repo.Root && args is ["read-tree", "-m", "-u", _, _])
+            {
+                syncAttempted = true;
+                return new GitCli.GitResult(1, "", "fixture checkout sync failed");
+            }
+            return GitCli.Run(directory, args);
+        });
+
+        repo.RecordReverted(repo.Supervisor());
+
+        Assert.True(syncAttempted);
+        Assert.NotEqual(repo.Merge, repo.Tip);
+        Assert.Collection(repo.Lines,
+            line => Assert.StartsWith("ACTIVATION_REVERTED ", line),
+            line => Assert.Equal($"ACTIVATION_MAIN_REVERTED failedCommit={repo.Merge} revertCommit={repo.Tip}", line));
+        repo.AssertRevertCleanedUp(worktrees);
     }
 
     [Theory]
@@ -198,6 +248,7 @@ public sealed class ActivationFailedMainRevertTests
     {
         using var repo = new Repository();
         var competing = repo.Git("commit-tree", repo.Merge + "^{tree}", "-p", repo.Merge, "-m", "Competing branch update");
+        repo.Git("checkout", "--detach", repo.Merge);
         var worktrees = repo.Worktrees;
         var checkout = repo.MakeCheckoutDirty();
         var refName = $"refs/heads/{Repository.Branch}";
@@ -316,6 +367,11 @@ public sealed class ActivationFailedMainRevertTests
             Assert.Equal(index, File.ReadAllBytes(Path.Combine(Root, ".git", "index")));
             Assert.Equal("unstaged", File.ReadAllText(Path.Combine(Root, "staged.txt")));
             Assert.Equal("untracked", File.ReadAllText(Path.Combine(Root, "untracked.txt")));
+            AssertRevertCleanedUp(worktrees);
+        }
+
+        internal void AssertRevertCleanedUp(string worktrees)
+        {
             Assert.False(File.Exists(Path.Combine(Root, ".git", "REVERT_HEAD")));
             Assert.False(Directory.Exists(Path.Combine(Root, ".git", "sequencer")));
             Assert.Equal(worktrees.Split('\n').Where(line => line.StartsWith("worktree ", StringComparison.Ordinal)),
