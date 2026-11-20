@@ -22,6 +22,7 @@ internal sealed class GoalWorktreeOrphanSweepScheduler
         AgentOrchestratorKernel? kernel = null,
         string? callerRole = null)
     {
+        GoalWorktrees.RetryDueOwnedEphemeralCleanup(executionDirectory, kernel, hooks);
         var result = GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, hooks, callerRole);
         lock (gate)
         {
