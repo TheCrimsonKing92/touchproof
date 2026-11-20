@@ -383,7 +383,92 @@ public sealed class SubscriptionVerificationTerminalContractTests
             WorkerResultBlockers.AssessSubscriptionVerification(task, Evidence(task, at, "Existing role-specific output.")).Status);
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, DateTimeOffset At) Dispatch(AgentRole role, bool subscription = true)
+    [Fact]
+    public void MarkedReviewerOmissionFailsAtFirstRecording()
+    {
+        var (kernel, goal, task, at) = Dispatch(AgentRole.Reviewer, findingContractVersion: 1);
+        var output = ContractWithAdvisoryFinding();
+        // The execution result has no marker. Kernel recording owns the binding.
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Evidence(task, at, output));
+
+        var verification = Assert.Single(task.VerificationHistory);
+        Assert.Equal(1, verification.FindingContractVersion);
+        Assert.NotEqual(WorkTaskStatus.Completed, task.Status);
+        Assert.False(verification.CompletionVerdictVerifiedSuccess);
+        var assessment = WorkerResultBlockers.AssessStoredSubscriptionVerification(task, verification);
+        Assert.Equal(VerificationTerminalContractStatus.Malformed, assessment.Status);
+        Assert.Contains("one unambiguous class_id", assessment.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id &&
+            evt.Message.Contains("one unambiguous class_id", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("\"unknown\"")]
+    [InlineData("null")]
+    [InlineData("\"\"")]
+    [InlineData("42")]
+    public void UnmarkedStoredRoundRejectsPresentInvalidClass(string classJson)
+    {
+        var (kernel, goal, task, at) = Dispatch(AgentRole.Reviewer);
+        var output = ContractWithAdvisoryFinding(",\"class_id\":" + classJson);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Evidence(task, at, output));
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        var verification = Assert.Single(restoredTask.VerificationHistory);
+
+        Assert.Null(verification.FindingContractVersion);
+        Assert.NotEqual(WorkTaskStatus.Completed, restoredTask.Status);
+        Assert.False(WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out var diagnostic));
+        Assert.Contains("class_id must be", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null, 1)]
+    [InlineData(1, null)]
+    public void RestoredReviewerRoundsUseTheirOwnAttemptMarkers(int? firstMarker, int? secondMarker)
+    {
+        var (kernel, goal, task, at) = Dispatch(AgentRole.Reviewer, findingContractVersion: firstMarker);
+        var evidence = Evidence(task, at, ContractWithAdvisoryFinding()) with { FindingContractVersion = secondMarker };
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, evidence);
+        var firstRound = Assert.Single(task.VerificationHistory);
+        Assert.Equal(firstMarker, firstRound.FindingContractVersion);
+        Assert.Equal(firstMarker is null, firstRound.CompletionVerdictVerifiedSuccess);
+
+        kernel.RetryTask(goal.Id, task.Id, "Review the next candidate.");
+        var next = at.AddMinutes(1);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, DispatchRecord(next) with { FindingContractVersion = secondMarker });
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, evidence with { CompletedAt = next.AddSeconds(1) });
+        Assert.Null(task.LastVerification);
+        Assert.Single(task.VerificationHistory);
+        var nextOutput = ContractWithAdvisoryFinding(",\"class_id\":\"none\"");
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Evidence(task, next, nextOutput));
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Collection(restoredTask.DispatchHistory,
+            dispatch => Assert.Equal(firstMarker, dispatch.FindingContractVersion),
+            dispatch => Assert.Equal(secondMarker, dispatch.FindingContractVersion));
+        Assert.Equal(secondMarker, restoredTask.LastDispatch!.FindingContractVersion);
+        Assert.Equal(secondMarker, restoredTask.LastVerification!.FindingContractVersion);
+        Assert.Collection(restoredTask.VerificationHistory,
+            round =>
+            {
+                Assert.Equal(firstMarker, round.FindingContractVersion);
+                Assert.Equal(firstMarker is null ? VerificationTerminalContractStatus.Valid : VerificationTerminalContractStatus.Malformed,
+                    WorkerResultBlockers.AssessStoredSubscriptionVerification(restoredTask, round).Status);
+                Assert.Equal(firstMarker is null, WorkerResultBlockers.TryFindReviewFindingRound(round, out _, out _));
+            },
+            round => Assert.Equal(secondMarker, round.FindingContractVersion));
+    }
+
+    private static string ContractWithAdvisoryFinding(string classField = "") =>
+        Contract(AgentRole.Reviewer).Replace("findings: []", $$"""
+            findings: [{"stable_id":"note","state":"open","severity":"advisory","category":"code-quality"{{classField}},"location":{"file":"src/Target.cs","region":"Run"},"description":"Clarify the guard."}]
+            """, StringComparison.Ordinal);
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, DateTimeOffset At) Dispatch(
+        AgentRole role, bool subscription = true, int? findingContractVersion = null)
     {
         var clock = new FakeClock();
         var kernel = new AgentOrchestratorKernel(clock);
@@ -391,7 +476,7 @@ public sealed class SubscriptionVerificationTerminalContractTests
         kernel.ActivateGoal(goal.Id, [new AgentDefinition(AgentId.New(), role.ToString(), role,
             new ModelProfile("Test", "fixture", ModelCapability.Text, SubscriptionMode.ApiKey))]);
         var task = Assert.Single(goal.Tasks);
-        kernel.RecordTaskDispatch(goal.Id, task.Id, subscription ? DispatchRecord(clock.UtcNow) :
+        kernel.RecordTaskDispatch(goal.Id, task.Id, subscription ? DispatchRecord(clock.UtcNow) with { FindingContractVersion = findingContractVersion } :
             new TaskDispatchRecord("api-worker", "api review", @"C:\repo", clock.UtcNow, WorkerProviderKind: ProviderKind.HermesAcp));
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Fixture attempt started.");
         return (kernel, goal, task, clock.UtcNow);

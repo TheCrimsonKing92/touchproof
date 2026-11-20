@@ -102,7 +102,10 @@ public sealed record TaskVerificationRecord(
     PlannerEvidenceStoreReference? HumanInputStoreReference = null,
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
     DateTimeOffset? DispatchAttemptAt = null,
-    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null)
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null,
+    // Bound by the host to the dispatch that produced this result.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? FindingContractVersion = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -361,7 +364,9 @@ public sealed record TaskDispatchRecord(
     FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
     FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
     // Host-captured dispatch input, never reconstructed from completion-time criteria.
-    string? PlannerEvidenceCriteriaVersionHash = null)
+    string? PlannerEvidenceCriteriaVersionHash = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? FindingContractVersion = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
