@@ -1,5 +1,5 @@
 using System.Globalization;
-using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Usage;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -43,9 +43,9 @@ internal sealed class WorkerUsageSampleSource(IEnumerable<Goal> goals)
 
     private static long? ReadValue(string metric, TaskDispatchRecord dispatch) => metric switch
     {
-        CostGoalOutcomeMetric.WorkerTurns => ContextUsageReport.RecordedTurns(dispatch),
-        CostGoalOutcomeMetric.WorkerInput => ContextUsageFigures.RecordedUsage(dispatch) is { } usage
-            ? ContextUsageFigures.Provider(usage.InputTokens).Value : null,
+        CostGoalOutcomeMetric.WorkerTurns => DispatchUsageValues.RecordedTurns(dispatch),
+        CostGoalOutcomeMetric.WorkerInput =>
+            DispatchUsageValues.ReportedCount(DispatchUsageValues.RecordedUsage(dispatch)?.InputTokens),
         _ => throw new ArgumentOutOfRangeException(nameof(metric), metric, "Unknown worker usage metric.")
     };
 }
