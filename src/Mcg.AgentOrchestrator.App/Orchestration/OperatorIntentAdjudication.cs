@@ -30,7 +30,9 @@ internal sealed class OperatorIntentAdjudication(
         OperatorIntentRecord intent,
         AdjudicateOperatorIntentPayload payload,
         DateTimeOffset now,
-        bool recordTimeline = true)
+        bool recordTimeline = true,
+        Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelLatestProcess = null,
+        Action? markGoalMutated = null)
     {
         var shape = NormalizeShape(payload.Shape);
         var verifiedRegate = shape == "reopen-regate" && goal.Status == GoalStatus.Verified;
@@ -158,6 +160,8 @@ internal sealed class OperatorIntentAdjudication(
                     !ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id)))
                     Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
                         "steward-capability-boundary", now, recordTimeline);
+                if (cancelLatestProcess is not null)
+                    UpstreamRouteCancellation.Cancel(kernel, goal, task, cancelLatestProcess, markGoalMutated);
                 kernel.RetryTaskWithAuthoritativeFeedback(
                     goal.Id,
                     task.Id,
