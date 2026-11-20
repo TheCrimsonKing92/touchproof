@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
@@ -7,13 +8,15 @@ using Fixture = ExecutorScreeningRunnerTests.ExecutorScreeningFixture;
 // Parallel-safe. The executor, sampler, clock and receipt store belong to the fixture.
 public sealed class ExecutorWholeGateTrialTests
 {
+    private const string FailedMethodFilter = "Name~Suite.ExampleTests.Broken";
+
     [Fact]
     public async Task SendsEveryLaneAndSerializesDifferentMachineLocalKeysWhileBackfilling()
     {
         using var fixture = new Fixture();
         var lanes = new[]
         {
-            Lane("local-a", 600, "xunit:EnvMutation"),
+            Lane("local-a", 600, "XUNIT:ENVMUTATION"),
             Lane("local-b", 500, "xunit:ProcessSpawning"),
             Lane("keyless-a", 400),
             Lane("keyless-b", 300),
@@ -25,7 +28,7 @@ public sealed class ExecutorWholeGateTrialTests
             MachineLocalResourceKeys = ["xunit:EnvMutation", "xunit:ProcessSpawning"],
             Screening = new() { Mode = "shadow", KnownDivergentTests = ["ExampleTests.Broken"] }
         };
-        Assert.Equal(new[] { "other-key", "build-change" },
+        Assert.Equal(new[] { "local-a", "other-key", "build-change" },
             ExecutorScreeningPlanner.SelectLanes(lanes, config).Excluded.Select(lane => lane.LaneName));
 
         var plan = Plan(lanes);
@@ -43,7 +46,7 @@ public sealed class ExecutorWholeGateTrialTests
             if (handles.Count == 2) firstTwo.TrySetResult();
             if (request.Filter == "local-b") nextLocal.TrySetResult();
             if (request.Filter is not ("local-a" or "local-b" or "keyless-a"))
-                handle.Publish(fixture.Result(request, failure: request.Filter == "other-key"));
+                handle.Publish(fixture.Result(request, failure: request.Filter is "other-key" or FailedMethodFilter));
             return Task.FromResult(new RemoteLaneSubmission(handle));
         };
 
@@ -77,7 +80,8 @@ public sealed class ExecutorWholeGateTrialTests
         }
 
         Assert.False(localOverlap);
-        Assert.Equal(lanes.Select(lane => lane.Filter).Order(), fixture.Executor.Requests.Select(request => request.Filter).Order());
+        Assert.Equal(lanes.Select(lane => lane.Filter).Append(FailedMethodFilter).Order(),
+            fixture.Executor.Requests.Select(request => request.Filter).Order());
         Assert.All(fixture.Executor.Requests, request =>
         {
             Assert.Equal(fixture.Entry.Id, request.ExecutorId);
@@ -107,6 +111,7 @@ public sealed class ExecutorWholeGateTrialTests
         var failing = Assert.Single(receipt.Lanes, lane => lane.LaneName == "infrastructure tests: other-key");
         Assert.Equal((0, 1), (failing.Passed!.Value, failing.Failed!.Value));
         Assert.Equal("Suite.ExampleTests.Broken", Assert.Single(failing.FailingTests));
+        Assert.Equal(AcceptanceLaneRerunEvidence.ConfirmedFailure, failing.Rerun!.Outcome);
         fixture.AssertReleased();
 
         void Publish(string filter)
@@ -114,6 +119,95 @@ public sealed class ExecutorWholeGateTrialTests
             var lane = handles[filter];
             lane.Handle.Publish(fixture.Result(lane.Request));
         }
+    }
+
+    [Fact]
+    public async Task ExclusiveKeysWithDifferentCasingSerializeWhileAnotherLaneBackfills()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        var first = new FakeRemoteLaneExecutor.Handle(fixture.Clock.GetUtcNow());
+        var firstTwo = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Executor.Submit = (request, _) =>
+        {
+            if (fixture.Executor.Requests.Count == 2) firstTwo.TrySetResult();
+            return Task.FromResult(request.Filter == "A" ? new RemoteLaneSubmission(first) : fixture.PassingSubmission(request));
+        };
+        var plan = Plan([Lane("A", 3, "shared-key"), Lane("B", 2, "SHARED-KEY"), Lane("C", 1)]);
+        var work = ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry, plan,
+            fixture.Configuration, fixture.Executor, fixture.Root, fixture.ReceiptPath, "exclusive-keys",
+            fixture.Clock, TimeSpan.Zero, null, null, cancellation.Token);
+        try
+        {
+            await firstTwo.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(new[] { "A", "C" }, fixture.Executor.Requests.Select(request => request.Filter));
+            first.Publish(fixture.Result(fixture.Executor.Requests.First()));
+            Assert.Equal(ExecutorWholeGateTrialStatus.Complete, (await work.WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
+            Assert.Equal(new[] { "A", "C", "B" }, fixture.Executor.Requests.Select(request => request.Filter));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await work.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    public async Task RetriesOnlyFailuresEligibleUnderAcceptancePolicy(bool incomplete, bool explained, bool shouldRerun)
+    {
+        using var fixture = new Fixture();
+        fixture.Executor.Submit = (request, _) =>
+        {
+            if (request.Filter == FailedMethodFilter)
+            {
+                fixture.Clock.Advance(TimeSpan.FromSeconds(3));
+                return Task.FromResult(fixture.PassingSubmission(request));
+            }
+            var handle = new FakeRemoteLaneExecutor.Handle(fixture.Clock.GetUtcNow());
+            var result = fixture.Result(request, failure: true, incomplete: incomplete);
+            if (explained)
+            {
+                var path = Assert.Single(result.TestResultPaths);
+                var trx = XDocument.Load(path);
+                trx.Descendants("Counters").Single().SetAttributeValue("passed", 1);
+                trx.Descendants("Results").Single().Add(new XElement("UnitTestResult",
+                    new XAttribute("testName", "Suite.ExampleTests.Passed"), new XAttribute("outcome", "Passed")));
+                trx.Save(path);
+            }
+            handle.Publish(result);
+            return Task.FromResult(new RemoteLaneSubmission(handle));
+        };
+
+        await ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry, Plan([Lane("A", 1)]),
+            fixture.Configuration, fixture.Executor, fixture.Root, fixture.ReceiptPath, "retry",
+            fixture.Clock, TimeSpan.Zero, null, null);
+
+        var lane = Assert.Single(Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath)).Lanes);
+        Assert.Equal("Suite.ExampleTests.Broken", Assert.Single(lane.FailingTests));
+        Assert.Equal(incomplete ? AcceptanceShardCompletionPredicates.IncompleteExecution : null, lane.ExecutionFailure);
+        if (!shouldRerun)
+        {
+            Assert.Null(lane.Rerun);
+            Assert.Equal("A", Assert.Single(fixture.Executor.Requests).Filter);
+            return;
+        }
+
+        var requests = fixture.Executor.Requests.ToArray();
+        Assert.Equal(new[] { "A", FailedMethodFilter }, requests.Select(request => request.Filter));
+        Assert.NotEqual(requests[0].Lane, requests[1].Lane);
+        Assert.Equal(requests[0].ExecutorId, requests[1].ExecutorId);
+        Assert.Equal(requests[0].VerifyingCommitSha, requests[1].VerifyingCommitSha);
+        Assert.Equal(GoalAcceptanceVerifier.ShortHash(FailedMethodFilter), requests[1].FilterHash);
+        Assert.Equal(3d, lane.WallSeconds);
+        var rerun = Assert.IsType<ExecutorWholeGateTrialLaneRerun>(lane.Rerun);
+        Assert.Equal(AcceptanceLaneRerunEvidence.Flake, rerun.Outcome);
+        Assert.Equal(FailedMethodFilter, rerun.Filter);
+        Assert.Equal((3d, 1, 0), (rerun.WallSeconds!.Value, rerun.Passed!.Value, rerun.Failed!.Value));
+        Assert.Empty(rerun.FailingTests);
+        Assert.Null(rerun.ExecutionFailure);
     }
 
     [Fact]
@@ -168,7 +262,12 @@ public sealed class ExecutorWholeGateTrialTests
     private static ExecutorWholeGateTrialPlan Plan(IReadOnlyList<AcceptanceTestLane> lanes) =>
         new(lanes.Select(lane => new ExecutorWholeGateTrialLane("infrastructure tests: " + lane.Name,
             ExecutorScreeningPlanner.Project, lane.Filter, lane.ExclusiveResourceKeys, lane.EstimatedSerialSeconds,
-            TimeSpan.FromHours(1), lane.AllowsEmptySelection)).ToArray(), [], AcceptanceDeclaredTestSettings.Empty);
+            TimeSpan.FromHours(1), lane.AllowsEmptySelection, new()
+            {
+                Name = "infrastructure tests: " + lane.Name, Type = "dotnet-test", Runner = "mtp",
+                Project = ExecutorScreeningPlanner.Project, Arguments = ["--filter", lane.Filter],
+                IsResolvedInfrastructureLane = true
+            })).ToArray(), [], AcceptanceDeclaredTestSettings.Empty);
 
     private sealed class Sampler(ManualRemoteLaneClock clock) : IExecutorWholeGateTrialSampler
     {

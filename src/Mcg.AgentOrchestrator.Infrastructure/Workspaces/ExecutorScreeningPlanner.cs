@@ -12,7 +12,7 @@ internal sealed record ExecutorScreeningLaneSelection(IReadOnlyList<AcceptanceTe
 
 internal sealed record ExecutorWholeGateTrialLane(string Name, string Project, string Filter,
     IReadOnlyList<string> ExclusiveResourceKeys, double EstimatedSerialSeconds, TimeSpan Timeout,
-    bool AllowsEmptySelection = false);
+    bool AllowsEmptySelection = false, GoalAcceptanceVerifier.AcceptanceManifestCheck? RetryCheck = null);
 
 internal sealed record ExecutorWholeGateTrialPlan(IReadOnlyList<ExecutorWholeGateTrialLane> Lanes,
     IReadOnlyList<ExecutorScreeningExcludedLane> UnsupportedChecks,

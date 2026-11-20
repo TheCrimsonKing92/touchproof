@@ -194,7 +194,7 @@ internal static class CliExecutorScreenCommand
             }
             var filter = AcceptanceCheckCommandBuilder.ExtractFilterArguments(check.Arguments, []);
             lanes.Add(new(check.Name, project, filter ?? selectAll, check.ExclusiveResourceKeys,
-                check.EstimatedSerialSeconds, settings.ResolveCheckTimeout(check.TimeoutMinutes), check.AllowsEmptySelection));
+                check.EstimatedSerialSeconds, settings.ResolveCheckTimeout(check.TimeoutMinutes), check.AllowsEmptySelection, check));
         }
         if (lanes.Select(lane => lane.Name).Concat(unsupported.Select(check => check.LaneName))
             .GroupBy(name => name, StringComparer.Ordinal).Any(group => group.Count() > 1))

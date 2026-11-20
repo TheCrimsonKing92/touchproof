@@ -19,9 +19,16 @@ internal sealed record ExecutorScreeningReceipt(string ReceiptId, string GoalId,
     ExecutorScreeningVerdict Verdict, IReadOnlyList<ExecutorScreeningLaneOutcome> LaneOutcomes,
     IReadOnlyList<ExecutorScreeningExcludedLane> ExcludedLanes, int Version = 1);
 
+internal sealed record ExecutorWholeGateTrialLaneRerun(string Outcome, string Filter, double? WallSeconds,
+    int? Passed, int? Failed, IReadOnlyList<string> FailingTests, string? ExecutionFailure);
+
 internal sealed record ExecutorWholeGateTrialLaneResult(string LaneName, double? WallSeconds,
-    int? Passed, int? Failed, IReadOnlyList<string> FailingTests, string? ExecutionFailure = null)
+    int? Passed, int? Failed, IReadOnlyList<string> FailingTests, string? ExecutionFailure = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ExecutorWholeGateTrialLaneRerun? Rerun = null)
 {
+    [JsonIgnore]
+    public bool HasExecutionFailure => ExecutionFailure is not null || Rerun?.ExecutionFailure is not null;
+
     internal static ExecutorWholeGateTrialLaneResult ReadTrx(string name, IReadOnlyList<string> paths,
         double? wallSeconds = null, int? exitCode = null, bool allowsEmptySelection = false)
     {
@@ -29,9 +36,16 @@ internal sealed record ExecutorWholeGateTrialLaneResult(string LaneName, double?
         var decision = GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
             new GoalAcceptanceVerifier.CommandResult(exitCode ?? 0, ""), completion,
             allowEmptySelection: allowsEmptySelection);
+        return ReadTrx(name, paths, wallSeconds, decision,
+            GoalAcceptanceVerifierTestTelemetry.ExtractTrxFailureIdentities(paths));
+    }
+
+    internal static ExecutorWholeGateTrialLaneResult ReadTrx(string name, IReadOnlyList<string> paths,
+        double? wallSeconds, AcceptanceShardCompletionDecision decision, IReadOnlyList<string> failingTests)
+    {
         if (!decision.Passed && decision.FailedPredicate is not
             (AcceptanceShardCompletionPredicates.FailingTrx or AcceptanceShardCompletionPredicates.AssemblyCleanupFailure))
-            return new(name, wallSeconds, null, null, [], decision.FailedPredicate ?? "trx-incomplete");
+            return new(name, wallSeconds, null, null, failingTests, decision.FailedPredicate ?? "trx-incomplete");
 
         var passed = 0;
         var failed = 0;
@@ -63,7 +77,6 @@ internal sealed record ExecutorWholeGateTrialLaneResult(string LaneName, double?
             return new(name, wallSeconds, null, null, [], "trx-counts-unavailable");
         }
         wallSeconds ??= (finished - started)?.TotalSeconds;
-        var failingTests = GoalAcceptanceVerifierTestTelemetry.ExtractTrxFailureIdentities(paths);
         return new(name, wallSeconds, passed, failed, failingTests,
             !decision.Passed && failed == 0 ? decision.FailedPredicate : null);
     }
@@ -107,8 +120,8 @@ internal static class ExecutorWholeGateTrialComparison
     }
 
     private static bool Matches(ExecutorWholeGateTrialLaneResult[] remote, ExecutorWholeGateTrialLaneResult[] local) =>
-        remote is [{ ExecutionFailure: null, Passed: not null, Failed: not null } observed] &&
-        local is [{ ExecutionFailure: null, Passed: not null, Failed: not null } expected] &&
+        remote is [{ HasExecutionFailure: false, Passed: not null, Failed: not null } observed] &&
+        local is [{ HasExecutionFailure: false, Passed: not null, Failed: not null } expected] &&
         observed.Passed == expected.Passed && observed.Failed == expected.Failed;
 }
 
