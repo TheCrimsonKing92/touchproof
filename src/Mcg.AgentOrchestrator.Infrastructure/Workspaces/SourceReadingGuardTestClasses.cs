@@ -8,7 +8,19 @@ internal static class SourceReadingGuardTestClasses
 {
     internal static ImpactReplaySourceGuardReport? Read(ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes)
-        => Project(SourceReaderAnalysisCache.Current.GetOrAnalyze(sources, Extract, Evaluate), classes);
+        => Project(Analyze(sources), classes);
+
+    internal static ImpactReplaySourceGuardReport? Read(ImpactReplayTestSourceIndex sources,
+        IReadOnlyList<AcceptanceTestClassDescriptor> classes,
+        out IReadOnlyList<AssemblyScanningGuardTestClasses.ScanFile> scans)
+    {
+        var analysis = Analyze(sources);
+        scans = analysis.AssemblyScans;
+        return Project(analysis, classes);
+    }
+
+    internal static SourceReaderAnalysisCache.Analysis Analyze(ImpactReplayTestSourceIndex sources) =>
+        SourceReaderAnalysisCache.Current.GetOrAnalyze(sources, Extract, Evaluate);
 
     internal static SourceReaderFileFacts[] Extract(ImpactReplayTestSourceIndex sources, HashSet<string>? paths)
     {
@@ -128,7 +140,11 @@ internal static class SourceReadingGuardTestClasses
             }
         }
         return new(hasSnapshotCache, owners.Where(pair => pair.Value.Any(readers.Contains))
-            .Select(pair => pair.Key).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+            .Select(pair => pair.Key).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray())
+        {
+            AssemblyScans = files.Select(file => file.AssemblyScans).OfType<AssemblyScanningGuardTestClasses.ScanFile>()
+                .DistinctBy(file => file.ContentHash).OrderBy(file => file.ContentHash, StringComparer.Ordinal).ToArray()
+        };
     }
 
     private static ImpactReplaySourceGuardReport? Project(SourceReaderAnalysisCache.Analysis analysis,
