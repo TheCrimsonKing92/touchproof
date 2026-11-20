@@ -47,6 +47,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private string? _requestedEpicId;
     private string? _requestedGateGoalId;
     private bool _settingsRequested;
+    private string? _settingsTarget;
+    internal void SetSettingsTarget(string? provider) => _settingsTarget = provider;
+    internal string? TakeSettingsTarget()
+    { var provider = _settingsTarget; _settingsTarget = null; return provider; }
     internal bool TakeSettingsRequested()
     { var requested = _settingsRequested; _settingsRequested = false; return requested; }
     internal string? TakeRequestedEpicId()

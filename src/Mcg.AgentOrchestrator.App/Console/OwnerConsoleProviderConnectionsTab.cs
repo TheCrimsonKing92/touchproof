@@ -22,6 +22,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     private bool _listing;
     private bool _initialChecksStarted;
     private string? _loadError;
+    private readonly OwnerConsoleSettingsView.ProviderTarget _target;
 
     internal OwnerConsoleProviderConnectionsTab(IProviderConnectionsConsoleGateway connections,
         IProviderSignInLauncher launcher, Func<IReadOnlyList<AgentDefinition>> loadRoster, Action<Action> invoke,
@@ -33,6 +34,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         _clock = clock;
         _lifetime = lifetime;
         _signIn = new(connections, launcher, FindProfile, Check, apply => Post(apply), lifetime);
+        _target = new(() => _rows, index => { _selected = index; ProbeSelectedDeviceCode(); });
     }
 
     internal Action? Invalidate { get; set; }
@@ -45,7 +47,9 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     public int SelectedLine => _selected;
     public IReadOnlyList<string> Lines => RenderLines().ToArray();
     public string StatusText => _listing ? "Reading provider connections…" :
-        _loadError ?? (Selected is { } row ? RowStatus(row) ?? "" : "");
+        _loadError ?? _target.Notice ?? (Selected is { } row ? RowStatus(row) ?? "" : "");
+
+    internal void Target(string? provider) => _target.Set(provider, _listed && !_listing);
 
     public string KeyHint
     {
@@ -57,10 +61,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         }
     }
 
-    public void Activate()
-    {
-        if (!_listed && _loadError is null) Refresh();
-    }
+    public void Activate() { if (!_listed && _loadError is null) Refresh(); }
 
     public void Refresh()
     {
@@ -73,6 +74,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
 
     public void HandleKey(Key key)
     {
+        _target.Notice = null;
         if (_lifetime.IsCancellationRequested || key.IsAlt || key.IsCtrl) return;
         if (key == Key.CursorUp || key == Key.CursorDown)
         {
@@ -167,6 +169,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         _listed = true;
         _listing = false;
         RebuildRows();
+        _target.Apply();
     }
 
     private void RebuildRows()

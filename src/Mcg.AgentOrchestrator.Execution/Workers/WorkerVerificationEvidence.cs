@@ -54,6 +54,9 @@ internal static class WorkerVerificationEvidence
             return null;
         }
 
+        // Keep preparation failure explicit when the complete rejected plan is unavailable.
+        // A head-and-tail preview omits part of the plan the Planner needs to repair.
+        // ResolveStandardOutputForContext can use a marked preview as supporting context.
         return RequireAuthoritativeStandardOutput(rejectedPlan, identity);
     }
 

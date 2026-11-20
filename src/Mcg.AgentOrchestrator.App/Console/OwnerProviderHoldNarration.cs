@@ -3,8 +3,27 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal static class OwnerProviderHoldNarration
 {
     internal static OwnerConsoleActivityItem? NarrateItem(IReadOnlyList<OwnerConductEvent> ordered, int index,
-        Func<string?, string> name) => TryNarrate(ordered[index], out var sentence, out var why, out var next, out var act)
-            ? OwnerActivityNarrator.Item(ordered[index], name(ordered[index].GoalId), ordered, sentence, why, next, act) : null;
+        Func<string?, string> name)
+    {
+        var evt = ordered[index];
+        if (!TryNarrate(evt, out var sentence, out var why, out var next, out var act)) return null;
+        var provider = SignInProvider(evt);
+        if (provider is not null) act += $" Press s to open sign-in for {provider}.";
+        return OwnerActivityNarrator.Item(evt, name(evt.GoalId), ordered, sentence, why, next, act)
+            with { SignInProvider = provider };
+    }
+
+    internal static string? SignInProvider(OwnerConductEvent evt)
+    {
+        if (evt.EventKind is not ("provider-hold-placed" or "provider-hold-check" or "provider-hold-overdue") ||
+            OwnerEventFields.Field(evt, "diagnosis") is not { Length: > 0 } diagnosis ||
+            !RequiresSignIn(Uri.UnescapeDataString(diagnosis)) || Binding(evt) is not { } binding) return null;
+        var separator = binding.IndexOf("::", StringComparison.Ordinal);
+        return separator > 0 && binding[..separator].Trim() is { Length: > 0 } provider ? provider : null;
+    }
+
+    private static bool RequiresSignIn(string diagnosis) =>
+        diagnosis.Contains("last confirmed: authentication-required", StringComparison.Ordinal);
 
     internal static bool TryNarrate(OwnerConductEvent evt, out string sentence, out string reason,
         out string nextStep, out string ownerAction)
@@ -67,7 +86,7 @@ internal static class OwnerProviderHoldNarration
             OwnerEventFields.Field(evt, "diagnosis") is not { Length: > 0 } diagnosis) return false;
         var overdue = evt.EventKind == "provider-hold-overdue" || OwnerEventFields.Field(evt, "state") == "probe-overdue";
         reason = (overdue ? $"The probe became due {OwnerEventFields.Field(evt, "due")}; " : "") + Uri.UnescapeDataString(diagnosis);
-        var auth = reason.Contains("last confirmed: authentication-required", StringComparison.Ordinal);
+        var auth = RequiresSignIn(reason);
         sentence = auth ? $"Provider sign-in required: {name}" : overdue
             ? $"Provider check overdue: {name} balance unverified" : $"Provider availability unverified: {name}";
         nextStep = "Protective admission remains until a successful current same-binding availability check.";
