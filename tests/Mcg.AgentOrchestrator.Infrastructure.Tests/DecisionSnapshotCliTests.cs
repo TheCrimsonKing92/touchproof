@@ -42,17 +42,17 @@ public sealed class DecisionSnapshotCliTests : CliCommandTestBase
                     Assert.True(row.Read());
                     Assert.Equal(0L, row.GetInt64(0));
                 }
-                var mainBefore = SHA256.HashData(File.ReadAllBytes(db));
+                var mainBefore = SHA256.HashData(ReadFixtureStoreBytes(db));
                 var completed = new GoalSnapshot(WalId.Value, "Cancelled goal committed only to WAL", GoalStatus.Cancelled, [], []);
                 await repository.SaveAsync(AgentOrchestratorKernel.FromSnapshot(
                     kernel.ExportSnapshot() with { Goals = [.. kernel.ExportSnapshot().Goals, completed] }));
-                Assert.Equal(mainBefore, SHA256.HashData(File.ReadAllBytes(db)));
+                Assert.Equal(mainBefore, SHA256.HashData(ReadFixtureStoreBytes(db)));
                 Assert.True(new FileInfo(db + "-wal").Length > 32, "WAL must contain frames before the copy.");
-                File.Copy(db + "-wal", copiedDb + "-wal");
-                if (withShm) File.Copy(db + "-shm", copiedDb + "-shm");
+                File.WriteAllBytes(copiedDb + "-wal", ReadFixtureStoreBytes(db + "-wal"));
+                if (withShm) File.WriteAllBytes(copiedDb + "-shm", ReadFixtureStoreBytes(db + "-shm"));
             }
 
-            File.Copy(db, copiedDb);
+            File.WriteAllBytes(copiedDb, ReadFixtureStoreBytes(db));
         }
 
         Directory.CreateDirectory(Path.Combine(copy, "unrelated"));
@@ -105,6 +105,15 @@ public sealed class DecisionSnapshotCliTests : CliCommandTestBase
         Assert.Contains("Decision snapshot failed", cannotPublish.Stderr, StringComparison.Ordinal);
         Assert.True(Directory.Exists(outputDirectory));
         Assert.Equal(beforeRoot.ToArray(), Inventory(fixture.Path).ToArray());
+    }
+
+    private static byte[] ReadFixtureStoreBytes(string path)
+    {
+        // The keeper holds SQLite's read/write handles open to preserve the uncheckpointed WAL.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return bytes.ToArray();
     }
 
     private static SortedDictionary<string, string> Inventory(string root)
