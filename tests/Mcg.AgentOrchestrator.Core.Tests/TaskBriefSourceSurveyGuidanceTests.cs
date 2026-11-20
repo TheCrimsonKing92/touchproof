@@ -26,16 +26,16 @@ public sealed class TaskBriefSourceSurveyGuidanceTests
     }
 
     [Theory]
-    [InlineData(AgentRole.Developer, TaskComplexity.Simple, true)]
-    [InlineData(AgentRole.Developer, TaskComplexity.Complex, true)]
-    [InlineData(AgentRole.Planner, TaskComplexity.Simple, true)]
-    [InlineData(AgentRole.Planner, TaskComplexity.Complex, true)]
-    [InlineData(AgentRole.Tester, TaskComplexity.Simple, false)]
-    [InlineData(AgentRole.Tester, TaskComplexity.Complex, false)]
-    [InlineData(AgentRole.Reviewer, TaskComplexity.Simple, false)]
-    [InlineData(AgentRole.Reviewer, TaskComplexity.Complex, false)]
+    [InlineData(AgentRole.Developer, TaskComplexity.Simple, true, 9500)]
+    [InlineData(AgentRole.Developer, TaskComplexity.Complex, true, 9500)]
+    [InlineData(AgentRole.Planner, TaskComplexity.Simple, true, 7000)]
+    [InlineData(AgentRole.Planner, TaskComplexity.Complex, true, 7000)]
+    [InlineData(AgentRole.Tester, TaskComplexity.Simple, false, 8500)]
+    [InlineData(AgentRole.Tester, TaskComplexity.Complex, false, 8500)]
+    [InlineData(AgentRole.Reviewer, TaskComplexity.Simple, false, 8000)]
+    [InlineData(AgentRole.Reviewer, TaskComplexity.Complex, false, 8000)]
     public void TaskBrief_ReadProcedure_UsesRoleAcrossComplexities(
-        AgentRole role, TaskComplexity complexity, bool includesProcedure)
+        AgentRole role, TaskComplexity complexity, bool includesProcedure, int contextBudget)
     {
         var description = complexity == TaskComplexity.Simple
             ? "Update the label."
@@ -46,16 +46,19 @@ public sealed class TaskBriefSourceSurveyGuidanceTests
         Assert.Equal(complexity, TaskComplexityEstimator.Estimate(description, goal.Objective, role));
 
         var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
-        var lines = brief.Split('\n');
+        var lines = brief.ReplaceLineEndings("\n").Split('\n');
         string[][] steps =
         [
-            ["this session already printed the lines you need", "including in supplied excerpts", "use those lines"],
-            ["their location is unknown", "with one `rg -n` or Grep search", "Read the needed range once", "40 lines before and 40 lines after", "at file boundaries"],
-            ["fewer than 300 lines or you need most of it", "only once per session", "Batch known ranges into one command"],
-            ["Reread previously printed lines only after you changed the file", "a build or test reported a line in it", "additional unseen lines in a bounded range"]
+            ["Before each file read", "reuse needed lines already printed this session", "including supplied excerpts"],
+            ["location is unknown", "search once with `rg -n` or Grep", "Read the needed unread range once", "40 lines on each side", "within file bounds"],
+            ["fewer than 300 lines or you need most of it", "normally once per session", "Batch known ranges in one command"],
+            ["Reread printed lines only after you edit the file", "or a build or test reports a line in it"]
         ];
 
+        var outputTemplate = Array.IndexOf(lines, "WORKER_RESULT:");
+        Assert.True(outputTemplate >= 0);
         var previousStep = -1;
+        var procedureCharacters = 0;
         foreach (var fragments in steps)
         {
             if (!includesProcedure)
@@ -66,9 +69,14 @@ public sealed class TaskBriefSourceSurveyGuidanceTests
 
             var step = Array.FindIndex(lines, line => line.Contains(fragments[0], StringComparison.Ordinal));
             Assert.True(step > previousStep, $"Read procedure step missing or out of order: {fragments[0]}");
+            Assert.True(step < outputTemplate);
             Assert.All(fragments, fragment => Assert.Contains(fragment, lines[step], StringComparison.Ordinal));
+            procedureCharacters += lines[step].Length + Environment.NewLine.Length;
             previousStep = step;
         }
+
+        Assert.Equal(contextBudget + procedureCharacters,
+            AgentOrchestratorKernel.TaskBriefCharacterBudget(role, usesFileAccessContext: true));
     }
 
     [Fact]

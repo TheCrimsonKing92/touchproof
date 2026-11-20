@@ -4,12 +4,15 @@ internal static class WorkerReadProcedure
 {
     private static readonly IReadOnlyList<string> Steps = Array.AsReadOnly(new[]
     {
-        "- Before reading, check whether this session already printed the lines you need, including in supplied excerpts. If so, use those lines.",
-        "- When you need unread lines and their location is unknown, locate them with one `rg -n` or Grep search. Read the needed range once with 40 lines before and 40 lines after, stopping at file boundaries.",
-        "- Read a whole file only when it has fewer than 300 lines or you need most of it. Normally read it in full only once per session. Batch known ranges into one command.",
-        "- Reread previously printed lines only after you changed the file or a build or test reported a line in it. Read additional unseen lines in a bounded range when needed."
+        "- Before each file read, reuse needed lines already printed this session, including supplied excerpts.",
+        "- If the location is unknown, search once with `rg -n` or Grep. Read the needed unread range once with 40 lines on each side, within file bounds.",
+        "- Read a whole file only if it has fewer than 300 lines or you need most of it, normally once per session. Batch known ranges in one command.",
+        "- Reread printed lines only after you edit the file or a build or test reports a line in it."
     });
 
     internal static IReadOnlyList<string> ForRole(AgentRole role) =>
         role is AgentRole.Developer or AgentRole.Planner ? Steps : [];
+
+    internal static int CharacterCountForRole(AgentRole role) =>
+        ForRole(role).Sum(line => line.Length + Environment.NewLine.Length);
 }
