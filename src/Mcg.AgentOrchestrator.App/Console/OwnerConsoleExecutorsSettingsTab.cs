@@ -20,11 +20,12 @@ internal sealed class OwnerConsoleExecutorsSettingsTab : IOwnerConsoleSettingsTa
 
     internal const string TabTitle = "Executors";
     internal const string HelpKeys = "Up/Down highlight  Space enable/disable";
+    internal const string BrowsingKeyHint = HelpKeys + "  Left/Right tab  Esc/q back (slots/poll/lease read-only)";
     public string Title => TabTitle;
     public bool Editing => false;
     public int SelectedLine => _executors.Count == 0 ? -1 : _selected * 2;
     public string StatusText { get; private set; } = "";
-    public string KeyHint => HelpKeys + "  Left/Right tab  Esc/q back (slots/poll/lease read-only)";
+    public string KeyHint => BrowsingKeyHint;
     public IReadOnlyList<string> Lines { get { Refresh(); return _lines; } }
 
     public void Refresh()
