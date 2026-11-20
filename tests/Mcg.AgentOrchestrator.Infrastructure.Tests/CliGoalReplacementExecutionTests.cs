@@ -235,7 +235,8 @@ public sealed class CliGoalReplacementExecutionTests
             }
             """);
         bool MatchesKeyedPrefix(BlockSyntax candidate) =>
-            allowed.IsEquivalentTo(SyntaxFactory.Block(candidate.Statements.Take(allowed.Statements.Count)));
+            SyntaxFactory.AreEquivalent(allowed,
+                SyntaxFactory.Block(candidate.Statements.Take(allowed.Statements.Count)));
 
         Assert.True(MatchesKeyedPrefix(body),
             $"{path}: ExecuteCommand must validate options and immediately return the keyed submission before other dispatch.");
