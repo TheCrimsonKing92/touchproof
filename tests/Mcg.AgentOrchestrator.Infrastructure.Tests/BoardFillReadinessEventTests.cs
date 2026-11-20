@@ -58,6 +58,41 @@ public sealed class BoardFillReadinessEventTests
         Assert.Empty(Assert.Single(ReadSnapshots(harness.EventsPath)));
     }
 
+    [Fact]
+    public void Tick_retries_failed_append_and_records_each_changed_map_in_order()
+    {
+        var failNextAppend = true;
+        using var harness = new BoardFillTestHarness(beforeRequiredEventDrain: () =>
+        {
+            if (!failNextAppend) return;
+            failNextAppend = false;
+            throw new IOException("Injected conduct event append failure");
+        });
+        harness.Policy = harness.Policy with { BoardFillMode = ConductorBoardFillMode.Shadow };
+        var first = Blocked('a', "missing1", BacklogDependencyTargetKind.Goal);
+        var second = Blocked('b', "missing1", BacklogDependencyTargetKind.Goal);
+
+        harness.Items = [first];
+        harness.Host.ServiceTick(harness.Kernel);
+        Assert.False(failNextAppend);
+        Assert.Empty(ReadSnapshots(harness.EventsPath));
+
+        harness.Items = [first, second];
+        harness.Host.ServiceTick(harness.Kernel);
+        Assert.Single(ReadSnapshots(harness.EventsPath));
+
+        harness.Items = [];
+        harness.Host.ServiceTick(harness.Kernel);
+        harness.Host.ServiceTick(harness.Kernel);
+        harness.Host.ServiceTick(harness.Kernel);
+
+        const string reason = " [Blocked: missing prerequisite missing1]";
+        Assert.Collection(ReadSnapshots(harness.EventsPath),
+            initial => Assert.Equal(new KeyValuePair<string, int>(reason, 1), Assert.Single(initial)),
+            changed => Assert.Equal(new KeyValuePair<string, int>(reason, 2), Assert.Single(changed)),
+            cleared => Assert.Empty(cleared));
+    }
+
     private static BacklogItem Blocked(char id, string prerequisite, BacklogDependencyTargetKind kind)
     {
         var item = BoardFillReadyItemSelectorTests.Item(id);

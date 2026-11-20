@@ -37,7 +37,7 @@ internal sealed partial class ConductorBoardFillHost
     private DateTime _stoppedReportDay;
     private string? _reportedBackoffRound;
     private string? _lastReadinessDetail;
-    private (string Detail, string EventId, DateTimeOffset ObservedAt)? _pendingReadiness;
+    private readonly LinkedList<(string Detail, string EventId, DateTimeOffset ObservedAt)> _pendingReadiness = new();
     internal Task? CurrentRound => _round;
 
     // Drafting is read-only; optional filing delegates all goal mutations to the CLI intake seam.
@@ -189,13 +189,16 @@ internal sealed partial class ConductorBoardFillHost
             if (!readiness.Eligible)
                 counts[readiness.Suffix] = counts.GetValueOrDefault(readiness.Suffix) + 1;
         var detail = JsonSerializer.Serialize(counts);
-        if (_pendingReadiness is null && detail == _lastReadinessDetail) return;
+        if (detail != (_pendingReadiness.Last?.Value.Detail ?? _lastReadinessDetail))
+            _pendingReadiness.AddLast((detail, Guid.NewGuid().ToString("N"), now));
 
-        // The writer can queue a required event before returning failure. Retry with the same ID.
-        var pending = _pendingReadiness ??= (detail, Guid.NewGuid().ToString("N"), now);
-        if (!_events.AppendRequired("BOARD_FILL_READINESS", null, pending.Detail, pending.ObservedAt, pending.EventId)) return;
-        _lastReadinessDetail = pending.Detail;
-        _pendingReadiness = null;
+        // Submit one snapshot per tick in observation order. The writer may have staged the ID before a failed append.
+        if (_pendingReadiness.First is { Value: var pending } &&
+            _events.AppendRequired("BOARD_FILL_READINESS", null, pending.Detail, pending.ObservedAt, pending.EventId))
+        {
+            _lastReadinessDetail = pending.Detail;
+            _pendingReadiness.RemoveFirst();
+        }
     }
 
     private void AnnotateNearDuplicate(BacklogItem item, BoardFillNearDuplicateReference reference)
