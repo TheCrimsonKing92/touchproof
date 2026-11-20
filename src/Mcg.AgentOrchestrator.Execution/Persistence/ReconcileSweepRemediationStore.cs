@@ -272,7 +272,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         return GetAcceptanceLease(connection, goalId, staleAfter);
     }
 
-    internal static ReconcileAcceptanceLeaseState? GetAcceptanceLease(
+    private static ReconcileAcceptanceLeaseState? GetAcceptanceLease(
         SqliteConnection connection,
         string goalId,
         TimeSpan staleAfter)

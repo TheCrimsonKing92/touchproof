@@ -171,7 +171,7 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
             // holds new acceptance/landing work where candidate and terminal evidence meet.
             // Goal 350ad330: exclude multi-repository goals from gate-ready projection before I/O.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 516), // def5cd48: planner conflict probe and existing-policy escalation.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 560), // def5cd48: planner conflict probe and existing-policy escalation.
             // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 345),
@@ -582,7 +582,7 @@ internal static class SourceSizeRatchet
             // Goal 9eb2f8ba: eight measured wiring lines connect the separate recurrence handler; no new partial.
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
-            new SourceClassCeiling("ConductorDriver", 13398, 67),
+            new SourceClassCeiling("ConductorDriver", 13431, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

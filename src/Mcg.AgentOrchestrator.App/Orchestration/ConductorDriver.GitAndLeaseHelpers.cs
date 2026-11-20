@@ -95,7 +95,7 @@ internal sealed partial class ConductorDriver
             : null;
     }
 
-    internal static string FormatEvidenceMutationLeaseHeld(ReconcileAcceptanceLeaseState lease) =>
+    private static string FormatEvidenceMutationLeaseHeld(ReconcileAcceptanceLeaseState lease) =>
         $"acceptance lease held; owner={lease.Owner}; expiresAtUtc={lease.ExpiresAtUtc:O}";
 
     private ConductorAdvanceResult ReplacementEvidenceMutationHeld(
