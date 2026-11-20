@@ -513,6 +513,104 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     }
 
     [Xunit.Fact]
+    public void AdvanceOnce_WithoutTickAndCandidateDeclined_RunsInlineGateAndLands()
+    {
+        const string inlineLease = "conductor:acceptance-and-land";
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var leases = new RecordingEvidenceMutationLeases();
+        var lifecycleReads = 0;
+        var verifierRuns = 0;
+        var landings = 0;
+        string[]? outstandingDuringVerification = null;
+        var driver = MakeAcceptanceDriver(
+            // Enter landing as Verified, then decline background admission when the workspace blocks.
+            getFacts: _ => ++lifecycleReads == 1 ? GoalLifecycleFacts.None : new(IsBlocked: true),
+            runAcceptanceVerificationWithLease: (_, _, _, _) =>
+            {
+                verifierRuns++;
+                outstandingDuringVerification = leases.Outstanding.ToArray();
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            tryAcquireEvidenceMutationLease: leases.Acquire,
+            onLand: () => landings++);
+        Assert.True(driver.ParallelAcceptanceEnabled);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.StartsWith("Landed:", executed.Description, StringComparison.Ordinal);
+        Assert.Equal(1, verifierRuns);
+        Assert.Equal(1, landings);
+        Assert.NotNull(outstandingDuringVerification);
+        Assert.Equal(inlineLease, Assert.Single(outstandingDuringVerification));
+        Assert.Empty(leases.Outstanding);
+    }
+
+    [Xunit.Fact]
+    public void Tick_PassedReconciledReceipt_LandsUnderReplayLease()
+    {
+        const string replayLease = "conductor:acceptance-receipt-replay";
+        const string candidateSha = "1111111111111111111111111111111111111111";
+        const string mainSha = "2222222222222222222222222222222222222222";
+        var attemptRoot = CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SimpleGoal();
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective, ["Acceptance passes"], VerificationClass.TestVerifiable, [], []));
+            PassVerification(kernel, goal, goal.Tasks.Single());
+            var policy = ConductorAutonomyPolicy.Conservative;
+            string[] scopes = ["src/example.cs"];
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default, runInline: true, isProcessAlive: _ => true,
+                acquireStableSlotLease: (_, _) => null);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, scopes, candidateSha, mainSha);
+            var seeded = coordinator.Evaluate(candidate, policy,
+                (current, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    current, new AcceptanceVerificationSummary(true, [], BranchHeadSha: candidateSha, MainHeadSha: mainSha)));
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, seeded.Kind);
+            coordinator.MarkReconciled(seeded.Attempt);
+            var receipt = ReadOnlyAttempt(attemptRoot, goal);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, receipt.Outcome);
+            Assert.NotNull(receipt.ReconciledAt);
+            Assert.Null(receipt.ReplayLandedAt);
+
+            var leases = new RecordingEvidenceMutationLeases();
+            var verifierRuns = 0;
+            var landingLeaseSnapshots = new List<string[]>();
+            var driver = MakeAcceptanceDriver(
+                runAcceptanceVerificationWithLease: (_, _, _, _) =>
+                {
+                    verifierRuns++;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                parallelAcceptanceAttemptCoordinator: coordinator,
+                tryAcquireEvidenceMutationLease: leases.Acquire,
+                onLand: () => landingLeaseSnapshots.Add(leases.Outstanding.ToArray()),
+                getLandingFileScopes: _ => scopes,
+                resolveAcceptanceHeads: _ => (candidateSha, mainSha));
+            driver.BeginTick(kernel, 1);
+
+            var result = driver.AdvanceOnce(goal, policy);
+
+            var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.StartsWith("Landed:", executed.Description, StringComparison.Ordinal);
+            Assert.Equal(0, verifierRuns);
+            Assert.Equal(replayLease, Assert.Single(leases.Requests));
+            Assert.Equal(replayLease, Assert.Single(Assert.Single(landingLeaseSnapshots)));
+            Assert.Empty(leases.Outstanding);
+            var replayed = ReadOnlyAttempt(attemptRoot, goal);
+            Assert.Equal(receipt.AttemptId, replayed.AttemptId);
+            Assert.NotNull(replayed.ReplayLandedAt);
+        }
+        finally
+        {
+            Directory.Delete(attemptRoot, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void Tick_ParallelAcceptanceVerifier_UsesItsOwnMutationLease()
     {
         const int ownerPid = 9804;
@@ -581,7 +679,9 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary>?
             runAcceptanceVerificationWithOptions = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
-        Action? onLand = null) =>
+        Action? onLand = null,
+        Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null) =>
         new(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             () => 0,
@@ -625,7 +725,9 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             utcNow: utcNow,
             executionDirectory: executionDirectory,
             runAcceptanceVerificationWithOptions: runAcceptanceVerificationWithOptions,
-            tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease);
+            tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
+            getLandingFileScopes: getLandingFileScopes,
+            resolveAcceptanceHeads: resolveAcceptanceHeads);
 
     private sealed class RecordingEvidenceMutationLeases
     {
