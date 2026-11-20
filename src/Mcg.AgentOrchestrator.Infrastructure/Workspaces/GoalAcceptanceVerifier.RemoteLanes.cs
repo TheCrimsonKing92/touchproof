@@ -37,8 +37,7 @@ public sealed partial class GoalAcceptanceVerifier
             ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks, engineSettings);
         var partitionVerdictCache = AcceptancePartitionVerdictCache.Create(
             new AcceptancePartitionVerdictCacheOptions(
-                goalId,
-                worktreePath,
+                goalId, worktreePath,
                 effectiveChecks,
                 engineSettings.PartitionVerdictFullRerunEveryN,
                 _testOverrides.PartitionVerdictWithinAttemptRerunEnabled,
@@ -48,7 +47,8 @@ public sealed partial class GoalAcceptanceVerifier
                 () => executionOwner.Identity.AttemptId,
                 resolveManifestIdentity,
                 () => EngineSettings.EnforceStructuralCoverage,
-                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, ResolveChangedFiles: _testOverrides.ResolvePartitionVerdictChangedFilesForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))], MemberGoalIds: executionOwner.AttemptMemberGoalIds?.Select(id => id.Value).ToArray()),
+                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, ResolveChangedFiles: _testOverrides.ResolvePartitionVerdictChangedFilesForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))], MemberGoalIds: executionOwner.AttemptMemberGoalIds?.Select(id => id.Value).ToArray(),
+                ResolvePreReviewEvidenceReceipts: () => executionOwner.PreReviewEvidenceReceipts),
             out var unavailableReason);
         if (partitionVerdictCache is null)
         {
