@@ -199,6 +199,7 @@ public sealed class ActivationFailedMainRevertTests
         using var repo = new Repository();
         var competing = repo.Git("commit-tree", repo.Merge + "^{tree}", "-p", repo.Merge, "-m", "Competing branch update");
         var worktrees = repo.Worktrees;
+        var checkout = repo.MakeCheckoutDirty();
         var refName = $"refs/heads/{Repository.Branch}";
         var publicationSeen = false;
         using var runner = LandingExecutor.UseGitRunner((directory, args) =>
@@ -217,7 +218,7 @@ public sealed class ActivationFailedMainRevertTests
         Assert.True(publicationSeen);
         Assert.Equal(competing, repo.Tip);
         Assert.Contains("prepared tip", repo.HeldEvent(repo.Merge), StringComparison.Ordinal);
-        Assert.Equal(worktrees, repo.Worktrees);
+        repo.AssertCheckoutPreserved(checkout, worktrees);
     }
 
     internal sealed class Repository : IDisposable
