@@ -693,6 +693,88 @@ Remove-Item -LiteralPath .conduct-stop
 
 For lifecycle repairs, use `set-goal-status` only with Core-valid `GoalStatus` values: `Draft`, `Active`, `WaitingForHuman`, `Parked`, `Verified`, `Completed`, `Failed`, `Cancelled`, `Superseded`. Invalid values poison snapshot loads; malformed goal rows are quarantined on load (landed in `1d2223c2`), which preserves the rest of the store but hides the damaged goal until repaired.
 
+### CLI commands that write goal state directly
+
+The **Goal-scoped write path** column refers to the `IsGoalScopedWriteCommand` route in `CliPersistentStateRunner`. Other routes may still transact or checkpoint one goal at a time, as indicated in the table. **Pollable status** means an operation-specific persisted status exposed by a CLI query. A success line or a read of the current goal or task state is a point-in-time observation.
+
+| Verb or form | Goal-scoped write path | Pollable status |
+| --- | --- | --- |
+| `goal-depends --on`, `--remove`, or `--clear` | Yes, with an explicit goal and a scoped repository. Whole-kernel transaction on fallback. | No. The success line reports the post-commit dependency set. |
+| `revise` with an explicit goal, without `--history` | Yes, with a scoped repository. Whole-kernel transaction on fallback. | No |
+| `note` | No (dedicated goal-state transaction). | No |
+| `verification-plan` with replacement text | No (dedicated goal-state transaction). | No |
+| `park-goal`, alias `stop --as park` | No (dedicated lifecycle transaction). | No |
+| `unpark-goal` | No (dedicated lifecycle transaction). | No |
+| `cancel-goal`, alias `stop --as cancel` | No (dedicated lifecycle transaction). | No |
+| `supersede-goal`, alias `stop --as supersede` | No (dedicated lifecycle transaction). | No |
+| `abandon-goal`, alias `stop --as abandon` | No (dedicated lifecycle transaction and cleanup outbox). | No |
+| `goal` including `--simple` and `--run` | No (creation transaction with outbox). | With `--request-key`, poll `goal-intake-status <request-key>`. |
+| `simple-goal` | No (creation transaction with outbox). | With `--request-key`, poll `goal-intake-status <request-key>`. |
+| `goal --from-backlog` | No (keyed creation transaction or backlog-intake checkpoint). | With `--request-key`, poll `goal-intake-status <request-key>`. |
+| `backlog-intake --create-goal` or `--create-simple-goal` | No (keyed creation transaction or backlog-intake checkpoint). | With `--request-key`, poll `goal-intake-status <request-key>`. |
+| `goal-replace` | No (replacement transaction with outbox). | No. The request ID identifies the replacement receipt used on resubmission. |
+| `goal-delivery-retry` | No (replays goal-creation outbox delivery). | No separate retry status. `goal-intake-status` can show the original keyed creation. |
+| `lifecycle-goal` | No (creation and baseline-aware progress checkpoints). | No |
+| `lifecycle-simple-goal` | No (creation and baseline-aware progress checkpoints). | No |
+| `run-goal` | No (baseline-aware checkpoint for the selected goal). | No |
+| `goal-mark-landed` | No (single-goal checkpoint and landing audit). | No |
+| `acceptance`, alias `accept` | No (goal-only acceptance and merge-guard transactions). | No for the full operation. `gate-status` shows gate activity. |
+| `acceptance-queue --apply` | No (acceptance and queue checkpoints). | No |
+| `acceptance-repair` | No (whole-kernel transaction). | No |
+| `acceptance-retry` | No (whole-kernel transaction with audit outbox). | No |
+| `conduct <goal>` | No (single-goal conduct checkpoints). | No |
+| `conduct --loop` or `conduct --watch` | No (baseline-aware tick checkpoints and reconciliation). | `conductor status` shows loop liveness. Individual tick writes have no operation status. |
+| `reconcile` | No (process reconciliation transaction). | No |
+| `refresh-dispatch` | No (goal-state process refresh transaction). | No |
+| `refresh-dispatches` | No (process refresh transactions). | No |
+| `start-dispatches` | No (dispatch checkpoints). | No |
+| `readiness-repair` | No (single-goal checkpoint when a repair changes state). | No |
+| `goal-recovery` | No (single-goal checkpoint when the recovery sweep changes state). | No |
+| `next` without `--full` | No (single-goal checkpoint when the sweep changes state). | No |
+| `supervisor --apply-safe` | No (single-goal checkpoint). | No |
+| `goal-amend` | No (whole-kernel transaction). | No |
+| `goal-plan --create-goals` or `--create-simple-goals` | No (whole-kernel transaction). | No |
+| `plan --confirm-plan` | No (whole-kernel transaction). | No |
+| `intent-template --create-goal` or `--create-simple-goal` | No (whole-kernel transaction). | No |
+| `recover` | No (whole-kernel transaction). | No |
+| `ask-goal` | No (dedicated whole-kernel transaction). | No |
+| `ask` | No (whole-kernel transaction). | No |
+| `answer` | No (whole-kernel transaction). | No |
+| `reassign-agent` | No (whole-kernel transaction). | No |
+| `re-delegate`, alias `redelegate` | No (whole-kernel transaction). | No |
+| `supersede` for a clarification answer | No (whole-kernel transaction). | No |
+| `gate-satisfied` | No (whole-kernel transaction). | No |
+| `delegate` | No (whole-kernel transaction). | No |
+| `advance` | No (whole-kernel transaction). | No |
+| `advance-subscription` | No (whole-kernel transaction). | No |
+| `run` | No (whole-kernel transaction). | No |
+| `api-run` | No (whole-kernel transaction). | No |
+| `verify` | No (whole-kernel transaction). | No |
+| `dispatch` | No (whole-kernel transaction). | No |
+| `worker-dispatch` | No (whole-kernel transaction). | No |
+| `profile-dispatch` | No (whole-kernel transaction). | No |
+| `profile-dispatch-ready` | No (whole-kernel transaction). | No |
+| `subscription-dispatch` | No (whole-kernel transaction). | No |
+| `subscription-dispatch-ready` | No (whole-kernel transaction). | No |
+| `execute-dispatch` | No (whole-kernel transaction). | No |
+| `start-dispatch` | No (whole-kernel transaction). | No |
+| `start-subscription-ready` | No (whole-kernel transaction). | No |
+| `start-subscription-ready-goals` | No (whole-kernel transaction). | No |
+| `drain-goals --apply` | No (whole-kernel transaction). | No |
+| `rollback-goal` | No (whole-kernel transaction). | No |
+| `land` | No (whole-kernel transaction and landing checkpoints). | No |
+| `workspace merge` | No (whole-kernel transaction when publishing merge state). | No |
+| `workspace remove` | No (whole-kernel transaction when reconciling landed acceptance). | No |
+| `goals-prune --confirm-prune` | No (whole-kernel transaction). | No |
+| `project create` | No (initializes a new project store). | No |
+| `goal-refinement-run` (internal CLI entry point) | No (goal refinement attachment and outbox transactions). | No |
+| SQLite utility `set-goal-status` | No (offline row update). | No |
+| SQLite utility `requeue-task` | No (offline row update). | No |
+
+`revise --history`, `verification-plan` without replacement text, the report forms of `next --full` and `supervisor`, and the preview forms of `acceptance-queue`, `drain-goals`, and `goals-prune` are queries. Project state moves and `state-db-maintenance` operate on the database under their own maintenance procedures. Portfolio assignments such as `epic-assign` write portfolio data. The dashboard and demo seeding have separate writers.
+
+Use `operator-intent-status <intent-id>` for queued operations. These include `retry`, `progress`, `verify-manual`, `adjudicate`, `add-task` (also `repair-task-graph`), `cancel-dispatch`, `goal-priority`, `goal-isolation`, `provider-reset`, `integration-scope`, `approve-policy-change`, `criterion-evidence-map`, `criterion-evidence-record`, `criterion-evidence-repair`, `criterion-evidence-rephase`, `gate-cancel`, `obligation-rebind`, `repair-multi-repository-landing`, `attention answer`, `attention dismiss`, `epic-bar`, `epic-outcome-define`, and `epic-outcome-record`. [State writer inventory](triage/state-writer-inventory-2026-09-06.md).
+
 ### WorkspaceReady + no ready batch after Developer
 
 **Symptom.** `conduct --loop` repeatedly holds or escalates a goal at `WorkspaceReady` / "no ready batch" after the Developer task completed, with Tester or Reviewer tasks still `Assigned`. In the 2026-06-27 incident, example goals `6d76b216` and `abf4967a` showed this pattern; future incidents will have different prefixes.
