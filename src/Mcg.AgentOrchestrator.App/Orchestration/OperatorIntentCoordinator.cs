@@ -329,7 +329,7 @@ internal sealed partial class OperatorIntentCoordinator
 
                 if (retryClarification != RetryClarificationHandling.Resumed)
                 {
-                    Apply(kernel, goal, intent);
+                    Apply(kernel, goal, intent, () => mutated = true);
                 }
                 kernel.RecordOperatorIntentApplied(
                     goal.Id,
@@ -501,7 +501,8 @@ internal sealed partial class OperatorIntentCoordinator
     private void Apply(
         AgentOrchestratorKernel kernel,
         Goal goal,
-        OperatorIntentRecord intent)
+        OperatorIntentRecord intent,
+        Action markGoalMutated)
     {
         ValidateCompletedDutyIntent(goal, intent);
         switch (intent.Verb)
@@ -694,7 +695,8 @@ internal sealed partial class OperatorIntentCoordinator
             case OperatorIntentVerbs.Adjudicate:
                 var adjudication = Deserialize<AdjudicateOperatorIntentPayload>(intent);
                 (_adjudication ?? throw new InvalidOperationException("Operator adjudication is not configured."))
-                    .Apply(kernel, goal, task, intent, adjudication, _utcNow());
+                    .Apply(kernel, goal, task, intent, adjudication, _utcNow(),
+                        cancelLatestProcess: CancelLatestProcess, markGoalMutated: markGoalMutated);
                 break;
 
             default:
