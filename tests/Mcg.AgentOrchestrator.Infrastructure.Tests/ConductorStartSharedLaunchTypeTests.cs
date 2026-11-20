@@ -1,5 +1,3 @@
-using ArchUnitNET.Domain.Dependencies;
-using ArchUnitNET.Loader;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using System.Reflection;
@@ -11,20 +9,20 @@ public sealed class ConductorStartSharedLaunchTypeTests
     public void StartAndSelfRelaunch_CallTheSameHandleListLauncher()
     {
         var assembly = typeof(CliConductorCommand).Assembly;
-        var architecture = new ArchLoader().LoadAssemblies([assembly]).Build();
-        var cli = Assert.Single(architecture.Types, type => type.FullName == typeof(CliConductorCommand).FullName);
-        Assert.Contains(cli.Dependencies.OfType<MethodCallDependency>(), call =>
-            call.TargetMember.DeclaringType.FullName == typeof(HandleListConductorProcessLauncher).FullName);
+        var index = DependencyIndexCache.Get(assembly);
+        var cli = Assert.Single(index.Types, type => type.FullName == typeof(CliConductorCommand).FullName);
+        Assert.Contains(cli.Methods.SelectMany(method => method.Calls), call =>
+            call.DeclaringType.FullName == typeof(HandleListConductorProcessLauncher).FullName);
         foreach (var caller in new[] { typeof(ConductorLoopHandoff), typeof(HandleListConductorProcessLauncher) })
         {
             // Include compiler-generated local functions, where self-relaunch invokes the native call.
-            var calls = architecture.Types.Where(type => type.FullName == caller.FullName ||
+            var calls = index.Types.Where(type => type.FullName == caller.FullName ||
                     type.FullName.StartsWith(caller.FullName + "+", StringComparison.Ordinal) ||
                     type.FullName.StartsWith(caller.FullName + "/", StringComparison.Ordinal))
-                .SelectMany(type => type.Dependencies.OfType<MethodCallDependency>()).ToArray();
-            Assert.Contains(calls, call => call.TargetMember.DeclaringType.FullName ==
+                .SelectMany(type => type.Methods.SelectMany(method => method.Calls)).ToArray();
+            Assert.Contains(calls, call => call.DeclaringType.FullName ==
                 typeof(Mcg.AgentOrchestrator.Infrastructure.HandleListProcessLauncher).FullName &&
-                call.TargetMember.Name.StartsWith("Launch(", StringComparison.Ordinal));
+                call.Name == "Launch");
         }
     }
 

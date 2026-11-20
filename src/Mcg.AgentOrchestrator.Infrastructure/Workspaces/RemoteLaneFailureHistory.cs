@@ -8,6 +8,8 @@ internal sealed record RemoteLaneFailureStreak(int Count, DateTimeOffset? Newest
 // A streak belongs to a lane/filter binding and is derived from ledger append order.
 internal sealed class RemoteLaneFailureHistory
 {
+    private const int LineLimit = 500;
+
     private static readonly HashSet<string> CountedOutcomes = new(StringComparer.OrdinalIgnoreCase)
     {
         "remote-red", "late-after-fallback", "trx-incomplete", "lease-expired",
@@ -20,7 +22,7 @@ internal sealed class RemoteLaneFailureHistory
         var countedAttempts = new HashSet<(string Attempt, string Lane)>();
         try
         {
-            foreach (var line in SharedJsonlFile.ReadLines(path).TakeLast(GoalAcceptanceVerifier.RemoteLaneOfferHistoryLineLimit))
+            foreach (var line in SharedJsonlFile.ReadLines(path).TakeLast(LineLimit))
             {
                 try
                 {
