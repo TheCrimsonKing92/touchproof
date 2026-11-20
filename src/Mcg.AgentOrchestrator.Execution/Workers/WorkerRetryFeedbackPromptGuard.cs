@@ -70,7 +70,7 @@ internal static class WorkerRetryFeedbackPromptGuard
                 LogicalIdentity,
                 task.Id.Value,
                 acceptedRetry.AcceptedAt,
-                HashNormalized(acceptedRetry.Message),
+                RetryFeedbackDeliveryClassifier.HashFeedback(acceptedRetry.Message),
                 artifact.ContentHash,
                 WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(projection)),
                 WorkerContextArtifact.Hash(promptBytes),
@@ -86,7 +86,4 @@ internal static class WorkerRetryFeedbackPromptGuard
         $"Worker dispatch blocked: {ErrorCode}: {detail} for task {task.Id.Value}.",
         ErrorCode,
         [$"blocked: {ErrorCode}: {detail} for task {task.Id.Value}"]);
-
-    private static string HashNormalized(string value) => WorkerContextArtifact.Hash(
-        Encoding.UTF8.GetBytes(value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Trim()));
 }
