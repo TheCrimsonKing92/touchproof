@@ -26,7 +26,7 @@ public sealed class FindingEvidenceRepositoryRequestTests
     public void Parse_SuppliedRepository_RoundTripsRawKey(string repository)
     {
         var request = JsonSerializer.Deserialize<FindingEvidenceRequest>(Legacy)! with { Repository = repository };
-        var findings = "[{\"stable_id\":\"probe\",\"state\":\"open\",\"class_id\":\"none\",\"location\":{\"file\":\"src/A.cs\",\"region\":\"A.Run\"}," +
+        var findings = "[{\"stable_id\":\"probe\",\"state\":\"open\",\"location\":{\"file\":\"src/A.cs\",\"region\":\"A.Run\"}," +
             "\"description\":\"Prove focused evidence\",\"evidence_request\":" + JsonSerializer.Serialize(request) + "}]";
         Assert.True(ReviewFindingConvergence.TryParseJson(findings, "[]", out var round, out var diagnostic), diagnostic);
         Assert.Equal(repository, Assert.Single(round.Findings).EvidenceRequest!.Repository);

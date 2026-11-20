@@ -97,7 +97,7 @@ public sealed class FindingEvidenceNegativeControlRequestTests
     }
 
     private static string Findings(string option) =>
-        "[{\"stable_id\":\"negative-control\",\"state\":\"open\",\"class_id\":\"none\",\"location\":{\"file\":\"src/A.cs\",\"region\":\"A.Run\"}," +
+        "[{\"stable_id\":\"negative-control\",\"state\":\"open\",\"location\":{\"file\":\"src/A.cs\",\"region\":\"A.Run\"}," +
         "\"description\":\"Prove test sensitivity\",\"evidence_request\":{\"selections\":[{\"test_project\":\"Core.Tests\",\"test_class\":\"ProbeTests\"}]" +
         option + "}}]";
 }

@@ -219,7 +219,7 @@ public sealed class PlannerAcceptanceOwnershipTests
         var f = new Fixture();
         f.Plan(Request);
         f.Review(findings: """
-            [{"stable_id":"source-defect","state":"open","class_id":"none","location":{"file":"src/Example.cs","region":"Execute"},"description":"Source returns success on failure.","severity":"blocking","category":"correctness"}]
+            [{"stable_id":"source-defect","state":"open","location":{"file":"src/Example.cs","region":"Execute"},"description":"Source returns success on failure.","severity":"blocking","category":"correctness"}]
             """);
         Assert.Equal(WorkTaskStatus.Failed, f.Reviewer.Status);
         var history = JsonSerializer.Serialize(f.Reviewer.VerificationHistory);

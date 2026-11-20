@@ -428,7 +428,7 @@ internal static class FindingRoundBatchCoordinator
     {
         execution = null;
         var verification = task.LastVerification ?? (useRetainedVerification ? task.VerificationHistory.LastOrDefault() : null);
-        if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _, task.RequiredRole)) return null;
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)) return null;
         execution = ResolveExecution(driver, goal, round);
         if (driver._getPreReviewEvidenceContext(goal).CandidateSha?.Trim() is not { } candidate ||
             !ConductorGitRevisionReader.IsValid(candidate)) return null;

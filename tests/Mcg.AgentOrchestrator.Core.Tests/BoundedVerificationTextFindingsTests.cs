@@ -11,7 +11,7 @@ public sealed class BoundedVerificationTextFindingsTests
     private static string BuildReviewerLog(out string findingsLine)
     {
         findingsLine =
-            "findings: [{\"stable_id\":\"straddling-finding\",\"state\":\"open\",\"class_id\":\"none\",\"severity\":\"blocking\"," +
+            "findings: [{\"stable_id\":\"straddling-finding\",\"state\":\"open\",\"severity\":\"blocking\"," +
             "\"category\":\"correctness\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
             "\"description\":\"" + new string('D', 6_500) + "\"}]";
 

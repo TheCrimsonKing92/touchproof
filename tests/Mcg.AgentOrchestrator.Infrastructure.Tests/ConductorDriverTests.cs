@@ -223,7 +223,7 @@ public sealed class ConductorDriverTests
     internal static string BlockingIdentityRepairOutput(string stableId, string file, string region) =>
         string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: review",
             "tests: pass - inspected evidence", "blockers: none",
-            $$"""findings: [{"stable_id":"{{stableId}}","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"{{file}}","region":"{{region}}","hunk":"guard"},"description":"Blocking identity repair control."}]""",
+            $$"""findings: [{"stable_id":"{{stableId}}","state":"open","severity":"blocking","category":"correctness","location":{"file":"{{file}}","region":"{{region}}","hunk":"guard"},"description":"Blocking identity repair control."}]""",
             "touched_anchors: []", "verdict: needs-work", "END_WORKER_RESULT");
 
     internal static string ReviewerPassWithAdvisory(string stableId, ReviewFindingLocation location) =>

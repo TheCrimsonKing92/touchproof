@@ -152,7 +152,7 @@ public sealed class ReviewerUnactionableNeedsWorkContractTests
 
     private static string Finding(string id, string state = "open", string category = "test-evidence",
         string severity = "blocking", string request = "") =>
-        $$"""{"stable_id":"{{id}}","state":"{{state}}","class_id":"none","severity":"{{severity}}","category":"{{category}}","location":{"file":"src/Example.cs","region":"{{id}}"},"description":"Inspect the candidate evidence."{{request}}}""";
+        $$"""{"stable_id":"{{id}}","state":"{{state}}","severity":"{{severity}}","category":"{{category}}","location":{"file":"src/Example.cs","region":"{{id}}"},"description":"Inspect the candidate evidence."{{request}}}""";
 
     private static string Contract(string verdict, IEnumerable<string> findings) =>
         "WORKER_RESULT:\nfiles: none\ncommands: inspected candidate\ntests: deferred - ExampleTests\n" +

@@ -677,7 +677,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        ReviewFinding[] roundFindings = WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _, task.RequiredRole)
+        ReviewFinding[] roundFindings = WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)
             ? round.Findings.Where(finding => finding.State == ReviewFindingState.Open &&
                                                HasTypedEvidenceRequest(finding)).ToArray()
             : [];
@@ -1135,7 +1135,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.RequiredRole == AgentRole.Tester &&
-            !WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out _, task.RequiredRole))
+            !WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out _))
         {
             // Structured Tester findings are opt-in so existing Tester workers remain compatible.
             // When present they use the same stable-identity ledger as Reviewer findings.
@@ -1143,7 +1143,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         WorkerResultBlockers.TryFindReviewFindingRound(
-            verification, out var submittedRound, out _, out var advisoryRejections, out _, task.RequiredRole);
+            verification, out var submittedRound, out _, out var advisoryRejections, out _);
         foreach (var rejection in advisoryRejections)
         {
             var warning = ReviewFindingParseRejectionNote.BuildAdvisoryWarning(task.RequiredRole, rejection);
@@ -1238,7 +1238,7 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             if (!WorkerResultBlockers.TryFindReviewFindingRound(
-                    verification, out var round, out var parseDiagnostic, out var advisoryRejections, out var formatViolation, role))
+                    verification, out var round, out var parseDiagnostic, out var advisoryRejections, out var formatViolation))
             {
                 if (isCurrentRound)
                 {

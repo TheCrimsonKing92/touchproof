@@ -13,7 +13,7 @@ public sealed class WorkerResultBlockersTests
             no other blocking findings exist in this diff
             WORKER_RESULT:
             blockers: src/ReceiptWriter.cs:42 blocking violates AC-2 - receipt is written too early; src/Schema.cs:18 blocking violates AC-5 - schema version is stale
-            findings: [{"stable_id":"receipt-order","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"src/ReceiptWriter.cs","region":"Write"},"description":"Violates AC-2: receipt is written too early."},{"stable_id":"schema-version","state":"open","class_id":"none","severity":"blocking","category":"spec-compliance","location":{"file":"src/Schema.cs","region":"Version"},"description":"Violates AC-5: schema version is stale."}]
+            findings: [{"stable_id":"receipt-order","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/ReceiptWriter.cs","region":"Write"},"description":"Violates AC-2: receipt is written too early."},{"stable_id":"schema-version","state":"open","severity":"blocking","category":"spec-compliance","location":{"file":"src/Schema.cs","region":"Version"},"description":"Violates AC-5: schema version is stale."}]
             criteria_verdicts: [{"criterion_index":1,"verdict":"not-met","evidence":"src/ReceiptWriter.cs:42"},{"criterion_index":4,"verdict":"not-met","evidence":"src/Schema.cs:18"}]
             verdict: needs-work
             END_WORKER_RESULT
@@ -220,7 +220,7 @@ public sealed class WorkerResultBlockersTests
             1,
             """
             WORKER_RESULT:
-            findings: [{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
+            findings: [{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
             touched_anchors: [{"file":"src/A.cs","region":"A.Run","hunk":"guard"}]
             verdict: needs-work
             END_WORKER_RESULT
@@ -245,7 +245,7 @@ public sealed class WorkerResultBlockersTests
             1,
             """
             WORKER_RESULT:
-            findings: [{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
+            findings: [{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
             touched_anchors: [{"file":"src/A.cs","region":"A.Run","hunk":"guard"}]
             verdict: needs-work
             END_WORKER_RESULT
@@ -268,7 +268,7 @@ public sealed class WorkerResultBlockersTests
             0,
             """
             WORKER_RESULT:
-            findings: [{"stable_id":"reported-goals-may-lack-timeline-evidence","state":"open","class_id":"none","location":{"file":"src/TerminalGoalTimeline.cs","region":"BuildReportedGoals"},"description":"Reported goals may lack timeline evidence."}]
+            findings: [{"stable_id":"reported-goals-may-lack-timeline-evidence","state":"open","location":{"file":"src/TerminalGoalTimeline.cs","region":"BuildReportedGoals"},"description":"Reported goals may lack timeline evidence."}]
             touched_anchors: []
             verdict: pass
             END_WORKER_RESULT
@@ -1070,7 +1070,7 @@ public sealed class WorkerResultBlockersTests
     public void ReviewFindingMissingSeverityDeserializesAndRoundTripsAsBlocking()
     {
         const string legacyJson =
-            """{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."}""";
+            """{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."}""";
 
         var finding = JsonSerializer.Deserialize<ReviewFinding>(legacyJson);
 
@@ -1090,7 +1090,7 @@ public sealed class WorkerResultBlockersTests
     public void ReviewFindingNullOrUnrecognizedSeverityDefaultsToBlocking(string severityJson)
     {
         var findingsJson =
-            $$"""[{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":{{severityJson}}}]""";
+            $$"""[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":{{severityJson}}}]""";
 
         var parsed = ReviewFindingConvergence.TryParseJson(
             findingsJson,
@@ -1112,7 +1112,7 @@ public sealed class WorkerResultBlockersTests
     public void ReviewFindingInvalidOrMissingCategoryDefaultsToUnspecified(string categoryJson)
     {
         var findingsJson =
-            $$"""[{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."{{categoryJson}}}]""";
+            $$"""[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."{{categoryJson}}}]""";
 
         Assert.True(
             ReviewFindingConvergence.TryParseJson(findingsJson, "[]", out var round, out var diagnostic),
@@ -1166,7 +1166,7 @@ public sealed class WorkerResultBlockersTests
             """
             WORKER_RESULT:
             blockers: none
-            findings: [{"stable_id":"F-1","state":"open","class_id":"none","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
+            findings: [{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
             touched_anchors: []
             verdict: needs-work
             END_WORKER_RESULT
@@ -1189,7 +1189,7 @@ public sealed class WorkerResultBlockersTests
             """
             WORKER_RESULT:
             blockers: missing focused evidence
-            findings: [{"stable_id":"evidence-1","state":"open","class_id":"none","severity":"blocking","category":"correctness","location":{"file":"ConductorDriver.cs","region":"routing"},"description":"Run Infrastructure.Tests ConductorDriverTests","evidence_request":{"selections":[{"test_project":"Infrastructure.Tests","test_class":"ConductorDriverTests"}]}}]
+            findings: [{"stable_id":"evidence-1","state":"open","severity":"blocking","category":"correctness","location":{"file":"ConductorDriver.cs","region":"routing"},"description":"Run Infrastructure.Tests ConductorDriverTests","evidence_request":{"selections":[{"test_project":"Infrastructure.Tests","test_class":"ConductorDriverTests"}]}}]
             touched_anchors: []
             verdict: needs-work
             END_WORKER_RESULT
