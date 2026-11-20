@@ -213,9 +213,10 @@ public sealed class CliGoalReplacementExecutionTests
         Assert.Contains(bindCalls, method => method.Name == nameof(GoalIntakeRequestStore.MarkCreated));
     }
 
-    private static void AssertKeyedRunnerDispatch()
+    private static void AssertKeyedRunnerDispatch([CallerFilePath] string testSourcePath = "")
     {
-        var path = Path.Combine(VerifiedRepositoryRoot.Find(),
+        // Inspect the worktree used to compile this test. The harness root can point to the publishing checkout.
+        var path = Path.Combine(VerifiedRepositoryRoot.Resolve(testSourcePath, static _ => null),
             "src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs");
         var root = CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot();
         var runner = Assert.Single(root.DescendantNodes().OfType<ClassDeclarationSyntax>(),
@@ -237,7 +238,7 @@ public sealed class CliGoalReplacementExecutionTests
             allowed.IsEquivalentTo(SyntaxFactory.Block(candidate.Statements.Take(allowed.Statements.Count)));
 
         Assert.True(MatchesKeyedPrefix(body),
-            "ExecuteCommand must validate options and immediately return the keyed submission before other dispatch.");
+            $"{path}: ExecuteCommand must validate options and immediately return the keyed submission before other dispatch.");
 
         var fullLoad = SyntaxFactory.ParseStatement("stateRepository.LoadAsync().GetAwaiter().GetResult();");
         Assert.False(MatchesKeyedPrefix(body.WithStatements(body.Statements.Insert(1, fullLoad))));
