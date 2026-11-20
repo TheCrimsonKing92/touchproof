@@ -2,10 +2,82 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 // Parallel-safe: isolated repositories/stores and AsyncLocal console capture; no global hooks or environment changes.
 public sealed class BacklogIntakeForceReclaimCorrectionTests : CliCommandTestBase
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Continuation_CorrectedOwnerLanded_RevalidatesReplacementLineage(bool removeLineage)
+    {
+        var workspace = await PrepareWorkspace();
+        var (item, originalId) = await PrepareOwner(workspace, "Correct and continue the intake pipeline", recorded: false);
+        string[] command = ["backlog-intake", item.Id, "--create-goal", "--pipeline", "scout",
+            "--backlog-coverage", "slice", "--force-reclaim"];
+        Assert.Contains("GOAL_REPLACE_SUCCEEDED", Execute(workspace, command));
+
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = await repository.LoadAsync();
+        var claims = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var intake = new BacklogIntakeRecordStore(workspace.SqliteStatePath);
+        var correctedClaim = Assert.IsType<SourceBacklogClaimSnapshot>(claims.ResolveClaim(kernel, item.Id));
+        var correction = Assert.Single(claims.ListLineage(item.Id));
+        Assert.Equal(originalId.Value, correction.PredecessorGoalId);
+        Assert.Equal(correctedClaim.OwnerGoalId, correction.SuccessorGoalId);
+        var originalIntake = Assert.IsType<BacklogIntakeRecord>(intake.Get(item.Id));
+        Assert.Equal(originalId.Value, originalIntake.GoalId);
+
+        var corrected = kernel.GetGoal(new GoalId(correctedClaim.OwnerGoalId));
+        foreach (var task in corrected.Tasks)
+            kernel.ReportTaskProgress(corrected.Id, task.Id, WorkTaskStatus.Completed, "Fixture task complete.");
+        var root = workspace.ExecutionDirectory;
+        kernel.CompleteGoalFromMergeEvidence(corrected.Id, RunGitOutput(root, "rev-parse", "HEAD").Trim(), "Corrected goal landed.");
+        GoalOperationJournal.Completed(root, corrected, "conductor:land", "Corrected goal landed.");
+        await repository.SaveAsync(kernel);
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        Assert.True(await backlog.TryCloseByIdAsync(item.Id));
+        await backlog.ReopenAsync(item.Id);
+
+        if (removeLineage)
+        {
+            var hooks = new BacklogIntakeContinuationHooks(BeforeFirstWrite: () =>
+            {
+                using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                    { DataSource = workspace.SqliteStatePath, Pooling = false }.ToString());
+                connection.Open();
+                using var delete = connection.CreateCommand();
+                delete.CommandText = "DELETE FROM goal_replacement_lineage WHERE request_id = $requestId";
+                delete.Parameters.AddWithValue("$requestId", correction.RequestId.ToString("D"));
+                Assert.Equal(1, delete.ExecuteNonQuery());
+            });
+
+            var refusal = Assert.Throws<BacklogIntakeContinuationException>(() => Execute(workspace, command, hooks));
+            Assert.Equal(BacklogIntakeContinuationRefusal.SnapshotChanged, refusal.Reason);
+            var after = await repository.LoadAsync();
+            Assert.Equal(2, after.Goals.Count);
+            Assert.Equal(correctedClaim, claims.ResolveClaim(after, item.Id));
+            Assert.Equal(originalIntake, intake.Get(item.Id));
+            Assert.Empty(claims.ListContinuationLineage(item.Id));
+            Assert.Null(intake.GetContinuation(item.Id));
+            return;
+        }
+
+        var output = Execute(workspace, command);
+        var restored = await repository.LoadAsync();
+        Assert.Equal(3, restored.Goals.Count);
+        var successorClaim = Assert.IsType<SourceBacklogClaimSnapshot>(claims.ResolveClaim(restored, item.Id));
+        Assert.Equal(correctedClaim.Version + 1, successorClaim.Version);
+        var continuation = Assert.Single(claims.ListContinuationLineage(item.Id));
+        Assert.Equal(corrected.Id.Value, continuation.PredecessorGoalId);
+        Assert.Equal(successorClaim.OwnerGoalId, continuation.SuccessorGoalId);
+        Assert.Equal(successorClaim.OwnerGoalId, intake.Get(item.Id)?.GoalId);
+        Assert.Equal("GoalCreated", intake.Get(item.Id)?.Status);
+        Assert.Equal(correction, Assert.Single(claims.ListLineage(item.Id)));
+        Assert.Contains($"predecessor={corrected.Id.Value} successor={successorClaim.OwnerGoalId}", output);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
@@ -367,13 +439,19 @@ public sealed class BacklogIntakeForceReclaimCorrectionTests : CliCommandTestBas
         return (item, owner.Id);
     }
 
-    private static string Execute(OrchestratorWorkspace workspace, string[] command)
+    private static string Execute(OrchestratorWorkspace workspace, string[] command, BacklogIntakeContinuationHooks? hooks = null)
     {
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        return CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(command,
-            CreateMigratedStateRepository(workspace.SqliteStatePath), workspace, ref agents,
-            new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal));
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var providers = new InMemoryModelProviderRegistry([]);
+        return CaptureConsole(() =>
+        {
+            if (hooks is null)
+                CliPersistentStateRunner.ExecuteCommand(command, repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            else
+                CliBacklogIntakeExecution.Execute(command, repository, workspace, ref agents, providers, ref profiles, ref currentGoal, hooks);
+        });
     }
 }

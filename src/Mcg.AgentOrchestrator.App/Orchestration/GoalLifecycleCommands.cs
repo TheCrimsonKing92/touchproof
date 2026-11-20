@@ -220,7 +220,7 @@ internal static class GoalLifecycleCommands
         return goal;
     }
 
-    private static Goal CreateGoalFromPlan(
+    internal static Goal CreateGoalFromPlan(
         AgentOrchestratorKernel kernel,
         GoalObjectivePlan plan,
         GoalId? sliceBatchParentId = null)
