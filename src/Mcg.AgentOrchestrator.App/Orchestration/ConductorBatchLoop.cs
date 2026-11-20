@@ -230,6 +230,7 @@ internal sealed partial class ConductorBatchLoop
         Action<bool>? onMaxDurationDeferralStateChanged = null,
         bool emitActivationHeartbeat = false)
     {
+        var watchSleep = new ConductorWatchSleep(stopFilePath, ignoreInitialStopFile: onlyGoalId is not null);
         var leaseDirectory = Path.GetDirectoryName(Path.GetFullPath(stopFilePath)) ?? Directory.GetCurrentDirectory();
         var leaseAcquisition = AcquireActiveDatabaseLeases(leaseDirectory, busyWriteDelay);
         if (!leaseAcquisition.Succeeded)
@@ -237,6 +238,8 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
+        if (watchSleep.IsIgnoringInitialStopFile)
+            Console.WriteLine($"[conduct --watch] The existing repo-wide stop file is ignored for named goal {ShortGoalId(onlyGoalId!)}.");
         using var activationAdmissionHealth = BeginActivationAdmission(emitActivationHeartbeat);
         checkpointGoalTick = ResetLandingTickSave(checkpointGoalTick);
         _consecutiveJanitorialFailures.Clear();
@@ -498,8 +501,8 @@ internal sealed partial class ConductorBatchLoop
                         busyWriteDelay,
                         checkpointGoalTick: checkpointGoalTick,
                         checkpointHeldGoalIds: checkpointHeldGoals);
-                    drainHold.Wait(sleepFunc, interval => SleepUntilNextTick(
-                        interval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId)));
+                    drainHold.Wait(sleepFunc, interval => watchSleep.Wait(
+                        interval, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId)));
                     return new(SelfRelaunchDrainDisposition.ContinueTick,
                         HeldForRunningDispatches: drainHold.DispatchesPending);
                 }
@@ -611,7 +614,7 @@ internal sealed partial class ConductorBatchLoop
                 selfRelaunchDrainStartedAt = _utcNow();
             }
 
-            if (IsStopRequested(stopFilePath))
+            if (watchSleep.IsStopRequested())
             {
                 ReconcilePendingWakeMaintenance(totalTicks, []);
                 stopRequested = true;
@@ -977,7 +980,7 @@ internal sealed partial class ConductorBatchLoop
                         ProgressLines = intentTickLines,
                         OperatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? []
                     });
-                    if (IsStopRequested(stopFilePath))
+                    if (watchSleep.IsStopRequested())
                     {
                         stopRequested = true;
                         StopLoop("stop-after-operator-intent");
@@ -1077,13 +1080,13 @@ internal sealed partial class ConductorBatchLoop
                             : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
-                        : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId));
+                        : watchSleep.Wait(idleInterval, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
                         pendingWakeMaintenanceKind = "idle-wake-sweep";
                     }
 
-                    if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
+                    if (idleSleep == WatchSleepResult.StopRequested || watchSleep.IsStopRequested())
                     {
                         // A wake still owns exit reconciliation even when shutdown wins admission.
                         // Do not capture or apply another intent batch on this stopping path.
@@ -1721,15 +1724,15 @@ internal sealed partial class ConductorBatchLoop
 
                 var sleepResult = sleepFunc is not null
                     ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
-                    : SleepUntilNextTick(fallbackInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId));
+                    : watchSleep.Wait(fallbackInterval, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId));
 
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
-                    EmitProgress(FormatWatchWake(totalTicks, stopFilePath, wakeSignal));
+                    EmitProgress(FormatWatchWake(totalTicks, watchSleep.GetWakeStopFilePath(), wakeSignal));
                     pendingWakeMaintenanceKind = "wake-sweep";
                 }
 
-                if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
+                if (sleepResult == WatchSleepResult.StopRequested || watchSleep.IsStopRequested())
                 {
                     ReconcilePendingWakeMaintenance(totalTicks, tickLines);
                     stopRequested = true;
@@ -2469,16 +2472,13 @@ internal sealed partial class ConductorBatchLoop
         _detachGoalRunningDispatches(kernel, goal);
     }
 
-    private static bool IsStopRequested(string stopFilePath) =>
-        !string.IsNullOrEmpty(stopFilePath) && File.Exists(stopFilePath);
-
     internal static WatchSleepResult SleepUntilNextTick(
         TimeSpan interval,
         string stopFilePath,
         IConductorWakeSignal? wakeSignal,
         IReadOnlyList<string> trackedExitCodePaths,
         IReadOnlyList<string>? runningAttemptExitCodePaths = null) =>
-        ConductorWatchSleep.Wait(interval, stopFilePath, wakeSignal, trackedExitCodePaths, runningAttemptExitCodePaths);
+        new ConductorWatchSleep(stopFilePath).Wait(interval, wakeSignal, trackedExitCodePaths, runningAttemptExitCodePaths);
 
 }
 
