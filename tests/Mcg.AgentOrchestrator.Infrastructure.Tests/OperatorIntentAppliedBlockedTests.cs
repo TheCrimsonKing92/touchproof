@@ -28,18 +28,21 @@ public sealed class OperatorIntentAppliedBlockedTests
     {
         using var fixture = new Fixture();
         fixture.Fail(fixture.Developer, DispatchRule);
-        fixture.Fail(fixture.Tester, VerdictRule);
+        fixture.Kernel.ReportTaskProgress(fixture.Goal.Id, fixture.Tester.Id,
+            WorkTaskStatus.Failed, "Tester work failed.");
         var intent = await fixture.Enqueue(fixture.Tester, OperatorIntentVerbs.Retry,
             new RetryOperatorIntentPayload("Retry the Tester work.", null));
 
         fixture.Coordinator.ExecutePending(fixture.Kernel, fixture.Goal);
         var clarification = Assert.Single(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id));
         Assert.Equal(fixture.Tester.Id, clarification.TaskId);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, fixture.Tester.Status);
         Assert.Equal(OperatorIntentStatus.Claimed, (await fixture.Store.GetAsync(intent.Id))!.Status);
         fixture.Kernel.SubmitHumanInput(clarification.Id, nameof(RetryCause.NewSourceFinding));
 
         await AssertBlockedApplication(fixture, intent, "Applied retry continuation", DispatchRule, DispatchGuidance);
         Assert.Equal(WorkTaskStatus.Assigned, fixture.Tester.Status);
+        Assert.Equal(RetryCause.NewSourceFinding, fixture.Tester.PendingRetryCause);
     }
 
     [Xunit.Fact]
