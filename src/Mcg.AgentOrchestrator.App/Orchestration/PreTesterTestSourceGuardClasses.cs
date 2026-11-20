@@ -23,9 +23,9 @@ internal static class PreTesterTestSourceGuardClasses
         if (!Directory.Exists(root)) return [];
 
         var names = DeveloperDeferredTestSelections.EnumerateSourceFiles(root)
-            .Select(Path.GetFileNameWithoutExtension)
-            .Where(name => name!.EndsWith("GuardTests", StringComparison.Ordinal))
-            .Select(name => name!)
+            .Select(TestIdentityFilenameAssumption.GetClassNameCandidate)
+            .OfType<string>()
+            .Where(name => name.EndsWith("GuardTests", StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(name => name, StringComparer.Ordinal)
             .Concat(SharedTableClasses.Select(entry => entry.TestClass))

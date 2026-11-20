@@ -34,7 +34,8 @@ internal static class PlannerAmendmentBatchRecorder
                 completedRound: workerResultPresent ? completedRound : null,
                 workerResultLogReference: workerResultReference,
                 recordDuplicateSuppression: workerResultPresent,
-                amendmentCriterionIndex: directive.AmendmentCriterionIndex);
+                amendmentCriterionIndex: directive.AmendmentCriterionIndex,
+                amendmentProposedText: directive.AmendmentProposedText);
             if (workerResultPresent && result.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(output, out var status) &&
                 status == WorkerResultBlockers.BlockersStatus.None)

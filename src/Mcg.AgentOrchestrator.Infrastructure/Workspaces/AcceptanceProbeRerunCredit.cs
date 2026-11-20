@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -81,7 +82,8 @@ internal static class AcceptanceProbeRerunCredit
             foreach (var path in changedPaths())
             {
                 if (!Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase)) continue;
-                if (classes.Contains(Path.GetFileNameWithoutExtension(path), StringComparer.OrdinalIgnoreCase))
+                if (TestIdentityFilenameAssumption.GetClassNameCandidate(path) is { } className &&
+                    classes.Contains(className, StringComparer.OrdinalIgnoreCase))
                     return Deny("inside-diff");
                 var candidatePath = Path.Combine(worktreePath, path);
                 string content;

@@ -109,7 +109,8 @@ internal sealed class PlannerEvidenceRecorder(
             foreach (var amendment in batch.Directives.Where(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment))
                 kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, amendment.Question, kind: amendment.Kind,
                     questionFingerprint: amendment.QuestionFingerprint, blockerFingerprint: amendment.BlockerFingerprint,
-                    recordDuplicateSuppression: false, amendmentCriterionIndex: amendment.AmendmentCriterionIndex);
+                    recordDuplicateSuppression: false, amendmentCriterionIndex: amendment.AmendmentCriterionIndex,
+                    amendmentProposedText: amendment.AmendmentProposedText);
             blocksActiveWork = kernel.GetPendingBlockingHumanInput(goal.Id).Any(item => item.TaskId == task.Id) ||
                 batch.Directives.Any(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment);
         }
