@@ -5,14 +5,19 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed class WorkerUsageSampleSource(IEnumerable<Goal> goals)
+internal sealed class WorkerUsageSampleSource
 {
-    private readonly (AgentRole Role, TaskDispatchRecord Dispatch)[] newestFirst = goals.SelectMany(goal => goal.Tasks)
-        .SelectMany(task => task.DispatchHistory.Select(dispatch => (task.RequiredRole, Dispatch: dispatch)))
-        .OrderByDescending(row => row.Dispatch.DispatchedAt).ToArray();
+    private readonly (AgentRole Role, TaskDispatchRecord Dispatch)[] newestFirst;
 
-    internal static WorkerUsageSampleSource Read(string statePath) => new(
-        SqliteOrchestratorStateRepository.OpenReadOnly(statePath).LoadAsync().GetAwaiter().GetResult().Goals);
+    internal WorkerUsageSampleSource(IEnumerable<Goal> goals) : this(DispatchUsagePopulation.Build(goals))
+    {
+    }
+
+    private WorkerUsageSampleSource(DispatchUsagePopulation population) =>
+        newestFirst = population.Dispatches.OrderByDescending(row => row.Dispatch.DispatchedAt).ToArray();
+
+    internal static WorkerUsageSampleSource Read(string statePath) =>
+        new(DispatchUsagePopulation.Read(SqliteOrchestratorStateRepository.OpenReadOnly(statePath)));
 
     internal static DateTimeOffset? ReadLandedAt(string homeDirectory, string landedHomeCommit)
     {
