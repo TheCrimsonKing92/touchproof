@@ -110,7 +110,7 @@ internal static class CliCommandHelp
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
-    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>] [--whole-gate (requires --executor)]";
+    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>] [--whole-gate [--goal <prefix>] [--max-lanes <n>]]";
     public const string ImpactReplayStatusUsage = "Usage: impact-replay --status --checkpoint-file <path>";
     public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] [--attempts-file <path>] --out <directory> [--floor <name> ...]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -122,12 +122,12 @@ internal static class CliCommandHelp
     public const string DirectiveUsage = "Usage: directive record --kind intake|pacing|scope --text-file <path> [--expires-at <utc> | --until-handoff] [--actor-kind human|agent] [--operator-actor <actor>] [--idempotency-key <key>] [--json] | directive retire <id> --reason <text> [--json] | directive handoff [--note <text>] [--json]";
     public const string DirectivesUsage = "Usage: directives [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent] [--json]";
-    public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json] [--sections]";
+    public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json] [--sections | --rework [--until <ISO-8601-with-offset>] [--top <positive-int>]]";
     public const string ClaudeUsageBackfillUsage = "Usage: claude-usage-backfill [--since <ISO-8601-with-offset>] [--goal <goal-prefix>] [--apply] [--json]";
     public const string PromotionFactsBackfillUsage = "Usage: promotion-facts-backfill [--apply] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
-    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop | conductor setup | conductor apply-intents <goal-prefix>";
+    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop | conductor setup | conductor apply-intents <goal-prefix|--workspace>";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -736,8 +736,8 @@ internal static class CliCommandHelp
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
     private static readonly CommandHelpEntry ExecutorScreen = new(
-        ExecutorScreenUsage, "Screen a candidate on an idle executor, or use --whole-gate to measure the full test lane plan on a named executor.",
-        ["--max-candidates", "--executor", "--whole-gate", "--help", "-h"]);
+        ExecutorScreenUsage, "Screen a candidate on an idle executor. --whole-gate requires --executor and selects passed local gates. Use --goal for a specific goal and --max-lanes to cap lane submissions.",
+        ["--max-candidates", "--executor", "--whole-gate", "--goal", "--max-lanes", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
         ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor. Use --attempts-file to select listed attempt ids. It cannot be combined with --since or --limit.",
         ["--since", "--limit", "--attempts-file", "--out", "--floor", "--status", "--checkpoint-file", "--help", "-h"]);
@@ -810,8 +810,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry ContextUsage = new(
         ContextUsageUsage,
-        "Report per-role and per-model worker dispatch context usage.",
-        ["--since", "--role", "--json", "--sections", "--help", "-h"]);
+        "Report worker context usage by role and model, or retry usage by role, cause and finding class.",
+        ["--since", "--role", "--json", "--sections", "--rework", "--until", "--top", "--help", "-h"]);
 
     private static readonly CommandHelpEntry ClaudeUsageBackfill = new(
         ClaudeUsageBackfillUsage,
@@ -839,8 +839,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
-        "Start, report or stop the conductor, set up versioned stores, or apply one goal's pending operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
-        ["--clear-stop", "--plan", "--help", "-h"]);
+        "Start, report or stop the conductor, set up versioned stores, or apply pending goal or workspace operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
+        ["--clear-stop", "--plan", "--workspace", "--help", "-h"]);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)

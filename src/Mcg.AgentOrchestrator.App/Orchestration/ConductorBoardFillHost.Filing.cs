@@ -56,6 +56,8 @@ internal sealed partial class ConductorBoardFillHost
             // A crash before FinishFiling resumes the same durable attempt and request key.
             var pending = (draft.Filings ?? []).SingleOrDefault(row => row.Result is null);
             var attempt = pending ?? _store.BeginFiling(draft.Id, _utcNow());
+            if (pending is not null && _filingSeams?.Intake.HasPendingCreation(attempt.RequestKey) == true)
+                return attempt;
             var refusal = FilingAdmission(draft, attempt, previous is not null, token, out var revalidated);
             if (refusal is not null) return Finish(refusal);
             // Re-reading a completed receipt creates no goal and bypasses new-goal admission limits.
@@ -74,6 +76,8 @@ internal sealed partial class ConductorBoardFillHost
                 return Finish(attempt with { Result = "failed", Reason = "intake-exception",
                     Stderr = exception.ToString(), ExitCode = 1, Terminal = true });
             }
+            if (intake.IsPending)
+                return attempt;
             if (intake.Kind is not ("filed" or "replayed") || string.IsNullOrWhiteSpace(intake.GoalId) || intake.ExitCode != 0)
                 return Finish(attempt with { Result = "failed", Reason = intake.Reason == "ok" ? "intake-failed" : intake.Reason,
                     GoalId = intake.GoalId, Stdout = intake.Stdout, Stderr = intake.Stderr, ExitCode = intake.ExitCode, Terminal = true });
@@ -93,7 +97,9 @@ internal sealed partial class ConductorBoardFillHost
             }
             var failed = dependencies.Where(dependency => !dependency.Applied).Select(dependency => BoardFillFiledEvent.Id8(dependency.GoalId)).ToArray();
             var reason = revalidated && intake.Reason == "ok" ? BoardFillStaleHeadRevalidation.AdmittedReason : intake.Reason;
-            return Finish(attempt with { Result = intake.Kind, Reason = failed.Length == 0 ? reason :
+            // This is the first completed filing for the draft, even if intake was
+            // observed by replay. Count it toward the daily filing cap.
+            return Finish(attempt with { Result = pending is null ? intake.Kind : "filed", Reason = failed.Length == 0 ? reason :
                 "dependency-failed:" + string.Join(',', failed), GoalId = intake.GoalId, Stdout = intake.Stdout,
                 Stderr = intake.Stderr, ExitCode = intake.ExitCode, Dependencies = dependencies, Terminal = true, Intake = intake });
 

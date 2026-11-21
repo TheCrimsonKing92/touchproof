@@ -224,8 +224,10 @@ public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktr
             Goal? currentGoal = null;
             var intake = new[] { "simple-goal", "Keyed workspace goal", "--request-key", "workspace-key" };
 
-            _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            var queued = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
                 intake, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+            Assert.Contains("\"state\":\"still-committing\"", queued);
+            KeyedGoalCreationIntentTests.ApplyWorkspace(workspace);
             var goal = Assert.Single((await repository.LoadAsync()).Goals);
             var kernel = await repository.LoadAsync();
             currentGoal = kernel.Goals.Single();

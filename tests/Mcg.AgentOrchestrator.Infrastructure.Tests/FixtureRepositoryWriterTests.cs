@@ -93,6 +93,44 @@ public sealed class FixtureRepositoryWriterTests
     }
 
     [Fact]
+    public void LinkedWorktree_SelectTip_WritesSharedHistoryAndLeavesMainCheckoutAlone()
+    {
+        WithRepository(root =>
+        {
+            var main = Path.Combine(root, "main");
+            var linked = Path.Combine(root, "linked");
+            Directory.CreateDirectory(main);
+            RealGit(main, "init", "-b", "main");
+            RealGit(main, "config", "user.name", Identity.Name);
+            RealGit(main, "config", "user.email", Identity.Email);
+            File.WriteAllText(Path.Combine(main, "example.txt"), "main\n");
+            RealGit(main, "add", "example.txt");
+            RealGit(main, "commit", "-m", "Seed");
+            RealGit(main, "worktree", "add", "-b", "linked", linked);
+
+            var mainGit = Path.Combine(main, ".git");
+            var mainHead = RealGit(main, "rev-parse", "HEAD").StandardOutput.Trim();
+            var mainHeadBytes = File.ReadAllBytes(Path.Combine(mainGit, "HEAD"));
+            var mainIndex = File.ReadAllBytes(Path.Combine(mainGit, "index"));
+            var writer = new FixtureRepositoryWriter(linked);
+            Assert.True(writer.IsLinkedWorktree);
+            Assert.Equal(mainGit, writer.CommonDirectory);
+            Assert.Equal(Path.GetFullPath(RealGit(linked, "rev-parse", "--absolute-git-dir").StandardOutput.Trim()), writer.GitDirectory);
+            var tip = writer.WriteSnapshot(new Dictionary<string, byte[]> { ["example.txt"] = "linked\n"u8.ToArray() },
+                [mainHead], "Linked snapshot", Identity);
+            writer.SelectTip("linked", tip);
+
+            Assert.Empty(RealGit(linked, "fsck", "--strict").StandardError);
+            Assert.Equal(tip, RealGit(linked, "rev-parse", "HEAD").StandardOutput.Trim());
+            Assert.Equal(tip, RealGit(main, "rev-parse", "refs/heads/linked").StandardOutput.Trim());
+            Assert.Empty(RealGit(linked, "status", "--porcelain").StandardOutput);
+            Assert.Equal(mainHead, RealGit(main, "rev-parse", "HEAD").StandardOutput.Trim());
+            Assert.Equal(mainHeadBytes, File.ReadAllBytes(Path.Combine(mainGit, "HEAD")));
+            Assert.Equal(mainIndex, File.ReadAllBytes(Path.Combine(mainGit, "index")));
+        });
+    }
+
+    [Fact]
     public void IdenticalInputs_EmptyTreeAndOrderedParents_ProduceIdenticalIds()
     {
         WithRepository(firstRoot => WithRepository(secondRoot =>
