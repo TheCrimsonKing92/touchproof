@@ -113,11 +113,11 @@ internal sealed partial class ConductorBatchLoop
             BuildLockBlockedException or
             OperationCanceledException;
 
-    private static bool IsEnvironmentInterferenceAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
+    internal static bool IsEnvironmentInterferenceAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
         run.Acceptance is { } acceptance &&
         ConductorDriver.IsEnvironmentalApparatusAcceptanceRun(acceptance);
 
-    private static bool IsRetryableTerminalAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+    internal static bool IsRetryableTerminalAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.Outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
             or ConductorParallelAcceptanceAttemptOutcome.Cancelled ||

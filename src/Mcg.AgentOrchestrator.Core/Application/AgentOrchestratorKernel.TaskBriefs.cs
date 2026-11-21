@@ -248,13 +248,13 @@ public sealed partial class AgentOrchestratorKernel
         headerLines.AddRange(BuildDeveloperPreReviewRepeatBriefBlock(goal, task));
         headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
+        var taskDescriptionLine = $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}";
         headerLines.AddRange([
             $"Goal: {(goal.RefinedSpec is null ? PromptContextFormatter.TrimPrimaryContextBlock(declarationContext.Objective, complexity) : CurrentSpecificationProjection.ProjectObjective(declarationContext.Objective, goal.RefinedSpec))}",
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
-            "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach orchestrator state.",
-            "A Planner must map evidence that was never recorded as disposition=undecidable, naming what would settle it, its required source, and why it is unavailable, while planning all remaining criteria in the same round. Escalate only when operator action is required; classified evidence escalations must state retrievable plus the inaccessible store, or never-recorded.",
-            $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}",
+            ..TaskBriefHeader.DecisionContextLines(task.RequiredRole),
+            taskDescriptionLine,
             $"Task role: {task.RequiredRole}",
             $"Task status: {task.Status}",
             $"Task id: {task.Id.Value}",
@@ -292,10 +292,8 @@ public sealed partial class AgentOrchestratorKernel
                 : $"If blockers remain, use `needs-work`; `blocked-at-cap` is only valid at round {reviewRetryCap.StopRound}/{reviewRetryCap.StopRound}.");
         }
 
-        var segments = new List<TaskBriefSegment>
-        {
-            TaskBriefSegment.Fixed(headerLines)
-        };
+        List<TaskBriefSegment> segments = [TaskBriefHeader.WithTaskDescriptionFallback(
+            headerLines, taskDescriptionLine, task, usesFileAccessContext)];
 
         var instructionLines = new List<string>
         {

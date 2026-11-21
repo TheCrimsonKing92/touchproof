@@ -127,7 +127,7 @@ internal static class CliCommandHelp
     public const string PromotionFactsBackfillUsage = "Usage: promotion-facts-backfill [--apply] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
-    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop | conductor setup | conductor apply-intents <goal-prefix|--workspace>";
+    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop [--drain [--drain-timeout-seconds <n>]] | conductor setup | conductor apply-intents <goal-prefix|--workspace>";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -839,8 +839,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
-        "Start, report or stop the conductor, set up versioned stores, or apply pending goal or workspace operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
-        ["--clear-stop", "--plan", "--workspace", "--help", "-h"]);
+        "Start, report or stop the conductor, set up versioned stores, or apply pending goal or workspace operator intents while no conductor runs. Plain stop detaches immediately. Drain waits for admitted work and detaches on timeout (default 1800 seconds). status --json prints the versioned mcg.conductor-status envelope.",
+        ["--clear-stop", "--drain", "--drain-timeout-seconds", "--plan", "--workspace", "--help", "-h"]);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)

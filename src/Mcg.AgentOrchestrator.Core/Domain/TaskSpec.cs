@@ -1442,6 +1442,20 @@ public sealed partial class TaskSpec
             LastDispatch = updated;
     }
 
+    internal bool TrySetDispatchReachCheck(DateTimeOffset dispatchedAt, IReadOnlyList<DeveloperReachCheckEntry> entries)
+    {
+        var index = _dispatchHistory.FindLastIndex(dispatch => dispatch.DispatchedAt == dispatchedAt);
+        if (index < 0)
+            return false;
+
+        var updated = _dispatchHistory[index] with { ReachCheck = entries };
+        _dispatchHistory[index] = updated;
+        if (index == _dispatchHistory.Count - 1)
+            LastDispatch = updated;
+
+        return true;
+    }
+
     internal void RecordProcess(TaskProcessRecord process)
     {
         LastProcess = process;
@@ -1497,7 +1511,10 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion, WorkerToolsDirectory: dispatch.WorkerToolsDirectory);
+        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion, WorkerToolsDirectory: dispatch.WorkerToolsDirectory)
+    {
+        ReachCheck = dispatch.ReachCheck
+    };
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1542,7 +1559,10 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion, dispatch.WorkerToolsDirectory);
+        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion, dispatch.WorkerToolsDirectory)
+    {
+        ReachCheck = dispatch.ReachCheck
+    };
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

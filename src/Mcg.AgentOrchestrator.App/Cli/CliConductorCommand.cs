@@ -27,7 +27,12 @@ internal static class CliConductorCommand
         output ??= Console.Out;
         error ??= Console.Error;
         lockProbe ??= new SystemConductorLockProbe();
-        if (args.Count < 2 || args.Count > 3 ||
+        var isStop = args.Count >= 2 && args[1].Equals("stop", StringComparison.OrdinalIgnoreCase);
+        var drain = false;
+        var drainTimeoutSeconds = ConductorDrainSignal.DefaultTimeoutSeconds;
+        if (isStop
+            ? !ConductorDrainSignal.TryParseStopArguments(args, out drain, out drainTimeoutSeconds)
+            : args.Count < 2 || args.Count > 3 ||
             args.Count == 3 && !(args[1].Equals("start", StringComparison.OrdinalIgnoreCase) &&
                 args[2].Equals("--clear-stop", StringComparison.OrdinalIgnoreCase)) &&
                 !(args[1].Equals("setup", StringComparison.OrdinalIgnoreCase) && args[2].Equals("--plan", StringComparison.OrdinalIgnoreCase)) &&
@@ -100,6 +105,17 @@ internal static class CliConductorCommand
                         return 0;
                     }
                     var stopFile = workspace.ConductorStopFilePath;
+                    if (drain)
+                    {
+                        var drainFile = ConductorDrainSignal.PathFor(stopFile);
+                        ConductorDrainSignal.Write(drainFile, drainTimeoutSeconds);
+                        output.WriteLine(FormattableString.Invariant(
+                            $"Drain requested for conductor pid {owner}. {drainFile} timeoutSeconds={drainTimeoutSeconds:G}"));
+                        output.WriteLine("The conductor will wait for in-flight work, then stop. If the timeout expires, it will detach.");
+                        if (ConductorWatchSleep.IsStopRequested(stopFile))
+                            output.WriteLine("The pending plain stop takes precedence.");
+                        return 0;
+                    }
                     using (new FileStream(stopFile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)) { }
                     if (output is OwnerConsoleStructuredWriter stopped) stopped.Mark(OwnerConsoleFieldSnapshot.Create("conductor-stop",
                         new("pid", "Conductor PID", owner?.ToString()), new("path", "Stop file path", stopFile)));

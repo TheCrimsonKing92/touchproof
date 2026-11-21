@@ -20,6 +20,10 @@ internal static class SdlcRolePromptRequirements
         "- Timeout/killed/no-results is inconclusive, not a pass. Rerun only on changed execution; only `test_project` and `test_class` define that selection. unsupported fields; cosmetic selector differences don't; full-gate/operator/acceptance owns rest. Never extend deadline/invent cause.";
     internal const string DeveloperSelfCheckProcedure =
         "- Before WORKER_RESULT, for each criterion naming Developer as owner, open the test written/changed for it: its assertion must check the specific named outcome, not a weaker property, and fail on pre-change code. If both hold, report proven with the test in criteria_self_check; else strengthen it or report unmet and set assigned_scope_complete: false.";
+    private const string DeveloperChangeReachProcedure =
+        "- Before WORKER_RESULT, search each new/changed branch predicate, method signature or user-visible string/flag via `wt find --references <Name>` where available/applicable, else `git grep -n -w` (quote terms). Use old/new terms, literal/token variants and enclosing symbol + tokens for unnamed predicates. Include sibling production paths, tests and fixtures. List each hit in reach_check by subject, repo-relative path[:line] and updated, covered-by <test>, or unaffected - <reason>. For criteria naming files/packages/symbols/artifacts, cite grep or non-empty/absence/tracked-file checks in criteria_self_check.";
+    private const string DeveloperReachOverflowProcedure =
+        "- Over limit, keep each subject and each updated or sibling production reference. Group only same-pattern hits by file/dir path or glob and disposition. If still over, omit reach_check and name overflowed subjects in prose.";
     internal const string SelfCheckAttestation =
         "- For each proven entry in Developer Criteria Self-Check on a criterion you attest, check the named test exists in the candidate and its assertion checks the named outcome; otherwise raise a finding against that criterion.";
     private const string ReviewerWorkerClaimsRule =
@@ -100,6 +104,8 @@ internal static class SdlcRolePromptRequirements
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 DeveloperDeferredTestsExactForm,
                 DeveloperSelfCheckProcedure,
+                DeveloperChangeReachProcedure,
+                DeveloperReachOverflowProcedure,
                 "- Implement only the requested behavior and keep edits scoped.",
                 "- Name the failing test in `tests: deferred`; never run tests.",
                 "- Report changed files and the behavior each change enables.",
@@ -282,6 +288,8 @@ internal static class SdlcRolePromptRequirements
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 DeveloperDeferredTestsExactForm,
                 DeveloperSelfCheckProcedure,
+                DeveloperChangeReachProcedure,
+                DeveloperReachOverflowProcedure,
                 "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
                 "- Name the failing test in `tests: deferred`; never run tests.",

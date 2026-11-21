@@ -2143,6 +2143,12 @@ public sealed class TaskBriefTests
     var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(AgentRole.Developer, usesFileAccessContext: true);
     Assert.InRange(budget, 9500, 10000);
     Assert.True(fileAccessBrief.Length <= budget, $"File-access brief has {fileAccessBrief.Length} characters; ceiling is {budget}.");
+    Assert.Contains("Task: Design and implement production prompt budget controls. task-start", fileAccessBrief, StringComparison.Ordinal);
+    Assert.Contains("Read current-task.md in the context directory for the full description.", fileAccessBrief, StringComparison.Ordinal);
+    Assert.DoesNotContain("task-tail", fileAccessBrief, StringComparison.Ordinal);
+    Assert.Contains("task-tail", apiBrief, StringComparison.Ordinal);
+    Assert.Contains("wt find --references <Name>", fileAccessBrief, StringComparison.Ordinal);
+    Assert.Contains("reach_check: <optional", fileAccessBrief, StringComparison.Ordinal);
     Assert.DoesNotContain(AgentOutputDirectives.WorkerWriteDenialGuidance, fileAccessBrief, StringComparison.Ordinal);
     Assert.Contains(AgentOutputDirectives.WorkerWriteDenialGuidance, apiBrief, StringComparison.Ordinal);
     Assert.Contains("current-task.md in the context directory", fileAccessBrief, StringComparison.Ordinal);
