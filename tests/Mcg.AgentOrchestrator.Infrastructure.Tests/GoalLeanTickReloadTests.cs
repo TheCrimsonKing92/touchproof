@@ -13,6 +13,7 @@ public sealed class GoalLeanTickReloadTests
         var seed = GoalTaskHistoryTestFixture.Snapshot(entries: 4, taskCount: 3);
         seed = seed with
         {
+            Tasks = seed.Tasks.Select(task => task with { WorkerBuildInvocations = [] }).ToArray(),
             Timeline = Enumerable.Range(0, 5).Select(index => new ProgressEventSnapshot(
                 seed.Id, null, ProgressKind.TaskNote, $"Event {index}",
                 GoalTaskHistoryTestFixture.At.AddMinutes(index / 2))).ToArray()

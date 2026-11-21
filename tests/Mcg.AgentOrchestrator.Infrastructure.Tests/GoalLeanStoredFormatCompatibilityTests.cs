@@ -13,6 +13,13 @@ public sealed class GoalLeanStoredFormatCompatibilityTests
     {
         using var support = new GoalTimelineTestSupport();
         var seed = GoalTimelineTestSupport.Snapshot();
+        var buildTask = Assert.Single(GoalTaskBuildHistoryTestSupport.Snapshot(tasks: 1, openSequence: null).Tasks);
+        var buildInvocations = buildTask.WorkerBuildInvocations!
+            .Select(invocation => invocation with { GoalId = seed.Id }).ToArray();
+        seed = seed with
+        {
+            Tasks = [seed.Tasks[0] with { WorkerBuildInvocations = buildInvocations }, .. seed.Tasks.Skip(1)]
+        };
         await support.SeedAsync(seed);
         var options = new JsonSerializerOptions();
         options.Converters.Add(new JsonStringEnumConverter());
@@ -47,8 +54,8 @@ public sealed class GoalLeanStoredFormatCompatibilityTests
         Assert.Equal(JsonSerializer.Serialize(expected, options), JsonSerializer.Serialize(actual, options));
     }
 
-    // The inline model and split row layout come from the existing history and Timeline
-    // fixtures. This reader uses their persisted names and ordering directly.
+    // The inline model and split row layouts come from the existing history, build-history
+    // and Timeline fixtures. This reader uses their persisted names and ordering directly.
     private static GoalSnapshot ReadPreChangeGoal(GoalTaskHistoryTestFixture fixture, string id, JsonSerializerOptions options)
     {
         var goal = JsonNode.Parse(fixture.RawGoal(id))!.AsObject();
@@ -62,8 +69,14 @@ public sealed class GoalLeanStoredFormatCompatibilityTests
         foreach (var entry in goal["Tasks"]!.AsArray())
         {
             var task = entry!.AsObject();
-            if (task["HistoryInTable"] is not JsonObject marker) continue;
             var taskId = task["Id"]!.GetValue<string>();
+            if (task["WorkerBuildInvocationsInTable"] is JsonNode buildCount)
+            {
+                task["WorkerBuildInvocations"] = ReadRows(connection, id, buildCount.GetValue<int>(), taskId, "build");
+                task.Remove("WorkerBuildInvocationsInTable");
+            }
+
+            if (task["HistoryInTable"] is not JsonObject marker) continue;
             foreach (var (property, kind) in new[] { ("Verification", "verification"), ("Dispatch", "dispatch") })
             {
                 Assert.True(marker.TryGetPropertyValue(property, out var count));
@@ -83,14 +96,20 @@ public sealed class GoalLeanStoredFormatCompatibilityTests
     {
         using var command = connection.CreateCommand();
         command.Parameters.AddWithValue("$goal", goalId);
-        if (taskId is null)
-            command.CommandText = "SELECT sequence, entry_json FROM goal_timeline WHERE goal_id = $goal ORDER BY sequence";
-        else
+        command.CommandText = kind switch
         {
-            command.CommandText = """
+            null => "SELECT sequence, entry_json FROM goal_timeline WHERE goal_id = $goal ORDER BY sequence",
+            "build" => """
+                SELECT sequence, entry_json FROM goal_task_build_history
+                WHERE goal_id = $goal AND task_id = $task AND kind = $kind ORDER BY sequence
+                """,
+            _ => """
                 SELECT sequence, entry_json FROM goal_task_history
                 WHERE goal_id = $goal AND task_id = $task AND kind = $kind ORDER BY sequence
-                """;
+                """
+        };
+        if (taskId is not null)
+        {
             command.Parameters.AddWithValue("$task", taskId);
             command.Parameters.AddWithValue("$kind", kind!);
         }
