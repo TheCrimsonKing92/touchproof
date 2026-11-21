@@ -93,7 +93,7 @@ public sealed class DeveloperWorkerResultTesterProjectionTests
         fixture.Report(string.Join(newline, "WORKER_RESULT:", "unselected preamble",
             "blockers:", "  issue: waiting for evidence", "commands: omitted",
             "  unrelated: command detail", "**criteria_self_check:** []", "  criterion 0: first claim",
-            "criteria_self_check: []", "  criterion 1: second claim", "assigned_scope_complete: true",
+            "criteria_self_check: []", "  criterion 1: second claim", "`reach_check: []`", "assigned_scope_complete: true",
             "**tests:** deferred - ChangedTests", "  receipt: C:\\fixture\\test.log", "commit: " + Candidate,
             "files: none", "  details: explicit no changes", "confidence: high", "END_WORKER_RESULT"));
 

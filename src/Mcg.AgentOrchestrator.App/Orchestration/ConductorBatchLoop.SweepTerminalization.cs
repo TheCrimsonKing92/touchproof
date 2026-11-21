@@ -5,6 +5,23 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
+    private readonly Func<IReadOnlyList<string>>? _reconcileDrainedSweepRemedies;
+
+    private bool ReconcileDrainedSweepRemedies(int tick)
+    {
+        if (_reconcileDrainedSweepRemedies is null)
+            return true;
+
+        var events = RunJanitorialPhase("drain-sweep-remedies", tick, _reconcileDrainedSweepRemedies);
+        if (events is null)
+            return false;
+
+        foreach (var line in events)
+            EmitProgress(line);
+
+        return true;
+    }
+
     private IEnumerable<(ConductorLandingReceipt Receipt, bool ChangedFilesAvailable)> RecoverSweepLandingReceipts(
         TerminalGoalSweepResult? sweepResult, IReadOnlyCollection<GoalId> terminalizedGoalIds)
     {

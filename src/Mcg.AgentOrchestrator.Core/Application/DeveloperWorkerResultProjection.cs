@@ -26,7 +26,8 @@ internal static class DeveloperWorkerResultProjection
                 (AgentOutputDirectives.WorkerResultFieldNames.Contains(label, StringComparer.OrdinalIgnoreCase) ||
                  label.Equals("commit", StringComparison.OrdinalIgnoreCase) ||
                  label.Equals("assigned_scope_complete", StringComparison.OrdinalIgnoreCase) ||
-                 label.Equals("criteria_self_check", StringComparison.OrdinalIgnoreCase)))
+                 label.Equals("criteria_self_check", StringComparison.OrdinalIgnoreCase) ||
+                 WorkerResultMarkers.NormalizeWorkerResultMarker(label).Equals("reach_check", StringComparison.OrdinalIgnoreCase)))
             {
                 fields.TryGetValue(label, out current);
             }
