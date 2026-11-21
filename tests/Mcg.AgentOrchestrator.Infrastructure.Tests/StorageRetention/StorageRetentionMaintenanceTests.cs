@@ -80,6 +80,32 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.All(paths, path => Assert.False(File.Exists(path)));
     }
 
+    [Xunit.Fact]
+    public void WorkerArtifacts_GuidSuffixedDispatches_UseTheirOwnExitCodes()
+    {
+        using var fixture = new RetentionFixture();
+        var writtenAt = Now.AddDays(-15);
+        var prefix = Path.Combine(fixture.LogDirectory, $"{GoalId[..8]}-{TaskId[..8]}-{writtenAt:yyyyMMddHHmmss}");
+        var failure = WriteDispatch(new string('a', 32), 1);
+        var success = WriteDispatch(new string('b', 32), 0);
+
+        fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.All(failure, path => Assert.True(File.Exists(path)));
+        Assert.All(success, path => Assert.False(File.Exists(path)));
+
+        string[] WriteDispatch(string id, int exitCode)
+        {
+            var logPath = $"{prefix}-{id}.out.log";
+            var exitPath = $"{prefix}-{id}.exit.txt";
+            File.WriteAllText(logPath, "dispatch output");
+            DispatchExitArtifacts.Write(exitPath, DispatchExitArtifacts.Native(exitCode, "exited", writtenAt));
+            File.SetLastWriteTimeUtc(logPath, writtenAt.UtcDateTime);
+            File.SetLastWriteTimeUtc(exitPath, writtenAt.UtcDateTime);
+            return [logPath, exitPath];
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerRetention_dispatch_without_exit_artifact_is_kept_past_threshold")]
     public void DispatchWithoutExitArtifactIsKeptPastThreshold()
     {

@@ -316,7 +316,8 @@ public static partial class WorkerProfileDispatcher
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         var preparation = WorkerDispatchPromptPreparation.Prepare(
             budgetedBrief, profile, workerProviderKind, promptRoot,
-            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions, providerName), dispatchedAt, retainedDispatch);
+            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions, providerName),
+            dispatchedAt, retainedDispatch, workerToolsDirectory is not null);
         contextPackageReceipt = WorkerRetryFeedbackPromptGuard.Validate(goal, task, contextPackage, contextPackageReceipt, preparation.PromptPath);
         WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
         if (retainedDispatch is not null)
@@ -2465,7 +2466,8 @@ public static partial class WorkerProfileDispatcher
         WorkerProfile profile,
         ProviderKind providerKind,
         IReadOnlyDictionary<string, string?> dispatchVariables,
-        Action<string>? diagnosticSink = null)
+        Action<string>? diagnosticSink = null,
+        bool allowClaudePlannerWorkerTools = false)
     {
         // Superseded built-in claude-cli commands are repaired at invocation time and in memory only: the
         // resolved profile drives this one command construction and is never handed to the profile store.
@@ -2492,7 +2494,8 @@ public static partial class WorkerProfileDispatcher
                 openaiBaseUrl: GetDispatchVariable(dispatchVariables, "openaiBaseUrl"),
                 openaiApiKey: GetDispatchVariable(dispatchVariables, "openaiApiKey"),
                 approvalMode: GetDispatchVariable(dispatchVariables, "approvalMode"),
-                repositoryPolicyMaxBytes: resolved.RepositoryPolicyMaxBytes));
+                repositoryPolicyMaxBytes: resolved.RepositoryPolicyMaxBytes,
+                allowClaudePlannerWorkerTools: allowClaudePlannerWorkerTools));
     }
 
     private static bool HasRequiredBuiltInVariables(
@@ -2527,16 +2530,12 @@ public static partial class WorkerProfileDispatcher
         WorkerProfile profile,
         ProviderKind providerKind)
     {
-        if (!ProviderCommandBuilder.IsBuiltIn(providerKind))
-        {
-            return false;
-        }
-
         // The legacy shim remains authoritative for user-persisted and test-local command overrides
         // until Slice 3 rejects custom templates that reuse a built-in profile name.
-        return profile.CommandTemplate.Equals(
-            WorkerProfileCatalog.Default().GetRequired(profile.Name).CommandTemplate,
-            StringComparison.Ordinal);
+        return ProviderCommandBuilder.IsBuiltIn(providerKind) &&
+            profile.CommandTemplate.Equals(
+                WorkerProfileCatalog.Default().GetRequired(profile.Name).CommandTemplate,
+                StringComparison.Ordinal);
     }
 
     private static string GetDispatchVariable(

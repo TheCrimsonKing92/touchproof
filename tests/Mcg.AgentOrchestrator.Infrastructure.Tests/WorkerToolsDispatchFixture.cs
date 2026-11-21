@@ -43,7 +43,8 @@ internal sealed class WorkerToolsDispatchFixture : IDisposable
 
     internal string BuildLog => Path.Combine(_root, "build.log");
 
-    internal (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, string Prompt) Prepare(AgentRole role, bool fails = false)
+    internal (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, string Prompt) Prepare(
+        AgentRole role, bool fails = false, bool useClaude = false)
     {
         var config = Path.Combine(_root, fails ? "broken.json" : "worker-tools.json");
         File.WriteAllText(config, JsonSerializer.Serialize(new
@@ -57,9 +58,13 @@ internal sealed class WorkerToolsDispatchFixture : IDisposable
         var task = new TaskSpec(TaskId.New(), "Prepare a worker tools fixture.", role);
         var goal = kernel.CreateGoal("Exercise worker tools dispatch.", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-        var prepared = WorkerProfileDispatcher.PrepareTask(kernel, goal, task,
-            new WorkerProfile("local", "fixture-worker"), Path.Combine(_root, "prompts"),
-            _worker.Worktree, DateTimeOffset.UtcNow, workerTools: installer);
+        var profile = useClaude
+            ? WorkerProfileCatalog.Default().GetRequired("claude-cli")
+            : new WorkerProfile("local", "fixture-worker");
+        var prepared = WorkerProfileDispatcher.PrepareTask(kernel, goal, task, profile,
+            Path.Combine(_root, "prompts"), _worker.Worktree, DateTimeOffset.UtcNow,
+            variables: useClaude ? new Dictionary<string, string?> { ["subscriptionModelName"] = "claude-opus-5" } : null,
+            workerTools: installer);
         return (kernel, goal, prepared.Task, File.ReadAllText(prepared.PromptPath));
     }
 

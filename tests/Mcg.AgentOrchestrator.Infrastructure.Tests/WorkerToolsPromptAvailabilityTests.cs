@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class WorkerToolsPromptAvailabilityTests
 {
@@ -28,5 +29,29 @@ public sealed class WorkerToolsPromptAvailabilityTests
                 .Where(message => message.StartsWith("WORKER_TOOLS_INSTALL_FAILED", StringComparison.Ordinal)));
         }
         Assert.Contains("stage=materialize", Assert.Single(failedNotes));
+    }
+
+    [Fact]
+    public void ClaudeReadOnlyDispatch_GrantsWorkerToolsOnlyToPlannerWithInstall()
+    {
+        using var fixture = new WorkerToolsDispatchFixture();
+        var installedPlanner = fixture.Prepare(AgentRole.Planner, useClaude: true);
+        var installedDispatch = Assert.IsType<TaskDispatchRecord>(installedPlanner.Task.LastDispatch);
+        Assert.NotNull(installedDispatch.WorkerToolsDirectory);
+        Assert.Contains("--permission-mode 'dontAsk'", installedDispatch.Command);
+        var baseAllowlist = ProviderCommandBuilder.ClaudeReadOnlyAllowedTools;
+        Assert.Contains($"--allowed-tools '{baseAllowlist},Bash(wt read *),Bash(wt find *),Bash(wt --help*)'", installedDispatch.Command);
+
+        var unavailablePlanner = fixture.Prepare(AgentRole.Planner, fails: true, useClaude: true);
+        var unavailableDispatch = Assert.IsType<TaskDispatchRecord>(unavailablePlanner.Task.LastDispatch);
+        Assert.Null(unavailableDispatch.WorkerToolsDirectory);
+        Assert.Contains($"--allowed-tools '{baseAllowlist}'", unavailableDispatch.Command);
+
+        foreach (var role in new[] { AgentRole.Reviewer, AgentRole.Researcher })
+        {
+            var control = fixture.Prepare(role, useClaude: true);
+            var dispatch = Assert.IsType<TaskDispatchRecord>(control.Task.LastDispatch);
+            Assert.Contains($"--allowed-tools '{baseAllowlist}'", dispatch.Command);
+        }
     }
 }
