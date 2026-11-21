@@ -40,7 +40,8 @@ internal sealed class ConductorWatchSleep
         TimeSpan interval,
         IConductorWakeSignal? wakeSignal,
         IReadOnlyList<string> trackedExitCodePaths,
-        IReadOnlyList<string>? runningAttemptExitCodePaths = null)
+        IReadOnlyList<string>? runningAttemptExitCodePaths = null,
+        Func<bool>? observeDrain = null)
     {
         wakeSignal?.UpdateTrackedExitArtifacts(trackedExitCodePaths);
         if (wakeSignal is IConductorAttemptExitWakeSignal attemptWake) attemptWake.UpdateTrackedAttemptExitArtifacts(runningAttemptExitCodePaths ?? []);
@@ -50,6 +51,8 @@ internal sealed class ConductorWatchSleep
         {
             if (IsStopRequested())
                 return WatchSleepResult.StopRequested;
+            if (observeDrain?.Invoke() == true)
+                return WatchSleepResult.DrainRequested;
             var slice = remaining < poll ? remaining : poll;
             if (wakeSignal is not null)
             {
@@ -63,9 +66,9 @@ internal sealed class ConductorWatchSleep
             remaining -= slice;
         }
 
-        return IsStopRequested()
-            ? WatchSleepResult.StopRequested
-            : WatchSleepResult.FallbackElapsed;
+        if (IsStopRequested())
+            return WatchSleepResult.StopRequested;
+        return observeDrain?.Invoke() == true ? WatchSleepResult.DrainRequested : WatchSleepResult.FallbackElapsed;
     }
 
     private static (DateTime LastWriteUtc, DateTime CreationUtc, long Length)? ReadStopFileStamp(string stopFilePath)

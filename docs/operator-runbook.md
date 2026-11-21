@@ -255,9 +255,15 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 | `--max-duration <s>` / `--max-iterations <n>` | bound the run |
 | `--daemon` | persistent mode for controlled active-goal intake; stays alive on an empty backlog and picks up goals submitted after the loop starts |
 
-**Stop a loop deliberately** with `mcg-orchestrator.cmd conductor stop`. Check it with `mcg-orchestrator.cmd conductor status`; start it deliberately with `mcg-orchestrator.cmd conductor start` (`--clear-stop` clears a prior stop request). A `.conduct-stop` is a detach, not a drain: at the next stop check the loop starts no new dispatches, attempts to detach live workers, persists the detached state, and exits without waiting for those workers to finish. A successful detach leaves the task running for a successor to reconcile; if detachment fails, the fallback cancels the dispatch so it can be requeued. Prefer a quiet window with no live workers before a deliberate stop. Ctrl-C is not equivalent: the conduct-loop path has no `Console.CancelKeyPress` handler, so Ctrl-C terminates without the detach/checkpoint path.
+Use `mcg-orchestrator.cmd conductor stop --drain` to stop admission and let the loop reconcile in-flight dispatches and gates before exiting. The request writes `.conduct-drain` alongside the plain-stop file. The loop reports unfinished identities in `LOOP_DRAIN` and ends with `LOOP_DRAINED` naming the count and identities it waited for. The timeout begins when the loop first observes the request and defaults to 1800 seconds. Set a positive finite duration with `--drain-timeout-seconds <n>`. On timeout, `LOOP_STOP reason=drain-timeout` includes `fallback=detach` and identifies the unfinished work. A passed gate receipt is available for landing after restart.
+
+Use `mcg-orchestrator.cmd conductor stop` for an immediate detach at the next stop check. It creates `.conduct-stop` and takes precedence during a drain. The loop persists the detached state and exits, leaving successfully detached work for a successor to reconcile. If detachment fails, the loop cancels the dispatch so it can be requeued. Ctrl-C terminates without the detach checkpoint because the conduct-loop path has no `Console.CancelKeyPress` handler.
+
+Check the owner with `mcg-orchestrator.cmd conductor status`. The drain request remains on disk after exit. Remove the drain file at the path printed by the command before starting a loop that should admit work. Deleting or rewriting the file during a drain leaves the active drain and deadline in effect. `conductor start --clear-stop` clears the plain-stop file only.
 
 A `.conduct-stop` already on disk blocks board pickup only. A `conduct <goal> --watch` started with that file present reports once that it is ignoring the file for the named goal. Run the watch with the file in place. Creating or rewriting it after the watch starts still stops the watch through the detach procedure above. `conductor stop` leaves an existing file as it is, so rewrite the file to send a new stop request while it remains present.
+
+A named-goal watch also ignores a drain file already present at startup. Creating or rewriting the drain file after the watch starts requests a drain for that watch.
 
 `mcg-orchestrator.cmd conductor setup` preflights every versioned registered store and numbered state migration before creating or upgrading any store. Current schemas are repeatable with an active conductor. Forward migrations acquire the existing conductor lease and require a quiet workspace; an active owner prevents them. `conductor start` performs setup before launching the same managed App runtime; a setup error prevents launch.
 While a conductor is live, a pending-upgrade refusal prints each pending store's path and recorded and required versions plus the `conductor setup --plan` / `conductor stop` / `conductor setup` / `conductor start --clear-stop` sequence; intent and backlog writes still go through when their own stores are current.
@@ -285,21 +291,23 @@ For an upgrade failure or newer-schema refusal: use the supported stop/detach pr
 
 Use this procedure when self-relaunch is disabled, when activation reverts, or when the running supervisor predates the automatic activation implementation. Re-arm the landed code deliberately:
 
-1. Inspect active goals with `Get-OrchestratorSnapshot.ps1` and exact dispatch inventories; when practical, wait until no worker is in flight because `.conduct-stop` detaches rather than drains.
-2. Run `mcg-orchestrator.cmd conductor stop`, record the reported PID, and wait for `LOOP_STOP` in `.orchestrator\logs\conduct-events.log`. Use `conductor status` to inspect the current state.
+1. Run `mcg-orchestrator.cmd conductor stop --drain` and record the reported PID and drain file path.
+2. Wait for `LOOP_DRAINED` in `.orchestrator\logs\conduct-events.log`. If the loop reports `LOOP_STOP reason=drain-timeout`, inspect the unfinished identities in that event. Use `conductor status` to check the owner.
 3. Confirm that recorded PID is no longer running with `Get-RepoProcessInfo.ps1 -Id <pid> -IncludeChildren`. An orderly exit normally removes `conduct-loop.lock`; if it remains, remove it only after the owner PID is confirmed dead.
-4. Run `mcg-orchestrator.cmd conductor start --clear-stop`. The foreground launcher's HEAD/source freshness check prepares current code; `conductor start` binds the resolved workspace and launches that same managed runtime through `Start-OrchestratorCommand.ps1`. For an incompatible schema advance, first complete the explicit quiet setup transition described above.
+4. Remove the recorded drain file and run `mcg-orchestrator.cmd conductor start --clear-stop`. The foreground launcher's HEAD/source freshness check prepares current code. `conductor start` binds the resolved workspace and launches that same managed runtime through `Start-OrchestratorCommand.ps1`. For an incompatible schema advance, first complete the explicit quiet setup transition described above.
 
 ```powershell
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal-prefix>
 $conductorPid = Get-Content -LiteralPath .orchestrator\conduct-loop.lock -TotalCount 1
-.\mcg-orchestrator.cmd conductor stop
-# Wait for LOOP_STOP, then verify the recorded lock PID is dead:
+.\mcg-orchestrator.cmd conductor stop --drain
+# Wait for LOOP_DRAINED or LOOP_STOP reason=drain-timeout, then verify the recorded PID is dead:
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-RepoProcessInfo.ps1 -Id $conductorPid -IncludeChildren
 # Only after the PID is confirmed dead; a live-owner lock failure must remain visible:
 if (Test-Path -LiteralPath .orchestrator\conduct-loop.lock) {
     Remove-Item -LiteralPath .orchestrator\conduct-loop.lock -ErrorAction Stop
 }
+# Use the drain file path printed by conductor stop --drain:
+Remove-Item -LiteralPath <reported-drain-file-path> -ErrorAction Stop
 .\mcg-orchestrator.cmd conductor start --clear-stop
 # Fallback launcher when the conductor CLI is unavailable:
 $env:MCG_DISPATCH_MAX_RUNTIME_MIN = '120'

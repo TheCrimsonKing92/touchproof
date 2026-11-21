@@ -1063,7 +1063,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         }
 
         var summary = new ConductorBatchLoop(
-            measuredSweepWithCheckpointHolds: (_, heldGoalIds) =>
+            measuredSweepWithCheckpointHolds: (_, heldGoalIds, _) =>
             {
                 sweepHeldGoalIds.Add(heldGoalIds.ToArray());
                 return new TerminalGoalSweepResult([]);
