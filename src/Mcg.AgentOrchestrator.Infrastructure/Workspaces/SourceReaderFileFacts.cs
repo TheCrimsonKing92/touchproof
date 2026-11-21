@@ -20,6 +20,9 @@ internal sealed record SourceReaderFileFacts(
     [property: JsonRequired] SourceReaderFileFacts.TypeFact[] Types,
     [property: JsonRequired] SourceReaderFileFacts.MemberFact[] Members)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AssemblyScanningGuardTestClasses.ScanFile? AssemblyScans { get; init; }
+
     internal sealed record TypeFact(
         [property: JsonRequired] string Id,
         [property: JsonRequired] string Owner,
@@ -81,7 +84,10 @@ internal sealed record SourceReaderFileFacts(
             references.Any(name => IsCollectionBuilder(name) || name is
                 "InterpolatedStringHandler" or "InterpolatedStringHandlerAttribute" or
                 "AsyncMethodBuilder" or "AsyncMethodBuilderAttribute");
-        return new(RelativePath(sources, tree), Hash(tree.GetText().ToString()),
+        var contentHash = Hash(tree.GetText().ToString());
+        var scanPositions = nodes.OfType<InvocationExpressionSyntax>()
+            .Where(AssemblyScanningGuardTestClasses.IsScanSite).Select(call => call.SpanStart).Distinct().ToArray();
+        return new(RelativePath(sources, tree), contentHash,
             nodes.OfType<ClassDeclarationSyntax>().Any(type => type.Identifier.ValueText == "RepositorySourceSnapshotCache"),
             unbounded, names, references,
             nodes.Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax or BaseNamespaceDeclarationSyntax ||
@@ -91,7 +97,10 @@ internal sealed record SourceReaderFileFacts(
                         field.Modifiers.Any(SyntaxKind.RequiredKeyword)))
                 .Select(DeclarationShape).Order(StringComparer.Ordinal).ToArray(), [],
             nodes.OfType<ClassDeclarationSyntax>().Select(type => new TypeFact("", ImpactReplayTestSourceIndex.ClassName(type),
-                null, type.BaseList?.WithoutTrivia().ToFullString() ?? "")).ToArray(), []);
+                null, type.BaseList?.WithoutTrivia().ToFullString() ?? "")).ToArray(), [])
+        {
+            AssemblyScans = scanPositions.Length == 0 ? null : new(contentHash, tree.Length, scanPositions)
+        };
     }
 
     // Syntax-only declaration shape: scope, kind, name, arity and accessibility can all change lookup
@@ -237,7 +246,8 @@ internal sealed record SourceReaderFileFacts(
             if (file.ContentHash is not { Length: 64 } || !file.ContentHash.All(Uri.IsHexDigit) ||
                 !Names(file.DeclaredNames) || !Names(file.ReferencedNames) || !Names(file.TypeDeclarationShapes) ||
                 !Names(file.DeclaredSymbolIds) ||
-                file.Types is null || file.Members is null) return false;
+                file.Types is null || file.Members is null ||
+                file.AssemblyScans is { } scans && (!scans.IsValid || scans.ContentHash != file.ContentHash)) return false;
             if (file.Types.Any(type => type is null || string.IsNullOrWhiteSpace(type.Id) ||
                     string.IsNullOrWhiteSpace(type.Owner) || type.BaseList is null)) return false;
             if (file.Members.Any(member => member is null || string.IsNullOrWhiteSpace(member.Id) ||
