@@ -86,4 +86,5 @@ internal sealed record OwnerQuestionSnapshot(
 internal sealed record HiddenOwnerQuestion(OwnerQuestion Question, string Reason);
 
 internal sealed record OwnerGoalCard(
-    string Id, string Title, GoalStatus State, AgentRole? CurrentRole, DateTimeOffset? LastEvent);
+    string Id, string Title, GoalStatus State, AgentRole? CurrentRole, DateTimeOffset? LastEvent,
+    string? OutcomeSummary = null);
