@@ -323,7 +323,11 @@ public sealed record TaskDispatchSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     bool? BriefSnapshotFromVersion = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    int? FindingContractVersion = null);
+    int? FindingContractVersion = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<DeveloperReachCheckEntry>? ReachCheck { get; init; }
+}
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

@@ -285,7 +285,7 @@ internal sealed partial class ConductorBatchLoop
         activeAttemptSlotIndexes.Add(candidate.SlotIndex);
     }
 
-    private static ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
+    internal static ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
         ConductorDriver driver,
         Goal goal,
         ConductorAutonomyPolicy policy,

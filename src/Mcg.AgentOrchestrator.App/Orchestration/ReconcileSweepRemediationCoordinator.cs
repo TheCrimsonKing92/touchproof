@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -15,12 +16,13 @@ internal enum TerminalGoalRemedyExecutionDisposition
 internal sealed record TerminalGoalRemedyExecutionResult(
     int ExitStatus,
     string Output,
-    TerminalGoalRemedyExecutionDisposition Disposition = TerminalGoalRemedyExecutionDisposition.Completed)
+    TerminalGoalRemedyExecutionDisposition Disposition = TerminalGoalRemedyExecutionDisposition.Completed,
+    string? AcceptanceAttemptId = null)
 {
     public bool Succeeded => Disposition == TerminalGoalRemedyExecutionDisposition.Completed && ExitStatus == 0;
 
-    public static TerminalGoalRemedyExecutionResult Pending(string output) =>
-        new(0, output, TerminalGoalRemedyExecutionDisposition.Pending);
+    public static TerminalGoalRemedyExecutionResult Pending(string output, string? acceptanceAttemptId = null) =>
+        new(0, output, TerminalGoalRemedyExecutionDisposition.Pending, acceptanceAttemptId);
 
     public static TerminalGoalRemedyExecutionResult Retryable(int exitStatus, string output) =>
         new(exitStatus, output, TerminalGoalRemedyExecutionDisposition.Retryable);
@@ -39,11 +41,11 @@ internal sealed class ReconcileSweepRemediationCoordinator(
     private static readonly TimeSpan AttemptStaleAfter = TimeSpan.FromMinutes(30);
     private readonly Dictionary<string, PendingAttempt> _pendingAttempts = new(StringComparer.Ordinal);
 
-    public ReconcileSweepRemediationOutcome Process(TerminalGoalSweepResult sweep)
+    public ReconcileSweepRemediationOutcome Process(TerminalGoalSweepResult sweep, bool admitRemedies = true)
     {
         var events = new List<string>();
         var remedySucceeded = false;
-        var polledStateKeys = PollPendingAttempts(events, ref remedySucceeded);
+        var polledStateKeys = admitRemedies ? PollPendingAttempts(events, ref remedySucceeded) : null;
 
         foreach (var goal in sweep.Goals)
         {
@@ -51,7 +53,7 @@ internal sealed class ReconcileSweepRemediationCoordinator(
             {
                 var remedy = blocker.Remedy;
                 var stateKey = BuildStateKey(goal.GoalId.Value, blocker.Kind, blocker.Evidence, remedy);
-                if (polledStateKeys.Contains(stateKey))
+                if (polledStateKeys?.Contains(stateKey) ?? _pendingAttempts.ContainsKey(stateKey))
                 {
                     continue;
                 }
@@ -61,7 +63,7 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                     events.Add(RenderBlocker(goal.GoalPrefix, blocker));
                 }
 
-                if (IsAwaitingConductorAcceptanceGate(blocker))
+                if (!admitRemedies || IsAwaitingConductorAcceptanceGate(blocker))
                 {
                     continue;
                 }
@@ -98,7 +100,8 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                             blocker,
                             remedy,
                             state.InFlightOwner,
-                            state.AttemptCount);
+                            state.AttemptCount,
+                            pendingResult.AcceptanceAttemptId);
                     }
                     continue;
                 }
@@ -141,7 +144,8 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                         blocker,
                         remedy,
                         owner,
-                        claim.AttemptNumber);
+                        claim.AttemptNumber,
+                        result.AcceptanceAttemptId);
                     continue;
                 }
 
@@ -153,6 +157,26 @@ internal sealed class ReconcileSweepRemediationCoordinator(
         return new ReconcileSweepRemediationOutcome(events, remedySucceeded);
     }
 
+    public IReadOnlyList<string> ReconcileDrainedAttempts(Func<GoalId, string, bool> isSettled)
+    {
+        var events = new List<string>();
+        foreach (var (stateKey, pending) in _pendingAttempts.ToArray())
+        {
+            if (pending.AcceptanceAttemptId is not { } attemptId || !isSettled(pending.Remedy.GoalId, attemptId))
+                continue;
+
+            // The drain tick reconciled the gate. Release the sweep lease and preserve
+            // the remedy budget so a later conductor can finish the landing.
+            CompleteAttempt(events, pending.GoalPrefix, pending.Blocker, stateKey, pending.Owner,
+                pending.AttemptNumber, TerminalGoalRemedyExecutionResult.Retryable(
+                    75, $"acceptance attempt {attemptId} reconciled during drain; landing deferred"),
+                releaseLeaseFirst: true);
+            _pendingAttempts.Remove(stateKey);
+        }
+
+        return events;
+    }
+
     private HashSet<string> PollPendingAttempts(List<string> events, ref bool remedySucceeded)
     {
         var polledStateKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -162,6 +186,7 @@ internal sealed class ReconcileSweepRemediationCoordinator(
             var result = Execute(pending.Remedy);
             if (result.Disposition == TerminalGoalRemedyExecutionDisposition.Pending)
             {
+                _pendingAttempts[stateKey] = pending with { AcceptanceAttemptId = result.AcceptanceAttemptId };
                 continue;
             }
 
@@ -199,11 +224,17 @@ internal sealed class ReconcileSweepRemediationCoordinator(
         string stateKey,
         string owner,
         int attemptNumber,
-        TerminalGoalRemedyExecutionResult result)
+        TerminalGoalRemedyExecutionResult result,
+        bool releaseLeaseFirst = false)
     {
+        // Drain cleanup may be retried. Releasing a settled gate's lease is idempotent,
+        // so keep the sweep claim available until that release succeeds.
+        if (releaseLeaseFirst)
+            store.ReleaseAcceptanceLease(blocker.Remedy.GoalId.Value, owner);
         var consumesAttempt = result.Disposition == TerminalGoalRemedyExecutionDisposition.Completed;
         store.CompleteAttempt(stateKey, owner, result.ExitStatus, result.Output, consumesAttempt);
-        store.ReleaseAcceptanceLease(blocker.Remedy.GoalId.Value, owner);
+        if (!releaseLeaseFirst)
+            store.ReleaseAcceptanceLease(blocker.Remedy.GoalId.Value, owner);
         events.Add(
             $"SWEEP_REMEDY_RESULT goal={goalPrefix} kind={blocker.Kind} attempt={attemptNumber} " +
             $"exit={result.ExitStatus} output={JsonSerializer.Serialize(result.Output)}" +
@@ -275,5 +306,6 @@ internal sealed class ReconcileSweepRemediationCoordinator(
         TerminalGoalSweepBlocker Blocker,
         TerminalGoalRemedy Remedy,
         string Owner,
-        int AttemptNumber);
+        int AttemptNumber,
+        string? AcceptanceAttemptId);
 }

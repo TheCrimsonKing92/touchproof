@@ -3336,13 +3336,13 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var expectedOutcome = useLegacyStartThenAttach
                 ? ConductorParallelAcceptanceAttemptOutcome.GateEngineFault
                 : ConductorParallelAcceptanceAttemptOutcome.Passed;
-            Assert.True(
-                completedAttempt!.Outcome == expectedOutcome,
+            Assert.True(completedAttempt!.Outcome == expectedOutcome,
                 $"Expected {expectedOutcome}, actual {completedAttempt.Outcome}: {completedAttempt.Detail}");
             if (useLegacyStartThenAttach)
             {
                 Assert.True(File.Exists(markerPath), "The legacy start-then-attach control waits for the unowned child to exit, so its first command must execute before attachment fails.");
-                Assert.Contains("stage=owned-process-group-attachment", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.True(completedAttempt.Detail?.Contains("stage=owned-process-group-attachment", StringComparison.Ordinal) == true,
+                    $"Expected an attachment fault for {completedAttempt.AttemptId}. Detail: {completedAttempt.Detail}\nStderr: {TryReadAllTextShared(completedAttempt.StderrPath)}");
                 Assert.Contains("native_error_code=", completedAttempt.Detail, StringComparison.Ordinal);
                 Assert.Contains("native_message=", completedAttempt.Detail, StringComparison.Ordinal);
                 Assert.Contains("candidate_has_exited=true", completedAttempt.Detail, StringComparison.Ordinal);

@@ -1464,16 +1464,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var conductEventLogWriter = new ConductEventLogWriter(context.Workspace.ConductEventsLogPath);
                 using var processErrorModeObserver = new ProcessErrorModeEventObserver(conductEventLogWriter);
                 var reconcileSweepOptions = ReconcileSweepConfiguration.Load(AppContext.BaseDirectory);
-                var reconcileSweepCoordinator = new ReconcileSweepRemediationCoordinator(
-                    new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath),
-                    reconcileSweepOptions,
-                    remedy => ConductorBatchLoop.ExecuteReconcileSweepAcceptanceRemedy(
-                        context.Kernel,
-                        loopDriver,
-                        remedy,
-                        loopPolicy),
-                    remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch)
-                        .TryGetGoalBranchTip(remedy.GoalId));
+                var reconcileSweepCoordinator = ConductorAcceptanceSweepRemedy.CreateCoordinator(
+                    context.Workspace, context.Kernel, loopDriver, loopPolicy, reconcileSweepOptions);
                 var loopReaper = OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace);
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
                 var consoleCodePageWatch = new ConductorConsoleCodePageWatch();
@@ -1501,7 +1493,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var maxDurationDeferralCeiling = AcceptanceGateEngineSettings.Load(context.Workspace.ExecutionDirectory).ResolveCheckTimeout(null);
                 TerminalGoalSweepResult reconcileSweep(
                     AgentOrchestratorKernel loopKernel,
-                    IReadOnlySet<string> checkpointHeldGoalIds)
+                    IReadOnlySet<string> checkpointHeldGoalIds,
+                    bool admitRemedies)
                 {
                     firstTickEvent.Observe();
                     agentRoster.Refresh();
@@ -1626,7 +1619,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         cache: terminalSweepCache,
                         cleanupHooks: context.CleanupContext.Hooks,
                         workspace: context.Workspace));
-                    var remediation = ConductorTickStepLedger.Measure("reconcile-remediation", () => reconcileSweepCoordinator.Process(terminalSweep));
+                    var remediation = ConductorTickStepLedger.Measure("reconcile-remediation", () => reconcileSweepCoordinator.Process(terminalSweep, admitRemedies));
                     if (remediation.RemedySucceeded)
                     {
                         var remediatedSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
@@ -1687,6 +1680,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     var loopSummary = new ConductorBatchLoop(
                         loadTrxCoherenceVerdicts: directory => { TrxCoherenceVerdictStore.Load(directory); TrxCoherenceVerdictStore.EnableAppend(directory); loopSetup.Dispose(); },
                         measuredSweepWithCheckpointHolds: reconcileSweep,
+                        reconcileDrainedSweepRemedies: () => reconcileSweepCoordinator.ReconcileDrainedAttempts(
+                            (goalId, attemptId) => loopDriver.ParallelAcceptanceAttemptCoordinator
+                                .GetUnreconciledAttempts([goalId.Value]).All(attempt => attempt.AttemptId != attemptId)),
                         reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                         detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                         recoverInterruptedDispatches: loopKernel => new SupersededBriefRoundCanceller(loopReaper).CancelAndRequeueInterruptedDispatches(

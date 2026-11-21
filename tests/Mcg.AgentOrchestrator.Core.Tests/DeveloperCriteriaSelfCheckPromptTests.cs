@@ -24,8 +24,9 @@ public sealed class DeveloperCriteriaSelfCheckPromptTests
     public void BothRequirementFormsCarryProcedureAndAttestation(TaskComplexity complexity)
     {
         var developer = SdlcRolePromptRequirements.BuildPlainText(AgentRole.Developer, complexity);
-        var procedure = Assert.Single(developer.Split('\n').Where(l => l.Contains("criteria_self_check", StringComparison.Ordinal)));
-        foreach (var fragment in new[] { "Before WORKER_RESULT", "Developer as owner", "open the test", "specific named outcome", "not a weaker property", "pre-change code", "proven", "strengthen", "unmet", "assigned_scope_complete: false" })
+        var procedure = Assert.Single(developer.Split('\n').Where(l => l.StartsWith(
+            "- Before WORKER_RESULT, for each criterion naming Developer as owner,", StringComparison.Ordinal)));
+        foreach (var fragment in new[] { "Before WORKER_RESULT", "Developer as owner", "open the test", "specific named outcome", "not a weaker property", "pre-change code", "proven", "criteria_self_check", "strengthen", "unmet", "assigned_scope_complete: false" })
             Assert.Contains(fragment, procedure, StringComparison.Ordinal);
         Assert.DoesNotContain("finding against that criterion", developer, StringComparison.Ordinal);
         foreach (var role in new[] { AgentRole.Tester, AgentRole.Reviewer })
