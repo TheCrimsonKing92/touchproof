@@ -28,7 +28,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal IReadOnlyList<string> EvaluateExecutorSlots() => SlotController?.Evaluate() ?? [];
     internal ProviderResetRetainedSourceRecorder? ProviderResets { get; init; }
     internal ClaudeUsageBackfillIntentHandler? ClaudeUsageBackfills { get; init; }
-    internal IGoalCreationOperatorIntentHandler? GoalCreation { get; init; }
+    internal GoalCreationOperatorIntentHandler? GoalCreation { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel) =>
         ExecuteWorkspacePending(kernel, out _);

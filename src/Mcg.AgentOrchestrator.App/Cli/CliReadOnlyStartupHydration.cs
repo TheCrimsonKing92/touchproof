@@ -168,21 +168,4 @@ internal static class CliKeyedGoalCreationSubmission
         else
             GoalTextView.PrintGoal(currentGoal);
     }
-
-    internal static string ResolveGoalIntakeFailureCode(Exception exception)
-    {
-        var firstToken = exception.Message
-            .Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .FirstOrDefault();
-        if (firstToken is not null &&
-            firstToken.Length <= 100 &&
-            firstToken.All(character => char.IsAsciiLetterUpper(character) || char.IsAsciiDigit(character) || character == '_'))
-        {
-            return firstToken;
-        }
-
-        return exception is ArgumentException
-            ? "GOAL_INTAKE_ARGUMENT_INVALID"
-            : "GOAL_INTAKE_CREATE_FAILED";
-    }
 }

@@ -93,7 +93,7 @@ public sealed class KeyedGoalCreationIntentTests : CliCommandTestBase
         using (GoalCreationSideEffectDelivery.UseBeforeEffectDelivery(_ => throw new IOException("interrupted acknowledgement")))
         {
             var coordinator = OperatorIntentCoordinator.CreateDefault(workspace,
-                new GoalCreationOperatorIntentHandler(workspace, reopened));
+                new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction(), reopened));
             Assert.Contains("result=deferred", Assert.Single(coordinator.ExecuteWorkspacePending(working)));
         }
 
@@ -109,7 +109,8 @@ public sealed class KeyedGoalCreationIntentTests : CliCommandTestBase
         var recoveredKernel = new AgentOrchestratorKernel();
         using (ConductorLoopLease.Acquire(workspace.OrchestratorDirectory))
         {
-            var recovered = OperatorIntentCoordinator.CreateDefault(workspace, new GoalCreationOperatorIntentHandler(workspace));
+            var recovered = OperatorIntentCoordinator.CreateDefault(workspace,
+                new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction()));
             Assert.Contains("result=applied-recovered", Assert.Single(recovered.ExecuteWorkspacePending(recoveredKernel)));
             Assert.Empty(recovered.ExecuteWorkspacePending(recoveredKernel));
         }

@@ -203,7 +203,8 @@ internal static class CliConductorCommand
             WorkspaceStoreSetup.RunWithOwnership(workspace);
         var repository = stateRepository?.Invoke(workspace) ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
         var coordinator = OperatorIntentCoordinator.CreateDefault(workspace,
-            new GoalCreationOperatorIntentHandler(workspace, repository as IOrchestratorStateOutboxRepository));
+            new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction(),
+                repository as IOrchestratorStateOutboxRepository));
         var lines = coordinator.ExecuteWorkspacePending(repository.LoadAsync().GetAwaiter().GetResult(), out var deferred,
             verb: OperatorIntentVerbs.GoalCreate);
         if (lines.Count == 0)
@@ -310,5 +311,46 @@ internal static class CliConductorCommand
         output.WriteLine($"Conductor launched: pid {pid}; stdout log: {stdoutPath}");
         output.WriteLine("Check status: touchproof.cmd conductor status");
         return 0;
+    }
+}
+
+internal sealed class CliGoalIntentConstruction : IGoalIntentConstruction
+{
+    public bool IsSupportedCommand(IReadOnlyList<string> arguments) =>
+        CliKeyedGoalCreationSubmission.IsCommand(arguments);
+
+    public void Build(
+        GoalCreationOperatorIntentPayload payload,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IGoalLifecycleEventWriter eventWriter,
+        CollaborationItemRaise raiseCollaborationItem,
+        Action<Goal, IReadOnlyCollection<string>?> finalize)
+    {
+        // Pending intents from before submission validation can still carry a follow-up flag.
+        CliKeyedGoalCreationSubmission.ValidateCreationOnly(payload.CreationArguments);
+        var arguments = payload.CreationArguments.ToArray();
+        string? briefPath = null;
+        try
+        {
+            if (payload.BriefFileValueIndex is { } index)
+            {
+                briefPath = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("goal-creation"), $"{Guid.NewGuid():N}.txt");
+                File.WriteAllText(briefPath, payload.Objective);
+                arguments[index] = briefPath;
+            }
+
+            var agents = payload.Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            _ = CliCommandDispatcher.ExecuteCommand(arguments, kernel, workspace, ref agents,
+                new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
+                eventWriter: eventWriter, refinementCollaborationItemRaise: raiseCollaborationItem,
+                finalizeGoalCreation: finalize);
+        }
+        finally
+        {
+            if (briefPath is not null) File.Delete(briefPath);
+        }
     }
 }

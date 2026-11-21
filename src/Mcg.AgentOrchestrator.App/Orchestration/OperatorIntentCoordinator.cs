@@ -83,7 +83,7 @@ internal sealed partial class OperatorIntentCoordinator
     }
 
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace,
-        IGoalCreationOperatorIntentHandler? goalCreation = null)
+        GoalCreationOperatorIntentHandler? goalCreation = null)
     {
         var versionReader = BuildGoalStateVersionReader(workspace.OrchestratorDirectory);
         var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);

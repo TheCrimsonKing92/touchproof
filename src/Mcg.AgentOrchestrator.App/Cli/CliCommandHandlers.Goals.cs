@@ -1492,7 +1492,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var executorToolsDeploy = ConductorExecutorToolsDeploy.ForWorkspace(context.Workspace, conductEventLogWriter);
                 var stateLogCheck = StateLogDivergenceCheckRunner.ForWorkspace(context.Workspace);
                 var failureClustersDaily = FailureClustersDailyRunner.ForWorkspace(context.Workspace);
-                var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace, new GoalCreationOperatorIntentHandler(context.Workspace));
+                var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace, new(context.Workspace, new CliGoalIntentConstruction()));
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var intentGoalReloadObservations = new Dictionary<string, ConductorGoalReloadObservation>(StringComparer.Ordinal);
                 var parkedGoalSafetyNetTick = 0;
@@ -1852,7 +1852,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     providerHoldProbe: ProviderHoldStandaloneProbe.CreateDefault(context.Workspace, context.Agents,
                         context.WorkerProfiles, new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                         () => conductDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: false) > 0).ObserveTick,
-                    operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace, new GoalCreationOperatorIntentHandler(context.Workspace)),
+                    operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace, new(context.Workspace, new CliGoalIntentConstruction())),
                     prepareOperatorIntentTarget: (wk, goalId) => OperatorIntentTargetPreparation.PrepareLoadedOperatorIntentTarget(
                         context, wk, wk.GetGoal(goalId), watchReaper),
                     goalReloadObservation: _ => new ConductorGoalReloadObservation.NotObserved(),

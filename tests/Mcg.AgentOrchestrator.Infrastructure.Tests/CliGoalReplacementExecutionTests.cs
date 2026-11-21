@@ -203,18 +203,19 @@ public sealed class CliGoalReplacementExecutionTests
             method.Name == nameof(OperatorIntentCoordinator.ExecuteWorkspacePending));
         var route = Assert.Single(References(workspaceDispatch), method =>
             method.DeclaringType == typeof(OperatorIntentCoordinator) && method.Name == "ApplyGoalCreation");
-        var contract = typeof(IGoalCreationOperatorIntentHandler);
-        var interfaceApply = Assert.Single(References(route), method =>
-            method.DeclaringType == contract && method.Name == nameof(IGoalCreationOperatorIntentHandler.Apply));
         var handler = typeof(GoalCreationOperatorIntentHandler);
-        var implementation = handler.GetInterfaceMap(contract);
-        Assert.Equal(interfaceApply, Assert.Single(implementation.InterfaceMethods));
-        var apply = Assert.Single(implementation.TargetMethods);
+        Assert.Equal(typeof(OperatorIntentCoordinator).Namespace, handler.Namespace);
+        var apply = Assert.Single(References(route), method =>
+            method.DeclaringType == handler && method.Name == nameof(GoalCreationOperatorIntentHandler.Apply));
         var applyCalls = References(apply).ToArray();
         Assert.Contains(applyCalls, method => method.Name == "TransactGoalCreationWithOutboxAsync");
+        Assert.Contains(applyCalls, method => method.DeclaringType == typeof(GoalCreationSideEffectDelivery) &&
+            method.Name == nameof(GoalCreationSideEffectDelivery.DeliverPending));
         var bind = Assert.Single(applyCalls.Where(method => method.DeclaringType?.DeclaringType == handler)
             .SelectMany(References), method => method.DeclaringType == handler && method.Name == "BuildAndBind");
         var bindCalls = References(bind).ToArray();
+        Assert.Contains(bindCalls, method => method.DeclaringType == typeof(IGoalIntentConstruction) &&
+            method.Name == nameof(IGoalIntentConstruction.Build));
         Assert.Contains(bindCalls, method => method.Name == nameof(AgentOrchestratorKernel.ReplaceGoalWithSnapshot));
         Assert.Contains(bindCalls, method => method.Name == nameof(GoalIntakeRequestStore.MarkCreated));
     }

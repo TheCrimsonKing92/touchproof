@@ -1,20 +1,33 @@
-using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal interface IGoalIntentConstruction
+{
+    bool IsSupportedCommand(IReadOnlyList<string> arguments);
+
+    void Build(
+        GoalCreationOperatorIntentPayload payload,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IGoalLifecycleEventWriter eventWriter,
+        CollaborationItemRaise raiseCollaborationItem,
+        Action<Goal, IReadOnlyCollection<string>?> finalize);
+}
 
 internal sealed class GoalCreationOperatorIntentHandler(
-    OrchestratorWorkspace workspace, IOrchestratorStateOutboxRepository? outboxRepository = null)
-    : IGoalCreationOperatorIntentHandler
+    OrchestratorWorkspace workspace, IGoalIntentConstruction construction,
+    IOrchestratorStateOutboxRepository? outboxRepository = null)
 {
     private readonly GoalIntakeRequestStore _requests = new(workspace.SqliteStatePath);
     private readonly IOrchestratorStateOutboxRepository _repository =
         outboxRepository ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
 
-    public bool Apply(AgentOrchestratorKernel workingKernel, GoalCreationOperatorIntentPayload payload, out string summary)
+    internal bool Apply(AgentOrchestratorKernel workingKernel, GoalCreationOperatorIntentPayload payload, out string summary)
     {
-        if (!CliKeyedGoalCreationSubmission.IsCommand(payload.CreationArguments))
+        if (!construction.IsSupportedCommand(payload.CreationArguments))
         {
             throw new InvalidOperationException("GOAL_INTAKE_PAYLOAD_INVALID reason=unexpected-key-or-command");
         }
@@ -40,7 +53,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
             try
             {
                 receipt = _requests.MarkFailed(payload.RequestKey, payload.Fingerprint,
-                    CliKeyedGoalCreationSubmission.ResolveGoalIntakeFailureCode(cause), cause.Message);
+                    ResolveFailureCode(cause), cause.Message);
             }
             catch (Exception failure)
             {
@@ -119,29 +132,13 @@ internal sealed class GoalCreationOperatorIntentHandler(
         GoalSnapshot? prepared = null;
         try
         {
-            // Pending intents from before submission validation can still carry a follow-up flag.
-            CliKeyedGoalCreationSubmission.ValidateCreationOnly(payload.CreationArguments);
             // Prepare on a detached kernel so preconditions see the pre-creation state and
             // nothing from a failed build can enter the live conductor's working set.
             var constructionKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
-            var args = payload.CreationArguments.ToArray();
-            var briefPath = payload.BriefFileValueIndex is null ? null :
-                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("goal-creation"), $"{Guid.NewGuid():N}.txt");
             try
             {
-                if (payload.BriefFileValueIndex is { } index)
-                {
-                    File.WriteAllText(briefPath!, payload.Objective);
-                    args[index] = briefPath!;
-                }
-
-                var agents = payload.Agents;
-                var profiles = WorkerProfileCatalog.Default();
-                Goal? currentGoal = null;
-                _ = CliCommandDispatcher.ExecuteCommand(args, constructionKernel, workspace, ref agents,
-                    new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
-                    eventWriter: events, refinementCollaborationItemRaise: collaboration.RaiseAsync,
-                    finalizeGoalCreation: (goal, sourceDependencies) =>
+                construction.Build(payload, constructionKernel, workspace, events, collaboration.RaiseAsync,
+                    (goal, sourceDependencies) =>
                     {
                         GoalRefinementWorkCoordinator.RecordPending(constructionKernel, goal.Id);
                         prepared = constructionKernel.ExportGoalSnapshot(goal.Id);
@@ -155,10 +152,6 @@ internal sealed class GoalCreationOperatorIntentHandler(
                     });
             }
             catch (ConstructionReadyException) { }
-            finally
-            {
-                if (briefPath is not null) File.Delete(briefPath);
-            }
             if (prepared is null)
                 throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
         }
@@ -177,7 +170,26 @@ internal sealed class GoalCreationOperatorIntentHandler(
         ]);
     }
 
+    private static string ResolveFailureCode(Exception exception)
+    {
+        var firstToken = exception.Message
+            .Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+        if (firstToken is not null &&
+            firstToken.Length <= 100 &&
+            firstToken.All(character => char.IsAsciiLetterUpper(character) || char.IsAsciiDigit(character) || character == '_'))
+        {
+            return firstToken;
+        }
+
+        return exception is ArgumentException
+            ? "GOAL_INTAKE_ARGUMENT_INVALID"
+            : "GOAL_INTAKE_CREATE_FAILED";
+    }
+
     private sealed class ConstructionFailedException(Exception cause) : Exception(cause.Message, cause);
     private sealed class ConstructionReadyException : Exception { }
     private sealed class InvalidReceiptException(string message) : InvalidOperationException(message);
 }
+
+internal sealed class GoalCreationIntentDeferredException(Exception cause) : Exception(cause.Message, cause);
