@@ -71,14 +71,25 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         for (var index = 10; index < goals.Length; index++)
             await fixture.WriteGoalAsync(goals[index] with { Status = GoalStatus.Completed }, archive: true, compress: compress);
 
-        var probe = new QueryProbe(fixture.Queries);
+        await new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath).WriteAttentionArchiveEvidenceMarkersAsync();
+        var observations = new List<GoalSnapshotReadObservation>();
+        var queries = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Workspace.SqliteStatePath, observations.Add);
+        var probe = new QueryProbe(queries);
+        var evidenceFreeIds = goals.Skip(10).Select(goal => goal.Id).ToHashSet();
         var expected = await fixture.BaselineAsync();
         foreach (var args in new[] { new[] { "attention", "--json" }, new[] { "attention", "list", "--json" } })
         {
             probe.Loads.Clear();
+            observations.Clear();
             var actual = CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(args, probe, fixture.Workspace, new FixedTime()));
             AssertJsonEqual(expected, actual);
             Assert.Equal(new[] { current.Id, goals[1].Id }, Assert.Single(probe.Loads));
+            Assert.Equal(3, probe.LastProjection!.Reads.ArchivePayloadsRead);
+            Assert.Equal(3, probe.LastProjection.Reads.ArchivePayloadsDecoded);
+            Assert.Contains(observations, read => read.Operation == "attention-task-history");
+            Assert.Contains(observations, read => read.Operation == "attention-timeline");
+            Assert.DoesNotContain(observations, read => read.GoalId is { } id && evidenceFreeIds.Contains(id) &&
+                read.Operation is "attention-archive-decode" or "attention-task-history" or "attention-timeline");
         }
         using var document = JsonDocument.Parse(expected);
         var payload = document.RootElement.GetProperty("payload");
@@ -88,8 +99,6 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         Assert.Equal(2, payload.GetProperty("ownerQuestionHolds")[1].GetProperty("taskNumber").GetInt32());
         Assert.Equal(4, payload.GetProperty("gateEvidence").GetArrayLength());
         Assert.Single(payload.GetProperty("providerHolds").EnumerateArray());
-        Assert.Equal(history + 3, probe.LastProjection!.Reads.ArchivePayloadsRead);
-        Assert.Equal(probe.LastProjection.Reads.ArchivePayloadsRead, probe.LastProjection.Reads.ArchivePayloadsDecoded);
         Assert.Equal(0, probe.BoardLoads);
         var fallback = new QueryProbe(fixture.Queries) { Unsupported = true };
         AssertJsonEqual(expected, Render(await AttentionJsonReadContext.ReadAsync(fallback, fixture.Workspace, Now)));
