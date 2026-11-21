@@ -14,7 +14,8 @@ internal static class AttentionAgentReadView
         IReadOnlyList<OwnerQuestionHoldBlocker>? ownerQuestions = null,
         IReadOnlyList<AttentionPostLandingDuty>? postLandingDuties = null,
         IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null,
-        object[]? unlinkedGoals = null)
+        object[]? unlinkedGoals = null,
+        IReadOnlyList<CostGoalOutcomeAttentionView.Row>? costGoalOutcomes = null)
     {
         var renderTime = PostLandingFollowUpAttention.CaptureRenderTime(time);
         var payload = UnlinkedGoalAttentionView.WithRows(PostLandingFollowUpAttention.WithRows(WithPostLandingDuties(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
@@ -31,7 +32,8 @@ internal static class AttentionAgentReadView
                 ["ownerQuestionHolds"] = OwnerQuestionRows(ownerQuestions, goals)
             }, amendmentHolds), DutyRows(postLandingDuties, goals)), waits, goals, renderTime.GetUtcNow()), unlinkedGoals);
         return AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionSchema, AgentReadEnvelope.AttentionSchemaVersion,
-            AttentionOperatorPreLandingEvidenceView.WithRows(payload, goals),
+            CostGoalOutcomeAttentionView.WithRows(
+                AttentionOperatorPreLandingEvidenceView.WithRows(payload, goals), costGoalOutcomes, includeCounts: false),
             new JsonSerializerOptions(JsonSerializerDefaults.Web), renderTime);
     }
 
@@ -42,7 +44,8 @@ internal static class AttentionAgentReadView
         IReadOnlyList<AttentionPostLandingDuty>? postLandingDuties = null,
         IReadOnlyCollection<Goal>? goals = null,
         IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null,
-        object[]? unlinkedGoals = null)
+        object[]? unlinkedGoals = null,
+        IReadOnlyList<CostGoalOutcomeAttentionView.Row>? costGoalOutcomes = null)
     {
         var renderedAt = (time ?? TimeProvider.System).GetUtcNow();
         return JsonSerializer.Serialize(new
@@ -51,13 +54,14 @@ internal static class AttentionAgentReadView
             schemaVersion = 1,
             generatedAt = renderedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             omittedSections = new[] { "gateEvidence" },
-            payload = UnlinkedGoalAttentionView.WithRows(PostLandingFollowUpAttention.WithRows(WithPostLandingDuties(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
+            payload = CostGoalOutcomeAttentionView.WithRows(UnlinkedGoalAttentionView.WithRows(PostLandingFollowUpAttention.WithRows(WithPostLandingDuties(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
             {
                 ["waits"] = WaitRows(waits),
                 ["items"] = ItemRows(items),
                 ["providerHolds"] = (providerHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray(),
                 ["ownerQuestionHolds"] = OwnerQuestionRows(ownerQuestions, null)
-            }, amendmentHolds), DutyRows(postLandingDuties, null)), waits, goals, renderedAt), unlinkedGoals)
+            }, amendmentHolds), DutyRows(postLandingDuties, null)), waits, goals, renderedAt), unlinkedGoals),
+                costGoalOutcomes, includeCounts: true)
         }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
     }
 

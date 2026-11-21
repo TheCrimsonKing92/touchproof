@@ -41,7 +41,7 @@ public static class CrossGoalSubscriptionStartPlanner
     {
         var effectiveNow = now ?? DateTimeOffset.UtcNow;
         var candidates = kernel.Goals
-            .Where(goal => goal.Status is GoalStatus.Active or GoalStatus.WaitingForHuman)
+            .Where(DispatchReadinessAssessment.IsCandidateGoal)
             .Select(goal => BuildCandidate(goal, agents, profiles, kernel.ProviderHoldScope, effectiveNow))
             .Where(candidate => candidate is not null)
             .Select(candidate => candidate!)
@@ -78,16 +78,7 @@ public static class CrossGoalSubscriptionStartPlanner
     {
         var assessment = DispatchReadinessAssessment.Evaluate(goal, providerHoldScope, agents, profiles, now);
         var subscriptionPlan = assessment.Plan;
-        var readinessVerdict = assessment.Verdict;
-        if (readinessVerdict is not DispatchReadinessReady)
-        {
-            return null;
-        }
-
-        var readyItems = subscriptionPlan.Items
-            .Where(item => item.TaskStatus == WorkTaskStatus.Assigned &&
-                (item.CanPrepare || item.CanAttemptSubscriptionSubstitution))
-            .ToList();
+        var readyItems = DispatchReadinessAssessment.ReadyItems(assessment);
         if (readyItems.Count == 0)
         {
             return null;
