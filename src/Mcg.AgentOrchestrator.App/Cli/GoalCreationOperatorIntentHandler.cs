@@ -1,30 +1,20 @@
-using System.Text.Json;
-using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
-
-internal delegate void GoalIntentConstruction(
-    IReadOnlyList<string> arguments,
-    AgentOrchestratorKernel kernel,
-    OrchestratorWorkspace workspace,
-    IReadOnlyList<AgentDefinition> agents,
-    IGoalLifecycleEventWriter eventWriter,
-    CollaborationItemRaise raiseCollaborationItem,
-    Action<Goal, IReadOnlyCollection<string>?> finalize);
+namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal sealed class GoalCreationOperatorIntentHandler(
-    OrchestratorWorkspace workspace, IOrchestratorStateOutboxRepository repository, GoalIntentConstruction constructGoal)
+    OrchestratorWorkspace workspace, IOrchestratorStateOutboxRepository? outboxRepository = null)
+    : IGoalCreationOperatorIntentHandler
 {
     private readonly GoalIntakeRequestStore _requests = new(workspace.SqliteStatePath);
+    private readonly IOrchestratorStateOutboxRepository _repository =
+        outboxRepository ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
 
-    internal bool Apply(AgentOrchestratorKernel workingKernel, OperatorIntentRecord intent, out string summary)
+    public bool Apply(AgentOrchestratorKernel workingKernel, GoalCreationOperatorIntentPayload payload, out string summary)
     {
-        var payload = JsonSerializer.Deserialize<GoalCreationOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
-            ?? throw new InvalidOperationException("GOAL_INTAKE_PAYLOAD_INVALID reason=missing-payload");
-        if (payload.RequestKey != intent.IdempotencyKey ||
-            !CliKeyedGoalCreationSubmission.IsCommand(payload.CreationArguments))
+        if (!CliKeyedGoalCreationSubmission.IsCommand(payload.CreationArguments))
         {
             throw new InvalidOperationException("GOAL_INTAKE_PAYLOAD_INVALID reason=unexpected-key-or-command");
         }
@@ -37,9 +27,9 @@ internal sealed class GoalCreationOperatorIntentHandler(
             // and source claims. The scoped writer saves only the new goal and its outbox.
             var existing = _requests.Get(payload.RequestKey);
             var ids = existing?.State == GoalIntakeRequestStates.StillCommitting
-                ? repository.ListGoalMetadataAsync().GetAwaiter().GetResult().Select(goal => new GoalId(goal.Id)).ToArray()
+                ? _repository.ListGoalMetadataAsync().GetAwaiter().GetResult().Select(goal => new GoalId(goal.Id)).ToArray()
                 : [];
-            (receipt, replayed) = repository.TransactGoalCreationWithOutboxAsync(
+            (receipt, replayed) = _repository.TransactGoalCreationWithOutboxAsync(
                 new GoalCreationLoadScope(ids, []),
                 (kernel, _) => Task.FromResult(BuildAndBind(kernel, payload))).GetAwaiter().GetResult();
         }
@@ -54,7 +44,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
             }
             catch (Exception failure)
             {
-                throw new ApplyDeferredException(failure);
+                throw new GoalCreationIntentDeferredException(failure);
             }
             replayed = false;
         }
@@ -62,7 +52,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
         {
             // A storage failure leaves the claim recoverable. Reapplication checks the durable
             // binding before constructing anything, including after an uncertain commit.
-            throw new ApplyDeferredException(ex);
+            throw new GoalCreationIntentDeferredException(ex);
         }
 
         if (receipt.State == GoalIntakeRequestStates.Failed)
@@ -74,13 +64,13 @@ internal sealed class GoalCreationOperatorIntentHandler(
         {
             if (!workingKernel.Goals.Any(goal => goal.Id == goalId))
             {
-                var snapshot = repository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+                var snapshot = _repository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
                     ?? throw new InvalidOperationException($"GOAL_INTAKE_RECEIPT_INVALID requestKey={payload.RequestKey} reason=created-goal-missing");
                 workingKernel.ReplaceGoalWithSnapshot(snapshot);
             }
 
             var goal = workingKernel.GetGoal(goalId);
-            _ = GoalCreationSideEffectDelivery.DeliverPending(repository, workspace, workingKernel, goalId);
+            _ = GoalCreationSideEffectDelivery.DeliverPending(_repository, workspace, workingKernel, goalId);
             if (!replayed)
                 _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goalId);
             if (payload.RequestedEpicId is not null || goal.SourceBacklogItemId is not null)
@@ -104,7 +94,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
         }
         catch (Exception ex)
         {
-            throw new ApplyDeferredException(GoalCreationSideEffectDelivery.Incomplete(goalId, ex));
+            throw new GoalCreationIntentDeferredException(GoalCreationSideEffectDelivery.Incomplete(goalId, ex));
         }
         return replayed;
     }
@@ -145,8 +135,13 @@ internal sealed class GoalCreationOperatorIntentHandler(
                     args[index] = briefPath!;
                 }
 
-                constructGoal(args, constructionKernel, workspace, payload.Agents, events, collaboration.RaiseAsync,
-                    (goal, sourceDependencies) =>
+                var agents = payload.Agents;
+                var profiles = WorkerProfileCatalog.Default();
+                Goal? currentGoal = null;
+                _ = CliCommandDispatcher.ExecuteCommand(args, constructionKernel, workspace, ref agents,
+                    new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
+                    eventWriter: events, refinementCollaborationItemRaise: collaboration.RaiseAsync,
+                    finalizeGoalCreation: (goal, sourceDependencies) =>
                     {
                         GoalRefinementWorkCoordinator.RecordPending(constructionKernel, goal.Id);
                         prepared = constructionKernel.ExportGoalSnapshot(goal.Id);
@@ -182,7 +177,6 @@ internal sealed class GoalCreationOperatorIntentHandler(
         ]);
     }
 
-    internal sealed class ApplyDeferredException(Exception cause) : Exception(cause.Message, cause);
     private sealed class ConstructionFailedException(Exception cause) : Exception(cause.Message, cause);
     private sealed class ConstructionReadyException : Exception { }
     private sealed class InvalidReceiptException(string message) : InvalidOperationException(message);

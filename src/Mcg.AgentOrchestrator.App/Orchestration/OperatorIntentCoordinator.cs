@@ -83,8 +83,7 @@ internal sealed partial class OperatorIntentCoordinator
     }
 
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace,
-        ITransactionalOrchestratorStateRepository? stateRepository = null,
-        GoalIntentConstruction? constructGoal = null)
+        IGoalCreationOperatorIntentHandler? goalCreation = null)
     {
         var versionReader = BuildGoalStateVersionReader(workspace.OrchestratorDirectory);
         var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
@@ -135,9 +134,7 @@ internal sealed partial class OperatorIntentCoordinator
                 }
             })
         {
-            GoalCreation = constructGoal is null ? null : new(workspace,
-                stateRepository as IOrchestratorStateOutboxRepository ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
-                constructGoal),
+            GoalCreation = goalCreation,
             IntegrationScopeOwner = kernel => new ConductorConflictIntegration(kernel, workspace.ExecutionDirectory,
                 workspace.IntegrationBranch, (g, t, n, k, c) => throw new InvalidOperationException("Intent application cannot retry integration."),
                 _ => throw new InvalidOperationException("Intent application cannot dispatch integration."), statePath: workspace.SqliteStatePath),

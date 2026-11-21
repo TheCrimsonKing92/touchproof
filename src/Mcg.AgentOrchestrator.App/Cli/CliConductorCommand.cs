@@ -202,8 +202,8 @@ internal static class CliConductorCommand
         if (!StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
             WorkspaceStoreSetup.RunWithOwnership(workspace);
         var repository = stateRepository?.Invoke(workspace) ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace, repository,
-            CliGoalIntentConstruction.Build);
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace,
+            new GoalCreationOperatorIntentHandler(workspace, repository as IOrchestratorStateOutboxRepository));
         var lines = coordinator.ExecuteWorkspacePending(repository.LoadAsync().GetAwaiter().GetResult(), out var deferred,
             verb: OperatorIntentVerbs.GoalCreate);
         if (lines.Count == 0)
@@ -310,25 +310,5 @@ internal static class CliConductorCommand
         output.WriteLine($"Conductor launched: pid {pid}; stdout log: {stdoutPath}");
         output.WriteLine("Check status: touchproof.cmd conductor status");
         return 0;
-    }
-}
-
-internal static class CliGoalIntentConstruction
-{
-    internal static void Build(
-        IReadOnlyList<string> arguments,
-        AgentOrchestratorKernel kernel,
-        OrchestratorWorkspace workspace,
-        IReadOnlyList<AgentDefinition> agents,
-        IGoalLifecycleEventWriter eventWriter,
-        CollaborationItemRaise raiseCollaborationItem,
-        Action<Goal, IReadOnlyCollection<string>?> finalize)
-    {
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = null;
-        _ = CliCommandDispatcher.ExecuteCommand(arguments, kernel, workspace, ref agents,
-            new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
-            eventWriter: eventWriter, refinementCollaborationItemRaise: raiseCollaborationItem,
-            finalizeGoalCreation: finalize);
     }
 }

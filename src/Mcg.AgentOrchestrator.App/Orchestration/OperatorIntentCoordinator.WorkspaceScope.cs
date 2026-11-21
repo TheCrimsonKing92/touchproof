@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -27,7 +28,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal IReadOnlyList<string> EvaluateExecutorSlots() => SlotController?.Evaluate() ?? [];
     internal ProviderResetRetainedSourceRecorder? ProviderResets { get; init; }
     internal ClaudeUsageBackfillIntentHandler? ClaudeUsageBackfills { get; init; }
-    internal GoalCreationOperatorIntentHandler? GoalCreation { get; init; }
+    internal IGoalCreationOperatorIntentHandler? GoalCreation { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel) =>
         ExecuteWorkspacePending(kernel, out _);
@@ -52,9 +53,7 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new InvalidOperationException("Workspace intent services are unavailable.");
                 replayed = intent.Verb switch
                 {
-                    OperatorIntentVerbs.GoalCreate =>
-                        (GoalCreation ?? throw new InvalidOperationException("Goal creation intent services are unavailable."))
-                            .Apply(kernel, intent, out outcomeSummary),
+                    OperatorIntentVerbs.GoalCreate => ApplyGoalCreation(kernel, intent, out outcomeSummary),
                     OperatorIntentVerbs.ExecutorSetSlots or OperatorIntentVerbs.ExecutorSetEnabled or OperatorIntentVerbs.FocusedEvidenceSet =>
                         ApplyExecutorSetting(intent, out outcomeSummary),
                     OperatorIntentVerbs.ClaudeUsageBackfill =>
@@ -81,7 +80,7 @@ internal sealed partial class OperatorIntentCoordinator
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
             }
-            catch (GoalCreationOperatorIntentHandler.ApplyDeferredException ex)
+            catch (GoalCreationIntentDeferredException ex)
             {
                 deferred = true;
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result=deferred reason={Sanitize(ex.Message)}");
@@ -105,6 +104,17 @@ internal sealed partial class OperatorIntentCoordinator
             lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result={(replayed ? "applied-recovered" : "applied")}");
         }
         return lines;
+    }
+
+    private bool ApplyGoalCreation(AgentOrchestratorKernel kernel, OperatorIntentRecord intent, out string summary)
+    {
+        var handler = GoalCreation ?? throw new InvalidOperationException("Goal creation intent services are unavailable.");
+        var payload = JsonSerializer.Deserialize<GoalCreationOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
+            ?? throw new InvalidOperationException("GOAL_INTAKE_PAYLOAD_INVALID reason=missing-payload");
+        if (payload.RequestKey != intent.IdempotencyKey)
+            throw new InvalidOperationException("GOAL_INTAKE_PAYLOAD_INVALID reason=unexpected-key-or-command");
+
+        return handler.Apply(kernel, payload, out summary);
     }
 
     private bool ApplyExecutorSetting(OperatorIntentRecord intent, out string summary)

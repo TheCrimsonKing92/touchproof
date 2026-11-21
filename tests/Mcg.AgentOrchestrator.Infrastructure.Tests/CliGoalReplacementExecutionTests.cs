@@ -201,9 +201,15 @@ public sealed class CliGoalReplacementExecutionTests
         var workspaceDispatch = Assert.Single(References(workspaceApply.Method), method =>
             method.DeclaringType == typeof(OperatorIntentCoordinator) &&
             method.Name == nameof(OperatorIntentCoordinator.ExecuteWorkspacePending));
+        var route = Assert.Single(References(workspaceDispatch), method =>
+            method.DeclaringType == typeof(OperatorIntentCoordinator) && method.Name == "ApplyGoalCreation");
+        var contract = typeof(IGoalCreationOperatorIntentHandler);
+        var interfaceApply = Assert.Single(References(route), method =>
+            method.DeclaringType == contract && method.Name == nameof(IGoalCreationOperatorIntentHandler.Apply));
         var handler = typeof(GoalCreationOperatorIntentHandler);
-        var apply = Assert.Single(References(workspaceDispatch), method =>
-            method.DeclaringType == handler && method.Name == nameof(GoalCreationOperatorIntentHandler.Apply));
+        var implementation = handler.GetInterfaceMap(contract);
+        Assert.Equal(interfaceApply, Assert.Single(implementation.InterfaceMethods));
+        var apply = Assert.Single(implementation.TargetMethods);
         var applyCalls = References(apply).ToArray();
         Assert.Contains(applyCalls, method => method.Name == "TransactGoalCreationWithOutboxAsync");
         var bind = Assert.Single(applyCalls.Where(method => method.DeclaringType?.DeclaringType == handler)
