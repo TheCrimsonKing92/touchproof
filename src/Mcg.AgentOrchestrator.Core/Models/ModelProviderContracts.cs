@@ -366,7 +366,9 @@ public sealed record TaskDispatchRecord(
     // Host-captured dispatch input, never reconstructed from completion-time criteria.
     string? PlannerEvidenceCriteriaVersionHash = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    int? FindingContractVersion = null)
+    int? FindingContractVersion = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? WorkerToolsDirectory = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
@@ -384,6 +386,9 @@ public sealed record DispatchProviderUsage(
     ProviderUsageValue CachedInputTokens,
     ProviderUsageValue OutputTokens)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, long>? WtCalls { get; init; }
+
     private static readonly ProviderUsageValue UnrecordedTurns = ProviderUsageValue.Unknown("not-recorded");
     private static readonly ProviderUsageValue UnrecordedToolCalls = ProviderUsageValue.Unknown("not-recorded");
 

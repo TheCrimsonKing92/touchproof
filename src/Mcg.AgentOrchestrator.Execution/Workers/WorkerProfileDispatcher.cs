@@ -159,7 +159,7 @@ public static partial class WorkerProfileDispatcher
         // the dispatch so the start boundary transports that one decision instead of selecting again.
         ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
         Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null,
-        bool restorePreparedContext = false)
+        bool restorePreparedContext = false, WorkerToolsInstaller? workerTools = null)
     {
         integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
@@ -217,10 +217,10 @@ public static partial class WorkerProfileDispatcher
                 ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
             : null;
         var changedExistingTests = ReviewerChangedExistingTestScope.Read(kernel, goal, task, workingDirectory, reviewerScopeMergeBase, targetContext?.HeadCommit, reviewerScopeChangedFiles);
+        var workerToolsDirectory = retainedDispatch is null ? workerTools?.ResolveForDispatch(kernel, goal.Id, task) : retainedDispatch.WorkerToolsDirectory;
         var usesTypedContextPackage = WorkerContextHelpers.UsesTypedContextPackage(
             task.RequiredRole,
-            providerName,
-            modelName);
+            providerName, modelName);
         var briefSource = kernel.BuildTaskBriefSource(
             goal.Id,
             task.Id,
@@ -242,7 +242,7 @@ public static partial class WorkerProfileDispatcher
             changedExistingTests: changedExistingTests.Entries,
             changedExistingTestsDiagnostic: changedExistingTests.Diagnostic,
             acceptanceManifestPromptPath: WorkerAcceptanceManifestDisplayPath.ForPrompt(targetHome, workingDirectory),
-            integrationBranchPromptName: integrationBranch, roleRequirementStack: ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome), repositoryWorktrees: GoalRepositoryBriefEntries.For(goal, workingDirectory), testCheckCommands: task.RequiredRole == AgentRole.Planner ? ProjectStackResolver.TestCheckCommandsFor(workingDirectory, targetHome) : null);
+            integrationBranchPromptName: integrationBranch, roleRequirementStack: ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome), repositoryWorktrees: GoalRepositoryBriefEntries.For(goal, workingDirectory), testCheckCommands: task.RequiredRole == AgentRole.Planner ? ProjectStackResolver.TestCheckCommandsFor(workingDirectory, targetHome) : null, workerToolsAvailable: workerToolsDirectory is not null);
         var brief = usesTypedContextPackage
             ? briefSource.ToTaskBrief(string.Empty)
             : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
@@ -356,7 +356,7 @@ public static partial class WorkerProfileDispatcher
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
             FindingEvidenceReviewContext: reviewEvidenceContext,
             FindingEvidenceReviewContinuation: FindingEvidenceDispatchContext.Continuation(task),
-            ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort)),
+            ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort), WorkerToolsDirectory: workerToolsDirectory),
             allowPendingRecordedDispatchRefresh);
         ReviewerChangedExistingTestScope.RecordConductEvent(goal, task, changedExistingTests, promptRoot, dispatchedAt, allowPendingRecordedDispatchRefresh);
         PrerequisiteEvidenceTrimNote.RecordIfTrimmed(kernel, goal.Id, task.Id, brief);
@@ -512,7 +512,7 @@ public static partial class WorkerProfileDispatcher
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
-        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null, WorkerToolsInstaller? workerTools = null)
     {
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
@@ -588,7 +588,7 @@ public static partial class WorkerProfileDispatcher
             plannerSampleCount: plannerSampleCount,
             paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
             claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome,
-            deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver);
+            deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver, workerTools: workerTools);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1166,7 +1166,7 @@ public static partial class WorkerProfileDispatcher
         // batch reading the operator's real credential store. Production leaves it null and each
         // prepared task below gets its own single resolution.
         Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
-        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null, WorkerToolsInstaller? workerTools = null)
     {
         var tasks = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1268,7 +1268,7 @@ public static partial class WorkerProfileDispatcher
                 plannerSampleCount: plannerSampleCount,
                 paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
                 claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome,
-                deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver));
+                deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver, workerTools: workerTools));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

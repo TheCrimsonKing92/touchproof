@@ -135,7 +135,7 @@ internal sealed partial class GoalDispatchOperations
             shadowRecorder: DispatchShadowRecorder.Default,
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace), workerTools: CreateWorkerToolsInstaller(home));
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
     }
@@ -476,7 +476,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace), workerTools: CreateWorkerToolsInstaller(home));
         foreach (var prepared in batch.Dispatches)
             intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
         return batch with { Blocked = [.. batch.Blocked.Where(item => !inventory.Blocked.ContainsKey(new TaskId(item.TaskId))), .. inventory.Blocked.Values] };
@@ -531,7 +531,7 @@ internal sealed partial class GoalDispatchOperations
                 cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
                 orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
                 targetHome: WorkerTargetHomeFactory.For(home, workspace),
-                deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
+                deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace), workerTools: CreateWorkerToolsInstaller(home));
         }
         catch (KeyNotFoundException ex) when (task.AssignedAgentId is not null &&
             !agents.Any(agent => agent.Id == task.AssignedAgentId))

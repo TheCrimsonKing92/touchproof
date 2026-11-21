@@ -1,9 +1,12 @@
 using Mcg.AgentOrchestrator.App.Usage;
 using Mcg.AgentOrchestrator.Core;
+using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal sealed record ContextUsageStat(double? Median, long? P90);
+internal sealed record ContextUsageWtCalls(int ReportedDispatchCount, IReadOnlyDictionary<string, long> BySubcommand,
+    ContextUsageStat Total);
 
 internal sealed record ContextUsageRow(
     string Role,
@@ -18,7 +21,8 @@ internal sealed record ContextUsageRow(
     ContextUsageStat ToolCalls,
     ContextUsageStat HarnessOverhead,
     int MissingUsageCount,
-    IReadOnlyDictionary<string, int> MissingUsageReasons);
+    IReadOnlyDictionary<string, int> MissingUsageReasons,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ContextUsageWtCalls? WtCalls = null);
 
 internal sealed record ContextUsageResult(
     DateTimeOffset? Since,
@@ -59,7 +63,7 @@ internal static class ContextUsageReport
                 Stat(group.Select(item => RecordedToolCalls(item.Dispatch))),
                 Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.HarnessOverhead(receipt).Value)),
                 missing.Length,
-                reasons);
+                reasons, WorkerToolsPromptSection.AppliesTo(group.First().Task.RequiredRole) ? WtCallStats(usage) : null);
         })
         .OrderBy(row => row.Role, StringComparer.Ordinal)
         .ThenBy(row => row.Model == "unknown" ? 1 : 0)
@@ -69,6 +73,17 @@ internal static class ContextUsageReport
     }
 
     internal static long? RecordedTurns(TaskDispatchRecord dispatch) => DispatchUsageValues.RecordedTurns(dispatch);
+
+    private static ContextUsageWtCalls WtCallStats(IEnumerable<DispatchProviderUsage?> usage)
+    {
+        var recorded = usage.Select(value => value?.WtCalls).OfType<IReadOnlyDictionary<string, long>>()
+            .Where(counts => counts.Count > 0).ToArray();
+        var bySubcommand = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        foreach (var (command, count) in recorded.SelectMany(counts => counts))
+            bySubcommand[command] = bySubcommand.GetValueOrDefault(command) + count;
+        return new ContextUsageWtCalls(recorded.Length, bySubcommand,
+            Stat(recorded.Select(counts => (long?)counts.Values.Sum())));
+    }
 
     private static long? RecordedToolCalls(TaskDispatchRecord dispatch)
     {

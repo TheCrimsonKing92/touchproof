@@ -6,9 +6,9 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<TaskBriefSegment> segments,
         AgentRole role,
         bool usesFileAccessContext,
-        bool measureWithTypedSourceBoundaries)
+        bool measureWithTypedSourceBoundaries, bool workerToolsAvailable)
     {
-        var budget = TaskBriefCharacterBudget(role, usesFileAccessContext);
+        var budget = TaskBriefCharacterBudget(role, usesFileAccessContext) + WorkerToolsPromptSection.ForRole(role, workerToolsAvailable).Sum(line => line.Length + 1);
         if (!usesFileAccessContext || CountTaskBriefCharacters(segments, measureWithTypedSourceBoundaries) <= budget)
         {
             return CreateTaskBriefBudgetSelection(segments, new HashSet<LogicalArtifactIdentity>());

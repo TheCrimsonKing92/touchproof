@@ -175,7 +175,7 @@ public sealed partial class AgentOrchestratorKernel
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
-        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null)
+        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null, bool workerToolsAvailable = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -302,7 +302,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(WorkerReadProcedure.ForRole(task.RequiredRole).Concat(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory, roleRequirementStack, testCheckCommands)));
+        instructionLines.AddRange(WorkerReadProcedure.ForRole(task.RequiredRole).Concat(WorkerToolsPromptSection.ForRole(task.RequiredRole, workerToolsAvailable)).Concat(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory, roleRequirementStack, testCheckCommands)));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(instructionLines, task.RequiredRole, includeReference: true);
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
@@ -611,7 +611,7 @@ public sealed partial class AgentOrchestratorKernel
             retractedSegments,
             task.RequiredRole,
             usesFileAccessContext,
-            measureWithTypedSourceBoundaries);
+            measureWithTypedSourceBoundaries, workerToolsAvailable);
 
         return new TaskBriefSource(
             goal.Id,

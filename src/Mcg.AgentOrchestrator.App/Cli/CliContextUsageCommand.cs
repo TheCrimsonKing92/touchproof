@@ -44,7 +44,8 @@ internal static class CliContextUsageCommand
                         $"harness-overhead={Format(row.HarnessOverhead)} | " +
                         $"missing-usage={row.MissingUsageCount} reasons=" +
                         (row.MissingUsageReasons.Count == 0 ? "none" :
-                            string.Join(",", row.MissingUsageReasons.Select(reason => $"{reason.Key}={reason.Value}"))));
+                            string.Join(",", row.MissingUsageReasons.Select(reason => $"{reason.Key}={reason.Value}"))) +
+                        FormatWtCalls(row.WtCalls));
                 }
             }
             return 0;
@@ -66,6 +67,16 @@ internal static class CliContextUsageCommand
 
     private static string Format(ContextUsageStat stat) =>
         $"median={stat.Median?.ToString(CultureInfo.InvariantCulture) ?? "unknown"},p90={stat.P90?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}";
+
+    private static string FormatWtCalls(ContextUsageWtCalls? calls)
+    {
+        if (calls is null)
+            return string.Empty;
+        var counts = calls.ReportedDispatchCount == 0
+            ? "unknown"
+            : string.Join(",", calls.BySubcommand.Select(pair => $"{pair.Key}={pair.Value}"));
+        return $" | wt-calls={Format(calls.Total)} reported={calls.ReportedDispatchCount} subcommands={counts}";
+    }
 
     private static void WriteSections(ContextSectionOutcomeResult report, bool json, TextWriter output)
     {
