@@ -60,7 +60,7 @@ public sealed class CliWriterPersistenceBoundaryTests
         AgentOrchestratorKernel kernel, GoalId id) =>
         CliPersistentStateRunner.PersistSingleGoalSnapshot(repository, kernel, id);
 
-    private static IEnumerable<MethodBase> References(MethodBase method)
+    internal static IEnumerable<MethodBase> References(MethodBase method)
     {
         var bytes = method.GetMethodBody()?.GetILAsByteArray();
         if (bytes is null) yield break;

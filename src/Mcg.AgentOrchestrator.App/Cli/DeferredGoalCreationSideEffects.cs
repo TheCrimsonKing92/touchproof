@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.Application;
 
 internal enum GoalCreationDeliveryDisposition
 {
@@ -177,6 +177,54 @@ internal static class GoalCreationSideEffectDelivery
         }
 
         return receipt;
+    }
+
+    internal static GoalCreationDeliveryResult DeliverPending(
+        IOrchestratorStateOutboxRepository outboxRepository,
+        OrchestratorWorkspace workspace,
+        AgentOrchestratorKernel kernel,
+        GoalId goalId)
+    {
+        OrchestratorStateOutboxProcessingResult? processingResult = null;
+        var claimed = outboxRepository.TryProcessOutboxMessageAsync(
+                MessageId(goalId.Value),
+                async (message, cancellationToken) =>
+                {
+                    try
+                    {
+                        var receipt = Deserialize(message);
+                        if (!receipt.GoalId.Equals(goalId.Value, StringComparison.Ordinal) ||
+                            kernel.Goals.All(candidate => candidate.Id != goalId))
+                        {
+                            processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                $"Goal-creation delivery receipt targets missing or mismatched goal '{receipt.GoalId}'.");
+                            return processingResult;
+                        }
+
+                        await DeliverAsync(receipt, workspace, kernel, cancellationToken).ConfigureAwait(false);
+                        processingResult = OrchestratorStateOutboxProcessingResult.Completed;
+                        return processingResult;
+                    }
+                    catch (JsonException ex)
+                    {
+                        processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                            $"Invalid goal-creation delivery receipt: {ex.Message}");
+                        return processingResult;
+                    }
+                })
+            .GetAwaiter()
+            .GetResult();
+
+        if (!claimed)
+            return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.AlreadyDelivered);
+
+        if (processingResult?.Disposition == OrchestratorStateOutboxDisposition.Quarantine)
+        {
+            throw new InvalidOperationException(
+                $"GOAL_CREATE_DELIVERY_INVALID goal={goalId.Value} detail={processingResult.Detail}");
+        }
+
+        return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.Delivered);
     }
 
     public static async Task DeliverAsync(
