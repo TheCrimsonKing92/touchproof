@@ -15,6 +15,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
     public IReadOnlyList<AcceptanceSelectedExecutionCheckCoverage> WholeProjectCoverage { get; init; } = [];
     public IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks { get; init; } = [];
     public IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? AssemblyScanReasons { get; init; }
+    public IReadOnlyList<ImpactReplayChangedSupportFileSummary>? SupportSelections { get; init; }
 
     internal bool HasPlan => Outcome == ReverseDependencySelectionOutcome.Resolved;
 
@@ -26,23 +27,34 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         bool projectReachAvailable = true,
         Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? selectableProjectChecks = null,
         IReadOnlySet<string>? changedTestProjects = null,
-        IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? assemblyScanReasons = null)
+        IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? assemblyScanReasons = null,
+        IReadOnlyList<ImpactReplayChangedSupportFileSummary>? supportSelections = null,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? supportProjectClasses = null)
     {
         var obligations = new HashSet<string>(StringComparer.Ordinal);
         var methodFormResolutions = new List<AcceptanceSelectedExecutionMethodFormResolution>();
         var coverage = new List<AcceptanceSelectedExecutionCheckCoverage>();
         IReadOnlyList<AcceptanceWholeProjectCheckInventory>? projectInventories = null;
+        var fallbacks = (supportSelections ?? []).Where(item => item.FullRunTriggered)
+            .OrderBy(item => item.Path, StringComparer.Ordinal).ToArray();
+        var forcedProjects = fallbacks.SelectMany(item => item.AffectedProjects).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var retainInfrastructure = forcedProjects.Contains(AcceptancePolicyShardPlanner.InfrastructureTestsProject);
+        var supportReason = fallbacks.Length == 0 ? null :
+            string.Join("; ", fallbacks.Select(item => $"{item.Path}: {string.Join(", ", item.Reasons)}"));
+        string WithSupportReason(string reason) => supportReason is null ? reason : reason + "; " + supportReason;
         AcceptanceSelectedExecutionPlan Full(ReverseDependencySelectionOutcome outcome, string? reason) =>
-            new(outcome, reason ?? outcome.ToString(), lanes, [], floorLanes, guardClasses,
+            new(outcome, WithSupportReason(reason ?? outcome.ToString()), lanes, [], floorLanes, guardClasses,
                 obligations.Order(StringComparer.Ordinal).ToArray())
             {
                 MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray(),
-                AssemblyScanReasons = assemblyScanReasons
+                AssemblyScanReasons = assemblyScanReasons, SupportSelections = supportSelections
             };
         if (changedFiles is null || !changedFiles.Any())
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate changes are unavailable.");
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved)
             return Full(selection.Outcome, selection.Reason);
+        if (fallbacks.Any(item => item.AffectedProjects.Count == 0))
+            return Full(ReverseDependencySelectionOutcome.Abandoned, "Affected test projects are unavailable.");
         if (!classes.Any())
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate test-class inventory is unavailable.");
 
@@ -131,7 +143,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             var translated = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
             var eligible = classes.Where(item => membership[lane.Name](item.FullName))
                 .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-            var whole = floorLanes.Contains(lane.Name, StringComparer.Ordinal) || !translated.Contains("--filter-class");
+            var whole = retainInfrastructure || floorLanes.Contains(lane.Name, StringComparer.Ordinal) || !translated.Contains("--filter-class");
             var retained = whole ? eligible : eligible.Where(names.Contains).ToArray();
             var skipped = eligible.Except(retained, StringComparer.Ordinal).ToArray();
             var disposition = whole ? "retained" : retained.Length == 0 ? "skipped" : "narrowed";
@@ -150,17 +162,27 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             }
             records.Add(new(lane.Name, disposition, retained, skipped, filter ?? (whole ? lane.Filter : null)));
         }
-        return new(ReverseDependencySelectionOutcome.Resolved, null, execution, records, floorLanes,
+        return new(ReverseDependencySelectionOutcome.Resolved, supportReason, execution, records, floorLanes,
             guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray())
         {
             MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray(),
-            AssemblyScanReasons = assemblyScanReasons,
+            AssemblyScanReasons = assemblyScanReasons, SupportSelections = supportSelections,
             UnresolvedObligationSelectors = unresolved.Select(item =>
                 AcceptanceUnresolvedObligationSelector.Create(item.Selector, classes, item.WellFormed)).ToArray(),
-            ProjectChecks = selectableProjects.Select(check => AcceptanceSelectedExecutionProjectCheckEntry.Create(
-                check, names, floorLanes, projectReachAvailable,
-                hasChangedTestFiles: changedTestProjects?.Contains(check.Project) == true)).ToArray()
+            ProjectChecks = selectableProjects.Select(CreateProjectEntry).ToArray()
         };
+
+        AcceptanceSelectedExecutionProjectCheckEntry CreateProjectEntry(AcceptanceWholeProjectCheckInventory check)
+        {
+            var projectMatches = supportProjectClasses?.FirstOrDefault(item =>
+                AcceptancePolicyShardPlanner.ProjectMatches(check.Project, item.Key)).Value;
+            var requiredNames = projectMatches is { Count: > 0 }
+                ? names.Concat(projectMatches).ToHashSet(StringComparer.Ordinal) : names;
+            var whole = changedTestProjects?.Contains(check.Project) == true ||
+                forcedProjects.Any(project => AcceptancePolicyShardPlanner.ProjectMatches(check.Project, project)) ||
+                projectMatches?.Except(check.Classes.Select(item => item.FullName), StringComparer.Ordinal).Any() == true;
+            return AcceptanceSelectedExecutionProjectCheckEntry.Create(check, requiredNames, floorLanes, projectReachAvailable, whole);
+        }
     }
 
     internal static bool IsDefaultFloor(string name) =>
