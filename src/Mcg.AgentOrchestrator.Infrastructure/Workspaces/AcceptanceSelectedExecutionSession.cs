@@ -15,6 +15,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
 {
     private readonly AcceptanceSelectedExecutionMode _effectiveMode = mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null
         ? AcceptanceSelectedExecutionMode.Shadow : mode;
+    private readonly Stopwatch _inputTimer = new();
+    private AcceptanceSelectedExecutionInput? _input;
     private AcceptanceSelectedExecutionPlan? _plan;
     private IReadOnlyList<AcceptanceTestClassDescriptor> _classes = [];
     private IReadOnlyList<AcceptanceTestLane> _actual = [];
@@ -41,6 +43,27 @@ internal sealed class AcceptanceSelectedExecutionSession(
         mode == AcceptanceSelectedExecutionMode.Off ? null : TransformProjectChecks;
     internal IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks => _plan?.ProjectChecks ?? [];
 
+    internal IReadOnlyList<ImpactReplayChangedSupportFileSummary> ReadSupportFallbacks() =>
+        _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && !attributionScoped && changedFiles is { Count: > 0 }
+            ? (ReadInput(changedFiles).SupportSelections ?? []).Where(item => item.FullRunTriggered).ToArray()
+            : [];
+
+    private AcceptanceSelectedExecutionInput ReadInput(IReadOnlyList<string> changes)
+    {
+        if (_input is not null) return _input;
+        _inputTimer.Start();
+        try
+        {
+            return _input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changes, engineSettings, integrationBranch)
+                : read(worktreePath, changes);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return _input = new(ReverseDependencyTestSelection.Unreadable($"{ex.GetType().Name}: {ex.Message}"), [], [], []);
+        }
+        finally { _inputTimer.Stop(); }
+    }
+
     internal IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> TransformProjectChecks(
         IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> checks)
     {
@@ -60,6 +83,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
     {
         if (mode == AcceptanceSelectedExecutionMode.Off) return lanes;
         _actual = lanes;
+        var priorInputMilliseconds = _inputTimer.Elapsed.TotalMilliseconds;
         var timer = Stopwatch.StartNew();
         try
         {
@@ -68,8 +92,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                     attributionScoped ? "Attribution-scoped attempt." : "Candidate changes are unavailable.", lanes, [], [], [], []);
             else
             {
-                var input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changedFiles, engineSettings, integrationBranch)
-                    : read(worktreePath, changedFiles);
+                var input = ReadInput(changedFiles);
                 _classes = input.Classes;
                 var targets = wholeProjectChecks.Where(check => check.SupportsSelectedExecution).ToArray();
                 var inventories = new Dictionary<AcceptanceWholeProjectCheck, AcceptanceWholeProjectCheckInventory>();
@@ -135,7 +158,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 $"{ex.GetType().Name}: {ex.Message}", lanes, [], [], [], []);
             _classes = []; // An incomplete inventory cannot certify counts.
         }
-        finally { _milliseconds = timer.Elapsed.TotalMilliseconds; }
+        finally { _milliseconds = priorInputMilliseconds + timer.Elapsed.TotalMilliseconds; }
         return _actual = Applied ? _plan!.ExecutionLanes : lanes;
     }
 

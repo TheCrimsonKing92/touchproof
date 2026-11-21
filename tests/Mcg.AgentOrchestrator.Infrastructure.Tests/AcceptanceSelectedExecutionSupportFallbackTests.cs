@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 using static AcceptanceSelectedExecutionFixture;
 using static AcceptanceSelectedExecutionProjectFixture;
 using static ImpactReplayChangedSupportReferenceScanTests;
@@ -41,6 +42,57 @@ public sealed class AcceptanceSelectedExecutionSupportFallbackTests
         var summary = Assert.Single(json.RootElement.GetProperty("selectedExecution").GetProperty("supportSelections").EnumerateArray());
         Assert.Equal("Support.cs", summary.GetProperty("path").GetString());
         Assert.True(summary.GetProperty("fullRunTriggered").GetBoolean());
+    }
+
+    [Fact]
+    public void TruncatedSupportClosure_SchedulesCoreOutsideOriginalPolicyScope()
+    {
+        using var switches = AcceptanceShardPolicySwitches.Use(new(FullShards: false, ChangeScoped: true));
+        using var repository = new RepositoryTestReachTests.RepositoryFixture();
+        const string support = RepositoryTestReachTests.RepositoryFixture.TestDirectory + "/Support.cs";
+        const string referrer = RepositoryTestReachTests.RepositoryFixture.TestDirectory + "/A.cs";
+        repository.Write(support, "public class Helpers { }");
+        repository.Write(referrer, "namespace Candidate; public class A { Helpers value; }");
+        Check[] declarations =
+        [
+            new() { Name = "core tests", Type = "dotnet-test", Project = CoreTestsProject, Arguments = ["--verbosity", "minimal"] },
+            new() { Name = "infrastructure tests", Type = "dotnet-test", Project = InfrastructureTestsProject }
+        ];
+        repository.Write("config/acceptance-manifest.json", JsonSerializer.Serialize(new { checks = declarations }));
+        string[] changed = [support];
+        var settings = new AcceptanceGateEngineSettings { EnforceStructuralCoverage = false };
+        AcceptanceBalancedLaneExpansion lanes = new(Lanes, null);
+        var baseline = GoalAcceptanceVerifier.CreateEffectiveGatePlan(repository.Root, changed, settings,
+            infrastructureLaneExpansion: lanes, balanceFocusedSelection: true);
+        Assert.True(baseline.PolicyShardPlan.Applies);
+        Assert.False(baseline.PolicyShardPlan.ForceFull);
+        Assert.False(baseline.PolicyShardPlan.IncludesProject(CoreTestsProject));
+        Assert.DoesNotContain(baseline.Checks, check => check.Project == CoreTestsProject);
+
+        var result = ImpactReplayChangedSupportReferenceScan.Select(repository.Root, changed,
+            [new(Path.Combine(repository.Root, InfrastructureTestsProject), true,
+                [Path.Combine(repository.Root, support), Path.Combine(repository.Root, referrer)]),
+             new(Path.Combine(repository.Root, CoreTestsProject), false, [])],
+            () => new HashSet<string>(StringComparer.Ordinal) { "Candidate.A" }, maximumVisited: 1);
+        var fallback = Assert.Single(result.SupportSelections);
+        Assert.True(fallback.Truncated);
+        Assert.Contains(CoreTestsProject, fallback.AffectedProjects);
+        var session = CreateSession(result, changed, result.Classes);
+
+        var effective = GoalAcceptanceVerifier.CreateEffectiveGatePlan(repository.Root, changed, settings,
+            infrastructureLaneExpansion: lanes, selectedExecution: session, balanceFocusedSelection: true);
+
+        Assert.False(effective.StructuralCoverageApplies);
+        Assert.False(effective.PolicyShardPlan.ForceFull);
+        var core = Assert.Single(effective.Checks, check => check.Project == CoreTestsProject);
+        Assert.Equal(declarations[0].Arguments, core.Arguments);
+        var observation = AcceptanceGateLanePlanPublisher.Classify("attempt", effective.CandidateLanes,
+            effective.InfrastructureTestLanes, effective.Manifest.Checks, effective.PolicyRequiredChecks,
+            effective.PolicyShardPlan, effective.DotnetShardDisposition, effective.SemanticDeduplications,
+            effective.Checks, effective.Checks, effective.Checks, selectedExecution: session);
+        var record = Assert.IsType<AcceptanceSelectedExecutionRecord>(observation.SelectedExecution);
+        Assert.Contains(support, record.FullGateReason);
+        Assert.Contains("truncated", record.FullGateReason);
     }
 
     [Fact]

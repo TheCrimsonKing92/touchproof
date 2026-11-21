@@ -572,7 +572,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var selectedExecution = await AcceptanceSelectedExecutionSession.CreateAsync(engineSettings, worktreePath, changedFiles,
             executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory, executionOwner.GateTestObligationSelectors, IntegrationBranch).ConfigureAwait(false);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
-            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.GateTransform, projectCheckTransform: selectedExecution.ProjectCheckTransform,
+            executionOwner.ProjectHomeDirectory, selectedExecution: selectedExecution,
             balanceFocusedSelection: true);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
@@ -1794,29 +1794,16 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceGateEngineSettings engineSettings,
         string? projectHomeDirectory = null,
         AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null,
-        Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceWholeProjectCheck>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null,
-        SelectionSourceTexts? sourceTexts = null, Func<IReadOnlyList<AcceptanceManifestCheck>, IReadOnlyList<AcceptanceManifestCheck>>? projectCheckTransform = null,
+        AcceptanceSelectedExecutionSession? selectedExecution = null,
+        SelectionSourceTexts? sourceTexts = null,
         bool balanceFocusedSelection = false)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
         var policyShardPlan = BuildPolicyShardPlan(changedFiles, null,
             CandidateTreeProbe.ForRepositoryRoot(worktreePath), AcceptanceProjectTopologySource.Create(projectHomeDirectory, manifest.Checks.Select(check => check.Project).OfType<string>()), manifest.Checks.Select(check => check.Project).OfType<string>());
-        if (dotnetShardDisposition == DotnetShardDisposition.RunDotnetShards &&
-            !policyShardPlan.ForceFull &&
-            manifest.Checks.Any(check =>
-                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)) &&
-            !manifest.Checks.Any(check =>
-                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
-                policyShardPlan.IncludesProject(check.Project)))
-        {
-            policyShardPlan = policyShardPlan with
-            {
-                Applies = true,
-                ForceFull = true,
-                Evidence = $"strict candidate path disposition requires dotnet shards; {policyShardPlan.Evidence}"
-            };
-        }
+        policyShardPlan = ApplyGateProjectRequirements(policyShardPlan, dotnetShardDisposition, manifest.Checks,
+            selectedExecution?.ReadSupportFallbacks() ?? []);
 
         var laneExpansion = infrastructureLaneExpansion ?? AcceptanceInfrastructureLaneResolver.ResolveExecution(engineSettings, worktreePath);
         var candidateLanes = laneExpansion.Lanes;
@@ -1825,11 +1812,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             changedFiles,
             policyShardPlan);
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks, sourceTexts));
+        if (policyShardPlan.SupportFallbackProjects.Count > 0)
+            policyRequiredChecks = policyRequiredChecks.Where(check => !IsFocusedProjectDotnetCheck(check) ||
+                !policyShardPlan.RequiresFullSupportRun(check.Project)).ToArray();
         var focusedExpansion = balanceFocusedSelection ? FocusedReverseDependentLaneSplitter.Resolve(
             policyRequiredChecks, manifest.Checks, policyShardPlan,
             laneExpansion with { Lanes = infrastructureTestLanes }, engineSettings, worktreePath, sourceTexts) : null;
         var fullInfrastructureGate = focusedExpansion?.FullGateReason is not null;
-        infrastructureTestLanes = fullInfrastructureGate ? candidateLanes : laneTransform?.Invoke(infrastructureTestLanes,
+        infrastructureTestLanes = fullInfrastructureGate ? candidateLanes : selectedExecution?.GateTransform?.Invoke(infrastructureTestLanes,
             AcceptanceWholeProjectCheck.Scheduled(manifest.Checks, policyRequiredChecks, policyShardPlan, dotnetShardDisposition, changedFiles)) ?? infrastructureTestLanes;
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
@@ -1847,8 +1837,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : new StructuralCoverageDeclarationPlan(policyEffectiveChecks, []);
         var semanticDeduplication = DeduplicateSemanticExecutionChecks(ApplyDotnetShardDisposition(
             ExpandBroadInfrastructureChecks(
-                (fullInfrastructureGate ? null : projectCheckTransform?.Invoke(structuralCoverageDeclarations.Checks)) ?? structuralCoverageDeclarations.Checks,
-                infrastructureTestLanes, keepUnshardedInfrastructure: fullInfrastructureGate),
+                (fullInfrastructureGate ? null : selectedExecution?.TransformProjectChecks(structuralCoverageDeclarations.Checks)) ?? structuralCoverageDeclarations.Checks,
+                infrastructureTestLanes, keepUnshardedInfrastructure: fullInfrastructureGate ||
+                    policyShardPlan.RequiresFullSupportRun(InfrastructureTestsProject)),
             dotnetShardDisposition));
         return new EffectiveGatePlan(
             manifest,
