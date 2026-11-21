@@ -17,15 +17,8 @@ internal static partial class TerminalGoalSweep
         IReadOnlyDictionary<string, GoalStatus> evictedGoals,
         IReadOnlySet<string> checkpointHeldGoalIds)
     {
-        // The first sweep and its remediation retry share the same observation. Terminal status
-        // created during reconciliation can trigger retention after checkpointing.
-        var buildRootGoals = goalReloads.Where(pair =>
-                pair.Value is ConductorGoalReloadObservation.Terminal terminal &&
-                IsTerminalSweepStatus(terminal.Status))
-            .Select(pair => (Id: new GoalId(pair.Key), IsTerminal: true))
-            .Concat(ObserveBuildRootGoals(kernel, evictedGoals))
-            .Where(goal => !checkpointHeldGoalIds.Contains(goal.Id.Value))
-            .ToArray();
+        var buildRootGoals = ObserveConductorBuildRootGoals(
+            kernel, goalReloads, evictedGoals, checkpointHeldGoalIds, s_ownedRootState.BuildRootGate);
 
         TerminalGoalSweepResult Sweep() => ConductorTickStepLedger.Measure("terminal-sweep-run", () => Run(
             kernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, cache: cache,
@@ -37,6 +30,31 @@ internal static partial class TerminalGoalSweep
         if (remediation.RemedySucceeded)
             terminalSweep = Sweep().PreserveTerminalizationsFrom(terminalSweep);
         return (terminalSweep, remediation);
+    }
+
+    internal static (GoalId Id, bool IsTerminal)[] ObserveConductorBuildRootGoals(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyDictionary<string, ConductorGoalReloadObservation> goalReloads,
+        IReadOnlyDictionary<string, GoalStatus> evictedGoals,
+        IReadOnlySet<string> checkpointHeldGoalIds,
+        BuildRootReapCadenceGate gate)
+    {
+        // Checkpoint eviction leaves terminal metadata even when the next reload omits the goal.
+        // Probe only ids the gate saw live. Current reload and aggregate observations take precedence.
+        var checkpointedTerminals = gate.SnapshotPreviouslyLiveGoals()
+            .Where(id => kernel.TryGetKnownDependencyGoalStatus(id, out var status) &&
+                Enum.TryParse<GoalStatus>(status, out var parsedStatus) && IsTerminalSweepStatus(parsedStatus))
+            .Select(id => (Id: id, IsTerminal: true));
+
+        // The sweep and its remediation retry share this pre-reconciliation observation.
+        return goalReloads.Where(pair =>
+                pair.Value is ConductorGoalReloadObservation.Terminal terminal &&
+                IsTerminalSweepStatus(terminal.Status))
+            .Select(pair => (Id: new GoalId(pair.Key), IsTerminal: true))
+            .Concat(ObserveBuildRootGoals(kernel, evictedGoals))
+            .Concat(checkpointedTerminals)
+            .Where(goal => !checkpointHeldGoalIds.Contains(goal.Id.Value))
+            .ToArray();
     }
 
     private static IEnumerable<(GoalId Id, bool IsTerminal)> ObserveBuildRootGoals(

@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -48,6 +49,44 @@ public sealed class TerminalGoalSweepBuildRootCadenceTests : IDisposable
 
         Sweep(Reap, terminal, reclaimGoalRoots: true);
         Assert.Equal(5, calls);
+    }
+
+    [Fact]
+    public async Task Sweep_runs_early_once_after_checkpoint_evicts_a_live_goal()
+    {
+        // The database and all sweep roots belong to this fixture.
+        var db = Path.Combine(fixture.FullName, "checkpoint.db");
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Checkpoint cadence fixture");
+        await repository.SaveAsync(kernel);
+        var baselines = new Dictionary<string, GoalSnapshot> { [goal.Id.Value] = kernel.ExportGoalSnapshot(goal.Id) };
+
+        var goalReloads = new Dictionary<string, ConductorGoalReloadObservation>();
+        var reloadEvictions = new Dictionary<string, GoalStatus>();
+        TerminalGoalSweepOwnedRootResult Tick(params string[] heldIds) => Sweep(
+            () => new(1, 0, 0, 0, []), TerminalGoalSweep.ObserveConductorBuildRootGoals(
+                kernel, goalReloads, reloadEvictions, heldIds.ToHashSet(StringComparer.Ordinal), state.BuildRootGate));
+
+        Assert.Equal(1, Tick().ProcessedCount);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(0, Tick().ProcessedCount);
+
+        kernel.CancelGoal(goal.Id, "Checkpoint cadence fixture");
+        var requests = CliPersistentStateRunner.BuildConductLoopCheckpointRequests(
+            kernel, [goal.Id], baselines, repository, db, containTransientBaselineLoads: true, out var holds);
+        Assert.Empty(holds);
+        var checkpoint = Assert.Single(await repository.CheckpointGoalSnapshotsAsync(requests));
+        Assert.True(checkpoint.IsDurable);
+        var save = Assert.IsType<GoalSnapshotSaveResult>(checkpoint.SaveResult);
+        Assert.Equal(GoalStatus.Cancelled, save.PersistedSnapshot!.Status);
+        CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(kernel, save);
+        Assert.Equal(1, kernel.EvictTerminalGoalAggregates([goal.Id]));
+        Assert.Empty(kernel.Goals);
+
+        Assert.Equal(0, Tick(goal.Id.Value).ProcessedCount);
+        Assert.Equal(1, Tick().ProcessedCount);
+        Assert.Equal(0, Tick().ProcessedCount);
     }
 
     [Fact]

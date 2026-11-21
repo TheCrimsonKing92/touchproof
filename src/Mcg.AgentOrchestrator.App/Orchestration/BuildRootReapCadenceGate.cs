@@ -8,6 +8,12 @@ internal sealed class BuildRootReapCadenceGate
     private readonly HashSet<GoalId> liveGoals = [];
     private long? lastPassStarted;
 
+    internal GoalId[] SnapshotPreviouslyLiveGoals()
+    {
+        lock (sync)
+            return liveGoals.ToArray();
+    }
+
     internal TerminalGoalSweepOwnedRootResult? RunIfDue(
         TimeProvider clock, TimeSpan interval, bool force,
         IEnumerable<(GoalId Id, bool IsTerminal)>? goals, Func<TerminalGoalSweepOwnedRootResult> reap)
