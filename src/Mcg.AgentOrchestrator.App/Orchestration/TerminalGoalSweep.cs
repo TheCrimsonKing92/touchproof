@@ -367,7 +367,7 @@ internal sealed class TerminalGoalSweepCache
             {
                 goal.Id.Value,
                 goal.Status.ToString(),
-                $"timeline={goal.Timeline.Count}",
+                $"timeline={goal.TimelineCount}",
                 $"deps={string.Join(",", goal.DependsOn.Select(id => id.Value).Order(StringComparer.Ordinal))}"
             }
             .Concat(taskParts)
@@ -419,7 +419,8 @@ internal static partial class TerminalGoalSweep
         MergeTrainAcceptanceStore? mergeTrainAcceptanceStore = null,
         CohortAcceptanceStore? cohortAcceptanceStore = null,
         bool reclaimGoalRoots = false,
-        BackgroundDispatchRunner? dispatchRunner = null)
+        BackgroundDispatchRunner? dispatchRunner = null,
+        OrchestratorWorkspace? workspace = null)
     {
         var runTiming = System.Diagnostics.Stopwatch.StartNew();
         var setupTiming = System.Diagnostics.Stopwatch.StartNew();
@@ -437,7 +438,7 @@ internal static partial class TerminalGoalSweep
         }
         gitRunner = CountingGitRunner;
         cleanupHooks ??= new GoalWorktreeCleanupHooks();
-        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
+        workspace ??= OrchestratorWorkspace.ForDirectory(executionDirectory);
         orchestratorDirectory ??= workspace.OrchestratorDirectory;
         mergeTrainAcceptanceStore ??= new MergeTrainAcceptanceStore(
             Path.Combine(orchestratorDirectory, "merge-train-acceptance.db"));
@@ -448,7 +449,9 @@ internal static partial class TerminalGoalSweep
             new CompletionBuildEvidenceCoordinator(reconciliationStatePath, executionDirectory))
         {
             RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate,
-            WorkerBuildInvocations = new WorkerBuildInvocationOperations(reconciliationStatePath, executionDirectory),
+            WorkerBuildInvocations = WorkerBuildInvocationOperations.ForWorkspace(
+                workspace with { SqliteStatePath = reconciliationStatePath },
+                OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory)),
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(orchestratorDirectory, workspace.LogDirectory)
         };
         setupTiming.Stop();

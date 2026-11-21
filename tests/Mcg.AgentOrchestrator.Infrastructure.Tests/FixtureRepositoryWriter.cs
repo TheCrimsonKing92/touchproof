@@ -7,13 +7,43 @@ using System.Text;
 /// <summary>
 /// Writes SHA-1 loose blobs, nested trees, commits, loose refs, symbolic HEAD, reflogs,
 /// working files and a checksummed version 2 index for regular files (100644).
-/// Packs, packed refs, linked worktrees, SHA-256, executable/symlink/gitlink modes and
-/// index versions 3/4 or extensions belong to subsequent slices.
+/// Linked worktrees share loose objects and branch refs with the common directory.
+/// Packs, packed refs, per-worktree refs other than HEAD, worktree configuration,
+/// SHA-256, non-regular modes and index versions 3/4 or semantic extensions are unsupported.
 /// </summary>
-internal sealed class FixtureRepositoryWriter(string repository)
+internal sealed class FixtureRepositoryWriter
 {
-    internal string Root { get; } = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repository));
-    internal string GitDirectory => Path.Combine(Root, ".git");
+    internal FixtureRepositoryWriter(string repository)
+    {
+        Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repository));
+        DotGit = Path.Combine(Root, ".git");
+        GitDirectory = File.Exists(DotGit) ? ReadDirectoryPointer(DotGit, "gitdir: ") : DotGit;
+        var commonPointer = Path.Combine(GitDirectory, "commondir");
+        IsLinkedWorktree = Path.Exists(commonPointer);
+        if (GitDirectory != DotGit && !IsLinkedWorktree)
+            throw new InvalidDataException("Unsupported separate fixture Git directory.");
+        CommonDirectory = IsLinkedWorktree ? ReadDirectoryPointer(commonPointer) : GitDirectory;
+    }
+
+    internal string Root { get; }
+    internal string DotGit { get; }
+    internal string GitDirectory { get; }
+    internal string CommonDirectory { get; }
+    internal bool IsLinkedWorktree { get; }
+
+    internal static string ReadDirectoryPointer(string file, string prefix = "")
+    {
+        var text = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(file));
+        if (text.EndsWith('\n')) text = text[..^1];
+        if (text.EndsWith('\r')) text = text[..^1];
+        if (!text.StartsWith(prefix, StringComparison.Ordinal))
+            throw new InvalidDataException("Invalid fixture Git directory pointer.");
+        var path = text[prefix.Length..];
+        if (path.Length == 0 || path != path.Trim() || path.Any(char.IsControl) || path.StartsWith('\uFEFF') ||
+            Path.IsPathRooted(path) && !Path.IsPathFullyQualified(path))
+            throw new InvalidDataException("Invalid fixture Git directory pointer.");
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path, Path.GetDirectoryName(file)!));
+    }
     internal sealed record Identity(string Name, string Email, DateTimeOffset Date)
     {
         internal string Header => $"{Name} <{Email}> {Date.ToUnixTimeSeconds()} {Date.ToString("zzz", CultureInfo.InvariantCulture).Replace(":", "")}";
@@ -22,7 +52,7 @@ internal sealed class FixtureRepositoryWriter(string repository)
     internal void Initialize(string branch = "main", string? templates = null)
     {
         ValidateRef("refs/heads/" + branch);
-        if (File.Exists(GitDirectory) || Directory.Exists(GitDirectory))
+        if (Path.Exists(DotGit))
             throw new IOException("Fixture repository already exists.");
         Directory.CreateDirectory(GitDirectory);
         if (templates is not null) CopyDirectory(templates, GitDirectory);
@@ -36,6 +66,7 @@ internal sealed class FixtureRepositoryWriter(string repository)
     }
 
     internal string WriteBlob(byte[] bytes) => WriteObject("blob", bytes);
+    internal static string HashBlob(byte[] bytes) => ObjectId(ObjectBytes("blob", bytes));
 
     internal string WriteTree(IReadOnlyDictionary<string, string> files)
     {
@@ -85,6 +116,53 @@ internal sealed class FixtureRepositoryWriter(string repository)
         return WriteCommit(WriteTree(blobs), parents, message, identity, identity);
     }
 
+    // Commits explicit regular fixture files whose worktree bytes are already their intended blob bytes.
+    internal string CommitFiles(IEnumerable<string> paths, string message, Identity identity, bool allowEmpty = false)
+    {
+        var reference = HeadReference() ?? throw new InvalidDataException("Fixture commit requires a branch.");
+        var previous = ReadRef(reference) ?? throw new InvalidDataException("Fixture commit requires a seeded branch.");
+        var files = ReadCommitFiles(previous);
+        if (File.Exists(Path.Combine(GitDirectory, "MERGE_HEAD")) ||
+            File.Exists(Path.Combine(CommonDirectory, "info", "attributes")) ||
+            files.Keys.Any(IsAttributesPath))
+            throw new InvalidDataException("Fixture commit requires a plain checkout without Git attributes.");
+
+        var changes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var config = File.ReadAllText(Path.Combine(CommonDirectory, "config"));
+        foreach (var path in paths)
+        {
+            ValidatePath(path);
+            var file = Path.Combine(Root, path);
+            for (var directory = Path.GetDirectoryName(file)!; ; directory = Path.GetDirectoryName(directory)!)
+            {
+                if (File.Exists(Path.Combine(directory, ".gitattributes")) || IsAttributesPath(path))
+                    throw new InvalidDataException("Fixture commit encountered Git attributes.");
+                if (directory == Root) break;
+            }
+            var bytes = File.ReadAllBytes(file);
+            if (bytes.Contains((byte)'\r') && !config.Contains("\tautocrlf = false\n", StringComparison.Ordinal))
+                throw new InvalidDataException("Fixture commit requires disabled newline conversion for CR bytes.");
+            changes.Add(path, bytes);
+        }
+
+        if (!allowEmpty && changes.All(change =>
+            files.TryGetValue(change.Key, out var blob) && blob == HashBlob(change.Value)))
+            throw new InvalidDataException("Fixture commit has no changes.");
+        foreach (var (path, bytes) in changes)
+            files[path] = WriteBlob(bytes);
+        var head = WriteCommit(WriteTree(files), [previous], message, identity, identity);
+        WriteIndex(files);
+        WriteRef(reference, head);
+        var subject = $"commit: {message}";
+        AppendReflog(reference, previous, head, identity, subject);
+        AppendReflog("HEAD", previous, head, identity, subject);
+        AtomicWrite(Path.Combine(GitDirectory, "COMMIT_EDITMSG"), Encoding.UTF8.GetBytes(message + "\n"));
+        return head;
+
+        static bool IsAttributesPath(string path) =>
+            Path.GetFileName(path).Equals(".gitattributes", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal void SelectTip(string branch, string commit)
     {
         ValidateRef("refs/heads/" + branch);
@@ -114,13 +192,13 @@ internal sealed class FixtureRepositoryWriter(string repository)
     {
         ValidateRef(reference);
         ValidateId(id);
-        AtomicWrite(Path.Combine(GitDirectory, reference), Encoding.ASCII.GetBytes(id + "\n"));
+        AtomicWrite(Path.Combine(CommonDirectory, reference), Encoding.ASCII.GetBytes(id + "\n"));
     }
 
     internal void AppendReflog(string reference, string? oldId, string newId, Identity identity, string subject)
     {
         if (reference != "HEAD") ValidateRef(reference);
-        var path = Path.Combine(GitDirectory, "logs", reference);
+        var path = Path.Combine(reference == "HEAD" ? GitDirectory : CommonDirectory, "logs", reference);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.AppendAllText(path, $"{oldId ?? new string('0', 40)} {newId} {identity.Header}{(subject.Length == 0 ? "" : "\t" + subject)}\n", new UTF8Encoding(false));
     }
@@ -134,7 +212,7 @@ internal sealed class FixtureRepositoryWriter(string repository)
     internal string? ReadRef(string reference)
     {
         ValidateRef(reference);
-        var path = Path.Combine(GitDirectory, reference);
+        var path = Path.Combine(CommonDirectory, reference);
         if (!File.Exists(path)) return null;
         var id = File.ReadAllText(path).Trim();
         ValidateId(id);
@@ -173,23 +251,23 @@ internal sealed class FixtureRepositoryWriter(string repository)
     internal byte[] ReadObject(string id, string expectedType)
     {
         ValidateId(id);
-        using var input = File.OpenRead(Path.Combine(GitDirectory, "objects", id[..2], id[2..]));
+        using var input = File.OpenRead(Path.Combine(CommonDirectory, "objects", id[..2], id[2..]));
         using var compressed = new ZLibStream(input, CompressionMode.Decompress);
         using var buffer = new MemoryStream();
         compressed.CopyTo(buffer);
         var bytes = buffer.ToArray();
         var end = Array.IndexOf(bytes, (byte)0);
         if (end < 0 || Encoding.ASCII.GetString(bytes, 0, end) != $"{expectedType} {bytes.Length - end - 1}" ||
-            Convert.ToHexStringLower(SHA1.HashData(bytes)) != id)
+            ObjectId(bytes) != id)
             throw new InvalidDataException("Invalid loose object.");
         return bytes[(end + 1)..];
     }
 
     private string WriteObject(string type, byte[] body)
     {
-        var bytes = Encoding.ASCII.GetBytes($"{type} {body.Length}\0").Concat(body).ToArray();
-        var id = Convert.ToHexStringLower(SHA1.HashData(bytes));
-        var path = Path.Combine(GitDirectory, "objects", id[..2], id[2..]);
+        var bytes = ObjectBytes(type, body);
+        var id = ObjectId(bytes);
+        var path = Path.Combine(CommonDirectory, "objects", id[..2], id[2..]);
         if (File.Exists(path)) return id;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporary = path + "." + Guid.NewGuid().ToString("N");
@@ -205,7 +283,12 @@ internal sealed class FixtureRepositoryWriter(string repository)
         return id;
     }
 
-    internal void WriteIndex(IReadOnlyDictionary<string, string> files)
+    private static byte[] ObjectBytes(string type, byte[] body) =>
+        Encoding.ASCII.GetBytes($"{type} {body.Length}\0").Concat(body).ToArray();
+
+    private static string ObjectId(byte[] bytes) => Convert.ToHexStringLower(SHA1.HashData(bytes));
+
+    internal void WriteIndex(IReadOnlyDictionary<string, string> files, IReadOnlyDictionary<string, byte[]>? refreshedFiles = null)
     {
         using var body = new MemoryStream();
         body.Write("DIRC"u8);
@@ -218,7 +301,8 @@ internal sealed class FixtureRepositoryWriter(string repository)
             ValidateId(id);
             var start = body.Position;
             var info = new FileInfo(Path.Combine(Root, path));
-            var matches = info.Exists && WriteBlob(File.ReadAllBytes(info.FullName)) == id;
+            var matches = (refreshedFiles is null || refreshedFiles.ContainsKey(path)) &&
+                info.Exists && HashBlob(File.ReadAllBytes(info.FullName)) == id;
             WriteTime(body, matches ? info.CreationTimeUtc : DateTime.UnixEpoch);
             WriteTime(body, matches ? info.LastWriteTimeUtc : DateTime.UnixEpoch);
             WriteUInt(body, 0); // dev

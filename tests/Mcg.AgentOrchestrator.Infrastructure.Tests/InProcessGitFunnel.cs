@@ -14,7 +14,7 @@ internal static class InProcessGitFunnel
     private static readonly object RecordingLock = new();
     private static readonly AsyncLocal<Scope?> CurrentScope = new();
     internal static bool RealGitOnly => Disabled || CurrentScope.Value?.RealOnly == true;
-    internal static readonly string[] ServedShapes = ["init", "config-set", "add-all", "add-paths", "commit-message",
+    internal static readonly string[] ServedShapes = ["init", "config-set", "add-all", "add-paths", "commit-message", "commit-pathspec",
         "checkout-new", "switch-new", "branch-create", "update-ref", "rev-parse"];
     private static readonly HashSet<string> EnvironmentKeys = new(StringComparer.Ordinal)
     {
@@ -38,8 +38,10 @@ internal static class InProcessGitFunnel
         private readonly Scope? previous;
         private readonly object sync = new();
         private readonly List<string> served = [];
+        private readonly List<string> launched = [];
         internal bool RealOnly { get; }
         internal string[] Served { get { lock (sync) return served.ToArray(); } }
+        internal string[] Launched { get { lock (sync) return launched.ToArray(); } }
         internal Scope(bool realOnly)
         {
             previous = CurrentScope.Value;
@@ -47,17 +49,21 @@ internal static class InProcessGitFunnel
             CurrentScope.Value = this;
         }
         internal void Record(string shape) { lock (sync) served.Add(shape); previous?.Record(shape); }
+        internal void RecordLaunch(string command) { lock (sync) launched.Add(command); previous?.RecordLaunch(command); }
         public void Dispose() => CurrentScope.Value = previous;
     }
 
     internal static void RecordLaunch(IReadOnlyList<string> arguments) => Record("launched", arguments);
     private static void Record(string disposition, IReadOnlyList<string> arguments)
     {
-        if (RecordingPath is null) return;
+        var launchScope = disposition == "launched" ? CurrentScope.Value : null;
+        if (RecordingPath is null && launchScope is null) return;
         var commandIndex = 0;
         while (commandIndex + 2 < arguments.Count && arguments[commandIndex] is "-c" or "-C") commandIndex += 2;
         var command = commandIndex < arguments.Count && Regex.IsMatch(arguments[commandIndex], "^[a-z][a-z-]*$")
             ? arguments[commandIndex] : "<other>";
+        launchScope?.RecordLaunch(command);
+        if (RecordingPath is null) return;
         // Values following options remain masked even when a message happens to look like an option.
         var valueNext = false;
         var tokens = new List<string>();
@@ -122,7 +128,7 @@ internal static class InProcessGitFunnel
         {
             // The installed templates and config format are platform-specific. Other hosts use git.
             if (!OperatingSystem.IsWindows() || !Directory.Exists(writer.Root) ||
-                File.Exists(writer.GitDirectory) || Directory.Exists(writer.GitDirectory) ||
+                Path.Exists(writer.DotGit) ||
                 Directory.EnumerateFileSystemEntries(writer.Root).Any(path =>
                     (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)) return false;
             var quiet = false;
@@ -140,11 +146,12 @@ internal static class InProcessGitFunnel
             var templates = Path.Combine(install ?? "", "mingw64", "share", "git-core", "templates");
             if (!Directory.Exists(templates) || File.Exists(Path.Combine(templates, "config"))) return false;
             action = () => writer.Initialize(branch, templates);
-            output = quiet ? "" : "Initialized empty Git repository in " + writer.GitDirectory.Replace('\\', '/') + "/\n";
+            output = quiet ? "" : "Initialized empty Git repository in " + writer.DotGit.Replace('\\', '/') + "/\n";
             shape = "init";
             return true;
         }
 
+        if (writer.IsLinkedWorktree && args[0] is not ("add" or "commit" or "rev-parse")) return false;
         if (!SafeRepository(writer, out var config)) return false;
         if (args[0] == "config")
         {
@@ -163,7 +170,18 @@ internal static class InProcessGitFunnel
         {
             var index = 1;
             while (index < args.Count && args[index] is "--verify" or "-q" or "--quiet") index++;
-            if (index != args.Count - 1 || !GitRefFileResolver.TryResolve(writer.Root, args[index], out var id, _ => null)) return false;
+            if (index != args.Count - 1) return false;
+            string? id;
+            if (GitRefFileResolver.TryResolve(writer.Root, args[index], out var resolved, _ => null))
+                id = resolved;
+            else if (writer.IsLinkedWorktree && args[index] == "HEAD" && writer.HeadReference() is { } headRef)
+            {
+                // The ref resolver has a narrower config allowlist (for example core.trustctime).
+                id = writer.ReadRef(headRef);
+                if (id is null) return false;
+                writer.ReadObject(id, "commit");
+            }
+            else return false;
             action = () => { }; output = id + "\n"; shape = "rev-parse";
             return true;
         }
@@ -222,7 +240,7 @@ internal static class InProcessGitFunnel
         {
             var target = args[1];
             FixtureRepositoryWriter.ValidateRef(target);
-            if (!SafeLocation(writer, target)) return false;
+            if (!SafeLocation(writer.CommonDirectory, target)) return false;
             var old = writer.ReadRef(target);
             if (File.Exists(Path.Combine(writer.GitDirectory, "packed-refs")) ||
                 args.Count == 4 && args[3] != (old ?? new string('0', 40))) return false;
@@ -246,22 +264,26 @@ internal static class InProcessGitFunnel
     private static bool SafeRepository(FixtureRepositoryWriter writer, out Dictionary<string, string> config)
     {
         config = new(StringComparer.OrdinalIgnoreCase);
-        if (!Directory.Exists(writer.GitDirectory) || File.Exists(Path.Combine(writer.GitDirectory, "commondir")) ||
-            File.Exists(Path.Combine(writer.GitDirectory, "objects", "info", "alternates")) ||
-            File.Exists(Path.Combine(writer.GitDirectory, "info", "attributes")) ||
-            File.Exists(Path.Combine(writer.GitDirectory, "shallow")) ||
-            Directory.Exists(Path.Combine(writer.GitDirectory, "refs", "replace"))) return false;
+        var git = writer.GitDirectory;
+        var common = writer.CommonDirectory;
+        if (!Directory.Exists(git) || !Directory.Exists(common) || !SafeLocation(writer.Root, ".git") ||
+            new[] { "objects/info/alternates", "objects/info/http-alternates", "info/attributes", "info/grafts",
+                "info/sparse-checkout", "shallow", "refs/replace" }.Any(name => Path.Exists(Path.Combine(common, name)))) return false;
+        if (writer.IsLinkedWorktree && !SafeLinkedWorktree(writer)) return false;
         // Check the metadata we consume, not every historical loose object on every call.
-        foreach (var name in new[] { "HEAD", "index", "config", "objects", "objects/pack", "refs", "refs/heads", "hooks", "info/exclude" })
-            if (!SafeLocation(writer, name)) return false;
-        var packs = Path.Combine(writer.GitDirectory, "objects", "pack");
+        foreach (var name in new[] { "HEAD", "index" })
+            if (!SafeLocation(git, name)) return false;
+        foreach (var name in new[] { "config", "objects", "objects/pack", "refs", "refs/heads", "hooks", "info/exclude" })
+            if (!SafeLocation(common, name)) return false;
+        var packs = Path.Combine(common, "objects", "pack");
         if (Directory.Exists(packs) && Directory.EnumerateFiles(packs, "*.pack").Any()) return false;
         var currentRef = writer.HeadReference();
-        if (currentRef is not null && !SafeLocation(writer, currentRef)) return false;
-        var hooks = Path.Combine(writer.GitDirectory, "hooks");
+        if (currentRef is not null && !SafeLocation(common, currentRef)) return false;
+        if (writer.IsLinkedWorktree && (currentRef is null || !File.Exists(Path.Combine(common, currentRef)))) return false;
+        var hooks = Path.Combine(common, "hooks");
         if (Directory.Exists(hooks) && Directory.EnumerateFiles(hooks).Any(path => !path.EndsWith(".sample", StringComparison.Ordinal))) return false;
         var section = "";
-        foreach (var line in File.ReadAllLines(Path.Combine(writer.GitDirectory, "config")))
+        foreach (var line in File.ReadAllLines(Path.Combine(common, "config")))
         {
             var text = line.Trim();
             if (text.Length == 0 || text[0] is '#' or ';') continue;
@@ -278,7 +300,7 @@ internal static class InProcessGitFunnel
             if (key.ToLowerInvariant() switch
                 {
                     "core.repositoryformatversion" => value != "0",
-                    "core.bare" or "core.filemode" or "core.symlinks" or "commit.gpgsign" or "core.autocrlf" => value != "false",
+                    "core.bare" or "core.filemode" or "core.symlinks" or "core.trustctime" or "commit.gpgsign" or "core.autocrlf" => value != "false",
                     "core.logallrefupdates" or "core.ignorecase" => value != "true",
                     "user.name" or "user.email" => false,
                     _ => true
@@ -287,12 +309,46 @@ internal static class InProcessGitFunnel
         return true;
     }
 
+    private static bool SafeLinkedWorktree(FixtureRepositoryWriter writer)
+    {
+        var git = writer.GitDirectory;
+        var common = writer.CommonDirectory;
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var worktrees = Path.Combine(common, "worktrees");
+        if (!File.Exists(writer.DotGit) || !string.Equals(Path.GetDirectoryName(git), worktrees, comparison) ||
+            !SafeLocation(common, Path.GetRelativePath(common, git)) ||
+            !SafeLocation(git, "gitdir") || !SafeLocation(git, "commondir") ||
+            !string.Equals(FixtureRepositoryWriter.ReadDirectoryPointer(Path.Combine(git, "gitdir")), writer.DotGit, comparison))
+            return false;
+        return !new[] { "config.worktree", "info/sparse-checkout", "refs/bisect", "refs/worktree", "refs/rewritten",
+                "logs/refs", "hooks", "packed-refs", "objects" }.Any(name => Path.Exists(Path.Combine(git, name))) &&
+            !Path.Exists(Path.Combine(common, "packed-refs")) && !HasCommitInProgress(git) && !HasCommitInProgress(common);
+    }
+
+    private static bool HasCommitInProgress(string git) =>
+        new[] { "MERGE_HEAD", "MERGE_MODE", "MERGE_AUTOSTASH", "AUTO_MERGE", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+            "SQUASH_MSG", "REBASE_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_START" }
+            .Any(name => Path.Exists(Path.Combine(git, name)));
+
     private static bool PlanAdd(FixtureRepositoryWriter writer, IReadOnlyList<string> args, Dictionary<string, string> staged,
         out Action? action, out string shape)
     {
         action = null; shape = "";
         if (args.Count < 2) return false;
         var all = args.Count == 2 && args[1] is "-A" or "--all" or ".";
+        var explicitPaths = args.Skip(1).ToArray();
+        if (!all && explicitPaths.All(staged.ContainsKey))
+        {
+            if (staged.Keys.Any(IsAttributesFile) || !TryReadTrackedPaths(writer, explicitPaths, out var trackedContent))
+                return false;
+            action = () =>
+            {
+                foreach (var (path, bytes) in trackedContent) staged[path] = writer.WriteBlob(bytes);
+                writer.WriteIndex(staged, trackedContent);
+            };
+            shape = "add-paths";
+            return true;
+        }
         var paths = new List<string>();
         var pending = new Stack<string>();
         pending.Push(writer.Root);
@@ -300,7 +356,7 @@ internal static class InProcessGitFunnel
         {
             foreach (var path in Directory.EnumerateFileSystemEntries(directory))
             {
-                if (path == writer.GitDirectory) continue;
+                if (path == writer.DotGit) continue;
                 if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
                 var relative = Path.GetRelativePath(writer.Root, path).Replace('\\', '/');
                 if (Path.GetFileName(path) is ".gitignore" or ".gitattributes" or ".git") return false;
@@ -308,10 +364,10 @@ internal static class InProcessGitFunnel
                 if (Directory.Exists(path)) pending.Push(path); else paths.Add(relative);
             }
         }
-        var exclude = Path.Combine(writer.GitDirectory, "info", "exclude");
+        var exclude = Path.Combine(writer.CommonDirectory, "info", "exclude");
         if (File.Exists(exclude) && File.ReadAllLines(exclude).Any(line => line.Trim().Length > 0 && !line.TrimStart().StartsWith('#'))) return false;
         if (paths.Distinct(StringComparer.OrdinalIgnoreCase).Count() != paths.Count) return false;
-        var chosen = all ? paths.ToArray() : args.Skip(1).ToArray();
+        var chosen = all ? paths.ToArray() : explicitPaths;
         if (!all && chosen.Any(path => path.StartsWith('-') || !paths.Contains(path, StringComparer.Ordinal))) return false;
         var content = chosen.ToDictionary(path => path, path => File.ReadAllBytes(Path.Combine(writer.Root, path)), StringComparer.Ordinal);
         action = () =>
@@ -324,6 +380,33 @@ internal static class InProcessGitFunnel
         return true;
     }
 
+    private static bool TryReadTrackedPaths(FixtureRepositoryWriter writer, IEnumerable<string> paths,
+        out Dictionary<string, byte[]> content)
+    {
+        content = new(StringComparer.Ordinal);
+        foreach (var path in paths)
+        {
+            FixtureRepositoryWriter.ValidatePath(path);
+            if (path.StartsWith('-') || path.IndexOfAny(['*', '?', '[']) >= 0 || content.ContainsKey(path) ||
+                !SafeFileLocation(writer.Root, path)) return false;
+            var file = Path.Combine(writer.Root, path);
+            if (!File.Exists(file) || IsAttributesFile(path) || HasWorkingAttributes(writer, path)) return false;
+            content.Add(path, File.ReadAllBytes(file));
+        }
+        return true;
+    }
+
+    private static bool IsAttributesFile(string path) =>
+        Path.GetFileName(path).Equals(".gitattributes", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasWorkingAttributes(FixtureRepositoryWriter writer, string path)
+    {
+        for (var directory = Path.GetDirectoryName(Path.Combine(writer.Root, path)); directory is not null;
+             directory = directory == writer.Root ? null : Path.GetDirectoryName(directory))
+            if (File.Exists(Path.Combine(directory, ".gitattributes"))) return true;
+        return false;
+    }
+
     private static bool PlanCommit(FixtureRepositoryWriter writer, IReadOnlyList<string> args,
         IReadOnlyDictionary<string, string>? env, Dictionary<string, string> config, string reference, string? head,
         Dictionary<string, string> previous, Dictionary<string, string> staged,
@@ -332,35 +415,49 @@ internal static class InProcessGitFunnel
         action = null; readOutput = null; output = shape = "";
         var messages = new List<string>();
         var allowEmpty = false; var quiet = false;
+        var pathOffset = args.Count;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] == "-m" && i + 1 < args.Count) messages.Add(args[++i]);
             else if (args[i] == "--allow-empty") allowEmpty = true;
             else if (args[i] is "-q" or "--quiet") quiet = true;
+            else if (args[i] == "--" && i + 1 < args.Count) { pathOffset = i + 1; break; }
             else return false;
         }
         if (messages.Count == 0 || messages.Any(message => message.Any(c => c < 32 || c > 126)) ||
-            new[] { "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "SQUASH_MSG", "rebase-merge", "rebase-apply", "sequencer" }
-                .Any(name => File.Exists(Path.Combine(writer.GitDirectory, name)) || Directory.Exists(Path.Combine(writer.GitDirectory, name))) ||
-            previous.Keys.Concat(staged.Keys).Any(path => Path.GetFileName(path) == ".gitattributes") ||
-            File.Exists(Path.Combine(writer.GitDirectory, "packed-refs"))) return false;
+            HasCommitInProgress(writer.GitDirectory) ||
+            previous.Keys.Concat(staged.Keys).Any(IsAttributesFile) ||
+            Path.Exists(Path.Combine(writer.CommonDirectory, "packed-refs"))) return false;
+        var commitFiles = staged;
+        var selected = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        if (pathOffset < args.Count)
+        {
+            var paths = args.Skip(pathOffset).ToArray();
+            if (head is null || allowEmpty ||
+                paths.Any(path => !previous.ContainsKey(path) || !staged.ContainsKey(path)) ||
+                !TryReadTrackedPaths(writer, paths, out selected)) return false;
+            commitFiles = new(previous, StringComparer.Ordinal);
+            foreach (var (path, bytes) in selected) commitFiles[path] = FixtureRepositoryWriter.HashBlob(bytes);
+        }
+        if ((writer.IsLinkedWorktree || selected.Count > 0) &&
+            (!SafeFileLocation(writer.GitDirectory, "COMMIT_EDITMSG") || !SafeFileLocation(writer.GitDirectory, "logs/HEAD") ||
+                !SafeFileLocation(writer.CommonDirectory, "logs/" + reference))) return false;
         var message = string.Join("\n\n", messages.Select(CleanMessage)).Trim('\n');
-        if (message.Length == 0 || !allowEmpty && EqualFiles(previous, staged)) return false;
+        if (message.Length == 0 || !allowEmpty && EqualFiles(previous, commitFiles)) return false;
         if (!TryIdentity("AUTHOR", env, config, out var author) || !TryIdentity("COMMITTER", env, config, out var committer)) return false;
-        var added = staged.Keys.Except(previous.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        var removed = previous.Keys.Except(staged.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var added = commitFiles.Keys.Except(previous.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var removed = previous.Keys.Except(commitFiles.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         if (added.Length > 0 && removed.Length > 0) return false; // rename detection
-        var changed = previous.Keys.Union(staged.Keys, StringComparer.Ordinal)
-            .Where(path => !previous.TryGetValue(path, out var old) || !staged.TryGetValue(path, out var next) || old != next).ToArray();
+        var changed = previous.Keys.Union(commitFiles.Keys, StringComparer.Ordinal)
+            .Where(path => !previous.TryGetValue(path, out var old) || !commitFiles.TryGetValue(path, out var next) || old != next).ToArray();
         var insertions = 0; var deletions = 0;
         foreach (var path in changed)
         {
             if (path.Any(c => c < 32 || c > 126 || c is '"' or '\\')) return false;
-            for (var directory = Path.GetDirectoryName(Path.Combine(writer.Root, path)); directory is not null;
-                 directory = directory == writer.Root ? null : Path.GetDirectoryName(directory))
-                if (File.Exists(Path.Combine(directory, ".gitattributes"))) return false;
+            if (HasWorkingAttributes(writer, path)) return false;
             var old = previous.TryGetValue(path, out var before) ? writer.ReadObject(before, "blob") : [];
-            var next = staged.TryGetValue(path, out var after) ? writer.ReadObject(after, "blob") : [];
+            commitFiles.TryGetValue(path, out var after);
+            var next = selected.TryGetValue(path, out var bytes) ? bytes : after is null ? [] : writer.ReadObject(after, "blob");
             if (!TryLineChange(old, next, out var plus, out var minus)) return false;
             // Git's break detection can report a rewrite instead of this line summary.
             if (before is not null && after is not null && Math.Max(old.Length, next.Length) >= 400 && minus > 0) return false;
@@ -383,12 +480,14 @@ internal static class InProcessGitFunnel
         var captured = new StringBuilder();
         action = () =>
         {
-            var tree = writer.WriteTree(staged);
+            foreach (var (path, bytes) in selected) staged[path] = writer.WriteBlob(bytes);
+            var tree = writer.WriteTree(commitFiles);
             var id = writer.WriteCommit(tree, head is null ? [] : [head], message, author, committer);
             FixtureRepositoryWriter.AtomicWrite(Path.Combine(writer.GitDirectory, "COMMIT_EDITMSG"), Encoding.UTF8.GetBytes(message + "\n"));
             writer.WriteRef(reference, id);
             writer.AppendReflog(reference, head, id, committer, $"commit{(head is null ? " (initial)" : "")}: {message.Split('\n')[0]}");
             writer.AppendReflog("HEAD", head, id, committer, $"commit{(head is null ? " (initial)" : "")}: {message.Split('\n')[0]}");
+            if (selected.Count > 0) writer.WriteIndex(staged, selected);
             if (!quiet)
             {
                 captured.Append($"[{branch}{(head is null ? " (root-commit)" : "")} {Abbreviate(writer, id)}] {message.Split('\n')[0]}\n");
@@ -398,13 +497,13 @@ internal static class InProcessGitFunnel
             }
         };
         readOutput = captured.ToString;
-        shape = "commit-message";
+        shape = selected.Count == 0 ? "commit-message" : "commit-pathspec";
         return true;
     }
 
     private static string Abbreviate(FixtureRepositoryWriter writer, string id)
     {
-        var names = Directory.EnumerateFiles(Path.Combine(writer.GitDirectory, "objects", id[..2]))
+        var names = Directory.EnumerateFiles(Path.Combine(writer.CommonDirectory, "objects", id[..2]))
             .Select(Path.GetFileName).Where(name => name is { Length: 38 }).Select(name => id[..2] + name).ToArray();
         var length = 7;
         while (length < 40 && names.Count(name => name.StartsWith(id[..length], StringComparison.Ordinal)) > 1) length++;
@@ -440,17 +539,24 @@ internal static class InProcessGitFunnel
     private static bool EqualFiles(Dictionary<string, string> a, Dictionary<string, string> b) =>
         a.Count == b.Count && a.All(pair => b.TryGetValue(pair.Key, out var id) && id == pair.Value);
     private static bool RefExists(FixtureRepositoryWriter writer, string reference) =>
-        !SafeLocation(writer, reference) || File.Exists(Path.Combine(writer.GitDirectory, reference)) || File.Exists(Path.Combine(writer.GitDirectory, "packed-refs"));
-    private static bool SafeLocation(FixtureRepositoryWriter writer, string relative)
+        !SafeLocation(writer.CommonDirectory, reference) || File.Exists(Path.Combine(writer.CommonDirectory, reference)) ||
+        File.Exists(Path.Combine(writer.CommonDirectory, "packed-refs"));
+
+    private static bool SafeFileLocation(string directory, string relative) =>
+        !Directory.Exists(Path.Combine(directory, relative)) && SafeLocation(directory, relative);
+
+    private static bool SafeLocation(string directory, string relative)
     {
-        var path = Path.GetFullPath(Path.Combine(writer.GitDirectory, relative));
-        if (!path.StartsWith(writer.GitDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
+        var path = Path.GetFullPath(Path.Combine(directory, relative));
+        if (!path.StartsWith(Path.EndsInDirectorySeparator(directory) ? directory : directory + Path.DirectorySeparatorChar,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) return false;
         while (true)
         {
-            if (File.Exists(path + ".lock") || (File.Exists(path) || Directory.Exists(path)) &&
+            if (Path.Exists(path + ".lock") || Path.Exists(path) &&
                 (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
-            if (path == writer.GitDirectory) return true;
+            if (path == directory) return true;
             path = Path.GetDirectoryName(path)!;
+            if (File.Exists(path)) return false;
         }
     }
     private static bool SimpleValue(string value) => value.Length > 0 && value == value.Trim() &&

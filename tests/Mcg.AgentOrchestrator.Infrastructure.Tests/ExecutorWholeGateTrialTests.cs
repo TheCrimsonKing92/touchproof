@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -211,6 +213,66 @@ public sealed class ExecutorWholeGateTrialTests
     }
 
     [Fact]
+    public async Task LaneLimitSkipsAnEligibleRerunAndPreservesTheFirstResult()
+    {
+        using var fixture = new Fixture();
+        fixture.Executor.Submit = (request, _) => Task.FromResult(fixture.Submission(request, failure: true));
+
+        await ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry, Plan([Lane("A", 1)]),
+            fixture.Configuration, fixture.Executor, fixture.Root, fixture.ReceiptPath, "limited-rerun",
+            fixture.Clock, TimeSpan.Zero, null, null, maxLanes: 1);
+
+        Assert.Equal("A", Assert.Single(fixture.Executor.Requests).Filter);
+        var receipt = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath));
+        Assert.Equal(1, receipt.SubmissionAttempts);
+        var lane = Assert.Single(receipt.Lanes);
+        Assert.Equal("Suite.ExampleTests.Broken", Assert.Single(lane.FailingTests));
+        Assert.Equal(1, lane.Failed);
+        Assert.Null(lane.ExecutionFailure);
+        Assert.Null(lane.Rerun);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RerunSubmissionFailureUsesProbeAndPersistsItsReason(bool reachable)
+    {
+        using var fixture = new Fixture();
+        var probes = 0;
+        fixture.Executor.Submit = (request, _) => request.Filter == FailedMethodFilter
+            ? throw new IOException("retry push failed\r\nadditional detail")
+            : Task.FromResult(fixture.Submission(request, failure: request.Filter == "A"));
+        var plan = Plan([Lane("A", 2, "shared-key"), Lane("B", 1, "shared-key")]);
+
+        await ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry, plan,
+            fixture.Configuration, fixture.Executor, fixture.Root, fixture.ReceiptPath, "failed-rerun",
+            fixture.Clock, TimeSpan.Zero, null, null, probe: _ =>
+            {
+                probes++;
+                return Task.FromResult(reachable);
+            });
+
+        Assert.Equal(1, probes);
+        Assert.Equal(reachable ? new[] { "A", FailedMethodFilter, "B" } : ["A", FailedMethodFilter],
+            fixture.Executor.Requests.Select(request => request.Filter));
+        var receipt = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath));
+        Assert.Equal(reachable ? 3 : 2, receipt.SubmissionAttempts);
+        Assert.Equal(ExecutorWholeGateTrialStatus.Incomplete, receipt.Status);
+        Assert.Collection(receipt.Lanes,
+            first =>
+            {
+                Assert.Null(first.ExecutionFailure);
+                Assert.Equal("submit-failed:IOException:retry push failed",
+                    Assert.IsType<ExecutorWholeGateTrialLaneRerun>(first.Rerun).ExecutionFailure);
+            },
+            second =>
+            {
+                Assert.Equal(reachable ? null : "executor-unreachable", second.ExecutionFailure);
+                Assert.Equal(reachable ? (int?)1 : null, second.Passed);
+            });
+    }
+
+    [Fact]
     public async Task TrialAndScreeningReadersKeepCandidateEligibilitySeparate()
     {
         using var fixture = new Fixture();
@@ -226,7 +288,95 @@ public sealed class ExecutorWholeGateTrialTests
         var trialRead = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath));
         Assert.Equal("trial", trialRead.ReceiptId);
         Assert.Equal(fixture.Candidate, ExecutorScreeningPlanner.PickCandidate([fixture.Candidate], [screeningRead]));
-        Assert.Null(ExecutorScreeningPlanner.PickTrialCandidate([fixture.Candidate], [trialRead]));
+        var passedGate = new ExecutorPassedGate(fixture.Candidate.GoalId, "passed", fixture.Candidate.Commit,
+            fixture.Candidate.MainSha, fixture.Clock.GetUtcNow());
+        Assert.Single(ExecutorScreeningPlanner.SelectTrialGates([passedGate], [], null));
+        Assert.Empty(ExecutorScreeningPlanner.SelectTrialGates([passedGate], [trialRead], null));
+        Assert.Equal(passedGate, Assert.Single(ExecutorScreeningPlanner.SelectTrialGates([passedGate], [trialRead], passedGate.GoalId)));
+    }
+
+    [Fact]
+    public async Task SamplerReadsCommitThroughGlobalMemoryStatusExAndFillsTheReceipt()
+    {
+        using var fixture = new Fixture();
+        var id = Guid.NewGuid().ToString("N");
+        var summary = new TaskCompletionSource<GoalAcceptanceVerifier.CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scripts = new List<string>();
+        var sampler = new ExecutorWholeGateTrialSshSampler(fixture.Entry with { RunnerAlias = "runner" },
+            fixture.Root, id, TimeSpan.FromMinutes(1), (args, _, _, token) =>
+            {
+                Assert.Equal("-EncodedCommand", args[^2]);
+                var script = Encoding.Unicode.GetString(Convert.FromBase64String(args[^1]));
+                scripts.Add(script);
+                if (scripts.Count == 1) return summary.Task.WaitAsync(token);
+                if (scripts.Count == 3)
+                    summary.SetResult(new(0, """{"PeakCommittedBytes":2000,"CommitLimitBytesAtPeak":4000,"SampleCount":24}"""));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+        await ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry, Plan([Lane("A", 1)]),
+            fixture.Configuration, fixture.Executor, fixture.Root, fixture.ReceiptPath, id,
+            fixture.Clock, TimeSpan.Zero, sampler, null);
+
+        Assert.Collection(scripts, collect =>
+        {
+            Assert.Contains("GlobalMemoryStatusEx", collect);
+            Assert.DoesNotContain("Get-CimInstance", collect);
+            Assert.Contains("[long]$sample.TotalPageFile - [long]$sample.AvailablePageFile", collect);
+            Assert.Contains("$limit = [long]$sample.TotalPageFile", collect);
+            Assert.Matches("(?s)Add-Type.*while.*\\[Mcg.CommitStatus\\]::Read\\(\\)", collect);
+            Assert.Contains("1000 - ($elapsed.ElapsedMilliseconds % 1000)", collect);
+        }, ready => Assert.Contains("while (-not [IO.File]::Exists($ready))", ready),
+            stop => Assert.Contains("[IO.File]::WriteAllText($stop, '')", stop));
+        var memory = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath)).Memory;
+        Assert.Equal(new ExecutorWholeGateTrialMemory(2000, 4000, 24, IntervalSeconds: 1), memory);
+        using var json = JsonDocument.Parse(Assert.Single(File.ReadLines(fixture.ReceiptPath)));
+        var persisted = json.RootElement.GetProperty("memory");
+        Assert.Equal(2000, persisted.GetProperty("peak_committed_bytes").GetInt64());
+        Assert.Equal(4000, persisted.GetProperty("commit_limit_bytes_at_peak").GetInt64());
+        Assert.Equal(24, persisted.GetProperty("sample_count").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(true, null, "B", null)]
+    [InlineData(false, null, null, "executor-unreachable")]
+    [InlineData(null, null, null, "executor-unreachable")]
+    [InlineData(true, 1, null, "max-lanes-reached")]
+    public async Task SubmissionExceptionPreservesReasonAndUsesProbeBeforeBlockingOtherLanes(
+        bool? reachable, int? maxLanes, string? secondRequest, string? secondFailure)
+    {
+        using var fixture = new Fixture();
+        fixture.Executor.Submit = (request, _) => request.Filter == "A"
+            ? throw new IOException("push failed\r\nadditional detail")
+            : Task.FromResult(fixture.PassingSubmission(request));
+        var probes = 0;
+        var plan = Plan([Lane("A", 2), Lane("B", 1)]) with
+        {
+            UnsupportedChecks = [new("git diff whitespace", "executor-transport-requires-dotnet-test")]
+        };
+
+        await ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry, plan,
+            fixture.Configuration, fixture.Executor, fixture.Root, fixture.ReceiptPath, "submission-failure",
+            fixture.Clock, TimeSpan.Zero, null, null,
+            probe: _ =>
+            {
+                probes++;
+                return reachable is { } result ? Task.FromResult(result) : throw new TimeoutException();
+            }, maxLanes: maxLanes);
+
+        Assert.Equal(1, probes);
+        Assert.Equal(secondRequest is null ? new[] { "A" } : new[] { "A", secondRequest },
+            fixture.Executor.Requests.Select(request => request.Filter));
+        var receipt = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath));
+        Assert.Equal(ExecutorWholeGateTrialStatus.Incomplete, receipt.Status);
+        Assert.Collection(receipt.Lanes,
+            first => Assert.Equal("submit-failed:IOException:push failed", first.ExecutionFailure),
+            second =>
+            {
+                Assert.Equal(secondFailure, second.ExecutionFailure);
+                Assert.Equal(secondRequest is null ? (int?)null : 1, second.Passed);
+            });
+        Assert.Equal(Assert.Single(plan.UnsupportedChecks), Assert.Single(receipt.UnsupportedChecks));
     }
 
     [Fact]

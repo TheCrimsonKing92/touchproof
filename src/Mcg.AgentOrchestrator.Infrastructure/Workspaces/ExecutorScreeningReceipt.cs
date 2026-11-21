@@ -100,7 +100,8 @@ internal sealed record ExecutorWholeGateTrialReceipt(string ReceiptId, string Go
     string ExecutorId, DateTimeOffset StartedAt, double WallSeconds, ExecutorWholeGateTrialStatus Status,
     IReadOnlyList<ExecutorWholeGateTrialLaneResult> Lanes, ExecutorWholeGateTrialMemory Memory,
     ExecutorWholeGateTrialLocalAttempt? LocalAttempt, IReadOnlyList<ExecutorScreeningExcludedLane> UnsupportedChecks,
-    int Version = 2, string Kind = "whole-gate-trial");
+    int Version = 2, string Kind = "whole-gate-trial",
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SubmissionAttempts = null);
 
 internal static class ExecutorWholeGateTrialComparison
 {

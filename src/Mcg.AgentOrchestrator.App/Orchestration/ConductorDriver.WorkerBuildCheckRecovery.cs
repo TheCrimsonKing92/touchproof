@@ -88,8 +88,7 @@ internal sealed partial class ConductorDriver
             }
         }
         var errorBlock = WorkerBuildCheckRecoveryText.ErrorBlock(errors?.Format(20), cause);
-        var worktreePath = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
-        if (worktreePath is null)
+        if (_executionDirectory is not { } repositoryRoot || GoalWorktrees.TryResolve(repositoryRoot, goal.Id) is not { } worktreePath)
         {
             var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, "checkpoint commit failed: goal worktree unavailable.", errorBlock);
             var escalated = Escalate(goal, goalPrefix, policy, state, reason);
@@ -139,8 +138,9 @@ internal sealed partial class ConductorDriver
                 Decision = capacity ? FailedGoalRecoveryDecisionRecords.BuildCapacityRetriesExhausted(decision.Identity, reason) :
                     FailedGoalRecoveryDecisionRecords.BuildCheckRecoveryExhausted(decision.Identity, reason) } };
         }
-        var feedback = capacity ? WorkerBuildCheckRecoveryText.CapacityRetryFeedback(capacityRounds, committed, checkpoint) :
-            WorkerBuildCheckRecoveryText.RetryFeedback(task.WorkerBuildCheckRecoveryCount, committed, checkpoint, noBuild ? null : errors!.Format(50), cause);
+        var buildInstruction = WorkerBuildCheckRecoveryText.BuildInstruction(repositoryRoot, worktreePath, _cohortWorkspace?.ProjectHomeDirectoryOrNull);
+        var feedback = capacity ? WorkerBuildCheckRecoveryText.CapacityRetryFeedback(capacityRounds, committed, checkpoint, buildInstruction) :
+            WorkerBuildCheckRecoveryText.RetryFeedback(task.WorkerBuildCheckRecoveryCount, committed, checkpoint, noBuild ? null : errors!.Format(50), cause, buildInstruction);
         try { _workerBuildRecoveryRetry(goal.Id, task.Id, feedback); }
         catch (InvalidOperationException ex)
         {

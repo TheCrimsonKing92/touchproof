@@ -53,7 +53,8 @@ internal static class OwnerConsoleVerb
                 new CliOwnerDigestConsoleAdapter(workspace), changes,
                 fleet: () => OwnerFleetViewModelBuilder.Load(workspace, liveness, owners: owners),
                 terminalWidth: () => TerminalWidth(() => System.Console.WindowWidth),
-                projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace));
+                projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace),
+                orchestratorDirectory: workspace.OrchestratorDirectory);
             await new OwnerConsoleLoop(session, new SystemConsoleInput(), source, clock)
                 .RunAsync(cancellationToken);
             return 0;

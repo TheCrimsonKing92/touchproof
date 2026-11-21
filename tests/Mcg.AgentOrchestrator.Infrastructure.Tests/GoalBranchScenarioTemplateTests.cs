@@ -113,6 +113,7 @@ public sealed class GoalBranchScenarioTemplateTests(ITestOutputHelper output) : 
         try
         {
             using var launches = new Launches();
+            using var funnel = InProcessGitFunnel.Observe();
             var copies = Enumerable.Range(0, 2).Select(async _ =>
             {
                 await start.Task;
@@ -127,7 +128,7 @@ public sealed class GoalBranchScenarioTemplateTests(ITestOutputHelper output) : 
             start.SetResult();
             var templates = await Task.WhenAll(copies);
             Assert.Single(templates.Distinct());
-            Assert.Equal(1, launches.Commits);
+            Assert.Equal(1, launches.Commits + funnel.Served.Count(shape => shape.StartsWith("commit", StringComparison.Ordinal)));
             Assert.Equal(2, roots.Distinct().Count());
         }
         finally { foreach (var root in roots) DeleteDirectory(root); }

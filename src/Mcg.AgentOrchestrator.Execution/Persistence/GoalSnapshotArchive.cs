@@ -111,23 +111,29 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
         if (snapshot is not { IsMetadataOnly: true })
             return snapshot;
 
+        var json = await ReadDocumentAsync(connection, snapshot.Id, cancellationToken);
+        if (json is null) return snapshot;
+        readObserver?.Invoke(new("archive-attempt", snapshot.Id, json.Length));
+        var hydrated = JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
+        if (hydrated is not null)
+            readObserver?.Invoke(new("archive-deserialized", snapshot.Id, json.Length));
+        return await new GoalTimelineStore(serializerOptions).HydrateAsync(connection, hydrated, json, cancellationToken);
+    }
+
+    internal static async Task<string?> ReadDocumentAsync(
+        SqliteConnection connection, string goalId, CancellationToken cancellationToken)
+    {
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
-        command.Parameters.AddWithValue("$id", snapshot.Id);
+        command.Parameters.AddWithValue("$id", goalId);
         try
         {
-            var json = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(cancellationToken));
-            if (json is null) return snapshot;
-            readObserver?.Invoke(new("archive-attempt", snapshot.Id, json.Length));
-            var hydrated = JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
-            if (hydrated is not null)
-                readObserver?.Invoke(new("archive-deserialized", snapshot.Id, json.Length));
-            return await new GoalTimelineStore(serializerOptions).HydrateAsync(connection, hydrated, json, cancellationToken);
+            return GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(cancellationToken));
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
             ex.Message.Contains("no such table: goal_snapshot_archive", StringComparison.OrdinalIgnoreCase))
         {
-            return snapshot;
+            return null;
         }
     }
 

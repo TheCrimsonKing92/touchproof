@@ -70,6 +70,7 @@ internal sealed class OrchestratorHome
     }
 
     internal bool IsHome(OrchestratorWorkspace workspace) => IsHome(workspace.ExecutionDirectory);
+    internal bool IsRegisteredNonHome(OrchestratorWorkspace workspace) => workspace.IsProjectScoped && !IsHome(workspace);
 
     internal bool IsHome(string directory) => SourceRootDirectory is not null && string.Equals(
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)),

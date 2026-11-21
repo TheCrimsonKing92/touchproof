@@ -11,7 +11,8 @@ public sealed class WorkerBuildRealCompilerUsageGuardTests
         [ProjectPath + "WorkerBuildRequestIntegrationTests.cs"] = "Real compilation verifies low-integrity sandboxing and invalid-source compiler failure.",
         [ProjectPath + "BuildRequestLauncherContractTests.cs"] = "Real compilation supplies the outcome, exit code and phase baseline for fake-launch parity.",
         [ProjectPath + "WorkerBuildRequestRecoveryTests.cs"] = "An MSBuild gate before CoreCompile verifies managed-host death interrupts the real compiler and preserves its recovery obligation.",
-        [ProjectPath + "WorkerBuildRequestStructuralIntegrationTests.cs"] = "Real compilation feeds structural violation replay and a fresh successful correction."
+        [ProjectPath + "WorkerBuildRequestStructuralIntegrationTests.cs"] = "Real compilation feeds structural violation replay and a fresh successful correction.",
+        [ProjectPath + "NonHomeWorkerBuildEvidenceTests.cs"] = "Real compilation through the prompted command verifies that the host builds the selected solution and the conductor consumes its evidence."
     };
 
     [Fact]

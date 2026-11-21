@@ -23,7 +23,8 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
 
     internal AdditiveConflictGitFixture(
         IReadOnlyList<ConflictFile>? files = null, GoalId? goalId = null,
-        bool bom = false, string lineEnding = "\n", string? attributes = null, string? mainCommitMessage = null)
+        bool bom = false, string lineEnding = "\n", string? attributes = null, string? mainCommitMessage = null,
+        bool inProcessSetup = false)
     {
         // Dispatch integration resolves main explicitly, regardless of the host's init.defaultBranch.
         Repository = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: true);
@@ -47,24 +48,34 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
                 Write(Repository, ".gitattributes", attributes);
                 basePaths.Add(".gitattributes");
             }
-            if (basePaths.Count > 0)
-                RunGit(Repository, ["add", "-f", "--", .. basePaths]);
+            var writeInProcess = inProcessSetup && attributes is null;
+            var identity = new FixtureRepositoryWriter.Identity("Worktree Tests", "tests@example.com", DateTimeOffset.Now);
             // An add/add fixture intentionally has no file at the base commit.
-            RunGit(Repository, "commit", "--allow-empty", "-m", "Fixture base");
+            if (writeInProcess)
+                new FixtureRepositoryWriter(Repository).CommitFiles(basePaths, "Fixture base", identity, allowEmpty: true);
+            else
+            {
+                if (basePaths.Count > 0)
+                    RunGit(Repository, ["add", "-f", "--", .. basePaths]);
+                RunGit(Repository, "commit", "--allow-empty", "-m", "Fixture base");
+            }
             Worktree = GoalWorktrees.Ensure(Repository, GoalId);
             var paths = files.Select(file => file.Path).ToArray();
             foreach (var file in files) Write(Worktree, file.Path, file.Goal);
-            RunGit(Worktree, ["add", "-f", "--", .. paths]);
-            RunGit(Worktree, "commit", "-m", "Goal changes");
-            OriginalHead = InfrastructureTestSupport.TryReadGitHeadInProcess(Worktree, out var originalHead) && originalHead is not null
-                ? originalHead
-                : Git(Worktree, "rev-parse", "HEAD").Trim();
+            OriginalHead = CommitSide(Worktree, "Goal changes");
             foreach (var file in files) Write(Repository, file.Path, file.Main);
-            RunGit(Repository, ["add", "-f", "--", .. paths]);
-            RunGit(Repository, "commit", "-m", mainCommitMessage ?? "Main changes");
-            MainHead = InfrastructureTestSupport.TryReadGitHeadInProcess(Repository, out var mainHead) && mainHead is not null
-                ? mainHead
-                : Git(Repository, "rev-parse", "HEAD").Trim();
+            MainHead = CommitSide(Repository, mainCommitMessage ?? "Main changes");
+
+            string CommitSide(string root, string message)
+            {
+                if (writeInProcess)
+                    return new FixtureRepositoryWriter(root).CommitFiles(paths, message, identity);
+                RunGit(root, ["add", "-f", "--", .. paths]);
+                RunGit(root, "commit", "-m", message);
+                return InfrastructureTestSupport.TryReadGitHeadInProcess(root, out var head) && head is not null
+                    ? head
+                    : Git(root, "rev-parse", "HEAD").Trim();
+            }
         }
         catch
         {
