@@ -99,6 +99,7 @@ internal sealed class SoloAcceptanceFailureHandler(
         if (SoloCorrectionRetryBudget.HoldReason(goal, failure!, policy.MaxCriterionRetries) is { } capReason)
             return Hold(goal, prefix, policy, capReason);
         route = diagnose?.Invoke(goal, route) ?? route;
+        if (AttributedFailureDiagnosisTarget.TryHold(goal, prefix, policy, route, recordEscalation) is { } held) return held;
         // The existing accounting and route marker are included in the dispatch
         // checkpoint before any worker starts. Replay never charges another retry.
         recordRetryFeedback(goal.Id, route.DeveloperTaskId!, [route.Feedback!]);
