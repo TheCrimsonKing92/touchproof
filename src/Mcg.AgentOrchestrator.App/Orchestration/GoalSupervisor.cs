@@ -286,7 +286,7 @@ public static class GoalSupervisor
 
     private static bool HasAlternateAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
     {
-        return agents.Any(agent =>
+        return !InventoryModelAssignment.IsInventoryId(task.AssignedAgentId) && agents.Any(agent =>
             agent.Role == task.RequiredRole &&
             agent.Status == AgentStatus.Available &&
             agent.Id != task.AssignedAgentId);

@@ -10,7 +10,7 @@ internal static class AcceptancePrecheck
             (task.Status == WorkTaskStatus.Cancelled && task.RequiredRole != AgentRole.Reviewer) ||
             (task.Status == WorkTaskStatus.Completed && CountsAsPassed(goal, task)));
 
-    private static bool CountsAsPassed(Goal goal, TaskSpec task) =>
+    internal static bool CountsAsPassed(Goal goal, TaskSpec task) =>
         task.LastVerification is { } verification &&
         WorkerResultBlockers.AssessSubscriptionVerification(task, verification).AllowsCompletion &&
         (WorkerResultBlockers.AssessSubscriptionVerification(task, verification).Status == VerificationTerminalContractStatus.NotApplicable ||

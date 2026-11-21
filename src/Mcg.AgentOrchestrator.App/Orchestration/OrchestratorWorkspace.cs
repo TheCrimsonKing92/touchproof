@@ -218,6 +218,8 @@ public sealed record OrchestratorWorkspace(
     // Registry of orchestrator-internal model functions (acceptance-judge lanes, future samplers,
     // etc.) — separate from the worker agent catalog so internal model uses never touch task routing.
     public string ModelFunctionCatalogPath => Path.Combine(OrchestratorDirectory, "model-functions.json");
+    public string ModelInventoryPath => Path.Combine(OrchestratorDirectory, "model-inventory.json");
+    public string ModelDeclarationsPath => Path.Combine(OrchestratorDirectory, "model-declarations.json");
 
     // Post-hoc worker inquiry receipts live outside goal state. They are advisory evidence only and
     // must not dirty task verification, dispatch, process, or acceptance records.

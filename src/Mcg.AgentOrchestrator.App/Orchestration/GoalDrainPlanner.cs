@@ -154,7 +154,8 @@ internal static class GoalDrainPlanner
         }
 
         var blockedProvider = tasks
-            .Select(task => task.AssignedAgentId is null ? null : agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId)?.Model.ProviderName)
+            .Select(task => InventoryModelAssignment.Parse(task.AssignedAgentId)?.Provider ??
+                agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId)?.Model.ProviderName)
             .FirstOrDefault(provider => !policy.AllowsProvider(provider));
         if (blockedProvider is not null)
         {

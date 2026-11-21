@@ -243,7 +243,8 @@ internal static class RunGoalService
         return new RunGoalStopEvidence(
             TaskDisplayNumber.Resolve(goal, task.Id),
             task.Id.Value,
-            result.StopReason,
+            InventoryAssignedDispatchAgents.ExecutionFailure(task) is { } hold
+                ? $"{hold.Code}: {hold.Message}" : result.StopReason,
             BuildOutputTail(task));
     }
 
@@ -304,7 +305,7 @@ internal static class RunGoalService
             return false;
         }
 
-        if (task.AssignedAgentId is not { } failedAgentId)
+        if (task.AssignedAgentId is not { } failedAgentId || InventoryModelAssignment.IsInventoryId(failedAgentId))
         {
             stopReason = $"Automatic failover stopped for task {task.Id.Value[..8]}: the {task.RequiredRole} task has no assigned agent. Add an available alternate {task.RequiredRole} agent to the active agent list, then re-run run-goal or re-delegate manually.";
             return false;
