@@ -60,14 +60,58 @@ internal sealed partial class ConductorDriver
         int slotIndex,
         out string? reason)
     {
-        reason = ParallelAcceptanceEligibility.GetDeclineReason(goal, policy.GetTransitionDecision(GoalLifecycleState.Verified),
-            HasRoutableRecordedCohortAttributionFailure, GetFacts,
-            subject => HasActiveApparatusHold(subject, out _) || HasActiveOwnerReviewHold(subject, out _, out _));
-        if (reason is not null) return null;
+        if (MultiRepositoryGoal.Applies(goal)) { reason = MultiRepositoryGoal.Reason(goal); return null; }
+        if (goal.Status == GoalStatus.Parked)
+        {
+            reason = CandidateDeclineHoldActive;
+            return null;
+        }
+        if (HasRoutableRecordedCohortAttributionFailure(goal))
+        {
+            reason = CandidateDeclineCohortAttributionFailure;
+            return null;
+        }
 
-        var acceptanceHeads = _resolveAcceptanceHeads(goal);
-        ParallelAcceptanceEligibility.ValidateSlot(goal, slotIndex, _parallelAcceptanceAttemptCoordinator.HasLiveAttempt,
-            TryGetActiveEvidenceMutationLease, GetAcceptanceSlotCount);
+        if (policy.GetTransitionDecision(GoalLifecycleState.Verified) == ConductorTransitionDecision.Escalate)
+        {
+            reason = CandidateDeclineVerifiedTransitionRequiresOperator;
+            return null;
+        }
+
+        if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying))
+        {
+            reason = CandidateDeclineLifecycleNotVerified;
+            return null;
+        }
+
+        if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
+        {
+            reason = CandidateDeclineVerificationIncomplete;
+            return null;
+        }
+
+        if (HasActiveApparatusHold(goal, out _) || HasActiveOwnerReviewHold(goal, out _, out _))
+        {
+            reason = CandidateDeclineHoldActive;
+            return null;
+        }
+
+        reason = null; var acceptanceHeads = _resolveAcceptanceHeads(goal);
+
+        if (!_parallelAcceptanceAttemptCoordinator.HasLiveAttempt(goal.Id.Value) &&
+            TryGetActiveEvidenceMutationLease(goal) is { } lease)
+        {
+            throw new EvidenceMutationLeaseUnavailableException(FormatEvidenceMutationLeaseHeld(lease));
+        }
+
+        var slotCount = GetAcceptanceSlotCount(goal);
+        if (slotIndex < 0 || slotIndex >= slotCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(slotIndex),
+                slotIndex,
+                $"Acceptance slot index must be 0 through {slotCount - 1} for goal {goal.Id.Value[..8]}.");
+        }
 
         return ConductorParallelAcceptanceCandidate.Create(
             goal,

@@ -8,7 +8,6 @@ public sealed partial class CollaborationItemStore : ICollaborationItemStore
 {
     private readonly string _dbPath;
     private readonly bool _readOnly;
-    private readonly bool _offlineCopy;
     private static readonly TimeSpan DefaultActionTtl = TimeSpan.FromHours(12);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> AllowedActionVerbs = new(StringComparer.OrdinalIgnoreCase)
@@ -38,21 +37,14 @@ public sealed partial class CollaborationItemStore : ICollaborationItemStore
     {
     }
 
-    private CollaborationItemStore(string dbPath, bool readOnly, bool offlineCopy = false)
+    private CollaborationItemStore(string dbPath, bool readOnly)
     {
         _dbPath = dbPath;
         _readOnly = readOnly;
-        _offlineCopy = offlineCopy;
         if (!readOnly)
         {
             Setup(dbPath);
         }
-    }
-
-    public static CollaborationItemStore? OpenReadOnlyOfflineCopy(string stateDirectory)
-    {
-        var path = Path.Combine(stateDirectory, "collaboration-items.db");
-        return File.Exists(path) ? new(path, readOnly: true, offlineCopy: true) : null;
     }
 
     public static CollaborationItemStore OpenReadOnly(string dbPath)

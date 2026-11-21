@@ -81,25 +81,17 @@ internal sealed partial class ConductorDriver
         if (_executionDirectory is null || goal.LatestAcceptanceFailure is not { } failure ||
             failure.BranchHeadSha is not { } candidate || failure.FailedChecks.Count == 0 ||
             !failure.FailedChecks.All(IsOwnerReviewCheckName)) return false;
-        var held = ReadOwnerReviewHold(failure, candidate, GoalOperationJournal.Read(_executionDirectory, goal.Id));
-        if (held is null) return false;
+        var entry = GoalOperationJournal.Read(_executionDirectory, goal.Id).Entries.LastOrDefault(entry =>
+            entry.Operation == GoalOperationJournal.OwnerReviewHoldOperation &&
+            string.Equals(entry.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase));
+        if (entry is null || GoalOperationJournal.ReadOwnerReviewHold(entry) is not { } held ||
+            held.FailureOccurredAt != failure.OccurredAt) return false;
         var current = _resolveAcceptanceHeads(goal).BranchHeadSha;
         if (!string.IsNullOrWhiteSpace(current) &&
             !string.Equals(current, candidate, StringComparison.OrdinalIgnoreCase)) return false;
         sha = candidate;
         receipt = held;
         return !IsOwnerReviewApproved(goal, sha, held.Fingerprint);
-    }
-
-    internal static OwnerReviewHoldReceipt? ReadOwnerReviewHold(
-        AcceptanceFailureSummary failure, string candidate, GoalOperationJournalSummary journal)
-    {
-        if (failure.FailedChecks.Count == 0 || !failure.FailedChecks.All(IsOwnerReviewCheckName)) return null;
-        var entry = journal.Entries.LastOrDefault(entry =>
-            entry.Operation == GoalOperationJournal.OwnerReviewHoldOperation &&
-            string.Equals(entry.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase));
-        var held = entry is null ? null : GoalOperationJournal.ReadOwnerReviewHold(entry);
-        return held?.FailureOccurredAt == failure.OccurredAt ? held : null;
     }
 
     private ConductorAdvanceResult OwnerReviewHeld(

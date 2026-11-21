@@ -53,17 +53,6 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
     public static SqliteOrchestratorStateRepository OpenReadOnly(string dbPath) => OpenReadOnly(dbPath, null);
 
-    /// <summary>Opens a stable offline copy with a private WAL index. The caller must exclude concurrent writers.</summary>
-    public static SqliteOrchestratorStateRepository OpenReadOnlyOfflineCopy(string dbPath) =>
-        new(dbPath, statementObserver: null, telemetryOptions: null, beforeOutboxCommit: null,
-            StateDbConnectionProfile.OfflineCopyRead, readObserver: null);
-
-    public ReconcileAcceptanceLeaseState? ReadAcceptanceLease(GoalId goalId, TimeSpan staleAfter)
-    {
-        using var connection = OpenConnection();
-        return ReconcileSweepRemediationStore.GetAcceptanceLease(connection, goalId.Value, staleAfter);
-    }
-
     public static SqliteOrchestratorStateRepository OpenReadOnly(
         string dbPath, Action<GoalSnapshotReadObservation>? readObserver) =>
         new(

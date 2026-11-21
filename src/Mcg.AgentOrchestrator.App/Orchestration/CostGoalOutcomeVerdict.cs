@@ -97,7 +97,8 @@ internal static class CostGoalOutcomeVerdict
     internal static IReadOnlyList<CostGoalOutcomeResult> Evaluate(CostGoalOutcomeRecord record,
         IEnumerable<OutcomeGateObservation> gates, string landedHomeCommit, Func<string, string, bool> containsCommit,
         DateTimeOffset adoptedAt, DateTimeOffset evaluatedAt, CostGoalOutcomeReplay? replay = null,
-        IEnumerable<TickStepObservation>? ticks = null)
+        IEnumerable<TickStepObservation>? ticks = null,
+        Func<OutcomeMetricLine, (OutcomeMetricSample Before, OutcomeMetricSample After)?>? measureWorkerUsage = null)
     {
         if (record.FinalVerdicts.Count == record.Filing.Baselines.Count) return record.FinalVerdicts;
         ArgumentException.ThrowIfNullOrWhiteSpace(landedHomeCommit);
@@ -119,12 +120,14 @@ internal static class CostGoalOutcomeVerdict
             ? final : EvaluateLine(index, baseline, eligible, evaluatedAt >= deadline, replay,
                 CostGoalOutcomeMetric.TickStepName(baseline.Line.Name) is { } step
                     ? CostGoalOutcomeMetric.MeasureTickStep(baseline.Line, step, eligibleTicks, baseline.Line.Window)
-                    : null)).ToArray();
+                    : null,
+                CostGoalOutcomeMetric.IsWorkerUsageMetric(baseline.Line.Name)
+                    ? measureWorkerUsage?.Invoke(baseline.Line) : null)).ToArray();
     }
 
     private static CostGoalOutcomeResult EvaluateLine(int index, OutcomeMetricBaseline baseline,
         IReadOnlyList<OutcomeGateObservation> eligible, bool expired, CostGoalOutcomeReplay? replay,
-        OutcomeMetricSample? tickSample)
+        OutcomeMetricSample? tickSample, (OutcomeMetricSample Before, OutcomeMetricSample After)? workerSamples)
     {
         var line = baseline.Line;
         var window = new OutcomeGateWindow(line);
@@ -140,8 +143,8 @@ internal static class CostGoalOutcomeVerdict
         var replayMetric = CostGoalOutcomeMetric.IsReplayMetric(line.Name);
         var replayGuard = CostGoalOutcomeMetric.IsReplayMetric(line.Guard?.Name);
         var usesReplay = replayMetric || replayGuard;
-        var (before, after) = replayMetric ? MeasureReplay(line.Name) :
-            (new OutcomeMetricSample(baseline.Value, baseline.SampleSize), tickSample ?? gateSample);
+        var (before, after) = workerSamples ?? (replayMetric ? MeasureReplay(line.Name) :
+            (new OutcomeMetricSample(baseline.Value, baseline.SampleSize), tickSample ?? gateSample));
         var guard = line.Guard is null ? null : replayGuard
             ? ReplayGuard(line.Guard.Name)
             : new OutcomeGuardResult(baseline.Guard ?? new(null, 0), gateGuard ?? new(null, 0));
@@ -159,6 +162,13 @@ internal static class CostGoalOutcomeVerdict
         CostGoalOutcomeResult WaitForWindow(string reason) => expired
             ? Result(CostGoalOutcomeState.InsufficientData, reason) : Result(CostGoalOutcomeState.Pending);
 
+        if (CostGoalOutcomeMetric.IsWorkerUsageMetric(line.Name))
+        {
+            if (workerSamples is null) return Result(CostGoalOutcomeState.Pending, "worker-usage-unavailable");
+            if (before.Value is null) return Result(CostGoalOutcomeState.InsufficientData, "insufficient-samples");
+            if (after.Value is null)
+                return Result(expired ? CostGoalOutcomeState.InsufficientData : CostGoalOutcomeState.Pending, "insufficient-samples");
+        }
         if (usesReplay && replay is { AttemptSetSize: null })
             return Result(CostGoalOutcomeState.InsufficientData, "replay-set-mismatch");
         if (after.Value is null)
@@ -314,6 +324,7 @@ internal static class CostGoalOutcomeVerdict
     {
         var detail = FormattableString.Invariant(
             $"line={result.LineIndex + 1} metric={result.Line.Name} verdict={StateName(result.State)} before={Format(result.Before)} after={Format(result.After)} target={result.Line.Target} direction={result.Line.Direction} window={result.Line.Window} beforeSamples={result.BeforeSampleSize} afterSamples={result.AfterSampleSize} reason={result.Reason ?? "none"}");
+        if (result.Line.Role is { } role) detail += $" role={role}";
         if (result.Line.Guard is { } declaration && result.Guard is { } guard)
             detail += FormattableString.Invariant(
                 $" guard={declaration.Name} guardRule={declaration.Rule} guardBefore={Format(guard.Before.Value)} guardAfter={Format(guard.After.Value)} guardBeforeSamples={guard.Before.SampleSize} guardAfterSamples={guard.After.SampleSize}");
