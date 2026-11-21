@@ -1545,7 +1545,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             loopKernel.MarkKnownCompletedDependencyGoals(
                                 reloadedKernel.KnownCompletedDependencyGoals.Where(goalId =>
                                     !checkpointHeldGoalIds.Contains(goalId.Value)));
-                            var snapshot = reloadedKernel.ExportSnapshot();
+                            var snapshot = OrchestratorSnapshot.Capture(reloadedKernel, includeDeferredRows: false);
                             foreach (var persistedGoal in snapshot.Goals.Where(goal =>
                                          trackedGoalIdSet.Contains(goal.Id) &&
                                          !checkpointHeldGoalIds.Contains(goal.Id) &&
