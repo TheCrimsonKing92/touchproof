@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed record OrchestratorBuildCheckRequest(
     string WorktreeRoot,
     IReadOnlyList<string> Projects,
-    TimeSpan Timeout);
+    TimeSpan Timeout,
+    IReadOnlyList<string>? BuildTargets = null);
 
 public sealed record OrchestratorBuildCheckResult(
     bool Ran,
@@ -87,12 +88,16 @@ public static class OrchestratorBuildEvidenceCheck
         Func<OrchestratorBuildCheckRequest, CompletionBuildEvidenceOperation>? reconcileOperation = null,
         bool hasOperation = false,
         string? expectedScopeMetadataDigest = null,
-        WorkerBuildProjectScope.DispatchContext? completedDispatch = null)
+        WorkerBuildProjectScope.DispatchContext? completedDispatch = null,
+        DotnetBuildTargetSelection? selection = null)
     {
         if (failedWorkerBuildCheck)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
+
+        if (selection?.Error is { } error)
+            return new(true, false, "worker_build_target_selection=error; " + error);
 
         IReadOnlyList<string> projects = WorkerBuildEvidenceRequirement.FindRequiredProjects(
             worktreeRoot,
@@ -113,7 +118,12 @@ public static class OrchestratorBuildEvidenceCheck
                 return new(true, false, $"worker_build_scope=invalid; {exception.Message}");
             }
         }
-        if (projects.Count == 0 && !hasOperation)
+        var targets = selection?.WithRequiredProjects(projects);
+        if (selection is not null)
+            projects = projects.Concat(selection.Projects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (selection?.AbsenceProof is { } proof && targets?.Count == 0)
+            return new(false, false, "worker_build_target_selection=NotApplicable; " + proof);
+        if (projects.Count == 0 && targets is not { Count: > 0 } && !hasOperation)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
@@ -121,7 +131,7 @@ public static class OrchestratorBuildEvidenceCheck
         var missingProjects = receipt.Matches
             ? WorkerBuildReceiptCoverage.FindMissingProjects(projects, receipt.Projects)
             : [];
-        if (receipt.Matches && missingProjects.Count == 0 && !hasOperation)
+        if (receipt.Matches && missingProjects.Count == 0 && !hasOperation && selection is null)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
@@ -133,7 +143,7 @@ public static class OrchestratorBuildEvidenceCheck
             receiptReason += $"; digest_detail={receipt.Detail}";
         if (reconcileOperation is not null)
         {
-            var operation = reconcileOperation(new(worktreeRoot, projects, DefaultTimeout));
+            var operation = reconcileOperation(new(worktreeRoot, projects, DefaultTimeout, targets));
             if (operation.IsPending)
                 return new(false, false, operation.Diagnostic, operation);
             var finalReceipt = workerBuildReceipt();
@@ -147,6 +157,8 @@ public static class OrchestratorBuildEvidenceCheck
                 $"build_evidence_operation={operation.Id}; build_evidence_outcome={operation.Phase}; " +
                 $"receipt_coverage={covered}; {operation.Diagnostic}", operation);
         }
+        if (selection is not null)
+            return new(true, false, "worker_build_target_selection=available; completion build coordinator is unavailable.");
         OrchestratorBuildCheckResult result;
         try
         {

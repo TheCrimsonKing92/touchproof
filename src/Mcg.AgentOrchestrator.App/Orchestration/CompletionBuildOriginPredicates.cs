@@ -60,7 +60,7 @@ internal static class CompletionBuildOriginPredicates
             var expected = Path.GetFullPath(c.ExecutionDirectory);
             return !string.Equals(observed, expected, StringComparison.OrdinalIgnoreCase) ? Values(observed, expected) : null;
         }),
-        new("ProjectsPresent", c => c.Operation.Projects.Count == 0 ? Values("0", ">0") : null),
+        new("ProjectsPresent", c => (c.Operation.BuildTargets ?? c.Operation.Projects).Count == 0 ? Values("0", ">0") : null),
         new("ProjectsNormalized", c =>
         {
             var normalized = CompletionBuildEvidenceCoordinator.NormalizeProjects(c.Operation.Projects);

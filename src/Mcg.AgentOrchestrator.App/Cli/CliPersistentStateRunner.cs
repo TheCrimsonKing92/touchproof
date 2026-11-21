@@ -2191,7 +2191,7 @@ internal static partial class CliPersistentStateRunner
             workspace.ExecutionDirectory, workspace.IntegrationBranch,
             goalId,
             cleanupHooks: cleanupContext.Hooks,
-            orchestratorDirectory: workspace.OrchestratorDirectory);
+            workspace: workspace);
         var targetSweepTimelineEnd = TerminalGoalSweepLifecycleEvents.Capture(kernel);
         reconcileStarted.Stop();
         TerminalGoalSweepTextView.PrintTerminalGoalSweep(targetSweep);
