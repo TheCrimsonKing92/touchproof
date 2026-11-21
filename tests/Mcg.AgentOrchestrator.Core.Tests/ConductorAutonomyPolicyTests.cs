@@ -5,6 +5,16 @@ namespace Mcg.AgentOrchestrator.Core.Tests;
 
 public sealed class ConductorAutonomyPolicyTests
 {
+    [Fact]
+    public void MainFullVerificationIntervalCoexistsWithConductorAutonomyPolicy()
+    {
+        var baseline = ConductorAutonomyPolicy.Default.ToJson();
+        var policy = System.Text.Json.Nodes.JsonNode.Parse(baseline)!.AsObject();
+        policy["mainFullVerificationIntervalSeconds"] = 3600;
+        Assert.Equal(ConductorAutonomyPolicy.ParseJson(baseline).ToJson(),
+            ConductorAutonomyPolicy.ParseJson(policy.ToJsonString()).ToJson());
+    }
+
     [Xunit.Fact]
     public void RoutingHold_DefaultsToThreeMinutes_IncludingLegacyJson()
     {

@@ -85,6 +85,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly TimeProvider _canaryDrainClock;
     private readonly TimeProvider _drainClock;
     private SelectedExecutionBackstopCoordinator? _selectedExecutionBackstop;
+    private MainFullVerificationCoordinator? _mainFullVerification;
     private readonly PromptRolloutWatchCoordinator? _promptRolloutWatch;
     private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
@@ -421,6 +422,10 @@ internal sealed partial class ConductorBatchLoop
         if (observeTickWithoutDispatch is null)
         {
             _selectedExecutionBackstop ??= SelectedExecutionBackstopCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
+            if (keepAliveWhenIdle && onlyGoalId is null)
+                _mainFullVerification = MainFullVerificationCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
+            if (_mainFullVerification is { } scheduledVerification)
+                driver.ParallelAcceptanceAttemptCoordinator.GetMainFullVerificationRunId = () => scheduledVerification.ActiveRunId;
             driver.GateMissDetector ??= _selectedExecutionBackstop is { } backstop ? new(backstop, line => EmitProgress(line)) : null;
             driver.SuccessfulLandingSink = receipt =>
             {
@@ -686,6 +691,8 @@ internal sealed partial class ConductorBatchLoop
             }
             using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick");
             _tickPhaseElapsedMs.Clear();
+            if (_mainFullVerification is { } mainVerification)
+                RunJanitorialPhase("main-full-verification-poll", totalTicks + 1, () => { mainVerification.Poll(); return true; });
             if (pendingSelfRelaunch is null &&
                 deferredSelfRelaunch is not null &&
                 totalTicks >= selfRelaunchRetryAfterTick)
@@ -997,6 +1004,10 @@ internal sealed partial class ConductorBatchLoop
                     _selectedExecutionBackstop?.ServiceAsync().GetAwaiter().GetResult();
                     return true;
                 });
+                if (_mainFullVerification is { } idleVerification &&
+                    !admissionHold.Suppress(isDeferringMaxDurationStop, pendingSelfRelaunch is not null))
+                    RunJanitorialPhase("main-full-verification-idle", nextTick, () => idleVerification.Service(0,
+                        () => CanAdmitIdleMainVerification(driver, policy.AcceptanceWidth, nextTick)));
                 if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
                 {
                     totalTicks++;
@@ -1924,6 +1935,12 @@ internal sealed partial class ConductorBatchLoop
             foreach (var line in CurrentRetryDiagnostics.Value?.CompleteAll() ?? [])
                 EmitProgress(line);
             CurrentRetryDiagnostics.Value = previousRetryDiagnostics;
+            if (_mainFullVerification is { } finalVerification)
+            {
+                driver.ParallelAcceptanceAttemptCoordinator.GetMainFullVerificationRunId = null;
+                RunJanitorialPhase("main-full-verification-stop", totalTicks, () => { finalVerification.Dispose(); return true; });
+            }
+            _mainFullVerification = null;
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
         }
     }
@@ -2375,6 +2392,11 @@ internal sealed partial class ConductorBatchLoop
                 suppressNewAcceptanceAdmission));
         ConductorTickStepLedger.Measure("priority-guard", () => _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityBaseOrder, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, changedGoalLines.Add));
         ConductorTickStepLedger.Measure("deferral-summary", () => SummarizeAcceptanceDeferrals(state, tick, changedGoalLines));
+        if (_mainFullVerification is { } mainVerification && !suppressNewAcceptanceAdmission())
+            RunJanitorialPhase("main-full-verification-admission", tick, () => mainVerification.Service(
+                Math.Max(state.DeferredByAdmission, state.Results.Values.Count(entry =>
+                    entry.Result.Outcome is ConductorAdvanceOutcome.Held { Owner: ConductorHoldOwner.AcceptanceQueue })),
+                () => DecideLiveAcceptanceAdmission(state.AcceptanceCensus, configuredAcceptanceWidth).IsAdmitted));
 
         return state.Results;
     }
