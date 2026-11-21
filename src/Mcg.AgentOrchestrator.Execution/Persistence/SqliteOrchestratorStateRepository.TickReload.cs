@@ -85,10 +85,14 @@ public sealed partial class SqliteOrchestratorStateRepository
         return await read(connection, hot.RootElement, version);
     }, CancellationToken.None);
 
-    private static GoalSnapshot CompleteTickSnapshot(GoalSnapshot snapshot, GoalSnapshot stored, long? storedVersion)
+    private static GoalSnapshot CompleteTickSnapshot(GoalSnapshot snapshot, GoalSnapshot stored, long? storedVersion,
+        GoalSnapshot? checkpointBaseline = null)
     {
         if (snapshot.TickRowVersion is not { } version) return snapshot;
         var storedTasks = stored.Tasks.ToDictionary(task => task.Id, StringComparer.Ordinal);
+        var baselineTasks = checkpointBaseline is { TickRowVersion: null }
+            ? checkpointBaseline.Tasks.ToDictionary(task => task.Id, StringComparer.Ordinal)
+            : null;
         return snapshot with
         {
             TickRowVersion = null,
@@ -101,14 +105,18 @@ public sealed partial class SqliteOrchestratorStateRepository
             {
                 if (task.DeferredHistory is null) return task;
                 var persisted = storedTasks.GetValueOrDefault(task.Id);
+                var historyBeforeChanges = task.HistoryBeforeChanges;
+                // A successful checkpoint advances the request baseline while retaining the live task.
+                if (historyBeforeChanges is not null && baselineTasks?.GetValueOrDefault(task.Id) is { } baselineTask)
+                    historyBeforeChanges = new(baselineTask.VerificationHistory, baselineTask.DispatchHistory);
                 return task with
                 {
                     DeferredHistory = null,
                     HistoryBeforeChanges = null,
-                    VerificationHistory = CompleteHistory(task.HistoryBeforeChanges?.Verification,
-                        persisted?.VerificationHistory, task.VerificationHistory, task.HistoryBeforeChanges is not null),
-                    DispatchHistory = CompleteHistory(task.HistoryBeforeChanges?.Dispatch,
-                        persisted?.DispatchHistory, task.DispatchHistory, task.HistoryBeforeChanges is not null)
+                    VerificationHistory = CompleteHistory(historyBeforeChanges?.Verification,
+                        persisted?.VerificationHistory, task.VerificationHistory, historyBeforeChanges is not null),
+                    DispatchHistory = CompleteHistory(historyBeforeChanges?.Dispatch,
+                        persisted?.DispatchHistory, task.DispatchHistory, historyBeforeChanges is not null)
                 };
             }).ToArray()
         };

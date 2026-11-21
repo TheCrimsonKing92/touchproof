@@ -44,6 +44,52 @@ public sealed class GoalLeanSaveSafetyTests
     }
 
     [Fact]
+    public async Task SecondTickCheckpointPersistsEveryNewVerificationOnTheSameLeanGoal()
+    {
+        using var support = new GoalTimelineTestSupport();
+        var seed = GoalTimelineTestSupport.Snapshot();
+        await support.Repository.SaveGoalSnapshotsAsync([seed]);
+        var id = new GoalId(seed.Id);
+        var kernel = await ReloadLeanAsync(support, id);
+        var baselines = new Dictionary<string, GoalSnapshot>();
+        ConductLoopTargetLoader.CaptureMissingTickBaselines(baselines, kernel);
+        Assert.NotNull(baselines[seed.Id].TickRowVersion);
+
+        var goal = kernel.GetGoal(id);
+        AppendVerificationAndEvent(goal);
+        var firstSave = await SaveCheckpointAsync();
+        Assert.Equal(GoalSnapshotSaveDisposition.Saved, firstSave.Disposition);
+        Assert.False(CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(kernel, firstSave));
+        Assert.Same(goal, kernel.GetGoal(id));
+        var firstPersisted = Assert.IsType<GoalSnapshot>(firstSave.PersistedSnapshot);
+        Assert.Null(firstPersisted.TickRowVersion);
+        baselines[seed.Id] = firstPersisted;
+
+        var at = GoalTimelineTestSupport.At.AddHours(2);
+        goal.Tasks[0].RecordVerification(new("verify-second", "fixture", 1, "second verification", "", at));
+        goal.Tasks[0].RecordVerification(new("verify-third", "fixture", 1, "third verification", "", at.AddMinutes(1)));
+        goal.Append(new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, "second tick event", at));
+
+        var secondSave = await SaveCheckpointAsync();
+        Assert.Equal(GoalSnapshotSaveDisposition.Saved, secondSave.Disposition);
+        var stored = Assert.IsType<GoalSnapshot>(await support.Repository.LoadGoalAsync(id));
+        Assert.Equal(seed.Tasks[0].VerificationHistory!.Select(row => row.StandardOutput)
+                .Concat(["tick verification", "second verification", "third verification"]),
+            stored.Tasks[0].VerificationHistory!.Select(row => row.StandardOutput));
+        Assert.Equal(seed.Timeline.Select(row => row.Message).Concat(["tick event", "second tick event"]),
+            stored.Timeline.Select(row => row.Message));
+
+        async Task<GoalSnapshotSaveResult> SaveCheckpointAsync()
+        {
+            var request = Assert.Single(CliPersistentStateRunner.BuildConductLoopCheckpointRequests(
+                kernel, [id], baselines, support.Repository, support.Fixture.DatabasePath,
+                containTransientBaselineLoads: false, out var holds));
+            Assert.Empty(holds);
+            return Assert.Single(await support.Repository.SaveGoalSnapshotsWithMergeAsync([request]));
+        }
+    }
+
+    [Fact]
     public async Task CompareAndSwapPreservesLeanRowsAndPersistsAppends()
     {
         using var support = new GoalTimelineTestSupport();

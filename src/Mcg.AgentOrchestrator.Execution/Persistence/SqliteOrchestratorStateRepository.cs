@@ -946,7 +946,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     }
 
                     var baseline = CompleteTickSnapshot(request.Baseline, storedSnapshot, storedVersion);
-                    var current = CompleteTickSnapshot(request.Current, storedSnapshot, storedVersion);
+                    var current = CompleteTickSnapshot(request.Current, storedSnapshot, storedVersion, request.Baseline);
                     if (tickDisposition == storedDisposition &&
                         (request.Baseline.TickRowVersion is null || request.Baseline.TickRowVersion == storedVersion) &&
                         SnapshotEquals(RefinedSpecSnapshotAccess.NormalizeForStorage(storedSnapshot),
