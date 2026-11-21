@@ -12,10 +12,11 @@ internal static class DispatchReadinessAssessment
         IReadOnlyCollection<Goal>? providerHoldScope,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        ModelInventory? inventory = null)
     {
         var plan = SubscriptionPlanBuilder.Build(
-            goal, agents, profiles, now: now, providerHoldScope: providerHoldScope);
+            goal, agents, profiles, now: now, providerHoldScope: providerHoldScope, inventory: inventory);
         return new(plan, DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, now));
     }
 }

@@ -79,7 +79,7 @@ internal static class GoalIntakeRequestMapper
             .Select(entry => $"{entry.value.ToLowerInvariant()}={ValueAfter(args, entry.index)}")
             .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
-        var assignedAgents = CliCommandHandlers.ApplyRoleAgentOverrides(args, agents)
+        var assignedAgents = CliCommandHandlers.ApplyRoleAgentOverrides(args, agents, workspace)
             .GroupBy(agent => agent.Role)
             .Select(group => group.First())
             .OrderBy(agent => agent.Role)
