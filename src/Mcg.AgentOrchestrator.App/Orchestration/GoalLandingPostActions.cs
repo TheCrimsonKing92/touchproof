@@ -94,6 +94,23 @@ internal static class GoalLandingPostActions
         return evidence;
     }
 
+    private static string RemainingSliceScope(string objective)
+    {
+        const string prefix = "Follow-up slices:";
+        var declarations = new List<string>();
+        var hasScope = false;
+        using var brief = new StringReader(objective);
+        while (brief.ReadLine() is { } line)
+        {
+            var declaration = line.AsSpan().TrimStart();
+            if (!declaration.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            declarations.Add(line);
+            hasScope |= !declaration[prefix.Length..].IsWhiteSpace();
+        }
+
+        return hasScope ? string.Join('\n', declarations) : "Remaining slices: not recorded";
+    }
+
     public static bool AutoCloseSourceBacklogItem(
         Goal? goal,
         string backlogStorePath,
@@ -142,7 +159,8 @@ internal static class GoalLandingPostActions
             if (goal.SourceBacklogCoverage == SourceBacklogCoverage.Slice)
             {
                 var landingNote = $"Recorded slice landing for goal {goal.Id.Value}. integrateCommit={commitSha}";
-                var landingResult = store.TryRecordOpenItemLandingAsync(goal.SourceBacklogItemId, landingNote).GetAwaiter().GetResult();
+                var landingResult = store.TryRecordOpenItemSliceLandingAsync(goal.SourceBacklogItemId, landingNote,
+                    RemainingSliceScope(goal.Objective)).GetAwaiter().GetResult();
                 switch (landingResult.Disposition)
                 {
                     case BacklogLandingDisposition.Recorded:

@@ -41,7 +41,7 @@ public sealed class MtpTestRunnerScriptTestsCompilerBoundary
         Xunit.Assert.Equal(0, result.ExitCode);
         Xunit.Assert.Contains("EXPECTED_COMPILER_FAILURE", result.Stdout, StringComparison.Ordinal);
         AssertCompilerDirectoriesReaped(sandbox);
-        Xunit.Assert.Empty(Directory.GetDirectories(Path.Combine(tempRoot, "mcg-mtp-startup-hook", "v1")));
+        Xunit.Assert.Empty(Directory.GetDirectories(Path.Combine(tempRoot, "mcg-mtp-startup-hook", "v2")));
     }
 
     [Xunit.Theory]
@@ -64,7 +64,12 @@ public sealed class MtpTestRunnerScriptTestsCompilerBoundary
                     $published = [IO.Path]::Combine($cache, $digest)
                     [void][IO.Directory]::CreateDirectory($published)
                     [IO.File]::Copy($Destination, [IO.Path]::Combine($published, $script:MtpStartupHookAssemblyName))
-                    $marker = @{ schemaVersion=$script:MtpStartupHookSchemaVersion; sourceDigest=$digest; assemblyDigest=(Get-MtpSha256File -Path $Destination) }
+                    $marker = @{
+                        schemaVersion = $script:MtpStartupHookSchemaVersion
+                        compilerKind = $script:MtpStartupHookCompilerKind
+                        sourceDigest = $digest
+                        assemblyDigest = (Get-MtpSha256File -Path $Destination)
+                    }
                     [IO.File]::WriteAllText([IO.Path]::Combine($published, $script:MtpStartupHookMarkerName), ($marker | ConvertTo-Json -Compress))
                 }
                 else { [IO.File]::WriteAllBytes($Destination, [byte[]]@(0)) }
@@ -102,10 +107,11 @@ public sealed class MtpTestRunnerScriptTestsCompilerBoundary
         var body = """
             $script:forceCompilerFailure = $FAILURE_FLAG
             $script:compilerLock = $null
-            function Add-Type {
-                param($TypeDefinition, $OutputAssembly, $OutputType, $ErrorAction)
-                Microsoft.PowerShell.Utility\Add-Type @PSBoundParameters
-                $lockPath = [IO.Path]::Combine([IO.Path]::GetDirectoryName($OutputAssembly), 'cleanup-lock')
+            $script:originalDelegate = (Get-Command Invoke-MtpStartupHookWindowsPowerShell).ScriptBlock
+            function Invoke-MtpStartupHookWindowsPowerShell {
+                param($Source, $AssemblyPath)
+                & $script:originalDelegate -Source $Source -AssemblyPath $AssemblyPath
+                $lockPath = [IO.Path]::Combine([IO.Path]::GetDirectoryName($AssemblyPath), 'cleanup-lock')
                 $script:compilerLock = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
                 if ($script:forceCompilerFailure) { throw 'CONTROLLED_COMPILER_FAILURE' }
             }

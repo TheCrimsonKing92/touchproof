@@ -87,10 +87,14 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
 
     internal void MarkHoldReleaseReported(string id) => Update(id, current => current with { HoldReleaseReported = true });
 
-    internal IReadOnlySet<string> AlreadyDrafted(IReadOnlyList<BacklogItem> items, string? currentMainHead = null)
+    internal IReadOnlySet<string> AlreadyDrafted(IReadOnlyList<BacklogItem> items, string? currentMainHead = null) =>
+        AlreadyDrafted(items, currentMainHead, ReadAll(newestFirst: true));
+
+    internal static HashSet<string> AlreadyDrafted(IReadOnlyList<BacklogItem> items, string? currentMainHead,
+        IReadOnlyList<BoardFillDraftRound> newestFirst)
     {
         // Insertion order identifies the latest round even when the injected clock has not moved.
-        var history = ReadAll(newestFirst: true).GroupBy(round => round.BacklogItemId)
+        var history = newestFirst.GroupBy(round => round.BacklogItemId)
             .ToDictionary(group => group.Key, group => group.ToArray());
         return items.Where(item => history.TryGetValue(item.Id, out var rounds) &&
             (rounds.Any(round => round.Outcome == "draft" && round.ChangeStamp >= BoardFillReadyItemSelector.ChangeStamp(item)) ||

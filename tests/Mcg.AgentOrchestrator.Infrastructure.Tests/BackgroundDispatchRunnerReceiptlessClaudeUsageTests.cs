@@ -80,7 +80,7 @@ public sealed class BackgroundDispatchRunnerReceiptlessClaudeUsageTests
                 ClaudeTranscriptUsage = new ClaudeTranscriptUsageReader([])
             };
             var result = runner.ResolveDispatchProviderUsage(dispatch, Path.Combine(root, "unused.out.log"));
-            Assert.Equal(new ProviderReportedUsage(8, 2, 3, TurnCount: 1), result.Usage);
+            Assert.Equal(new ProviderReportedUsage(8, 2, 3, TurnCount: 1, ToolCallCount: 0), result.Usage);
         });
 
     private static void WithCompletedDispatch(

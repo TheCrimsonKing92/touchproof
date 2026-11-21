@@ -14,24 +14,37 @@ public sealed class BoardFillReselectionHostTests
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
         var workspace = fixture.Workspace;
-        var kernel = new AgentOrchestratorKernel();
-        var owner = kernel.CreateGoal("Landed slice");
-        kernel.SetGoalSourceBacklogItemLink(owner.Id, fixture.Item.Id, SourceBacklogCoverage.Slice);
-        var snapshot = kernel.ExportSnapshot();
-        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
-        { Goals = snapshot.Goals.Select(goal => goal with { Status = GoalStatus.Completed }).ToArray() });
-        owner = Assert.Single(kernel.Goals);
+        var activeItem = await fixture.Store.AddAsync("Actively claimed item");
+        var setupKernel = new AgentOrchestratorKernel();
+        var ownerId = setupKernel.CreateGoal("Landed slice\nFollow-up slices: remaining scope").Id;
+        var activeId = setupKernel.CreateGoal("Active slice").Id;
+        setupKernel.SetGoalSourceBacklogItemLink(ownerId, fixture.Item.Id, SourceBacklogCoverage.Slice);
+        setupKernel.SetGoalSourceBacklogItemLink(activeId, activeItem.Id, SourceBacklogCoverage.Slice);
+        var snapshot = setupKernel.ExportSnapshot();
+        setupKernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+                { Status = goal.Id == ownerId.Value ? GoalStatus.Completed : GoalStatus.Active }).ToArray()
+        });
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-        await repository.SaveAsync(kernel);
-        await repository.TransactAsync((current, _) => Task.FromResult((ShouldSave: true,
-            Result: new SourceBacklogClaimStore(workspace.SqliteStatePath).EnsureClaimForNewGoal(
-                current, fixture.Item.Id, owner.Id.Value, SourceBacklogCoverage.Slice))));
-        Assert.False(GoalLandingPostActions.AutoCloseSourceBacklogItem(owner, workspace.BacklogStorePath,
-            kernel: kernel, integrateCommitSha: Repository.Head, stateDbPath: workspace.SqliteStatePath));
+        await repository.SaveAsync(setupKernel);
+        await repository.TransactAsync((current, _) =>
+        {
+            var claims = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+            claims.EnsureClaimForNewGoal(current, fixture.Item.Id, ownerId.Value, SourceBacklogCoverage.Slice);
+            claims.EnsureClaimForNewGoal(current, activeItem.Id, activeId.Value, SourceBacklogCoverage.Slice);
+            return Task.FromResult((ShouldSave: true, Result: true));
+        });
+        Assert.False(GoalLandingPostActions.AutoCloseSourceBacklogItem(setupKernel.GetGoal(ownerId), workspace.BacklogStorePath,
+            kernel: setupKernel, integrateCommitSha: Repository.Head, stateDbPath: workspace.SqliteStatePath));
         var landed = (await fixture.Store.GetByExactIdAsync(fixture.Item.Id))!;
         Assert.Equal(BacklogItemStatus.Open, landed.Status);
         Assert.Single(landed.Notes.Where(note => note.Text.Contains("Recorded slice landing", StringComparison.Ordinal)));
+        var tickSnapshot = setupKernel.ExportSnapshot();
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(tickSnapshot with
+        { Goals = tickSnapshot.Goals.Where(goal => goal.Id == activeId.Value).ToArray() });
+        Assert.Equal(activeId, Assert.Single(tickKernel.Goals).Id);
 
         const string reason = "All remaining scope is delivered.";
         const string evidence = "docs/role-capability-matrix.md:1";
@@ -69,10 +82,15 @@ public sealed class BoardFillReselectionHostTests
             mainHead: () => Repository.Head);
         try
         {
-            host.ServiceTick(kernel);
+            var readiness = defaults._readiness(tickKernel, [landed, activeItem]);
+            Assert.True(readiness(landed).Eligible);
+            Assert.Equal(new BacklogReadiness(false, false, " [Blocked: source already claimed or unresolved]"),
+                readiness(activeItem));
+
+            host.ServiceTick(tickKernel);
             Assert.NotNull(host.CurrentRound);
             await PanelTestHarness.Signal(host.CurrentRound!, "reselected Author round completed");
-            host.ServiceTick(kernel);
+            host.ServiceTick(tickKernel);
             var round = Assert.Single(store.ReadAll());
             Assert.Equal(fixture.Item.Id, round.BacklogItemId);
             Assert.Equal(1, calls);
@@ -93,7 +111,7 @@ public sealed class BoardFillReselectionHostTests
                 Assert.True(round.Assessment!.Fileable, string.Join(", ", round.Assessment.FailingReasons));
                 Assert.NotNull(host.CurrentFiling);
                 await PanelTestHarness.Signal(host.CurrentFiling!, "next slice filing completed");
-                host.ServiceTick(kernel);
+                host.ServiceTick(tickKernel);
                 var request = Assert.Single(intake.Requests);
                 Assert.Equal(fixture.Item.Id, request.BacklogItemId);
                 Assert.Equal("slice", request.Coverage);

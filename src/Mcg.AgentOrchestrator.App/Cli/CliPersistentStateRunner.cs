@@ -64,6 +64,9 @@ internal static partial class CliPersistentStateRunner
             return CliTaskGraphRepairCommand.Execute(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
         if (args.Count > 0 && args[0].Equals("epic-bar", StringComparison.OrdinalIgnoreCase) && !CliCommandHelp.IsCommandSpecificHelp(args))
             return CliEpicOutcomeCommands.ExecuteLegacyBar(args, workspace, operatorIntentSubmissionSource);
+        if (RecordControlReceiptCommand.IsCommand(args))
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers,
+                ref workerProfiles, ref currentGoal);
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
@@ -218,12 +221,7 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
-        if (IsSingleGoalSnapshotCommand(args))
-        {
-            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
-        }
-
-        if (IsSingleGoalReportCommand(args))
+        if (IsSingleGoalSnapshotCommand(args) || IsSingleGoalReportCommand(args))
         {
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
@@ -1824,21 +1822,9 @@ internal static partial class CliPersistentStateRunner
 
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
-        var request = GoalIntakeRequestMapper.Map(args, workspace, agents);
-        GoalIntakeRequestStore? requestStore = null;
-        GoalIntakeRequestRecord? intakeRecord = null;
-        if (request is not null)
-        {
-            requestStore = new GoalIntakeRequestStore(workspace.SqliteStatePath);
-            var reservation = request.Reserve(requestStore);
-            intakeRecord = reservation.Record;
-            if (reservation.Kind == GoalIntakeReservationKind.Replay)
-            {
-                GoalIntakeReplayReceipt.Print(reservation.Record, request, stateRepository,
-                    workspace, GoalCreationSummaryView.IsRequested(args), ref currentGoal);
-                return false;
-            }
-        }
+        var intake = new GoalIntakeCommandReceipt(args, workspace, agents);
+        if (intake.TryReplay(outboxRepository, kernel, ref currentGoal))
+            return false;
         GoalSnapshot? committedSnapshot = null;
         var deferredEventWriter = new DeferredGoalLifecycleEventWriter();
         var deferredCollaborationWriter = new DeferredGoalCreationCollaborationWriter(
@@ -1862,19 +1848,10 @@ internal static partial class CliPersistentStateRunner
                             preparedSourceBacklogDependencies: preparedSourceBacklogDependencies,
                             allowTerminalSourceClaimTakeover: allowTerminalSourceClaimTakeover);
                         currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
-                        if (request is not null)
-                        {
-                            intakeRecord = requestStore!.MarkCreated(
-                                request.RequestKey,
-                                request.Fingerprint,
-                                preparedSnapshot.Id);
-                            if (request.Mode.StartsWith("backlog-", StringComparison.Ordinal) &&
-                                preparedSnapshot.SourceBacklogItemId is { } sourceBacklogItemId)
-                            {
-                                new BacklogIntakeRecordStore(workspace.SqliteStatePath)
-                                    .MarkGoalCreated(sourceBacklogItemId, preparedSnapshot.Id);
-                            }
-                        }
+                        intake.MarkCreated(preparedSnapshot.Id);
+                        if (intake.IsBacklogRequest &&
+                            preparedSnapshot.SourceBacklogItemId is { } sourceBacklogItemId)
+                            new BacklogIntakeRecordStore(workspace.SqliteStatePath).MarkGoalCreated(sourceBacklogItemId, preparedSnapshot.Id);
                         return Task.FromResult((
                             ShouldSave: true,
                             Result: true,
@@ -1883,8 +1860,7 @@ internal static partial class CliPersistentStateRunner
                 .GetAwaiter()
                 .GetResult();
             committedSnapshot = preparedSnapshot;
-            if (intakeRecord is not null && !GoalCreationSummaryView.IsRequested(args))
-                GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
+            intake.ReportProgress();
             try
             {
                 _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
@@ -1903,7 +1879,7 @@ internal static partial class CliPersistentStateRunner
         try
         {
             shouldSave = CliCommandDispatcher.ExecuteCommand(
-                request?.RequestedEpicId is { } epicId ? EpicAtCreation.UseResolvedArgument(args, epicId) : args,
+                intake.Request?.RequestedEpicId is { } epicId ? EpicAtCreation.UseResolvedArgument(args, epicId) : args,
                 kernel,
                 workspace,
                 ref agents,
@@ -1914,43 +1890,26 @@ internal static partial class CliPersistentStateRunner
                 finalizeGoalCreation: FinalizeGoalCreation,
                 eventWriter: deferredEventWriter,
                 refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync,
-                reportGoalCreationProgress: () =>
-                {
-                    if (intakeRecord is not null && !GoalCreationSummaryView.IsRequested(args))
-                        GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
-                });
+                backlogContinuation: intake.ContinuationHost(outboxRepository),
+                reportGoalCreationProgress: intake.ReportProgress);
             if (committedSnapshot is null)
             {
+                if (intake.TryPrintContinuationResult(stateRepository, ref currentGoal))
+                    return false;
                 throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
             }
         }
         catch (InvalidOperationException ex)
-            when (request is null &&
+            when (intake.Record is null &&
                   ex.Message.StartsWith("GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL", StringComparison.Ordinal))
         {
             return false;
         }
-        catch (Exception ex)
-            when (committedSnapshot is null && GoalCreationPreconditionValidator.GetReason(ex) is not null)
+        catch (Exception ex) when (committedSnapshot is null)
         {
-            currentGoal = null;
-            if (request is not null)
-            {
-                _ = requestStore!.MarkFailed(
-                    request.RequestKey,
-                    request.Fingerprint,
-                    ResolveGoalIntakeFailureCode(ex),
-                    ex.Message);
-            }
-            throw;
-        }
-        catch (Exception ex) when (request is not null && committedSnapshot is null)
-        {
-            _ = requestStore!.MarkFailed(
-                request.RequestKey,
-                request.Fingerprint,
-                ResolveGoalIntakeFailureCode(ex),
-                ex.Message);
+            if (GoalCreationPreconditionValidator.GetReason(ex) is not null)
+                currentGoal = null;
+            intake.MarkFailed(ex);
             throw;
         }
 
@@ -1997,23 +1956,6 @@ internal static partial class CliPersistentStateRunner
         }
         catch (Exception ex) { custody.RecordException(ex, ex is CliExitException); throw; }
         finally { custody.RecordExit(); }
-    }
-
-    private static string ResolveGoalIntakeFailureCode(Exception exception)
-    {
-        var firstToken = exception.Message
-            .Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .FirstOrDefault();
-        if (firstToken is not null &&
-            firstToken.Length <= 100 &&
-            firstToken.All(character => char.IsAsciiLetterUpper(character) || char.IsAsciiDigit(character) || character == '_'))
-        {
-            return firstToken;
-        }
-
-        return exception is ArgumentException
-            ? "GOAL_INTAKE_ARGUMENT_INVALID"
-            : "GOAL_INTAKE_CREATE_FAILED";
     }
 
     private static bool ExecuteGoalCreateDeliveryRetry(

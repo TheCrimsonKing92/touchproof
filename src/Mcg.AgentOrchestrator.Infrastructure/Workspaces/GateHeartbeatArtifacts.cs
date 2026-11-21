@@ -69,7 +69,8 @@ public sealed record GateHeartbeatSnapshot(
     string? RunId = null,
     DateTimeOffset? PreStopObservedAt = null,
     DateTimeOffset? PreStopProgressAt = null,
-    string? OwnerStateDirectory = null);
+    string? OwnerStateDirectory = null,
+    GateReplayReceipt? ReplayReceipt = null);
 
 public sealed record GateHeartbeatStatus(
     int SlotIndex,
