@@ -13,8 +13,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed record WorkerBuildHostReference(string StatePath, string ExecutionDirectory,
     string GoalId, string TaskId, DateTimeOffset DispatchAt, string DispatchId,
     TaskIntentAdmissionReference? Admission = null, string? StorageRoot = null,
-    WorkerBuildStructuralPolicy? StructuralPolicy = null);
-public sealed record WorkerBuildRequest(int Version, string RequestKey, string[] Projects, string Configuration);
+    WorkerBuildStructuralPolicy? StructuralPolicy = null, bool SelectTargets = false);
+public sealed record WorkerBuildRequest(int Version, string RequestKey, string[] Projects, string Configuration, bool SelectTargets = false);
 public sealed record WorkerBuildResponse(string InvocationId, WorkerBuildOutcome? Outcome, string Diagnostic,
     int? CompilerExitCode = null, WorkerBuildStructuralCheck? StructuralCheck = null)
 {
@@ -39,6 +39,7 @@ public interface IWorkerBuildInvocationOperations
 {
     WorkerBuildHostReference Prepare(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId);
     bool ReconcileOutstanding(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, bool cancelled = false);
+    DotnetBuildTargetSelection? SelectBuildTargets(string worktreeRoot) => null;
     WorkerBuildConsumption Consume(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId,
         IReadOnlyList<string> changedPaths, IReadOnlyList<string> dirtyPaths);
 }
@@ -120,7 +121,8 @@ internal sealed class WorkerBuildRequestChannel : IDisposable
                 var request = JsonSerializer.Deserialize<WorkerBuildRequest>(message.ToString())
                     ?? throw new IOException("Worker build request is empty.");
                 if (request.Version != 1 || !Guid.TryParseExact(request.RequestKey, "N", out _) ||
-                    request.Projects is not { Length: > 0 and <= 100 } ||
+                    (request.SelectTargets ? request.Projects is not { Length: 0 }
+                        : request.Projects is not { Length: > 0 and <= 100 }) ||
                     request.Configuration is not ("Debug" or "Release"))
                     throw new UnauthorizedAccessException("Unsupported worker build request.");
                 if (peer.HasExited || !owner.Group.Contains(peer.SafeHandle) || ReadIdentity(peer) != identity)

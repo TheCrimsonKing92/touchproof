@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -26,7 +27,8 @@ internal sealed class PreTesterReverseDependencySelectionFixture : IDisposable
     internal void Write(string path, string text) => _files.Write(path, text);
     internal void Test(string name, string? dependency = null) => _files.Test(name, dependency);
 
-    internal void WithCostHistory(string engine = "")
+    internal void WithCostHistory(string engine = "",
+        int completedGateAttempts = ReverseDependencyEvidenceCostInputs.MinimumCompletedGateAttempts)
     {
         Write("tests/Mcg.AgentOrchestrator.Core.Tests/CoreTests.cs",
             "public class CoreTests { [Xunit.Fact] public void Works() {} }");
@@ -38,22 +40,41 @@ internal sealed class PreTesterReverseDependencySelectionFixture : IDisposable
               { "name": "core", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj" }
             ] }
             """);
+        WriteCandidateFailureHistory(Root, completedGateAttempts);
+        var failure = AcceptanceClassDurationHistoryStore.RecordAttempt(Root, "fixture-duration",
+            [new("fixture-duration", "fixture", "ConsumerTests", 1)], 20, completed: true, passed: true);
+        Assert.Null(failure);
+    }
+
+    internal static void WriteCandidateFailureHistory(string root,
+        int completedGateAttempts = ReverseDependencyEvidenceCostInputs.MinimumCompletedGateAttempts)
+    {
         var completed = DateTimeOffset.UtcNow.AddMinutes(-1);
-        var metadata = new ConductorParallelAcceptanceAttempt("fixture-red", "goal", "goal", 0, null, null,
-            completed.AddMinutes(-1), completed, 0, ConductorParallelAcceptanceAttemptOutcome.Failed,
-            "", "", "", "", "", "", CompletedAt: completed, Kind: "gate");
         var result = new ConductorParallelAcceptanceRunArtifact("accepted", null, null, null, null,
             new(false, [new("tests", false, 1, null, FailingTestAttributions:
                 [new("ConsumerTests.Works", AcceptanceTestFailureOrigin.Introduced, "fixture")])]),
             null, null, null, null);
-        var attempts = Path.Combine(HostLedgerStateDirectory.Resolve(Root), "acceptance-gate-attempts");
+        var attempts = Path.Combine(HostLedgerStateDirectory.Resolve(root), "acceptance-gate-attempts");
         Directory.CreateDirectory(attempts);
-        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        File.WriteAllText(Path.Combine(attempts, "fixture-red.attempt.json"), JsonSerializer.Serialize(metadata, json));
-        File.WriteAllText(Path.Combine(attempts, "fixture-red.result.json"), JsonSerializer.Serialize(result, json));
-        var failure = AcceptanceClassDurationHistoryStore.RecordAttempt(Root, "fixture-duration",
-            [new("fixture-duration", "fixture", "ConsumerTests", 1)], 20, completed: true, passed: true);
-        Assert.Null(failure);
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+        var resultJson = JsonSerializer.Serialize(result, json);
+        for (var index = 0; index < completedGateAttempts; index++)
+        {
+            var id = $"fixture-red-{index:D2}";
+            // Keep metadata compact for the source-read byte comparison.
+            var metadata = new
+            {
+                AttemptId = id,
+                Kind = "gate",
+                CompletedAt = completed,
+                Outcome = ConductorParallelAcceptanceAttemptOutcome.Failed
+            };
+            File.WriteAllText(Path.Combine(attempts, $"{id}.attempt.json"), JsonSerializer.Serialize(metadata, json));
+            File.WriteAllText(Path.Combine(attempts, $"{id}.result.json"), resultJson);
+        }
     }
 
     public void Dispose() => _files.Dispose();

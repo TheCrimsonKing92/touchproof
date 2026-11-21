@@ -42,7 +42,7 @@ internal sealed partial class ConductorBatchLoop
         return true;
     }
 
-    private static bool IsIdentityStaleRegated(
+    internal static bool IsIdentityStaleRegated(
         ConductorParallelAcceptanceRunResult run,
         ConductorParallelAcceptanceAttempt attempt) =>
         IsIdentityStaleRun(run) &&

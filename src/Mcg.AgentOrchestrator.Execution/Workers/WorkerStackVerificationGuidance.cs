@@ -7,8 +7,19 @@ internal static class WorkerStackVerificationGuidance
 {
     private const string BuildCheckLastInstruction = "Run the build check last, after your final edit, and make no edits after it (notes, docs, tests); any later edit needs a fresh build check.";
 
-    internal static IReadOnlyList<string> CurrentTaskSection(ProjectStack? stack)
+    internal static string NonHomeBuildCommand =>
+        $"""dotnet "{Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll")}" worker-build-request --selected-targets""";
+
+    private static string NonHomeBuildInstruction =>
+        $"- Run `{NonHomeBuildCommand}` from the worktree root after your final edit. The host selects and builds the project targets and records the evidence.";
+
+    internal static IReadOnlyList<string> CurrentTaskSection(ProjectStack? stack, bool useSelectedBuildTargets = false)
     {
+        if (stack == ProjectStack.Dotnet && useSelectedBuildTargets)
+            return [string.Empty, "## Build/Test Verification", NonHomeBuildInstruction,
+                "- Report the host build result in WORKER_RESULT. Name deferred test classes for the acceptance gate.",
+                "- Do not run worker-side tests. " + BuildCheckLastInstruction];
+
         if (stack == ProjectStack.Go)
         {
             return
@@ -40,10 +51,16 @@ internal static class WorkerStackVerificationGuidance
         }
     }
 
-    internal static IReadOnlyList<string> DeterministicVerificationSection(Toolchain toolchain, GoalId goalId)
+    internal static IReadOnlyList<string> DeterministicVerificationSection(Toolchain toolchain, GoalId goalId, bool useSelectedBuildTargets = false)
     {
         var lines = new List<string> { string.Empty };
-        if (toolchain == Toolchain.Dotnet)
+        if (toolchain == Toolchain.Dotnet && useSelectedBuildTargets)
+        {
+            lines.Add("## Worker Build Check");
+            lines.Add(NonHomeBuildInstruction);
+            lines.Add("- Report the host build result in WORKER_RESULT. Tests belong to the acceptance gate.");
+        }
+        else if (toolchain == Toolchain.Dotnet)
         {
             var buildInvocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
             lines.Add("## Worker Build Check");
@@ -125,8 +142,12 @@ internal static class WorkerStackVerificationGuidance
     internal static IReadOnlyList<string> NativeDeveloperAcceptanceEvidenceBrokerLines() =>
         NativeDeveloperBrokerGuidance.AcceptanceEvidenceLines("project-native command results", "the project's acceptance manifest checks");
 
-    internal static IReadOnlyList<string> DeveloperBuildOnlyBrokerLines()
+    internal static IReadOnlyList<string> DeveloperBuildOnlyBrokerLines(bool useSelectedBuildTargets = false)
     {
+        if (useSelectedBuildTargets)
+            return ["- build-only", "  Artifact: current-task.md",
+                $"  Command: `{NonHomeBuildCommand}`",
+                "  Evidence: Report the host build result and name deferred test classes for the acceptance gate."];
         var buildInvocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
         return
         [

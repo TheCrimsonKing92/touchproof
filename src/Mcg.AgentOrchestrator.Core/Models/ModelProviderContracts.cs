@@ -377,6 +377,9 @@ public sealed record TaskDispatchRecord(
     public int ConductorRoutingRevision { get; internal set; } = ConductorRoutingRevision;
 
     public GoalId? GoalId { get; internal set; } = GoalId;
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<DeveloperReachCheckEntry>? ReachCheck { get; init; }
 }
 
 public sealed record DispatchProviderUsage(

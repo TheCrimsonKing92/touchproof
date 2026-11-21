@@ -116,6 +116,53 @@ internal sealed class FixtureRepositoryWriter
         return WriteCommit(WriteTree(blobs), parents, message, identity, identity);
     }
 
+    // Commits explicit regular fixture files whose worktree bytes are already their intended blob bytes.
+    internal string CommitFiles(IEnumerable<string> paths, string message, Identity identity, bool allowEmpty = false)
+    {
+        var reference = HeadReference() ?? throw new InvalidDataException("Fixture commit requires a branch.");
+        var previous = ReadRef(reference) ?? throw new InvalidDataException("Fixture commit requires a seeded branch.");
+        var files = ReadCommitFiles(previous);
+        if (File.Exists(Path.Combine(GitDirectory, "MERGE_HEAD")) ||
+            File.Exists(Path.Combine(CommonDirectory, "info", "attributes")) ||
+            files.Keys.Any(IsAttributesPath))
+            throw new InvalidDataException("Fixture commit requires a plain checkout without Git attributes.");
+
+        var changes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var config = File.ReadAllText(Path.Combine(CommonDirectory, "config"));
+        foreach (var path in paths)
+        {
+            ValidatePath(path);
+            var file = Path.Combine(Root, path);
+            for (var directory = Path.GetDirectoryName(file)!; ; directory = Path.GetDirectoryName(directory)!)
+            {
+                if (File.Exists(Path.Combine(directory, ".gitattributes")) || IsAttributesPath(path))
+                    throw new InvalidDataException("Fixture commit encountered Git attributes.");
+                if (directory == Root) break;
+            }
+            var bytes = File.ReadAllBytes(file);
+            if (bytes.Contains((byte)'\r') && !config.Contains("\tautocrlf = false\n", StringComparison.Ordinal))
+                throw new InvalidDataException("Fixture commit requires disabled newline conversion for CR bytes.");
+            changes.Add(path, bytes);
+        }
+
+        if (!allowEmpty && changes.All(change =>
+            files.TryGetValue(change.Key, out var blob) && blob == HashBlob(change.Value)))
+            throw new InvalidDataException("Fixture commit has no changes.");
+        foreach (var (path, bytes) in changes)
+            files[path] = WriteBlob(bytes);
+        var head = WriteCommit(WriteTree(files), [previous], message, identity, identity);
+        WriteIndex(files);
+        WriteRef(reference, head);
+        var subject = $"commit: {message}";
+        AppendReflog(reference, previous, head, identity, subject);
+        AppendReflog("HEAD", previous, head, identity, subject);
+        AtomicWrite(Path.Combine(GitDirectory, "COMMIT_EDITMSG"), Encoding.UTF8.GetBytes(message + "\n"));
+        return head;
+
+        static bool IsAttributesPath(string path) =>
+            Path.GetFileName(path).Equals(".gitattributes", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal void SelectTip(string branch, string commit)
     {
         ValidateRef("refs/heads/" + branch);

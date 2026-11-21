@@ -5,25 +5,29 @@ using Xunit;
 // Parallel-safe: private filesystem roots, injected home lookup, and no processes or environment mutation.
 public sealed class WorkerTargetHomeFactoryTests
 {
-    [Fact]
-    public void For_ProjectWorkspace_CarriesProjectHomeAndManifestResolver()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void For_ProjectWorkspace_CarriesProjectHomeAndManifestResolver(bool isHome)
     {
         using var homeFixture = CreateHomeFixture();
         using var targetFixture = new OrchestratorHomeRootSeparationTests.Fixture();
         using var dataFixture = new OrchestratorHomeRootSeparationTests.Fixture();
         var home = OrchestratorHome.ResolveForLaunch(homeFixture.Root, _ => null);
-        var workspace = OrchestratorWorkspace.ForProject("foreign", targetFixture.Root,
-            targetFixture.Root, dataRootDirectory: dataFixture.Root);
+        var targetRoot = isHome ? homeFixture.Root : targetFixture.Root;
+        var workspace = OrchestratorWorkspace.ForProject("fixture", targetRoot,
+            targetRoot, dataRootDirectory: dataFixture.Root);
 
         var targetHome = WorkerTargetHomeFactory.For(home, workspace);
 
         Assert.NotNull(workspace.ProjectHomeDirectoryOrNull);
         Assert.Equal(workspace.ProjectHomeDirectoryOrNull, targetHome.ProjectHomeDirectory);
         Assert.Equal(home.IsHome(workspace), targetHome.IsOrchestratorHome);
-        Assert.False(targetHome.IsOrchestratorHome);
+        Assert.Equal(isHome, targetHome.IsOrchestratorHome);
+        Assert.Equal(!isHome, targetHome.UsesSelectedBuildTargets);
         Assert.NotNull(targetHome.AcceptanceManifestPath);
-        Assert.Equal(WorkerAcceptanceManifestResolver.For(workspace)(targetFixture.Root),
-            targetHome.AcceptanceManifestPath(targetFixture.Root));
+        Assert.Equal(WorkerAcceptanceManifestResolver.For(workspace)(targetRoot),
+            targetHome.AcceptanceManifestPath(targetRoot));
     }
 
     [Theory]
@@ -41,6 +45,7 @@ public sealed class WorkerTargetHomeFactoryTests
         Assert.Null(targetHome.ProjectHomeDirectory);
         Assert.Equal(home.IsHome(workspace), targetHome.IsOrchestratorHome);
         Assert.Equal(isHome, targetHome.IsOrchestratorHome);
+        Assert.False(targetHome.UsesSelectedBuildTargets);
         Assert.NotNull(targetHome.AcceptanceManifestPath);
     }
 

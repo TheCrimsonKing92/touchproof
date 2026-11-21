@@ -44,20 +44,26 @@ internal static class WorkerBuildCheckRecoveryText
         ? $"checkpoint: worker-build-capacity exhausted 3/3 for task {taskId}"
         : $"checkpoint: worker-build-capacity retry {rounds}/3 for task {taskId}";
 
-    internal static string CapacityRetryFeedback(int rounds, bool committed, string checkpoint) =>
+    internal static string CapacityRetryFeedback(int rounds, bool committed, string checkpoint, string buildInstruction) =>
         $"worker-build-capacity automatic retry {rounds}/3:" +
         Environment.NewLine + (committed ? $"checkpoint commit {checkpoint}" :
             $"no uncommitted changes were found; goal branch HEAD {checkpoint}") +
         Environment.NewLine + SlotCapacityBlock +
-        Environment.NewLine + "Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit.";
+        Environment.NewLine + $"Rerun {buildInstruction}";
 
     internal static string RetryFeedback(int recoveryCount, bool committed, string checkpoint, string? formattedErrors,
-        WorkerBuildNoBuildCause cause = WorkerBuildNoBuildCause.LockTimeout) =>
+        WorkerBuildNoBuildCause cause, string buildInstruction) =>
         $"worker-build-check-failed automatic recovery {recoveryCount + 1}/2:" +
         Environment.NewLine + (committed ? $"checkpoint commit {checkpoint}" :
             $"no uncommitted changes were found; goal branch HEAD {checkpoint}") +
         Environment.NewLine + (formattedErrors is null
-            ? ErrorBlock(null, cause) + Environment.NewLine + "Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit."
-            : "Fix only what the build reports below, and run scripts/Invoke-WorkerBuildCheck.ps1 after the last edit." +
+            ? ErrorBlock(null, cause) + Environment.NewLine + $"Rerun {buildInstruction}"
+            : $"Fix only what the build reports below, and run {buildInstruction}" +
                 Environment.NewLine + formattedErrors);
+
+    internal static string BuildInstruction(string repositoryRoot, string worktreeRoot, string? projectHomeDirectory) =>
+        !OrchestratorHome.ResolveForLaunch(repositoryRoot).IsHome(repositoryRoot) &&
+        ProjectStackResolver.Resolve(worktreeRoot, projectHomeDirectory) == Toolchain.Dotnet
+        ? $"`{WorkerStackVerificationGuidance.NonHomeBuildCommand}` from the worktree root after the last edit."
+        : "scripts/Invoke-WorkerBuildCheck.ps1 after the last edit.";
 }

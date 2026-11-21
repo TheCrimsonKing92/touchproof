@@ -68,6 +68,8 @@ internal sealed class DiscoveryTrackedPaths
         return new(normalizedRoot, files, directories);
     }
 
+    internal bool HasTrackedPaths => files is not null;
+
     public bool IncludesFile(string fullPath) => files is null || files.Contains(Relative(fullPath));
 
     public bool IncludesDirectory(string fullPath) =>

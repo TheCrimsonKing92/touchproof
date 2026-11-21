@@ -89,10 +89,11 @@ internal sealed partial class CompletionBuildEvidenceCoordinator : ICompletionBu
             operation = new CompletionBuildEvidenceOperation(id, goalId.Value, taskId.Value,
                 task.LastDispatch!.DispatchedAt, BackgroundDispatchRunner.BuildDispatchId(goalId, taskId, task.LastDispatch),
                 Path.GetFullPath(request.WorktreeRoot), digest, NormalizeProjects(request.Projects), workerProcess,
-                _utcNow() + request.Timeout + _remoteBuildBudget(request.WorktreeRoot), CompletionBuildEvidencePhase.Launching,
+                _utcNow() + request.Timeout + (request.BuildTargets is null ? _remoteBuildBudget(request.WorktreeRoot) : TimeSpan.Zero),
+                CompletionBuildEvidencePhase.Launching,
                 _statePath, _executionDirectory,
                 Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goalId, _storageRoot), "completion-build-evidence", id + ".result.json"),
-                Environment.ProcessId, new DateTimeOffset(owner.StartTime.ToUniversalTime()));
+                Environment.ProcessId, new DateTimeOffset(owner.StartTime.ToUniversalTime()), BuildTargets: request.BuildTargets);
             try { operation = Store(kernel, operation, null); }
             catch (Exception ex)
             {
@@ -166,6 +167,8 @@ internal sealed partial class CompletionBuildEvidenceCoordinator : ICompletionBu
             return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.Cancelled, "Originating dispatch was cancelled or superseded.");
         if (!WorktreeTreeDigest.TryCompute(request.WorktreeRoot, out var digest, out _) ||
             digest != operation.TreeDigest || !NormalizeProjects(request.Projects).SequenceEqual(operation.Projects) ||
+            (request.BuildTargets is null ? operation.BuildTargets is not null :
+                operation.BuildTargets is null || !request.BuildTargets.SequenceEqual(operation.BuildTargets)) ||
             !string.Equals(Path.GetFullPath(request.WorktreeRoot), operation.WorktreeRoot, StringComparison.OrdinalIgnoreCase))
             return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.StaleCandidate, "Completion build candidate or required projects changed.");
         if (!operation.IsPending) return operation;
@@ -462,6 +465,17 @@ internal sealed partial class CompletionBuildEvidenceCoordinator : ICompletionBu
             if (remaining <= TimeSpan.Zero) throw new OperationCanceledException();
             if (!WorktreeTreeDigest.TryCompute(operation.WorktreeRoot, out var digest, out _) || digest != operation.TreeDigest)
                 result = operation with { Phase = CompletionBuildEvidencePhase.StaleCandidate, Diagnostic = "Candidate changed before build authorization." };
+            else if (operation.BuildTargets is not null)
+            {
+                using var qos = BuildLaunchQosSweep.Begin("completion-build", args[1], operation.GoalId,
+                    Environment.ProcessId, BuildLaunchQosSweep.RootAndDescendants);
+                var receiptPath = Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goal.Id), WorkerBuildReceipt.FileName);
+                var placement = NonHomeCompletionBuild.Run(operation, receiptPath);
+                result = operation with
+                {
+                    Phase = placement.Phase, BuildExitCode = placement.BuildExitCode, Diagnostic = placement.Diagnostic
+                };
+            }
             else
             {
                 RemoteLaneExecutorConfiguration configuration;

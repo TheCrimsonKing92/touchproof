@@ -10,14 +10,24 @@ internal sealed class ImpactReplayChangedSupportNameFilter
     private readonly UsingDirectiveSyntax[] _aliases;
 
     internal ImpactReplayChangedSupportNameFilter(IEnumerable<INamedTypeSymbol> declared, IEnumerable<SyntaxTree> trees)
+        : this(declared, ReadAliases(trees))
+    {
+    }
+
+    internal ImpactReplayChangedSupportNameFilter(IEnumerable<INamedTypeSymbol> declared, UsingDirectiveSyntax[] aliases)
     {
         _names = new(StringComparer.Ordinal);
-        _aliases = trees.SelectMany(tree => tree.GetRoot().DescendantNodes().OfType<UsingDirectiveSyntax>())
-            .Where(directive => directive.Alias is not null).ToArray();
+        _aliases = aliases;
         Widen(declared);
     }
 
-    internal void Widen(IEnumerable<INamedTypeSymbol> types)
+    internal IReadOnlySet<string> Names => _names;
+
+    internal static UsingDirectiveSyntax[] ReadAliases(IEnumerable<SyntaxTree> trees) =>
+        trees.SelectMany(tree => tree.GetRoot().DescendantNodes().OfType<UsingDirectiveSyntax>())
+            .Where(directive => directive.Alias is not null).ToArray();
+
+    private void Widen(IEnumerable<INamedTypeSymbol> types)
     {
         foreach (var type in types)
         {

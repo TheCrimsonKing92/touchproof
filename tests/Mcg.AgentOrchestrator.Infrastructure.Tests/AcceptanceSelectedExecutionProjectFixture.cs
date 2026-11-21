@@ -46,7 +46,7 @@ internal static class AcceptanceSelectedExecutionProjectFixture
         IReadOnlyList<string>? changes = null) => GoalAcceptanceVerifier.CreateEffectiveGatePlan(root,
             changes ?? AcceptanceSelectedExecutionFixture.Changes, AcceptanceGateEngineSettings.Parse("{}"),
             infrastructureLaneExpansion: new(AcceptanceSelectedExecutionFixture.Lanes, null),
-            laneTransform: session.GateTransform, projectCheckTransform: session.ProjectCheckTransform);
+            selectedExecution: session);
 
     internal static RepositoryTestReachTests.RepositoryFixture Repository()
     {
