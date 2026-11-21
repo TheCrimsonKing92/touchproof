@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -35,6 +36,8 @@ internal sealed partial class ConductorBoardFillHost
     private readonly HashSet<string> _reportedStoppedItems = new(StringComparer.Ordinal);
     private DateTime _stoppedReportDay;
     private string? _reportedBackoffRound;
+    private string? _lastReadinessDetail;
+    private readonly LinkedList<(string Detail, string EventId, DateTimeOffset ObservedAt)> _pendingReadiness = new();
     internal Task? CurrentRound => _round;
 
     // Drafting is read-only; optional filing delegates all goal mutations to the CLI intake seam.
@@ -113,31 +116,27 @@ internal sealed partial class ConductorBoardFillHost
         ReportFinished();
         var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
         var epicMembers = _epicMembership.Read(items, now);
-        if (epicMembers is null) return null;
-        ServiceFiling(items, epicMembers);
-        // Admission refreshes membership on the filing thread; wait for that observation before spending another draft.
-        if (held || _round is not null || _filing is not null ||
-            kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals) return null;
-        if (policy.BoardFillMaxDraftsPerDay is { } cap && _store.StartedOnUtcDay(now) >= cap)
-            return policy.BoardFillMode == ConductorBoardFillMode.Shadow
-                ? BoardBelowTargetMonitor.ModeNotFile : BoardBelowTargetMonitor.DailyCapReached;
-        if (_heldMainHead is not null)
-        {
-            string? mainHead;
-            try { mainHead = _mainHead(); }
-            catch { return null; } // An unresolved head cannot release a repository hold.
-            if (string.IsNullOrWhiteSpace(mainHead) ||
-                string.Equals(mainHead, _heldMainHead, StringComparison.OrdinalIgnoreCase)) return null;
-            _heldMainHead = null;
-        }
-        if (_trackedEditsHold.Blocks(now)) return null;
+        if (epicMembers is not null) ServiceFiling(items, epicMembers);
+        var newestFirst = _store.ReadAll(newestFirst: true);
+        var rounds = newestFirst.Reverse().ToArray();
+        var goals = kernel.Goals.ToArray();
+        var admission = epicMembers is null ? (Allowed: false, Reason: (string?)null)
+            : DraftAdmission(goals, rounds, policy, held, now);
         string? observedMain;
         try { observedMain = _staleMainHead(); }
         catch { observedMain = null; }
-        items = ReleaseContradictionHolds(items, observedMain);
-        var preferredOrder = ReadPreferredOrder(now);
-        var rounds = _store.ReadAll(newestFirst: true).Reverse().ToArray();
+        // Record evidence releases before selection so a new round captures the durable item stamp.
+        if (admission.Allowed) items = ReleaseContradictionHolds(items, observedMain);
         var stopped = BoardFillConsecutiveNonDraftRounds.StoppedItems(rounds, now);
+        var excluded = ConductorBoardFillDraftStore.AlreadyDrafted(items, observedMain, newestFirst);
+        excluded.UnionWith(stopped.Keys);
+        Func<BacklogItem, BacklogReadiness>? readiness = null;
+        var evaluate = ConductorTickStepLedger.CountReadinessEvaluations(item => (readiness ??= _readiness(kernel, items))(item));
+        var candidates = BoardFillReadyItemSelector.EvaluateCandidates(items, goals, excluded, evaluate, rounds, observedMain).ToArray();
+        ReportReadiness(candidates, now);
+        if (!admission.Allowed) return admission.Reason;
+
+        var preferredOrder = ReadPreferredOrder(now);
         ReportStoppedItems(items, stopped, now);
         if (BoardFillFailureBreaker.Evaluate(rounds, now) is { } backoff)
         {
@@ -149,14 +148,8 @@ internal sealed partial class ConductorBoardFillHost
             return policy.BoardFillMode == ConductorBoardFillMode.Shadow
                 ? BoardBelowTargetMonitor.ModeNotFile : BoardBelowTargetMonitor.AuthorRefusalStreak;
         }
-        var excluded = _store.AlreadyDrafted(items, observedMain).ToHashSet(StringComparer.Ordinal);
-        excluded.UnionWith(stopped.Keys);
-        var goals = kernel.Goals.ToArray();
-        var item = BoardFillReadyItemSelector.Select(items, goals, excluded,
-            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), rounds, preferredOrder,
-            // Evidence releases must first advance the durable item stamp; otherwise Begin
-            // would capture the marker time and the new round would fail backlog-changed.
-            observedMain, epicMembers: epicMembers, epicMissing: missing => _epicMembership.Ask(missing, now),
+        var item = BoardFillReadyItemSelector.SelectReady(candidates, preferredOrder,
+            epicMembers, missing => _epicMembership.Ask(missing, now),
             nearDuplicate: BoardFillNearDuplicate.Lookup(items, goals, rounds, now),
             nearDuplicateSkipped: AnnotateNearDuplicate);
         if (item is null)
@@ -166,6 +159,46 @@ internal sealed partial class ConductorBoardFillHost
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
         _round = Task.Run(() => RunRoundAsync(item.Id));
         return null;
+    }
+
+    private (bool Allowed, string? Reason) DraftAdmission(IReadOnlyList<Goal> goals,
+        IReadOnlyList<BoardFillDraftRound> rounds, ConductorAutonomyPolicy policy, bool held, DateTimeOffset now)
+    {
+        // Admission refreshes membership on the filing thread; wait for that observation before spending another draft.
+        if (held || _round is not null || _filing is not null ||
+            goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals) return (false, null);
+        if (policy.BoardFillMaxDraftsPerDay is { } cap && BoardFillDailyAllowance.Count(rounds, now) >= cap)
+            return (false, policy.BoardFillMode == ConductorBoardFillMode.Shadow
+                ? BoardBelowTargetMonitor.ModeNotFile : BoardBelowTargetMonitor.DailyCapReached);
+        if (_heldMainHead is not null)
+        {
+            string? mainHead;
+            try { mainHead = _mainHead(); }
+            catch { return (false, null); } // An unresolved head cannot release a repository hold.
+            if (string.IsNullOrWhiteSpace(mainHead) ||
+                string.Equals(mainHead, _heldMainHead, StringComparison.OrdinalIgnoreCase)) return (false, null);
+            _heldMainHead = null;
+        }
+        return (!_trackedEditsHold.Blocks(now), null);
+    }
+
+    private void ReportReadiness(IEnumerable<(BacklogItem Item, BacklogReadiness Ready)> candidates, DateTimeOffset now)
+    {
+        var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (_, readiness) in candidates)
+            if (!readiness.Eligible)
+                counts[readiness.Suffix] = counts.GetValueOrDefault(readiness.Suffix) + 1;
+        var detail = JsonSerializer.Serialize(counts);
+        if (detail != (_pendingReadiness.Last?.Value.Detail ?? _lastReadinessDetail))
+            _pendingReadiness.AddLast((detail, Guid.NewGuid().ToString("N"), now));
+
+        // Submit one snapshot per tick in observation order. The writer may have staged the ID before a failed append.
+        if (_pendingReadiness.First is { Value: var pending } &&
+            _events.AppendRequired("BOARD_FILL_READINESS", null, pending.Detail, pending.ObservedAt, pending.EventId))
+        {
+            _lastReadinessDetail = pending.Detail;
+            _pendingReadiness.RemoveFirst();
+        }
     }
 
     private void AnnotateNearDuplicate(BacklogItem item, BoardFillNearDuplicateReference reference)

@@ -1,0 +1,8 @@
+{"type":"item.started","item":{"id":"cmd-1","type":"command_execution"}}
+{"type":"item.completed","item":{"id":"cmd-1","type":"command_execution","status":"completed"}}
+{"type":"item.completed","item":{"id":"cmd-2","type":"command_execution","status":"failed"}}
+{"type":"item.completed","item":{"id":"cmd-3","type":"command_execution","status":"completed"}}
+{"type":"item.completed","item":{"id":"edit","type":"file_change","status":"completed"}}
+{"type":"item.completed","item":{"id":"assistant-1","type":"agent_message","text":"Working"}}
+{"type":"item.completed","item":{"id":"assistant-2","type":"agent_message","text":"Done"}}
+{"type":"turn.completed","usage":{"input_tokens":80,"cached_input_tokens":50,"output_tokens":20}}

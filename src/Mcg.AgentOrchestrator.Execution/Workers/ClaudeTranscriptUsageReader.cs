@@ -71,6 +71,7 @@ public sealed class ClaudeTranscriptUsageReader(
             using var stream = (openRead ?? OpenSharedRead)(transcript);
             using var reader = new StreamReader(stream);
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
+            var seenToolCalls = new HashSet<(string MessageId, string ToolUseId)>();
             long input = 0, cached = 0, output = 0;
             while (reader.ReadLine() is { } line)
             {
@@ -88,14 +89,33 @@ public sealed class ClaudeTranscriptUsageReader(
                         continue;
 
                     var messageId = id.GetString();
-                    if (string.IsNullOrWhiteSpace(messageId) || !seenIds.Add(messageId))
+                    if (string.IsNullOrWhiteSpace(messageId))
                         continue;
 
-                    checked
+                    if (seenIds.Add(messageId))
                     {
-                        input += messageInput;
-                        cached += messageCached;
-                        output += messageOutput;
+                        checked
+                        {
+                            input += messageInput;
+                            cached += messageCached;
+                            output += messageOutput;
+                        }
+                    }
+
+                    // Claude can write the blocks of one assistant message on separate lines.
+                    if (!message.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+                        continue;
+
+                    foreach (var block in content.EnumerateArray())
+                    {
+                        if (block.ValueKind == JsonValueKind.Object &&
+                            block.TryGetProperty("type", out var blockType) &&
+                            blockType.ValueKind == JsonValueKind.String && blockType.ValueEquals("tool_use") &&
+                            block.TryGetProperty("id", out var blockId) && blockId.ValueKind == JsonValueKind.String &&
+                            blockId.GetString() is { } toolUseId && !string.IsNullOrWhiteSpace(toolUseId))
+                        {
+                            seenToolCalls.Add((messageId, toolUseId));
+                        }
                     }
                 }
                 catch (JsonException)
@@ -106,7 +126,7 @@ public sealed class ClaudeTranscriptUsageReader(
 
             return seenIds.Count == 0
                 ? new(null, $"claude-transcript-no-usage: {fileName} reported no assistant usage")
-                : new(new ProviderReportedUsage(input, output, cached, seenIds.Count), string.Empty);
+                : new(new ProviderReportedUsage(input, output, cached, seenIds.Count, seenToolCalls.Count), string.Empty);
         }
         catch (Exception ex)
         {

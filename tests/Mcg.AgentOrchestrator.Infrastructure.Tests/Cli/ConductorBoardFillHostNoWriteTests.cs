@@ -70,7 +70,8 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
             Assert.True(File.Exists(round.DraftPath));
             Assert.True(File.Exists(round.ReceiptPath));
             Assert.Equal(1, calls);
-            Assert.Single(File.ReadAllLines(events));
+            Assert.Single(File.ReadLines(events), line =>
+                JsonSerializer.Deserialize<JsonElement>(line).GetProperty("eventKind").GetString() == "board-fill-draft");
             Assert.Equal(beforeBacklog, File.ReadAllBytes(workspace.BacklogStorePath));
             Assert.Equal(beforeGoals, JsonSerializer.Serialize(kernel.ExportSnapshot()));
             Assert.Equal(existing.Id, Assert.Single(kernel.Goals).Id);

@@ -12,4 +12,7 @@ internal sealed record GateHeartbeatContext(
 {
     internal string? RunClass { get; init; }
     internal string? RunId { get; init; }
+    internal AcceptanceAttemptIdentity? AttemptIdentity { get; init; }
+    internal IReadOnlyList<string>? DeclaredTestResultPaths { get; init; }
+    internal bool RequiresAcceptanceLease { get; init; }
 }

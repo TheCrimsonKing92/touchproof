@@ -1,0 +1,5 @@
+{"type":"assistant","message":{"id":"a","usage":{"input_tokens":10,"cache_read_input_tokens":3,"output_tokens":5},"content":[{"type":"thinking","thinking":"Checking the files"}]}}
+{"type":"assistant","message":{"id":"a","usage":{"input_tokens":10,"cache_read_input_tokens":3,"output_tokens":6},"content":[{"type":"text","text":"Working"}]}}
+{"type":"assistant","message":{"id":"a","usage":{"input_tokens":10,"cache_read_input_tokens":3,"output_tokens":7},"content":[{"type":"tool_use","id":"first","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"assistant","message":{"id":"a","usage":{"input_tokens":10,"cache_read_input_tokens":3,"output_tokens":7},"content":[{"type":"tool_use","id":"first","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"assistant","message":{"id":"a","usage":{"input_tokens":10,"cache_read_input_tokens":3,"output_tokens":8},"content":[{"type":"tool_use","id":"second","name":"Read","input":{"file_path":"AGENTS.md"}}]}}
