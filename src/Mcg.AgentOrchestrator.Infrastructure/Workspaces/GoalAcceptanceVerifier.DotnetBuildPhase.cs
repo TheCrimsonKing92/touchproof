@@ -128,7 +128,8 @@ internal sealed class AcceptanceDotnetBuildPhase
         }
 
         var buildProjects = cacheableProjects
-            .Where(policyShardPlan.IncludesProject)
+            .Where(project => policyShardPlan.DependencyClosure.Contains(project, StringComparer.OrdinalIgnoreCase) ||
+                policyShardPlan.RequiresFullSupportRun(project))
             .ToArray();
         if (buildProjects.Length == 0 || buildProjects.Length == cacheableProjects.Length)
         {
