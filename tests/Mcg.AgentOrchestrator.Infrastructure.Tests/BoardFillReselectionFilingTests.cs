@@ -26,11 +26,13 @@ public sealed class BoardFillReselectionFilingTests : CliCommandTestBase
             var path = Path.Combine(root, "draft.md");
             File.WriteAllText(path, BoardFillAssessmentTestFixture.Brief);
             var adapter = new BoardFillCliGoalIntake(workspace);
-            var first = adapter.File(new("first", path, item.Id, "slice"), default);
-            Assert.Equal("filed", first.Kind);
+            var firstRequest = new BoardFillIntakeRequest("first", path, item.Id, "slice");
+            Assert.True(adapter.File(firstRequest, default).IsPending);
+            Assert.Contains("result=applied", KeyedGoalCreationIntentTests.ApplyWorkspace(workspace));
             var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
             var kernel = await repository.LoadAsync();
             var owner = Assert.Single(kernel.Goals);
+            Assert.Equal(owner.Id.Value, adapter.FindCreatedGoal(firstRequest.RequestKey));
             var claims = new SourceBacklogClaimStore(workspace.SqliteStatePath);
             var before = claims.ResolveClaim(kernel, item.Id)!;
             Assert.Equal(owner.Id.Value, before.OwnerGoalId);
@@ -47,7 +49,10 @@ public sealed class BoardFillReselectionFilingTests : CliCommandTestBase
                 Assert.Empty(filing.Intake.Requests);
             }
             // Bypassing admission cannot steal a live slice owner's claim at commit.
-            var refused = adapter.File(new("live-owner", path, item.Id, "full"), default);
+            var liveOwnerRequest = new BoardFillIntakeRequest("live-owner", path, item.Id, "full");
+            Assert.True(adapter.File(liveOwnerRequest, default).IsPending);
+            Assert.Contains("result=rejected", KeyedGoalCreationIntentTests.ApplyWorkspace(workspace));
+            var refused = adapter.File(liveOwnerRequest, default);
             Assert.Equal("failed", refused.Kind);
             Assert.Contains("source-backlog-consumed", refused.Stderr);
             kernel = await repository.LoadAsync();
@@ -59,19 +64,22 @@ public sealed class BoardFillReselectionFilingTests : CliCommandTestBase
             { Goals = snapshot.Goals.Select(goal => goal with { Status = status }).ToArray() });
             await repository.SaveAsync(kernel);
             Assert.DoesNotContain(item.Id, adapter.ReadBoard().LinkedBacklogItemIds);
-            var filed = adapter.File(new("terminal-owner", path, item.Id, "full"), default);
-            Assert.Equal("filed", filed.Kind);
-            Assert.Equal(0, filed.ExitCode);
+            var terminalOwnerRequest = new BoardFillIntakeRequest("terminal-owner", path, item.Id, "full");
+            Assert.True(adapter.File(terminalOwnerRequest, default).IsPending);
+            Assert.Contains("result=applied", KeyedGoalCreationIntentTests.ApplyWorkspace(workspace));
+            var replayed = adapter.File(terminalOwnerRequest, default);
+            Assert.Equal("replayed", replayed.Kind);
+            Assert.Equal(0, replayed.ExitCode);
             kernel = await repository.LoadAsync();
             Assert.Equal(2, kernel.Goals.Count);
-            var successor = kernel.Goals.Single(goal => goal.Id.Value == filed.GoalId);
+            var successor = kernel.Goals.Single(goal => goal.Id.Value == replayed.GoalId);
             Assert.Equal(item.Id, successor.SourceBacklogItemId);
             Assert.Equal(SourceBacklogCoverage.Full, successor.SourceBacklogCoverage);
             var after = claims.ResolveClaim(kernel, item.Id)!;
             Assert.Equal(successor.Id.Value, after.OwnerGoalId);
             Assert.Equal(2, after.Version);
             Assert.Equal(SourceBacklogCoverage.Full, after.Coverage);
-            Assert.Equal("replayed", adapter.File(new("terminal-owner", path, item.Id, "full"), default).Kind);
+            Assert.Equal("replayed", adapter.File(terminalOwnerRequest, default).Kind);
             Assert.Equal(after, claims.ResolveClaim(await repository.LoadAsync(), item.Id));
         }
         finally { Directory.Delete(root, recursive: true); }
