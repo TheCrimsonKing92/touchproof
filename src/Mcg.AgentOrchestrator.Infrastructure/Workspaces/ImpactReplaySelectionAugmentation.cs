@@ -16,16 +16,33 @@ internal static class ImpactReplaySelectionAugmentation
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
         out ImpactReplayDeclaredGuardReport declaredGuards, IReadOnlyList<string>? additionalClasses,
         IReadOnlyList<string> testProjectDirectories)
+        => Apply(selection, changedFiles, sources, classes, guards, out declaredGuards, additionalClasses,
+            testProjectDirectories, out _);
+
+    internal static ReverseDependencyTestSelection Apply(ReverseDependencyTestSelection selection,
+        IEnumerable<string> changedFiles, ImpactReplayTestSourceIndex sources,
+        IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
+        out ImpactReplayDeclaredGuardReport declaredGuards, IReadOnlyList<string>? additionalClasses,
+        IReadOnlyList<string> testProjectDirectories, out AssemblyScanningGuardTestClasses.SelectionReason[] assemblyScans,
+        IReadOnlyList<AssemblyScanningGuardTestClasses.ScanFile>? scanFiles = null,
+        IReadOnlyList<string>? scanChanges = null)
     {
         var changed = changedFiles.ToArray();
         declaredGuards = ImpactReplayDeclaredGuardSelection.Read(changed, sources, classes);
         var mapped = ChangedFileTestClassPathMapper.Read(changed, sources, classes, testProjectDirectories);
+        scanChanges ??= changed;
+        assemblyScans = sources.RepositoryRoot is not null && sources.Projects is { Count: > 0 } &&
+            scanChanges.Any(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            ? AssemblyScanningGuardTestClasses.Match(sources,
+                scanFiles ?? SourceReadingGuardTestClasses.Analyze(sources).AssemblyScans, classes, scanChanges)
+            : [];
         if (mapped.Outcome != ReverseDependencySelectionOutcome.Resolved) return mapped;
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved) return selection;
         if (declaredGuards.DegradationReason is { } reason)
             return ReverseDependencyTestSelection.Unreadable(reason, selection.CacheReceipt, selection.Headroom);
         var names = selection.TestClassNames.Concat(mapped.TestClassNames).Concat(guards?.Classes ?? [])
             .Concat(declaredGuards.Selections.Select(item => item.ClassName)).Concat(additionalClasses ?? [])
+            .Concat(assemblyScans.Select(item => item.ClassName))
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         // Count distinct runnable identities; a reverse-dependency short name and a declared full
         // name can denote the same class. Never truncate required guards to fit a focused filter.
