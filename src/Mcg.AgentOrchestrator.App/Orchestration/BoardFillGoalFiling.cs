@@ -5,6 +5,7 @@ internal interface IBoardFillGoalIntake
 {
     // Positive durable evidence only: a pending attempt alone does not authorize bypassing admission.
     string? FindCreatedGoal(string requestKey);
+    bool HasPendingCreation(string requestKey) => false;
     BoardFillIntakeResult File(BoardFillIntakeRequest request, CancellationToken token);
     BoardFillIntakeResult Depend(string goalId, string dependencyGoalId, CancellationToken token);
 }
@@ -18,7 +19,10 @@ internal sealed record BoardFillIntakeRequest(string DraftId, string BriefPath, 
 }
 
 internal sealed record BoardFillIntakeResult(string Kind, string? GoalId, string Stdout, string Stderr,
-    int ExitCode, string Reason = "ok");
+    int ExitCode, string Reason = "ok")
+{
+    internal bool IsPending => Kind == "pending" && ExitCode == 0;
+}
 internal sealed record BoardFillGoalBoard(int NonTerminalCount, IReadOnlySet<string> LinkedBacklogItemIds);
 internal sealed record BoardFillFilingSeams(IBoardFillGoalIntake Intake, Func<BoardFillGoalBoard> Board,
     Func<string?> MainHead, Func<string, string, IReadOnlyList<string>?> ChangedPaths);

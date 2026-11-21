@@ -6,6 +6,38 @@ using Microsoft.Data.Sqlite;
 public sealed class ConductorBoardFillFilingRecoveryTests
 {
     [Fact]
+    public void Queued_intake_keeps_the_same_unfinished_filing_until_created()
+    {
+        using var h = new BoardFillFilingTestFixture();
+        var draft = h.Assessed(scope: new("overlap", [new("bbbbbbbb1111", "scope")]));
+        h.Intake.Filing = _ => new("pending", null, "still-committing", "", 0, "intake-pending");
+
+        var queued = h.Host.AttemptFiling(draft.Id);
+
+        Assert.Null(queued.Result);
+        Assert.Null(queued.FinishedAt);
+        Assert.False(queued.Terminal);
+        Assert.Equal(queued, Assert.Single(Assert.Single(h.Drafts.Store.ReadAll()).Filings!));
+        Assert.Empty(h.Intake.Dependencies);
+        Assert.Empty(h.FilingEvents());
+        Assert.Equal(0, h.Drafts.Store.FiledOnUtcDay(h.Drafts.Clock.UtcNow));
+
+        h.Intake.Goals[queued.RequestKey] = "aaaaaaaa1111";
+        h.Intake.Filing = null;
+        var filed = h.Host.AttemptFiling(draft.Id);
+
+        Assert.Equal(queued.Id, filed.Id);
+        Assert.Equal(queued.RequestKey, filed.RequestKey);
+        Assert.Equal("filed", filed.Result);
+        Assert.Equal("aaaaaaaa1111", filed.GoalId);
+        Assert.Equal("replayed", filed.Intake!.Kind);
+        Assert.All(h.Intake.Requests, request => Assert.Equal(queued.RequestKey, request.RequestKey));
+        Assert.Equal(2, h.Intake.Requests.Count);
+        Assert.Equal(("aaaaaaaa1111", "bbbbbbbb1111"), Assert.Single(h.Intake.Dependencies));
+        Assert.Equal(1, h.Drafts.Store.FiledOnUtcDay(h.Drafts.Clock.UtcNow));
+    }
+
+    [Fact]
     public void Board_read_fault_is_a_retryable_refusal_without_intake()
     {
         using var h = new BoardFillFilingTestFixture();
@@ -69,7 +101,8 @@ public sealed class ConductorBoardFillFilingRecoveryTests
         h.Host.ServiceTick(h.Drafts.Kernel);
         var result = Assert.Single(h.Drafts.Store.ReadAll()).Filings!.Single();
         Assert.Equal(pending.Id, result.Id);
-        Assert.Equal("replayed", result.Result);
+        Assert.Equal("filed", result.Result);
+        Assert.Equal("replayed", result.Intake!.Kind);
         Assert.Equal(created.GoalId, result.GoalId);
         Assert.Equal(pending.RequestKey, h.Intake.Requests.Last().RequestKey);
         Assert.Equal(2, h.Intake.Requests.Count);
@@ -169,7 +202,8 @@ public sealed class ConductorBoardFillFilingRecoveryTests
         await PanelTestHarness.Signal(h.Host.CurrentFiling!, "recovery completed after store repair");
         h.Host.ServiceTick(h.Drafts.Kernel);
         var recovered = Assert.Single(h.Drafts.Store.ReadAll()).Filings!.Single();
-        Assert.Equal("replayed", recovered.Result);
+        Assert.Equal("filed", recovered.Result);
+        Assert.Equal("replayed", recovered.Intake!.Kind);
         Assert.Equal(pending.GoalId, recovered.GoalId);
         Assert.Single(h.Intake.Goals);
         Assert.Single(h.FilingEvents());
