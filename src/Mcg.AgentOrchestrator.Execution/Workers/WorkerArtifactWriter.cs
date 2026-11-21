@@ -414,7 +414,7 @@ internal sealed partial class WorkerArtifactWriter
         };
 
         if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
-            lines.InsertRange(6, WorkerStackVerificationGuidance.CurrentTaskSection(stack));
+            lines.InsertRange(6, WorkerStackVerificationGuidance.CurrentTaskSection(stack, targetHome?.UsesSelectedBuildTargets ?? false));
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
@@ -520,7 +520,7 @@ internal sealed partial class WorkerArtifactWriter
 
         if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
             lines.AddRange(WorkerStackVerificationGuidance.DeterministicVerificationSection(
-                ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), goal.Id));
+                ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), goal.Id, _targetHome.UsesSelectedBuildTargets));
 
         if (task.RequiredRole == AgentRole.Reviewer)
         {
@@ -659,7 +659,7 @@ internal sealed partial class WorkerArtifactWriter
         if (planningRole)
             lines.AddRange(PlanningBrokerGuidance.BuildAndPolicyLines(toolchain, testImpactPlan, verificationPolicy, plannerUsesDurableResearch));
         else if (developerBuildOnly)
-            lines.AddRange(WorkerStackVerificationGuidance.DeveloperBuildOnlyBrokerLines());
+            lines.AddRange(WorkerStackVerificationGuidance.DeveloperBuildOnlyBrokerLines(_targetHome.UsesSelectedBuildTargets));
         else if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
         else if (toolchain == Toolchain.Node && task.RequiredRole == AgentRole.Developer)

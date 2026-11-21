@@ -29,7 +29,8 @@ public sealed record WorkerBuildInvocation(
     IReadOnlyList<WorkerBuildProcess>? Children = null, string? LeaseOwner = null,
     WorkerBuildOutcome? Outcome = null, int? CompilerExitCode = null,
     bool Consumed = false, bool CustodyReleased = false, string Diagnostic = "",
-    WorkerBuildStructuralCheck? StructuralCheck = null, WorkerBuildStructuralPolicy? StructuralPolicy = null)
+    WorkerBuildStructuralCheck? StructuralCheck = null, WorkerBuildStructuralPolicy? StructuralPolicy = null,
+    IReadOnlyList<string>? BuildTargets = null)
 {
     public bool IsTerminal => Outcome is not null;
     public WorkerBuildPhase Phase => Observations[^1].Phase;
@@ -38,6 +39,7 @@ public sealed record WorkerBuildInvocation(
         GoalId == other.GoalId && TaskId == other.TaskId && DispatchAt == other.DispatchAt &&
         DispatchId == other.DispatchId && WorktreeRoot == other.WorktreeRoot && TreeDigest == other.TreeDigest &&
         ScopeIdentity == other.ScopeIdentity && Projects.SequenceEqual(other.Projects) &&
+        (BuildTargets is null ? other.BuildTargets is null : other.BuildTargets is not null && BuildTargets.SequenceEqual(other.BuildTargets)) &&
         Configuration == other.Configuration && Deadline == other.Deadline && Host == other.Host && Worker == other.Worker &&
         AdmissionStorePath == other.AdmissionStorePath && AdmissionVersion == other.AdmissionVersion && StructuralPolicy == other.StructuralPolicy;
 
@@ -61,13 +63,14 @@ public sealed record WorkerBuildInvocation(
     {
         var started = Observations.Count(o => o.Phase == WorkerBuildPhase.CompilerStarted);
         var children = Children?.Count ?? 0;
-        if (Observations.Count == 0 || Projects.Count == 0 || string.IsNullOrWhiteSpace(TreeDigest) ||
-            string.IsNullOrWhiteSpace(ScopeIdentity) || children > Projects.Count || started > children ||
+        var targetCount = (BuildTargets ?? Projects).Count;
+        if (Observations.Count == 0 || targetCount == 0 || string.IsNullOrWhiteSpace(TreeDigest) ||
+            string.IsNullOrWhiteSpace(ScopeIdentity) || children > targetCount || started > children ||
             (Phase == WorkerBuildPhase.Completed) != IsTerminal || CustodyReleased && !IsTerminal ||
             Consumed && (!IsTerminal || !CustodyReleased) ||
             StructuralCheck is not null && (!IsTerminal || !StructuralCheck.IsBoundTo(this) ||
                 StructuralCheck.ProjectHomeDirectory != StructuralPolicy?.ProjectHomeDirectory) ||
-            Outcome == WorkerBuildOutcome.Success && (children != Projects.Count || started != children || CompilerExitCode != 0) ||
+            Outcome == WorkerBuildOutcome.Success && (children != targetCount || started != children || CompilerExitCode != 0) ||
             Outcome is (WorkerBuildOutcome.CompilerFailure or WorkerBuildOutcome.PackageRestoreRefused) &&
                 (started == 0 || CompilerExitCode is null or 0) ||
             Outcome == WorkerBuildOutcome.TimeoutAfterStart && started == 0 ||

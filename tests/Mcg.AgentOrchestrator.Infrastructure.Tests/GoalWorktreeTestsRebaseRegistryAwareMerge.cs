@@ -20,7 +20,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         var goal = Registry(Row(A, 10, "base A") + Row(B, 10, "base B") + Row(C, 13, "goal C"));
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, baseline, main, goal), Guard(A), Guard(B), Guard(C)
-        ], bom: bom, lineEnding: lineEnding);
+        ], bom: bom, lineEnding: lineEnding, inProcessSetup: true);
         var events = new List<string>();
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
@@ -46,7 +46,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
             new(SourceSizeRatchet.SourcePath, Registry(Row(WidgetPath, 3, "base")),
                 Registry(Row(WidgetPath, 4, "shared", "main")), Registry(Row(WidgetPath, 4, "shared", "goal"))),
             new(WidgetPath, BaseText, mainWidget, goalWidget)
-        ]);
+        ], inProcessSetup: true);
         var events = new List<string>();
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
@@ -62,17 +62,17 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
     [Fact]
     public void BelowMeasuredRow_RefusesAndRestoresOriginalCleanBranch()
     {
-        using var fixture = BelowMeasuredRowFixture();
+        using var fixture = BelowMeasuredRowFixture(inProcessSetup: true);
 
         AssertRefused(fixture, "registry-ceiling-below-measured");
     }
 
-    internal static AdditiveConflictGitFixture BelowMeasuredRowFixture() => new([
+    internal static AdditiveConflictGitFixture BelowMeasuredRowFixture(bool inProcessSetup = false) => new([
         new(SourceSizeRatchet.SourcePath, Registry(Row(WidgetPath, 3, "base") + Row(B, 10, "base B")),
             Registry(Row(WidgetPath, 4, "main growth") + Row(B, 10, "base B")),
             Registry(Row(WidgetPath, 3, "base") + Row(B, 11, "goal B"))),
         new(WidgetPath, BaseText, MainText, GoalText), Guard(B)
-    ]);
+    ], inProcessSetup: inProcessSetup);
 
     [Fact]
     public void DivergentClassEntry_MergesWithMeasuredClassTotals()
@@ -81,7 +81,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10), ClassRow(10)),
                 Registry(Row(A, 10), ClassRow(11)), Registry(Row(A, 10), ClassRow(12))), Guard(A),
             new("src/WidgetPart.cs", "partial class Widget\n{\n}\n", "partial class Widget\n{\n}\n", "partial class Widget\n{\n}\n")
-        ]);
+        ], inProcessSetup: true);
 
         var events = new List<string>();
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
@@ -99,7 +99,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10) + Row(B, 10)),
                 Registry(Row(A, 11, "main") + Row(B, 10)), Registry(Row(B, 10))), Guard(A), Guard(B)
-        ]);
+        ], inProcessSetup: true);
 
         AssertRefused(fixture, "registry-same-key-conflict");
     }
@@ -110,7 +110,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10)),
                 Registry(Row(A, 11, "main")), Registry(Row(A, 12, "goal")))
-        ]);
+        ], inProcessSetup: true);
 
         AssertRefused(fixture, "registry-same-key-conflict");
     }
@@ -122,7 +122,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10)),
                 Registry(Row(A, 10)).Replace("// file header", "// main header"),
                 Registry(Row(A, 10)).Replace("// file header", "// goal header")), Guard(A)
-        ]);
+        ], inProcessSetup: true);
 
         AssertRefused(fixture, "non-empty-base");
     }
@@ -133,7 +133,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10)),
                 Registry(Row(A, 11)), Registry(Row(A, 12))), Guard(A)
-        ]);
+        ], inProcessSetup: true);
         var events = new List<string>();
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId,
@@ -148,13 +148,13 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
     [Fact]
     public void AdditionsAndRemoval_PreservesSurvivingOrderAndMainFirstAnchors()
     {
-        using var fixture = AdditionsAndRemovalFixture();
+        using var fixture = AdditionsAndRemovalFixture(inProcessSetup: true);
         var (result, events) = Rebase(fixture);
 
         AssertAdditionsAndRemoval(fixture, result, events);
     }
 
-    internal static AdditiveConflictGitFixture AdditionsAndRemovalFixture()
+    internal static AdditiveConflictGitFixture AdditionsAndRemovalFixture(bool inProcessSetup = false)
     {
         const string d = "src/D.cs";
         const string e = "src/E.cs";
@@ -163,7 +163,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
                 Registry(Row(A, 11, "main A") + Row(d, 10, "main addition") + Row(B, 10) + Row(C, 10)),
                 Registry(Row(A, 10) + Row(e, 10, "goal addition") + Row(C, 12, "goal C"))),
             Guard(A), Guard(B), Guard(C), Guard(d), Guard(e)
-        ]);
+        ], inProcessSetup: inProcessSetup);
     }
 
     internal static void AssertAdditionsAndRemoval(
@@ -184,7 +184,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10) + Row(B, 10)),
                 Registry(Row(A, 11) + Row(B, 10), ClassRow(10)), Registry(Row(A, 10) + Row(B, 12))),
             Guard(A), Guard(B)
-        ]);
+        ], inProcessSetup: true);
         var events = new List<string>();
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
@@ -200,7 +200,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10) + Row(A, 10)),
                 Registry(Row(A, 11) + Row(A, 10)), Registry(Row(A, 12) + Row(A, 10))), Guard(A)
-        ]);
+        ], inProcessSetup: true);
 
         AssertRefused(fixture, "non-empty-base");
     }
@@ -220,7 +220,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, baseline, mainLayout ? layout : other, mainLayout ? other : layout),
             Guard(A), Guard(B), Guard(C)
-        ]);
+        ], inProcessSetup: true);
 
         AssertRefused(fixture, "non-empty-base");
     }
@@ -250,7 +250,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, baseline, mainLayout ? layout : other, mainLayout ? other : layout),
             Guard(A), Guard(B), Guard(C)
-        ]);
+        ], inProcessSetup: true);
 
         AssertRefused(fixture, "non-empty-base");
     }
@@ -270,7 +270,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, baseline, mainLayout ? ChangeLayout(main) : main,
                 mainLayout ? goal : ChangeLayout(goal)), Guard(A), Guard(B)
-        ]);
+        ], inProcessSetup: true);
         var events = new List<string>();
 
         var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
@@ -289,7 +289,7 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
             new(SourceSizeRatchet.SourcePath, Registry("", ClassRow(10) + other),
                 Registry("", ClassRow(11) + other),
                 Registry("", ClassRow(10) + other.Replace(", 10,", ", 12,", StringComparison.Ordinal)))
-        ]);
+        ], inProcessSetup: true);
 
         AssertRefused(fixture, "registry-verification-unavailable");
     }

@@ -317,7 +317,7 @@ public static partial class WorkerProfileDispatcher
             budgetedBrief, profile, workerProviderKind, promptRoot,
             BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions, providerName), dispatchedAt, retainedDispatch);
         contextPackageReceipt = WorkerRetryFeedbackPromptGuard.Validate(goal, task, contextPackage, contextPackageReceipt, preparation.PromptPath);
-        WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
+        WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch, targetHome);
         if (retainedDispatch is not null)
         {
             var restored = WorkerDispatchPromptPreparation.RecordRestoredReceipt(kernel, goal, task, retainedDispatch, contextPackageReceipt, preparation);

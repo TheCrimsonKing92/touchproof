@@ -6,10 +6,15 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Owns build-scope preparation and its binding to the dispatch attribution boundary.</summary>
 internal static class WorkerBuildScopeDispatchPreparation
 {
-    internal static void Prepare(Goal goal, TaskSpec task, string workingDirectory, string integrationBranch)
+    internal static void Prepare(Goal goal, TaskSpec task, string workingDirectory, string integrationBranch,
+        WorkerTargetHome? targetHome = null)
     {
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester)) return;
+        var toolchain = targetHome is { IsOrchestratorHome: false }
+            ? ProjectStackResolver.Resolve(workingDirectory, targetHome.ProjectHomeDirectory)
+            : TargetToolchainDetector.Detect(workingDirectory);
         if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
-            TargetToolchainDetector.Detect(workingDirectory) == Toolchain.Dotnet &&
+            toolchain == Toolchain.Dotnet &&
             Directory.Exists(workingDirectory) &&
             GitCli.RunForRepository(workingDirectory, "symbolic-ref", "--short", "HEAD") is { Succeeded: true } branch &&
             branch.Output.Trim().StartsWith("goal/", StringComparison.OrdinalIgnoreCase))

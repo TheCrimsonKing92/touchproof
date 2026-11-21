@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record ReverseDependencyEvidenceCostInputs(
     double SelectionSeconds, double FullGateSeconds, double? FailureRate, string? UnavailableReason = null)
 {
+    internal const int MinimumCompletedGateAttempts = 10;
+
     internal sealed record Attempt(ConductorParallelAcceptanceAttempt Metadata,
         ConductorParallelAcceptanceRunArtifact? Result);
 
@@ -24,7 +26,7 @@ internal sealed record ReverseDependencyEvidenceCostInputs(
         var completed = attempts.Where(item => item.Metadata.Kind == "gate" &&
                 item.Metadata.CompletedAt is { } time && time >= now.AddDays(-14) && time <= now)
             .DistinctBy(item => item.Metadata.AttemptId).ToArray();
-        return new(Cost(selectionClasses), Cost(gateClasses), completed.Length == 0 ? null :
+        return new(Cost(selectionClasses), Cost(gateClasses), completed.Length < MinimumCompletedGateAttempts ? null :
             (double)completed.Count(CandidateCausedFailure) / completed.Length);
     }
 
