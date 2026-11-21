@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -6,7 +7,8 @@ internal sealed record OwnerGoalDetailSnapshot(
     Goal Goal, int? LandingQueuePosition, IReadOnlyList<OwnerConductEvent> RecentEvents,
     OwnerConsoleGateProgress? Gate = null, bool GateObserved = false, OwnerConsoleGateEnd? LastGateEnd = null,
     string? PriorityWarning = null, OwnerGoalChangeSummary? Changes = null,
-    OwnerConsoleEvidenceAttemptProgress? Evidence = null)
+    OwnerConsoleEvidenceAttemptProgress? Evidence = null,
+    IReadOnlyList<CostGoalOutcomeAttentionView.Row>? Outcomes = null)
 {
     internal OwnerConsoleFieldSnapshot Fields()
     {
@@ -66,6 +68,7 @@ internal sealed record OwnerGoalDetailSnapshot(
             fields.Add(new("evidence/previous/outcome", "Last attempt outcome", evidence.Previous?.Outcome));
             fields.Add(new("evidence/previous/tests", "Last attempt tests", evidence.Previous?.TestsExecuted?.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         }
+        fields.AddRange(OwnerConsoleCostGoalOutcomeLines.Fields(Outcomes));
         return new(goal.Id.Value, [.. fields]);
     }
 
