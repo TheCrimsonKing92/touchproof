@@ -17,15 +17,16 @@ public sealed class PreTesterReverseDependencySelectionEquivalenceTests
         // This nested project is in lane identity, but outside both gate-scanned projects.
         fixture.Write("tests/LaneOnly.Tests/Nested/Nested.csproj", "<Project />");
         fixture.Write("tests/LaneOnly.Tests/Nested/Broken.cs", "public class Broken {");
+        var state = HostLedgerStateDirectory.Resolve(fixture.Root);
         if (skip)
         {
-            var resultPath = Path.Combine(HostLedgerStateDirectory.Resolve(fixture.Root),
-                "acceptance-gate-attempts/fixture-red.result.json");
-            File.Delete(resultPath); // Completed receipt remains in the denominator, with no candidate failure.
+            var attempts = Path.Combine(state, "acceptance-gate-attempts");
+            // Completed attempts stay in the denominator without any recorded candidate failures.
+            foreach (var resultPath in Directory.EnumerateFiles(attempts, "*.result.json"))
+                File.Delete(resultPath);
         }
         var selected = new[] { "ConsumerTests" };
         var changed = new[] { PreTesterReverseDependencySelectionFixture.Source };
-        var state = HostLedgerStateDirectory.Resolve(fixture.Root);
         using var cacheScope = AcceptanceTestClassSourceCache.Use(new AcceptanceTestClassSourceCache(null));
         var expected = new ReverseDependencyEvidenceCostInputs(1, 1, skip ? 0 : 1);
         // The old, non-handoff path is the reference, also pinned to explicit input values.

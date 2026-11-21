@@ -6,8 +6,10 @@ using Fixture = PreTesterCoupledClassSelectionsTests.Fixture;
 // Parallel-safe: source fixtures are private; no processes or shared stores.
 public sealed class ReverseDependencyEvidenceCostRoutingTests
 {
-    [Fact]
-    public void Apply_CoreOnlySkip_PreservesOtherEvidenceSources()
+    [Theory]
+    [InlineData(0d)]
+    [InlineData(null)]
+    public void Apply_CoreOnlySkip_PreservesOtherEvidenceSources(double? failureRate)
     {
         using var fixture = new Fixture();
         fixture.Write(Fixture.Source, "public class NewContract {}");
@@ -23,7 +25,7 @@ public sealed class ReverseDependencyEvidenceCostRoutingTests
         };
         plan = plan with { Checks = [.. plan.Checks, .. other] };
         var lines = new List<string>();
-        var filtered = ReverseDependencyEvidenceCostGate.Apply(plan, _ => new(50, 100, 0), lines.Add);
+        var filtered = ReverseDependencyEvidenceCostGate.Apply(plan, _ => new(50, 100, failureRate), lines.Add);
         Assert.Single(lines);
         Assert.Contains("decision=skip", lines[0]);
         Assert.Equal(plan.Checks.Where(check => check != reverse), filtered.Checks);
@@ -55,14 +57,28 @@ public sealed class ReverseDependencyEvidenceCostRoutingTests
         Assert.Same(plan, ReverseDependencyEvidenceCostGate.Apply(plan, _ => new(10, 100, 0.5), lines.Add));
         Assert.Contains("decision=run", Assert.Single(lines));
         Assert.DoesNotContain("reach-skipped-cost", plan.Summary);
-        lines.Clear();
-        Assert.Same(plan, ReverseDependencyEvidenceCostGate.Apply(plan, _ => new(10, 100, null), lines.Add));
-        Assert.Contains("decision=run", Assert.Single(lines));
-        Assert.DoesNotContain("reach-skipped-cost", plan.Summary);
         var absent = plan with { Checks = [Check("other", "DependentTests")] };
         Assert.Same(absent, ReverseDependencyEvidenceCostGate.Apply(absent,
             _ => throw new InvalidOperationException("must not read inputs"), _ => throw new InvalidOperationException("must not log")));
         Assert.DoesNotContain("reach-skipped-cost", absent.Summary);
+    }
+
+    [Fact]
+    public void Apply_UnavailableRate_DropsReverseCheckAndRecordsSkip()
+    {
+        var reverse = Check(ReverseDependencyEvidenceCostGate.CheckName, "DependentTests");
+        var declared = Check("Developer declared", "DeclaredTests");
+        var plan = new RepositoryTestImpactPlan(true, false, "original summary", [reverse, declared]);
+        var lines = new List<string>();
+
+        var filtered = ReverseDependencyEvidenceCostGate.Apply(plan, _ => new(10, 100, null), lines.Add);
+
+        Assert.Same(declared, Assert.Single(filtered.Checks));
+        var line = Assert.Single(lines);
+        Assert.Contains("candidate_failure_rate=unavailable decision=skip", line);
+        Assert.Contains("too few completed gates to compute a rate", line);
+        Assert.Equal($"{plan.Summary} reach-skipped-cost: DependentTests not run before review; {line}", filtered.Summary);
+        Assert.DoesNotContain("input_unavailable=", filtered.Summary);
     }
 
     [Theory]
