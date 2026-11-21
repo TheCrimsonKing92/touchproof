@@ -111,106 +111,106 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        if (MultiRepositoryGoal.Applies(goal)) return ExecuteRepositoryAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified);
-        var facts = new VerifiedAdmissionFacts(goal.Status);
-        if (HasActiveOwnerReviewHold(goal, out var ownerSha, out var ownerReceipt))
-            return OwnerReviewHeld(goal, goalPrefix, policy, ownerSha, ownerReceipt!,
-                VerifiedAdmissionPolicy.Evaluate(facts with
-                {
-                    OwnerReviewHold = true, OwnerReviewSha = ownerSha, OwnerReviewReason = ownerReceipt!.Reason,
-                    OwnerReviewFingerprint = ownerReceipt.Fingerprint ?? "none"
-                }));
-        facts = facts with { OwnerReviewHold = false };
+        return PostAdoptionRegressionGuard.ObserveLandingResult(this, goal, Land(),
+            _isConductorTick, _conductorTick, _utcNow, _parallelAcceptanceAttemptCoordinator);
 
-        if (HasRoutableRecordedCohortAttributionFailure(goal))
+        ConductorAdvanceResult Land()
         {
-            return RouteRecordedCohortAttributionFailure(goal, goalPrefix, policy,
-                VerifiedAdmissionPolicy.Evaluate(facts with
+            if (MultiRepositoryGoal.Applies(goal)) return ExecuteRepositoryAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified);
+            var facts = new VerifiedAdmissionFacts(goal.Status);
+            if (HasActiveOwnerReviewHold(goal, out var ownerSha, out var ownerReceipt))
+                return OwnerReviewHeld(goal, goalPrefix, policy, ownerSha, ownerReceipt!,
+                    VerifiedAdmissionPolicy.Evaluate(facts with
+                    {
+                        OwnerReviewHold = true, OwnerReviewSha = ownerSha, OwnerReviewReason = ownerReceipt!.Reason,
+                        OwnerReviewFingerprint = ownerReceipt.Fingerprint ?? "none"
+                    }));
+            facts = facts with { OwnerReviewHold = false };
+
+            if (HasRoutableRecordedCohortAttributionFailure(goal))
+            {
+                return RouteRecordedCohortAttributionFailure(goal, goalPrefix, policy,
+                    VerifiedAdmissionPolicy.Evaluate(facts with
+                    {
+                        CohortAttribution = true,
+                        CohortAttributionEvidence = goal.LatestAcceptanceFailure!.CheckAttributions![0].Evidence
+                    }));
+            }
+            facts = facts with { CohortAttribution = false };
+            if (HasActiveApparatusHold(goal, out _))
+            {
+                var failure = goal.LatestAcceptanceFailure!;
+                return AdmissionHeld(facts with
                 {
-                    CohortAttribution = true,
-                    CohortAttributionEvidence = goal.LatestAcceptanceFailure!.CheckAttributions![0].Evidence
-                }));
-        }
-        facts = facts with { CohortAttribution = false };
-        if (HasActiveApparatusHold(goal, out _))
-        {
-            var failure = goal.LatestAcceptanceFailure!;
+                    ApparatusHold = true, ApparatusBranchSha = failure.BranchHeadSha ?? "unknown",
+                    ApparatusMainSha = failure.MainHeadSha ?? "unknown",
+                    ApparatusCandidate = FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)
+                });
+            }
+            facts = facts with { ApparatusHold = false };
+
+            var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified, out var fallbackFacts, out var declineReason);
+            if (sharedAcceptance is not null) return sharedAcceptance;
+            if (_isConductorTick && _parallelAcceptanceEnabled)
+            {
+                var cause = declineReason ?? "no candidate available";
+                var reason = $"No background acceptance attempt could be scheduled ({cause}).";
+                var decision = new PolicyDecisionRecord("solo-landing-admission", "Hold", 1, "no-parallel-acceptance-candidate", reason,
+                    [.. fallbackFacts.ToRecordedFacts(), new("candidateDeclineReason", cause)]);
+                return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason) { Decision = decision });
+            }
+
+            using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
+            if (evidenceMutationLease is null)
+            {
+                var result = ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
+                var held = (ConductorAdvanceOutcome.Held)result.Outcome;
+                var decision = VerifiedAdmissionPolicy.Evaluate(facts with
+                    { EvidenceLease = false, EvidenceLeaseReason = held.Reason });
+                return result with { Outcome = held with { Decision = decision.ToRecord() } };
+            }
+            facts = facts with { EvidenceLease = true };
+
+            if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
+                return AdmissionHeld(facts with { AllTasksPassed = false });
+            facts = facts with { AllTasksPassed = true };
+
+            var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
+            if (early is not null) return early;
+
+            // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
+            if (EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Verified, forGate: true) is { } environmentHold) return environmentHold;
+            var gateStart = VerifiedGateStartExecutor.Execute(
+                () => RunInlineLandingSourceSizePreflight(goal),
+                () => _runAcceptanceVerification(
+                        goal,
+                        null,
+                        null,
+                        CancellationToken.None,
+                        SoloLandingGateExecutionOptions.Create(goal, (_cohortKernel ?? _conductorTickKernel)?.HumanInputRequests)));
+            if (gateStart.DeferralKind is null)
+            {
+                return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, gateStart.Summary!);
+            }
+
             return AdmissionHeld(facts with
             {
-                ApparatusHold = true, ApparatusBranchSha = failure.BranchHeadSha ?? "unknown",
-                ApparatusMainSha = failure.MainHeadSha ?? "unknown",
-                ApparatusCandidate = FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)
+                GateStartDeferral = gateStart.DeferralKind,
+                InfrastructureDeferredReasonCode = gateStart.InfrastructureDeferredReasonCode,
+                InfrastructureDeferredMessage = gateStart.InfrastructureDeferredMessage,
+                BuildSlotsBusyDetail = gateStart.SlotsBusy is null ? null : FormatSlotsBusy(gateStart.SlotsBusy),
+                BuildLockBlockedDetail = gateStart.BuildLockAttribution is null ? null : FormatBuildLockBlocked(gateStart.BuildLockAttribution),
+                CancellationProbeCause = gateStart.CancellationCause
             });
-        }
-        facts = facts with { ApparatusHold = false };
 
-        var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified, out var fallbackFacts, out var declineReason);
-        if (sharedAcceptance is not null)
-            return sharedAcceptance;
-        if (_isConductorTick && _parallelAcceptanceEnabled)
-        {
-            var cause = declineReason ?? "no candidate available";
-            var reason = $"No background acceptance attempt could be scheduled ({cause}).";
-            var decision = new PolicyDecisionRecord("solo-landing-admission", "Hold", 1, "no-parallel-acceptance-candidate", reason,
-                [.. fallbackFacts.ToRecordedFacts(), new("candidateDeclineReason", cause)]);
-            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason) { Decision = decision });
-        }
-
-        using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
-        if (evidenceMutationLease is null)
-        {
-            var result = ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
-            var held = (ConductorAdvanceOutcome.Held)result.Outcome;
-            var decision = VerifiedAdmissionPolicy.Evaluate(facts with
-                { EvidenceLease = false, EvidenceLeaseReason = held.Reason });
-            return result with { Outcome = held with { Decision = decision.ToRecord() } };
-        }
-        facts = facts with { EvidenceLease = true };
-
-        if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
-        {
-            return AdmissionHeld(facts with { AllTasksPassed = false });
-        }
-        facts = facts with { AllTasksPassed = true };
-
-        var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
-        if (early is not null)
-        {
-            return early;
-        }
-
-        // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
-        if (EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Verified, forGate: true) is { } environmentHold) return environmentHold;
-        var gateStart = VerifiedGateStartExecutor.Execute(
-            () => RunInlineLandingSourceSizePreflight(goal),
-            () => _runAcceptanceVerification(
-                    goal,
-                    null,
-                    null,
-                    CancellationToken.None,
-                    SoloLandingGateExecutionOptions.Create(goal, (_cohortKernel ?? _conductorTickKernel)?.HumanInputRequests)));
-        if (gateStart.DeferralKind is null)
-        {
-            return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, gateStart.Summary!);
-        }
-
-        return AdmissionHeld(facts with
-        {
-            GateStartDeferral = gateStart.DeferralKind,
-            InfrastructureDeferredReasonCode = gateStart.InfrastructureDeferredReasonCode,
-            InfrastructureDeferredMessage = gateStart.InfrastructureDeferredMessage,
-            BuildSlotsBusyDetail = gateStart.SlotsBusy is null ? null : FormatSlotsBusy(gateStart.SlotsBusy),
-            BuildLockBlockedDetail = gateStart.BuildLockAttribution is null ? null : FormatBuildLockBlocked(gateStart.BuildLockAttribution),
-            CancellationProbeCause = gateStart.CancellationCause
-        });
-
-        ConductorAdvanceResult AdmissionHeld(VerifiedAdmissionFacts observed)
-        {
-            var decision = VerifiedAdmissionPolicy.Evaluate(observed);
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason,
-                    StableIdentity: decision.StableIdentity.Length == 0 ? null : decision.StableIdentity)
-                { Decision = decision.ToRecord() });
+            ConductorAdvanceResult AdmissionHeld(VerifiedAdmissionFacts observed)
+            {
+                var decision = VerifiedAdmissionPolicy.Evaluate(observed);
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason,
+                        StableIdentity: decision.StableIdentity.Length == 0 ? null : decision.StableIdentity)
+                    { Decision = decision.ToRecord() });
+            }
         }
     }
 
