@@ -9,10 +9,13 @@ internal sealed class AttributedFailureDiagnosisInquiry(InquiryDispatcher dispat
     internal async Task<AttributedFailureDiagnosisOutcome> RunAsync(Goal goal, AttributedFailureRouteDecision route,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
+        var task = AttributedFailureDiagnosisTarget.Select(goal, goal.FindTask(route.DeveloperTaskId!));
+        if (task is null)
+            return AttributedFailureDiagnosisOutcome.Unavailable(route, AttributedFailureRouteDecision.NoCompletedDeveloperDispatchCode,
+                "No completed Developer dispatch is recorded for this goal.");
         var agent = ResolveAgent(goal);
         if (agent is null)
             return AttributedFailureDiagnosisOutcome.Unavailable(route, "failed", "Reviewer inquiry agent unavailable");
-        var task = goal.Tasks.Single(task => task.Id == route.DeveloperTaskId);
         var result = await dispatcher.DispatchAsync(new InquiryDispatchRequest(goal, task,
             AttributedFailureDiagnosisPrompt.Build(goal, route.Failure!), promptDirectory, receiptDirectory, eventsDirectory,
             AgentSelection: agent, Timeout: timeout), cancellationToken).ConfigureAwait(false);

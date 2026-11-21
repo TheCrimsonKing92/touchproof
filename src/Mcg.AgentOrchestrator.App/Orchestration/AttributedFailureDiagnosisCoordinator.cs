@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -10,6 +12,8 @@ internal sealed class AttributedFailureDiagnosisCoordinator(
     Func<TimeSpan, CancellationToken, Task>? waitForDeadline = null)
 {
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
+    private static readonly Regex DiagnosisHeaderPattern = new(
+        @"\AATTRIBUTED_FAILURE_DIAGNOSIS candidate_sha=(?<candidate>\S+) signature=(?<signature>\S+) status=(?<status>\S+)(?: test_identities=(?<identities>\S+))?\z");
     private readonly object _gate = new();
     private readonly Dictionary<(GoalId, string, string), (CancellationToken Owner, Lazy<Task<AttributedFailureDiagnosisOutcome>> Attempt)> _attempts = [];
 
@@ -50,7 +54,7 @@ internal sealed class AttributedFailureDiagnosisCoordinator(
 
     private async Task<AttributedFailureDiagnosisOutcome> RunAsync(Goal goal, AttributedFailureRouteDecision route, CancellationToken enclosing)
     {
-        var recorded = AttributedFailureDiagnosisRecord.Read(goal, route.Failure!.CandidateSha, route.Signature!);
+        var recorded = ReadRecorded(goal, route.Failure!.CandidateSha, route.Signature!);
         if (recorded is not null) return recorded;
         using var inquiryCancellation = CancellationTokenSource.CreateLinkedTokenSource(enclosing);
         using var deadlineCancellation = CancellationTokenSource.CreateLinkedTokenSource(enclosing);
@@ -86,7 +90,34 @@ internal sealed class AttributedFailureDiagnosisCoordinator(
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
         enclosing.ThrowIfCancellationRequested();
-        recordNote(goal.Id, route.DeveloperTaskId!, AttributedFailureDiagnosisRecord.Format(outcome));
+        var note = AttributedFailureDiagnosisRecord.Format(outcome);
+        // The original header fields and advice remain intact. The extra field preserves identities
+        // even when a diagnosis has no subsequent retry event or a test name contains a comma.
+        var identities = Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(route.Failure.FailingTests));
+        note = note.Insert(note.IndexOf(Environment.NewLine, StringComparison.Ordinal), " test_identities=" + identities);
+        recordNote(goal.Id, route.DeveloperTaskId!, note);
         return outcome;
+    }
+
+    internal static Match MatchHeader(string line) => DiagnosisHeaderPattern.Match(line);
+
+    private static AttributedFailureDiagnosisOutcome? ReadRecorded(Goal goal, string candidate, string signature)
+    {
+        foreach (var entry in goal.Timeline)
+        {
+            if (!entry.Message.StartsWith(AttributedFailureDiagnosisRecord.Marker, StringComparison.Ordinal)) continue;
+            var firstLine = entry.Message.Split('\n', 2)[0].TrimEnd('\r');
+            var tokens = firstLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (!tokens.Contains("candidate_sha=" + candidate, StringComparer.Ordinal) ||
+                !tokens.Contains("signature=" + signature, StringComparer.Ordinal)) continue;
+            var status = MatchHeader(firstLine).Groups["status"].Value;
+            if (status != AttributedFailureRouteDecision.NoCompletedDeveloperDispatchCode)
+                return AttributedFailureDiagnosisRecord.Read(goal, candidate, signature);
+            var lines = AttributedFailureDiagnosisOutcome.Lines(entry.Message);
+            if (lines.Length != 2 || !lines[1].StartsWith("| ", StringComparison.Ordinal))
+                throw new InvalidOperationException("Malformed attributed failure diagnosis record.");
+            return new(candidate, signature, status, lines[1][2..]);
+        }
+        return null;
     }
 }
