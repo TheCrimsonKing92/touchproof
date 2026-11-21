@@ -6,9 +6,9 @@ public static class WorkerToolsPromptSection
     [
         "",
         "### Worker tools",
-        "Use `wt read` to read several known ranges in one call, for example `wt read --root . src/File.cs:10-25 src/Other.cs:42-57`.",
-        "Use `wt find` with `--definition` or `--references` to locate symbols, for example `wt find --root . --definition WorkerProfileDispatcher`.",
-        "`wt --help` gives the full contract. If `wt find` refuses the worktree because of submodules or git-visible changes, fall back to ordinary reads.",
+        "Batch known ranges with `wt read --root . src/File.cs:10-25 src/Other.cs:42-57`.",
+        "Find symbols with `wt find --root . --definition WorkerProfileDispatcher` or `--references`.",
+        "See `wt --help` for the full contract. If `wt find` refuses a worktree with submodules or git-visible changes, fall back to ordinary reads.",
         ""
     ];
 

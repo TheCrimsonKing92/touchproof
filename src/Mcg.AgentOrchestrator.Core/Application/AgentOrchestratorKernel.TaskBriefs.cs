@@ -611,7 +611,7 @@ public sealed partial class AgentOrchestratorKernel
             retractedSegments,
             task.RequiredRole,
             usesFileAccessContext,
-            measureWithTypedSourceBoundaries, workerToolsAvailable);
+            measureWithTypedSourceBoundaries);
 
         return new TaskBriefSource(
             goal.Id,
