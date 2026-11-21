@@ -38,6 +38,18 @@ internal static partial class WorkerBuildLogErrorReader
                 .OrderBy(path => path, StringComparer.Ordinal).ToArray();
             if (logs.Length == 0)
                 return null;
+            return Read(logs);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    internal static WorkerBuildErrors? Read(IEnumerable<string> logs)
+    {
+        try
+        {
             var errors = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var log in logs)

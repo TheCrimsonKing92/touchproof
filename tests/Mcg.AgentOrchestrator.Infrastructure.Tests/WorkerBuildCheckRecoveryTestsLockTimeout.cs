@@ -14,14 +14,17 @@ public sealed class WorkerBuildCheckRecoveryTestsLockTimeout
     private const string CompilerError = "src/Feature.cs(12,4): error CS0103: missing [App.csproj]";
 
     [Xunit.Theory]
-    [Xunit.InlineData(true)]
-    [Xunit.InlineData(false)]
-    public void LockTimeoutWithoutLogsCheckpointsAndRetries(bool timeoutInStandardError)
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(true, true)]
+    public void LockTimeoutWithoutLogsCheckpointsAndRetries(bool timeoutInStandardError, bool isNonHomeDotnet)
     {
         using var repository = CreateSeededGitRepository();
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
         var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
+        if (isNonHomeDotnet)
+            File.WriteAllText(Path.Combine(worktree, "Fixture.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         var originalHead = ReadGit(worktree, "rev-parse", "HEAD");
         var artifacts = Path.Combine(repository.WorkingDirectory, "build-artifacts");
         Assert.False(Directory.Exists(artifacts));
@@ -47,7 +50,12 @@ public sealed class WorkerBuildCheckRecoveryTestsLockTimeout
         Assert.Contains("lock", feedback, StringComparison.Ordinal);
         Assert.Contains("build check never ran", feedback, StringComparison.Ordinal);
         Assert.Contains(checkpoint, feedback, StringComparison.Ordinal);
-        Assert.Contains("Rerun scripts/Invoke-WorkerBuildCheck.ps1", feedback, StringComparison.Ordinal);
+        var buildCommand = isNonHomeDotnet
+            ? $"Rerun `{WorkerStackVerificationGuidance.NonHomeBuildCommand}` from the worktree root after the last edit."
+            : "Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit.";
+        Assert.Contains(buildCommand, feedback, StringComparison.Ordinal);
+        if (isNonHomeDotnet)
+            Assert.DoesNotContain("Invoke-WorkerBuildCheck.ps1", feedback, StringComparison.Ordinal);
         Assert.DoesNotContain("worker build errors:", feedback, StringComparison.Ordinal);
         Assert.Equal(feedback, task.AcceptedRetryFeedback!.Message);
         Assert.Empty(otherRetries);

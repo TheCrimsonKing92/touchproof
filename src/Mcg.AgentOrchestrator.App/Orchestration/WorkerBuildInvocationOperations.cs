@@ -8,10 +8,27 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
     DotnetBuildStorageRoot? storageRoot = null,
     Func<WorkerBuildProcess, bool>? isHostAlive = null,
     Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? digestGitRunner = null,
-    string? projectHomeDirectory = null, string integrationBranch = TrunkBranchName.Default) : IWorkerBuildInvocationOperations
+    string? projectHomeDirectory = null, string integrationBranch = TrunkBranchName.Default,
+    bool isNonHome = false) : IWorkerBuildInvocationOperations
 {
     internal const string OperationName = "dispatch:worker-build";
     private readonly SqliteOrchestratorStateRepository _repository = new(statePath);
+    private Lazy<bool> IsNonHome { get; init; } = new(() => isNonHome);
+
+    internal static WorkerBuildInvocationOperations ForWorkspace(OrchestratorWorkspace workspace,
+        OrchestratorHome home, DotnetBuildStorageRoot? storageRoot = null) => ForWorkspace(workspace, () => home, storageRoot);
+
+    internal static WorkerBuildInvocationOperations ForWorkspace(OrchestratorWorkspace workspace,
+        Func<OrchestratorHome> resolveHome, DotnetBuildStorageRoot? storageRoot = null) =>
+        new(workspace.SqliteStatePath, workspace.ExecutionDirectory, storageRoot,
+            projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, integrationBranch: workspace.IntegrationBranch)
+        {
+            IsNonHome = new(() => workspace.IsProjectScoped && resolveHome().IsRegisteredNonHome(workspace))
+        };
+
+    public DotnetBuildTargetSelection? SelectBuildTargets(string worktreeRoot) =>
+        IsNonHome.Value && ProjectStackResolver.Resolve(worktreeRoot, projectHomeDirectory) == Toolchain.Dotnet
+            ? new DotnetProjectDiscoveryAdapter().SelectBuildTargets(worktreeRoot) : null;
 
     public WorkerBuildHostReference Prepare(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {
@@ -21,7 +38,8 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         kernel.RecordWorkerBuildProtocol(goalId, taskId, 1);
         return new(statePath, executionDirectory, goalId.Value, taskId.Value, task.LastDispatch.DispatchedAt,
             BuildWorkerDispatchId(goalId, taskId, task.LastDispatch), StorageRoot: storageRoot?.RootPath,
-            StructuralPolicy: WorkerBuildStructuralPreflight.CapturePolicy(task.LastDispatch, projectHomeDirectory, integrationBranch));
+            StructuralPolicy: WorkerBuildStructuralPreflight.CapturePolicy(task.LastDispatch, projectHomeDirectory, integrationBranch),
+            SelectTargets: IsNonHome.Value);
     }
 
     // Provider sessions are learned from live heartbeats after enrollment. They are
@@ -103,7 +121,12 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         rejection = ValidateHistory(kernel, goalId, taskId, task);
         if (rejection is not null) return rejection;
         var required = WorkerBuildEvidenceRequirement.FindRequiredProjects(dispatch.WorkingDirectory, task.RequiredRole, changedPaths, dirtyPaths);
-        if (required.Count == 0 && invocations.Length == 0) return new(false, false, "worker_build_host=not-required");
+        var selection = SelectBuildTargets(dispatch.WorkingDirectory);
+        if (selection?.Error is { } selectionError)
+            return new(true, false, "worker_build_target_selection=error; " + selectionError);
+        if (selection is not null)
+            required = required.Concat(selection.Projects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (selection is null && required.Count == 0 && invocations.Length == 0) return new(false, false, "worker_build_host=not-required");
         WorkerBuildApplicabilityExplanation? explanation = null;
         WorkerBuildConsumption Explain(WorkerBuildConsumption result) => result with { Applicability = explanation };
         WorkerBuildProjectScope.Result scope;
@@ -113,6 +136,9 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
             explanation = WorkerBuildApplicabilityExplanation.Capture(reference.DispatchId, null, null, task.WorkerBuildInvocations);
             return Explain(Rejected("scope-invalid", "project scope comparison evidence is unavailable"));
         }
+        if (selection?.AbsenceProof is { } proof && scope.Projects.Count == 0 &&
+            task.WorkerBuildInvocations.All(i => i.DispatchId != reference.DispatchId || i.IsTerminal && i.CustodyReleased))
+            return new(false, false, "worker_build_target_selection=NotApplicable; " + proof);
         if (!WorktreeTreeDigest.TryCompute(dispatch.WorkingDirectory, out var digest, out var reason, out var failure, digestGitRunner))
         {
             explanation = WorkerBuildApplicabilityExplanation.Capture(reference.DispatchId, null, scope, task.WorkerBuildInvocations);
@@ -121,7 +147,8 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         explanation = WorkerBuildApplicabilityExplanation.Capture(reference.DispatchId, digest, scope, task.WorkerBuildInvocations,
             (recorded, candidate) => WorkerBuildApplicabilityExplanation.CompareRecordedTrees(dispatch.WorkingDirectory, recorded, candidate));
         var applicable = task.WorkerBuildInvocations.Where(i => i.DispatchId == reference.DispatchId &&
-            i.TreeDigest == digest && i.Projects.Intersect(scope.Projects, StringComparer.OrdinalIgnoreCase).Count() == scope.Projects.Count)
+            i.TreeDigest == digest && (selection is null || i.BuildTargets is not null &&
+                selection.WithRequiredProjects(i.Projects).SequenceEqual(i.BuildTargets)) && i.Projects.Intersect(scope.Projects, StringComparer.OrdinalIgnoreCase).Count() == scope.Projects.Count)
             .OrderByDescending(i => i.Deadline).FirstOrDefault();
         if (applicable is null)
         {
@@ -182,7 +209,8 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         Synchronize(kernel, goalId, taskId, Load(goalId.Value).GetTask(goalId, taskId).WorkerBuildInvocations);
         return Explain(new(consumed.Outcome != WorkerBuildOutcome.Success && consumed.Outcome != WorkerBuildOutcome.CompilerFailure,
             consumed.Outcome == WorkerBuildOutcome.CompilerFailure,
-            $"worker_build_invocation={consumed.Id}; phase={consumed.Phase}; outcome={consumed.Outcome}; consumed={consumed.Consumed}"));
+            $"worker_build_invocation={consumed.Id}; phase={consumed.Phase}; outcome={consumed.Outcome}; consumed={consumed.Consumed}" +
+            (selection is not null && consumed.Outcome == WorkerBuildOutcome.CompilerFailure ? "; " + consumed.Diagnostic : "")));
     }
 
     private static WorkerBuildConsumption Rejected(string reason, string detail) =>

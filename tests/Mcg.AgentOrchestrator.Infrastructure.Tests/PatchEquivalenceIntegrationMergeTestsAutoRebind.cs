@@ -8,19 +8,25 @@ using static LandingExecutorTests;
 // Real Git repositories and an inline acceptance coordinator, isolated to each fixture root.
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorBatchLoopTests
+    , IClassFixture<PatchEquivalenceAutoRebindRepositoryTemplate>
 {
-    private const string GuardedPath = "src/guarded.cs";
-    private const string GoalPath = "src/goal.txt";
+    internal const string GuardedPath = "src/guarded.cs";
+    internal const string GoalPath = "src/goal.txt";
     private const string MergeSubjectPrefix = "Integrate main into ";
+    private readonly PatchEquivalenceAutoRebindRepositoryTemplate template;
 
-    public PatchEquivalenceIntegrationMergeTestsAutoRebind(ITestOutputHelper output) : base(output) { }
+    public PatchEquivalenceIntegrationMergeTestsAutoRebind(
+        ITestOutputHelper output, PatchEquivalenceAutoRebindRepositoryTemplate template) : base(output)
+    {
+        this.template = template;
+    }
 
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
     public void IntegrationOnlyChain_LandsInOnePass(bool satisfied)
     {
-        using var fixture = CreateFixture();
+        using var fixture = template.Copy();
         if (satisfied)
             foreach (var obligation in fixture.Goal.CriterionEvidenceObligations.ToArray())
                 fixture.Kernel.RecordCriterionEvidence(fixture.Goal.Id, obligation.Id,
@@ -41,7 +47,7 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
     [Xunit.Fact]
     public void MergeTrainEntry_IntegrationOnlyChain_RebindsAndRecords()
     {
-        using var fixture = CreateFixture();
+        using var fixture = template.Copy();
         Assert.Null(AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
             fixture.Goal, fixture.Candidate, "main", fixture.Repository));
         Assert.Empty(AutoRebindEntries(fixture)); // The planning entry is read-only.
@@ -61,7 +67,7 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
     [Xunit.Fact]
     public void GoalFollowUpCommit_KeepsBaselineHold()
     {
-        using var fixture = CreateFixture();
+        using var fixture = template.Copy();
         ReadGit(fixture.Worktree, "commit", "--allow-empty", "-m", "Goal follow-up");
         fixture.Candidate = ReadGit(fixture.Worktree, "rev-parse", "HEAD");
         AssertBaselineHold(fixture);
@@ -70,14 +76,14 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
     [Xunit.Fact]
     public void IntegrationMergeEditingGoalLine_KeepsBaselineHold()
     {
-        using var fixture = CreateFixture(secondMerge: "goal-edit");
+        using var fixture = template.Copy(secondMerge: "goal-edit");
         AssertBaselineHold(fixture);
     }
 
     [Xunit.Fact]
     public void RaisedRatchetCeiling_KeepsBaselineHold()
     {
-        using var fixture = CreateFixture(secondMerge: "raise");
+        using var fixture = template.Copy(secondMerge: "raise");
         AssertBaselineHold(fixture);
     }
 
@@ -86,14 +92,14 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
     [Xunit.InlineData("dispatch")]
     public void TryProve_WrongIntegrationSubject_Refuses(string shape)
     {
-        using var fixture = CreateFixture(secondMerge: shape);
+        var fixture = template.ReadOnly(shape);
         Assert.False(Prove(fixture, out _));
     }
 
     [Xunit.Fact]
     public void TryProve_NonAncestorBound_Refuses()
     {
-        using var fixture = CreateFixture();
+        using var fixture = template.Copy();
         AppendCommit(fixture.Repository, "sibling.txt", "not in candidate ancestry");
         var sibling = ReadGit(fixture.Repository, "rev-parse", "HEAD");
         Assert.Equal(1, GitCli.Run(fixture.Repository, "merge-base", "--is-ancestor", sibling, fixture.Candidate).ExitCode);
@@ -107,7 +113,7 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
     [Xunit.InlineData(17, false)]
     public void TryProve_NetRatchetRows_RequireNonIncreasingCeilings(int boundCeiling, bool expected)
     {
-        using var fixture = CreateFixture(boundCeiling: boundCeiling);
+        var fixture = template.ReadOnly(boundCeiling: boundCeiling);
         Assert.Equal(expected, Prove(fixture, out var evidence));
         if (!expected) return;
         Assert.StartsWith("integration-only:", evidence, StringComparison.Ordinal);
@@ -115,7 +121,7 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
         Assert.All(fixture.Walked, sha => Assert.Contains(sha, evidence, StringComparison.Ordinal));
     }
 
-    private static bool Prove(Fixture fixture, out string evidence) =>
+    internal static bool Prove(Fixture fixture, out string evidence) =>
         IntegrationOnlyCandidateDrift.TryProve(fixture.Repository, fixture.Bound, fixture.Candidate,
             "main", GoalWorktrees.BranchName(fixture.Goal.Id), out evidence);
 
@@ -186,34 +192,34 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
         return (summary, landCalls, acceptanceRuns);
     }
 
-    private static Fixture CreateFixture(string secondMerge = "writer", int boundCeiling = 20)
+    internal static Fixture PrepareRepository(string secondMerge, int boundCeiling)
     {
         var repository = CreateGitRepository();
         try
         {
             Directory.CreateDirectory(Path.Combine(repository, "src"));
-            File.WriteAllLines(Path.Combine(repository, GuardedPath), Enumerable.Range(1, 20).Select(i => $"// line {i}"));
+            File.AppendAllText(Path.Combine(repository, ".git", "config"), "\n[core]\n\tautocrlf = false\n");
+            var identity = new FixtureRepositoryWriter.Identity("Tests", "tests@example.invalid", DateTimeOffset.Now);
+            var mainWriter = new FixtureRepositoryWriter(repository);
+            File.WriteAllText(Path.Combine(repository, GuardedPath), GuardedLines(1, 20));
             WriteAuthority(repository, 20);
-            ReadGit(repository, "add", GuardedPath, SourceSizeRatchet.SourcePath);
-            ReadGit(repository, "commit", "-m", "Seed guarded authority");
+            mainWriter.CommitFiles([GuardedPath, SourceSizeRatchet.SourcePath], "Seed guarded authority", identity);
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateVerifiedSimpleGoal(kernel, "Update src/goal.txt and shrink guarded file");
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                 ["Full acceptance passes", "Goal content preserved"], VerificationClass.TestVerifiable, [], []));
             var worktree = GoalWorktrees.Ensure(repository, goal.Id);
-            File.WriteAllLines(Path.Combine(worktree, GuardedPath), Enumerable.Range(6, 15).Select(i => $"// line {i}"));
+            var goalWriter = new FixtureRepositoryWriter(worktree);
+            File.WriteAllText(Path.Combine(worktree, GuardedPath), GuardedLines(6, 15));
             File.WriteAllText(Path.Combine(worktree, GoalPath), "goal owned line\n");
             if (boundCeiling != 20) WriteAuthority(worktree, boundCeiling);
-            ReadGit(worktree, "add", GuardedPath, GoalPath, SourceSizeRatchet.SourcePath);
-            ReadGit(worktree, "commit", "-m", "Goal changes");
-            var bound = ReadGit(worktree, "rev-parse", "HEAD");
+            var bound = goalWriter.CommitFiles([GuardedPath, GoalPath, SourceSizeRatchet.SourcePath], "Goal changes", identity);
             for (var index = 0; index < 2; index++)
                 kernel.MapCriterionEvidenceOwner(goal.Id, index, 1, CriterionEvidenceOwner.Acceptance,
                     "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: bound);
 
-            File.AppendAllLines(Path.Combine(repository, GuardedPath), Enumerable.Range(1, 3).Select(i => $"// main added {i}"));
-            ReadGit(repository, "add", GuardedPath);
-            ReadGit(repository, "commit", "-m", "Grow guarded file on main");
+            File.AppendAllText(Path.Combine(repository, GuardedPath), MainGrowth);
+            mainWriter.CommitFiles([GuardedPath], "Grow guarded file on main", identity);
             var first = GoalBranchMainMerge.TryMergeMainIntoGoalBranch(repository, goal.Id);
             Assert.Equal(GoalWorktreeRebaseStatus.Rebased, first.Status);
             Assert.Equal("merged-main", first.Detail);
@@ -229,10 +235,10 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
                 Assert.Equal(25, Assert.Single(SourceSizeRatchetPreflight.TryReadAuthority(worktree)!).MaximumLineCount);
                 Assert.True(SourceSizeRatchetRetightener.IsNumericRetightenOnly(before,
                     File.ReadAllText(Path.Combine(worktree, SourceSizeRatchet.SourcePath))));
-                ReadGit(worktree, "add", SourceSizeRatchet.SourcePath);
-                ReadGit(worktree, "commit", "-m", SourceSizeRatchetRetightener.CommitSubject);
+                goalWriter.CommitFiles([SourceSizeRatchet.SourcePath], SourceSizeRatchetRetightener.CommitSubject, identity);
             }
-            AppendCommit(repository, "src/unrelated.txt", "second main advance");
+            File.WriteAllText(Path.Combine(repository, "src/unrelated.txt"), "second main advance\n");
+            var main = mainWriter.CommitFiles(["src/unrelated.txt"], "Add src/unrelated.txt", identity);
             var subject = $"{MergeSubjectPrefix}{GoalWorktrees.BranchName(goal.Id)} before acceptance";
             if (secondMerge == "writer")
             {
@@ -258,26 +264,35 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(secondMerge == "raise" ? 4 : 3, walked.Length);
             Assert.Equal(3, ReadGit(worktree, "rev-list", "--parents", "-n", "1", candidate).Split(' ').Length);
-            return new Fixture(repository, worktree, kernel, goal, bound, candidate, walked);
+            return new Fixture(repository, worktree, kernel, goal, bound, main, candidate, walked);
         }
         catch { TryDeleteDirectory(repository); throw; }
     }
+
+    internal static string GuardedLines(int start, int count) =>
+        string.Concat(Enumerable.Range(start, count).Select(i => $"// line {i}\n"));
+
+    internal static string MainGrowth => "// main added 1\n// main added 2\n// main added 3\n";
 
     private static void WriteAuthority(string root, int ceiling)
     {
         var path = Path.Combine(root, SourceSizeRatchet.SourcePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, $"// authority comment\nnew SourceSizeCeiling(\"{GuardedPath}\", {ceiling}), // row comment\n");
+        File.WriteAllText(path, Authority(ceiling));
     }
 
-    private sealed class Fixture(string repository, string worktree, AgentOrchestratorKernel kernel,
-        Goal goal, string bound, string candidate, string[] walked) : IDisposable
+    internal static string Authority(int ceiling) =>
+        $"// authority comment\nnew SourceSizeCeiling(\"{GuardedPath}\", {ceiling}), // row comment\n";
+
+    internal sealed class Fixture(string repository, string worktree, AgentOrchestratorKernel kernel,
+        Goal goal, string bound, string main, string candidate, string[] walked) : IDisposable
     {
         public string Repository { get; } = repository;
         public string Worktree { get; } = worktree;
         public AgentOrchestratorKernel Kernel { get; } = kernel;
         public Goal Goal { get; } = goal;
         public string Bound { get; } = bound;
+        public string Main { get; } = main;
         public string Candidate { get; set; } = candidate;
         public string[] Walked { get; } = walked;
         public void Dispose() => TryDeleteDirectory(Repository);

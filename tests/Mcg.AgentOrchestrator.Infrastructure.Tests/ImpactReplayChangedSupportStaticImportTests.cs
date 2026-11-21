@@ -52,7 +52,7 @@ public sealed class ImpactReplayChangedSupportStaticImportTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void SameNamedStaticMember_OnOtherClass_IsNotSelected(bool ambiguous)
+    public void SameNamedStaticMember_SelectsChangedSourceOnlyWhenItIsACandidate(bool ambiguous)
     {
         using var sources = new SourceFixture();
         sources.Add("Support.cs", "namespace Support; public static class Journal { public static int Compute() => 1; }");
@@ -65,7 +65,8 @@ public sealed class ImpactReplayChangedSupportStaticImportTests
         var actual = sources.Select();
 
         Assert.Null(actual.AbandonReason);
-        Assert.Equal(new[] { "SampleTests.AlphaTests" }, actual.Classes);
+        Assert.Equal(ambiguous ? new[] { "SampleTests.AlphaTests", "SampleTests.BetaTests" } :
+            new[] { "SampleTests.AlphaTests" }, actual.Classes);
         Assert.Empty(actual.OtherFiles);
     }
 
@@ -113,7 +114,7 @@ public sealed class ImpactReplayChangedSupportStaticImportTests
             _sources.Add(path);
         }
 
-        internal (IReadOnlyList<string> Classes, string? AbandonReason, IReadOnlyList<string> OtherFiles) Select() =>
+        internal ImpactReplayChangedSupportSelection Select() =>
             ImpactReplayChangedSupportReferenceScan.Select(_root, ["Support.cs"],
                 [new(Path.Combine(_root, "Infrastructure.Tests.csproj"), true, _sources)],
                 () => new HashSet<string>(StringComparer.Ordinal)

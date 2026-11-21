@@ -17,8 +17,7 @@ internal static class StartupTerminalSweep
         var timing = Stopwatch.StartNew();
         var result = TerminalGoalSweep.Run(
             sweepKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId,
-            cleanupHooks: cleanupHooks, orchestratorDirectory: workspace.OrchestratorDirectory,
-            reclaimGoalRoots: true, gitRunner: gitRunner);
+            cleanupHooks: cleanupHooks, reclaimGoalRoots: true, gitRunner: gitRunner, workspace: workspace);
         timing.Stop();
         StartupSweepTotal.Record(timing.ElapsedMilliseconds);
         try

@@ -885,8 +885,7 @@ internal sealed partial class GoalDispatchOperations
             completionBuildEvidence: new CompletionBuildEvidenceCoordinator(workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
             RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate,
-            WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory,
-                projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, integrationBranch: workspace.IntegrationBranch),
+            WorkerBuildInvocations = WorkerBuildInvocationOperations.ForWorkspace(workspace, () => _resolveHome(workspace)),
             NodeDependencyInstall = WorkerNodeDependencyInstallSource.For(workspace.ProjectHomeDirectoryOrNull),
             DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
                 workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes,
