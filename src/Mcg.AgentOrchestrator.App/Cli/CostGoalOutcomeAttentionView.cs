@@ -36,6 +36,10 @@ internal static class CostGoalOutcomeAttentionView
 
     private static Row[] ReadGoal(CostGoalOutcomeStore store, string goalId)
     {
+        // The store names records with GUIDs in N format. Legacy IDs have no record path.
+        if (!Guid.TryParseExact(goalId, "N", out _))
+            return [];
+
         try
         {
             var record = store.Read(new GoalId(goalId));

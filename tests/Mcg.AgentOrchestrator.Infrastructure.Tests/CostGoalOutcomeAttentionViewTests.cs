@@ -106,9 +106,13 @@ public sealed class CostGoalOutcomeAttentionViewTests : IDisposable
     private async Task<IOrchestratorStateQueries> CreateQueriesAsync()
     {
         var workspace = Workspace;
+        var landedTask = new TaskSnapshot("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Implement landed cost goal",
+            AgentRole.Developer, WorkTaskStatus.Completed, null, null, null, null, null, null);
+        var activeTask = new TaskSnapshot("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Implement active cost goal",
+            AgentRole.Developer, WorkTaskStatus.Pending, null, null, null, null, null, null);
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
-            [new GoalSnapshot(Landed.Value, "Landed cost goal", GoalStatus.Completed, [], [], CreatedAt: Now, TerminatedAt: Now),
-             new GoalSnapshot(Active.Value, "Active cost goal", GoalStatus.Active, [], [], CreatedAt: Now)], []));
+            [new GoalSnapshot(Landed.Value, "Landed cost goal", GoalStatus.Completed, [landedTask], [], CreatedAt: Now, TerminatedAt: Now),
+             new GoalSnapshot(Active.Value, "Active cost goal", GoalStatus.Active, [activeTask], [], CreatedAt: Now)], []));
         CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
