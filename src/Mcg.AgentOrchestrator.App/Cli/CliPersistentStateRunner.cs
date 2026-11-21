@@ -64,6 +64,9 @@ internal static partial class CliPersistentStateRunner
             return CliTaskGraphRepairCommand.Execute(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
         if (args.Count > 0 && args[0].Equals("epic-bar", StringComparison.OrdinalIgnoreCase) && !CliCommandHelp.IsCommandSpecificHelp(args))
             return CliEpicOutcomeCommands.ExecuteLegacyBar(args, workspace, operatorIntentSubmissionSource);
+        if (RecordControlReceiptCommand.IsCommand(args))
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers,
+                ref workerProfiles, ref currentGoal);
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
@@ -218,12 +221,7 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
-        if (IsSingleGoalSnapshotCommand(args))
-        {
-            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
-        }
-
-        if (IsSingleGoalReportCommand(args))
+        if (IsSingleGoalSnapshotCommand(args) || IsSingleGoalReportCommand(args))
         {
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }

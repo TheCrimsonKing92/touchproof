@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -316,6 +317,96 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
     private static AdjudicateOperatorIntentPayload Payload(string shape) =>
         new(shape, "Operator explanation", ["receipt-1"], Harness.Version, "C:\\tmp");
 
+    [Xunit.Fact]
+    public async Task Same_goal_control_receipt_hashes_stored_bytes_in_adjudication_and_lessons()
+    {
+        await WithHarness(async harness =>
+        {
+            var (kernel, goal) = SimpleGoal("Adjudicate with a recorded control");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var receipt = RecordControl(harness.Root, goal.Id);
+            var path = ControlReceiptPath(harness.Root, receipt.ReceiptId);
+            await File.AppendAllTextAsync(path, "\r\n  ");
+            var hash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var reference = $"control-receipt:{receipt.ReceiptId}";
+            var intent = await harness.Enqueue(goal, task, Payload("close") with
+            {
+                WorkingDirectory = harness.Root,
+                EvidenceReferences = [reference]
+            });
+
+            var result = harness.Coordinator.ExecutePending(kernel, goal);
+            harness.Coordinator.CompletePersisted([goal.Id]);
+
+            Assert.True(result.MutatedGoalState);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            var state = await CollaborationItemStore.ForDirectory(harness.Root).GetDecisionStateAsync($"adjudicate-{intent.Id}");
+            Assert.NotNull(state);
+            Assert.Equal(EffectReceiptStatus.Applied, state.Effect?.Status);
+            var expected = new EvidenceManifestEntry(reference, hash);
+            Assert.Equal(expected, Assert.Single(state.Request.EvidenceManifest.Entries));
+            Assert.True(harness.Resolver.TryResolveForLesson(reference, harness.Root, goal, out var lesson, out var rejection), rejection);
+            Assert.Equal(expected, lesson);
+        });
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing")]
+    [Xunit.InlineData("foreign")]
+    [Xunit.InlineData("malformed")]
+    [Xunit.InlineData("wrong-id")]
+    public async Task Unusable_control_receipt_is_rejected_without_task_state_change(string invalidCase)
+    {
+        await WithHarness(async harness =>
+        {
+            var (kernel, goal) = SimpleGoal("Reject unusable control evidence");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var owner = invalidCase == "foreign" ? SimpleGoal("Receipt owner").Goal : goal;
+            var receipt = RecordControl(harness.Root, owner.Id);
+            var path = ControlReceiptPath(harness.Root, receipt.ReceiptId);
+            var reference = $"control-receipt:{receipt.ReceiptId}";
+            var payload = Payload("close") with { WorkingDirectory = harness.Root, EvidenceReferences = [reference] };
+            Assert.True(harness.Resolver.TryResolve(reference, owner, payload, out _));
+            if (invalidCase == "missing")
+            {
+                File.Delete(path);
+                Assert.False(File.Exists(path));
+            }
+            else if (invalidCase == "malformed")
+            {
+                await File.WriteAllTextAsync(path, "{broken");
+            }
+            else if (invalidCase == "wrong-id")
+            {
+                var otherReceipt = RecordControl(harness.Root, goal.Id);
+                File.Copy(ControlReceiptPath(harness.Root, otherReceipt.ReceiptId), path, overwrite: true);
+            }
+
+            var before = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id) with { Timeline = [] }, JsonOptions);
+            var intent = await harness.Enqueue(goal, task, payload);
+
+            var result = harness.Coordinator.ExecutePending(kernel, goal);
+
+            Assert.False(result.MutatedGoalState);
+            Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id) with { Timeline = [] }, JsonOptions));
+            var state = await harness.Decisions.GetDecisionStateAsync($"adjudicate-{intent.Id}");
+            Assert.NotNull(state?.Effect);
+            Assert.Equal(EffectReceiptStatus.Rejected, state.Effect.Status);
+            Assert.Equal("evidence-reference-unresolved", state.Effect.Result);
+            Assert.False(harness.Resolver.TryResolveForLesson(reference, harness.Root, goal, out _, out var rejection));
+            Assert.Equal($"evidence-reference-unresolved {reference}", rejection);
+        });
+    }
+
+    private static OperatorControlReceipt RecordControl(string root, GoalId goalId) =>
+        new OperatorControlReceiptStore(root).Record(goalId, "criterion-v1-0", "negative-control", "verify", 1, 0, 1,
+            ["no-trx-on-disk.trx"], "operator-attested-sha");
+
+    private static string ControlReceiptPath(string root, string receiptId) =>
+        Path.Combine(root, "operator-evidence", "control-receipts", receiptId + ".json");
+
     private static AdjudicateOperatorIntentPayload RoutePayload() =>
         Payload("route") with { Cause = nameof(RetryCause.ContractClarification), Text = "Apply the clarified contract." };
 
@@ -399,10 +490,12 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
             Root = root;
             Store = new SqliteOperatorIntentStore(Path.Combine(root, "operator-intents.db"), Path.Combine(root, "logs"));
             Decisions = CollaborationItemStore.ForDirectory(root);
+            Resolver = new AdjudicationEvidenceResolver(root);
             Coordinator = new OperatorIntentCoordinator(
                 Store,
                 decisions: Decisions,
-                goalStateVersionResolver: _ => Version)
+                goalStateVersionResolver: _ => Version,
+                evidenceResolver: Resolver)
             {
                 CancelLatestProcess = cancelLatestProcess ??
                     ((_, _, _) => throw new InvalidOperationException("Unexpected dispatch cancellation in adjudication test."))
@@ -412,6 +505,7 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
         internal string Root { get; }
         internal SqliteOperatorIntentStore Store { get; }
         internal CollaborationItemStore Decisions { get; }
+        internal AdjudicationEvidenceResolver Resolver { get; }
         internal OperatorIntentCoordinator Coordinator { get; }
 
         internal async Task<OperatorIntentRecord> Enqueue(

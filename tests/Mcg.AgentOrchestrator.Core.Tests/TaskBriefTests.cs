@@ -2139,10 +2139,9 @@ public sealed class TaskBriefTests
         contextDirectory: "C:\\repo\\.orchestrator-context\\goal").Content;
     var apiBrief = kernel.BuildTaskBrief(goal.Id, currentTask.Id).Content;
 
-    // The premise-invalid instruction adds 119 characters plus CRLF; the blocker role list adds 12.
-    // Preserve the previous 9000-character allowance for all other brief content.
+    // Keep the added read procedure within 500 characters of the existing 9500-character allowance.
     var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(AgentRole.Developer, usesFileAccessContext: true);
-    Assert.Equal(9500, budget);
+    Assert.InRange(budget, 9500, 10000);
     Assert.True(fileAccessBrief.Length <= budget, $"File-access brief has {fileAccessBrief.Length} characters; ceiling is {budget}.");
     Assert.DoesNotContain(AgentOutputDirectives.WorkerWriteDenialGuidance, fileAccessBrief, StringComparison.Ordinal);
     Assert.Contains(AgentOutputDirectives.WorkerWriteDenialGuidance, apiBrief, StringComparison.Ordinal);

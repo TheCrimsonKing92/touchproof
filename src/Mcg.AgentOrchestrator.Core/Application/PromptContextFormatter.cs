@@ -46,7 +46,7 @@ internal static class PromptContextFormatter
             };
         }
 
-        return role switch
+        var contextBudget = role switch
         {
             AgentRole.Planner => 7000,
             AgentRole.Researcher => 8000,
@@ -57,6 +57,7 @@ internal static class PromptContextFormatter
             AgentRole.Reviewer => 8000,
             _ => 7000
         };
+        return contextBudget + WorkerReadProcedure.CharacterCountForRole(role);
     }
 
     public static string TrimPromptBlock(string value)

@@ -991,13 +991,22 @@ public sealed class BacklogStore
     }
 
     // Records an idempotent landing note only while the item is Open.
-    public async Task<BacklogLandingResult> TryRecordOpenItemLandingAsync(
+    public Task<BacklogLandingResult> TryRecordOpenItemLandingAsync(
         string id,
         string note,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RecordOpenItemLandingAsync(id, note, remainingScope: null, cancellationToken);
+
+    public Task<BacklogLandingResult> TryRecordOpenItemSliceLandingAsync(
+        string id, string header, string remainingScope, CancellationToken cancellationToken = default) =>
+        RecordOpenItemLandingAsync(id, header, remainingScope, cancellationToken);
+
+    private async Task<BacklogLandingResult> RecordOpenItemLandingAsync(
+        string id, string note, string? remainingScope, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(note))
             throw new ArgumentException("Backlog landing note cannot be empty.", nameof(note));
+        var header = note.Trim();
 
         return await WithBusyRetryAsync(async () =>
         {
@@ -1028,11 +1037,13 @@ public sealed class BacklogStore
                         WHERE NOT EXISTS (
                             SELECT 1
                             FROM backlog_notes
-                            WHERE backlog_item_id = $backlog_item_id AND text = $text)
+                            WHERE backlog_item_id = $backlog_item_id
+                              AND (text = $text OR text = $slice_header OR instr(text, $slice_header || char(10)) = 1))
                         """;
                     insert.Parameters.AddWithValue("$backlog_item_id", id);
                     insert.Parameters.AddWithValue("$created_at", createdAt);
-                    insert.Parameters.AddWithValue("$text", note.Trim());
+                    insert.Parameters.AddWithValue("$slice_header", remainingScope is null ? (object)DBNull.Value : header);
+                    insert.Parameters.AddWithValue("$text", remainingScope is null ? header : header + "\n" + remainingScope);
                     inserted = await insert.ExecuteNonQueryAsync(cancellationToken);
                 }
 
