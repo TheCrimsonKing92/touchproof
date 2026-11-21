@@ -302,7 +302,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory, roleRequirementStack, testCheckCommands));
+        instructionLines.AddRange(WorkerReadProcedure.ForRole(task.RequiredRole).Concat(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory, roleRequirementStack, testCheckCommands)));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(instructionLines, task.RequiredRole, includeReference: true);
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);

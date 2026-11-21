@@ -27,7 +27,8 @@ public sealed class AuthorBriefDraftPromptTestsHouseConventions
             HouseCriterion, prompt);
         Assert.DoesNotContain(FormerTesterSentence, prompt);
         Assert.Contains("Keep What to build to at most four numbered items.", prompt);
-        Assert.Contains("When the backlog item needs more, draft only the first slice and list the remaining slices under Scope in a line beginning `Follow-up slices:`.", prompt);
+        Assert.Contains("For an item without a recorded slice landing, draft only the first slice if the item needs to be split.", prompt);
+        Assert.Contains("List any remaining slices in order under Scope in a line beginning `Follow-up slices:`.", prompt);
         Assert.DoesNotContain("numbered or bulleted", prompt);
     }
 

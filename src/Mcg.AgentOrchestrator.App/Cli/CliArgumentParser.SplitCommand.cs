@@ -25,7 +25,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return NormalizeRetryTaskTargetArgs(commandArgs);
     }
 
-    if (command.Equals("adjudicate", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("adjudicate", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals(RecordControlReceiptCommand.Name, StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeArgs([command, .. TokenizeQuotedArguments(remainder)]);
     }

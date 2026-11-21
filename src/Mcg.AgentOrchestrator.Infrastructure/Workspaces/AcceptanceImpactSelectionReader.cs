@@ -13,10 +13,11 @@ internal static class AcceptanceImpactSelectionReader
         var routing = new ImpactReplayChangedSourceRouting(checkout);
         var sources = new ImpactReplayTestSourceIndex(LaneTestSourceRootResolver.SourceFiles(checkout,
             LaneTestSourceRootResolver.Resolve(checkout)), routing.TestProjects, checkout);
-        var guards = SourceReadingGuardTestClasses.Read(sources, classes);
+        var guards = SourceReadingGuardTestClasses.Read(sources, classes, out var scanFiles);
+        var (changedLineRanges, scanChanges) = ReadCandidateDiff(checkout, integrationBranch, changedFiles, scanFiles.Count > 0);
         var impact = Read(checkout, changedFiles, routing, sources, classes, guards,
             ChangedFileTestClassPathMapper.TestProjectDirectories(settings), bypassCache: false,
-            changedLineRanges: ReadChangedLineRanges(checkout, integrationBranch));
+            changedLineRanges: changedLineRanges, scanFiles: scanFiles, scanChanges: scanChanges);
         var selection = impact.ChangedTests.AbandonReason is { } reason
             ? ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.ChangedFileUnmapped, reason)
             : impact.Selection;
@@ -24,16 +25,20 @@ internal static class AcceptanceImpactSelectionReader
             .Select(item => item.ClassName)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             ProjectClasses: project => routing.TestProjects.FirstOrDefault(item => item.Path.Equals(
                 Path.GetFullPath(project, checkout), StringComparison.OrdinalIgnoreCase)) is { } match
-                ? AcceptanceTestClassSourceScanner.Scan(match.Path, match.Sources.ToArray()) : []);
+                ? AcceptanceTestClassSourceScanner.Scan(match.Path, match.Sources.ToArray()) : [],
+            AssemblyScanReasons: impact.AssemblyScans);
     }
 
     internal static (ReverseDependencyTestSelection Selection, ImpactReplayDeclaredGuardReport DeclaredGuards,
         (IReadOnlyList<string> Classes, bool Gained, string? AbandonReason, IReadOnlyList<string> OtherFiles,
-            IReadOnlyList<string> QualifiedClasses) ChangedTests) Read(
+            IReadOnlyList<string> QualifiedClasses) ChangedTests,
+        IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason> AssemblyScans) Read(
         string checkout, IReadOnlyList<string> changedFiles, ImpactReplayChangedSourceRouting routing,
         ImpactReplayTestSourceIndex sources, IReadOnlyList<AcceptanceTestClassDescriptor> classes,
         ImpactReplaySourceGuardReport? guards, IReadOnlyList<string> testProjectDirectories, bool bypassCache,
-        IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges = null)
+        IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges = null,
+        IReadOnlyList<AssemblyScanningGuardTestClasses.ScanFile>? scanFiles = null,
+        IReadOnlyList<string>? scanChanges = null)
     {
         var changedSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -45,27 +50,63 @@ internal static class AcceptanceImpactSelectionReader
                 propagateShippingSourceReach: true, changedLineRanges: changedLineRanges);
         var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
         selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, sources, classes, guards,
-            out var declaredGuards, augmented.QualifiedClasses, testProjectDirectories);
-        return (selection, declaredGuards, augmented);
+            out var declaredGuards, augmented.QualifiedClasses, testProjectDirectories, out var assemblyScans, scanFiles, scanChanges);
+        return (selection, declaredGuards, augmented, assemblyScans);
     }
 
-    private static IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? ReadChangedLineRanges(
-        string checkout, string? integrationBranch)
+    private static (IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? LineRanges,
+        IReadOnlyList<string> ScanChanges) ReadCandidateDiff(
+        string checkout, string? integrationBranch, IReadOnlyList<string> changedFiles, bool hasScanSites)
     {
-        if (string.IsNullOrWhiteSpace(integrationBranch)) return null;
+        if (string.IsNullOrWhiteSpace(integrationBranch)) return (null, changedFiles);
         var mergeBase = GoalAcceptanceVerifier.ResolveGitScalar(checkout, "merge-base", "HEAD", integrationBranch);
-        if (mergeBase is null) return null;
+        if (mergeBase is null) return (null, changedFiles);
         try
         {
             var diff = GitCli.Run(checkout, GitCli.DefaultTimeoutMilliseconds, "-c", "core.quotePath=false",
                 "diff", "--unified=0", "--inter-hunk-context=0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
                 "--src-prefix=a/", "--dst-prefix=b/", mergeBase, "--", "*.cs");
-            return diff.ExitCode == 0 && !diff.DrainTimedOut ? ZeroContextDiffLineRangeParser.Parse(diff.Output) : null;
+            if (diff.ExitCode != 0 || diff.DrainTimedOut) return (null, changedFiles);
+            var ranges = ZeroContextDiffLineRangeParser.Parse(diff.Output);
+            var scanChanges = hasScanSites && (diff.Output.Contains("\nnew file mode ", StringComparison.Ordinal) ||
+                diff.Output.Contains("\ndeleted file mode ", StringComparison.Ordinal))
+                ? ReadRenameCounterparts(checkout, mergeBase, changedFiles) : changedFiles;
+            return (ranges, scanChanges);
         }
         catch (Exception)
         {
             // Precision is optional; missing or unparseable Git output preserves path-only selection.
-            return null;
+            return (null, changedFiles);
         }
+    }
+
+    private static IReadOnlyList<string> ReadRenameCounterparts(string checkout, string mergeBase, IReadOnlyList<string> changedFiles)
+    {
+        GitCli.GitResult status;
+        try
+        {
+            status = GitCli.Run(checkout, GitCli.DefaultTimeoutMilliseconds, "diff", "--name-status", "-z",
+                "--find-renames", "--diff-filter=R", mergeBase, "--");
+        }
+        catch (Exception)
+        {
+            return changedFiles;
+        }
+        if (!status.Succeeded || status.DrainTimedOut) return changedFiles;
+        var fields = status.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        if (fields.Length % 3 != 0) return changedFiles;
+        var original = changedFiles.Select(path => path.Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var paths = new HashSet<string>(original, StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < fields.Length; index += 3)
+        {
+            var before = fields[index + 1];
+            var after = fields[index + 2];
+            if (original.Contains(before) || original.Contains(after))
+            {
+                paths.Add(before);
+                paths.Add(after);
+            }
+        }
+        return paths.ToArray();
     }
 }

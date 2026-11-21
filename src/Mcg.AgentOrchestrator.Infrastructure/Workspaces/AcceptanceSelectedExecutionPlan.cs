@@ -14,6 +14,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
     public IReadOnlyList<AcceptanceUnresolvedObligationSelector> UnresolvedObligationSelectors { get; init; } = [];
     public IReadOnlyList<AcceptanceSelectedExecutionCheckCoverage> WholeProjectCoverage { get; init; } = [];
     public IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks { get; init; } = [];
+    public IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? AssemblyScanReasons { get; init; }
 
     internal bool HasPlan => Outcome == ReverseDependencySelectionOutcome.Resolved;
 
@@ -24,7 +25,8 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? wholeProjectChecks = null,
         bool projectReachAvailable = true,
         Func<IReadOnlyList<AcceptanceWholeProjectCheckInventory>>? selectableProjectChecks = null,
-        IReadOnlySet<string>? changedTestProjects = null)
+        IReadOnlySet<string>? changedTestProjects = null,
+        IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? assemblyScanReasons = null)
     {
         var obligations = new HashSet<string>(StringComparer.Ordinal);
         var methodFormResolutions = new List<AcceptanceSelectedExecutionMethodFormResolution>();
@@ -33,7 +35,10 @@ internal sealed record AcceptanceSelectedExecutionPlan(
         AcceptanceSelectedExecutionPlan Full(ReverseDependencySelectionOutcome outcome, string? reason) =>
             new(outcome, reason ?? outcome.ToString(), lanes, [], floorLanes, guardClasses,
                 obligations.Order(StringComparer.Ordinal).ToArray())
-            { MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray() };
+            {
+                MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray(),
+                AssemblyScanReasons = assemblyScanReasons
+            };
         if (changedFiles is null || !changedFiles.Any())
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate changes are unavailable.");
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved)
@@ -149,6 +154,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray())
         {
             MethodFormResolutions = methodFormResolutions.ToArray(), WholeProjectCoverage = coverage.ToArray(),
+            AssemblyScanReasons = assemblyScanReasons,
             UnresolvedObligationSelectors = unresolved.Select(item =>
                 AcceptanceUnresolvedObligationSelector.Create(item.Selector, classes, item.WellFormed)).ToArray(),
             ProjectChecks = selectableProjects.Select(check => AcceptanceSelectedExecutionProjectCheckEntry.Create(

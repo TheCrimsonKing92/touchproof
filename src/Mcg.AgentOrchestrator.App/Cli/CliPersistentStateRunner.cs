@@ -64,6 +64,9 @@ internal static partial class CliPersistentStateRunner
             return CliTaskGraphRepairCommand.Execute(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
         if (args.Count > 0 && args[0].Equals("epic-bar", StringComparison.OrdinalIgnoreCase) && !CliCommandHelp.IsCommandSpecificHelp(args))
             return CliEpicOutcomeCommands.ExecuteLegacyBar(args, workspace, operatorIntentSubmissionSource);
+        if (RecordControlReceiptCommand.IsCommand(args))
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers,
+                ref workerProfiles, ref currentGoal);
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
@@ -218,12 +221,7 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
-        if (IsSingleGoalSnapshotCommand(args))
-        {
-            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
-        }
-
-        if (IsSingleGoalReportCommand(args))
+        if (IsSingleGoalSnapshotCommand(args) || IsSingleGoalReportCommand(args))
         {
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
@@ -550,7 +548,7 @@ internal static partial class CliPersistentStateRunner
         return args[0].ToLowerInvariant() switch
         {
             _ when CliExperimentCommands.IsCommand(args[0]) || CliCommandHelp.IsCommandSpecificHelp(args) => true,
-            "help" or "model-functions" or "model-function-add" => true,
+            "help" or "models" or "model-functions" or "model-function-add" => true,
             "goal-intake-status" or "flake-census" or "worker-profiles" or "operator-commands" => true,
             // Portfolio views and writes use their own stores; goals read only metadata.
             "epic-add" or "epic-assign" or "epic-assign-many" or "epic-list" or "epic-show" or "epic-outcome-proposals" => true, _ when EpicProgressReadModel.IsEpicGoalsListing(args) => true,

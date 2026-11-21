@@ -28,16 +28,17 @@ internal sealed class BoardFillTestHarness : IDisposable
     private int _mainMoves;
     internal void MoveMain() => MainHead = (++_mainMoves).ToString("x40");
 
-    internal BoardFillTestHarness()
+    internal BoardFillTestHarness(Action? beforeRequiredEventDrain = null)
     {
         Directory.CreateDirectory(Root);
         Clock.UtcNow = BoardFillReadyItemSelectorTests.Now;
         Kernel = new(Clock);
         Store = new(StorePath);
-        Host = NewHost();
+        Host = NewHost(beforeRequiredEventDrain: beforeRequiredEventDrain);
     }
 
-    internal ConductorBoardFillHost NewHost(Func<string?>? mainHead = null) => new(Store, (_, token) =>
+    internal ConductorBoardFillHost NewHost(Func<string?>? mainHead = null,
+        Action? beforeRequiredEventDrain = null) => new(Store, (_, token) =>
     {
         Interlocked.Increment(ref _calls);
         Started.TrySetResult(true);
@@ -48,14 +49,20 @@ internal sealed class BoardFillTestHarness : IDisposable
             : outcome;
     }, () => Items,
         (_, _) => item => BacklogDependencyReadiness.Evaluate(item, _ => null, _ => null, _ => new(null), _ => "Running"),
-        () => Policy, new(EventsPath, utcNow: () => Clock.UtcNow), items => EpicMembership(items),
+        () => Policy, new(EventsPath, utcNow: () => Clock.UtcNow, beforeRequiredEventDrain: beforeRequiredEventDrain),
+        items => EpicMembership(items),
         () => Clock.UtcNow, mainHead: mainHead ?? (() => MainHead));
 
     internal AuthorBriefDraftOutcome Draft() => new("draft", 0, new string('c', 40),
         Path.Combine(Root, "draft.md"), Path.Combine(Root, "receipt.json"),
         [new("sections", true, "ok"), new("citations", true, "ok")]);
     internal void Release() => _release.TrySetResult(true);
-    internal string[] Events() => File.Exists(EventsPath) ? File.ReadAllLines(EventsPath) : [];
+    internal string[] Events() => LifecycleEvents(EventsPath);
+    internal static string[] LifecycleEvents(string path) => File.Exists(path) ? File.ReadLines(path).Where(line =>
+    {
+        using var entry = Event(line);
+        return entry.RootElement.GetProperty("eventKind").GetString() != "BOARD_FILL_READINESS";
+    }).ToArray() : [];
     internal static JsonDocument Event(string text) => JsonDocument.Parse(text);
     public void Dispose()
     {

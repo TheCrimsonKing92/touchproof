@@ -13,13 +13,25 @@ internal static class DispatchReadinessAssessment
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
         DateTimeOffset now,
-        WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null,
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
+        ModelInventory? inventory = null) =>
+        Evaluate(goal, providerHoldScope, agents, profiles, now,
+            sandboxOptions: null, commandExists: null, claudeAuthProbe: null, inventory: inventory);
+
+    public static DispatchReadinessAssessmentResult Evaluate(
+        Goal goal,
+        IReadOnlyCollection<Goal>? providerHoldScope,
+        IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles,
+        DateTimeOffset now,
+        WorkerSandboxOptions? sandboxOptions,
+        Func<string, bool>? commandExists,
+        Func<ClaudeCliAuthState>? claudeAuthProbe,
+        ModelInventory? inventory = null)
     {
         var plan = SubscriptionPlanBuilder.Build(
             goal, agents, profiles, now: now, providerHoldScope: providerHoldScope,
-            sandboxOptions: sandboxOptions, commandExists: commandExists, claudeAuthProbe: claudeAuthProbe);
+            sandboxOptions: sandboxOptions, commandExists: commandExists, claudeAuthProbe: claudeAuthProbe,
+            inventory: inventory);
         return new(plan, DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, now));
     }
 

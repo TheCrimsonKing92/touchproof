@@ -27,7 +27,7 @@ internal static class WorkerEnvironmentProbeContexts
         {
             var profile = task.Status == WorkTaskStatus.Running && task.LastDispatch is { } dispatch
                 ? dispatch.WorkerName
-                : WorkerProfileDispatcher.ResolveSubscriptionProfileName(
+                : InventoryModelAssignment.Parse(task.AssignedAgentId)?.Profile ?? WorkerProfileDispatcher.ResolveSubscriptionProfileName(
                     agents.Single(agent => agent.Id == task.AssignedAgentId), goal, task, profiles, sandbox,
                     cascadeTesterCheapFirst: policy.CascadeTesterCheapFirst,
                     cascadeCheapModelAlias: policy.CascadeCheapModelAlias,

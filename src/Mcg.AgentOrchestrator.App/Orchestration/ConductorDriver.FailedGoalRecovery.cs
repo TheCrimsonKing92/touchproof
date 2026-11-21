@@ -22,6 +22,9 @@ internal sealed partial class ConductorDriver
     {
         var facts = ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-facts", () => BuildFailedGoalRecoveryFacts(goal, policy, state));
         var decision = ConductorTickStepLedger.MeasureWithinWalk("walk-recovery-facts", () => FailedGoalRecoveryPolicy.Evaluate(facts));
+        if (decision.Action != FailedGoalRecoveryAction.ReconcileExitedDispatch &&
+            Application.InventoryAssignedDispatchAgents.FailedGoalHold(goal, state) is { } inventoryHold)
+            return MakeResult(goal.Id.Value, goalPrefix, policy, inventoryHold);
         IReadOnlyList<FailedGoalPendingNote> pendingNotes = [];
         FailedGoalFindingObservation? reviewContractObservation = null;
         FailedGoalFindingObservation? verifyingFindingObservation = null;
