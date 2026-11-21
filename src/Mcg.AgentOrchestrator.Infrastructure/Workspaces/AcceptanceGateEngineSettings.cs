@@ -39,6 +39,16 @@ internal sealed class AcceptanceGateEngineSettings
     public JsonElement SelectedExecutionModeValue { get; init; }
     [JsonIgnore]
     public AcceptanceSelectedExecutionMode SelectedExecutionMode { get; private set; }
+    [JsonPropertyName("supportClosureClassThreshold")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public JsonElement SupportClosureClassThresholdValue { get; init; }
+    [JsonIgnore]
+    public int SupportClosureClassThreshold => SupportClosureClassThresholdValue.ValueKind switch
+    {
+        JsonValueKind.Undefined => ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold,
+        JsonValueKind.Number when SupportClosureClassThresholdValue.TryGetInt32(out var threshold) => threshold,
+        _ => 0
+    };
     public long OutputCaptureLimitBytes { get; init; } = DefaultOutputCaptureLimitBytes;
 
     public static AcceptanceGateEngineSettings Load(string worktreePath, string? projectHomeDirectory = null)

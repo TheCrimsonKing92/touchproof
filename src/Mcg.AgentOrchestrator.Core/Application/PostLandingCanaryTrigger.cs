@@ -185,6 +185,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceBuildLockRemediation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.CandidateIdentity.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HeavyFixtureGitLaunchBoundCheck",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/ImpactReplayChangedSupportFileSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandAcceptanceCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandEnvironmentInputs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",

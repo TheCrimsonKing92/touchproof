@@ -87,12 +87,17 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
     [InlineData("generic")]
     [InlineData("partial")]
     [InlineData("nested")]
+    [InlineData("constraint")]
+    [InlineData("attribute")]
+    [InlineData("enum")]
     public void SupportChain_SelectsRunnableClassThroughNonRunnableFixture(string shape)
     {
         using var sources = new SourceFixture();
         sources.Add("Support.cs", shape == "generic"
             ? "namespace Support; public class Helpers<T> { }"
-            : "namespace Support; public class Helpers { }");
+            : shape == "attribute"
+                ? "namespace Support; public class HelpersAttribute : System.Attribute { }"
+                : "namespace Support; public class Helpers { public const int Value = 1; }");
         var fixture = shape switch
         {
             "base" => "public class HelperFixture : Support.Helpers { }",
@@ -108,6 +113,9 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
             "generic" => "public class HelperFixture<T> { Support.Helpers<T> value; }",
             "partial" => "public partial class HelperFixture { Support.Helpers value; }",
             "nested" => "public class Outer { public class HelperFixture { Support.Helpers value; } }",
+            "constraint" => "public class HelperFixture<T> where T : Support.Helpers { }",
+            "attribute" => "[Support.Helpers] public class HelperFixture { }",
+            "enum" => "public enum HelperFixture { Value = Support.Helpers.Value }",
             _ => "public class HelperFixture { Support.Helpers value; }"
         };
         sources.Add("Fixture.cs", (shape == "alias" ? "using H = Support.Helpers; " : "") + "namespace Fixtures; " + fixture);
@@ -118,6 +126,7 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
             "alias" => "using F = Fixtures.HelperFixture; namespace SampleTests; public class BetaTests { F value; }",
             "generic" => "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture<int> value; }",
             "nested" => "namespace SampleTests; public class BetaTests { Fixtures.Outer.HelperFixture value; }",
+            "constraint" => "namespace SampleTests; public class BetaTests { System.Type Value() => typeof(Fixtures.HelperFixture<>); }",
             _ => "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }"
         };
         sources.Add("BetaTests.cs", beta);
@@ -134,28 +143,18 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
     [InlineData("unreferenced")]
     [InlineData("collision")]
     [InlineData("comment-and-string")]
-    [InlineData("constraint")]
-    [InlineData("attribute")]
-    [InlineData("enum")]
     public void UnreferencedSupport_StillAbandonsWithExactReason(string shape)
     {
         using var sources = new SourceFixture();
-        sources.Add("Support.cs", shape == "attribute"
-            ? "namespace Support; public class HelpersAttribute : System.Attribute { }"
-            : "namespace Support; public class Helpers { public const int Value = 1; }");
+        sources.Add("Support.cs", "namespace Support; public class Helpers { }");
         sources.Add("Other.cs", "namespace Other; public class Helpers { }");
         sources.Add("Fixture.cs", "namespace Fixtures; " + (shape switch
         {
             "collision" => "public class HelperFixture { Other.Helpers value; }",
             "comment-and-string" => "public class HelperFixture { /* Support.Helpers */ string value = \"Support.Helpers\"; }",
-            "constraint" => "public class HelperFixture<T> where T : Support.Helpers { }",
-            "attribute" => "[Support.Helpers] public class HelperFixture { }",
-            "enum" => "public enum HelperFixture { Value = Support.Helpers.Value }",
             _ => "public class HelperFixture { int value; }"
         }));
-        sources.Add("BetaTests.cs", shape == "constraint"
-            ? "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture<int> value; }"
-            : "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }");
+        sources.Add("BetaTests.cs", "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }");
 
         var actual = sources.Select(["Support.cs"]);
 
@@ -186,7 +185,7 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void DirectMatch_DoesNotSupplementWithSupportChainMatches(bool unresolvedCompanion)
+    public void DirectMatch_SupplementsWithSupportChainMatches(bool unresolvedCompanion)
     {
         using var sources = new SourceFixture();
         sources.Add("Support.cs", "namespace Support; public class Helpers { }");
@@ -199,8 +198,8 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         var actual = sources.Select(unresolvedCompanion ? ["Support.cs", "Unused.cs"] : ["Support.cs"]);
 
         Assert.Equal(unresolvedCompanion ? "Changed test support has no resolvable test class: Unused.cs" : null, actual.AbandonReason);
-        Assert.Equal(unresolvedCompanion ? [] : new[] { "SampleTests.AlphaTests" }, actual.Classes);
-        Assert.Empty(actual.OtherFiles);
+        Assert.Equal(unresolvedCompanion ? [] : new[] { "SampleTests.AlphaTests", "SampleTests.BetaTests" }, actual.Classes);
+        Assert.Equal(new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
     }
 
     [Theory]
@@ -309,6 +308,10 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         Assert.Empty(actual.OtherFiles);
         Assert.Empty(probe.TreePasses);
         Assert.Empty(probe.BoundNames);
+        var summary = Assert.Single(actual.SupportSelections);
+        Assert.True(summary.Unresolved);
+        Assert.True(summary.FullRunTriggered);
+        Assert.Equal("Deleted.cs", summary.Path);
     }
 
     [Fact]
@@ -380,7 +383,7 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         ? FullName(parent) + "+" + type.Name
         : (type.ContainingNamespace.IsGlobalNamespace ? "" : type.ContainingNamespace.ToDisplayString() + ".") + type.Name;
 
-    private sealed class SourceFixture : IDisposable
+    internal sealed class SourceFixture : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "impact-support-scan-" + Guid.NewGuid().ToString("N"));
         private readonly List<string> _infrastructure = [];
@@ -401,9 +404,11 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
             (infrastructure ? _infrastructure : _other).Add(path);
         }
 
-        internal (IReadOnlyList<string> Classes, string? AbandonReason, IReadOnlyList<string> OtherFiles) Select(
-            IReadOnlyList<string> changed, ImpactReplayChangedSupportScanProbe? probe = null) =>
-            ImpactReplayChangedSupportReferenceScan.Select(Root, changed, Projects, () => Runnable, probe);
+        internal ImpactReplayChangedSupportSelection Select(
+            IReadOnlyList<string> changed, ImpactReplayChangedSupportScanProbe? probe = null,
+            int threshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold,
+            int maximumVisited = ImpactReplayChangedSupportReferrerClosure.DefaultMaximumVisited) =>
+            ImpactReplayChangedSupportReferenceScan.Select(Root, changed, Projects, () => Runnable, probe, threshold, maximumVisited);
 
         public void Dispose()
         {
