@@ -54,22 +54,24 @@ internal sealed record OwnerGoalDetailSnapshot(
                 new("event/" + i + "/phrase", "Recent event", OwnerLifecycleStageNarration.StagePhrase(item, OwnerConsoleGoalDetailFormatter.Finding(goal, item))) });
         }
         if (Gate is { } gate) fields.AddRange(new OwnerConsoleGateFieldProjection(gate).FieldSnapshot().Fields.Select(field => field with { Key = "gate/" + field.Key }));
-        if (Evidence is { } evidence)
-        {
-            fields.Add(new("evidence/start", "Evidence started", evidence.StartedAt?.ToString("O")));
-            fields.Add(new("evidence/ordinal", "Evidence attempt", evidence.Ordinal?.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-            fields.Add(new("evidence/observed", "Evidence observed at", evidence.ObservedAt.ToString("O")));
-            fields.Add(new("evidence/elapsed", "Evidence elapsed", evidence.StartedAt is { } start && start <= evidence.ObservedAt ? (evidence.ObservedAt - start).ToString("c") : null));
-            fields.Add(new("evidence/lane", "Evidence lane", evidence.Lane));
-            fields.Add(new("evidence/passed", "Evidence passed", evidence.Passed?.ToString()));
-            fields.Add(new("evidence/failed", "Evidence failed", evidence.Failed?.ToString()));
-            fields.Add(new("evidence/updated", "Evidence updated", evidence.LastProgressAt?.ToString("O")));
-            fields.Add(new("evidence/previous/duration", "Last attempt duration seconds", evidence.Previous?.DurationSeconds?.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
-            fields.Add(new("evidence/previous/outcome", "Last attempt outcome", evidence.Previous?.Outcome));
-            fields.Add(new("evidence/previous/tests", "Last attempt tests", evidence.Previous?.TestsExecuted?.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-        }
+        if (Evidence is { } evidence) AddEvidenceFields(fields, evidence);
         fields.AddRange(OwnerConsoleCostGoalOutcomeLines.Fields(Outcomes));
         return new(goal.Id.Value, [.. fields]);
+    }
+
+    private static void AddEvidenceFields(List<OwnerConsoleField> fields, OwnerConsoleEvidenceAttemptProgress evidence)
+    {
+        fields.Add(new("evidence/start", "Evidence started", evidence.StartedAt?.ToString("O")));
+        fields.Add(new("evidence/ordinal", "Evidence attempt", evidence.Ordinal?.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        fields.Add(new("evidence/observed", "Evidence observed at", evidence.ObservedAt.ToString("O")));
+        fields.Add(new("evidence/elapsed", "Evidence elapsed", evidence.StartedAt is { } start && start <= evidence.ObservedAt ? (evidence.ObservedAt - start).ToString("c") : null));
+        fields.Add(new("evidence/lane", "Evidence lane", evidence.Lane));
+        fields.Add(new("evidence/passed", "Evidence passed", evidence.Passed?.ToString()));
+        fields.Add(new("evidence/failed", "Evidence failed", evidence.Failed?.ToString()));
+        fields.Add(new("evidence/updated", "Evidence updated", evidence.LastProgressAt?.ToString("O")));
+        fields.Add(new("evidence/previous/duration", "Last attempt duration seconds", evidence.Previous?.DurationSeconds?.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
+        fields.Add(new("evidence/previous/outcome", "Last attempt outcome", evidence.Previous?.Outcome));
+        fields.Add(new("evidence/previous/tests", "Last attempt tests", evidence.Previous?.TestsExecuted?.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     internal OwnerGoalDetailSnapshot WithGate(OwnerConsoleGateProgress? observed) => this with
