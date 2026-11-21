@@ -881,7 +881,7 @@ internal static partial class CliPersistentStateRunner
 
         AgentOrchestratorKernel RunStartupSweep(AgentOrchestratorKernel startupKernel)
         {
-            tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+            tickBaselines = OrchestratorSnapshot.Capture(startupKernel, includeDeferredRows: false).Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
             try
             {
                 var openWorkGoalIds = new Lazy<IReadOnlyList<GoalId>>(() => TerminalOpenWorkCandidates.Read(stateRepository, Console.WriteLine));
@@ -908,7 +908,7 @@ internal static partial class CliPersistentStateRunner
                         sweepKernel, sweepTimelineBaseline, sweep.Goals.Select(goal => goal.GoalId),
                         new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch), Console.WriteLine);
                     startupKernel = LoadLoopKernel();
-                    tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+                    tickBaselines = OrchestratorSnapshot.Capture(startupKernel, includeDeferredRows: false).Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 });
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.OrphanWorktreeSweep, () => cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel, "conductor-startup"));
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.RemoteMirrorStart, () => RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId, workspace.IntegrationBranch));
@@ -1180,7 +1180,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-        var checkpointSnapshot = checkpoint.ExportSnapshot();
+        var checkpointSnapshot = OrchestratorSnapshot.Capture(checkpoint, includeDeferredRows: false);
         var humanInputByGoal = checkpointSnapshot.HumanInputRequests
             .Where(request => changed.Contains(request.GoalId))
             .GroupBy(request => request.GoalId, StringComparer.Ordinal)
@@ -1534,7 +1534,7 @@ internal static partial class CliPersistentStateRunner
         AgentOrchestratorKernel baseKernel,
         IReadOnlyList<GoalSnapshot> additionalGoals)
     {
-        var snapshot = baseKernel.ExportSnapshot();
+        var snapshot = OrchestratorSnapshot.Capture(baseKernel, includeDeferredRows: false);
         var existing = snapshot.Goals.Select(goal => goal.Id).ToHashSet(StringComparer.Ordinal);
         var mergedGoals = snapshot.Goals
             .Concat(additionalGoals.Where(goal => existing.Add(goal.Id)))

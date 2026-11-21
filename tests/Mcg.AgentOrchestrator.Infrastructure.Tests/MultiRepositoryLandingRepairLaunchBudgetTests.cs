@@ -11,12 +11,9 @@ public sealed class MultiRepositoryLandingRepairLaunchBudgetTests
     {
         // Baseline at f3b5a57f9: 14 (the existing seed-template test budget):
         // home worktree 1, crosswalk provisioning 7, change commits 3 each.
-        // New per-case count/ceiling: 10, removing two add and two rev-parse launches
-        // by committing each tracked path directly and discarding unused tip reads.
+        // The tracked-path commits removed two add and two rev-parse launches.
+        // Serving both commits leaves 8 real launches. GitLaunches includes RunGitProbe launches.
         // Seed initialization is one-time work, warmed separately before observation.
-        // Provisioning's 7 launches and product AdvanceOnce/Repair.Run body launches
-        // are unchanged. RunHome also saves two rev-parse calls per successful run,
-        // outside this constructor budget. Acceptance executes the count measurements.
         const int maximumGitLaunches = 10;
         var root = SharedTestSupport.CreateTempDirectory();
         MultiRepositoryAcceptanceGateFixture? fixture = null;
@@ -25,15 +22,21 @@ public sealed class MultiRepositoryLandingRepairLaunchBudgetTests
             MultiRepositoryAcceptanceGateSeedTemplate.CopyTo(Path.Combine(root, "home"), Role.Home);
             MultiRepositoryAcceptanceGateSeedTemplate.CopyTo(Path.Combine(root, "second"), Role.Second);
             var launches = new GitLaunches();
+            var funnel = InProcessGitFunnel.Observe();
             using (launches)
+            using (funnel)
                 fixture = new MultiRepositoryAcceptanceGateFixture();
 
-            var commands = launches.Commands;
-            Assert.True(commands.Length <= maximumGitLaunches,
-                $"Expected at most {maximumGitLaunches} fixture git launches; got {commands.Length}: {string.Join(", ", commands)}");
-            Assert.Equal(2, commands.Count(command => command == "commit"));
-            // Two adds and two registration reads across the home and secondary worktrees.
-            Assert.Equal(4, commands.Count(command => command == "worktree"));
+            var gitCliCommands = launches.Commands;
+            var probeCommands = funnel.Launched;
+            Assert.True(gitCliCommands.Length <= maximumGitLaunches,
+                $"Expected at most {maximumGitLaunches} fixture git launches; got {gitCliCommands.Length}: {string.Join(", ", gitCliCommands)}");
+            Assert.Equal(new[] { "commit-pathspec", "commit-pathspec" },
+                funnel.Served.Where(shape => shape.StartsWith("commit-", StringComparison.Ordinal)));
+            Assert.DoesNotContain("commit", gitCliCommands);
+            Assert.Equal(8, gitCliCommands.Length);
+            Assert.Equal(4, gitCliCommands.Count(command => command == "worktree"));
+            Assert.Equal(new[] { "worktree" }, probeCommands);
         }
         finally
         {

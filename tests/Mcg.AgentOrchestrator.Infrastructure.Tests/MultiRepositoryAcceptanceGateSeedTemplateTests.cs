@@ -54,8 +54,7 @@ public sealed class MultiRepositoryAcceptanceGateSeedTemplateTests
     [Fact]
     public void Constructor_WarmTemplate_UsesOnlyRemainingGoalSetupLaunches()
     {
-        // Home worktree: 1; crosswalk provisioning: 7; change commits: 3 each;
-        // verification record: 0. The three shared setup commits would add 6.
+        // Keep the warm-template launch cap. The funnel serves both tracked-path commits.
         const int maximumGitLaunches = 14;
         var root = SharedTestSupport.CreateTempDirectory();
         MultiRepositoryAcceptanceGateFixture? fixture = null;
@@ -63,13 +62,17 @@ public sealed class MultiRepositoryAcceptanceGateSeedTemplateTests
         {
             CopyPair(Path.Combine(root, "warm"));
             var launches = new GitLaunches();
+            var funnel = InProcessGitFunnel.Observe();
             using (launches)
+            using (funnel)
                 fixture = new MultiRepositoryAcceptanceGateFixture();
 
             var commands = launches.Commands;
             Assert.True(commands.Length <= maximumGitLaunches,
                 $"Expected at most {maximumGitLaunches} git launches; got {commands.Length}: {string.Join(", ", commands)}");
-            Assert.Equal(2, commands.Count(command => command == "commit"));
+            Assert.Equal(new[] { "commit-pathspec", "commit-pathspec" },
+                funnel.Served.Where(shape => shape.StartsWith("commit-", StringComparison.Ordinal)));
+            Assert.DoesNotContain("commit", commands);
         }
         finally
         {

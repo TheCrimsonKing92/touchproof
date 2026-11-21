@@ -60,7 +60,8 @@ internal sealed class OwnerConsoleSessionPrinter(
     }
 
     internal void PrintBoardRow(OwnerGoalCard goal) =>
-        output.WriteLine($"{goal.Id[..Math.Min(8, goal.Id.Length)]} | {goal.Title.Replace('\r', ' ').Replace('\n', ' ')} | {goal.State} | {goal.CurrentRole?.ToString() ?? "-"} | {Age(goal.LastEvent)}");
+        output.WriteLine($"{goal.Id[..Math.Min(8, goal.Id.Length)]} | {goal.Title.Replace('\r', ' ').Replace('\n', ' ')} | {goal.State} | {goal.CurrentRole?.ToString() ?? "-"} | {Age(goal.LastEvent)}" +
+            (goal.OutcomeSummary is { } summary ? " | " + summary : string.Empty));
 
     internal async Task PrintGoalAsync(string prefix, CancellationToken cancellationToken)
     {

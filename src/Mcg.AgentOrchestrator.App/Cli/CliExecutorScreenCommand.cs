@@ -15,6 +15,7 @@ internal static class CliExecutorScreenCommand
     internal static async Task<int> RunAsync(IReadOnlyList<string> args, OrchestratorWorkspace workspace)
     {
         var root = AcceptancePartitionVerdictCache.ResolveHostStateRoot(workspace.ExecutionDirectory);
+        var attemptsDirectory = workspace.OrchestratorDirectory;
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler cancel = (_, eventArgs) =>
         {
@@ -31,10 +32,13 @@ internal static class CliExecutorScreenCommand
                     TimeProvider.System, GoalAcceptanceVerifier.RunRemoteLaneTransportAsync, GitCli.Run),
                 TimeProvider.System, TimeSpan.FromSeconds(1), root,
                 ExecutorScreeningReceiptLedger.ResolveStorePath(root), Console.Out, Console.Error,
-                localAttemptSource: (candidate, plan, at) => ReadLocalAttempt(workspace.OrchestratorDirectory, candidate, plan, at),
+                localAttemptSource: (candidate, plan, at) => ReadLocalAttempt(attemptsDirectory, candidate, plan, at),
                 samplerFactory: (entry, candidate, id, plan) => new ExecutorWholeGateTrialSshSampler(entry, candidate.WorktreePath, id,
                     TimeSpan.FromMinutes(2 + plan.Lanes.Sum(lane => lane.Timeout.TotalMinutes + 20))),
-                token: cancellation.Token).ConfigureAwait(false);
+                token: cancellation.Token,
+                passedGateSource: goalId => ReadPassedGates(attemptsDirectory, goalId, cancellation.Token),
+                goalIds: () => ReadTrialGoalIds(workspace, attemptsDirectory),
+                trialCheckout: gate => OpenTrialCheckout(workspace.ExecutionDirectory, gate, Console.Error)).ConfigureAwait(false);
         }
         finally { if (trial) Console.CancelKeyPress -= cancel; }
     }
@@ -48,46 +52,56 @@ internal static class CliExecutorScreenCommand
         Func<string, ExecutorWholeGateTrialPlan>? trialPlanSource = null,
         Func<ExecutorScreeningCandidate, ExecutorWholeGateTrialPlan, DateTimeOffset, ExecutorWholeGateTrialLocalAttempt?>? localAttemptSource = null,
         Func<RemoteLaneExecutorEntry, ExecutorScreeningCandidate, string, ExecutorWholeGateTrialPlan, IExecutorWholeGateTrialSampler>? samplerFactory = null,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        Func<string?, IReadOnlyList<ExecutorPassedGate>>? passedGateSource = null,
+        Func<IEnumerable<string>>? goalIds = null,
+        Func<ExecutorPassedGate, (ExecutorScreeningCandidate Candidate, IDisposable? Checkout)?>? trialCheckout = null)
     {
         var maximum = 1;
         string? executorId = null;
+        string? goalPrefix = null;
+        int? remainingLanes = null;
         var wholeGate = false;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] is "--help" or "-h") { output.WriteLine(CliCommandHelp.ExecutorScreenUsage); return 0; }
             if (args[i] == "--whole-gate") { wholeGate = true; continue; }
-            if (args[i] is not ("--max-candidates" or "--executor") || i + 1 == args.Count) return Usage();
+            if (args[i] is not ("--max-candidates" or "--executor" or "--goal" or "--max-lanes") ||
+                i + 1 == args.Count || args[i + 1].StartsWith("-", StringComparison.Ordinal)) return Usage();
             var flag = args[i++];
-            if (flag == "--executor") executorId = args[i];
-            else if (!int.TryParse(args[i], NumberStyles.None, CultureInfo.InvariantCulture, out maximum) || maximum is < 1 or > 50)
+            if (flag == "--executor") { executorId = args[i]; continue; }
+            if (flag == "--goal")
+            {
+                if (string.IsNullOrWhiteSpace(args[i])) return Usage();
+                goalPrefix = args[i];
+                continue;
+            }
+            if (!int.TryParse(args[i], NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count < 1)
                 return Usage();
+            if (flag == "--max-lanes") remainingLanes = count;
+            else if (count > 50) return Usage();
+            else maximum = count;
         }
-        if (wholeGate && string.IsNullOrWhiteSpace(executorId)) return Usage();
+        if (wholeGate ? string.IsNullOrWhiteSpace(executorId) : goalPrefix is not null || remainingLanes is not null)
+            return Usage();
         var configuration = RemoteLaneExecutorConfiguration.Load(configurationPath);
         var refusal = !configuration.Enabled ? "remote-lanes-disabled" : wholeGate ? null : configuration.Screening.FaultReason == "invalid"
             ? "screening-invalid" : configuration.Screening.Mode != "shadow" ? "screening-off" : null;
         if (refusal is not null) { output.WriteLine("SCREEN refused reason=" + refusal); return 2; }
         if (executorId is not null && !configuration.Executors.Any(entry => entry.Id == executorId && entry.Transport == "ssh"))
             return Usage();
+        if (wholeGate)
+        {
+            try { return await RunWholeGateTrialsAsync().ConfigureAwait(false); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return 0; }
+        }
         for (var iteration = 0; iteration < maximum; iteration++)
         {
             if (token.IsCancellationRequested) break;
-            var entry = ExecutorScreeningPlanner.PickIdleExecutor(configuration.Executors,
-                id => RemoteExecutorOccupancy.IsOccupied(occupancyRoot, id), executorId);
-            if (entry is null) return Idle(configuration.Executors.Any(executor => executor.AdmissionEnabled &&
-                executor.Transport == "ssh" && (executorId is null || executor.Id == executorId))
-                ? "no-idle-executor" : "no-enabled-executor");
-            var candidate = wholeGate
-                ? ExecutorScreeningPlanner.PickTrialCandidate(candidateSource(), ExecutorScreeningReceiptLedger.ReadTrials(receiptPath))
-                : ExecutorScreeningPlanner.PickCandidate(candidateSource(), ExecutorScreeningReceiptLedger.ReadAll(receiptPath));
+            var entry = PickIdleExecutor();
+            if (entry is null) return NoExecutor();
+            var candidate = ExecutorScreeningPlanner.PickCandidate(candidateSource(), ExecutorScreeningReceiptLedger.ReadAll(receiptPath));
             if (candidate is null) return Idle("no-candidate");
-            if (wholeGate)
-            {
-                var result = await RunTrialAsync(candidate, entry).ConfigureAwait(false);
-                if (result is { } exit) return exit;
-                continue;
-            }
             IReadOnlyList<AcceptanceTestLane> lanes = [];
             var timeout = new AcceptanceGateEngineSettings().ResolveCheckTimeout(null);
             try { (lanes, timeout) = laneSource(candidate.WorktreePath); }
@@ -113,6 +127,41 @@ internal static class CliExecutorScreenCommand
         }
         return 0;
 
+        async Task<int> RunWholeGateTrialsAsync()
+        {
+            string? goalId = null;
+            if (goalPrefix is not null)
+            {
+                var matches = (goalIds?.Invoke() ?? []).Where(id => id.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Take(2).ToArray();
+                if (matches.Length != 1) return Refuse(matches.Length == 0 ? "goal-unknown" : "goal-ambiguous");
+                goalId = matches[0];
+            }
+
+            var trials = ExecutorScreeningPlanner.SelectTrialGates(passedGateSource?.Invoke(goalId) ?? [],
+                goalId is null ? ExecutorScreeningReceiptLedger.ReadTrials(receiptPath) : [], goalId);
+            var completed = 0;
+            foreach (var gate in trials)
+            {
+                if (token.IsCancellationRequested || completed == maximum || remainingLanes == 0) return 0;
+                var entry = PickIdleExecutor();
+                if (entry is null) return NoExecutor();
+                if (trialCheckout?.Invoke(gate) is not { } checkout)
+                {
+                    if (goalId is not null) return Refuse("candidate-checkout-unavailable");
+                    continue;
+                }
+                using (checkout.Checkout)
+                {
+                    var result = await RunTrialAsync(checkout.Candidate, entry).ConfigureAwait(false);
+                    if (result is { } exit) return exit;
+                }
+                completed++;
+            }
+            if (completed > 0) return 0;
+            return goalId is null ? Idle("no-eligible-candidates") : Refuse("goal-has-no-passed-gate");
+        }
+
         async Task<int?> RunTrialAsync(ExecutorScreeningCandidate candidate, RemoteLaneExecutorEntry entry)
         {
             ExecutorWholeGateTrialPlan plan;
@@ -136,8 +185,10 @@ internal static class CliExecutorScreenCommand
                 var receipt = await ExecutorScreeningRunner.RunWholeGateAsync(candidate, entry, plan, configuration,
                     executorFactory(configuration, candidate.WorktreePath, prefix), occupancyRoot, receiptPath, id,
                     clock, pollInterval, samplerFactory?.Invoke(entry, candidate, id, plan),
-                    at => localAttemptSource?.Invoke(candidate, plan, at), token).ConfigureAwait(false);
+                    at => localAttemptSource?.Invoke(candidate, plan, at), token, maxLanes: remainingLanes).ConfigureAwait(false);
                 if (receipt is null) return Idle("no-idle-executor");
+                if (remainingLanes is not null)
+                    remainingLanes -= receipt.SubmissionAttempts!.Value;
                 output.WriteLine(FormattableString.Invariant(
                     $"TRIAL goal={candidate.GoalId} commit={candidate.Commit} executor={entry.Id} status={receipt.Status.ToString().ToLowerInvariant()} lanes={receipt.Lanes.Count} unsupported-checks={receipt.UnsupportedChecks.Count} wall-seconds={receipt.WallSeconds:F2} receipt={receipt.ReceiptId}"));
                 output.WriteLine(ExecutorWholeGateTrialComparison.Format(receipt));
@@ -149,6 +200,12 @@ internal static class CliExecutorScreenCommand
 
         int Usage() { error.WriteLine(CliCommandHelp.ExecutorScreenUsage); return 2; }
         int Idle(string reason) { output.WriteLine("SCREEN idle reason=" + reason); return 0; }
+        int Refuse(string reason) { output.WriteLine("SCREEN refused reason=" + reason); return 2; }
+        RemoteLaneExecutorEntry? PickIdleExecutor() => ExecutorScreeningPlanner.PickIdleExecutor(configuration.Executors,
+            id => RemoteExecutorOccupancy.IsOccupied(occupancyRoot, id), executorId);
+        int NoExecutor() => Idle(configuration.Executors.Any(executor => executor.AdmissionEnabled &&
+            executor.Transport == "ssh" && (executorId is null || executor.Id == executorId))
+                ? "no-idle-executor" : "no-enabled-executor");
     }
 
     private static ExecutorWholeGateTrialPlan ReadCandidateTrialPlan(ExecutorScreeningCandidate candidate)
@@ -211,14 +268,19 @@ internal static class CliExecutorScreenCommand
             var attempts = ImpactReplayAttemptSource.Read(directory, since: null, skipped: [],
                 includeAttempt: (attempt, metadataPath) =>
                 {
+                    if (candidate.PassedGateAttemptId is { } id &&
+                        (attempt.AttemptId != id || attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed))
+                        return false;
                     if (attempt.Outcome is not (ConductorParallelAcceptanceAttemptOutcome.Passed or
                             ConductorParallelAcceptanceAttemptOutcome.Failed) ||
                         attempt.CompletedAt is not { } completed || completed > trialStarted ||
-                        (attempt.BranchHeadSha is { } sha && sha != candidate.Commit)) return false;
+                        (candidate.PassedGateAttemptId is null && attempt.BranchHeadSha is { } sha &&
+                            sha != candidate.Commit)) return false;
                     metadata.Add(metadataPath, attempt);
                     return true;
                 }, goalIds: [candidate.GoalId]);
-            var selected = attempts.Where(attempt => attempt.BranchHeadSha == candidate.Commit && attempt.MetadataPath is not null)
+            var selected = attempts.Where(attempt => attempt.GoalId == candidate.GoalId &&
+                    attempt.BranchHeadSha == candidate.Commit && attempt.MetadataPath is not null)
                 .OrderByDescending(attempt => metadata[attempt.MetadataPath!].CompletedAt)
                 .ThenBy(attempt => attempt.AttemptId, StringComparer.Ordinal).FirstOrDefault();
             if (selected?.MetadataPath is not { } path) return null;
@@ -279,6 +341,63 @@ internal static class CliExecutorScreenCommand
             Path.GetFileName(project.Replace('\\', '/')).Equals("Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.OrdinalIgnoreCase));
         return (AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, worktree),
             settings.ResolveCheckTimeout(check?.TimeoutMinutes));
+    }
+
+    internal static IReadOnlyList<ExecutorPassedGate> ReadPassedGates(string directory, string? goalId, CancellationToken token)
+    {
+        var completionTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var attempts = ImpactReplayAttemptSource.Read(directory, since: null, skipped: [], cancellationToken: token,
+            includeAttempt: (attempt, path) =>
+            {
+                if (attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed ||
+                    attempt.CompletedAt is not { } completed || (goalId is not null && attempt.GoalId != goalId))
+                    return false;
+                completionTimes[path] = completed;
+                return true;
+            }, goalIds: goalId is null ? null : [goalId]);
+        return attempts.Select(attempt => new ExecutorPassedGate(attempt.GoalId, attempt.AttemptId,
+            attempt.BranchHeadSha, attempt.MainHeadSha, completionTimes[attempt.MetadataPath!])).ToArray();
+    }
+
+    private static IEnumerable<string> ReadTrialGoalIds(OrchestratorWorkspace workspace, string directory)
+    {
+        var attempts = Path.Combine(directory, "acceptance-gate-attempts");
+        var stored = Directory.Exists(attempts) ? Directory.EnumerateDirectories(attempts).Select(Path.GetFileName) : [];
+        return ExperimentGoals.Read(workspace.SqliteStatePath).Select(goal => goal.Id.Value)
+            .Concat(stored.OfType<string>());
+    }
+
+    private static (ExecutorScreeningCandidate Candidate, IDisposable Checkout)? OpenTrialCheckout(
+        string root, ExecutorPassedGate gate, TextWriter error)
+    {
+        var tree = Scalar(root, "rev-parse", gate.Commit + "^{tree}");
+        if (tree is null)
+        {
+            error.WriteLine($"TRIAL checkout unavailable commit={gate.Commit}");
+            return null;
+        }
+        var parent = OrchestratorTempRoot.GetPurposeDirectory("executor-trial-worktrees");
+        Directory.CreateDirectory(parent);
+        var path = Path.Combine(parent, Guid.NewGuid().ToString("N"));
+        var added = GitCli.RunForRepository(root, "-c", "core.hooksPath=" + Path.Combine(path, "no-hooks"),
+            "worktree", "add", "--detach", "--quiet", path, gate.Commit);
+        if (!added.ProcessStarted || !added.Succeeded || added.DrainTimedOut)
+        {
+            error.WriteLine($"TRIAL checkout unavailable commit={gate.Commit} exit={added.ExitCode} {added.Error}");
+            return null;
+        }
+        return (new(gate.GoalId, GoalStatus.Verified, gate.Commit, tree, gate.MainSha, gate.CompletedAt,
+            true, true, path, gate.AttemptId), new TrialCheckout(root, path, error));
+    }
+
+    private sealed class TrialCheckout(string root, string path, TextWriter error) : IDisposable
+    {
+        public void Dispose()
+        {
+            var removed = GitCli.RunForRepository(root, "worktree", "remove", "--force", path);
+            if (!removed.ProcessStarted || !removed.Succeeded || removed.DrainTimedOut)
+                error.WriteLine($"TRIAL checkout cleanup failed path={path} exit={removed.ExitCode} {removed.Error}");
+        }
     }
 
     private static IReadOnlyList<ExecutorScreeningCandidate> ReadCandidates(OrchestratorWorkspace workspace)
