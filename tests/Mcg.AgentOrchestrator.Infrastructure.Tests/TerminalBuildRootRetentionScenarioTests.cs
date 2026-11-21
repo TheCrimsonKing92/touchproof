@@ -153,7 +153,7 @@ public sealed class TerminalBuildRootRetentionScenarioTests : IDisposable
     private static string EnabledPolicy() =>
         (ConductorAutonomyPolicy.Conservative with { BuildRootRetentionDays = 3 }).ToJson();
 
-    private static void InsertGoal(string db, string goalId, string status, DateTimeOffset updated)
+    internal static void InsertGoal(string db, string goalId, string status, DateTimeOffset updated)
     {
         using var connection = new SqliteConnection($"Data Source={db};Pooling=False");
         connection.Open();
@@ -165,7 +165,7 @@ public sealed class TerminalBuildRootRetentionScenarioTests : IDisposable
         command.ExecuteNonQuery();
     }
 
-    private static string[] Snapshot(string root) =>
+    internal static string[] Snapshot(string root) =>
     [
         .. Directory.GetDirectories(root, "*", SearchOption.AllDirectories).OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => "directory:" + Path.GetRelativePath(root, path)),

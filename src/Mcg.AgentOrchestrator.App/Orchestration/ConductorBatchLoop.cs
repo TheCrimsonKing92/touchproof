@@ -436,7 +436,7 @@ internal sealed partial class ConductorBatchLoop
             $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
             $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
-            $"acceptanceWidth={policy.AcceptanceWidth} adoptedBuildPushEnabled={policy.AdoptedBuildPushEnabled} {policy.Features.ToLogFields()} gitPath={SanitizeReason(ConductorGitResolution.Current.LogValue)}" +
+            $"acceptanceWidth={policy.AcceptanceWidth} adoptedBuildPushEnabled={policy.AdoptedBuildPushEnabled} buildRootReapIntervalSeconds={policy.BuildRootReapIntervalSeconds} {policy.Features.ToLogFields()} gitPath={SanitizeReason(ConductorGitResolution.Current.LogValue)}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
         SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)
         {
@@ -2256,7 +2256,7 @@ internal sealed partial class ConductorBatchLoop
 
         return $"{prefix}Name={Sanitize(policy.Name)} " +
                $"{prefix}MaxConcurrentPaidWorkers={policy.MaxConcurrentPaidWorkers} " +
-               $"{prefix}MaxCriterionRetries={policy.MaxCriterionRetries} " +
+               $"{prefix}MaxCriterionRetries={policy.MaxCriterionRetries} {prefix}BuildRootReapIntervalSeconds={policy.BuildRootReapIntervalSeconds} " +
                $"{prefix}AutoPromoteRiskThreshold={policy.AutoPromoteRiskThreshold?.ToString() ?? "none"} " +
                $"{prefix}MaxEmptyOutputDispatchRetries={policy.MaxEmptyOutputDispatchRetries} " +
                $"{prefix}MaxEmptyOutputAutoRecoverCycles={policy.MaxEmptyOutputAutoRecoverCycles} " +

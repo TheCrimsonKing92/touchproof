@@ -1365,6 +1365,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var continuityExitArtifactPath = GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag);
                 CliConductLoopStartup.PrintConductorPolicyWarnings(loopPolicyResolution);
                 var loopPolicy = loopPolicyResolution.Policy;
+                var buildRootReapIntervalSeconds = loopPolicy.BuildRootReapIntervalSeconds;
                 int? loopMaxIter = null;
                 if (GetFlagValue(parts, "--max-iterations") is { } miStr)
                     loopMaxIter = int.Parse(miStr, System.Globalization.CultureInfo.InvariantCulture);
@@ -1613,23 +1614,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         catch { /* per-goal isolation */ }
                     }
 
-                    var terminalSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
-                        loopKernel,
-                        context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
-                        cache: terminalSweepCache,
-                        cleanupHooks: context.CleanupContext.Hooks,
-                        workspace: context.Workspace));
-                    var remediation = ConductorTickStepLedger.Measure("reconcile-remediation", () => reconcileSweepCoordinator.Process(terminalSweep, admitRemedies));
-                    if (remediation.RemedySucceeded)
-                    {
-                        var remediatedSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
-                            loopKernel,
-                            context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
-                            cache: terminalSweepCache,
-                            cleanupHooks: context.CleanupContext.Hooks,
-                            workspace: context.Workspace));
-                        terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
-                    }
+                    var (terminalSweep, remediation) = TerminalGoalSweep.RunForConductor(loopKernel, context.Workspace,
+                        terminalSweepCache, context.CleanupContext.Hooks, reconcileSweepCoordinator, admitRemedies,
+                        buildRootReapIntervalSeconds, intentGoalReloadObservations, evictedGoalStatuses, checkpointHeldGoalIds);
                     // Concatenate, never overwrite: the unapplied-exit records are surfaced through the same
                     // progress-event channel as remediation, and an assignment here would silently drop them.
                     terminalSweep = terminalSweep with
@@ -1737,9 +1724,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         unscopedStallTickThreshold: unscopedStallTickThreshold,
                         journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
                         policySource: loopPolicyResolution.Source,
-                        reloadPolicy: loopPolicyName is null
-                            ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
-                            : null,
+                        reloadPolicy: loopPolicyName is null ? () =>
+                        {
+                            var resolution = ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory);
+                            buildRootReapIntervalSeconds = resolution.Policy.BuildRootReapIntervalSeconds;
+                            return resolution;
+                        } : null,
                         checkpointGoalTick: context.CheckpointGoals,
                         hasTransientLoadHold: () => scheduledLoadHold is not null,
                         maxDurationDeferralCeiling: maxDurationDeferralCeiling,
