@@ -11,7 +11,9 @@ public enum DispatchAssignmentHoldCode
     AgentUnavailable,
     RoleMismatch,
     ProfileUnavailable,
-    HarnessRebindUnsupported
+    HarnessRebindUnsupported,
+    InventoryAssignmentIneligible,
+    InventoryExecutionFailed
 }
 
 public sealed record DispatchAssignmentHold(

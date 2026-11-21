@@ -21,8 +21,8 @@ internal sealed partial class ConductorDriver
 {
     internal static DispatchReadinessVerdict EvaluateConductorReadiness(
         AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents,
-        WorkerProfileCatalog profiles, DateTimeOffset now) =>
-        DispatchReadinessAssessment.Evaluate(goal, kernel.ProviderHoldScope, agents, profiles, now).Verdict;
+        WorkerProfileCatalog profiles, DateTimeOffset now, ModelInventory? inventory = null) =>
+        DispatchReadinessAssessment.Evaluate(goal, kernel.ProviderHoldScope, agents, profiles, now, inventory).Verdict;
 
     private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
 
@@ -872,7 +872,7 @@ internal sealed partial class ConductorDriver
         _classifyChangeRisk = goal => _changeRiskMemo.Classify(dir, workspace.IntegrationBranch, GoalWorktrees.BranchName(goal.Id));
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
-        _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
+        _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow, Application.InventoryAssignedDispatchAgents.LoadForGoal(workspace, goal));
         _getLandingFileScopes = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-changed-files", () =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
@@ -1319,6 +1319,7 @@ internal sealed partial class ConductorDriver
     private ConductorAdvanceResult RouteAttributedFailure(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AttributedFailureRouteDecision route)
     {
         route = FailureDiagnosis?.Enrich(goal, route) ?? route;
+        if (AttributedFailureDiagnosisTarget.TryHold(goal, goalPrefix, policy, route, RecordEscalation) is { } held) return held;
         var failureRecordedAt = _utcNow();
         _retryTask(goal.Id, route.DeveloperTaskId!, route.Feedback!, null, RetryCause.NewTestFinding);
         var retryGoal = GetCurrentGoal(goal);
@@ -1330,7 +1331,6 @@ internal sealed partial class ConductorDriver
         return ExecuteDispatchAndStart(retryGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => RepositoryTupleLanding?.ProjectFacts(goal, _getFacts(goal)) ?? _getFacts(goal);
-
     private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence) =>
         FocusedEvidenceResultText.Format(evidence, TrimForConductorMessage);
 

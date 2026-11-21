@@ -63,7 +63,8 @@ internal sealed partial class GoalDispatchOperations
                     !ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task, assigned, utcNow(), out _))
                 .Where(task => !excludedTaskIds.Contains(task.Id)).Select(task => task.Id));
         goal = kernel.GetGoal(goal.Id);
-        excludedTaskIds = excludedTaskIds.Concat(offlineAssignments.ExcludedTaskIds).ToHashSet();
+        var inventory = InventoryAssignedDispatchAgents.ForBatch(workspace, goal, agents, profiles, excludedTaskIds);
+        excludedTaskIds = excludedTaskIds.Concat(offlineAssignments.ExcludedTaskIds).Concat(inventory.Blocked.Keys).ToHashSet();
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds, utcNow());
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
@@ -71,7 +72,7 @@ internal sealed partial class GoalDispatchOperations
         var home = _resolveHome(workspace);
         var workerExecutionDirectory = GoalWorkerDirectory.Resolve(workspace, goal.Id);
         Func<Goal, TaskSpec, IEnumerable<Goal>, WorkerSubscriptionPreflightResult> preflight = (viewGoal, viewTask, holdScope) =>
-            WorkerProfileDispatcher.PreflightSubscriptionTask(viewGoal, viewTask, agents, profiles,
+            WorkerProfileDispatcher.PreflightSubscriptionTask(viewGoal, viewTask, inventory.Agents, profiles,
                 workerExecutionDirectory, utcNow(),
                 allowGitReference: (sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled,
                 commandExists: commandExists, claudeAuthProbe: claudeAuthProbe, sandboxOptions: sandboxOptions,
@@ -92,7 +93,7 @@ internal sealed partial class GoalDispatchOperations
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
             goal,
-            agents,
+            inventory.Agents,
             profiles,
             workspace.PromptDirectory,
             workerExecutionDirectory,
@@ -208,7 +209,9 @@ internal sealed partial class GoalDispatchOperations
             processes with { RequeueSkippedCount = processes.RequeueSkippedCount + rejectedRecoveryIds.Count,
                 StartFailures = (processes.StartFailures ?? []).Concat(provisioningFailures).ToArray() },
             safeBatch.Plan,
-            OrderReadyBlockedDiagnostics(batch.Blocked.Concat(offlineAssignments.Blocked).ToArray(), safeBatch.Blocked));
+            OrderReadyBlockedDiagnostics(
+                [.. batch.Blocked.Where(item => !inventory.Blocked.ContainsKey(new TaskId(item.TaskId))),
+                 .. offlineAssignments.Blocked, .. inventory.Blocked.Values], safeBatch.Blocked));
     }
 
     internal static IReadOnlyList<ReadyBlockedDiagnostic> OrderReadyBlockedDiagnostics(
@@ -328,24 +331,28 @@ internal sealed partial class GoalDispatchOperations
                     "Retired OpenAI model in an unstarted dispatch requires preparation refresh before start."));
                 continue;
             }
-            if (ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart))
+            var inventoryAssignment = InventoryModelAssignment.Parse(task.AssignedAgentId);
+            var refreshAssignment = ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart) ||
+                inventoryAssignment is not null && (!PreparedDispatchMatchesAcknowledgedAssignment(task) ||
+                    !InventoryAssignedDispatchAgents.MatchesPreparedBinding(task.LastDispatch, inventoryAssignment));
+            if (refreshAssignment || inventoryAssignment is not null)
             {
                 resolvedAgents ??= agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
                 resolvedProfiles ??= profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
                 try
                 {
-                    RefreshPreparedDispatchBeforeStart(
-                        kernel,
-                        workspace,
-                        goal,
-                        task,
-                        resolvedAgents,
-                        resolvedProfiles,
-                        providers,
-                        reviewAutoRetryStopRound,
-                        sandboxOptions,
-                        conductorPolicy: conductorPolicy,
-                        cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
+                    if (refreshAssignment)
+                    {
+                        RefreshPreparedDispatchBeforeStart(
+                            kernel, workspace, goal, task, resolvedAgents, resolvedProfiles,
+                            providers, reviewAutoRetryStopRound, sandboxOptions, conductorPolicy: conductorPolicy,
+                            cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias,
+                            cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
+                    }
+                    else
+                    {
+                        InventoryAssignedDispatchAgents.Resolve(workspace, task, resolvedProfiles);
+                    }
                 }
                 catch (DispatchAssignmentHoldException ex)
                 {
@@ -650,6 +657,7 @@ internal sealed partial class GoalDispatchOperations
     }
 
     private static bool HasRetiredPreparedModel(TaskSpec task) =>
+        !InventoryModelAssignment.IsInventoryId(task.AssignedAgentId) &&
         task.LastDispatch is { } dispatch &&
         EffectiveModelAssignment.Normalize(dispatch.ProviderName, dispatch.ModelName) != dispatch.ModelName;
 

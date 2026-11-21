@@ -121,7 +121,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
                         .Select(lane => lane.Name).ToArray(), input.GuardClasses,
                     obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable, SelectableInventories,
-                    changedTestProjects);
+                    changedTestProjects, input.AssemblyScanReasons);
                 IReadOnlyList<AcceptanceTestClassDescriptor> ReadProject(string project)
                 {
                     try { return input.ProjectClasses?.Invoke(project) ?? []; }
@@ -171,7 +171,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
         {
             MethodFormResolutions = _plan?.MethodFormResolutions ?? [],
             UnresolvedObligationSelectors = _plan?.UnresolvedObligationSelectors ?? [],
-            WholeProjectCoverage = _plan?.WholeProjectCoverage is { Count: > 0 } covered ? covered : null
+            WholeProjectCoverage = _plan?.WholeProjectCoverage is { Count: > 0 } covered ? covered : null,
+            AssemblyScanReasons = _plan?.AssemblyScanReasons is { Count: > 0 } reasons ? reasons : null
         };
         return observation with { SelectedExecution = record };
     }

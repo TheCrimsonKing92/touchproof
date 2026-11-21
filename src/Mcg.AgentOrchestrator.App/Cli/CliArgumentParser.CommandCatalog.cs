@@ -145,6 +145,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "supersede",
     "agents",
     "agent-add",
+    "models",
     "model-functions",
     "model-function-add",
     "timeline",

@@ -228,7 +228,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var pipelineRequest = ResolveGoalIntakePipelineRequest(parts);
             var plan = BuildGoalObjectivePlan(context, replacementObjective, simple: false, pipelineRequest);
             GoalObjectivePlanner.ThrowIfBlocked(plan);
-            var replacementAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            var replacementAgents = ApplyRoleAgentOverrides(parts, context.Agents, context.Workspace, context.WorkerProfiles);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(plan, replacementAgents);
             GoalObjectivePlanTextView.PrintGoalObjectivePlan(plan);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
@@ -319,7 +319,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run | goal --text-file <path> --run");
                 var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false, goalPipelineRequest);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
-                var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+                var runAgents = ApplyRoleAgentOverrides(parts, context.Agents, context.Workspace, context.WorkerProfiles);
                 GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(runObjectivePlan, runAgents);
                 GoalObjectivePlanTextView.PrintGoalObjectivePlan(runObjectivePlan);
                 GoalScopeCollisionAdvisory.Print(context, runObjective);
@@ -341,7 +341,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, runEpicId);
                 GoalTextView.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
-                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file", "--pipeline");
+                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file", "--pipeline", "--profile");
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path> | goal --text-file <path>");
@@ -354,7 +354,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             }
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
-            var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents, context.Workspace, context.WorkerProfiles);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
             if (!summary) GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
             GoalScopeCollisionAdvisory.Print(context, goalObjective, repositories: goalRepositories);
@@ -396,7 +396,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
             var simpleEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, null, simpleSourceBacklogLink?.Item.Id);
             context.ReportGoalCreationProgress();
-            var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents, context.Workspace, context.WorkerProfiles);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
                 context.Kernel,
                 simpleAgents,
@@ -880,10 +880,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new ArgumentException("Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]");
             }
             var addedAgent = CreateCliAgentDefinition(parts);
+            CliModelsCommand.RequireRosterMembership(context.Workspace.ModelInventoryPath, addedAgent, parts);
             addedAgent = addedAgent with { Id = BuildAlternateAgentId(addedAgent, GetCliAgentIdSuffix(parts, addedAgent)) };
             context.Agents = new AgentCatalog(context.Agents).AddOrReplaceById(addedAgent).Agents;
             AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
             WorkerConfigurationTextView.PrintAgents(context.Agents);
+            return false;
+
+        case "models":
+            CliModelsCommand.Execute(parts, context);
             return false;
 
         case "model-functions":

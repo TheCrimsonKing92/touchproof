@@ -177,6 +177,7 @@ public static class DispatchReadinessRules
 
     private static string ResolveReadyBlockedProvider(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
     {
+        if (InventoryModelAssignment.Parse(task.AssignedAgentId) is { } inventory) return inventory.Profile;
         if (task.AssignedAgentId is null)
         {
             return "unknown";
@@ -209,6 +210,7 @@ public static class DispatchReadinessRules
 
     private static string? ResolveParallelProviderKey(TaskSpec task, IReadOnlyList<AgentDefinition>? agents)
     {
+        if (InventoryModelAssignment.Parse(task.AssignedAgentId) is { } inventory) return inventory.Provider;
         if (task.AssignedAgentId is null || agents is null)
         {
             return null;

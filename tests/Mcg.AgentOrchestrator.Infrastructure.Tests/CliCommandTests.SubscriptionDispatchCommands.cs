@@ -3018,7 +3018,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Goal? currentGoal = null;
 
         CliCommandDispatcher.ExecuteCommand(
-            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback"],
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback", "--allow-unlisted"],
             kernel,
             workspace,
             ref agents,
@@ -3026,7 +3026,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ref profiles,
             ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(
-            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback", "--complex-model", "claude-sonnet-4-6"],
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback", "--complex-model", "claude-sonnet-4-6", "--allow-unlisted"],
             kernel,
             workspace,
             ref agents,
@@ -3060,7 +3060,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Goal? currentGoal = null;
 
         CliCommandDispatcher.ExecuteCommand(
-            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fable", "--subscription-model", "fable"],
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fable", "--subscription-model", "fable", "--allow-unlisted"],
             kernel,
             workspace,
             ref agents,
