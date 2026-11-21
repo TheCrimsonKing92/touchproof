@@ -353,4 +353,40 @@ internal sealed class CliGoalIntentConstruction : IGoalIntentConstruction
             if (briefPath is not null) File.Delete(briefPath);
         }
     }
+
+    public void ValidatePrepared(
+        AgentOrchestratorKernel currentKernel,
+        GoalSnapshot prepared,
+        OrchestratorWorkspace workspace,
+        IReadOnlyCollection<string>? sourceDependencies,
+        bool allowTerminalSourceClaimTakeover) =>
+        GoalCreationPreconditionValidator.Validate(currentKernel, prepared, workspace,
+            preparedSourceBacklogDependencies: sourceDependencies,
+            allowTerminalSourceClaimTakeover: allowTerminalSourceClaimTakeover);
+
+    public void Complete(
+        GoalCreationOperatorIntentPayload payload,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        bool replayed)
+    {
+        if (payload.RequestedEpicId is not null || goal.SourceBacklogItemId is not null)
+        {
+            var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+            if (portfolio.GetGoalMembershipAsync(goal.Id.Value).GetAwaiter().GetResult() is null)
+            {
+                var epicId = payload.RequestedEpicId ?? EpicAtCreation.ResolveGoalEpic(workspace, null, goal.SourceBacklogItemId);
+                EpicAtCreation.AssignAfterCommit(workspace, PortfolioMemberKind.Goal, goal.Id.Value, epicId);
+            }
+        }
+
+        if (replayed)
+            return;
+
+        if (payload.Mode == "full")
+            GoalCitedDefectAdvisory.Warn(goal.Objective, () => kernel.Goals, goal, workspace.ConductEventsLogPath);
+        if (GoalCreationSummaryView.IsRequested(payload.CreationArguments))
+            GoalCreationSummaryView.Print(goal, "created", workspace.PortfolioStorePath);
+    }
 }

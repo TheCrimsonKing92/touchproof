@@ -1,4 +1,3 @@
-using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -15,6 +14,20 @@ internal interface IGoalIntentConstruction
         IGoalLifecycleEventWriter eventWriter,
         CollaborationItemRaise raiseCollaborationItem,
         Action<Goal, IReadOnlyCollection<string>?> finalize);
+
+    void ValidatePrepared(
+        AgentOrchestratorKernel currentKernel,
+        GoalSnapshot prepared,
+        OrchestratorWorkspace workspace,
+        IReadOnlyCollection<string>? sourceDependencies,
+        bool allowTerminalSourceClaimTakeover);
+
+    void Complete(
+        GoalCreationOperatorIntentPayload payload,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        bool replayed);
 }
 
 internal sealed class GoalCreationOperatorIntentHandler(
@@ -86,24 +99,9 @@ internal sealed class GoalCreationOperatorIntentHandler(
             _ = GoalCreationSideEffectDelivery.DeliverPending(_repository, workspace, workingKernel, goalId);
             if (!replayed)
                 _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goalId);
-            if (payload.RequestedEpicId is not null || goal.SourceBacklogItemId is not null)
-            {
-                var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
-                if (portfolio.GetGoalMembershipAsync(goalId.Value).GetAwaiter().GetResult() is null)
-                {
-                    var epicId = payload.RequestedEpicId ?? EpicAtCreation.ResolveGoalEpic(workspace, null, goal.SourceBacklogItemId);
-                    EpicAtCreation.AssignAfterCommit(workspace, PortfolioMemberKind.Goal, goalId.Value, epicId);
-                }
-            }
 
+            construction.Complete(payload, workingKernel, workspace, goal, replayed);
             summary = $"goal={goalId.Value}";
-            if (!replayed)
-            {
-                if (payload.Mode == "full")
-                    GoalCitedDefectAdvisory.Warn(goal.Objective, () => workingKernel.Goals, goal, workspace.ConductEventsLogPath);
-                if (GoalCreationSummaryView.IsRequested(payload.CreationArguments))
-                    GoalCreationSummaryView.Print(goal, "created", workspace.PortfolioStorePath);
-            }
         }
         catch (Exception ex)
         {
@@ -142,9 +140,8 @@ internal sealed class GoalCreationOperatorIntentHandler(
                     {
                         GoalRefinementWorkCoordinator.RecordPending(constructionKernel, goal.Id);
                         prepared = constructionKernel.ExportGoalSnapshot(goal.Id);
-                        GoalCreationPreconditionValidator.Validate(kernel, prepared, workspace,
-                            preparedSourceBacklogDependencies: sourceDependencies,
-                            allowTerminalSourceClaimTakeover: payload.AllowTerminalSourceClaimTakeover);
+                        construction.ValidatePrepared(kernel, prepared, workspace, sourceDependencies,
+                            payload.AllowTerminalSourceClaimTakeover);
                         GoalCreationSideEffectDelivery.BeforeStateCommit(goal.Id);
                         // The shared CLI handler would next deliver side effects or start work.
                         // End construction here so those steps can only run after commit.

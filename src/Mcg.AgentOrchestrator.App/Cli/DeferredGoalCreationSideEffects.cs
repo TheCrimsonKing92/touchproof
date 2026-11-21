@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.Application;
 
 internal enum GoalCreationDeliveryDisposition
 {
