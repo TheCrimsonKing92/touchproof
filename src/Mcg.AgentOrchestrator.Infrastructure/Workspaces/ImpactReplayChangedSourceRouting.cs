@@ -5,7 +5,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class ImpactReplayChangedSourceRouting
 {
-    internal sealed record Project(string Path, bool Infrastructure, IReadOnlyList<string> Sources);
+    internal sealed record Project(string Path, bool Infrastructure, IReadOnlyList<string> Sources)
+    {
+        // A synthetic source inventory may omit project-reference information.
+        internal IReadOnlySet<string>? References { get; init; }
+    }
     internal IReadOnlyList<Project> TestProjects { get; }
     private readonly string _checkout;
 
@@ -13,14 +17,21 @@ internal sealed class ImpactReplayChangedSourceRouting
     {
         _checkout = checkout;
         var projects = new List<Project>();
+        var references = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in Enumerate(checkout, "*.csproj"))
         {
             var document = XDocument.Load(path);
+            var directory = System.IO.Path.GetDirectoryName(path)!;
+            references[path] = document.Descendants().Where(e => e.Name.LocalName == "ProjectReference" &&
+                    !string.Equals((e.Attribute("ReferenceOutputAssembly")?.Value ??
+                        e.Elements().FirstOrDefault(child => child.Name.LocalName == "ReferenceOutputAssembly")?.Value)?.Trim(),
+                        "false", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(e => (e.Attribute("Include")?.Value ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+                .Select(include => System.IO.Path.GetFullPath(include.Replace('\\', '/'), directory)).ToArray();
             var infrastructure = System.IO.Path.GetFileName(path).Equals(
                 "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.OrdinalIgnoreCase);
             if (!infrastructure && !System.IO.Path.GetFileNameWithoutExtension(path).EndsWith(".Tests", StringComparison.OrdinalIgnoreCase) &&
                 !document.Descendants().Any(e => e.Name.LocalName == "IsTestProject" && e.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))) continue;
-            var directory = System.IO.Path.GetDirectoryName(path)!;
             var sources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (!document.Descendants().Any(e => e.Name.LocalName == "EnableDefaultCompileItems" && e.Value.Trim() == "false"))
                 sources.UnionWith(FileSystemTestClassDeclarationReader.EnumerateProjectSourceFiles(directory));
@@ -42,15 +53,34 @@ internal sealed class ImpactReplayChangedSourceRouting
             }
             projects.Add(new(path, infrastructure, sources.Order(StringComparer.OrdinalIgnoreCase).ToArray()));
         }
-        TestProjects = projects;
+        TestProjects = projects.Select(project => project with { References = ReachableProjects(project.Path) }).ToArray();
+
+        HashSet<string> ReachableProjects(string path)
+        {
+            var reached = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var pending = new Queue<string>(references[path]);
+            while (pending.TryDequeue(out var target))
+                if (reached.Add(target) && references.TryGetValue(target, out var next))
+                    foreach (var reference in next) pending.Enqueue(reference);
+            return reached;
+        }
     }
 
     internal bool IsTestSource(string relativePath)
     {
         var path = System.IO.Path.GetFullPath(relativePath, _checkout);
-        return TestProjects.Any(p => p.Sources.Contains(path, StringComparer.OrdinalIgnoreCase) ||
-            // Deleted default compile items still belong to their nearest project.
-            !File.Exists(path) && NearestProject(path) == p.Path);
+        return TestProjects.Any(p => p.Sources.Contains(path, StringComparer.OrdinalIgnoreCase)) ||
+            (!File.Exists(path) && DeletedSourceProjects(path).Count > 0);
+    }
+
+    internal IReadOnlyList<string> DeletedSourceProjects(string path)
+    {
+        // Deleted default compile items still belong to their nearest project.
+        var nearest = NearestProject(path);
+        var owners = TestProjects.Where(p => string.Equals(p.Path, nearest, StringComparison.OrdinalIgnoreCase) ||
+            p.Sources.Contains(path, StringComparer.OrdinalIgnoreCase)).Select(project => project.Path).ToArray();
+        return TestProjects.Where(project => owners.Contains(project.Path, StringComparer.OrdinalIgnoreCase) ||
+            owners.Any(owner => project.References?.Contains(owner) == true)).Select(project => project.Path).ToArray();
     }
 
     private string? NearestProject(string path)

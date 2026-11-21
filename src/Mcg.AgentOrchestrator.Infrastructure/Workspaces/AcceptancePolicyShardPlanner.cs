@@ -508,6 +508,10 @@ internal sealed record PolicyShardPlan(
 {
     internal AcceptanceProjectTopologySource Topology { get; init; } = AcceptanceProjectTopologySource.Home;
     public IReadOnlySet<string> AbsentProjects { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    internal IReadOnlySet<string> SupportFallbackProjects { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    internal bool RequiresFullSupportRun(string? project) => project is not null &&
+        SupportFallbackProjects.Contains(AcceptancePolicyShardPlanner.NormalizePath(project)!);
 
     public bool IsAbsentProject(string? project) =>
         !string.IsNullOrWhiteSpace(project) && AbsentProjects.Any(absent =>
@@ -525,6 +529,7 @@ internal sealed record PolicyShardPlan(
     public bool IncludesProject(string? project) =>
         !IsAbsentProject(project) && (ForceFull ||
         !Applies ||
+        RequiresFullSupportRun(project) ||
         (!string.IsNullOrWhiteSpace(project) &&
             DependencyClosure.Contains(AcceptancePolicyShardPlanner.NormalizePath(project)!)));
 }
