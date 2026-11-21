@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
@@ -36,6 +37,24 @@ public sealed class OwnerConsoleCostGoalOutcomeTests : IDisposable
     }
 
     [Fact]
+    public async Task DetailRendersUnreadableRecordAsOneReasonLine()
+    {
+        var goal = _harness.AddGoal(GoalIdWithRecord, "Cost goal", AgentRole.Developer);
+        var records = Directory.CreateDirectory(Path.Combine(_directory, "cost-goal-outcomes"));
+        File.WriteAllText(Path.Combine(records.FullName, $"{goal.Id.Value}.json"), "null");
+
+        var output = await RenderDetailAsync(goal.Id);
+
+        const string reason = "unreadable outcome record: InvalidDataException";
+        Assert.Equal(new[] { "Cost-goal outcomes:", $"  state=unreadable reason={reason}" },
+            output.Text.Split(Environment.NewLine).SkipWhile(line => line != "Cost-goal outcomes:")
+                .TakeWhile(line => !line.StartsWith("Recent events:", StringComparison.Ordinal)).ToArray());
+        var fields = output.Structured!.Detail!.Fields.Where(field => field.Key.StartsWith("outcome/", StringComparison.Ordinal));
+        Assert.Equal(new (string, string?)[] { ("outcome/0/state", "unreadable"), ("outcome/0/reason", reason) },
+            fields.Select(field => (field.Key, field.Value)));
+    }
+
+    [Fact]
     public async Task DetailWithoutRecordRendersNoOutcomeSection()
     {
         var goal = _harness.AddGoal(GoalIdWithRecord, "Cost goal", AgentRole.Developer);
@@ -44,6 +63,36 @@ public sealed class OwnerConsoleCostGoalOutcomeTests : IDisposable
 
         Assert.DoesNotContain("Cost-goal outcomes:", output.Text, StringComparison.Ordinal);
         Assert.DoesNotContain(output.Structured!.Detail!.Fields, field => field.Key.StartsWith("outcome/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DetailLoadReadsOutcomesOnceAndRenderingDoesNotRead()
+    {
+        var goal = _harness.AddGoal(GoalIdWithRecord, "Cost goal", AgentRole.Developer);
+        WriteRecord(goal.Id, new CostGoalOutcomeResult(0, new("metric", "decrease", "10%", 3),
+            CostGoalOutcomeState.Pending, 10, null, 5, 2, null));
+        var readGoalIds = new List<string>();
+        var query = new OwnerGoalDetailQuery(_harness.State, _harness.Tail, outcomes: id =>
+        {
+            readGoalIds.Add(id);
+            return CostGoalOutcomeAttentionView.Read([id], _directory);
+        });
+
+        var snapshot = await query.LoadAsync(goal.Id.Value, CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(goal.Id.Value, Assert.Single(readGoalIds));
+        for (var render = 0; render < 2; render++)
+        {
+            var output = new OwnerConsoleCapturedOutput();
+            OwnerConsoleGoalDetailFormatter.Render(snapshot, output, TimeZoneInfo.Utc);
+            Assert.Contains("  line=1 metric=metric state=pending ", output.Text, StringComparison.Ordinal);
+            Assert.Contains(snapshot.Fields().Fields, field => field.Key == "outcome/0/state" && field.Value == "pending");
+            Assert.Equal(goal.Id.Value, Assert.Single(readGoalIds));
+        }
+
+        Assert.NotNull(await query.LoadAsync(goal.Id.Value, CancellationToken.None));
+        Assert.Equal(new[] { goal.Id.Value, goal.Id.Value }, readGoalIds);
     }
 
     [Fact]
@@ -56,6 +105,18 @@ public sealed class OwnerConsoleCostGoalOutcomeTests : IDisposable
         var row = await ReadBoardRowAsync();
 
         Assert.Equal("11111111 | Cost goal | Active | Developer | 2m | outcomes pending=1 met=0 missed=0 insufficient-data=0 progress=line1:2/3", row);
+    }
+
+    [Fact]
+    public async Task BoardRowShowsMissedSummary()
+    {
+        var goal = _harness.AddGoal(GoalIdWithRecord, "Cost goal", AgentRole.Developer);
+        WriteRecord(goal.Id, new CostGoalOutcomeResult(0, new("metric", "decrease", "10%", 3),
+            CostGoalOutcomeState.Missed, 30, 29, 4, 3, null));
+
+        var row = await ReadBoardRowAsync();
+
+        Assert.Equal("11111111 | Cost goal | Active | Developer | 2m | outcomes pending=0 met=0 missed=1 insufficient-data=0", row);
     }
 
     [Fact]
