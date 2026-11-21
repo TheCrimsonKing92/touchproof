@@ -2161,7 +2161,8 @@ public sealed class TaskBriefTests
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
         var task = new TaskSpec(TaskId.New(), "Update the documentation.", role);
-        var goal = kernel.CreateGoal("Document the existing behavior.", [task]);
+        var research = new TaskSpec(TaskId.New(), "Inspect the existing behavior.", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Document the existing behavior.", [research, task]);
         for (var index = 0; index < 6; index++)
         {
             kernel.RecordTaskNote(goal.Id, task.Id, $"budget-note-{index} {new string('n', 110)}");
@@ -2171,8 +2172,9 @@ public sealed class TaskBriefTests
         const string branch = "goal/prompt-budget";
         const int headroom = 20;
         // Give each role the same small amount of space before enabling the fixed wt section.
-        var padding = budget - headroom - Render(branch, workerToolsAvailable: false).Length;
-        Assert.True(padding >= 0, "The fixture must fit before padding the branch label.");
+        var baselineLength = Render(branch, workerToolsAvailable: false).Length;
+        var padding = budget - headroom - baselineLength;
+        Assert.True(padding >= 0, $"{role} fixture has {baselineLength} characters before padding and needs {headroom} free within {budget}.");
         var paddedBranch = branch + new string('x', padding);
         var withoutTools = Render(paddedBranch, workerToolsAvailable: false);
         Assert.Equal(budget - headroom, withoutTools.Length);
