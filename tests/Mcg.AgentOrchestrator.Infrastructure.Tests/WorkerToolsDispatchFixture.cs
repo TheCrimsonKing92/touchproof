@@ -64,6 +64,7 @@ internal sealed class WorkerToolsDispatchFixture : IDisposable
         var prepared = WorkerProfileDispatcher.PrepareTask(kernel, goal, task, profile,
             Path.Combine(_root, "prompts"), _worker.Worktree, DateTimeOffset.UtcNow,
             variables: useClaude ? new Dictionary<string, string?> { ["subscriptionModelName"] = "claude-opus-5" } : null,
+            integrationBranch: _worker.Branch,
             workerTools: installer);
         return (kernel, goal, prepared.Task, File.ReadAllText(prepared.PromptPath));
     }
