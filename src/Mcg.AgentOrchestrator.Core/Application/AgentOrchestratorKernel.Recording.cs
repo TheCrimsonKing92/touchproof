@@ -228,6 +228,8 @@ public sealed partial class AgentOrchestratorKernel
                 terminalOutcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
             {
                 task.RecordCompletionVerdict(true, TaskOutcomeClassifier.TryExtractRule(terminalOutcome.ClassifierReceipt));
+                if (task.RequiredRole == AgentRole.Developer)
+                    DeveloperReachCheck.Record(task, verification, note => Append(goal, taskId, ProgressKind.TaskNote, note));
                 ReportWorkerTaskProgress(
                     goalId,
                     taskId,
@@ -591,10 +593,7 @@ public sealed partial class AgentOrchestratorKernel
             verifiedSuccess, (ownerTaskId, note) => Append(goal, ownerTaskId, ProgressKind.TaskNote, note));
 
         if (task.RequiredRole == AgentRole.Developer && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
-        {
-            Append(goal, taskId, ProgressKind.TaskNote,
-                DeveloperCriteriaSelfCheck.ParseWorkerOutput(verification.AuthoritativeStandardOutput ?? verification.StandardOutput).ToTaskNote(taskId));
-        }
+            DeveloperReachCheck.RecordWithCriteriaSelfCheck(task, verification, note => Append(goal, taskId, ProgressKind.TaskNote, note));
 
         if (task.RequiredRole == AgentRole.Reviewer && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
             new ReviewerVerdictEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m)).Close(goal, task, verification, HumanInputRequests, ReviewerEvidenceAncestry.Bind(task.LastDispatch.WorkingDirectory, reviewerEvidenceAncestry));
