@@ -94,6 +94,21 @@ public sealed class ExecutorScreeningPlannerTests
     }
 
     [Fact]
+    public void TrialSelectionUsesLatestGateCompletionAndDeduplicatesOnlyMatchingGoalCommits()
+    {
+        var olderCommit = new ExecutorPassedGate("goal-a", "older-commit", "old", "main", At(11));
+        var earlierRun = new ExecutorPassedGate("goal-a", "earlier-run", "current", "main", At(9));
+        var selected = earlierRun with { AttemptId = "a", CompletedAt = At(12) };
+        var tied = selected with { AttemptId = "z" };
+        var otherGoal = selected with { GoalId = "goal-b", AttemptId = "other", CompletedAt = At(13) };
+        ExecutorPassedGate[] gates = [earlierRun, tied, olderCommit, otherGoal, selected];
+
+        Assert.Equal(new[] { otherGoal, selected, olderCommit },
+            ExecutorScreeningPlanner.SelectTrialGates(gates, [], null));
+        Assert.Equal(selected, Assert.Single(ExecutorScreeningPlanner.SelectTrialGates(gates, [], "goal-a")));
+    }
+
+    [Fact]
     public void ExecutorChoiceSkipsNonSshAndOccupiedAndHonorsTheRequestedId()
     {
         var entries = new[] { new RemoteLaneExecutorEntry("local", 60), new("busy", 60, "ssh"),
