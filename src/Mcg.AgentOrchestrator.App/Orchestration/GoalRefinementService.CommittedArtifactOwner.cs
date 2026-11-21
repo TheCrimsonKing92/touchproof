@@ -62,6 +62,11 @@ internal sealed partial class GoalRefinementService
             (?:(?:an?|the|(?:at\s+least\s+)?one)\s+)?(?:new|committed|checked-in)\s+
         """ + Artifact + """
           | (?:(?:the\s+|this\s+)?(?:developer|candidate|change|implementation|patch|solution)\s+(?:(?:must|will|shall)\s+)?)?
+            (?!
+                adds?\s+(?:(?:an?|the)\s+)?(?!(?:new|committed|checked-in)\s+)
+        """ + QualifiedArtifact + """
+                \s+to\s+(?:(?:an?|the)\s+)?(?:focused\s+)?(?:evidence|test)\s+(?:run|selection)\b
+            )
             (?:
                 (?:adds?|creates?|writes?|commits?|updates?|modifies?|produces?|ships?|introduces?|extends?|checks?\s+in)\s+
                 (?:(?:an?|the)\s+)?(?:(?:new|existing|committed|checked-in)\s+)?
@@ -71,7 +76,8 @@ internal sealed partial class GoalRefinementService
           | (?:(?:an?|the)\s+)?(?:(?:new|existing|named|committed|checked-in)\s+)?
         """ + QualifiedArtifact + """
             \s+(?:(?:is|are)|(?:must|shall|will)\s+be)\s+
-            (?:added|created|written|committed|updated|modified|produced|shipped|introduced|extended|checked\s+in)\b
+            (?:added|created|written|committed|updated|modified|produced|shipped|introduced|extended|checked\s+in
+              | included\s+in\s+(?:(?:a|the|this)\s+)?commit)\b
         )
         """,
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace)]

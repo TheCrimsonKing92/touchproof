@@ -25,6 +25,8 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
     [Theory]
     [InlineData("A new machine-readable audit report is committed.")]
     [InlineData("The change writes a machine-readable audit report.")]
+    [InlineData("A report is included in the commit.")]
+    [InlineData("The change adds a new test to the focused evidence run.")]
     public async Task QualifiedArtifactProductionMovesTesterOwnershipToDeveloper(string requirement)
     {
         var goal = await FileAndRefine(false,
@@ -68,6 +70,7 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
     [Theory]
     [InlineData("Existing tests are included in the focused evidence run.")]
     [InlineData("A new focused evidence run of existing tests is produced.")]
+    [InlineData("The change adds the requested existing tests to the focused evidence run.")]
     public async Task EvidenceRunLanguageKeepsTesterOwnerWithoutRewriteDiagnostic(string requirement)
     {
         var criterion = $"{requirement} Tester owns; Acceptance executes. TEST-VERIFIABLE.";
