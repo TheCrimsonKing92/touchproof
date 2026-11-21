@@ -90,6 +90,11 @@ internal static class CliAttentionQueryCommand
 
         CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal);
+        var costGoalOutcomes = CostGoalOutcomeAttentionView.Read(
+            metadata.Where(goal => goal.Status.Equals(nameof(GoalStatus.Completed), StringComparison.OrdinalIgnoreCase))
+                .Select(goal => goal.Id),
+            workspace.OrchestratorDirectory);
+        CostGoalOutcomeAttentionView.Print(Console.Out, costGoalOutcomes);
         return true;
     }
 }
