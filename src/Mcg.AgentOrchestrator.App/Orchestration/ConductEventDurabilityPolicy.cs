@@ -8,5 +8,7 @@ internal static class ConductEventDurabilityPolicy
             "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or "sweep-owned-root-deferred" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or "exit-unapplied" or
             "blocked-recheck-heartbeat" or "policy-reload-failed" or "prompt-rollout-suspect" or "invalidated-attempt-stop" ||
+        (kind == "main-full-verification" &&
+            line.StartsWith(MainFullVerificationCoordinator.HoldEvent + " ", StringComparison.Ordinal)) ||
         line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
 }

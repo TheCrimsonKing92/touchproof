@@ -4,6 +4,16 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class ConductEventOperatorClassifierTests
 {
     [Theory]
+    [InlineData("MAIN_FULL_VERIFICATION_HOLD commit=sha test=Example.Tests.Fails landing=undetermined", "decision", true)]
+    [InlineData("MAIN_FULL_VERIFICATION result=passed commit=sha", "outcome", false)]
+    [InlineData("MAIN_FULL_VERIFICATION result=incomplete commit=sha", null, false)]
+    public void MainFullVerificationUsesOperatorClassificationAndDurability(string detail, string? expected, bool required)
+    {
+        Assert.Equal(expected, ConductEventOperatorClassifier.Classify("main-full-verification", detail));
+        Assert.Equal(required, ConductEventDurabilityPolicy.IsRequired("main-full-verification", detail));
+    }
+
+    [Theory]
     [InlineData("host-health", "HOST_HEALTH_FOREGROUND_LOCK_ARMED timeout_ms=2147483647 build=26200", "decision")]
     [InlineData("host-health", "HOST_HEALTH_FOREGROUND_LOCK_DISARMED timeout_ms=0 build=26200", "outcome")]
     [InlineData("host-health", "HOST_HEALTH_PAGED_POOL_HIGH paged_pool_mb=8192", "decision")]
