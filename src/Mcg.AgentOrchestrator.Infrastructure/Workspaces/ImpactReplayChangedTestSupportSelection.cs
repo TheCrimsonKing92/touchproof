@@ -13,7 +13,8 @@ internal static class ImpactReplayChangedTestSupportSelection
         int threshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold)
     {
         return ImpactReplayChangedSupportReferenceScan.Select(checkout, changedFiles, routing.TestProjects,
-            () => RunnableClasses(checkout, routing).Runnable, threshold: threshold);
+            () => RunnableClasses(checkout, routing).Runnable, threshold: threshold,
+            deletedSourceProjects: routing.DeletedSourceProjects);
     }
 
     internal static (HashSet<string> Runnable, IReadOnlyList<string> Excluded) RunnableClasses(

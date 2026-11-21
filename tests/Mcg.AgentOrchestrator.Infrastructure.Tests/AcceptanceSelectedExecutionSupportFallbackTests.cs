@@ -70,9 +70,9 @@ public sealed class AcceptanceSelectedExecutionSupportFallbackTests
         Assert.DoesNotContain(baseline.Checks, check => check.Project == CoreTestsProject);
 
         var result = ImpactReplayChangedSupportReferenceScan.Select(repository.Root, changed,
-            [new(Path.Combine(repository.Root, InfrastructureTestsProject), true,
-                [Path.Combine(repository.Root, support), Path.Combine(repository.Root, referrer)]),
-             new(Path.Combine(repository.Root, CoreTestsProject), false, [])],
+            [new(Path.GetFullPath(InfrastructureTestsProject, repository.Root), true,
+                 [Path.GetFullPath(support, repository.Root), Path.GetFullPath(referrer, repository.Root)]),
+             new(Path.GetFullPath(CoreTestsProject, repository.Root), false, [])],
             () => new HashSet<string>(StringComparer.Ordinal) { "Candidate.A" }, maximumVisited: 1);
         var fallback = Assert.Single(result.SupportSelections);
         Assert.True(fallback.Truncated);
@@ -132,15 +132,21 @@ public sealed class AcceptanceSelectedExecutionSupportFallbackTests
     [Fact]
     public void BoundedSupportSelection_NarrowsOnlyTheProjectWithTheReferrer()
     {
+        var cliInventory = Inventories[0] with
+        {
+            Classes = Inventories[0].Classes.Append(new("Candidate.A", null)).ToArray()
+        };
         var plan = AcceptanceSelectedExecutionPlan.Create(["Support.cs"],
-            ReverseDependencyTestSelection.Resolved(["Candidate.A"]), Lanes, Classes, [], [],
-            selectableProjectChecks: () => Inventories,
+            ReverseDependencyTestSelection.Resolved([]), Lanes, Classes, [], [],
+            selectableProjectChecks: () => [cliInventory, Inventories[1]],
             supportProjectClasses: new Dictionary<string, IReadOnlyList<string>>
             {
+                [InfrastructureTestsProject] = ["Candidate.A"],
                 [CliTestsProject] = ["Candidate.CliReached"]
             });
 
         Assert.Null(plan.FullGateReason);
+        Assert.Equal("Candidate.A", Assert.Single(Assert.Single(plan.Lanes, lane => lane.Name == "Balanced 1").SelectedClasses));
         var cli = Assert.Single(plan.ProjectChecks, check => check.Project == CliTestsProject).Lane;
         Assert.Equal("narrowed", cli.Disposition);
         Assert.Equal("Candidate.CliReached", Assert.Single(cli.SelectedClasses));
@@ -156,7 +162,7 @@ public sealed class AcceptanceSelectedExecutionSupportFallbackTests
         fixture.Runnable.UnionWith(["Candidate.A", "Candidate.B"]);
         string[] changed = ["A.cs"];
         var result = Select(fixture, changed);
-        var session = CreateSession(result, changed, result.Classes);
+        var session = CreateSession(result, changed, []);
 
         var observation = AcceptanceSelectedExecutionFixture.Observe(session);
 

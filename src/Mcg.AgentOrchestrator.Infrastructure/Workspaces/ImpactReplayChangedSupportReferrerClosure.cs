@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Project = Mcg.AgentOrchestrator.Infrastructure.ImpactReplayChangedSourceRouting.Project;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -8,12 +9,18 @@ internal sealed class ImpactReplayChangedSupportReferrerClosure
 {
     internal const int DefaultMaximumVisited = 10_000;
 
+    internal readonly record struct ProjectType(INamedTypeSymbol Type, Project Project);
+
     private readonly UsingDirectiveSyntax[] _aliases;
     private readonly ILookup<string, (INamedTypeSymbol Owner, SemanticModel Model, NameSyntax Reference)> _references;
-    private readonly Dictionary<string, ILookup<INamedTypeSymbol, INamedTypeSymbol>> _bound = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ILookup<ProjectType, ProjectType>> _bound = new(StringComparer.Ordinal);
+    private readonly Dictionary<INamedTypeSymbol, Project[]> _declaringProjects = new(SymbolEqualityComparer.Default);
+    private readonly ILookup<string, Project> _owners;
 
-    internal ImpactReplayChangedSupportReferrerClosure(CSharpCompilation compilation, IEnumerable<SyntaxTree> trees)
+    internal ImpactReplayChangedSupportReferrerClosure(CSharpCompilation compilation, IEnumerable<SyntaxTree> trees,
+        ILookup<string, Project> owners)
     {
+        _owners = owners;
         var declarations = trees.SelectMany(tree =>
         {
             var model = compilation.GetSemanticModel(tree);
@@ -30,12 +37,12 @@ internal sealed class ImpactReplayChangedSupportReferrerClosure
             .ToLookup(item => item.Name, item => (item.Owner, item.Model, item.Reference), StringComparer.Ordinal);
     }
 
-    internal (IReadOnlySet<INamedTypeSymbol> Types, bool Truncated) Expand(
-        IEnumerable<INamedTypeSymbol> seeds, int maximumVisited)
+    internal (IReadOnlySet<ProjectType> Types, bool Truncated) Expand(
+        IEnumerable<ProjectType> seeds, int maximumVisited)
     {
-        var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        var pending = new Queue<INamedTypeSymbol>();
-        foreach (var seed in seeds.Select(type => type.OriginalDefinition))
+        var visited = new HashSet<ProjectType>();
+        var pending = new Queue<ProjectType>();
+        foreach (var seed in seeds)
         {
             if (visited.Contains(seed)) continue;
             if (visited.Count >= maximumVisited) return (visited, true);
@@ -45,14 +52,16 @@ internal sealed class ImpactReplayChangedSupportReferrerClosure
 
         while (pending.TryDequeue(out var type))
         {
-            var names = new ImpactReplayChangedSupportNameFilter([type], _aliases);
+            var names = new ImpactReplayChangedSupportNameFilter([type.Type], _aliases);
             foreach (var name in names.Names.Order(StringComparer.Ordinal))
             {
                 if (!_bound.TryGetValue(name, out var edges))
                 {
                     edges = _references[name].SelectMany(item => ReferencedTypes(item.Model, item.Reference)
-                        .Select(target => (Target: target, item.Owner)))
-                        .ToLookup(item => item.Target, item => item.Owner, (IEqualityComparer<INamedTypeSymbol>)SymbolEqualityComparer.Default);
+                        .SelectMany(target => _owners[item.Model.SyntaxTree.FilePath].SelectMany(project =>
+                            ReferenceProjects(target, project).Select(targetProject =>
+                                (Target: new ProjectType(target, targetProject), Owner: new ProjectType(item.Owner, project))))))
+                        .ToLookup(item => item.Target, item => item.Owner);
                     _bound.Add(name, edges);
                 }
                 foreach (var owner in edges[type])
@@ -65,6 +74,17 @@ internal sealed class ImpactReplayChangedSupportReferrerClosure
             }
         }
         return (visited, false);
+    }
+
+    internal IEnumerable<Project> ReferenceProjects(INamedTypeSymbol type, Project referrer)
+    {
+        if (!_declaringProjects.TryGetValue(type, out var projects))
+            _declaringProjects[type] = projects = type.DeclaringSyntaxReferences
+                .SelectMany(declaration => _owners[declaration.SyntaxTree.FilePath]).Distinct().ToArray();
+        // Equal names in different assemblies can share one symbol in the source-only compilation.
+        // Prefer the referrer's own declaration, then consider only referenced assemblies.
+        if (projects.Contains(referrer)) return [referrer];
+        return referrer.References is { } references ? projects.Where(project => references.Contains(project.Path)) : projects;
     }
 
     private static IEnumerable<string> ReferenceNames(NameSyntax reference, IReadOnlySet<string> names)

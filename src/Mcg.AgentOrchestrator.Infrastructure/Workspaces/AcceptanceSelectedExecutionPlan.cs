@@ -135,6 +135,14 @@ internal sealed record AcceptanceSelectedExecutionPlan(
                 guards.UnionWith(matches.Select(item => item.FullName));
         }
         names.UnionWith(obligations);
+        IReadOnlyList<string> SupportClasses(string project) => supportProjectClasses?.FirstOrDefault(item =>
+            AcceptancePolicyShardPlanner.ProjectMatches(project, item.Key)).Value ?? [];
+        var infrastructureMatches = SupportClasses(AcceptancePolicyShardPlanner.InfrastructureTestsProject);
+        var unmappedInfrastructure = retainInfrastructure ? null : infrastructureMatches.FirstOrDefault(name =>
+            !laneClasses.Contains(name) || !membership.Values.Any(includes => includes(name)));
+        if (unmappedInfrastructure is not null)
+            return Full(ReverseDependencySelectionOutcome.Abandoned, "UnmappedTestClass: " + unmappedInfrastructure);
+        var infrastructureNames = names.Concat(infrastructureMatches).ToHashSet(StringComparer.Ordinal);
 
         var execution = new List<AcceptanceTestLane>();
         var records = new List<AcceptanceSelectedExecutionLane>();
@@ -144,7 +152,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             var eligible = classes.Where(item => membership[lane.Name](item.FullName))
                 .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             var whole = retainInfrastructure || floorLanes.Contains(lane.Name, StringComparer.Ordinal) || !translated.Contains("--filter-class");
-            var retained = whole ? eligible : eligible.Where(names.Contains).ToArray();
+            var retained = whole ? eligible : eligible.Where(infrastructureNames.Contains).ToArray();
             var skipped = eligible.Except(retained, StringComparer.Ordinal).ToArray();
             var disposition = whole ? "retained" : retained.Length == 0 ? "skipped" : "narrowed";
             string? filter = null;
@@ -174,13 +182,12 @@ internal sealed record AcceptanceSelectedExecutionPlan(
 
         AcceptanceSelectedExecutionProjectCheckEntry CreateProjectEntry(AcceptanceWholeProjectCheckInventory check)
         {
-            var projectMatches = supportProjectClasses?.FirstOrDefault(item =>
-                AcceptancePolicyShardPlanner.ProjectMatches(check.Project, item.Key)).Value;
-            var requiredNames = projectMatches is { Count: > 0 }
+            var projectMatches = SupportClasses(check.Project);
+            var requiredNames = projectMatches.Count > 0
                 ? names.Concat(projectMatches).ToHashSet(StringComparer.Ordinal) : names;
             var whole = changedTestProjects?.Contains(check.Project) == true ||
                 forcedProjects.Any(project => AcceptancePolicyShardPlanner.ProjectMatches(check.Project, project)) ||
-                projectMatches?.Except(check.Classes.Select(item => item.FullName), StringComparer.Ordinal).Any() == true;
+                projectMatches.Except(check.Classes.Select(item => item.FullName), StringComparer.Ordinal).Any();
             return AcceptanceSelectedExecutionProjectCheckEntry.Create(check, requiredNames, floorLanes, projectReachAvailable, whole);
         }
     }

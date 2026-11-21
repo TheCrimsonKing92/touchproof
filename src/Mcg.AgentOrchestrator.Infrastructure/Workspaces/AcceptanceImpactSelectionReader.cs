@@ -30,7 +30,7 @@ internal static class AcceptanceImpactSelectionReader
         var impact = Read(checkout, changedFiles, routing, sources, classes, guards,
             ChangedFileTestClassPathMapper.TestProjectDirectories(settings), bypassCache: false,
             changedLineRanges: changedLineRanges, scanFiles: scanFiles, scanChanges: scanChanges,
-            supportClosureThreshold: settings.SupportClosureClassThreshold);
+            supportClosureThreshold: settings.SupportClosureClassThreshold, scopeChangedTestsByProject: true);
         var selection = impact.Selection.Outcome == ReverseDependencySelectionOutcome.Resolved &&
             impact.ChangedTests.AbandonReason is { } reason
             ? ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.ChangedFileUnmapped, reason)
@@ -55,7 +55,8 @@ internal static class AcceptanceImpactSelectionReader
         IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges = null,
         IReadOnlyList<AssemblyScanningGuardTestClasses.ScanFile>? scanFiles = null,
         IReadOnlyList<string>? scanChanges = null,
-        int supportClosureThreshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold)
+        int supportClosureThreshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold,
+        bool scopeChangedTestsByProject = false)
     {
         var changedSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -68,7 +69,8 @@ internal static class AcceptanceImpactSelectionReader
         var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing,
             supportClosureThreshold);
         selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, sources, classes, guards,
-            out var declaredGuards, augmented.QualifiedClasses, testProjectDirectories, out var assemblyScans, scanFiles, scanChanges);
+            out var declaredGuards, scopeChangedTestsByProject ? null : augmented.QualifiedClasses,
+            testProjectDirectories, out var assemblyScans, scanFiles, scanChanges);
         return (selection, declaredGuards, augmented, assemblyScans);
     }
 

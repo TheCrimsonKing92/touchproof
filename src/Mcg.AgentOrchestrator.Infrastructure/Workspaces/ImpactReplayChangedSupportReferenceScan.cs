@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using ProjectType = Mcg.AgentOrchestrator.Infrastructure.ImpactReplayChangedSupportReferrerClosure.ProjectType;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -11,13 +12,14 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
     private sealed record TestClass(string Name, string Project, bool Infrastructure, string Source);
 
     private sealed record ChangedFile(string Path, string FullPath, IReadOnlySet<INamedTypeSymbol> Declared,
-        HashSet<TestClass> Direct, string? AbandonReason, string? UnresolvedReason);
+        HashSet<TestClass> Direct, string? AbandonReason, string? UnresolvedReason, bool Deleted = false);
 
     internal static ImpactReplayChangedSupportSelection Select(
         string checkout, IReadOnlyList<string> changedFiles,
         IReadOnlyList<ImpactReplayChangedSourceRouting.Project> testProjects, Func<ISet<string>> runnableClasses,
         ImpactReplayChangedSupportScanProbe? probe = null, int threshold = DefaultClosureThreshold,
-        int maximumVisited = ImpactReplayChangedSupportReferrerClosure.DefaultMaximumVisited)
+        int maximumVisited = ImpactReplayChangedSupportReferrerClosure.DefaultMaximumVisited,
+        Func<string, IReadOnlyList<string>>? deletedSourceProjects = null)
     {
         if (changedFiles.Count == 0) return ImpactReplayChangedSupportSelection.Empty;
         string Relative(string path) => Path.GetRelativePath(checkout, Path.GetFullPath(path, checkout)).Replace('\\', '/');
@@ -61,7 +63,7 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
                 var deleted = !File.Exists(path);
                 files.Add(new(Relative(path), path, new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default), [],
                     deleted ? null : $"Changed test support could not be resolved: {relativePath}",
-                    deleted ? "changed support source is missing or deleted" : "changed support source could not be mapped"));
+                    deleted ? "changed support source is missing or deleted" : "changed support source could not be mapped", deleted));
                 continue;
             }
             var changedModel = compilation.GetSemanticModel(changedTree);
@@ -76,7 +78,7 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
                 undeclared ? "no resolvable support declarations" : null));
         }
 
-        var classesByType = new Dictionary<INamedTypeSymbol, HashSet<TestClass>>(SymbolEqualityComparer.Default);
+        var classesByType = new Dictionary<ProjectType, HashSet<TestClass>>();
         var candidates = files.Where(file => file.Declared.Count > 0).ToArray();
         ImpactReplayChangedSupportReferrerClosure? closure = null;
         if (candidates.Length > 0)
@@ -87,8 +89,8 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
             {
                 return IncompleteInventory($"Test support class inventory could not be read: {error.Message}");
             }
-            MatchDirect(candidates, runnable);
-            closure = new(compilation, trees.Values);
+            closure = new(compilation, trees.Values, owners);
+            MatchDirect(candidates, runnable, closure);
         }
 
         var summaries = new List<ImpactReplayChangedSupportFileSummary>();
@@ -101,7 +103,8 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
             var truncated = false;
             if (file.Declared.Count > 0)
             {
-                var expansion = closure!.Expand(file.Declared, maximumVisited);
+                var seeds = file.Declared.SelectMany(type => owners[file.FullPath].Select(project => new ProjectType(type, project)));
+                var expansion = closure!.Expand(seeds, maximumVisited);
                 truncated = expansion.Truncated;
                 foreach (var type in expansion.Types)
                     if (classesByType.TryGetValue(type, out var classes)) reached.UnionWith(classes);
@@ -109,7 +112,10 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
             var union = reached.Concat(file.Direct).ToHashSet();
             var missingClasses = union.Count == 0 && !truncated && file.UnresolvedReason is null;
             var unresolved = file.UnresolvedReason is not null || missingClasses;
-            var projects = unresolved || truncated ? allProjects : union.Select(item => item.Project)
+            var deletedProjects = file.Deleted ? deletedSourceProjects?.Invoke(file.FullPath) : null;
+            var projects = deletedProjects is { Count: > 0 }
+                ? deletedProjects.Select(Relative).Order(StringComparer.Ordinal).ToArray()
+                : unresolved || truncated ? allProjects : union.Select(item => item.Project)
                 .Concat(owners[file.FullPath].Select(project => Relative(project.Path)))
                 .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
             var reasons = new List<string>();
@@ -123,7 +129,7 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
             summaries.Add(new(file.Path, CountClasses(file.Direct), closureCount, !truncated && !unresolved, truncated,
                 unresolved, projects, reasons.Count > 0, reasons));
 
-            projectMatches.UnionWith(union.Where(item => !item.Infrastructure));
+            projectMatches.UnionWith(union);
             // Replay retains earlier OtherFiles and its first abandon reason in input order.
             abandon ??= file.AbandonReason ?? (missingClasses
                 ? $"Changed test support has no resolvable test class: {file.Path}" : null);
@@ -139,7 +145,7 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
         ImpactReplayChangedSupportSelection IncompleteInventory(string reason) =>
             ImpactReplayChangedSupportSelection.Incomplete(changedPaths, allProjects, reason, threshold);
 
-        void MatchDirect(ChangedFile[] changed, ISet<string> runnable)
+        void MatchDirect(ChangedFile[] changed, ISet<string> runnable, ImpactReplayChangedSupportReferrerClosure graph)
         {
             var names = new ImpactReplayChangedSupportNameFilter(changed.SelectMany(file => file.Declared), trees.Values);
             foreach (var tree in trees.Values)
@@ -152,30 +158,34 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
                     var name = ImpactReplayChangedTestSupportSelection.FullName(owner);
                     if (!runnable.Contains(name)) continue;
                     owner = owner.OriginalDefinition;
-                    var identities = owners[tree.FilePath].Select(project =>
-                        new TestClass(name, Relative(project.Path), project.Infrastructure, Relative(tree.FilePath))).ToArray();
-                    if (!classesByType.TryGetValue(owner, out var classes)) classesByType.Add(owner, classes = []);
-                    classes.UnionWith(identities);
-                    var matched = changed.Select(file => file.Declared.Contains(owner)).ToArray();
-                    var pending = matched.Count(value => !value);
-                    foreach (var reference in node.DescendantNodes().OfType<NameSyntax>())
+                    foreach (var project in owners[tree.FilePath])
                     {
-                        if (pending == 0) break;
-                        if (!names.Matches(reference)) continue;
-                        probe?.Bound(name, ImpactReplayChangedSupportNameFilter.RightmostIdentifier(reference),
-                            ImpactReplayChangedSupportNameFilter.IsAttributeName(reference));
-                        foreach (var type in ImpactReplayChangedSupportReferrerClosure.ReferencedTypes(model, reference))
+                        var identity = new TestClass(name, Relative(project.Path), project.Infrastructure, Relative(tree.FilePath));
+                        var key = new ProjectType(owner, project);
+                        if (!classesByType.TryGetValue(key, out var classes)) classesByType.Add(key, classes = []);
+                        classes.Add(identity);
+                        var matched = changed.Select(file => file.Declared.Contains(owner) && owners[file.FullPath].Contains(project)).ToArray();
+                        var pending = matched.Count(value => !value);
+                        foreach (var reference in node.DescendantNodes().OfType<NameSyntax>())
                         {
-                            for (var index = 0; index < changed.Length; index++)
+                            if (pending == 0) break;
+                            if (!names.Matches(reference)) continue;
+                            probe?.Bound(name, ImpactReplayChangedSupportNameFilter.RightmostIdentifier(reference),
+                                ImpactReplayChangedSupportNameFilter.IsAttributeName(reference));
+                            foreach (var type in ImpactReplayChangedSupportReferrerClosure.ReferencedTypes(model, reference))
                             {
-                                if (matched[index] || !changed[index].Declared.Contains(type)) continue;
-                                matched[index] = true;
-                                pending--;
+                                for (var index = 0; index < changed.Length; index++)
+                                {
+                                    if (matched[index] || !changed[index].Declared.Contains(type) ||
+                                        !graph.ReferenceProjects(type, project).Any(owners[changed[index].FullPath].Contains)) continue;
+                                    matched[index] = true;
+                                    pending--;
+                                }
                             }
                         }
+                        for (var index = 0; index < changed.Length; index++)
+                            if (matched[index]) changed[index].Direct.Add(identity);
                     }
-                    for (var index = 0; index < changed.Length; index++)
-                        if (matched[index]) changed[index].Direct.UnionWith(identities);
                 }
             }
         }
