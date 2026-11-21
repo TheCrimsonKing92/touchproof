@@ -221,8 +221,7 @@ internal sealed partial class OperatorIntentCoordinator
                     out var entry, out var rejection))
             {
                 if (goalId is not null && goal is null &&
-                    (reference.StartsWith("focused-evidence:", StringComparison.OrdinalIgnoreCase) ||
-                     reference.StartsWith("acceptance-attempt:", StringComparison.OrdinalIgnoreCase)))
+                    AdjudicationEvidenceResolver.LessonReferenceRequiresGoal(reference))
                     rejection = $"evidence-reference-unresolved {reference}";
                 throw new OperatorLessonRejectedException(rejection);
             }

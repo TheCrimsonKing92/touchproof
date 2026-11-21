@@ -8,6 +8,9 @@ public sealed class BriefSourceContextSectionTests : WorkerDispatchTestSupport
 {
     private const string SourcePath = "src/cited.txt";
     private const string Sentinel = "source-context-line-sentinel";
+    private const string ExcerptGuidance =
+        "These excerpts are the current text of those line ranges. Use them instead of reading those ranges again; read beyond them with an offset and limit only when a decision needs lines the excerpt does not show.";
+    private const string FormerExcerptGuidance = "Do not re-read them unless you need more context.";
 
     [Xunit.Fact]
     public void ExtractsCitedLinesWithContextAndMergesOverlaps()
@@ -39,7 +42,8 @@ public sealed class BriefSourceContextSectionTests : WorkerDispatchTestSupport
         Assert.StartsWith("## Source context\n", section);
         Assert.Contains($"### {SourcePath} (lines 1-3)", section);
         Assert.Contains("current at candidate commit abcdef123456", section);
-        Assert.Contains("Do not re-read them unless you need more context.", section);
+        Assert.Contains(ExcerptGuidance, section);
+        Assert.DoesNotContain(FormerExcerptGuidance, section);
         Assert.DoesNotContain(root, section);
         Assert.DoesNotContain('\r', section);
         Assert.Contains("1 | first\n2 | second\n3 | third\n", section);
@@ -286,9 +290,16 @@ public sealed class BriefSourceContextSectionTests : WorkerDispatchTestSupport
         var dispatch = Prepare(fixture, typed);
         var prompt = File.ReadAllText(dispatch.PromptPath);
 
-        Assert.Contains("\n\n## Source context\n", prompt);
-        Assert.Contains("1 | " + Sentinel, prompt);
-        Assert.Contains("current at candidate commit " + fixture.Head, prompt);
+        const string heading = "\n\n## Source context\n";
+        Assert.Contains(heading, prompt);
+        var sectionStart = prompt.IndexOf(heading, StringComparison.Ordinal) + heading.Length;
+        var sectionEnd = prompt.IndexOf("\n## ", sectionStart, StringComparison.Ordinal);
+        var section = sectionEnd < 0 ? prompt[sectionStart..] : prompt[sectionStart..sectionEnd];
+        Assert.Contains($"### {SourcePath} (lines 1-1)", section);
+        Assert.Contains("1 | " + Sentinel, section);
+        Assert.Contains("current at candidate commit " + fixture.Head, section);
+        Assert.Contains(ExcerptGuidance, section);
+        Assert.DoesNotContain(FormerExcerptGuidance, section);
         Assert.Equal(typed, dispatch.Task.LastDispatch?.ContextPackageReceipt is not null);
         if (dispatch.Task.LastDispatch?.ContextPackageReceipt is { } receipt)
         {

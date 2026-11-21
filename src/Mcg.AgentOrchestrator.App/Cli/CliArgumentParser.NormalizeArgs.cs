@@ -46,6 +46,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return [.. commandArgs, .. metadata];
     }
 
+    if (RecordControlReceiptCommand.IsCommand(args))
+    {
+        return args;
+    }
+
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("answer", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))
