@@ -428,16 +428,8 @@ internal sealed partial class ConductorContinuitySupervisor
             return;
 
         AdoptedBuildPublicationReporting.Try(() =>
-        {
-            var policy = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory));
-            if (!policy.AdoptedBuildPushEnabled)
-                return;
-
-            // The push service reports a false return as held. The local revert still stands.
-            _ = PushActivationRevert is { } push
-                ? push(root, revert, branch)
-                : AdoptedBuildPushService.CreateDefault(root, TryAppendConductEvent).Push(revert, branch: branch);
-        }, "activation-main-revert-push");
+            RevertPushPolicyGate.Push(workspace.OrchestratorDirectory, root, revert, branch,
+                TryAppendConductEvent, PushActivationRevert), "activation-main-revert-push");
     }
 
     private void AppendAdoptedBuildEvent(string detail)
