@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -19,6 +20,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal readonly TaskId TaskId;
     internal readonly WorkerBuildHostReference Reference;
     internal readonly WorkerBuildInvocationOperations Operations;
+    internal readonly WorkerTargetHome? TargetHome;
     internal readonly DotnetBuildStorageRoot Storage;
     internal readonly FixtureTime Time = new();
     internal readonly List<WorkerBuildInvocation> Observed = [];
@@ -41,13 +43,19 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false,
         bool goalBranch = false, bool extraProject = false, bool reportWorkerResult = false,
         CompilerMode compilerMode = CompilerMode.Fake, Action<string>? seedRepository = null,
-        string? projectHomeDirectory = null, IReadOnlyList<string>? fakeCompilerProjects = null)
+        string? projectHomeDirectory = null, IReadOnlyList<string>? fakeCompilerProjects = null, bool isNonHome = false,
+        bool linkedWorktree = false)
     {
         _lowIntegrity = lowIntegrity;
         _compilerFailure = compilerFailure;
         _compilerMode = compilerMode;
         _fakeCompilerProjects = fakeCompilerProjects ?? [Project];
         RepositoryRoot = Path.Combine(Root, "repository");
+        if (isNonHome)
+        {
+            var workspace = OrchestratorWorkspace.ForProject("fixture", RepositoryRoot, dataRootDirectory: Root);
+            TargetHome = WorkerTargetHomeFactory.For(OrchestratorHome.ForInstallRoot(AppContext.BaseDirectory), workspace);
+        }
         try
         {
             Directory.CreateDirectory(Path.Combine(RepositoryRoot, "src", "Feature"));
@@ -88,7 +96,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             Kernel.ActivateGoal(goal.Id, [agent]);
             GoalId = goal.Id;
             TaskId = task.Id;
-            if (reportWorkerResult)
+            if (reportWorkerResult || linkedWorktree)
             {
                 // Completion inspects a linked goal worktree, including its .git file.
                 // Keep the seed repository and shared git metadata fixture-owned too.
@@ -123,7 +131,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             _ = StateDbMigrations.EnsureUpToDate(StatePath);
             Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
             Operations = new(StatePath, reportWorkerResult ? RepositoryRoot : Root, Storage,
-                projectHomeDirectory: projectHomeDirectory);
+                projectHomeDirectory: projectHomeDirectory ?? TargetHome?.ProjectHomeDirectory,
+                isNonHome: TargetHome?.UsesSelectedBuildTargets ?? false);
             var prepared = Operations.Prepare(Kernel, GoalId, TaskId);
             using var host = Process.GetCurrentProcess();
             var hostIdentity = WorkerBuildRequestChannel.ReadIdentity(host);

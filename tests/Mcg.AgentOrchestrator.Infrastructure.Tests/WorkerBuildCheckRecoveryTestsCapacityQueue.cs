@@ -160,13 +160,17 @@ public sealed class WorkerBuildCheckRecoveryTestsCapacityQueue
             WorkerResultPresent: true, AssignedScopeComplete: false));
     }
 
-    [Fact]
-    public void CapacityFailure_HoldsThenRetries_AsEnvironmentRound()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CapacityFailure_HoldsThenRetries_AsEnvironmentRound(bool isNonHomeDotnet)
     {
         using var repository = CreateSeededGitRepository();
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
         var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
+        if (isNonHomeDotnet)
+            File.WriteAllText(Path.Combine(worktree, "Fixture.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         var root = new DotnetBuildStorageRoot(Path.Combine(repository.WorkingDirectory, "host-builds"));
         var clock = new RecordingTimeProvider();
         var held = Enumerable.Range(0, 2).Select(index =>
@@ -207,7 +211,12 @@ public sealed class WorkerBuildCheckRecoveryTestsCapacityQueue
         var feedback = Assert.Single(retries);
         Assert.StartsWith("worker-build-capacity automatic retry 1/3:", feedback, StringComparison.Ordinal);
         Assert.Contains(WorkerBuildCheckRecoveryText.SlotCapacityBlock, feedback, StringComparison.Ordinal);
-        Assert.Contains("Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit.", feedback, StringComparison.Ordinal);
+        var buildCommand = isNonHomeDotnet
+            ? $"Rerun `{WorkerStackVerificationGuidance.NonHomeBuildCommand}` from the worktree root after the last edit."
+            : "Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit.";
+        Assert.Contains(buildCommand, feedback, StringComparison.Ordinal);
+        if (isNonHomeDotnet)
+            Assert.DoesNotContain("Invoke-WorkerBuildCheck.ps1", feedback, StringComparison.Ordinal);
         Assert.Equal(0, task.WorkerBuildCheckRecoveryCount);
         DispatchTask(kernel, goal, task, workingDirectory: worktree);
         var secondRound = Assert.Single(WorkerRoundLedger.FromGoal(goal).Where(round => round.RoundIndex == 2));

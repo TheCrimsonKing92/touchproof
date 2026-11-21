@@ -9,11 +9,24 @@ public sealed class ReverseDependencyEvidenceCostInputsTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-11-12T12:00:00Z");
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    [Theory]
+    [InlineData(9, null)]
+    [InlineData(10, 0.3)]
+    public void Compute_CompletedGateMinimum_DeterminesRateAvailability(int count, double? expected)
+    {
+        var attempts = Enumerable.Range(0, count).Select(index => Attempt($"gate-{index}", Now, passed: index >= 3));
+        var input = ReverseDependencyEvidenceCostInputs.Compute(["A"], ["A"],
+            new Dictionary<string, double>(), 3, attempts, Now);
+
+        Assert.Null(input.UnavailableReason);
+        Assert.Equal(expected, input.FailureRate);
+    }
+
     [Fact]
     public void Compute_MediansAndWindowChange_RecomputesDecision()
     {
         var medians = new Dictionary<string, double> { ["Selected"] = 10, ["Other"] = 10 };
-        var attempts = new[] { Attempt("red", Now.AddDays(-14)), Attempt("green", Now, passed: true) };
+        var attempts = WindowAttempts().ToArray();
         ReverseDependencyEvidenceCostInputs Read(DateTimeOffset now) => ReverseDependencyEvidenceCostInputs.Compute(
             ["Selected", "Selected"], ["Selected", "Other"], medians, 3, attempts, now);
         var first = Read(Now);
@@ -28,7 +41,7 @@ public sealed class ReverseDependencyEvidenceCostInputsTests
         Assert.False(Decide(second));
         medians["Selected"] = 10;
         var third = Read(Now.AddTicks(1));
-        Assert.Equal(0, third.FailureRate);
+        Assert.Null(third.FailureRate);
         Assert.False(Decide(third));
     }
 
@@ -73,7 +86,7 @@ public sealed class ReverseDependencyEvidenceCostInputsTests
     }
 
     [Theory]
-    [InlineData(false, false, 1)]
+    [InlineData(false, false, 0.1)]
     [InlineData(true, false, 0)]
     [InlineData(false, true, 0)]
     public void Compute_LegacyCheckAttribution_RespectsRecordedCauseAndFlake(
@@ -85,8 +98,10 @@ public sealed class ReverseDependencyEvidenceCostInputsTests
                 ? [new("Selected.Works", AcceptanceTestFailureOrigin.UnconfirmedIntroduced, "rerun passed")] : null)],
             CheckAttributions: [new("tests", AcceptanceFailureOrigin.Introduced, "baseline green",
                 environmental ? AcceptanceFailureCause.EnvironmentalApparatus : AcceptanceFailureCause.NotClassified)]) };
+        var passing = Enumerable.Range(1, ReverseDependencyEvidenceCostInputs.MinimumCompletedGateAttempts - 1)
+            .Select(index => Attempt($"green-{index}", Now, passed: true));
         var input = ReverseDependencyEvidenceCostInputs.Compute(["A"], ["A"],
-            new Dictionary<string, double>(), 3, [attempt with { Result = result }], Now);
+            new Dictionary<string, double>(), 3, passing.Append(attempt with { Result = result }), Now);
         Assert.Equal(expected, input.FailureRate);
     }
 
@@ -94,8 +109,7 @@ public sealed class ReverseDependencyEvidenceCostInputsTests
     public void Read_StoreChanges_RefreshesAllInputsAndExcludesOtherRepository()
     {
         using var fixture = new StoreFixture();
-        fixture.WriteAttempt(Attempt("red", Now.AddDays(-14)));
-        fixture.WriteAttempt(Attempt("green", Now, passed: true));
+        foreach (var attempt in WindowAttempts()) fixture.WriteAttempt(attempt);
         fixture.WriteAttempt(Attempt("foreign", Now) with { Metadata = Attempt("foreign", Now).Metadata with
         { ExecutionDirectory = Path.Combine(fixture.Root, "other-repository") } });
         fixture.Record("first", "Selected", 10);
@@ -112,7 +126,7 @@ public sealed class ReverseDependencyEvidenceCostInputsTests
         Assert.Equal(165, second.FullGateSeconds);
         Assert.False(Decide(second));
         var third = fixture.Read(Now.AddTicks(1));
-        Assert.Equal(0, third.FailureRate);
+        Assert.Null(third.FailureRate);
         Assert.False(Decide(third));
     }
 
@@ -153,6 +167,12 @@ public sealed class ReverseDependencyEvidenceCostInputsTests
 
     private static bool Decide(ReverseDependencyEvidenceCostInputs input) =>
         ReverseDependencyEvidenceCostRule.Evaluate(input.SelectionSeconds, input.FullGateSeconds, input.FailureRate).Run;
+
+    private static IEnumerable<ReverseDependencyEvidenceCostInputs.Attempt> WindowAttempts() =>
+        Enumerable.Range(0, 5).SelectMany(index => new[]
+        {
+            Attempt($"red-{index}", Now.AddDays(-14)), Attempt($"green-{index}", Now, passed: true)
+        });
 
     private static AcceptanceCheckResult Failure(AcceptanceTestFailureOrigin origin, bool environmental = false) =>
         new("tests", false, 1, null, FailingTestAttributions: [new("Selected.Works", origin, "receipt")],

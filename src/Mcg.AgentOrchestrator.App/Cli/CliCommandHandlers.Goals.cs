@@ -955,7 +955,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                 context.CurrentGoal.Id,
                 cleanupHooks: context.CleanupContext.Hooks,
-                orchestratorDirectory: context.Workspace.OrchestratorDirectory);
+                workspace: context.Workspace);
             TerminalGoalSweepTextView.PrintTerminalGoalSweep(readinessSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
@@ -987,7 +987,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                 context.CurrentGoal.Id,
                 cleanupHooks: context.CleanupContext.Hooks,
-                orchestratorDirectory: context.Workspace.OrchestratorDirectory);
+                workspace: context.Workspace);
             TerminalGoalSweepTextView.PrintTerminalGoalSweep(recoverySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
@@ -1242,7 +1242,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                     context.CurrentGoal.Id,
                     cleanupHooks: context.CleanupContext.Hooks,
-                    orchestratorDirectory: context.Workspace.OrchestratorDirectory);
+                    workspace: context.Workspace);
                 TerminalGoalSweepTextView.PrintTerminalGoalSweep(nextSweep);
                 TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
                 context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
@@ -1625,7 +1625,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                         cache: terminalSweepCache,
                         cleanupHooks: context.CleanupContext.Hooks,
-                        orchestratorDirectory: context.Workspace.OrchestratorDirectory));
+                        workspace: context.Workspace));
                     var remediation = ConductorTickStepLedger.Measure("reconcile-remediation", () => reconcileSweepCoordinator.Process(terminalSweep));
                     if (remediation.RemedySucceeded)
                     {
@@ -1634,7 +1634,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                             cache: terminalSweepCache,
                             cleanupHooks: context.CleanupContext.Hooks,
-                            orchestratorDirectory: context.Workspace.OrchestratorDirectory));
+                            workspace: context.Workspace));
                         terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
                     }
                     // Concatenate, never overwrite: the unapplied-exit records are surfaced through the same

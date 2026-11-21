@@ -11,10 +11,17 @@ internal static class CliWorkerHelperCommands
         var configuration = "Debug";
         var requestKey = Guid.NewGuid().ToString("N");
         var busyTimeoutSeconds = 120;
+        var selectTargets = false;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var index = 1; index < args.Length; index++)
         {
             var argument = args[index];
+            if (argument == "--selected-targets")
+            {
+                if (!seen.Add(argument)) return Usage(error);
+                selectTargets = true;
+                continue;
+            }
             if (!argument.StartsWith('-')) { projects.Add(argument); continue; }
             if (argument is not ("--configuration" or "--request-key" or "--busy-timeout-seconds") ||
                 !seen.Add(argument) || ++index >= args.Length || string.IsNullOrWhiteSpace(args[index]))
@@ -29,9 +36,9 @@ internal static class CliWorkerHelperCommands
                     break;
             }
         }
-        if (projects.Count == 0) return Usage(error);
+        if (selectTargets ? projects.Count != 0 : projects.Count == 0) return Usage(error);
         return new WorkerBuildRequestClient(output, error).Run(directory,
-            new WorkerBuildRequest(1, requestKey, projects.ToArray(), configuration), busyTimeoutSeconds);
+            new WorkerBuildRequest(1, requestKey, projects.ToArray(), configuration, selectTargets), busyTimeoutSeconds);
     }
 
     internal static int SubmitResult(string[] args, TextWriter output, TextWriter error) =>

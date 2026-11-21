@@ -31,8 +31,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var questions = new List<ProjectOwnerQuestion>();
         var tracked = DiscoveryTrackedPaths.Read(root);
         tracked.AskIfDegraded(questions);
-        var exclusions = new HashSet<string>(excludedDirectoryNames ?? [], StringComparer.OrdinalIgnoreCase);
-        exclusions.UnionWith(["bin", "obj", ".git"]);
+        var exclusions = DirectoryExclusions(excludedDirectoryNames);
         var discovery = EnumerateFiles(root, exclusions, tracked);
         var files = discovery.Files.Order(StringComparer.Ordinal).ToArray();
         foreach (var path in discovery.MissingDirectories.Select(path => Relative(root, path))
@@ -40,8 +39,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             Ask($"discovery/directories/{path}/membership",
                 $"Discovery could not inspect directory '{path}'; project membership may be incomplete.",
                 new FactSource(path, 1), questions);
-        var solutions = files.Where(file => Path.GetDirectoryName(file) == root &&
-            Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx").ToArray();
+        var solutions = RootSolutions(root, files).ToArray();
         var listed = new Dictionary<string, (string Name, FactSource Source)>(PathComparer);
         foreach (var solution in solutions)
         {
@@ -315,6 +313,68 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         {
             error = exception.Message;
             return null;
+        }
+    }
+
+    private static HashSet<string> DirectoryExclusions(IReadOnlyCollection<string>? additional = null)
+    {
+        var exclusions = new HashSet<string>(additional ?? [], StringComparer.OrdinalIgnoreCase);
+        exclusions.UnionWith(["bin", "obj", ".git"]);
+        return exclusions;
+    }
+
+    private static IEnumerable<string> RootSolutions(string root, IEnumerable<string> files) =>
+        files.Where(file => Path.GetDirectoryName(file) == root &&
+            Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx");
+
+    internal DotnetBuildTargetSelection SelectBuildTargets(string repositoryRoot)
+    {
+        try
+        {
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
+            var tracked = DiscoveryTrackedPaths.Read(root);
+            var questions = new List<ProjectOwnerQuestion>();
+            tracked.AskIfDegraded(questions);
+            if (questions.Count > 0)
+                return new([], [], Error: questions[0].Question);
+            if (!tracked.HasTrackedPaths)
+                return new([], [], Error: $"Could not establish tracked membership for '{root}'.");
+
+            var exclusions = DirectoryExclusions();
+            var discovery = EnumerateFiles(root, exclusions, tracked);
+            if (discovery.MissingDirectories.Count != 0)
+                return new([], [], Error: "Could not inspect " + string.Join(", ", discovery.MissingDirectories));
+
+            var solutions = RootSolutions(root, discovery.Files)
+                .GroupBy(file => Path.GetFileNameWithoutExtension(file), PathComparer)
+                .Select(group => group.OrderByDescending(file => Path.GetExtension(file)
+                    .Equals(".slnx", StringComparison.OrdinalIgnoreCase)).ThenBy(file => file, StringComparer.Ordinal).First())
+                .Order(StringComparer.Ordinal).ToArray();
+            if (solutions.Length > 0)
+            {
+                var projects = solutions.SelectMany(solution => ReadSolution(root, solution, questions))
+                    .Select(entry => entry.Path).Distinct(PathComparer).Order(StringComparer.Ordinal).ToArray();
+                // An out-of-root reference can still be reached by the build itself.
+                // Only a failure to read the solution invalidates the examination.
+                var unreadable = questions.FirstOrDefault(question =>
+                    solutions.Any(solution => question.FactKey == $"solutions/{Relative(root, solution)}"));
+                return unreadable is null
+                    ? new(solutions.Select(solution => Relative(root, solution)).ToArray(), projects)
+                    : new([], [], Error: unreadable.Question);
+            }
+
+            var projectFiles = discovery.Files.Where(IsProjectFile).Select(file => Relative(root, file))
+                .Order(StringComparer.Ordinal).ToArray();
+            if (projectFiles.Length > 0)
+                return new(projectFiles, projectFiles);
+            if (!WorktreeTreeDigest.TryCompute(root, out var digest, out var reason, out var failure))
+                return new([], [], Error: WorktreeTreeDigestFailure.WithDetail(reason, failure));
+            return new([], [], AbsenceProof: $"root={root}; tree_digest={digest}; tracked_root_solutions=0; tracked_projects=0; " +
+                $"excluded_directories={string.Join(",", exclusions.Order(StringComparer.Ordinal))}; reparse_points=excluded");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return new([], [], Error: error.Message);
         }
     }
 

@@ -13,8 +13,8 @@ public static class OperatorCancelAwareDispatchRunner
             workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
             RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate,
-            WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory,
-                projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, integrationBranch: workspace.IntegrationBranch),
+            WorkerBuildInvocations = WorkerBuildInvocationOperations.ForWorkspace(
+                workspace, OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory)),
             ExecutionThrottlingOptOut = () => DispatchJobExecutionQos.IsEnabled(workspace.SqliteStatePath),
             NodeDependencyInstall = WorkerNodeDependencyInstallSource.For(workspace.ProjectHomeDirectoryOrNull),
             DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
