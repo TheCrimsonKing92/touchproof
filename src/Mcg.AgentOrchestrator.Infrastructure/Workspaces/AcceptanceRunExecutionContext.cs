@@ -82,7 +82,8 @@ public sealed record AcceptanceRunExecutionOptions(
     AcceptanceFocusedRunBinding? FocusedRunBinding = null,
     Action<IReadOnlyList<AcceptanceLaneWaitOccurrence>>? LaneWaitSink = null,
     IReadOnlyList<string>? GateTestObligationSelectors = null,
-    IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceReceipts = null);
+    IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceReceipts = null,
+    string? PinnedMainCommit = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -602,6 +603,12 @@ public static partial class AcceptanceExecutionOwners
         }
 
         var identityResolvers = CreateGitIdentityResolvers(TrunkBranchName.Resolve(options.IntegrationBranch));
+        if (options.PinnedMainCommit is { } pinnedMain)
+        {
+            if (!string.Equals(identityResolvers.ResolveVerifyingCommitSha(worktreePath), pinnedMain, StringComparison.OrdinalIgnoreCase))
+                throw new AcceptanceExecutionIdentityChangedException("The checkout does not match the pinned main commit.", isChangedIdentity: true);
+            identityResolvers = identityResolvers with { ResolveMainSha = _ => pinnedMain };
+        }
         return CreateAttemptCore(
             worktreePath,
             goalId,
