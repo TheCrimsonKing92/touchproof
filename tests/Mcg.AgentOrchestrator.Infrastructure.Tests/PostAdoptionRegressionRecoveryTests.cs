@@ -24,8 +24,9 @@ public sealed class PostAdoptionRegressionRecoveryTests
         using var fixture = new Fixture();
         var guard = fixture.CreateGuard();
 
-        ObserveBatch(guard, 10);
         ObserveBatch(guard, 11);
+        Assert.Empty(fixture.Trace);
+
         guard.ObserveGoalResult(12, AdoptedAt.AddMinutes(12), "closing-goal", null, false, false, 2);
 
         Assert.Equal((fixture.Root, Revert, Branch), Assert.Single(fixture.Pushes));
