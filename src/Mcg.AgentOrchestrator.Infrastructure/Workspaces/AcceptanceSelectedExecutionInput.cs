@@ -6,4 +6,6 @@ internal sealed record AcceptanceSelectedExecutionInput(ReverseDependencyTestSel
     IReadOnlyList<AcceptanceTestClassDescriptor> Classes, IReadOnlyList<string> GuardClasses,
     IReadOnlyList<string>? ObligationSelectors = null,
     Func<string, IReadOnlyList<AcceptanceTestClassDescriptor>>? ProjectClasses = null,
-    IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? AssemblyScanReasons = null);
+    IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? AssemblyScanReasons = null,
+    IReadOnlyList<ImpactReplayChangedSupportFileSummary>? SupportSelections = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? SupportProjectClasses = null);

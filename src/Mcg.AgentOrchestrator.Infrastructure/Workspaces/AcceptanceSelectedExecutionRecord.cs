@@ -27,6 +27,9 @@ internal sealed record AcceptanceSelectedExecutionRecord(
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<AssemblyScanningGuardTestClasses.SelectionReason>? AssemblyScanReasons { get; init; }
 
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ImpactReplayChangedSupportFileSummary>? SupportSelections { get; init; }
+
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<AcceptanceUnresolvedObligationSelector> UnresolvedObligationSelectors { get; init; } = [];
 

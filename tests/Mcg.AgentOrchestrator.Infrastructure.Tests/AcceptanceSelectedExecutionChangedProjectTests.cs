@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static AcceptanceSelectedExecutionProjectFixture;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
@@ -36,11 +37,7 @@ public sealed class AcceptanceSelectedExecutionChangedProjectTests
         {
             changedFile = "shared/SharedHelper.cs";
             repository.Write(changedFile, "namespace Candidate; public class SharedHelper { }");
-            var projectFile = Path.Combine(repository.Root, projectPath);
-            var include = Path.GetRelativePath(Path.Combine(repository.Root, projectDirectory),
-                Path.Combine(repository.Root, changedFile));
-            File.WriteAllText(projectFile, File.ReadAllText(projectFile).Replace("</Project>",
-                $"<ItemGroup><Compile Include=\"{include}\" /></ItemGroup></Project>", StringComparison.Ordinal));
+            LinkSource(repository.Root, projectPath, changedFile);
         }
         else if (kind == "deleted-source")
         {
@@ -85,5 +82,67 @@ public sealed class AcceptanceSelectedExecutionChangedProjectTests
         var original = Assert.Single(Checks, item => item.Name == checkName);
         Assert.Equal(original.Arguments, Assert.Single(plan.Checks, item => item.Name == checkName).Arguments);
         Assert.Same(original, Assert.Single(session.TransformProjectChecks(Checks)));
+    }
+
+    [Theory]
+    [InlineData(100, false)]
+    [InlineData(1, true)]
+    public void LiveSession_ChangedLeafAndLinkedSupport_PreservesBothTestClasses(int threshold, bool fullRun)
+    {
+        using var switches = AcceptanceShardPolicySwitches.Use(new(FullShards: false, ChangeScoped: true));
+        using var repository = Repository();
+        repository.Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ATests.cs",
+            "namespace Candidate; public class A { [Xunit.Fact] public void Runs() { } }");
+        const string support = "shared/SharedSupport.cs";
+        repository.Write(support, "namespace Candidate; public class SharedSupport { }");
+        LinkSource(repository.Root, OwnerConsoleTestsProject, support);
+        var directory = Path.GetDirectoryName(OwnerConsoleTestsProject)!;
+        var leaf = Path.Combine(directory, "LeafTests.cs");
+        repository.Write(leaf, "namespace Candidate; public class LeafTests { [Xunit.Fact] public void Runs() { } }");
+        repository.Write(Path.Combine(directory, "Helper.cs"),
+            "namespace Candidate; public class Helper { public SharedSupport Value = new(); }");
+        repository.Write(Path.Combine(directory, "ReachedTests.cs"),
+            "namespace Candidate; public class ReachedTests { public Helper Value = new(); [Xunit.Fact] public void Runs() { } }");
+        repository.Write(Path.Combine(directory, "DirectTests.cs"),
+            "namespace Candidate; public class DirectTests { public SharedSupport Value = new(); [Xunit.Fact] public void Runs() { } }");
+        repository.Write(Path.Combine(directory, "UnrelatedTests.cs"),
+            "namespace Candidate; public class UnrelatedTests { [Xunit.Fact] public void Runs() { } }");
+        string[] changes = [RepositoryTestReachTests.RepositoryFixture.Source, leaf, support];
+        var settings = new AcceptanceGateEngineSettings
+        {
+            SupportClosureClassThresholdValue = JsonSerializer.SerializeToElement(threshold)
+        };
+        var session = new AcceptanceSelectedExecutionSession(AcceptanceSelectedExecutionMode.Enforce,
+            repository.Root, changes, engineSettings: settings);
+
+        var plan = EffectivePlan(repository.Root, session, changes);
+
+        Assert.True(session.Applied);
+        var dispatched = Assert.Single(plan.Checks, check => check.Project is not null &&
+            ProjectMatches(check.Project, OwnerConsoleTestsProject));
+        Assert.Equal(fullRun, plan.PolicyShardPlan.RequiresFullSupportRun(OwnerConsoleTestsProject));
+        if (fullRun)
+        {
+            Assert.Equal(Checks.Single(check => check.Project == OwnerConsoleTestsProject).Arguments, dispatched.Arguments);
+            Assert.Equal(support, Assert.Single(session.ReadSupportFallbacks()).Path);
+            return;
+        }
+
+        Assert.True(IsFocusedProjectDotnetCheck(dispatched));
+        var filterIndex = dispatched.Arguments.ToList().IndexOf("--filter");
+        Assert.InRange(filterIndex, 0, dispatched.Arguments.Count - 2);
+        var includes = AcceptanceLaneMembership.CreateClassMatcher(new(dispatched.Name, dispatched.Arguments[filterIndex + 1]));
+        Assert.True(includes("Candidate.LeafTests"));
+        Assert.True(includes("Candidate.ReachedTests"));
+        Assert.True(includes("Candidate.DirectTests"));
+        Assert.False(includes("Candidate.UnrelatedTests"));
+    }
+
+    private static void LinkSource(string root, string projectPath, string sourcePath)
+    {
+        var projectFile = Path.Combine(root, projectPath);
+        var include = Path.GetRelativePath(Path.GetDirectoryName(projectFile)!, Path.Combine(root, sourcePath));
+        File.WriteAllText(projectFile, File.ReadAllText(projectFile).Replace("</Project>",
+            $"<ItemGroup><Compile Include=\"{include}\" /></ItemGroup></Project>", StringComparison.Ordinal));
     }
 }

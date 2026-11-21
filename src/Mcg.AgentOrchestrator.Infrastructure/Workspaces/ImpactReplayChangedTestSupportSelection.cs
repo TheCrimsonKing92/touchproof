@@ -8,12 +8,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Semantic references distinguish aliases and equal short names in different namespaces.
 internal static class ImpactReplayChangedTestSupportSelection
 {
-    internal static (IReadOnlyList<string> Classes, string? AbandonReason, IReadOnlyList<string> OtherFiles) Read(
-        string checkout, IReadOnlyList<string> changedFiles, ImpactReplayChangedSourceRouting routing)
+    internal static ImpactReplayChangedSupportSelection Read(
+        string checkout, IReadOnlyList<string> changedFiles, ImpactReplayChangedSourceRouting routing,
+        int threshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold)
     {
-        if (changedFiles.Count == 0) return ([], null, []);
         return ImpactReplayChangedSupportReferenceScan.Select(checkout, changedFiles, routing.TestProjects,
-            () => RunnableClasses(checkout, routing).Runnable);
+            () => RunnableClasses(checkout, routing).Runnable, threshold: threshold,
+            deletedSourceProjects: routing.DeletedSourceProjects);
     }
 
     internal static (HashSet<string> Runnable, IReadOnlyList<string> Excluded) RunnableClasses(
