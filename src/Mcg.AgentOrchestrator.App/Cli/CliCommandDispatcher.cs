@@ -46,7 +46,8 @@ public static bool ExecuteCommand(
     WorktreeCleanupContext? cleanupContext = null,
     IClock? diagnosticsClock = null,
     Action<Action>? registerPostCommitAction = null,
-    Func<IReadOnlyCollection<GoalId>, AgentOrchestratorKernel>? loadOperatorIntentTargets = null)
+    Func<IReadOnlyCollection<GoalId>, AgentOrchestratorKernel>? loadOperatorIntentTargets = null,
+    BacklogIntakeContinuationHost? backlogContinuation = null)
 {
     CliCommandHelp.ValidateGoalCreationOptions(parts);
     if (RecordControlReceiptCommand.IsCommand(parts))
@@ -102,6 +103,7 @@ public static bool ExecuteCommand(
         loadOperatorIntentTargets: loadOperatorIntentTargets)
     {
         EventWriter = eventWriter,
+        BacklogContinuation = backlogContinuation,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(
             CrosswalkExecutableComposition.ForProcess,
             operationCleanupContext.Hooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),

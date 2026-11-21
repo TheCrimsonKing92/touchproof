@@ -1,0 +1,5 @@
+{"type":"assistant","message":{"id":"a","content":[{"type":"tool_use","id":"ineligible"}]}}
+{"type":"assistant","message":{"id":"a","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"first"},{"type":"text","text":"Working"},{"type":"tool_use","id":"second"}]}}
+{"type":"assistant","message":{"id":"a","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"first"},{"type":"text","text":"Working"},{"type":"tool_use","id":"second"}]}}
+{"type":"assistant","message":{"id":"b","usage":{"input_tokens":20,"output_tokens":7},"content":[{"type":"tool_use","id":"third"},{"type":"tool_result","content":[{"type":"tool_use","id":"nested"}]},null]}}
+{"type":"user","message":{"id":"ignored","usage":{"input_tokens":999},"content":[{"type":"tool_use","id":"user-block"}]}}

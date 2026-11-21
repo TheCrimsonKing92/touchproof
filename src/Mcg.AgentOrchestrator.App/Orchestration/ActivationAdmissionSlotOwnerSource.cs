@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -61,49 +60,7 @@ internal static class ActivationAdmissionSlotOwnerSource
     }
 
     internal static ActivationAdmissionOwnerPendingStep ReadPendingStep(string directory,
-        ConductorGroupedGateAttempt attempt)
-    {
-        if (attempt.Kind == "train")
-        {
-            var path = Path.Combine(directory, "merge-train-acceptance.db");
-            if (!File.Exists(path)) return ActivationAdmissionOwnerPendingStep.None;
-            var store = MergeTrainAcceptanceStore.OpenReadOnly(path);
-            var receipt = store.TryReadReceipt(attempt.IdentityValue);
-            return receipt?.Outcome switch
-            {
-                MergeTrainGateOutcome.Passed => ActivationAdmissionOwnerPendingStep.PassedReceipt,
-                MergeTrainGateOutcome.Failed => receipt.GateAttemptId is { } gateAttempt &&
-                    store.ReadAttemptEjections(gateAttempt).Any(ejection => ejection.Reason is
-                        MergeTrainEjectionReason.RedNewestMember or MergeTrainEjectionReason.RedAttributedMember)
-                        ? ActivationAdmissionOwnerPendingStep.SurvivorsGate : ActivationAdmissionOwnerPendingStep.Attribution,
-                _ => ActivationAdmissionOwnerPendingStep.None
-            };
-        }
-        if (attempt.Kind != "cohort") return ActivationAdmissionOwnerPendingStep.None;
-        var database = Path.Combine(directory, "cohort-acceptance.db");
-        if (!File.Exists(database)) return ActivationAdmissionOwnerPendingStep.None;
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = database, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 1
-        }.ToString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT outcome, attribution,
-                EXISTS(SELECT 1 FROM cohort_partition_receipts p WHERE p.cohort_id=r.cohort_id)
-            FROM cohort_receipts r WHERE cohort_id=$id;
-            """;
-        command.Parameters.AddWithValue("$id", attempt.IdentityValue);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read()) return ActivationAdmissionOwnerPendingStep.None;
-        return reader.GetString(0) switch
-        {
-            "Passed" => ActivationAdmissionOwnerPendingStep.PassedReceipt,
-            "Failed" when reader.GetString(1) == nameof(AcceptanceCohortAttributionOutcome.NotApplicable) => reader.GetBoolean(2)
-                ? ActivationAdmissionOwnerPendingStep.FocusedPartition : ActivationAdmissionOwnerPendingStep.Attribution,
-            _ => ActivationAdmissionOwnerPendingStep.None
-        };
-    }
+        ConductorGroupedGateAttempt attempt) => ActivationAdmissionGroupedPendingStep.Read(directory, attempt);
 
     private static bool Unreadable(Exception ex) => ex is IOException or UnauthorizedAccessException or
         JsonException or SqliteException or InvalidOperationException or ArgumentException or NotSupportedException;

@@ -174,6 +174,7 @@ internal sealed partial class ConductorDriver
 
         var receipt = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
         var round = receipt.Round;
+        var repeated = SummarizeRepeatedFailingSet(goal);
         var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(
             new FailedGoalVerifyingFindingRouteFacts(
                 triggeringTask.Id,
@@ -192,73 +193,43 @@ internal sealed partial class ConductorDriver
                     .TakeWhile(task => task.Id != triggeringTask.Id)
                     .Select(task => new FailedGoalFindingRouteTask(task.Id, task.RequiredRole))
                     .ToImmutableArray(),
-                SummarizeRepeatedFailingSet(goal), LifetimeRound: receipt.LifetimeRound ?? 0, LifetimeBackstop: receipt.LifetimeBackstop ?? 0));
+                repeated, LifetimeRound: receipt.LifetimeRound ?? 0, LifetimeBackstop: receipt.LifetimeBackstop ?? 0));
 
-        if (route.Kind == FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired)
+        var stopped = route.Kind switch
         {
-            observation = FailedGoalFindingObservation.Observed(
+            FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired => FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
                 $"{triggeringTask.RequiredRole} blocker requires operator-owned evidence; auto-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
-                $"Route: {reviewerRoute?.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole} output: {outputArtifact}");
-            observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
-                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
-            return true;
-        }
-
-        if (route.Kind == FailedGoalVerifyingFindingRouteKind.TargetUnavailable)
-        {
-            observation = FailedGoalFindingObservation.Observed(
+                $"Route: {reviewerRoute?.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole} output: {outputArtifact}"),
+            FailedGoalVerifyingFindingRouteKind.TargetUnavailable => FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingRouteUnavailable,
                 $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {route.TargetRole} task; operator action required. " +
-                $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
-            observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
-                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
-            return true;
-        }
-
-        if (route.Kind == FailedGoalVerifyingFindingRouteKind.RepeatedFailingTestSet)
-        {
-            var repeated = SummarizeRepeatedFailingSet(goal);
-            var hold = new PreReviewRepeatedFailureHold(repeated.RepeatedTests, repeated.ConsecutiveRounds);
-            observation = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingRepeatedFailingTestSet, hold.Reason);
-            observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
-                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
-            return true;
-        }
-
-        var targetTask = goal.Tasks.Single(task => task.Id == route.TargetTaskId);
-        if (route.Kind is FailedGoalVerifyingFindingRouteKind.RetryCapReached or FailedGoalVerifyingFindingRouteKind.LifetimeBackstopReached)
-        {
-            observation = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingRetryCapReached,
-                triggeringTask.RequiredRole == AgentRole.Reviewer
-                    ? BuildReviewCapDecisionMessage(
-                        goal,
-                        triggeringTask,
-                        receipt,
-                        trigger.Finding,
-                        outputArtifact,
+                $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}"),
+            FailedGoalVerifyingFindingRouteKind.RepeatedFailingTestSet => FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingRepeatedFailingTestSet,
+                new PreReviewRepeatedFailureHold(repeated.RepeatedTests, repeated.ConsecutiveRounds).Reason),
+            FailedGoalVerifyingFindingRouteKind.RetryCapReached or
+            FailedGoalVerifyingFindingRouteKind.LifetimeBackstopReached => FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingRetryCapReached, triggeringTask.RequiredRole == AgentRole.Reviewer
+                    ? BuildReviewCapDecisionMessage(goal, triggeringTask, receipt, trigger.Finding, outputArtifact,
                         triggeringTask.LastVerification?.MergedReviewFindings ?? [])
-                    : BuildTesterReviewCapDecisionMessage(goal, triggeringTask, targetTask, receipt, trigger.Finding, outputArtifact));
+                    : BuildTesterReviewCapDecisionMessage(goal, triggeringTask,
+                        goal.Tasks.Single(task => task.Id == route.TargetTaskId), receipt, trigger.Finding, outputArtifact)),
+            _ => null
+        };
+        if (stopped is not null)
+        {
             observation = FindingRoundBatchCoordinator.AttachDeferredClosure(this, goal, triggeringTask,
-                observation with { PendingNotes = pendingNotes.ToImmutableArray() });
+                stopped with { PendingNotes = pendingNotes.ToImmutableArray() });
             return true;
         }
 
         if (route.Kind == FailedGoalVerifyingFindingRouteKind.MissingFindingResult)
         {
-            observation = FailedGoalFindingObservation.Routed(
-                FailedGoalFindingObservationKind.FindingResultMissing,
-                triggeringTask.Id,
-                route.AttemptIdentity,
-                $"auto-review-retry round {route.Round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} " +
+            observation = ObserveVerifyingRoleRerun(
+                FailedGoalFindingObservationKind.FindingResultMissing, route.AttemptIdentity, route.RoundKind, route.RetryCause,
                 "reported needs-work, but its structured finding result was missing or unparseable and no current open blocking finding exists. " +
-                "Re-run the verifying role against the current Developer output; do not reopen the Developer from superseded finding history.",
-                warningMessage: null,
-                route.RoundKind,
-                route.RetryCause);
-            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+                "Re-run the verifying role against the current Developer output; do not reopen the Developer from superseded finding history.");
             return true;
         }
 
@@ -266,6 +237,7 @@ internal sealed partial class ConductorDriver
                 _findingStagnationKernel ?? _conductorTickKernel, out observation))
             return true;
 
+        var targetTask = goal.Tasks.Single(task => task.Id == route.TargetTaskId);
         var triggerLabel = triggeringTask.RequiredRole == AgentRole.Reviewer
             ? "verdict=needs-work"
             : "WORKER_RESULT blocker";
@@ -282,6 +254,24 @@ internal sealed partial class ConductorDriver
                 round,
                 outputArtifact,
                 landingFileScopes);
+        }
+        catch (ReviewFindingConvergenceException ex) when (
+            triggeringTask.RequiredRole == AgentRole.Reviewer &&
+            ex.Code == ReviewFindingConvergence.NeedsWorkWithoutOpenFindingsViolationCode)
+        {
+            var findings = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, triggeringTask)
+                .Concat(AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(
+                    goal, AgentRole.Tester, triggeringTask.LastVerification!.CompletedAt));
+            var inventory = string.Join(Environment.NewLine,
+                findings.Select(finding => $"- {finding.StableId}: {finding.State}/{finding.Severity}"));
+            observation = ObserveVerifyingRoleRerun(
+                FailedGoalFindingObservationKind.FindingRouteObserved, BuildFailedGoalAttemptIdentity(triggeringTask),
+                RetryRoundKind.Mechanical, RetryCause.CriterionEvidenceOwnerMismatch,
+                "reported needs-work with no open blocking finding in the merged inventory. " +
+                "Re-run the Reviewer against the current Developer output. Return pass or record at least one open blocking finding." +
+                $"{Environment.NewLine}Current finding inventory:{Environment.NewLine}" +
+                (inventory.Length == 0 ? "(empty)" : inventory));
+            return true;
         }
         catch (ReviewFindingConvergenceException ex)
         {
@@ -310,6 +300,12 @@ internal sealed partial class ConductorDriver
             route.RetryCause));
         observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
         return true;
+
+        FailedGoalFindingObservation ObserveVerifyingRoleRerun(FailedGoalFindingObservationKind kind, string attemptIdentity,
+            RetryRoundKind? roundKind, RetryCause? cause, string reason) =>
+            FailedGoalFindingObservation.Routed(kind, triggeringTask.Id, attemptIdentity,
+                $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} {reason}",
+                warningMessage: null, roundKind, cause) with { PendingNotes = pendingNotes.ToImmutableArray() };
     }
     private static IReadOnlyList<FailedGoalPendingNote> BuildSuppressedAutoReviewRetryFindingNotes(
         TaskSpec reviewerTask,

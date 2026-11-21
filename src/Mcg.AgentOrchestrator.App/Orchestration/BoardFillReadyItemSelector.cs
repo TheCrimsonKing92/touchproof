@@ -39,21 +39,40 @@ internal static class BoardFillReadyItemSelector
         string? currentMainHead = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
         IReadOnlySet<string>? epicMembers = null, Action<BacklogItem>? epicMissing = null,
         Func<BacklogItem, BoardFillNearDuplicateReference?>? nearDuplicate = null,
-        Action<BacklogItem, BoardFillNearDuplicateReference>? nearDuplicateSkipped = null)
+        Action<BacklogItem, BoardFillNearDuplicateReference>? nearDuplicateSkipped = null) =>
+        SelectReady(EvaluateCandidates(items, goals, alreadyDrafted, readiness, rounds, currentMainHead, changedFiles),
+            preferredOrder, epicMembers, epicMissing, nearDuplicate, nearDuplicateSkipped);
+
+    internal static IEnumerable<(BacklogItem Item, BacklogReadiness Ready)> EvaluateCandidates(
+        IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals, IReadOnlySet<string> alreadyDrafted,
+        Func<BacklogItem, BacklogReadiness> readiness, IReadOnlyList<BoardFillDraftRound>? rounds = null,
+        string? currentMainHead = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null)
+    {
+        var activeSources = goals.Where(goal => !goal.IsTerminal).Select(goal => goal.SourceBacklogItemId)
+            .ToHashSet(StringComparer.Ordinal);
+        var failures = rounds?.Where(BoardFillFailureKind.CountsTowardItem).ToLookup(round => round.BacklogItemId,
+            StringComparer.Ordinal);
+        return items.Where(item => item.Status == BacklogItemStatus.Open &&
+            !alreadyDrafted.Contains(item.Id) &&
+            (failures is null || failures[item.Id].Count(round => round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
+            !activeSources.Contains(item.Id) &&
+            !IsOwnerGated(item) && !IsAuthorRefused(item) &&
+            !BoardFillContradictionHold.Blocks(item, currentMainHead, changedFiles))
+            .DistinctBy(item => item.Id, StringComparer.Ordinal)
+            .Select(item => (Item: item, Ready: readiness(item)));
+    }
+
+    internal static BacklogItem? SelectReady(IEnumerable<(BacklogItem Item, BacklogReadiness Ready)> candidates,
+        IReadOnlyList<string>? preferredOrder, IReadOnlySet<string>? epicMembers, Action<BacklogItem>? epicMissing,
+        Func<BacklogItem, BoardFillNearDuplicateReference?>? nearDuplicate,
+        Action<BacklogItem, BoardFillNearDuplicateReference>? nearDuplicateSkipped)
     {
         var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
         if (preferredOrder is not null)
             for (var index = 0; index < preferredOrder.Count; index++)
                 ranks.TryAdd(preferredOrder[index], index);
 
-        return items.Where(item => item.Status == BacklogItemStatus.Open &&
-            !alreadyDrafted.Contains(item.Id) &&
-            (rounds is null || rounds.Count(round => round.BacklogItemId == item.Id &&
-                BoardFillFailureKind.CountsTowardItem(round) && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
-            !goals.Any(goal => goal.SourceBacklogItemId == item.Id && !goal.IsTerminal) &&
-            !IsOwnerGated(item) && !IsAuthorRefused(item) &&
-            !BoardFillContradictionHold.Blocks(item, currentMainHead, changedFiles))
-        .Select(item => (Item: item, Ready: readiness(item)))
+        return candidates
         .Where(candidate => candidate.Ready.Eligible)
         .Where(candidate =>
         {

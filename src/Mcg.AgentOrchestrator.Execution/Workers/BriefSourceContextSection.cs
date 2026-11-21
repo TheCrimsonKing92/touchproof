@@ -95,7 +95,7 @@ internal static class BriefSourceContextSection
 
         var candidate = string.IsNullOrWhiteSpace(candidateCommit) ? "(head unavailable)" : candidateCommit;
         var section = new StringBuilder("## Source context\n");
-        section.Append($"These working-tree lines are current at candidate commit {candidate}. Do not re-read them unless you need more context.\n");
+        section.Append($"These working-tree lines are current at candidate commit {candidate}. These excerpts are the current text of those line ranges. Use them instead of reading those ranges again; read beyond them with an offset and limit only when a decision needs lines the excerpt does not show.\n");
         // A head identifier is normally a SHA; still keep the complete section bounded for any caller.
         if (section.Length > TotalCap - PerFileCap)
             return null;

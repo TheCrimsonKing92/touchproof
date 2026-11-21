@@ -15,7 +15,7 @@ public sealed class ProviderUsageTurnCountTests
     public void ClaudeFixture_RecordsDistinctAssistantTurnsAndTokenTotals()
     {
         var result = new ClaudeTranscriptUsageReader([ClaudeRoot]).Read(ClaudeSession);
-        Assert.Equal(new ProviderReportedUsage(6360, 23, 6000, TurnCount: 3), result.Usage);
+        Assert.Equal(new ProviderReportedUsage(6360, 23, 6000, TurnCount: 3, ToolCallCount: 0), result.Usage);
         AssertRecorded(result.Usage, result.UnavailableReason);
     }
 
@@ -23,7 +23,7 @@ public sealed class ProviderUsageTurnCountTests
     public void CodexFixture_RecordsAllCompletedTurnsWhenUsageExists()
     {
         var result = CodexJsonlUsageParser.Parse(File.ReadAllText(CodexFixture));
-        Assert.Equal(new ProviderReportedUsage(80, 20, 50, TurnCount: 3), result.Usage);
+        Assert.Equal(new ProviderReportedUsage(80, 20, 50, TurnCount: 3, ToolCallCount: 0), result.Usage);
         AssertRecorded(result.Usage, result.UsageUnavailableReason);
     }
 
@@ -67,7 +67,7 @@ public sealed class ProviderUsageTurnCountTests
 
         var result = new ClaudeTranscriptUsageReader([root]).Read(ClaudeSession);
 
-        Assert.Equal(new ProviderReportedUsage(5, 0, 0, TurnCount: 2), result.Usage);
+        Assert.Equal(new ProviderReportedUsage(5, 0, 0, TurnCount: 2, ToolCallCount: 0), result.Usage);
     });
 
     [Fact]

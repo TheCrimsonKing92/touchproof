@@ -132,19 +132,6 @@ internal static class EpicPlanGoalClaimSnapshot
         var columns = new HashSet<string>(StringComparer.Ordinal);
         using (var reader = command.ExecuteReader())
             while (reader.Read()) columns.Add(reader.GetString(1));
-        if (currentGoals is null && columns.Count != 0)
-        {
-            var source = columns.Contains("source_backlog_item_id") ? "source_backlog_item_id" : "NULL";
-            var coverage = columns.Contains("snapshot_json") ? "json_extract(snapshot_json, '$.SourceBacklogCoverage')" : "NULL";
-            command.CommandText = $"SELECT id, status, {source}, {coverage} FROM goals";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                var id = reader.GetString(0);
-                goals[id] = new(id, reader.GetString(1), reader.IsDBNull(3) ? null : reader.GetValue(3).ToString());
-                if (!reader.IsDBNull(2)) byGoal[id] = reader.GetString(2);
-            }
-        }
         command.CommandText = "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'source_backlog_claims'";
         if (command.ExecuteScalar() is not null)
         {
@@ -153,6 +140,37 @@ internal static class EpicPlanGoalClaimSnapshot
             while (reader.Read())
                 persisted[reader.GetString(0)] = new(reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
         }
+        if (columns.Count == 0) return new(persisted, goals, byGoal);
+        var source = columns.Contains("source_backlog_item_id") ? "source_backlog_item_id" : "NULL";
+        var coverage = columns.Contains("snapshot_json") ? "json_extract(snapshot_json, '$.SourceBacklogCoverage')" : "NULL";
+        var projection = $"SELECT id, status, {source}, {coverage} FROM goals";
+        if (currentGoals is null)
+        {
+            command.CommandText = projection;
+            ReadGoals();
+        }
+        else
+        {
+            var missingOwners = persisted.Values.Select(claim => claim.OwnerGoalId)
+                .Except(goals.Keys, StringComparer.Ordinal).ToArray();
+            foreach (var batch in missingOwners.Chunk(400))
+            {
+                command.Parameters.Clear();
+                command.CommandText = $"{projection} WHERE id IN ({SqliteReadSession.BindIds(command, batch)})";
+                ReadGoals();
+            }
+        }
         return new(persisted, goals, byGoal);
+
+        void ReadGoals()
+        {
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetString(0);
+                goals[id] = new(id, reader.GetString(1), reader.IsDBNull(3) ? null : reader.GetValue(3).ToString());
+                if (!reader.IsDBNull(2)) byGoal[id] = reader.GetString(2);
+            }
+        }
     }
 }

@@ -24,7 +24,7 @@ public sealed class ConductorBoardFillHostAssessmentTests
         host.ServiceTick(h.Kernel);
         await PanelTestHarness.Signal(host.CurrentRound!, "verification finished");
         Assert.Null(Assert.Single(h.Store.ReadAll()).Outcome);
-        Assert.False(File.Exists(h.EventPath));
+        Assert.Empty(BoardFillTestHarness.LifecycleEvents(h.EventPath));
         host.ServiceTick(h.Kernel);
         Assert.Equal(1, calls);
         var round = Assert.Single(h.Store.ReadAll());
@@ -32,7 +32,7 @@ public sealed class ConductorBoardFillHostAssessmentTests
         Assert.Equal(verified, round.Assessment.Fileable);
         Assert.Equal(new[] { first.Id.Value, second.Id.Value }.Order(), round.Assessment.Scope.Depends.Select(dependency => dependency.GoalId));
         Assert.All(round.Assessment.Scope.Depends, dependency => Assert.Equal("ExactFile src/Feature/File.cs<->src/Feature/File.cs", dependency.Reason));
-        using var entry = BoardFillTestHarness.Event(Assert.Single(File.ReadAllLines(h.EventPath)));
+        using var entry = BoardFillTestHarness.Event(Assert.Single(BoardFillTestHarness.LifecycleEvents(h.EventPath)));
         var prefix = $"BOARD_FILL_DRAFT backlog={h.Item.Id[..8]} outcome=draft checks=4/4 draft={h.DraftPath}";
         var depends = string.Join(',', new[] { first.Id.Value, second.Id.Value }.Order().Select(id => id[..8]));
         var reasons = verified ? "none" : "premise-bullet-1:contradicted";
@@ -40,7 +40,7 @@ public sealed class ConductorBoardFillHostAssessmentTests
             entry.RootElement.GetProperty("detail").GetString());
         Assert.True(round.Reported);
         host.ServiceTick(h.Kernel);
-        Assert.Single(File.ReadAllLines(h.EventPath));
+        Assert.Single(BoardFillTestHarness.LifecycleEvents(h.EventPath));
         Assert.Equal(4, round.Checks.Count);
     }
 
@@ -61,7 +61,7 @@ public sealed class ConductorBoardFillHostAssessmentTests
         host.ServiceTick(h.Kernel);
         Assert.Same(task, host.CurrentRound);
         Assert.Null(Assert.Single(h.Store.ReadAll()).Assessment);
-        Assert.False(File.Exists(h.EventPath));
+        Assert.Empty(BoardFillTestHarness.LifecycleEvents(h.EventPath));
         release.SetResult(BoardFillAssessmentTestFixture.Verified);
         await PanelTestHarness.Signal(task!, "released verification finished");
         host.ServiceTick(h.Kernel);

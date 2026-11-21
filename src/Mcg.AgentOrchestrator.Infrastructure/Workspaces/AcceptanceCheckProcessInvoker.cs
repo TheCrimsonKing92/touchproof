@@ -62,12 +62,11 @@ internal static class AcceptanceCheckProcessInvoker
         var heartbeatFinalized = false;
         var registrationReleased = false;
         var processDisposed = false;
-
         var directLaunch = OperatingSystem.IsWindows() &&
             stdoutPipeName is not null && stderrPipeName is not null &&
             !string.Equals(startInfo.FileName, "cmd.exe", StringComparison.OrdinalIgnoreCase);
         var directStartInfo = directLaunch ? startInfo : null;
-
+        var replayLaunch = GateReplayReceipt.CaptureLaunch(request, startInfo, directLaunch, arguments);
         int? startedProcessId = null;
         int? completedProcessId = null;
         DateTimeOffset? completedProcessStartedAt = null;
@@ -216,7 +215,8 @@ internal static class AcceptanceCheckProcessInvoker
                     progressSink,
                     progressInterval ?? DefaultProgressInterval,
                     runningObserver: laneStall is null ? null : laneStall.Observe,
-                    suppressDiagnosticCaptures: request.SuppressDiagnosticCaptures);
+                    suppressDiagnosticCaptures: request.SuppressDiagnosticCaptures,
+                    replayLaunch: directStartInfo is null || directLaunch ? replayLaunch : null);
                 heartbeatTask = GateLaneHeartbeatLoop.RunAsync(
                     heartbeat.WriteRunning, () => { qosSweep?.RunPass(); sampler?.Tick(); }, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval);
             }
