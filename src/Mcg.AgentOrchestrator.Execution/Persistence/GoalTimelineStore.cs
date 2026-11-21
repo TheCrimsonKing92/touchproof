@@ -148,6 +148,44 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
         throw Error(id, "invalid TimelineInTable count");
     }
 
+    internal async Task<(int Count, DateTimeOffset? FirstOccurredAt)> ReadTickSummaryAsync(
+        SqliteConnection connection, GoalSnapshot snapshot, JsonElement marker, CancellationToken token)
+    {
+        if (ReadMarker(snapshot.Id, marker) is not { } expected)
+            return (snapshot.Timeline.Count, snapshot.Timeline.MinBy(evt => evt.OccurredAt)?.OccurredAt);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*), COALESCE(MAX(sequence), -1)
+            FROM goal_timeline WHERE goal_id = $id
+            """;
+        command.Parameters.AddWithValue("$id", snapshot.Id);
+        try
+        {
+            using (var reader = await command.ExecuteReaderAsync(token))
+            {
+                await reader.ReadAsync(token);
+                var actual = reader.GetInt64(0);
+                if (actual != expected) throw Error(snapshot.Id, $"expected {expected} rows, found {actual}");
+                if (reader.GetInt64(1) != actual - 1) throw Error(snapshot.Id, "sequence gap");
+            }
+
+            if (expected == 0 || snapshot.CreatedAt is not null || snapshot.BriefVersions is { Count: > 0 })
+                return (expected, null);
+
+            command.CommandText = """
+                SELECT json_extract(entry_json, '$.OccurredAt') FROM goal_timeline
+                WHERE goal_id = $id ORDER BY julianday(json_extract(entry_json, '$.OccurredAt')), sequence LIMIT 1
+                """;
+            var first = (string?)await command.ExecuteScalarAsync(token);
+            return (expected, first is null ? null : JsonSerializer.Deserialize<DateTimeOffset>(
+                JsonSerializer.Serialize(first)));
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
+            ex.Message.Contains("no such table: goal_timeline", StringComparison.OrdinalIgnoreCase))
+        { throw Error(snapshot.Id, "missing goal_timeline table", ex); }
+    }
+
     internal Task<JsonElement[]> ReadAsync(SqliteConnection? connection, string id, JsonElement root,
         CancellationToken token = default) => ReadAsync(connection, id,
             root.TryGetProperty("Timeline", out var inline) ? inline : default,
