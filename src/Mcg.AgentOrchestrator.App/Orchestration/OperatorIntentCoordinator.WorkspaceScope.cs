@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -27,14 +28,22 @@ internal sealed partial class OperatorIntentCoordinator
     internal IReadOnlyList<string> EvaluateExecutorSlots() => SlotController?.Evaluate() ?? [];
     internal ProviderResetRetainedSourceRecorder? ProviderResets { get; init; }
     internal ClaudeUsageBackfillIntentHandler? ClaudeUsageBackfills { get; init; }
+    internal GoalCreationOperatorIntentHandler? GoalCreation { get; init; }
 
-    public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel)
+    public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel) =>
+        ExecuteWorkspacePending(kernel, out _);
+
+    internal IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel, out bool deferred,
+        string? verb = null)
     {
+        deferred = false;
         var lines = new List<string>();
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
-            var intent = _store.ClaimNextAsync(OperatorIntentScopes.Workspace, ClaimOwner)
-                .GetAwaiter().GetResult();
+            var claim = verb is null
+                ? _store.ClaimNextAsync(OperatorIntentScopes.Workspace, ClaimOwner)
+                : _store.ClaimNextByVerbAsync(OperatorIntentScopes.Workspace, verb, ClaimOwner);
+            var intent = claim.GetAwaiter().GetResult();
             if (intent is null) break;
             bool replayed;
             string? outcomeSummary = null;
@@ -44,6 +53,7 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new InvalidOperationException("Workspace intent services are unavailable.");
                 replayed = intent.Verb switch
                 {
+                    OperatorIntentVerbs.GoalCreate => ApplyGoalCreation(kernel, intent, out outcomeSummary),
                     OperatorIntentVerbs.ExecutorSetSlots or OperatorIntentVerbs.ExecutorSetEnabled or OperatorIntentVerbs.FocusedEvidenceSet =>
                         ApplyExecutorSetting(intent, out outcomeSummary),
                     OperatorIntentVerbs.ClaudeUsageBackfill =>
@@ -70,6 +80,12 @@ internal sealed partial class OperatorIntentCoordinator
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
             }
+            catch (GoalCreationIntentDeferredException ex)
+            {
+                deferred = true;
+                lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result=deferred reason={Sanitize(ex.Message)}");
+                break;
+            }
             catch (Exception ex)
             {
                 var reason = Sanitize(ex.Message);
@@ -88,6 +104,17 @@ internal sealed partial class OperatorIntentCoordinator
             lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result={(replayed ? "applied-recovered" : "applied")}");
         }
         return lines;
+    }
+
+    private bool ApplyGoalCreation(AgentOrchestratorKernel kernel, OperatorIntentRecord intent, out string summary)
+    {
+        var handler = GoalCreation ?? throw new InvalidOperationException("Goal creation intent services are unavailable.");
+        var payload = JsonSerializer.Deserialize<GoalCreationOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
+            ?? throw new InvalidOperationException("GOAL_INTAKE_PAYLOAD_INVALID reason=missing-payload");
+        if (payload.RequestKey != intent.IdempotencyKey)
+            throw new InvalidOperationException("GOAL_INTAKE_PAYLOAD_INVALID reason=unexpected-key-or-command");
+
+        return handler.Apply(kernel, payload, out summary);
     }
 
     private bool ApplyExecutorSetting(OperatorIntentRecord intent, out string summary)

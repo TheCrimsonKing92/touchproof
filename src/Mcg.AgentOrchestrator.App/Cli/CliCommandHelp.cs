@@ -122,12 +122,12 @@ internal static class CliCommandHelp
     public const string DirectiveUsage = "Usage: directive record --kind intake|pacing|scope --text-file <path> [--expires-at <utc> | --until-handoff] [--actor-kind human|agent] [--operator-actor <actor>] [--idempotency-key <key>] [--json] | directive retire <id> --reason <text> [--json] | directive handoff [--note <text>] [--json]";
     public const string DirectivesUsage = "Usage: directives [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent] [--json]";
-    public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json] [--sections]";
+    public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json] [--sections | --rework [--until <ISO-8601-with-offset>] [--top <positive-int>]]";
     public const string ClaudeUsageBackfillUsage = "Usage: claude-usage-backfill [--since <ISO-8601-with-offset>] [--goal <goal-prefix>] [--apply] [--json]";
     public const string PromotionFactsBackfillUsage = "Usage: promotion-facts-backfill [--apply] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
-    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop | conductor setup | conductor apply-intents <goal-prefix>";
+    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop | conductor setup | conductor apply-intents <goal-prefix|--workspace>";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -810,8 +810,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry ContextUsage = new(
         ContextUsageUsage,
-        "Report per-role and per-model worker dispatch context usage.",
-        ["--since", "--role", "--json", "--sections", "--help", "-h"]);
+        "Report worker context usage by role and model, or retry usage by role, cause and finding class.",
+        ["--since", "--role", "--json", "--sections", "--rework", "--until", "--top", "--help", "-h"]);
 
     private static readonly CommandHelpEntry ClaudeUsageBackfill = new(
         ClaudeUsageBackfillUsage,
@@ -839,8 +839,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
-        "Start, report or stop the conductor, set up versioned stores, or apply one goal's pending operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
-        ["--clear-stop", "--plan", "--help", "-h"]);
+        "Start, report or stop the conductor, set up versioned stores, or apply pending goal or workspace operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
+        ["--clear-stop", "--plan", "--workspace", "--help", "-h"]);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)

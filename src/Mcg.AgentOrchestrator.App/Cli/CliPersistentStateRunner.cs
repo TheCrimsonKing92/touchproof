@@ -54,6 +54,9 @@ internal static partial class CliPersistentStateRunner
         bool allowTerminalSourceClaimTakeover = false)
     {
         CliCommandHelp.ValidateGoalCreationOptions(args);
+        if (CliKeyedGoalCreationSubmission.IsCommand(args))
+            return CliKeyedGoalCreationSubmission.Submit(args, stateRepository, workspace, agents, ref currentGoal,
+                operatorIntentSubmissionSource, allowTerminalSourceClaimTakeover);
         if (CliArgumentParser.IsAskGoal(args))
             return CliAskGoalCommand.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
@@ -664,7 +667,7 @@ internal static partial class CliPersistentStateRunner
     internal static bool IsGoalIntakeStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase);
 
-    private static bool HasRequestKey(IReadOnlyList<string> args) =>
+    internal static bool HasRequestKey(IReadOnlyList<string> args) =>
         args.Any(arg =>
             arg.Equals("--request-key", StringComparison.OrdinalIgnoreCase) ||
             arg.StartsWith("--request-key=", StringComparison.OrdinalIgnoreCase));
@@ -1815,10 +1818,7 @@ internal static partial class CliPersistentStateRunner
         bool allowTerminalSourceClaimTakeover = false)
     {
         if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
-        {
-            throw new InvalidOperationException(
-                "Goal creation requires a state repository with durable outbox support.");
-        }
+            throw new InvalidOperationException("Goal creation requires a state repository with durable outbox support.");
 
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -1995,53 +1995,8 @@ internal static partial class CliPersistentStateRunner
         IOrchestratorStateOutboxRepository outboxRepository,
         OrchestratorWorkspace workspace,
         AgentOrchestratorKernel kernel,
-        GoalId goalId)
-    {
-        OrchestratorStateOutboxProcessingResult? processingResult = null;
-        var claimed = outboxRepository.TryProcessOutboxMessageAsync(
-                GoalCreationSideEffectDelivery.MessageId(goalId.Value),
-                async (message, cancellationToken) =>
-                {
-                    try
-                    {
-                        var receipt = GoalCreationSideEffectDelivery.Deserialize(message);
-                        if (!receipt.GoalId.Equals(goalId.Value, StringComparison.Ordinal) ||
-                            kernel.Goals.All(candidate => candidate.Id != goalId))
-                        {
-                            processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
-                                $"Goal-creation delivery receipt targets missing or mismatched goal '{receipt.GoalId}'.");
-                            return processingResult;
-                        }
-
-                        await GoalCreationSideEffectDelivery.DeliverAsync(
-                            receipt,
-                            workspace,
-                            kernel,
-                            cancellationToken).ConfigureAwait(false);
-                        processingResult = OrchestratorStateOutboxProcessingResult.Completed;
-                        return processingResult;
-                    }
-                    catch (JsonException ex)
-                    {
-                        processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
-                            $"Invalid goal-creation delivery receipt: {ex.Message}");
-                        return processingResult;
-                    }
-                })
-            .GetAwaiter()
-            .GetResult();
-
-        if (!claimed)
-            return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.AlreadyDelivered);
-
-        if (processingResult?.Disposition == OrchestratorStateOutboxDisposition.Quarantine)
-        {
-            throw new InvalidOperationException(
-                $"GOAL_CREATE_DELIVERY_INVALID goal={goalId.Value} detail={processingResult.Detail}");
-        }
-
-        return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.Delivered);
-    }
+        GoalId goalId) =>
+        GoalCreationSideEffectDelivery.DeliverPending(outboxRepository, workspace, kernel, goalId);
 
     private static void PersistPostCreationGoalChanges(
         ITransactionalOrchestratorStateRepository stateRepository,

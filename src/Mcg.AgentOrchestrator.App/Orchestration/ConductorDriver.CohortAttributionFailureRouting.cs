@@ -90,9 +90,7 @@ internal sealed partial class ConductorDriver
     internal bool HasRoutableRecordedCohortAttributionFailure(Goal goal)
     {
         var failure = goal.LatestAcceptanceFailure;
-        if (failure?.CheckAttributions?.Any(attribution =>
-                attribution.Evidence.StartsWith(ConductorAcceptanceCohortAttributionVerdicts.EvidencePrefix,
-                    StringComparison.Ordinal)) != true)
+        if (failure is null || !IsRecordedCohortAttributionFailure(failure))
         {
             return false;
         }
@@ -102,6 +100,11 @@ internal sealed partial class ConductorDriver
             current.BranchRevision == failure.BranchHeadSha &&
             current.MainRevision == failure.MainHeadSha;
     }
+
+    internal static bool IsRecordedCohortAttributionFailure(AcceptanceFailureSummary failure) =>
+        failure.CheckAttributions?.Any(attribution =>
+            attribution.Evidence.StartsWith(ConductorAcceptanceCohortAttributionVerdicts.EvidencePrefix,
+                StringComparison.Ordinal)) == true;
 
     private GateReadyCandidateRevisionPair? ReadCurrentCohortAttributionRevisions(Goal goal)
     {

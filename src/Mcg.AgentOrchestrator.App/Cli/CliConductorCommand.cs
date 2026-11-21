@@ -72,7 +72,7 @@ internal static class CliConductorCommand
             switch (args[1].ToLowerInvariant())
             {
                 case "apply-intents" when args.Count == 3:
-                    return ApplyIntents(args, workspace, owner, stateRepository, output, error);
+                    return ApplyIntents(args, workspace, owner, stateRepository, output, error, verifyBinding);
                 case "start":
                     return Start(workspace, owner, args.Count == 3, launcher ?? (OperatingSystem.IsWindows()
                              ? new HandleListConductorProcessLauncher() : new SystemConductorProcessLauncher()),
@@ -138,13 +138,16 @@ internal static class CliConductorCommand
 
     private static int ApplyIntents(IReadOnlyList<string> args, OrchestratorWorkspace workspace, int? owner,
         Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository,
-        TextWriter output, TextWriter error)
+        TextWriter output, TextWriter error, Action? verifyBinding)
     {
         if (owner is not null)
         {
             error.WriteLine($"Refused: conductor running (pid {owner}); the running conductor applies pending intents on its next tick.");
             return 1;
         }
+
+        if (args[2].Equals("--workspace", StringComparison.OrdinalIgnoreCase))
+            return ApplyWorkspaceIntents(workspace, stateRepository, output, verifyBinding);
 
         ProgramStartupLifecycle.EnsureStateDbInitialized(args, workspace);
         var repository = stateRepository is null
@@ -188,6 +191,27 @@ internal static class CliConductorCommand
             default:
                 throw new InvalidOperationException($"Unexpected offline operator intent outcome: {outcome.GetType().Name}.");
         }
+    }
+
+    private static int ApplyWorkspaceIntents(OrchestratorWorkspace workspace,
+        Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository,
+        TextWriter output, Action? verifyBinding)
+    {
+        using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        verifyBinding?.Invoke();
+        if (!StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
+            WorkspaceStoreSetup.RunWithOwnership(workspace);
+        var repository = stateRepository?.Invoke(workspace) ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace,
+            new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction(),
+                repository as IOrchestratorStateOutboxRepository));
+        var lines = coordinator.ExecuteWorkspacePending(repository.LoadAsync().GetAwaiter().GetResult(), out var deferred,
+            verb: OperatorIntentVerbs.GoalCreate);
+        if (lines.Count == 0)
+            output.WriteLine("No pending workspace goal-creation intents.");
+        foreach (var line in lines)
+            output.WriteLine(line);
+        return deferred ? 1 : 0;
     }
 
     private static string? ResolveMainCommit(OrchestratorWorkspace workspace)
@@ -287,5 +311,82 @@ internal static class CliConductorCommand
         output.WriteLine($"Conductor launched: pid {pid}; stdout log: {stdoutPath}");
         output.WriteLine("Check status: touchproof.cmd conductor status");
         return 0;
+    }
+}
+
+internal sealed class CliGoalIntentConstruction : IGoalIntentConstruction
+{
+    public bool IsSupportedCommand(IReadOnlyList<string> arguments) =>
+        CliKeyedGoalCreationSubmission.IsCommand(arguments);
+
+    public void Build(
+        GoalCreationOperatorIntentPayload payload,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IGoalLifecycleEventWriter eventWriter,
+        CollaborationItemRaise raiseCollaborationItem,
+        Action<Goal, IReadOnlyCollection<string>?> finalize)
+    {
+        // Pending intents from before submission validation can still carry a follow-up flag.
+        CliKeyedGoalCreationSubmission.ValidateCreationOnly(payload.CreationArguments);
+        var arguments = payload.CreationArguments.ToArray();
+        string? briefPath = null;
+        try
+        {
+            if (payload.BriefFileValueIndex is { } index)
+            {
+                briefPath = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("goal-creation"), $"{Guid.NewGuid():N}.txt");
+                File.WriteAllText(briefPath, payload.Objective);
+                arguments[index] = briefPath;
+            }
+
+            var agents = payload.Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            _ = CliCommandDispatcher.ExecuteCommand(arguments, kernel, workspace, ref agents,
+                new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
+                eventWriter: eventWriter, refinementCollaborationItemRaise: raiseCollaborationItem,
+                finalizeGoalCreation: finalize);
+        }
+        finally
+        {
+            if (briefPath is not null) File.Delete(briefPath);
+        }
+    }
+
+    public void ValidatePrepared(
+        AgentOrchestratorKernel currentKernel,
+        GoalSnapshot prepared,
+        OrchestratorWorkspace workspace,
+        IReadOnlyCollection<string>? sourceDependencies,
+        bool allowTerminalSourceClaimTakeover) =>
+        GoalCreationPreconditionValidator.Validate(currentKernel, prepared, workspace,
+            preparedSourceBacklogDependencies: sourceDependencies,
+            allowTerminalSourceClaimTakeover: allowTerminalSourceClaimTakeover);
+
+    public void Complete(
+        GoalCreationOperatorIntentPayload payload,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        bool replayed)
+    {
+        if (payload.RequestedEpicId is not null || goal.SourceBacklogItemId is not null)
+        {
+            var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+            if (portfolio.GetGoalMembershipAsync(goal.Id.Value).GetAwaiter().GetResult() is null)
+            {
+                var epicId = payload.RequestedEpicId ?? EpicAtCreation.ResolveGoalEpic(workspace, null, goal.SourceBacklogItemId);
+                EpicAtCreation.AssignAfterCommit(workspace, PortfolioMemberKind.Goal, goal.Id.Value, epicId);
+            }
+        }
+
+        if (replayed)
+            return;
+
+        if (payload.Mode == "full")
+            GoalCitedDefectAdvisory.Warn(goal.Objective, () => kernel.Goals, goal, workspace.ConductEventsLogPath);
+        if (GoalCreationSummaryView.IsRequested(payload.CreationArguments))
+            GoalCreationSummaryView.Print(goal, "created", workspace.PortfolioStorePath);
     }
 }
