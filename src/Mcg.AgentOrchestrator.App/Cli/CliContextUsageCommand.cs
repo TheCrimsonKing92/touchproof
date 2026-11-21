@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.App.Usage;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -12,10 +13,15 @@ internal static class CliContextUsageCommand
         args.Count > 0 && args[0].Equals("context-usage", StringComparison.OrdinalIgnoreCase);
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace) =>
-        Run(args, () => ReadGoals(workspace), Console.Out, Console.Error);
+        Run(args, workspace, Console.Out, Console.Error);
+
+    internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace, TextWriter output, TextWriter error) =>
+        Run(args, () => ReadRepository(workspace).LoadAsync().GetAwaiter().GetResult().Goals, output, error,
+            (since, role) => DispatchUsagePopulation.Read(ReadRepository(workspace), since, role));
 
     internal static int Run(IReadOnlyList<string> args,
-        Func<IReadOnlyCollection<Goal>> loadGoals, TextWriter output, TextWriter error)
+        Func<IReadOnlyCollection<Goal>> loadGoals, TextWriter output, TextWriter error,
+        Func<DateTimeOffset?, string?, DispatchUsagePopulation>? loadUsage = null)
     {
         try
         {
@@ -25,7 +31,9 @@ internal static class CliContextUsageCommand
                 WriteSections(ContextSectionOutcomeReport.Build(loadGoals(), since, role), json, output);
                 return 0;
             }
-            var report = ContextUsageReport.Build(loadGoals(), since, role);
+            var report = loadUsage is null
+                ? ContextUsageReport.Build(loadGoals(), since, role)
+                : ContextUsageReport.Build(loadUsage(since, role), since, role);
             if (json)
             {
                 output.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions
@@ -46,6 +54,11 @@ internal static class CliContextUsageCommand
                         (row.MissingUsageReasons.Count == 0 ? "none" :
                             string.Join(",", row.MissingUsageReasons.Select(reason => $"{reason.Key}={reason.Value}"))));
                 }
+                var coverage = report.Coverage;
+                output.WriteLine($"Coverage: live={coverage.Live} archived={coverage.Archived} " +
+                    $"unknown-usage={coverage.UnknownUsage} conflicting={coverage.Conflicting}");
+                foreach (var identity in coverage.ConflictIds)
+                    output.WriteLine($"Conflicting dispatch: goal={identity.GoalId} task={identity.TaskId} sequence={identity.Sequence}");
             }
             return 0;
         }
@@ -56,12 +69,11 @@ internal static class CliContextUsageCommand
         }
     }
 
-    private static IReadOnlyCollection<Goal> ReadGoals(OrchestratorWorkspace workspace)
+    private static SqliteOrchestratorStateRepository ReadRepository(OrchestratorWorkspace workspace)
     {
         if (!File.Exists(workspace.SqliteStatePath))
             throw new FileNotFoundException("State database is missing.", workspace.SqliteStatePath);
-        return SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-            .LoadAsync().GetAwaiter().GetResult().Goals;
+        return SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
     }
 
     private static string Format(ContextUsageStat stat) =>
