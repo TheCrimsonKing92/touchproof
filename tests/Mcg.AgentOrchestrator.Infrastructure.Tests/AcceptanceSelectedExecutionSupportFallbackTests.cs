@@ -45,6 +45,48 @@ public sealed class AcceptanceSelectedExecutionSupportFallbackTests
     }
 
     [Fact]
+    public void AssemblyHookFallback_RetainsOwningProjectAndRecordsCause()
+    {
+        using var fixture = new SourceFixture();
+        fixture.Add("Support.cs", "public class Helpers { }");
+        fixture.Add("Hook.cs", """
+            using System.Runtime.CompilerServices;
+            public static class Hook
+            {
+                [ModuleInitializer]
+                internal static void Install() { _ = new Helpers(); }
+            }
+            """);
+        fixture.Add("A.cs", "namespace Candidate; public class A { Helpers value; }");
+        fixture.Add("B.cs", "namespace Candidate; public class B { }");
+        fixture.Runnable.UnionWith(["Candidate.A", "Candidate.B"]);
+        string[] changed = ["Support.cs"];
+        var result = Select(fixture, changed);
+        var session = CreateSession(result, changed, ["Candidate.A", "Candidate.CliReached"]);
+
+        var observation = AcceptanceSelectedExecutionProjectFixture.Observe(session);
+
+        var record = Assert.IsType<AcceptanceSelectedExecutionRecord>(observation.SelectedExecution);
+        Assert.Equal("plan", record.Decision);
+        Assert.Equal("Support.cs: support reaches an assembly-wide hook", record.FullGateReason);
+        foreach (var lane in Lanes)
+        {
+            var entry = Assert.Single(record.Lanes, item => item.Name == lane.Name);
+            Assert.Equal("retained", entry.Disposition);
+            Assert.Equal(lane.Filter, entry.Filter);
+        }
+        Assert.Equal("narrowed", Assert.Single(session.ProjectChecks, check => check.Project == CliTestsProject).Lane.Disposition);
+        var summary = Assert.Single(record.SupportSelections!);
+        Assert.Equal("Support.cs", summary.Path);
+        Assert.Equal(1, summary.DirectMatchCount);
+        Assert.Equal(1, summary.ClosureCount);
+        Assert.True(summary.Unresolved);
+        Assert.False(summary.Complete);
+        Assert.True(summary.FullRunTriggered);
+        Assert.Equal(InfrastructureTestsProject, Assert.Single(summary.AffectedProjects));
+    }
+
+    [Fact]
     public void TruncatedSupportClosure_SchedulesCoreOutsideOriginalPolicyScope()
     {
         using var switches = AcceptanceShardPolicySwitches.Use(new(FullShards: false, ChangeScoped: true));

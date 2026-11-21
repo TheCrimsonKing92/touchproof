@@ -12,7 +12,8 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
     private sealed record TestClass(string Name, string Project, bool Infrastructure, string Source);
 
     private sealed record ChangedFile(string Path, string FullPath, IReadOnlySet<INamedTypeSymbol> Declared,
-        HashSet<TestClass> Direct, string? AbandonReason, string? UnresolvedReason, bool Deleted = false);
+        HashSet<TestClass> Direct, string? AbandonReason, string? UnresolvedReason,
+        bool Deleted = false, bool HasAssemblyAttributes = false);
 
     internal static ImpactReplayChangedSupportSelection Select(
         string checkout, IReadOnlyList<string> changedFiles,
@@ -67,15 +68,17 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
                 continue;
             }
             var changedModel = compilation.GetSemanticModel(changedTree);
-            var declared = changedTree.GetRoot().DescendantNodes()
+            var root = (CompilationUnitSyntax)changedTree.GetRoot();
+            var hasAssemblyAttributes = root.AttributeLists.Any(ImpactReplayChangedSupportReferrerClosure.IsAssemblyOrModuleAttributeList);
+            var declared = root.DescendantNodes()
                 .Where(n => n is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
                 .Select(n => changedModel.GetDeclaredSymbol(n)).OfType<INamedTypeSymbol>()
                 .Select(type => type.OriginalDefinition)
                 .ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            var undeclared = declared.Count == 0;
+            var undeclared = declared.Count == 0 && !hasAssemblyAttributes;
             files.Add(new(Relative(path), path, declared, [],
                 undeclared ? $"Changed test support has no resolvable test class: {relativePath}" : null,
-                undeclared ? "no resolvable support declarations" : null));
+                undeclared ? "no resolvable support declarations" : null, HasAssemblyAttributes: hasAssemblyAttributes));
         }
 
         var classesByType = new Dictionary<ProjectType, HashSet<TestClass>>();
@@ -100,32 +103,42 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
         foreach (var file in files)
         {
             var reached = new HashSet<TestClass>();
+            var hookProjects = new HashSet<ImpactReplayChangedSourceRouting.Project>();
+            if (file.HasAssemblyAttributes) hookProjects.UnionWith(owners[file.FullPath]);
             var truncated = false;
             if (file.Declared.Count > 0)
             {
                 var seeds = file.Declared.SelectMany(type => owners[file.FullPath].Select(project => new ProjectType(type, project)));
                 var expansion = closure!.Expand(seeds, maximumVisited);
                 truncated = expansion.Truncated;
+                hookProjects.UnionWith(closure.AssemblyHookProjects(expansion.Types));
                 foreach (var type in expansion.Types)
                     if (classesByType.TryGetValue(type, out var classes)) reached.UnionWith(classes);
             }
             var union = reached.Concat(file.Direct).ToHashSet();
-            var missingClasses = union.Count == 0 && !truncated && file.UnresolvedReason is null;
-            var unresolved = file.UnresolvedReason is not null || missingClasses;
+            var reachesAssemblyHook = hookProjects.Count > 0;
+            var missingClasses = union.Count == 0 && !truncated && file.UnresolvedReason is null && !reachesAssemblyHook;
+            var unknownProjectReach = file.UnresolvedReason is not null || missingClasses;
+            var closureCount = CountClasses(reached);
+            var exceedsThreshold = threshold > 0 && closureCount > threshold;
+            var projectPaths = hookProjects.Select(project => Relative(project.Path));
+            if (!reachesAssemblyHook || threshold <= 0 || exceedsThreshold)
+                projectPaths = projectPaths.Concat(union.Select(item => item.Project))
+                    .Concat(owners[file.FullPath].Select(project => Relative(project.Path)));
             var deletedProjects = file.Deleted ? deletedSourceProjects?.Invoke(file.FullPath) : null;
             var projects = deletedProjects is { Count: > 0 }
                 ? deletedProjects.Select(Relative).Order(StringComparer.Ordinal).ToArray()
-                : unresolved || truncated ? allProjects : union.Select(item => item.Project)
-                .Concat(owners[file.FullPath].Select(project => Relative(project.Path)))
-                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
+                : unknownProjectReach || truncated ? allProjects
+                : projectPaths.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
             var reasons = new List<string>();
             if (file.UnresolvedReason is { } reason) reasons.Add(reason);
             if (missingClasses) reasons.Add("no resolvable test class");
+            if (reachesAssemblyHook) reasons.Add("support reaches an assembly-wide hook");
             if (truncated) reasons.Add($"support closure truncated at {maximumVisited} declarations");
             if (threshold <= 0) reasons.Add("invalid support closure threshold");
-            var closureCount = CountClasses(reached);
-            if (threshold > 0 && closureCount > threshold)
+            if (exceedsThreshold)
                 reasons.Add($"support closure class count {closureCount} exceeds threshold {threshold}");
+            var unresolved = unknownProjectReach || reachesAssemblyHook;
             summaries.Add(new(file.Path, CountClasses(file.Direct), closureCount, !truncated && !unresolved, truncated,
                 unresolved, projects, reasons.Count > 0, reasons));
 

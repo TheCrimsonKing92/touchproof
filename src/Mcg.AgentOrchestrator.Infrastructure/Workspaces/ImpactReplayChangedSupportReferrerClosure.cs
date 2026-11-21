@@ -13,6 +13,7 @@ internal sealed class ImpactReplayChangedSupportReferrerClosure
 
     private readonly UsingDirectiveSyntax[] _aliases;
     private readonly ILookup<string, (INamedTypeSymbol Owner, SemanticModel Model, NameSyntax Reference)> _references;
+    private readonly ILookup<ProjectType, Project> _assemblyHookReferrers;
     private readonly Dictionary<string, ILookup<ProjectType, ProjectType>> _bound = new(StringComparer.Ordinal);
     private readonly Dictionary<INamedTypeSymbol, Project[]> _declaringProjects = new(SymbolEqualityComparer.Default);
     private readonly ILookup<string, Project> _owners;
@@ -35,7 +36,30 @@ internal sealed class ImpactReplayChangedSupportReferrerClosure
                 .SelectMany(reference => ReferenceNames(reference, filter.Names).Select(name =>
                     (Name: name, Owner: ((INamedTypeSymbol)item.Symbol!).OriginalDefinition, item.Model, Reference: reference))))
             .ToLookup(item => item.Name, item => (item.Owner, item.Model, item.Reference), StringComparer.Ordinal);
+
+        var moduleInitializer = compilation.GetTypeByMetadataName("System.Runtime.CompilerServices.ModuleInitializerAttribute")!;
+        var initializerNames = new ImpactReplayChangedSupportNameFilter([moduleInitializer], _aliases);
+        var initializers = declarations.Where(item => item.Symbol is INamedTypeSymbol &&
+            item.Node is TypeDeclarationSyntax type && type.Members.OfType<MethodDeclarationSyntax>()
+                .SelectMany(method => method.AttributeLists.SelectMany(list => list.Attributes))
+                .Any(attribute => initializerNames.Matches(attribute.Name) &&
+                    SymbolEqualityComparer.Default.Equals(item.Model.GetTypeInfo(attribute).Type, moduleInitializer)))
+            .SelectMany(item => owners[item.Model.SyntaxTree.FilePath].Select(project =>
+                (Target: new ProjectType(((INamedTypeSymbol)item.Symbol!).OriginalDefinition, project), HookProject: project)));
+        // File-level registrations can reference support from another file or project without a containing type.
+        var registrations = trees.SelectMany(tree => ((CompilationUnitSyntax)tree.GetRoot()).AttributeLists
+            .Where(IsAssemblyOrModuleAttributeList).SelectMany(list => list.DescendantNodes().OfType<NameSyntax>())
+            .Where(filter.Matches).SelectMany(reference => ReferencedTypes(compilation.GetSemanticModel(tree), reference))
+            .SelectMany(target => owners[tree.FilePath].SelectMany(project => ReferenceProjects(target, project)
+                .Select(targetProject => (Target: new ProjectType(target, targetProject), HookProject: project)))));
+        _assemblyHookReferrers = initializers.Concat(registrations).ToLookup(item => item.Target, item => item.HookProject);
     }
+
+    internal static bool IsAssemblyOrModuleAttributeList(AttributeListSyntax list) =>
+        list.Target?.Identifier.ValueText is "assembly" or "module";
+
+    internal IEnumerable<Project> AssemblyHookProjects(IEnumerable<ProjectType> types) =>
+        types.SelectMany(type => _assemblyHookReferrers[type]);
 
     internal (IReadOnlySet<ProjectType> Types, bool Truncated) Expand(
         IEnumerable<ProjectType> seeds, int maximumVisited)
