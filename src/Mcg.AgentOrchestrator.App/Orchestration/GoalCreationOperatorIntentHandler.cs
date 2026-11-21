@@ -5,8 +5,17 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal delegate void GoalIntentConstruction(
+    IReadOnlyList<string> arguments,
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    IReadOnlyList<AgentDefinition> agents,
+    IGoalLifecycleEventWriter eventWriter,
+    CollaborationItemRaise raiseCollaborationItem,
+    Action<Goal, IReadOnlyCollection<string>?> finalize);
+
 internal sealed class GoalCreationOperatorIntentHandler(
-    OrchestratorWorkspace workspace, IOrchestratorStateOutboxRepository repository)
+    OrchestratorWorkspace workspace, IOrchestratorStateOutboxRepository repository, GoalIntentConstruction constructGoal)
 {
     private readonly GoalIntakeRequestStore _requests = new(workspace.SqliteStatePath);
 
@@ -71,7 +80,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
             }
 
             var goal = workingKernel.GetGoal(goalId);
-            _ = CliPersistentStateRunner.DeliverGoalCreationSideEffects(repository, workspace, workingKernel, goalId);
+            _ = GoalCreationSideEffectDelivery.DeliverPending(repository, workspace, workingKernel, goalId);
             if (!replayed)
                 _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goalId);
             if (payload.RequestedEpicId is not null || goal.SourceBacklogItemId is not null)
@@ -136,12 +145,8 @@ internal sealed class GoalCreationOperatorIntentHandler(
                     args[index] = briefPath!;
                 }
 
-                var agents = payload.Agents;
-                var profiles = WorkerProfileCatalog.Default();
-                Goal? currentGoal = null;
-                _ = CliCommandDispatcher.ExecuteCommand(args, constructionKernel, workspace, ref agents,
-                    new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal, eventWriter: events,
-                    refinementCollaborationItemRaise: collaboration.RaiseAsync, finalizeGoalCreation: (goal, sourceDependencies) =>
+                constructGoal(args, constructionKernel, workspace, payload.Agents, events, collaboration.RaiseAsync,
+                    (goal, sourceDependencies) =>
                     {
                         GoalRefinementWorkCoordinator.RecordPending(constructionKernel, goal.Id);
                         prepared = constructionKernel.ExportGoalSnapshot(goal.Id);
