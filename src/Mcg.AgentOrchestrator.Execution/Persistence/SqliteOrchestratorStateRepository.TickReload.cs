@@ -10,6 +10,18 @@ public sealed partial class SqliteOrchestratorStateRepository
         GoalTaskHistoryStore.DocumentMarkers markers, long version, CancellationToken token)
     {
         var id = snapshot.Id;
+        if (snapshot.IsMetadataOnly)
+        {
+            var archived = await GoalSnapshotArchive.ReadDocumentAsync(connection, id, token);
+            if (archived is null) return snapshot;
+            _readObserver?.Invoke(new("archive-attempt", id, archived.Length));
+            markers = new GoalTaskHistoryStore.DocumentMarkers();
+            snapshot = TaskHistoryStore.DecodeDocument(archived, markers)
+                ?? throw new JsonException($"Archived snapshot for goal '{id}' is null.");
+            _readObserver?.Invoke(new("archive-deserialized", id, archived.Length));
+            if (snapshot.IsMetadataOnly) return snapshot;
+        }
+
         var timelineStore = new GoalTimelineStore(SerializerOptions);
         var (count, first) = await timelineStore.ReadTickSummaryAsync(connection, snapshot, markers.Timeline, token);
         var projected = await TaskHistoryStore.ProjectTickTasksAsync(connection, snapshot, markers,
@@ -65,8 +77,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         using var hot = JsonDocument.Parse(json);
         if (hot.RootElement.TryGetProperty("IsMetadataOnly", out var stub) && stub.ValueKind == JsonValueKind.True)
         {
-            command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
-            var archived = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync())
+            var archived = await GoalSnapshotArchive.ReadDocumentAsync(connection, goalId, CancellationToken.None)
                 ?? throw new InvalidDataException($"Missing archive for goal '{goalId}'.");
             using var document = JsonDocument.Parse(archived);
             return await read(connection, document.RootElement, version);

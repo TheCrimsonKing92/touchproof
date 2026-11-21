@@ -695,7 +695,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             }
 
             var reused = next.Count;
-            Dictionary<string, (GoalSnapshot Snapshot, bool WasArchived)> reloaded;
+            Dictionary<string, GoalSnapshot> reloaded;
             using (new ReloadTimingScope(timing, ChangedSnapshotRead))
                 reloaded = await ReadGoalSnapshotsAsync(
                     connection, changed.Keys.Select(id => new GoalId(id)).ToArray(), cancellationToken, _readObserver,
@@ -707,9 +707,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     snapshots.Add(entry.Snapshot);
                 else if (reloaded.TryGetValue(id, out var goal))
                 {
-                    snapshots.Add(goal.Snapshot);
-                    if (!goal.WasArchived)
-                        next.Add(id, new(version, goal.Snapshot));
+                    snapshots.Add(goal);
+                    if (!goal.IsMetadataOnly)
+                        next.Add(id, new(version, goal));
                 }
             }
 
@@ -2451,7 +2451,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             using var snapshotTiming = new ReloadTimingScope(timing, ChangedSnapshotRead);
             preloadedGoals = (await ReadGoalSnapshotsAsync(conn, goalIds, cancellationToken, readObserver))
-                .Values.Select(goal => goal.Snapshot).ToArray();
+                .Values.ToArray();
         }
 
         List<HumanInputRequestSnapshot> humanInputSnapshots;
@@ -2516,13 +2516,13 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return command;
     }
 
-    private static async Task<Dictionary<string, (GoalSnapshot Snapshot, bool WasArchived)>> ReadGoalSnapshotsAsync(
+    private static async Task<Dictionary<string, GoalSnapshot>> ReadGoalSnapshotsAsync(
         SqliteConnection connection, IReadOnlyCollection<GoalId>? goalIds, CancellationToken token,
         Action<GoalSnapshotReadObservation>? readObserver,
         Func<SqliteConnection, GoalSnapshot, GoalTaskHistoryStore.DocumentMarkers, CancellationToken, Task<GoalSnapshot>>?
             projectTickGoal = null)
     {
-        var snapshots = new Dictionary<string, (GoalSnapshot, bool)>(StringComparer.Ordinal);
+        var snapshots = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal);
         if (goalIds is { Count: 0 }) return snapshots;
 
         await using var command = CreateGoalReadCommand(connection, "id, snapshot_json", goalIds);
@@ -2537,11 +2537,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 continue;
 
             readObserver?.Invoke(new("hot-deserialized", id, json.Length));
-            var hydrated = projectTickGoal is not null && !snapshot.IsMetadataOnly
+            var hydrated = projectTickGoal is not null
                 ? await projectTickGoal(connection, snapshot, markers, token)
                 : await HydrateReadGoalAsync(connection, snapshot, markers, token, readObserver,
                     hydrateArchive: goalIds is not null);
-            snapshots.Add(id, (hydrated!, snapshot.IsMetadataOnly));
+            snapshots.Add(id, hydrated!);
         }
 
         return snapshots;
@@ -3663,7 +3663,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             var stored = await ReadGoalSnapshotsAsync(conn, [new GoalId(goal.Id)], cancellationToken, readObserver: null);
             if (!stored.TryGetValue(goal.Id, out var existing))
                 throw new InvalidOperationException($"Cannot save deferred rows for missing goal '{goal.Id}'.");
-            goal = CompleteTickSnapshot(goal, existing.Snapshot, version - 1);
+            goal = CompleteTickSnapshot(goal, existing, version - 1);
         }
 
         var timeline = await new GoalTimelineStore(SerializerOptions).WriteAsync(conn, goal, cancellationToken);

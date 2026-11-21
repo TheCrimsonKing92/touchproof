@@ -4,8 +4,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalLeanTickReloadTests
 {
-    [Fact]
-    public async Task TickReloadKeepsLatestAndCountsWithPastRowsAvailableInStoredOrder()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TickReloadKeepsLatestAndCountsWithPastRowsAvailableInStoredOrder(bool archived)
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var seed = GoalTaskHistoryTestFixture.Snapshot(entries: 4, taskCount: 3);
@@ -17,11 +19,19 @@ public sealed class GoalLeanTickReloadTests
         };
         await fixture.Repository.SaveGoalSnapshotsAsync([seed]);
         fixture.AssertLatestRepresentation(seed);
+        using var document = JsonDocument.Parse(fixture.RawGoal(seed.Id));
+        if (archived)
+        {
+            Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(
+                GoalTaskHistoryTestFixture.At.AddDays(1), compressSnapshots: true));
+        }
         var id = new GoalId(seed.Id);
         var memory = new GoalReloadMemory();
         var reload = await fixture.Repository.LoadGoalsReusingUnchangedAsync([id], memory);
 
         var snapshot = memory.Entries[seed.Id].Snapshot;
+        Assert.Equal((1, 0), (reload.Reloaded, reload.Reused));
+        Assert.False(snapshot.IsMetadataOnly);
         Assert.Empty(snapshot.Timeline);
         Assert.Equal(seed.Timeline.Count, snapshot.DeferredTimeline!.Count);
         Assert.Equal(seed.Tasks.Count, snapshot.Tasks.Count);
@@ -48,7 +58,6 @@ public sealed class GoalLeanTickReloadTests
         Assert.All(checkpoint.Tasks, task => Assert.Empty(task.VerificationHistory!));
 
         using var connection = fixture.Open();
-        using var document = JsonDocument.Parse(fixture.RawGoal(seed.Id));
         var timeline = await new GoalTimelineStore(GoalTaskHistoryTestFixture.Options)
             .ReadAsync(connection, seed.Id, document.RootElement);
         Assert.Equal(seed.Timeline.Select(GoalTaskHistoryTestFixture.Json), timeline.Select(evt => evt.GetRawText()));
