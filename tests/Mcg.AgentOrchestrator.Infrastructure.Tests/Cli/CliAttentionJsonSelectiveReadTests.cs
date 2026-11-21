@@ -60,25 +60,29 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         await fixture.Store.RaiseAsync(CollaborationItemType.Decision, goals[1].Id, "Live item", "Body");
         await fixture.Store.RaiseAsync(CollaborationItemType.Decision, null, "Global", "Body");
         await fixture.Store.RaiseAsync(CollaborationItemType.Decision, Id(9999), "Orphan", "Body");
-        await fixture.WriteGoalAsync(goals[9] with { Status = GoalStatus.Completed, Tasks =
-            [goals[9].Tasks[0] with
-            {
-                LastDispatch = new("claude-cli", "claude", "fixture", Now.AddHours(-2),
-                    ProviderName: "Claude", ClaudeCredentialSourceDirectory: "account-a"),
-                LastVerification = new("claude", "fixture", 1, "", "You've hit your usage limit", Now.AddHours(-1),
-                    StandardErrorPath: "receipt", ProviderFailureKind: ProviderFailureKind.BudgetExhausted)
-            }] }, archive: true, compress: compress);
+        await fixture.WriteGoalAsync(WithArchiveEvidence(goals[9], "providerHolds"), archive: true, compress: compress);
         for (var index = 10; index < goals.Length; index++)
             await fixture.WriteGoalAsync(goals[index] with { Status = GoalStatus.Completed }, archive: true, compress: compress);
 
-        var probe = new QueryProbe(fixture.Queries);
+        await fixture.WriteAttentionMarkersAsync();
+        var observations = new List<GoalSnapshotReadObservation>();
+        var queries = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Workspace.SqliteStatePath, observations.Add);
+        var probe = new QueryProbe(queries);
+        var evidenceFreeIds = goals.Skip(10).Select(goal => goal.Id).ToHashSet();
         var expected = await fixture.BaselineAsync();
         foreach (var args in new[] { new[] { "attention", "--json" }, new[] { "attention", "list", "--json" } })
         {
             probe.Loads.Clear();
+            observations.Clear();
             var actual = CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(args, probe, fixture.Workspace, new FixedTime()));
             AssertJsonEqual(expected, actual);
             Assert.Equal(new[] { current.Id, goals[1].Id }, Assert.Single(probe.Loads));
+            Assert.Equal(3, probe.LastProjection!.Reads.ArchivePayloadsRead);
+            Assert.Equal(3, probe.LastProjection.Reads.ArchivePayloadsDecoded);
+            Assert.Contains(observations, read => read.Operation == "attention-task-history");
+            Assert.Contains(observations, read => read.Operation == "attention-timeline");
+            Assert.DoesNotContain(observations, read => read.GoalId is { } id && evidenceFreeIds.Contains(id) &&
+                read.Operation is "attention-archive-decode" or "attention-task-history" or "attention-timeline");
         }
         using var document = JsonDocument.Parse(expected);
         var payload = document.RootElement.GetProperty("payload");
@@ -88,12 +92,7 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         Assert.Equal(2, payload.GetProperty("ownerQuestionHolds")[1].GetProperty("taskNumber").GetInt32());
         Assert.Equal(4, payload.GetProperty("gateEvidence").GetArrayLength());
         Assert.Single(payload.GetProperty("providerHolds").EnumerateArray());
-        Assert.Equal(history + 3, probe.LastProjection!.Reads.ArchivePayloadsRead);
-        Assert.Equal(probe.LastProjection.Reads.ArchivePayloadsRead, probe.LastProjection.Reads.ArchivePayloadsDecoded);
         Assert.Equal(0, probe.BoardLoads);
-        var fallback = new QueryProbe(fixture.Queries) { Unsupported = true };
-        AssertJsonEqual(expected, Render(await AttentionJsonReadContext.ReadAsync(fallback, fixture.Workspace, Now)));
-        Assert.Equal(goals.Length, Assert.Single(fallback.Loads).Length);
         foreach (var args in SummaryForms())
         {
             probe.Loads.Clear();
@@ -101,9 +100,90 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
             AssertSummaryMatches(expected, summary);
             Assert.Empty(probe.LastProjection!.GateEvidence);
             Assert.Equal(new[] { current.Id, goals[1].Id }, Assert.Single(probe.Loads));
-            var legacy = new QueryProbe(fixture.Queries) { Unsupported = true };
-            AssertJsonEqual(summary, CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(args, legacy, fixture.Workspace, new FixedTime())));
-            Assert.Equal(goals.Length, Assert.Single(legacy.Loads).Length);
+        }
+    }
+
+    [Fact]
+    public async Task MarkerBackedArchiveGrowth_PreservesOutputBytesAndReadCounts()
+    {
+        using var large = await Fixture.CreateAsync(84);
+        using var small = await Fixture.CreateAsync(large.Goals[..8]);
+        await small.SeedMarkedHistoryAsync();
+        await large.SeedMarkedHistoryAsync();
+        var smallReads = new List<GoalSnapshotReadObservation>();
+        var largeReads = new List<GoalSnapshotReadObservation>();
+        var smallProbe = new QueryProbe(small.OpenObservedQueries(smallReads));
+        var largeProbe = new QueryProbe(large.OpenObservedQueries(largeReads));
+        var evidenceFreeIds = large.Goals.Skip(4).Select(goal => goal.Id).ToHashSet();
+
+        foreach (var args in AttentionForms())
+        {
+            var summary = args.Length == 4;
+            smallReads.Clear();
+            largeReads.Clear();
+            var smallOutput = RunAttention(args, small, smallProbe);
+            var largeOutput = RunAttention(args, large, largeProbe);
+            Assert.Equal(smallOutput, largeOutput);
+            Assert.Equal(await small.BaselineAsync(summary) + Environment.NewLine, smallOutput);
+            Assert.Equal(await large.BaselineAsync(summary) + Environment.NewLine, largeOutput);
+
+            var smallCounts = smallProbe.LastProjection!.Reads;
+            var largeCounts = largeProbe.LastProjection!.Reads;
+            Assert.Equal(small.Goals.Length, smallCounts.HotRows);
+            Assert.Equal(large.Goals.Length, largeCounts.HotRows);
+            Assert.Equal(summary ? 2 : 3, smallCounts.ArchivePayloadsRead);
+            Assert.Equal(smallCounts.ArchivePayloadsRead, largeCounts.ArchivePayloadsRead);
+            Assert.Equal(smallCounts.ArchivePayloadsRead, smallCounts.ArchivePayloadsDecoded);
+            Assert.Equal(smallCounts.ArchivePayloadsDecoded, largeCounts.ArchivePayloadsDecoded);
+            Assert.DoesNotContain(smallReads.Concat(largeReads), read => read.GoalId is { } id &&
+                evidenceFreeIds.Contains(id) &&
+                read.Operation is "attention-archive-decode" or "attention-task-history" or "attention-timeline");
+        }
+    }
+
+    [Theory]
+    [InlineData("gateEvidence", "goalId")]
+    [InlineData("postLandingDuties", "goalId")]
+    [InlineData("providerHolds", "sourceGoalId")]
+    public async Task EvidenceBearingTerminalArchive_IsDecodedAndRendered(string section, string goalIdProperty)
+    {
+        using var fixture = await Fixture.CreateAsync(2);
+        var goal = WithArchiveEvidence(fixture.Goals[0], section);
+        await fixture.WriteGoalAsync(goal, archive: true, compress: true);
+        await fixture.WriteGoalAsync(fixture.Goals[1] with { Status = GoalStatus.Completed }, archive: true, compress: true);
+        await fixture.WriteAttentionMarkersAsync();
+        var reads = new List<GoalSnapshotReadObservation>();
+        var probe = new QueryProbe(fixture.OpenObservedQueries(reads));
+
+        var output = RunAttention(["attention", "--json"], fixture, probe);
+
+        Assert.Equal(goal.Id, Assert.Single(reads.Where(read => read.Operation == "attention-archive-decode")).GoalId);
+        Assert.Equal(1, probe.LastProjection!.Reads.ArchivePayloadsDecoded);
+        using var document = JsonDocument.Parse(output);
+        var row = Assert.Single(document.RootElement.GetProperty("payload").GetProperty(section).EnumerateArray());
+        Assert.Equal(goal.Id, row.GetProperty(goalIdProperty).GetString());
+        if (section == "postLandingDuties")
+            Assert.Equal("Pending", row.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task UnsupportedProjection_MatchesMarkerBackedCliOutputBytes()
+    {
+        using var fixture = await Fixture.CreateAsync(84);
+        await fixture.SeedMarkedHistoryAsync();
+
+        foreach (var args in AttentionForms())
+        {
+            var bounded = new QueryProbe(fixture.Queries);
+            var fallback = new QueryProbe(fixture.Queries) { Unsupported = true };
+
+            Assert.Equal(RunAttention(args, fixture, bounded), RunAttention(args, fixture, fallback));
+
+            Assert.Equal(args.Length == 4 ? 2 : 3, bounded.LastProjection!.Reads.ArchivePayloadsDecoded);
+            Assert.Equal(new[] { fixture.Goals[0].Id }, Assert.Single(bounded.Loads));
+            Assert.Equal(1, fallback.MetadataLoads);
+            Assert.Equal(fixture.Goals.Select(goal => goal.Id).Order(StringComparer.Ordinal),
+                Assert.Single(fallback.Loads).Order(StringComparer.Ordinal));
         }
     }
 
@@ -305,6 +385,12 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
     private static string[][] SummaryForms() =>
         [["attention", "list", "--summary", "--json"], ["attention", "list", "--json", "--summary"]];
 
+    private static string[][] AttentionForms() =>
+        [["attention", "--json"], .. SummaryForms()];
+
+    private static string RunAttention(string[] args, Fixture fixture, QueryProbe probe) =>
+        CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(args, probe, fixture.Workspace, new FixedTime()));
+
     private static void AssertSummaryMatches(string full, string summary)
     {
         using var ordinary = JsonDocument.Parse(full);
@@ -336,6 +422,47 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
     private static GateTestObligation Gate(int version) => new("gate-" + version, version, ["Selector"], null, "Pending", Now);
     private static GoalHoldSnapshot Hold(string state, string blocker) => new("hold-" + state, state, blocker, Now);
     private sealed class FixedTime : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
+
+    private static GoalSnapshot WithArchiveEvidence(GoalSnapshot goal, string section)
+    {
+        var terminal = goal with { Status = GoalStatus.Completed, TerminatedAt = Now };
+        return section switch
+        {
+            "gateEvidence" => terminal with { GateTestObligations = [Gate(1)] },
+            "postLandingDuties" => WithPendingDuty(terminal),
+            "providerHolds" => terminal with { Tasks = [goal.Tasks[0] with
+            {
+                LastDispatch = new("claude-cli", "claude", "fixture", Now.AddHours(-2),
+                    ProviderName: "Claude", ClaudeCredentialSourceDirectory: "account-a"),
+                LastVerification = new("claude", "fixture", 1, "", "You've hit your usage limit", Now.AddHours(-1),
+                    StandardErrorPath: "receipt", ProviderFailureKind: ProviderFailureKind.BudgetExhausted)
+            }] },
+            _ => throw new ArgumentOutOfRangeException(nameof(section))
+        };
+    }
+
+    private static GoalSnapshot WithPendingDuty(GoalSnapshot goal)
+    {
+        const string criterion = "Observe the promoted fixture";
+        var scope = new CriterionObservationScope(CriterionObservationKind.RepositoryState, "Fixture published", "main");
+        var spec = new RefinedSpecSnapshot("Publish fixture", [criterion], nameof(VerificationClass.RealWorldDependent), [], [],
+            OperatorOwnedAcceptanceCriteria: [criterion],
+            CriterionEvidenceDeclarations: [new(criterion, CriterionEvidencePhase.PostLanding, scope, Atomic: true)]);
+        var revision = new string('a', 40);
+        var publication = new GoalPromotionFact(goal.Id, revision, new string('b', 40), revision, Now,
+            GoalPromotionFact.SoloProvenance);
+        return goal with
+        {
+            RefinedSpecVersions = [new(1, spec, Now.AddDays(-1), 1)],
+            CriterionEvidenceObligations =
+            [
+                new(CriterionEvidenceObligation.BuildId(1, 0), 0, 1, criterion, CriterionEvidenceOwner.Operator,
+                    CriterionEvidenceState.Pending, "fixture observation", "fixture", Now.AddDays(-1),
+                    ExpectedCandidateSha: revision, Phase: CriterionEvidencePhase.PostLanding, ObservationScope: scope,
+                    Publication: publication)
+            ]
+        };
+    }
 
     private sealed class QueryProbe(IOrchestratorStateQueries inner) : IOrchestratorStateQueries
     {
@@ -377,14 +504,39 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
             StateDbMigrations.EnsureUpToDate(Workspace.SqliteStatePath);
             Store = CollaborationItemStore.ForDirectory(Workspace.OrchestratorDirectory);
         }
-        public static async Task<Fixture> CreateAsync(int count)
+        public static Task<Fixture> CreateAsync(int count)
         {
-            var fixture = new Fixture();
             var kernel = new AgentOrchestratorKernel();
             for (var index = 0; index < count; index++) kernel.CreateGoal(new GoalId(Id(index + 1)), "Goal " + index);
-            fixture.Goals = kernel.ExportSnapshot().Goals.ToArray();
+            return CreateAsync(kernel);
+        }
+
+        public static Task<Fixture> CreateAsync(GoalSnapshot[] goals) =>
+            CreateAsync(AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(goals, [])));
+
+        private static async Task<Fixture> CreateAsync(AgentOrchestratorKernel kernel)
+        {
+            var fixture = new Fixture { Goals = kernel.ExportSnapshot().Goals.ToArray() };
             await new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath).SaveAsync(kernel);
             return fixture;
+        }
+
+        public IOrchestratorStateQueries OpenObservedQueries(List<GoalSnapshotReadObservation> reads) =>
+            SqliteOrchestratorStateRepository.OpenReadOnly(Workspace.SqliteStatePath, reads.Add);
+
+        public Task WriteAttentionMarkersAsync() =>
+            new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath).WriteAttentionArchiveEvidenceMarkersAsync();
+
+        public async Task SeedMarkedHistoryAsync()
+        {
+            await WriteGoalAsync(Goals[0] with { Status = GoalStatus.Active });
+            await WriteWaitAsync(new("fixed-wait", Goals[0].Id, Goals[0].Tasks[0].Id, "Choose?", Now));
+            await WriteGoalAsync(WithArchiveEvidence(Goals[1], "gateEvidence"), archive: true, compress: true);
+            await WriteGoalAsync(WithArchiveEvidence(Goals[2], "postLandingDuties"), archive: true, compress: true);
+            await WriteGoalAsync(WithArchiveEvidence(Goals[3], "providerHolds"), archive: true, compress: true);
+            foreach (var goal in Goals.Skip(4))
+                await WriteGoalAsync(goal with { Status = GoalStatus.Completed, TerminatedAt = Now }, archive: true, compress: true);
+            await WriteAttentionMarkersAsync();
         }
         public async Task WriteGoalAsync(GoalSnapshot snapshot, bool archive = false, bool compress = false)
         {
@@ -405,7 +557,8 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
             update.Parameters.AddWithValue("$id", snapshot.Id);
             update.Parameters.AddWithValue("$status", snapshot.Status.ToString());
             update.Parameters.AddWithValue("$json", JsonSerializer.Serialize(archive ? snapshot with
-                { IsMetadataOnly = true, Tasks = [], Timeline = [], GateTestObligations = null, CurrentHold = null, BriefVersions = null } : snapshot, Options));
+                { IsMetadataOnly = true, Tasks = [], Timeline = [], GateTestObligations = null, CurrentHold = null, BriefVersions = null,
+                    RefinedSpecVersions = null, CriterionEvidenceObligations = null } : snapshot, Options));
             Assert.Equal(1, await update.ExecuteNonQueryAsync());
         }
         public async Task WriteWaitAsync(HumanInputRequestSnapshot wait)
@@ -419,17 +572,28 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
             command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(wait, Options));
             Assert.Equal(1, await command.ExecuteNonQueryAsync());
         }
-        public async Task<string> BaselineAsync()
+        public async Task<string> BaselineAsync(bool summary = false)
         {
             var metadata = await Queries.ListGoalMetadataAsync();
             var kernel = await Queries.LoadGoalsAsync(metadata.Select(goal => new GoalId(goal.Id)).ToArray());
             var items = await Store.GetAttentionQueueAsync();
-            return AttentionAgentReadView.Render(CliCommandHandlers.HumanWaitsForAttention(kernel, null, false),
-                CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, false), new FixedTime(),
-                ProviderUsageHoldView.Read(kernel.Goals, Now), kernel.Goals,
-                unlinkedGoals: UnlinkedGoalAttentionView.Rows(kernel.Goals.Select(goal => new AttentionGoalReadFacts(
+            var waits = CliCommandHandlers.HumanWaitsForAttention(kernel, null, false);
+            var actionableItems = CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, false);
+            var providerHolds = ProviderUsageHoldView.Read(kernel.Goals, Now);
+            var unlinkedGoals = UnlinkedGoalAttentionView.Rows(kernel.Goals.Select(goal => new AttentionGoalReadFacts(
                     goal.Id.Value, goal.Status, goal.AuthoritativeBrief.Version,
-                    SourceBacklogItemId: goal.SourceBacklogItemId, Title: goal.Objective)).ToArray(), Workspace.PortfolioStorePath));
+                    SourceBacklogItemId: goal.SourceBacklogItemId, Title: goal.Objective)).ToArray(), Workspace.PortfolioStorePath);
+            if (!summary)
+                return AttentionAgentReadView.Render(waits, actionableItems, new FixedTime(), providerHolds, kernel.Goals,
+                    unlinkedGoals: unlinkedGoals);
+
+            var ownerQuestions = kernel.Goals
+                .Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
+                .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>().ToArray();
+            var duties = kernel.Goals.SelectMany(goal => goal.OutstandingPostLandingDuties
+                .Select(duty => new AttentionPostLandingDuty(goal.Id.Value, duty))).ToArray();
+            return AttentionAgentReadView.RenderSummary(waits, actionableItems, new FixedTime(), providerHolds, ownerQuestions,
+                duties, kernel.Goals, unlinkedGoals: unlinkedGoals);
         }
         public void Dispose() => Directory.Delete(_root, true);
     }
