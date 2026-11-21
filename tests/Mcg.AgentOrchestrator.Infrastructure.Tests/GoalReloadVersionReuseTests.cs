@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GoalReloadVersionReuseTests
 {
     [Fact]
-    public async Task UnchangedGoalsReuseCompleteSnapshotsWithoutSharingKernelMutations()
+    public async Task UnchangedGoalsReuseLeanSnapshotsWithoutSharingKernelMutations()
     {
         using var support = new GoalTimelineTestSupport();
         var (first, second) = await SeedTwoGoalsAsync(support);
@@ -27,6 +27,7 @@ public sealed class GoalReloadVersionReuseTests
         var repeated = await repository.LoadGoalsReusingUnchangedAsync(ids, memory);
         Assert.Equal((0, 2), (repeated.Reloaded, repeated.Reused));
         Assert.Equal(expected, GoalTimelineTestSupport.Json(repeated.Kernel.ExportSnapshot()));
+        var lean = GoalTimelineTestSupport.Json(OrchestratorSnapshot.Capture(repeated.Kernel, includeDeferredRows: false));
         Assert.Equal(new[] { first.Id, second.Id }, GoalIds(reads, "version-reused"));
         Assert.Empty(GoalIds(reads, "hot-attempt"));
         Assert.Empty(GoalIds(reads, "hot-deserialized"));
@@ -35,13 +36,17 @@ public sealed class GoalReloadVersionReuseTests
         // A full reader must still reject each missing set of marked rows.
         support.Fixture.Execute("DELETE FROM goal_task_history");
         await Assert.ThrowsAsync<InvalidDataException>(() => repository.LoadGoalsAsync(ids));
-        Assert.Equal(expected, GoalTimelineTestSupport.Json(
-            (await repository.LoadGoalsReusingUnchangedAsync(ids, memory)).Kernel.ExportSnapshot()));
+        var withoutHistory = await repository.LoadGoalsReusingUnchangedAsync(ids, memory);
+        Assert.Equal((0, 2), (withoutHistory.Reloaded, withoutHistory.Reused));
+        Assert.Equal(lean, GoalTimelineTestSupport.Json(
+            OrchestratorSnapshot.Capture(withoutHistory.Kernel, includeDeferredRows: false)));
 
         support.Fixture.Execute("DELETE FROM goal_timeline");
         await Assert.ThrowsAsync<InvalidDataException>(() => repository.LoadGoalsAsync(ids));
-        Assert.Equal(expected, GoalTimelineTestSupport.Json(
-            (await repository.LoadGoalsReusingUnchangedAsync(ids, memory)).Kernel.ExportSnapshot()));
+        var withoutTimeline = await repository.LoadGoalsReusingUnchangedAsync(ids, memory);
+        Assert.Equal((0, 2), (withoutTimeline.Reloaded, withoutTimeline.Reused));
+        Assert.Equal(lean, GoalTimelineTestSupport.Json(
+            OrchestratorSnapshot.Capture(withoutTimeline.Kernel, includeDeferredRows: false)));
     }
 
     [Theory]

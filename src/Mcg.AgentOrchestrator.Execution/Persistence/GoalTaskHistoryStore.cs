@@ -119,9 +119,16 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// version in the same transaction. The conductor can reuse a hydrated goal while that version
 /// is unchanged. An archive swap may preserve the version because it preserves the content.
 /// </summary>
-internal sealed class GoalTaskHistoryStore(JsonSerializerOptions options)
+internal sealed partial class GoalTaskHistoryStore
 {
-    private readonly GoalTaskBuildHistoryStore _buildHistory = new(options);
+    private readonly JsonSerializerOptions options;
+    private readonly GoalTaskBuildHistoryStore _buildHistory;
+
+    internal GoalTaskHistoryStore(JsonSerializerOptions options)
+    {
+        this.options = options;
+        _buildHistory = new(options);
+    }
 
     internal const string VerificationProperty = "VerificationHistory";
     internal const string DispatchProperty = "DispatchHistory";

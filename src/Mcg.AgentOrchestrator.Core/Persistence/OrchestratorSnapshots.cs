@@ -1,8 +1,15 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record OrchestratorSnapshot(
     IReadOnlyList<GoalSnapshot> Goals,
-    IReadOnlyList<HumanInputRequestSnapshot> HumanInputRequests);
+    IReadOnlyList<HumanInputRequestSnapshot> HumanInputRequests)
+{
+    internal static OrchestratorSnapshot Capture(AgentOrchestratorKernel kernel, bool includeDeferredRows) => new(
+        kernel.Goals.Where(goal => !goal.IsMetadataOnly).Select(goal => goal.ToSnapshot(includeDeferredRows)).ToList(),
+        kernel.HumanInputRequests.Select(request => request.ToSnapshot()).ToList());
+}
 
 public sealed record GoalSnapshot(
     string Id,
@@ -45,7 +52,22 @@ public sealed record GoalSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     GoalDeliveredForReview? DeliveredForReview = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    GoalRepositoryDeclaration? Repositories = null);
+    GoalRepositoryDeclaration? Repositories = null)
+{
+    [JsonIgnore] internal long? TickRowVersion { get; init; }
+    [JsonIgnore] internal DeferredGoalTimeline? DeferredTimeline { get; init; }
+}
+
+internal sealed record DeferredGoalTimeline(
+    int Count, DateTimeOffset? FirstOccurredAt, Func<GoalTimelineRows> Read);
+
+internal sealed record GoalTimelineRows(long Version, IReadOnlyList<ProgressEventSnapshot> Entries);
+
+internal sealed record DeferredTaskHistory(
+    int VerificationCount, int DispatchCount, int? RestoredVerificationCount, Func<TaskHistoryRows> Read);
+
+internal sealed record TaskHistoryRows(
+    IReadOnlyList<TaskVerificationSnapshot>? Verification, IReadOnlyList<TaskDispatchSnapshot>? Dispatch);
 
 public sealed record GoalHoldSnapshot(
     string Identity,
@@ -166,7 +188,11 @@ public sealed record TaskSnapshot(
     IReadOnlyList<string>? OperatorRoutingAutomaticFeedback = null,
     [property: System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    int? WorkerBuildInvocationsInTable = null);
+    int? WorkerBuildInvocationsInTable = null)
+{
+    [JsonIgnore] internal DeferredTaskHistory? DeferredHistory { get; init; }
+    [JsonIgnore] internal TaskHistoryRows? HistoryBeforeChanges { get; init; }
+}
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

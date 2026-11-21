@@ -693,7 +693,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 versions = await ReadSelectedGoalVersionsAsync(connection, goalIds, cancellationToken);
             var previous = memory.Entries;
             var next = ImmutableDictionary.CreateBuilder<string, GoalReloadMemory.Entry>(StringComparer.Ordinal);
-            var changed = new List<GoalId>();
+            var changed = new Dictionary<string, long>(StringComparer.Ordinal);
             foreach (var (id, version) in versions)
             {
                 if (previous.TryGetValue(id, out var entry) && entry.Version == version)
@@ -702,13 +702,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     _readObserver?.Invoke(new("version-reused", id));
                 }
                 else
-                    changed.Add(new GoalId(id));
+                    changed.Add(id, version);
             }
 
             var reused = next.Count;
-            Dictionary<string, (GoalSnapshot Snapshot, bool WasArchived)> reloaded;
+            Dictionary<string, GoalSnapshot> reloaded;
             using (new ReloadTimingScope(timing, ChangedSnapshotRead))
-                reloaded = await ReadGoalSnapshotsAsync(connection, changed, cancellationToken, _readObserver);
+                reloaded = await ReadGoalSnapshotsAsync(
+                    connection, changed.Keys.Select(id => new GoalId(id)).ToArray(), cancellationToken, _readObserver,
+                    (conn, snapshot, markers, token) => ProjectTickGoalAsync(conn, snapshot, markers, changed[snapshot.Id], token));
             var snapshots = new List<GoalSnapshot>(reused + reloaded.Count);
             foreach (var (id, version) in versions)
             {
@@ -716,9 +718,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     snapshots.Add(entry.Snapshot);
                 else if (reloaded.TryGetValue(id, out var goal))
                 {
-                    snapshots.Add(goal.Snapshot);
-                    if (!goal.WasArchived)
-                        next.Add(id, new(version, goal.Snapshot));
+                    snapshots.Add(goal);
+                    if (!goal.IsMetadataOnly)
+                        next.Add(id, new(version, goal));
                 }
             }
 
@@ -911,9 +913,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 continue;
             }
 
-            var result = await TransactGoalStateAsync(
+            var result = await TransactGoalStateVersionedAsync(
+                ResolveOperationTag($"{nameof(TransactGoalStateAsync)}({ShortGoalId(request.Current.Id)})"),
                 new GoalId(request.Current.Id),
-                (storedState, _) =>
+                (storedState, storedVersion, _) =>
                 {
                     var storedSnapshot = storedState?.Goal;
                     if (storedSnapshot is null)
@@ -942,12 +945,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "tick cannot change explicit operator disposition", storedState!.HumanInputRequests)));
                     }
 
-                    if (tickDisposition == storedDisposition && SnapshotEquals(
-                            RefinedSpecSnapshotAccess.NormalizeForStorage(storedSnapshot),
-                            RefinedSpecSnapshotAccess.NormalizeForStorage(request.Baseline)))
+                    var baseline = CompleteTickSnapshot(request.Baseline, storedSnapshot, storedVersion);
+                    var current = CompleteTickSnapshot(request.Current, storedSnapshot, storedVersion, request.Baseline);
+                    if (tickDisposition == storedDisposition &&
+                        (request.Baseline.TickRowVersion is null || request.Baseline.TickRowVersion == storedVersion) &&
+                        SnapshotEquals(RefinedSpecSnapshotAccess.NormalizeForStorage(storedSnapshot),
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(baseline)))
                     {
                         var state = ValidateConsistentGoalState(
-                            RefinedSpecSnapshotAccess.NormalizeForStorage(request.Current),
+                            RefinedSpecSnapshotAccess.NormalizeForStorage(current),
                             MergeHumanInputRequests(storedState!.HumanInputRequests, request.HumanInputRequests));
                         return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (true, state, new GoalSnapshotSaveResult(
@@ -969,7 +975,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 storedState!.HumanInputRequests)));
                     }
 
-                    if (!TryMergeGoalSnapshots(request.Baseline, storedSnapshot, request.Current, out var merged, out var reason))
+                    var preserveTimelineOrder = request.Baseline.TickRowVersion is not null || request.Current.TickRowVersion is not null;
+                    if (!TryMergeGoalSnapshots(baseline, storedSnapshot, current, preserveTimelineOrder, out var merged, out var reason))
                     {
                         return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (false, null, new GoalSnapshotSaveResult(
@@ -980,7 +987,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 storedState!.HumanInputRequests)));
                     }
 
-                    var normalized = NormalizeStoredVerificationStatus(merged, out var normalizedReason);
+                    var normalized = NormalizeStoredVerificationStatus(merged, preserveTimelineOrder, out var normalizedReason);
                     var resultReason = normalizedReason is null ? reason : $"{reason}; {normalizedReason}";
                     var mergedState = ValidateConsistentGoalState(
                         normalized,
@@ -2455,7 +2462,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             using var snapshotTiming = new ReloadTimingScope(timing, ChangedSnapshotRead);
             preloadedGoals = (await ReadGoalSnapshotsAsync(conn, goalIds, cancellationToken, readObserver))
-                .Values.Select(goal => goal.Snapshot).ToArray();
+                .Values.ToArray();
         }
 
         List<HumanInputRequestSnapshot> humanInputSnapshots;
@@ -2520,11 +2527,13 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return command;
     }
 
-    private static async Task<Dictionary<string, (GoalSnapshot Snapshot, bool WasArchived)>> ReadGoalSnapshotsAsync(
+    private static async Task<Dictionary<string, GoalSnapshot>> ReadGoalSnapshotsAsync(
         SqliteConnection connection, IReadOnlyCollection<GoalId>? goalIds, CancellationToken token,
-        Action<GoalSnapshotReadObservation>? readObserver)
+        Action<GoalSnapshotReadObservation>? readObserver,
+        Func<SqliteConnection, GoalSnapshot, GoalTaskHistoryStore.DocumentMarkers, CancellationToken, Task<GoalSnapshot>>?
+            projectTickGoal = null)
     {
-        var snapshots = new Dictionary<string, (GoalSnapshot, bool)>(StringComparer.Ordinal);
+        var snapshots = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal);
         if (goalIds is { Count: 0 }) return snapshots;
 
         await using var command = CreateGoalReadCommand(connection, "id, snapshot_json", goalIds);
@@ -2539,9 +2548,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 continue;
 
             readObserver?.Invoke(new("hot-deserialized", id, json.Length));
-            var hydrated = await HydrateReadGoalAsync(connection, snapshot, markers, token, readObserver,
-                hydrateArchive: goalIds is not null);
-            snapshots.Add(id, (hydrated!, snapshot.IsMetadataOnly));
+            var hydrated = projectTickGoal is not null
+                ? await projectTickGoal(connection, snapshot, markers, token)
+                : await HydrateReadGoalAsync(connection, snapshot, markers, token, readObserver,
+                    hydrateArchive: goalIds is not null);
+            snapshots.Add(id, hydrated!);
         }
 
         return snapshots;
@@ -2610,6 +2621,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         GoalSnapshot baseline,
         GoalSnapshot stored,
         GoalSnapshot current,
+        bool preserveTimelineOrder,
         out GoalSnapshot merged,
         out string reason)
     {
@@ -2713,7 +2725,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             Tasks = mergedTasks,
             GateTestObligations = MergePlannerGateObligations(stored.GateTestObligations, current.GateTestObligations),
             CriterionEvidenceObligations = obligationMerge.Obligations,
-            Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
+            Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline, preserveTimelineOrder),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
             // Slice-batch ownership is immutable aggregate intake metadata. Operator/store changes win
             // over a stale conductor tick exactly like the other store-owned snapshot fields.
@@ -2813,7 +2825,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             fields.TryGetProperty(name, out var value) ? value.GetRawText() : "null";
     }
 
-    private static GoalSnapshot NormalizeStoredVerificationStatus(GoalSnapshot snapshot, out string? reason)
+    private static GoalSnapshot NormalizeStoredVerificationStatus(GoalSnapshot snapshot, bool preserveTimelineOrder,
+        out string? reason)
     {
         reason = null;
         if (snapshot.Status is GoalStatus.Verified or GoalStatus.Parked or GoalStatus.WaitingForHuman)
@@ -2836,7 +2849,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         }
 
         reason = "reconciled stored all-task verification gates to Verified";
-        return kernel.ExportSnapshot().Goals.Single();
+        var reconciled = kernel.ExportSnapshot().Goals.Single();
+        return preserveTimelineOrder
+            ? snapshot with { Status = reconciled.Status, Timeline = [.. snapshot.Timeline, reconciled.Timeline[^1]] }
+            : reconciled;
     }
 
     private static bool TryMergeTaskSnapshots(
@@ -3024,7 +3040,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(
         IReadOnlyList<ProgressEventSnapshot> baseline,
         IReadOnlyList<ProgressEventSnapshot> stored,
-        IReadOnlyList<ProgressEventSnapshot> current)
+        IReadOnlyList<ProgressEventSnapshot> current,
+        bool preserveStoredOrder)
     {
         var baselineKeys = baseline.Select(SnapshotKey).ToHashSet(StringComparer.Ordinal);
         var merged = stored.ToList();
@@ -3038,7 +3055,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             merged.Add(evt);
         }
 
-        return merged.OrderBy(evt => evt.OccurredAt).ToList();
+        return preserveStoredOrder ? merged : merged.OrderBy(evt => evt.OccurredAt).ToList();
     }
 
     private static T PickTickOwned<T>(T baseline, T stored, T current) =>
@@ -3406,18 +3423,27 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             cancellationToken);
     }
 
-    public async Task<T> TransactGoalStateAsync<T>(
+    public Task<T> TransactGoalStateAsync<T>(
         string operationName,
         GoalId goalId,
         Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        TransactGoalStateVersionedAsync(operationName, goalId, (state, _, token) => transaction(state, token),
+            cancellationToken);
+
+    private async Task<T> TransactGoalStateVersionedAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalStateSnapshot?, int, CancellationToken,
+            Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+        CancellationToken cancellationToken)
     {
         var versionMismatchDelay = 50;
         var resolvedOperation = ResolveOperationTag($"{nameof(TransactGoalStateAsync)}({ShortGoalId(goalId.Value)})", operationName);
         for (var attempt = 1; ; attempt++)
         {
             var (loadedState, loadedVersion) = await LoadGoalStateAndVersionAsync(goalId, cancellationToken);
-            var (shouldSave, newState, result) = await transaction(loadedState, cancellationToken);
+            var (shouldSave, newState, result) = await transaction(loadedState, loadedVersion, cancellationToken);
 
             if (!shouldSave || newState is null)
                 return result;
@@ -3641,6 +3667,14 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         if (goal.IsMetadataOnly)
         {
             throw new InvalidOperationException($"Refusing to persist metadata-only goal snapshot '{ShortGoalId(goal.Id)}'. Hydrate the full aggregate before saving.");
+        }
+
+        if (goal.TickRowVersion is not null)
+        {
+            var stored = await ReadGoalSnapshotsAsync(conn, [new GoalId(goal.Id)], cancellationToken, readObserver: null);
+            if (!stored.TryGetValue(goal.Id, out var existing))
+                throw new InvalidOperationException($"Cannot save deferred rows for missing goal '{goal.Id}'.");
+            goal = CompleteTickSnapshot(goal, existing, version - 1);
         }
 
         var timeline = await new GoalTimelineStore(SerializerOptions).WriteAsync(conn, goal, cancellationToken);

@@ -23,7 +23,7 @@ internal static class ConductLoopTargetLoader
     {
         ArgumentNullException.ThrowIfNull(tickBaselines);
         ArgumentNullException.ThrowIfNull(loadedKernel);
-        foreach (var goal in loadedKernel.ExportSnapshot().Goals)
+        foreach (var goal in OrchestratorSnapshot.Capture(loadedKernel, includeDeferredRows: false).Goals)
             tickBaselines.TryAdd(goal.Id, goal);
     }
 
