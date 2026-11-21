@@ -20,7 +20,7 @@ public sealed class ShadowStartCommandTests
         Assert.NotEqual(0, failure.Exit);
         Assert.Contains("assertion=startup-first-tick", failure.Error);
         Assert.Contains("startup failure", failure.Error);
-        Assert.Contains($"Legacy grouped attempt has no lease in {fixture.Scratch("failed")}", failure.Error);
+        Assert.Contains($"stderr: Legacy grouped attempt has no lease in {fixture.Scratch("failed")}", failure.Error);
         Assert.Contains("wall_ms=", failure.Error);
         Assert.Contains("peak_working_set_bytes=", failure.Error);
         Assert.Equal(0, success.Exit);
@@ -114,6 +114,10 @@ public sealed class ShadowStartCommandTests
 
     private const string CandidateScript = """
         $ErrorActionPreference = 'Stop'
+        trap {
+            [Console]::Error.WriteLine($_.Exception.Message)
+            exit 1
+        }
         $mode = $args[0]
         $root = (Get-Location).Path
         $state = Join-Path $root '.orchestrator'

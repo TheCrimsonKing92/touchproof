@@ -170,20 +170,15 @@ internal static class CliShadowStartCommand
             if (!File.Exists(sourcePath))
                 continue;
 
-            using var live = OpenDatabase(sourcePath, SqliteOpenMode.ReadOnly);
-            using var copy = OpenDatabase(Path.Combine(state, database), SqliteOpenMode.ReadWriteCreate);
-            live.BackupDatabase(copy);
+            // A direct read-only open of a quiet WAL database can create source sidecars.
+            using var snapshot = new StoreInspectionSnapshot(sourcePath);
+            using var copy = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(state, database), Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
+            }.ToString());
+            copy.Open();
+            snapshot.Connection.BackupDatabase(copy);
         }
-    }
-
-    private static SqliteConnection OpenDatabase(string path, SqliteOpenMode mode)
-    {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = path, Mode = mode, Pooling = false
-        }.ToString());
-        try { connection.Open(); return connection; }
-        catch { connection.Dispose(); throw; }
     }
 
     private static ProcessStartInfo BuildLaunch(Options options, string scratch, string state)
