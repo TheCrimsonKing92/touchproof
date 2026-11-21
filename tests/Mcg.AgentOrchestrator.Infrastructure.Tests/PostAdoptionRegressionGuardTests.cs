@@ -136,6 +136,8 @@ public sealed class PostAdoptionRegressionGuardTests
                 (_, _) => throw new InvalidOperationException("A blocked goal must not land."),
                 null, _ => { }, _ => throw new InvalidOperationException("A blocked goal must not be cleaned up."),
                 (_, _, _) => { }, _ => null,
+                runAcceptanceVerificationWithSlot: (_, _) =>
+                    throw new InvalidOperationException("A blocked goal must not run parallel acceptance."),
                 getAcceptanceSlotCount: _ => 2, parallelAcceptanceAttemptCoordinator: coordinator,
                 utcNow: () => AdoptedAt);
             var observer = new RecordingObserver();
