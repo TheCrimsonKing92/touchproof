@@ -33,8 +33,15 @@ public sealed class WorkerToolsInstaller(string configurationPath, string cacheR
             pin = settings.PinnedCommit ?? pin;
             if (pin.Length is < 4 or > 64 || !pin.All(Uri.IsHexDigit))
                 throw new InvalidDataException("pinnedCommit must be a hexadecimal Git commit identity.");
-            var source = Path.GetFullPath(settings.SourceRepository
-                ?? throw new InvalidDataException("sourceRepository is required."), Path.GetDirectoryName(configurationPath)!);
+            var sourceRepository = settings.SourceRepository;
+            if (sourceRepository is null)
+            {
+                var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (profile.Length == 0)
+                    throw new InvalidDataException("Set sourceRepository when the current user profile is unavailable.");
+                sourceRepository = Path.Combine(profile, "vcs", "worker-tools");
+            }
+            var source = Path.GetFullPath(sourceRepository, Path.GetDirectoryName(configurationPath)!);
             var project = settings.Project ?? throw new InvalidDataException("project is required.");
             stage = "resolve";
             var identities = RunGit(source, "rev-parse", $"--disambiguate={pin}")
