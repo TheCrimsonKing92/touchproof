@@ -341,7 +341,8 @@ public sealed partial class AgentOrchestratorKernel
                 contextDirectory!,
                 "research-notes.md",
                 "Durable Research Notes",
-                collapsePriority: 10);
+                collapsePriority: 10,
+                referenceOnly: task.RequiredRole == AgentRole.Planner);
         }
 
         if (usesFileAccessContext &&
@@ -755,7 +756,8 @@ public sealed partial class AgentOrchestratorKernel
         string contextDirectory,
         string fileName,
         string heading,
-        int collapsePriority)
+        int collapsePriority,
+        bool referenceOnly = false)
     {
         var path = Path.Combine(contextDirectory, fileName);
         if (!File.Exists(path))
@@ -770,20 +772,15 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
-        segments.Add(TaskBriefSegment.Projected(
-            $"context/{fileName}",
-            [
-                $"## {heading}",
-                $"Artifact identity: {fileName}; sha256:{hash}",
-                text,
-                string.Empty
-            ],
-            [
-                $"## {heading}",
-                $"Read {fileName} in the context directory for the complete artifact; sha256:{hash}. Inline copy collapsed to stay under the role file-access prompt budget.",
-                string.Empty
-            ],
-            collapsePriority));
+        var identity = $"context/{fileName}";
+        var sectionHeading = $"## {heading}";
+        var reference = $"Read {fileName} in the context directory for the complete artifact; sha256:{hash}.";
+        segments.Add(referenceOnly
+            ? TaskBriefSegment.Projected(identity, [sectionHeading, reference, string.Empty])
+            : TaskBriefSegment.Projected(identity,
+                [sectionHeading, $"Artifact identity: {fileName}; sha256:{hash}", text, string.Empty],
+                [sectionHeading, reference + " Inline copy collapsed to stay under the role file-access prompt budget.", string.Empty],
+                collapsePriority));
     }
 
     private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)
