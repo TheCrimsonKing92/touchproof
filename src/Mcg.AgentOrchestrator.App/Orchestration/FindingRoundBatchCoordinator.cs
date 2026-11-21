@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -189,10 +190,10 @@ internal static class FindingRoundBatchCoordinator
         // Rejected and failed executions consume the same existing allowance as completed runs.
         var receiptId = ConductorDriver.CreateFindingEvidenceReceiptId(candidate, round, batch.Identity, basis);
         var identity = new FindingEvidenceBatchIdentity(task.Id, batchCandidate, round, batchBasis);
-        // Checkpoint the original members before per-finding writes can change the next tick's plan.
+        // Checkpoint the refused members before per-finding writes can change the next tick's plan.
         var refusal = FindingEvidenceExecutionClassifier.IsPermanentRefusal(new(false, Reason: reason))
-            ? new TerminalRefusal(attempt.AttemptId, batch.TypedRequest.Repository, receiptId, reason, detail,
-                FailedAttemptMembers(batch))
+            ? ReviewerSelectorCorrectionRoute.AttributeRefusal(driver, goal, task, batch, attempt, candidate,
+                settings, new(attempt.AttemptId, batch.TypedRequest.Repository, receiptId, reason, detail, FailedAttemptMembers(batch)))
             : null;
         lock (goal)
         {
@@ -203,7 +204,8 @@ internal static class FindingRoundBatchCoordinator
             if (refusal is not null)
             {
                 PublishTerminalRefusal(driver, goal, task, identity, refusal, batch.Findings, candidate, settings);
-                decision = RouteUnavailable(goal, task, identity, morePending, detail, reusedActionableRed);
+                decision = RouteUnavailable(goal, task, identity, morePending || refusal.Members.Length < batch.Members.Count,
+                    detail, reusedActionableRed);
             }
             else
             {
@@ -246,13 +248,23 @@ internal static class FindingRoundBatchCoordinator
     internal const string FailedAttemptMembersPrefix = "; request_members=";
     private const string RefusalCheckpointPrefix = "; refusal_batch=";
 
-    private sealed record TerminalRefusal(string AttemptId, string? Repository, string ReceiptId,
-        FindingEvidenceNotHonouredReason Reason, string Detail, FindingRoundBatchAccounting.Member[] Members);
+    internal sealed record TerminalRefusal(string AttemptId, string? Repository, string ReceiptId,
+        FindingEvidenceNotHonouredReason Reason, string Detail, FindingRoundBatchAccounting.Member[] Members,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FindingEvidenceSelection? RejectedSelection = null);
+
+    internal static TerminalRefusal? ReadTerminalRefusal(string message, FindingEvidenceBatchIdentity identity)
+    {
+        var marker = $"{RefusalCheckpointPrefix}{identity.Key}; refusal=";
+        var start = message.IndexOf(RefusalCheckpointPrefix, StringComparison.Ordinal);
+        if (start < 0 || !message.AsSpan(start).StartsWith(marker, StringComparison.Ordinal)) return null;
+        var end = message.LastIndexOf("; reason=", StringComparison.Ordinal);
+        return JsonSerializer.Deserialize<TerminalRefusal>(message[(start + marker.Length)..end]) ??
+            throw new InvalidOperationException("Focused evidence refusal checkpoint is null.");
+    }
 
     internal static void ResumeTerminalRefusals(ConductorDriver driver, Goal goal, TaskSpec task, FindingEvidenceBatchIdentity identity,
         ExecutionContext execution, IReadOnlyList<ReviewFinding> findings)
     {
-        var marker = $"{RefusalCheckpointPrefix}{identity.Key}; refusal=";
         lock (goal)
         {
             var refusals = new List<TerminalRefusal>();
@@ -260,11 +272,7 @@ internal static class FindingRoundBatchCoordinator
             {
                 if (item.TaskId != task.Id || item.Kind != ProgressKind.FindingEvidenceRunRecorded ||
                     !item.Message.StartsWith(FailedAttemptRunPrefix, StringComparison.Ordinal)) continue;
-                var start = item.Message.IndexOf(RefusalCheckpointPrefix, StringComparison.Ordinal);
-                if (start < 0 || !item.Message.AsSpan(start).StartsWith(marker, StringComparison.Ordinal)) continue;
-                var end = item.Message.LastIndexOf("; reason=", StringComparison.Ordinal);
-                refusals.Add(JsonSerializer.Deserialize<TerminalRefusal>(item.Message[(start + marker.Length)..end]) ??
-                    throw new InvalidOperationException("Focused evidence refusal checkpoint is null."));
+                if (ReadTerminalRefusal(item.Message, identity) is { } refusal) refusals.Add(refusal);
             }
             if (refusals.Count == 0) return;
 
@@ -604,6 +612,7 @@ internal static class FindingRoundBatchCoordinator
             if (summary.BatchSize > 0)
                 decision = decision with { BatchClosure = new(identity, JsonSerializer.Serialize(summary)) };
         }
+        decision = ReviewerSelectorCorrectionRoute.ApplyToSettlement(driver, goal, task, execution, decision);
         return handled;
     }
 

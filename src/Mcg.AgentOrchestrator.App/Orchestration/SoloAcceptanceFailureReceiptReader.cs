@@ -8,7 +8,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record SoloAcceptanceConsumptionContext(string CandidateSha, string MainSha,
     string CandidateTreeSha, string BaselineSha);
-internal sealed record SoloAcceptanceFailureRead(AttributedFailure? Failure, string Reason);
+internal sealed record SoloAcceptanceFailureRead(AttributedFailure? Failure, string Reason)
+{
+    internal IReadOnlyList<string> DroppedFlakeIdentities { get; init; } = [];
+}
 
 // This reads retained evidence only. Attribution execution remains in the verifier.
 internal static class SoloAcceptanceFailureReceiptReader
@@ -43,6 +46,7 @@ internal static class SoloAcceptanceFailureReceiptReader
                 return Refuse(SoloHoldReasons.CheckMismatch);
             var feedback = new SortedDictionary<string, string>(StringComparer.Ordinal);
             var checks = proof.Checks.Select(item => item.Check).ToArray();
+            var candidateChecks = new List<(SoloAcceptanceCheckEvidence Evidence, SoloAcceptanceFlakePartition Partition)>();
             foreach (var item in proof.Checks)
             {
                 var check = item.Check;
@@ -74,8 +78,15 @@ internal static class SoloAcceptanceFailureReceiptReader
                 if (attribution is not { Length: 1 } || attribution[0].Origin != AcceptanceFailureOrigin.Introduced ||
                     attribution[0].Cause != AcceptanceFailureCause.NotClassified)
                     return Refuse(SoloHoldReasons.AuthoritativeAttributionMismatch);
-                var rows = ReadRows(item, receipt.ResultsRoot);
-                foreach (var identity in identities)
+                candidateChecks.Add((item, ReadRows(item, receipt.ResultsRoot, allowConfirmedFlakes: true)));
+            }
+
+            var dropped = SoloAcceptanceFlakePartition.GetDroppedIdentities(candidateChecks.Select(candidate => candidate.Partition));
+            foreach (var (item, partition) in candidateChecks)
+            {
+                var check = item.Check;
+                var rows = partition.ReadFailures(dropped);
+                foreach (var identity in check.FailingTestIdentities!.Where(identity => !dropped.Contains(identity)))
                 {
                     var bindings = proof.Bindings.Where(binding => binding.CheckName == check.Name && binding.TestIdentity == identity).ToArray();
                     if (bindings.Length != 1) return Refuse(SoloHoldReasons.TestBindingMismatch);
@@ -97,7 +108,7 @@ internal static class SoloAcceptanceFailureReceiptReader
                     else
                     {
                         if (!Usable(baseline.Check)) return Refuse(SoloHoldReasons.BaselineApparatusOrUnknown);
-                        var baselineRows = ReadRows(baseline, receipt.ResultsRoot);
+                        var baselineRows = ReadRows(baseline, receipt.ResultsRoot).ValidateRows();
                         var selected = baselineRows.Where(row => AcceptanceFailureAttributionPlanner.NormalizeIdentity(row.Key) == selector).ToArray();
                         if (selected.Length == 0 || selected.Any(row => row.Key == identity && row.Value.Outcome == "Failed"))
                             return Refuse(SoloHoldReasons.BaselineInheritedOrUncovered);
@@ -129,7 +140,8 @@ internal static class SoloAcceptanceFailureReceiptReader
             }
             return feedback.Count == 0 ? Refuse(SoloHoldReasons.FailingTestsAbsent) : new(
                 new("solo", receipt.AttemptId, receipt.CandidateSha, feedback.Keys.ToArray(),
-                    string.Join(Environment.NewLine, feedback.Select(row => $"reproduced {row.Key}: {row.Value}"))), "solo-evidence-validated");
+                    string.Join(Environment.NewLine, feedback.Select(row => $"reproduced {row.Key}: {row.Value}"))), "solo-evidence-validated")
+                { DroppedFlakeIdentities = dropped.ToArray() };
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or XmlException or
             ArgumentException or InvalidOperationException or NullReferenceException)
@@ -169,40 +181,13 @@ internal static class SoloAcceptanceFailureReceiptReader
         check.ExecutedTestCount is > 0 && check.CompletionDecision?.TimedOut != true &&
         (check.Passed ? check.ExitCode == 0 : check.ExitCode is > 0);
 
-    private sealed record TrxRow(string Key, AcceptanceTrxFailure Value, string Path);
+    internal sealed record TrxRow(string Key, AcceptanceTrxFailure Value, string Path);
 
-    private static List<TrxRow> ReadRows(SoloAcceptanceCheckEvidence check, string root)
+    private static SoloAcceptanceFlakePartition ReadRows(SoloAcceptanceCheckEvidence check, string root, bool allowConfirmedFlakes = false)
     {
         if (check.Artifacts is not { Count: > 0 }) throw new InvalidDataException("solo-trx-absent");
         var artifactRows = check.Artifacts.Select(artifact => ReadTrx(artifact, root)).ToArray();
-        var rows = artifactRows.SelectMany(artifact => artifact).ToList();
-        var repeatedFailure = false;
-        foreach (var group in rows.GroupBy(row => row.Key, StringComparer.Ordinal)
-            .Where(group => group.Count() > 1 && group.Any(row => row.Value.Outcome == "Failed")))
-        {
-            // Listing the same artifact twice is not evidence of a second execution.
-            if (group.Select(row => row.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != group.Count())
-                RequireUnambiguousFailures(group, SoloHoldReasons.DuplicateTestRow);
-            if (group.Any(row => row.Value.Outcome == "Passed"))
-                throw new InvalidDataException($"solo-repeated-execution-flake: identity={group.Key}; " +
-                    $"outcome={AcceptanceLaneRerunEvidence.Flake}; outcomes={string.Join(",", group.Select(row => row.Value.Outcome))}");
-            if (group.Any(row => row.Value.Outcome != "Failed"))
-                RequireUnambiguousFailures(group, SoloHoldReasons.DuplicateTestRow);
-            repeatedFailure = true;
-        }
-        // Narrowed reruns (AcceptanceLaneRerunNarrowing.ComposeResult) record per-run maxima,
-        // not sums. Repeated failures identify that shape; other multi-TRX checks retain sums.
-        var executedCounts = artifactRows.Select(artifact => artifact.Count(row => row.Value.Outcome is "Passed" or "Failed")).ToArray();
-        var executed = repeatedFailure ? executedCounts.Max() : executedCounts.Sum();
-        var discoveredRows = repeatedFailure ? artifactRows.Max(artifact => artifact.Count) : rows.Count;
-        if (executed != check.Check.ExecutedTestCount)
-            throw new InvalidDataException($"solo-incomplete-check-rows: executed rows={executed}; recorded={check.Check.ExecutedTestCount}");
-        if (check.Check.DiscoveredTestCount is { } discovered && discovered != discoveredRows)
-            throw new InvalidDataException($"solo-incomplete-check-rows: discovered rows={discoveredRows}; recorded={discovered}");
-        if (!SameNames(rows.Where(row => row.Value.Outcome == "Failed").Select(row => row.Key).Distinct(StringComparer.Ordinal),
-            check.Check.FailingTestIdentities ?? []))
-            throw new InvalidDataException("solo-failing-tests-mismatch");
-        return rows;
+        return SoloAcceptanceFlakePartition.Classify(check.Check, artifactRows, allowConfirmedFlakes);
     }
 
     private static List<TrxRow> ReadTrx(SoloAcceptanceArtifact artifact, string root)
@@ -255,7 +240,7 @@ internal static class SoloAcceptanceFailureReceiptReader
         return bytes;
     }
 
-    private static bool SameNames(IEnumerable<string> left, IEnumerable<string> right)
+    internal static bool SameNames(IEnumerable<string> left, IEnumerable<string> right)
     {
         var a = left.Order(StringComparer.Ordinal).ToArray();
         var b = right.Order(StringComparer.Ordinal).ToArray();
