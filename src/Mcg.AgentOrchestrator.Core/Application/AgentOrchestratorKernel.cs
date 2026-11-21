@@ -72,12 +72,7 @@ public sealed partial class AgentOrchestratorKernel
     public bool TryGetKnownDependencyGoalStatus(GoalId goalId, out string status) =>
         _knownDependencyGoalStatuses.TryGetValue(goalId, out status!);
 
-    public OrchestratorSnapshot ExportSnapshot()
-    {
-        return new OrchestratorSnapshot(
-            _goals.Values.Where(goal => !goal.IsMetadataOnly).Select(goal => goal.ToSnapshot()).ToList(),
-            _humanInputRequests.Values.Select(request => request.ToSnapshot()).ToList());
-    }
+    public OrchestratorSnapshot ExportSnapshot() => OrchestratorSnapshot.Capture(this, includeDeferredRows: true);
 
     public static AgentOrchestratorKernel FromSnapshot(OrchestratorSnapshot snapshot, IClock? clock = null)
     {

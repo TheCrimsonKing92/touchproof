@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -17,6 +18,9 @@ public sealed class Goal
 
     private readonly List<TaskSpec> _tasks;
     private ImmutableList<ProgressEvent> _timeline = [];
+    private long? _tickRowVersion;
+    private DeferredGoalTimeline? _deferredTimeline;
+    private Lazy<(long Version, ImmutableList<ProgressEvent> Events)>? _storedTimeline;
     private readonly List<GoalBriefVersion> _briefVersions = [];
     private readonly List<RefinedSpecVersion> _refinedSpecVersions = [];
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
@@ -140,7 +144,24 @@ public sealed class Goal
 
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
 
-    public IReadOnlyList<ProgressEvent> Timeline => Volatile.Read(ref _timeline);
+    public IReadOnlyList<ProgressEvent> Timeline
+    {
+        get
+        {
+            var appended = Volatile.Read(ref _timeline);
+            if (_storedTimeline is null) return appended;
+            var (version, events) = _storedTimeline.Value;
+            if (version == _tickRowVersion || appended.Count == 0) return events.AddRange(appended);
+
+            // An independent write may have saved a staged event since this goal was reloaded.
+            var storedKeys = events.Select(TimelineEventKey).ToHashSet(StringComparer.Ordinal);
+            return events.AddRange(appended.Where(evt => !storedKeys.Contains(TimelineEventKey(evt))));
+        }
+    }
+
+    private static string TimelineEventKey(ProgressEvent evt) => JsonSerializer.Serialize(SnapshotProgressEvent(evt));
+
+    internal int TimelineCount => (_deferredTimeline?.Count ?? 0) + Volatile.Read(ref _timeline).Count;
 
     public ProgressEvent? LatestTaskRetryAfterAcceptanceFailure(TaskId taskId)
     {
@@ -149,7 +170,7 @@ public sealed class Goal
             return null;
         }
 
-        return _timeline
+        return Timeline
             .Where(evt =>
                 evt.TaskId == taskId &&
                 evt.Kind == ProgressKind.TaskRetried &&
@@ -1497,7 +1518,7 @@ public sealed class Goal
         return true;
     }
 
-    internal GoalSnapshot ToSnapshot()
+    internal GoalSnapshot ToSnapshot(bool includeDeferredRows = true)
     {
         if (IsMetadataOnly)
         {
@@ -1518,18 +1539,8 @@ public sealed class Goal
             Id.Value,
             Objective,
             Status,
-            _tasks.Select(task => task.ToSnapshot(briefVersions)).ToList(),
-            _timeline.Select(evt => new ProgressEventSnapshot(
-                evt.GoalId.Value,
-                evt.TaskId?.Value,
-                evt.Kind,
-                evt.Message,
-                evt.OccurredAt,
-                evt.RequeueSkipped,
-                evt.OperatorGates,
-                evt.OperatorIntentApplied,
-                evt.HumanInputSuperseded,
-                evt.TickOutcome, evt.Failure, evt.OperatorIntentCreatedAt, evt.PreTesterEvidence)).ToList(),
+            _tasks.Select(task => task.ToSnapshot(briefVersions, includeDeferredRows)).ToList(),
+            (includeDeferredRows ? Timeline : Volatile.Read(ref _timeline)).Select(SnapshotProgressEvent).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
             _refinedSpecVersions.Count == 0 && RefinedSpec is { } spec ? ToRefinedSpecSnapshot(spec) : null,
@@ -1588,8 +1599,23 @@ public sealed class Goal
             ExplicitDisposition: ExplicitDisposition,
             ParkedLifecycleStatus: ParkedLifecycleStatus,
             LandingBlocker: LandingBlocker,
-            DeliveredForReview: DeliveredForReview, Repositories: Repositories);
+            DeliveredForReview: DeliveredForReview, Repositories: Repositories)
+        {
+            TickRowVersion = includeDeferredRows ? null : _tickRowVersion,
+            DeferredTimeline = includeDeferredRows ? null : _deferredTimeline
+        };
     }
+
+    private static ProgressEventSnapshot SnapshotProgressEvent(ProgressEvent evt) => new(
+        evt.GoalId.Value, evt.TaskId?.Value, evt.Kind, evt.Message, evt.OccurredAt, evt.RequeueSkipped,
+        evt.OperatorGates, evt.OperatorIntentApplied, evt.HumanInputSuperseded, evt.TickOutcome, evt.Failure,
+        evt.OperatorIntentCreatedAt, evt.PreTesterEvidence);
+
+    private static ProgressEvent RestoreProgressEvent(ProgressEventSnapshot evt) => new(
+        new GoalId(evt.GoalId), evt.TaskId is null ? null : new TaskId(evt.TaskId),
+        evt.Kind, evt.Message, evt.OccurredAt, evt.RequeueSkipped, evt.OperatorGates,
+        evt.OperatorIntentApplied, evt.HumanInputSuperseded, evt.TickOutcome, evt.Failure,
+        evt.OperatorIntentCreatedAt, evt.PreTesterEvidence);
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
     {
@@ -1604,8 +1630,8 @@ public sealed class Goal
                 snapshot.TerminatedAt));
         }
 
-        var initialRecordedAt = snapshot.CreatedAt ??
-            snapshot.Timeline.OrderBy(item => item.OccurredAt).FirstOrDefault()?.OccurredAt ??
+        var initialRecordedAt = snapshot.CreatedAt ?? snapshot.DeferredTimeline?.FirstOccurredAt ??
+            snapshot.Timeline.MinBy(item => item.OccurredAt)?.OccurredAt ??
             DateTimeOffset.MinValue;
         var briefVersions = DispatchSnapshotShaping.BriefLookup(snapshot.BriefVersions);
         var goal = new Goal(
@@ -1625,19 +1651,23 @@ public sealed class Goal
         goal.SetStatus(snapshot.Status);
         goal.RestoreClarificationRoundCount(snapshot.ClarificationRoundCount);
 
-        foreach (var evt in snapshot.Timeline.OrderBy(item => item.OccurredAt))
+        goal._tickRowVersion = snapshot.TickRowVersion;
+        goal._deferredTimeline = snapshot.DeferredTimeline;
+        if (snapshot.DeferredTimeline is { } deferred)
         {
-            goal.Append(new ProgressEvent(
-                new GoalId(evt.GoalId),
-                evt.TaskId is null ? null : new TaskId(evt.TaskId),
-                evt.Kind,
-                evt.Message,
-                evt.OccurredAt,
-                evt.RequeueSkipped,
-                evt.OperatorGates,
-                evt.OperatorIntentApplied,
-                evt.HumanInputSuperseded,
-                evt.TickOutcome, evt.Failure, evt.OperatorIntentCreatedAt, evt.PreTesterEvidence));
+            goal._storedTimeline = new(() =>
+            {
+                var rows = deferred.Read();
+                return (rows.Version, rows.Entries.OrderBy(item => item.OccurredAt)
+                    .Select(RestoreProgressEvent).ToImmutableList());
+            });
+        }
+
+        foreach (var evt in snapshot.DeferredTimeline is null
+                     ? snapshot.Timeline.OrderBy(item => item.OccurredAt)
+                     : snapshot.Timeline.AsEnumerable())
+        {
+            goal.Append(RestoreProgressEvent(evt));
         }
 
         foreach (var depId in snapshot.DependsOn ?? [])
