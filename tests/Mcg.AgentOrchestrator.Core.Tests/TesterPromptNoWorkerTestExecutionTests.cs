@@ -88,6 +88,9 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
                 includeHighRiskContract.Value);
     }
 
+    private const string DeveloperReachProcedure = "- Before WORKER_RESULT, search each new/changed branch predicate, method signature or user-visible string/flag via `wt find --references <Name>` where available/applicable, else `git grep -n -w` (quote terms). Use old/new terms, literal/token variants and enclosing symbol + tokens for unnamed predicates. Include sibling production paths, tests and fixtures. List each hit in reach_check by subject, repo-relative path[:line] and updated, covered-by <test>, or unaffected - <reason>. For criteria naming files/packages/symbols/artifacts, cite grep or non-empty/absence/tracked-file checks in criteria_self_check.";
+    private const string DeveloperReachOverflow = "- Over limit, keep each subject and each updated or sibling production reference. Group only same-pattern hits by file/dir path or glob and disposition. If still over, omit reach_check and name overflowed subjects in prose.";
+
     // Literal role baselines, including the Developer premise-invalid contract and expanded constants.
     private static string[] BaselineLines(AgentRole role, bool compact) => (role, compact) switch
     {
@@ -99,6 +102,8 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
             "- Format: `tests: deferred - ClassA, ClassB` or backticked names.",
             "- Before WORKER_RESULT, for each criterion naming Developer as owner, open the test written/changed for it: its assertion must check the specific named outcome, not a weaker property, and fail on pre-change code. If both hold, report proven with the test in criteria_self_check; else strengthen it or report unmet and set assigned_scope_complete: false.",
+            DeveloperReachProcedure,
+            DeveloperReachOverflow,
             "- Implement only the requested behavior and keep edits scoped.",
             "- Name the failing test in `tests: deferred`; never run tests.",
             "- Report changed files and the behavior each change enables.",
@@ -112,6 +117,8 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
             "- Format: `tests: deferred - ClassA, ClassB` or backticked names.",
             "- Before WORKER_RESULT, for each criterion naming Developer as owner, open the test written/changed for it: its assertion must check the specific named outcome, not a weaker property, and fail on pre-change code. If both hold, report proven with the test in criteria_self_check; else strengthen it or report unmet and set assigned_scope_complete: false.",
+            DeveloperReachProcedure,
+            DeveloperReachOverflow,
             "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
             "- Keep edits scoped and report changed files plus behavior enabled.",
             "- Name the failing test in `tests: deferred`; never run tests.",

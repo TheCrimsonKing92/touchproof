@@ -13,6 +13,10 @@ using System.Text.Json;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispatchTestSupport
 {
+    internal static string CommitDispatchSetup(string worktree, string path, string message, DateTimeOffset time) =>
+        new FixtureRepositoryWriter(worktree).CommitFiles([path], message,
+            new("Dispatch Tests", "tests@example.com", time));
+
     [Xunit.Fact]
     public void PreparedCommit_ReusedWithoutGitLaunches_PreservesClassificationAndIsolation()
     {
@@ -2108,8 +2112,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
-    RunGit(worktree, ["add", "-A"], now.AddMinutes(-4));
-    RunGit(worktree, ["commit", "-m", "Feature"], now.AddMinutes(-4));
+    CommitDispatchSetup(worktree, "feature.txt", "Feature", now.AddMinutes(-4));
     var head = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
 
     var logs = Path.Combine(root, "logs");
@@ -2159,8 +2162,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
-    RunGit(worktree, ["add", "-A"], now.AddMinutes(-4));
-    RunGit(worktree, ["commit", "-m", "Feature"], now.AddMinutes(-4));
+    CommitDispatchSetup(worktree, "feature.txt", "Feature", now.AddMinutes(-4));
 
     var logs = Path.Combine(root, "logs");
     Directory.CreateDirectory(logs);
@@ -2409,8 +2411,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             var qwenDirectory = Path.Combine(worktree, ".qwen");
             Directory.CreateDirectory(qwenDirectory);
             File.WriteAllText(Path.Combine(qwenDirectory, "settings.json"), "{}");
-            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
-            RunGit(worktree, ["commit", "-m", "Qwen settings noise"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            CommitDispatchSetup(worktree, ".qwen/settings.json", "Qwen settings noise", DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
         });
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -3918,8 +3919,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         worktree =>
         {
             File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
-            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
-            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            CommitDispatchSetup(worktree, "feature.txt", "Feature", DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
         });
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     var workerCommit = ReadGit(worktree, ["rev-parse", "HEAD"]);
@@ -3984,8 +3984,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         worktree =>
         {
             File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
-            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
-            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            CommitDispatchSetup(worktree, "feature.txt", "Feature", DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
             File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover");
         },
         sandboxLowIntegrity: true);
@@ -4062,8 +4061,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         worktree =>
         {
             File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
-            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
-            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            CommitDispatchSetup(worktree, "feature.txt", "Feature", DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
             File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover");
         },
         sandboxLowIntegrity: true);
@@ -4115,8 +4113,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         worktree =>
         {
             File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
-            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
-            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            CommitDispatchSetup(worktree, "feature.txt", "Feature", DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
             File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover");
         },
         workerName: "claude-cli",

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -15,14 +14,16 @@ public sealed class PreTesterReverseDependencySelectionTests
     private const string Declared = "Core.Tests:DeclaredCoreTests";
     private const string Failure = "ConsumerTests.Works";
 
-    [Fact]
-    public void SkipDecisionAddsNothingAndPrintsOneCostLine()
+    [Theory]
+    [InlineData(0d)]
+    [InlineData(null)]
+    public void SkipDecisionAddsNothingAndPrintsOneCostLine(double? failureRate)
     {
         using var fixture = Repository();
         fixture.Test("SecondConsumerTests", "AppContract");
         var lines = new List<string>();
         var calls = 0;
-        var skip = ReverseDependencyEvidenceCostRule.Evaluate(50, 100, 0);
+        var skip = ReverseDependencyEvidenceCostRule.Evaluate(50, 100, failureRate);
 
         var actual = PreTesterReverseDependencySelections.Select(fixture.Root, [AppSource], lines.Add,
             costDecision: classes =>
@@ -37,6 +38,23 @@ public sealed class PreTesterReverseDependencySelectionTests
         Assert.Empty(actual.Provenance);
         Assert.Equal($"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-skipped-cost {skip.Line}",
             Assert.Single(lines));
+    }
+
+    [Fact]
+    public void TooFewCompletedGatesSkipSelectionOnRealCostPath()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        fixture.WithCostHistory(completedGateAttempts: ReverseDependencyEvidenceCostInputs.MinimumCompletedGateAttempts - 1);
+        var lines = new List<string>();
+
+        var actual = PreTesterReverseDependencySelections.Select(fixture.Root, [AppSource], lines.Add);
+
+        Assert.Empty(actual.Selections);
+        Assert.Empty(actual.Provenance);
+        var line = Assert.Single(lines);
+        Assert.StartsWith("PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-skipped-cost ", line);
+        Assert.Contains("candidate_failure_rate=unavailable decision=skip reason=too few completed gates to compute a rate", line);
+        Assert.DoesNotContain("input_unavailable=", line);
     }
 
     [Fact]
@@ -68,8 +86,10 @@ public sealed class PreTesterReverseDependencySelectionTests
         Assert.Empty(lines);
     }
 
-    [Fact]
-    public void SkipDecisionKeepsEveryOtherSelectionSource()
+    [Theory]
+    [InlineData(0d)]
+    [InlineData(null)]
+    public void SkipDecisionKeepsEveryOtherSelectionSource(double? failureRate)
     {
         using var fixture = Repository();
         fixture.Test("DeveloperDeclaredTests");
@@ -88,7 +108,7 @@ public sealed class PreTesterReverseDependencySelectionTests
             {
                 calls++;
                 Assert.Equal(["ConsumerTests"], classes);
-                return ReverseDependencyEvidenceCostRule.Evaluate(50, 100, 0);
+                return ReverseDependencyEvidenceCostRule.Evaluate(50, 100, failureRate);
             });
         // The driver merges declared, brief-named and open-finding classes before Augment.
         var declaration = new DeveloperDeferredTestSelection([
@@ -388,20 +408,8 @@ public sealed class PreTesterReverseDependencySelectionTests
                   { "name": "core", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj" }
                 ] }
                 """);
-            // A candidate-caused gate failure gives rate 1; reverse classes are a subset of the full gate.
-            var completed = DateTimeOffset.UtcNow.AddMinutes(-1);
-            var metadata = new ConductorParallelAcceptanceAttempt("fixture-red", "goal", "goal", 0, null, null,
-                completed.AddMinutes(-1), completed, 0, ConductorParallelAcceptanceAttemptOutcome.Failed,
-                "", "", "", "", "", "", CompletedAt: completed, Kind: "gate");
-            var result = new ConductorParallelAcceptanceRunArtifact("accepted", null, null, null, null,
-                new(false, [new("tests", false, 1, null,
-                    FailingTestAttributions: [new(Failure, AcceptanceTestFailureOrigin.Introduced, "fixture")])]),
-                null, null, null, null);
-            var attempts = Path.Combine(HostLedgerStateDirectory.Resolve(Repository.Root), "acceptance-gate-attempts");
-            Directory.CreateDirectory(attempts);
-            var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-            File.WriteAllText(Path.Combine(attempts, "fixture-red.attempt.json"), JsonSerializer.Serialize(metadata, json));
-            File.WriteAllText(Path.Combine(attempts, "fixture-red.result.json"), JsonSerializer.Serialize(result, json));
+            // Candidate-caused failures give rate 1 and reverse classes are a subset of the full gate.
+            PreTesterReverseDependencySelectionFixture.WriteCandidateFailureHistory(Repository.Root);
             // These driver scenarios require Run from the real readers, so expose the input
             // failure here before a missing reverse selection obscures its cause.
             var inputs = ReverseDependencyEvidenceCostHistory.Read(Repository.Root,

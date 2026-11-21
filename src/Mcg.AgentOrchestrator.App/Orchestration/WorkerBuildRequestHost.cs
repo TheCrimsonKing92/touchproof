@@ -55,16 +55,26 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         var kernel = _operations.Load(_reference.GoalId);
         var task = WorkerBuildInvocationOperations.RequireOrigin(kernel, _reference, _host, true);
         var root = Path.GetFullPath(task.LastDispatch!.WorkingDirectory);
-        var scope = WorkerBuildProjectScope.Resolve(root, request.Projects,
+        if (request.SelectTargets && !_reference.SelectTargets)
+            throw new UnauthorizedAccessException("Selected targets require a non-home build host.");
+        var selection = _reference.SelectTargets ? new DotnetProjectDiscoveryAdapter().SelectBuildTargets(root) : null;
+        if (selection?.Error is { } selectionError)
+            throw new IOException("worker_build_target_selection=error; " + selectionError);
+        var requested = selection is null ? request.Projects : request.Projects.Concat(selection.Projects).ToArray();
+        var scope = WorkerBuildProjectScope.Resolve(root, requested,
             expectedMetadataDigest: task.LastDispatch.WorkerBuildScope!.MetadataDigest);
         if (!WorktreeTreeDigest.TryCompute(root, out var digest, out var reason, out var failure))
             throw new InvalidOperationException("Worker build candidate unavailable: " + WorktreeTreeDigestFailure.WithDetail(reason, failure));
+        var targets = selection?.WithRequiredProjects(scope.Projects) ?? scope.Projects;
+        if (selection?.AbsenceProof is { } proof && targets.Count == 0)
+            return new("", WorkerBuildOutcome.Success, "worker_build_target_selection=NotApplicable; " + proof);
         var previous = task.WorkerBuildInvocations.SingleOrDefault(i =>
             i.DispatchId == _reference.DispatchId && i.RequestKey == request.RequestKey);
         if (previous is not null)
         {
             if (previous.Worker != worker || previous.TreeDigest != digest || previous.ScopeIdentity != scope.Identity ||
-                previous.Configuration != request.Configuration || !previous.Projects.SequenceEqual(scope.Projects))
+                previous.Configuration != request.Configuration || !previous.Projects.SequenceEqual(scope.Projects) ||
+                (selection is not null && (previous.BuildTargets is null || !previous.BuildTargets.SequenceEqual(targets))))
                 throw new UnauthorizedAccessException("Worker build idempotency key was reused for another payload/candidate.");
             var evidence = previous.StructuralCheck;
             if (evidence is null && previous.StructuralPolicy is not null)
@@ -87,7 +97,8 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             _reference.GoalId, _reference.TaskId, _reference.DispatchAt, _reference.DispatchId, root, digest,
             scope.Identity, scope.Projects, request.Configuration, _time.GetUtcNow() + _budget, _host, worker,
             Path.GetFullPath(_reference.Admission!.StorePath), _reference.Admission.Version, 1,
-            [new(WorkerBuildPhase.Requested, _time.GetUtcNow())], StructuralPolicy: _reference.StructuralPolicy);
+            [new(WorkerBuildPhase.Requested, _time.GetUtcNow())], StructuralPolicy: _reference.StructuralPolicy,
+            BuildTargets: selection is null ? null : targets);
         invocation = _operations.Store(invocation, null);
         _observe?.Invoke(invocation);
         GoalEvidenceOperationScope? custody = null;
@@ -101,6 +112,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         var stop = queueStop;
         var stopCause = StopCause.LifetimeEnded;
         var exits = new List<int?>();
+        WorkerBuildErrors? compilerErrors = null;
         WorkerBuildRestoreFailureReader.RestoreFailure? restoreFailure = null;
         var buildReceipt = _buildLedger is null ? null : new WorkerBuildReceiptObservation(_buildLedger);
         var terminalSafe = true;
@@ -171,7 +183,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                         throw new UnauthorizedAccessException($"Host compiler output LowIL preparation failed. {labeling.Diagnostic}");
                 }
                 var gcEnvironment = BuildGcEnvironment.ForStatePath(_reference.StatePath);
-                foreach (var project in scope.Projects)
+                foreach (var project in targets)
                 {
                     CheckCurrent();
                     Advance(WorkerBuildPhase.PreparingLaunch);
@@ -214,7 +226,12 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     qos = null;
                     child.Dispose();
                     child = null;
-                    if (exit != 0) restoreFailure = WorkerBuildRestoreFailureReader.Read(stdoutPath, stderrPath);
+                    if (exit != 0)
+                    {
+                        restoreFailure = WorkerBuildRestoreFailureReader.Read(stdoutPath, stderrPath);
+                        if (selection is not null)
+                            compilerErrors = WorkerBuildLogErrorReader.Read([stdoutPath, stderrPath]);
+                    }
                     CheckCurrent();
                     if (exit != 0) { CompleteDecision(StopCause.None); break; }
                 }
@@ -295,8 +312,11 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         { Observations = invocation.Observations.Append(new(phase, _time.GetUtcNow())).ToArray() });
         void CompleteDecision(StopCause cause)
         {
-            var result = Decide(invocation.Observations, scope.Projects, exits, cause, _budget, _time.GetUtcNow(), worker.Pid, restoreFailure);
-            Complete(result.Outcome, result.CompilerExitCode, result.Diagnostic);
+            var result = Decide(invocation.Observations, targets, exits, cause, _budget, _time.GetUtcNow(), worker.Pid, restoreFailure);
+            var diagnostic = compilerErrors is { Total: > 0 }
+                ? result.Diagnostic + Environment.NewLine + compilerErrors.Format(10)
+                : result.Diagnostic;
+            Complete(result.Outcome, result.CompilerExitCode, diagnostic);
         }
         void Complete(WorkerBuildOutcome outcome, int? exit, string diagnostic)
         {
@@ -319,7 +339,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             { stopCause = StopCause.DispatchCancelled; throw new OperationCanceledException("Dispatch cancelled."); }
             var latest = WorkerBuildInvocationOperations.RequireOrigin(latestKernel, _reference, _host, true);
             if (validateCandidate && (!WorktreeTreeDigest.TryCompute(root, out var currentDigest, out _) || currentDigest != invocation.TreeDigest ||
-                WorkerBuildProjectScope.Resolve(root, request.Projects,
+                WorkerBuildProjectScope.Resolve(root, requested,
                     expectedMetadataDigest: latest.LastDispatch!.WorkerBuildScope!.MetadataDigest).Identity != invocation.ScopeIdentity))
                 throw new WorkerBuildCandidateChangedException();
         }

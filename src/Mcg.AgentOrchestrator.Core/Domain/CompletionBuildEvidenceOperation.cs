@@ -32,7 +32,8 @@ public sealed record CompletionBuildEvidenceOperation(
     string Diagnostic = "",
     bool Applied = false,
     bool CustodyReleased = false,
-    string? RecoversOperationId = null)
+    string? RecoversOperationId = null,
+    IReadOnlyList<string>? BuildTargets = null)
 {
     public bool IsPending => Phase is CompletionBuildEvidencePhase.Launching or CompletionBuildEvidencePhase.Pending or CompletionBuildEvidencePhase.WaitingForLease;
 
@@ -49,7 +50,8 @@ public sealed record CompletionBuildEvidenceOperation(
         WorkerProcess.CompletedAt == other.WorkerProcess.CompletedAt && WorkerProcess.ExitCode == other.WorkerProcess.ExitCode &&
         WorkerProcess.StandardOutputPath == other.WorkerProcess.StandardOutputPath &&
         WorkerProcess.StandardErrorPath == other.WorkerProcess.StandardErrorPath && WorkerProcess.ExitCodePath == other.WorkerProcess.ExitCodePath &&
-        Projects.SequenceEqual(other.Projects);
+        Projects.SequenceEqual(other.Projects) &&
+        (BuildTargets is null ? other.BuildTargets is null : other.BuildTargets is not null && BuildTargets.SequenceEqual(other.BuildTargets));
 }
 
 // An attributed operation selector binds the child and receipt that the operator observed.

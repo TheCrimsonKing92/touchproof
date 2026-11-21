@@ -13,7 +13,7 @@ internal static class CliLifecycleReadiness
             context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
             goal.Id,
             cleanupHooks: context.CleanupContext.Hooks,
-            orchestratorDirectory: context.Workspace.OrchestratorDirectory);
+            workspace: context.Workspace);
         TerminalGoalSweepTextView.PrintTerminalGoalSweep(sweep);
         TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
         goal = context.Kernel.GetGoal(goal.Id);

@@ -13,6 +13,8 @@ public sealed class WorkerStackVerificationGuidanceWriterParityTests : IDisposab
     [InlineData("MyApp.csproj", true, AgentRole.Tester)]
     [InlineData("MyApp.csproj", false, AgentRole.Developer)]
     [InlineData("MyApp.csproj", false, AgentRole.Tester)]
+    [InlineData("MyApp.csproj", false, AgentRole.Developer, false)]
+    [InlineData("MyApp.csproj", false, AgentRole.Tester, false)]
     [InlineData("go.mod", true, AgentRole.Developer)]
     [InlineData("go.mod", true, AgentRole.Tester)]
     [InlineData("go.mod", false, AgentRole.Developer)]
@@ -30,22 +32,30 @@ public sealed class WorkerStackVerificationGuidanceWriterParityTests : IDisposab
     [InlineData("", false, AgentRole.Developer)]
     [InlineData("", false, AgentRole.Tester)]
     public void Write_StackHomeAndRole_PreservesGuidancePlacement(
-        string marker, bool isOrchestratorHome, AgentRole role)
+        string marker, bool isOrchestratorHome, AgentRole role, bool isRegisteredProject = true)
     {
         var target = CreateTarget(marker);
         var (goal, task) = CreateTask(role);
         var toolchain = ProjectStackResolver.Resolve(target, null);
         var stack = ProjectStackResolver.GuidanceStack(toolchain, isOrchestratorHome);
 
-        var context = Write(goal, task, target, isOrchestratorHome ? null : new WorkerTargetHome(false));
+        var useSelectedBuildTargets = !isOrchestratorHome && isRegisteredProject;
+        var context = Write(goal, task, target, isOrchestratorHome ? null : new WorkerTargetHome(false,
+            projectHomeDirectory: isRegisteredProject ? _root.FullName : null)
+        {
+            UsesSelectedBuildTargets = useSelectedBuildTargets
+        });
 
         var currentTask = ReadLines(context, "current-task.md");
-        Assert.Equal(WorkerStackVerificationGuidance.CurrentTaskSection(stack), currentTask.Skip(6).Take(6));
+        var currentTaskSection = WorkerStackVerificationGuidance.CurrentTaskSection(stack, useSelectedBuildTargets);
+        Assert.Equal(currentTaskSection, currentTask.Skip(6).Take(currentTaskSection.Count));
+        Assert.Equal(string.Empty, currentTask[6 + currentTaskSection.Count]);
+        Assert.Equal("## Description", currentTask[7 + currentTaskSection.Count]);
 
         var deterministic = ReadLines(context, "deterministic-verification.md");
         var findings = Array.IndexOf(deterministic, "## Findings");
         Assert.True(findings >= 0, "Deterministic verification must include the Findings heading.");
-        var section = WorkerStackVerificationGuidance.DeterministicVerificationSection(toolchain, goal.Id);
+        var section = WorkerStackVerificationGuidance.DeterministicVerificationSection(toolchain, goal.Id, useSelectedBuildTargets);
         Assert.Equal(section.Select(NormalizeStorageRoot),
             deterministic.Skip(findings + 1).Take(section.Count).Select(NormalizeStorageRoot));
 
@@ -71,7 +81,7 @@ public sealed class WorkerStackVerificationGuidanceWriterParityTests : IDisposab
         {
             var start = Array.IndexOf(brokers, "- build-only");
             Assert.True(start >= 0, "Dotnet Developer brokers must include the build-only action.");
-            var expected = WorkerStackVerificationGuidance.DeveloperBuildOnlyBrokerLines();
+            var expected = WorkerStackVerificationGuidance.DeveloperBuildOnlyBrokerLines(useSelectedBuildTargets);
             Assert.Equal(expected, brokers.Skip(start).Take(expected.Count));
         }
         else
