@@ -523,6 +523,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Action<TimeSpan>? _buildPermitSleep;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly DotnetBuildStorageRoot? _buildStorageRoot;
+    internal Func<string?>? GetMainFullVerificationRunId { get; set; }
     private readonly int _conductorGenerationId;
     private readonly Func<string, TimeSpan, IDisposable?> _tryAcquireAttemptWriterLease;
     private readonly Func<string, string, CancellationToken, DotnetBuildEnvironmentLease> _acquireCohortStableSlotRound;

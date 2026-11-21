@@ -50,6 +50,7 @@ public sealed class ConductorStatusLandingBlockerTests
             "Pending clarifications: 0; human waits: 0",
             "Most recent landing: unavailable",
             "Worker adoption: unavailable",
+            "Main full verification: none recorded",
             "Pending operator intents: unavailable (intent database missing)",
             "Owner directives: 0 active", ""), Status("conductor", "status"));
         Assert.DoesNotContain("landingBlocker", Status("conductor", "status", "--json"),
