@@ -50,6 +50,12 @@ public static bool ExecuteCommand(
     BacklogIntakeContinuationHost? backlogContinuation = null)
 {
     CliCommandHelp.ValidateGoalCreationOptions(parts);
+    if (RecordControlReceiptCommand.IsCommand(parts))
+    {
+        if (!CliCommandHelp.TryPrintStartupHelp(parts))
+            RecordControlReceiptCommand.Execute(parts, kernel, workspace);
+        return false;
+    }
     if (CliArgumentParser.IsAskGoal(parts))
     {
         if (CliCommandHelp.TryPrintStartupHelp(parts)) return false;

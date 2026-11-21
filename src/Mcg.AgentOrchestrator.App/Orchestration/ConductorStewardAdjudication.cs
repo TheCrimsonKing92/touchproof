@@ -18,7 +18,7 @@ internal static class ConductorStewardAdjudicationParser
     // Mirrors the accepted kinds in AdjudicationEvidenceResolver.TryResolve.
     private static readonly HashSet<string> ResolverKinds = new(StringComparer.OrdinalIgnoreCase)
     {
-        "trx", "operator-evidence", "focused-evidence", "acceptance-attempt"
+        "trx", "operator-evidence", "focused-evidence", "acceptance-attempt", "control-receipt"
     };
 
     internal static ConductorStewardAdjudication Parse(string output)

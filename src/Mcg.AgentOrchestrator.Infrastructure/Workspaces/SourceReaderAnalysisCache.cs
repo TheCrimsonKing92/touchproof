@@ -10,14 +10,17 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
 {
     // Bump for serialized shape OR analysis semantics changes in SourceReadingGuardTestClasses
     // or WholeTreeSourceReaderDetector.
-    internal const int FormatVersion = 9;
+    internal const int FormatVersion = 10;
     private static string? _defaultDirectoryOverride;
     private static readonly Lazy<SourceReaderAnalysisCache> Shared = new(() => new(_defaultDirectoryOverride ?? DefaultDirectory()));
     private static readonly AsyncLocal<SourceReaderAnalysisCache?> Scoped = new();
     private long _analysisCount;
     private long _semanticFileCount;
 
-    internal sealed record Analysis(bool DeclaresSnapshotCache, IReadOnlyList<string> ReaderOwners);
+    internal sealed record Analysis(bool DeclaresSnapshotCache, IReadOnlyList<string> ReaderOwners)
+    {
+        internal IReadOnlyList<AssemblyScanningGuardTestClasses.ScanFile> AssemblyScans { get; init; } = [];
+    }
 
     internal static SourceReaderAnalysisCache Current => Scoped.Value ?? Shared.Value;
     internal long AnalysisCount => Interlocked.Read(ref _analysisCount);
@@ -172,9 +175,11 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
             // Exact hits need only the result; System.Text.Json skips the potentially large facts payload.
             var entry = JsonSerializer.Deserialize<ResultEnvelope>(File.ReadAllText(path));
             if (entry is null || entry.FormatVersion != FormatVersion || entry.Key != key ||
-                entry.ReaderOwners is null || entry.ReaderOwners.Any(string.IsNullOrWhiteSpace)) return false;
+                entry.ReaderOwners is null || entry.ReaderOwners.Any(string.IsNullOrWhiteSpace) ||
+                entry.AssemblyScans is null || entry.AssemblyScans.Any(file => file is null || !file.IsValid)) return false;
             analysis = new(entry.DeclaresSnapshotCache,
-                entry.ReaderOwners.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+                entry.ReaderOwners.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray())
+            { AssemblyScans = entry.AssemblyScans };
             return true;
         }
         catch (Exception error) when (error is not OutOfMemoryException) { return false; }
@@ -189,7 +194,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(temporary, JsonSerializer.Serialize(new Envelope(FormatVersion, key,
-                analysis.ReaderOwners.ToArray(), analysis.DeclaresSnapshotCache, files,
+                analysis.ReaderOwners.ToArray(), analysis.DeclaresSnapshotCache, analysis.AssemblyScans.ToArray(), files,
                 files is null ? null : Digest(key, files))));
             // Publish a closed, complete entry by renaming within the destination filesystem.
             File.Move(temporary, destination, overwrite: true);
@@ -223,6 +228,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         [property: JsonRequired] string Key,
         [property: JsonRequired] string[]? ReaderOwners,
         [property: JsonRequired] bool DeclaresSnapshotCache,
+        [property: JsonRequired] AssemblyScanningGuardTestClasses.ScanFile[]? AssemblyScans,
         SourceReaderFileFacts[]? Files,
         string? FilesDigest);
 
@@ -230,7 +236,8 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         [property: JsonRequired] int FormatVersion,
         [property: JsonRequired] string Key,
         [property: JsonRequired] string[]? ReaderOwners,
-        [property: JsonRequired] bool DeclaresSnapshotCache);
+        [property: JsonRequired] bool DeclaresSnapshotCache,
+        [property: JsonRequired] AssemblyScanningGuardTestClasses.ScanFile[]? AssemblyScans);
 
     private sealed class Scope(Action restore) : IDisposable
     {

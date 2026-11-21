@@ -189,6 +189,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "goal-isolation",
     "verify-manual",
     "adjudicate",
+    "record-control-receipt",
     "approve-policy-change",
     "integration-scope",
     "criterion-evidence-map",

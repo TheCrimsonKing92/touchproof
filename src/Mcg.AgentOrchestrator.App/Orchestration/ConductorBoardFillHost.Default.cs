@@ -21,7 +21,8 @@ internal sealed partial class ConductorBoardFillHost
         () => BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath),
         (kernel, items) =>
         {
-            var byId = items.ToDictionary(item => item.Id, StringComparer.Ordinal);
+            var byId = items.DistinctBy(item => item.Id, StringComparer.Ordinal)
+                .ToDictionary(item => item.Id, StringComparer.Ordinal);
             var dependencyClaims = new SourceBacklogClaimStore(workspace.SqliteStatePath);
             EpicPlanGoalClaims claims;
             try { claims = EpicPlanGoalClaimSnapshot.Read(workspace.SqliteStatePath, kernel.Goals.ToArray()); }

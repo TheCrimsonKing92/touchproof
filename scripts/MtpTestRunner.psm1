@@ -23,7 +23,8 @@ $script:MtpClosureSchemaVersion = 1
 $script:MtpBuildReceiptName = '.mcg-build-receipt.txt'
 $script:MtpBuildReceiptSchemaVersion = 2
 $script:MtpClosureSnapshotAttempts = 3
-$script:MtpStartupHookSchemaVersion = 1
+$script:MtpStartupHookSchemaVersion = 2
+$script:MtpStartupHookCompilerKind = 'windows-powershell-framework-codedom'
 $script:MtpStartupHookAssemblyName = 'Mcg.AgentOrchestrator.FaultDialogStartupHook.dll'
 $script:MtpStartupHookMarkerName = '.mcg-startup-hook.json'
 $script:MtpStartupHookSource = @'
@@ -1752,6 +1753,8 @@ function Assert-MtpFaultDialogStartupHook {
         throw "Fault-dialog startup-hook marker is invalid at '$markerPath': $($_.Exception.Message)"
     }
     if ([int]$marker.schemaVersion -ne $script:MtpStartupHookSchemaVersion -or
+        $null -eq $marker.PSObject.Properties['compilerKind'] -or
+        -not $script:MtpStartupHookCompilerKind.Equals([string]$marker.compilerKind, [System.StringComparison]::Ordinal) -or
         -not ([string]$marker.sourceDigest).Equals($ExpectedSourceDigest, [System.StringComparison]::Ordinal)) {
         throw "Fault-dialog startup-hook marker does not match the current source: $markerPath"
     }
@@ -1760,6 +1763,135 @@ function Assert-MtpFaultDialogStartupHook {
         throw "Fault-dialog startup-hook assembly digest does not match its marker: $assemblyPath"
     }
     return $assemblyPath
+}
+
+function Assert-MtpStartupHookAssemblyReferences {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        if ($PSVersionTable.PSVersion.Major -le 5) {
+            $assembly = [System.Reflection.Assembly]::ReflectionOnlyLoad([IO.File]::ReadAllBytes($Path))
+            $references = $assembly.GetReferencedAssemblies()
+        }
+        else {
+            $stream = [IO.File]::OpenRead($Path)
+            try {
+                $reader = [System.Reflection.PortableExecutable.PEReader]::new($stream, [System.Reflection.PortableExecutable.PEStreamOptions]::LeaveOpen)
+                try {
+                    $metadata = [System.Reflection.Metadata.PEReaderExtensions]::GetMetadataReader(
+                        $reader, [System.Reflection.Metadata.MetadataReaderOptions]::None, $null)
+                    if (-not $metadata.IsAssembly) {
+                        throw 'The PE metadata does not describe an assembly.'
+                    }
+                    $references = foreach ($handle in $metadata.AssemblyReferences) {
+                        $metadata.GetAssemblyReference($handle).GetAssemblyName()
+                    }
+                }
+                finally { $reader.Dispose() }
+            }
+            finally { $stream.Dispose() }
+        }
+    }
+    catch {
+        throw "Startup-hook assembly references could not be read at '$Path': $($_.Exception.Message)"
+    }
+
+    $hasMscorlib = $false
+    foreach ($reference in $references) {
+        if ($reference.Name -eq 'System.Runtime') {
+            throw "Startup-hook assembly contains incompatible reference '$($reference.FullName)'."
+        }
+        if ($reference.Name -eq 'mscorlib') {
+            $hasMscorlib = $true
+        }
+    }
+    if (-not $hasMscorlib) {
+        throw 'Startup-hook assembly is missing the required mscorlib reference.'
+    }
+}
+
+function Invoke-MtpStartupHookCodeDom {
+    param([string]$Source, [string]$AssemblyPath)
+
+    $parameters = New-Object System.CodeDom.Compiler.CompilerParameters
+    $parameters.GenerateExecutable = $false
+    $parameters.GenerateInMemory = $false
+    $parameters.OutputAssembly = $AssemblyPath
+    $compilerDirectory = [IO.Path]::GetDirectoryName($AssemblyPath)
+    $parameters.TempFiles = New-Object System.CodeDom.Compiler.TempFileCollection($compilerDirectory, $false)
+    [void]$parameters.ReferencedAssemblies.Add('System.dll')
+    $provider = New-Object Microsoft.CSharp.CSharpCodeProvider
+    try {
+        $result = $provider.CompileAssemblyFromSource($parameters, [string[]]@($Source))
+        if ($result.Errors.HasErrors) {
+            $messages = @($result.Errors | Where-Object { -not $_.IsWarning } | ForEach-Object { $_.ToString() })
+            throw "Startup-hook compilation failed: $($messages -join [Environment]::NewLine)"
+        }
+    }
+    finally { $provider.Dispose() }
+}
+
+function Invoke-MtpStartupHookWindowsPowerShell {
+    param([string]$Source, [string]$AssemblyPath)
+
+    $windowsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+    $compiler = Join-Path $windowsDirectory 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not [IO.File]::Exists($compiler)) {
+        throw "Startup-hook compilation requires Windows PowerShell 5.1 at '$compiler'."
+    }
+
+    $compilerDirectory = [IO.Path]::GetDirectoryName($AssemblyPath)
+    $sourcePath = Join-Path $compilerDirectory 'startup-hook.cs'
+    $bootstrapPath = Join-Path $compilerDirectory 'compile.ps1'
+    [IO.File]::WriteAllText($sourcePath, $Source, [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($bootstrapPath, @'
+param([string]$ModulePath, [string]$SourcePath, [string]$AssemblyPath)
+$ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -ne 'Desktop' -or
+    $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+    throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)."
+}
+$module = Import-Module -Name $ModulePath -PassThru
+& $module {
+    param($SourcePath, $AssemblyPath)
+    Invoke-MtpStartupHookCodeDom -Source ([IO.File]::ReadAllText($SourcePath)) -AssemblyPath $AssemblyPath
+} $SourcePath $AssemblyPath
+'@, [Text.Encoding]::UTF8)
+
+    $modulePath = Join-Path $PSScriptRoot 'MtpTestRunner.psm1'
+    $startInfo = New-MtpProcessStartInfo -Executable $compiler -Arguments @(
+        $compiler, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        $bootstrapPath, $modulePath, $sourcePath, $AssemblyPath)
+    $startInfo.WorkingDirectory = $compilerDirectory
+    # Windows components expand these paths even when the calling environment was scrubbed.
+    $startInfo.EnvironmentVariables['SystemDrive'] = [IO.Path]::GetPathRoot($windowsDirectory).TrimEnd('\')
+    $startInfo.EnvironmentVariables['SystemRoot'] = $windowsDirectory
+    $startInfo.EnvironmentVariables['WINDIR'] = $windowsDirectory
+    $startInfo.EnvironmentVariables['TEMP'] = $compilerDirectory
+    $startInfo.EnvironmentVariables['TMP'] = $compilerDirectory
+    $startInfo.RedirectStandardInput = $true
+    $process = [System.Diagnostics.Process]::new()
+    try {
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw 'No compiler process was started.'
+        }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.StandardInput.Close()
+        $process.WaitForExit()
+        $diagnostics = ($stderr.GetAwaiter().GetResult() + [Environment]::NewLine + $stdout.GetAwaiter().GetResult()).Trim()
+        if ($process.ExitCode -ne 0) {
+            throw "Compiler exited with code $($process.ExitCode). $diagnostics"
+        }
+        if (-not [IO.File]::Exists($AssemblyPath)) {
+            throw "Compiler did not produce '$AssemblyPath'. $diagnostics"
+        }
+    }
+    catch {
+        throw "Startup-hook compilation with Windows PowerShell 5.1 at '$compiler' failed: $($_.Exception.Message)"
+    }
+    finally { $process.Dispose() }
 }
 
 function Write-MtpFaultDialogStartupHookAssembly {
@@ -1784,7 +1916,6 @@ function Write-MtpFaultDialogStartupHookAssembly {
     if ($compilerAssembly.Length -gt 240) {
         throw "Startup-hook compilation path exceeds the 240-character compiler budget: $compilerAssembly"
     }
-    $provider = $null
     try {
         try {
             [void][IO.Directory]::CreateDirectory($compilerDirectory)
@@ -1793,26 +1924,14 @@ function Write-MtpFaultDialogStartupHookAssembly {
             throw [IO.IOException]::new("Startup-hook compilation directory is unavailable or unwritable at '$compilerDirectory': $($_.Exception.Message)", $_.Exception)
         }
         if ($PSVersionTable.PSVersion.Major -gt 5) {
-            Add-Type -TypeDefinition $script:MtpStartupHookSource -OutputAssembly $compilerAssembly -OutputType Library -ErrorAction Stop
+            Invoke-MtpStartupHookWindowsPowerShell -Source $script:MtpStartupHookSource -AssemblyPath $compilerAssembly
         }
         else {
-            $parameters = New-Object System.CodeDom.Compiler.CompilerParameters
-            $parameters.GenerateExecutable = $false
-            $parameters.GenerateInMemory = $false
-            $parameters.OutputAssembly = $compilerAssembly
-            $parameters.TempFiles = New-Object System.CodeDom.Compiler.TempFileCollection($compilerDirectory, $false)
-            [void]$parameters.ReferencedAssemblies.Add('System.dll')
-            $provider = New-Object Microsoft.CSharp.CSharpCodeProvider
-            $result = $provider.CompileAssemblyFromSource($parameters, [string[]]@($script:MtpStartupHookSource))
-            if ($result.Errors.HasErrors) {
-                $messages = @($result.Errors | Where-Object { -not $_.IsWarning } | ForEach-Object { $_.ToString() })
-                throw "Startup-hook compilation failed: $($messages -join [Environment]::NewLine)"
-            }
+            Invoke-MtpStartupHookCodeDom -Source $script:MtpStartupHookSource -AssemblyPath $compilerAssembly
         }
         [IO.File]::Copy($compilerAssembly, $Destination, $false)
     }
     finally {
-        if ($null -ne $provider) { $provider.Dispose() }
         try {
             if ([IO.Directory]::Exists($compilerDirectory)) {
                 [IO.Directory]::Delete($compilerDirectory, $true)
@@ -1831,7 +1950,7 @@ function Resolve-MtpFaultDialogStartupHook {
     }
 
     $sourceDigest = Get-MtpSha256Text -Text $script:MtpStartupHookSource
-    $cacheParent = Join-Path ([System.IO.Path]::GetTempPath()) 'mcg-mtp-startup-hook\v1'
+    $cacheParent = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-mtp-startup-hook\v$($script:MtpStartupHookSchemaVersion)"
     $publishedDirectory = Join-Path $cacheParent $sourceDigest
     $cacheParentFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $cacheParent
     $publishedFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $publishedDirectory
@@ -1848,9 +1967,11 @@ function Resolve-MtpFaultDialogStartupHook {
         $stagingAssemblyFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $stagingAssembly
 
         Write-MtpFaultDialogStartupHookAssembly -Destination $stagingAssemblyFileSystemPath
+        Assert-MtpStartupHookAssemblyReferences -Path $stagingAssemblyFileSystemPath
         $assemblyDigest = Get-MtpSha256File -Path $stagingAssemblyFileSystemPath
         $marker = [ordered]@{
             schemaVersion = $script:MtpStartupHookSchemaVersion
+            compilerKind = $script:MtpStartupHookCompilerKind
             sourceDigest = $sourceDigest
             assemblyDigest = $assemblyDigest
         }

@@ -29,6 +29,23 @@ public sealed class OperatorLessonRecordIntentTests
         Assert.Empty(fixture.LessonStore.List(includeRetired: true));
     }
 
+    [Theory]
+    [InlineData(null, "evidence-reference-requires-goal")]
+    [InlineData("unknown-goal", "evidence-reference-unresolved")]
+    public async Task ControlReceipt_RejectsMissingOrUnknownGoal(string? goalId, string reason)
+    {
+        using var fixture = new OperatorLessonHarness();
+        var reference = $"control-receipt:{Guid.NewGuid():N}";
+        var intent = await fixture.Record([reference], goalId: goalId);
+
+        fixture.Tick();
+
+        var outcome = await fixture.IntentStore.GetAsync(intent.Id);
+        Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+        Assert.Equal($"Rejected {intent.Verb}: {reason} {reference}", outcome.Outcome);
+        Assert.Empty(fixture.LessonStore.List(includeRetired: true));
+    }
+
     [Fact]
     public async Task RecordAcceptsValidLineAndHashesWholeFile()
     {

@@ -1319,6 +1319,7 @@ internal sealed partial class ConductorDriver
     private ConductorAdvanceResult RouteAttributedFailure(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AttributedFailureRouteDecision route)
     {
         route = FailureDiagnosis?.Enrich(goal, route) ?? route;
+        if (AttributedFailureDiagnosisTarget.TryHold(goal, goalPrefix, policy, route, RecordEscalation) is { } held) return held;
         var failureRecordedAt = _utcNow();
         _retryTask(goal.Id, route.DeveloperTaskId!, route.Feedback!, null, RetryCause.NewTestFinding);
         var retryGoal = GetCurrentGoal(goal);
@@ -1330,7 +1331,6 @@ internal sealed partial class ConductorDriver
         return ExecuteDispatchAndStart(retryGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => RepositoryTupleLanding?.ProjectFacts(goal, _getFacts(goal)) ?? _getFacts(goal);
-
     private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence) =>
         FocusedEvidenceResultText.Format(evidence, TrimForConductorMessage);
 

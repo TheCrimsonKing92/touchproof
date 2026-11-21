@@ -390,6 +390,14 @@ public sealed record WorkerContextPackageReceipt(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     ProviderUsageValue? Turns = null)
 {
+    private static readonly ProviderUsageValue UnrecordedToolCalls = ProviderUsageValue.Unknown("not-recorded");
+
+    public ProviderUsageValue ToolCalls
+    {
+        get;
+        init => field = value ?? UnrecordedToolCalls;
+    } = UnrecordedToolCalls;
+
     public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
     {
         if (!EarlyConvergenceEligible ||
@@ -422,7 +430,8 @@ public sealed record WorkerContextPackageReceipt(
         InputTokens = MergeUsageValue(InputTokens, usage?.InputTokens, unavailableReason),
         CachedInputTokens = MergeUsageValue(CachedInputTokens, usage?.CachedInputTokens, unavailableReason),
         OutputTokens = MergeUsageValue(OutputTokens, usage?.OutputTokens, unavailableReason),
-        Turns = MergeUsageValue(Turns, usage?.TurnCount, unavailableReason)
+        Turns = MergeUsageValue(Turns, usage?.TurnCount, unavailableReason),
+        ToolCalls = MergeUsageValue(ToolCalls, usage?.ToolCallCount, unavailableReason)
     };
 
     public WorkerContextPackageReceipt WithProviderUsage(ModelUsage? usage, string unavailableReason = "absent") => this with
@@ -482,4 +491,5 @@ public sealed record ProviderReportedUsage(
     long? InputTokens,
     long? OutputTokens,
     long? CachedInputTokens = null,
-    long? TurnCount = null);
+    long? TurnCount = null,
+    long? ToolCallCount = null);
