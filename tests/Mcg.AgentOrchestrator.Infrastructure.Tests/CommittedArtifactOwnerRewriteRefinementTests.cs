@@ -23,6 +23,21 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
     }
 
     [Theory]
+    [InlineData("A new machine-readable audit report is committed.")]
+    [InlineData("The change writes a machine-readable audit report.")]
+    public async Task QualifiedArtifactProductionMovesTesterOwnershipToDeveloper(string requirement)
+    {
+        var goal = await FileAndRefine(false,
+            $"{requirement} Tester owns; Acceptance executes. TEST-VERIFIABLE.");
+
+        var expected = $"{requirement} Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+        Assert.Equal(expected, Assert.Single(goal.RefinedSpec!.AcceptanceCriteria));
+        Assert.Equal(expected, Assert.Single(goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria));
+        Assert.Equal(DiagnosticPrefix + "declared criterion 1 requires a committed artifact; owner Tester -> Developer",
+            Assert.Single(RewriteDiagnostics(goal)));
+    }
+
+    [Theory]
     [InlineData(false, "The change adds a script and runs the existing tests.")]
     [InlineData(true, "The existing `docs/behavior.md` file must be updated.")]
     public async Task FileChangesMoveReviewerOwnershipToDeveloper(bool useFallback, string requirement)
@@ -48,6 +63,19 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
         Assert.Equal([evidenceOnly, DeveloperArtifact], goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
         Assert.Equal(DiagnosticPrefix + "declared criterion 2 requires a committed artifact; owner Tester -> Developer",
             Assert.Single(RewriteDiagnostics(goal)));
+    }
+
+    [Theory]
+    [InlineData("Existing tests are included in the focused evidence run.")]
+    [InlineData("A new focused evidence run of existing tests is produced.")]
+    public async Task EvidenceRunLanguageKeepsTesterOwnerWithoutRewriteDiagnostic(string requirement)
+    {
+        var criterion = $"{requirement} Tester owns; Acceptance executes. TEST-VERIFIABLE.";
+        var goal = await FileAndRefine(false, criterion);
+
+        Assert.Equal(criterion, Assert.Single(goal.RefinedSpec!.AcceptanceCriteria));
+        Assert.Equal(criterion, Assert.Single(goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria));
+        Assert.Empty(RewriteDiagnostics(goal));
     }
 
     private static IEnumerable<string> RewriteDiagnostics(Goal goal) => goal.Timeline

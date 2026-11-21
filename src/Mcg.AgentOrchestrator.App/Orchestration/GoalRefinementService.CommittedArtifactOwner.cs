@@ -14,6 +14,15 @@ internal sealed partial class GoalRefinementService
         )
         """;
 
+    // Explicit production verbs allow descriptive modifiers within the artifact noun phrase.
+    // Stop at clause and preposition boundaries, such as "a run of existing tests".
+    private const string QualifiedArtifact = """
+        (?:
+            (?!\b(?:a|an|the|and|or|that|which|whether|of|from|for|in|on|to|by|with|without|using|about|no|not)\b)
+            [\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*[ \t]+
+        )*
+        """ + Artifact;
+
     private static Dictionary<string, string> RewriteCommittedArtifactOwners(
         List<string> criteria, List<string> diagnostics)
     {
@@ -58,11 +67,11 @@ internal sealed partial class GoalRefinementService
                 (?:(?:an?|the)\s+)?(?:(?:new|existing|committed|checked-in)\s+)?
               | (?:includes?|contains?)\s+(?:(?:an?|the)\s+)?(?:new|committed|checked-in)\s+
             )
-        """ + Artifact + """
+        """ + QualifiedArtifact + """
           | (?:(?:an?|the)\s+)?(?:(?:new|existing|named|committed|checked-in)\s+)?
-        """ + Artifact + """
+        """ + QualifiedArtifact + """
             \s+(?:(?:is|are)|(?:must|shall|will)\s+be)\s+
-            (?:added|created|written|committed|updated|modified|produced|included|shipped|introduced|extended|checked\s+in)\b
+            (?:added|created|written|committed|updated|modified|produced|shipped|introduced|extended|checked\s+in)\b
         )
         """,
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace)]
