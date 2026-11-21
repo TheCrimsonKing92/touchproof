@@ -107,7 +107,7 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
     private static void CommitTrackedChange(string path, string content)
     {
         File.WriteAllText(Path.Combine(path, "example.txt"), content);
-        // A pathspec stages the tracked file as part of the commit; neither caller needs the tip.
+        // A fixture pathspec commit stages the selected tracked file without a separate add.
         GoalRepositoryWorktreeProvisionerFixture.Run(path, "commit", "-m", "Change example", "--", "example.txt");
     }
 

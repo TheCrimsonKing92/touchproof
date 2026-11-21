@@ -1,4 +1,5 @@
 using System.Text;
+using static GoalRepositoryWorktreeProvisionerFixtureSeedTests;
 
 // Parallel-safe: unique roots and async-flow scopes; no process environment mutations.
 public sealed class InProcessGitFunnelEquivalenceTests
@@ -29,6 +30,52 @@ public sealed class InProcessGitFunnelEquivalenceTests
             Assert.Empty(real.Served);
             Assert.True(real.Launched >= served.Served.Length);
         });
+    }
+
+    [Fact]
+    public void LinkedWorktree_PathspecAndPlainCommits_MatchRealGitAndIsolateMain()
+    {
+        WithRepository(root =>
+        {
+            var served = RunLinkedWorktreeScript(root, realOnly: false);
+            ResetDirectory(root);
+            var real = RunLinkedWorktreeScript(root, realOnly: true);
+            Assert.Equal(real, served);
+            Assert.Equal("MM unrelated.txt\n", served.PathspecStatus);
+            Assert.Equal(" M unrelated.txt\n", served.FinalStatus);
+        });
+    }
+
+    [Fact]
+    public void AcceptanceFixture_PathspecAndCommitChangeCalls_AreServedAndMatchRealTips()
+    {
+        (string HomeSetup, string SecondarySetup, string HomeFinal, string SecondaryFinal) Build(bool realOnly)
+        {
+            using var observation = InProcessGitFunnel.Observe(realOnly);
+            using var dates = GoalRepositoryWorktreeProvisionerFixture.WithCommitDates(FixedEnvironment["GIT_AUTHOR_DATE"]);
+            using var fixture = new MultiRepositoryAcceptanceGateFixture();
+            Assert.Equal(realOnly ? Array.Empty<string>() : new[] { "commit-pathspec", "commit-pathspec" },
+                observation.Served.Where(shape => shape.StartsWith("commit-", StringComparison.Ordinal)));
+            Assert.Equal(realOnly ? 2 : 0, observation.Launched.Count(command => command == "commit"));
+            string homeSetup;
+            string secondarySetup;
+            using (var readbackLaunches = new GitLaunches())
+            {
+                homeSetup = GoalRepositoryWorktreeProvisionerFixture.Run(fixture.HomeWorktree, "rev-parse", "HEAD");
+                secondarySetup = GoalRepositoryWorktreeProvisionerFixture.Run(fixture.SecondaryWorktree, "rev-parse", "HEAD");
+                Assert.Equal(new[] { "rev-parse", "rev-parse" }, readbackLaunches.Commands);
+            }
+            var homeFinal = GoalRepositoryWorktreeProvisionerFixture.CommitChange(fixture.HomeWorktree, "next home\n");
+            var secondaryFinal = GoalRepositoryWorktreeProvisionerFixture.CommitChange(fixture.SecondaryWorktree, "next secondary\n");
+            Assert.Equal(realOnly ? Array.Empty<string>() : new[] { "commit-pathspec", "commit-pathspec", "commit-message", "commit-message" },
+                observation.Served.Where(shape => shape.StartsWith("commit-", StringComparison.Ordinal)));
+            Assert.Equal(realOnly ? 4 : 0, observation.Launched.Count(command => command == "commit"));
+            Assert.Equal(homeFinal, RealGit(fixture.HomeWorktree, "rev-parse", "HEAD").Trim());
+            Assert.Equal(secondaryFinal, RealGit(fixture.SecondaryWorktree, "rev-parse", "HEAD").Trim());
+            return (homeSetup, secondarySetup, homeFinal, secondaryFinal);
+        }
+
+        Assert.Equal(Build(realOnly: true), Build(realOnly: false));
     }
 
     [Theory]
@@ -158,6 +205,67 @@ public sealed class InProcessGitFunnelEquivalenceTests
         });
     }
 
+    [Theory]
+    [InlineData("merge-in-progress")]
+    [InlineData("hook")]
+    [InlineData("packed-refs")]
+    public void LinkedWorktree_UnsupportedState_LaunchesRealGit(string state)
+    {
+        WithRepository(root =>
+        {
+            var main = Path.Combine(root, "main");
+            var worktree = Path.Combine(root, "linked");
+            Directory.CreateDirectory(main);
+            BuildSeed(main);
+            File.WriteAllText(Path.Combine(main, "content.txt"), "seed\n");
+            RealGit(main, "add", "content.txt");
+            RealGitWithFixedEnvironment(main, "commit", "-m", "Seed tracked content");
+            RealGit(main, "worktree", "add", "-b", "linked", worktree);
+
+            var content = Path.Combine(worktree, "content.txt");
+            string[] add = ["add", "content.txt"];
+            File.WriteAllText(content, "eligible\n");
+            using (var baseline = InProcessGitFunnel.Observe())
+            {
+                var result = RunGitProbe(worktree, add);
+                Assert.True(result.Succeeded, result.ToString());
+                Assert.Equal(new[] { "add-paths" }, baseline.Served);
+                Assert.Empty(baseline.Launched);
+            }
+            RealGit(worktree, "restore", "--staged", "--worktree", "content.txt");
+
+            var commonGit = Path.Combine(main, ".git");
+            switch (state)
+            {
+                case "merge-in-progress":
+                    RealGitWithFixedEnvironment(main, "commit", "--allow-empty", "-m", "Advance main");
+                    RealGitWithFixedEnvironment(worktree, "merge", "--no-ff", "--no-commit", "main");
+                    Assert.Equal(RealGit(main, "rev-parse", "HEAD"), RealGit(worktree, "rev-parse", "MERGE_HEAD"));
+                    break;
+                case "hook":
+                    File.WriteAllText(Path.Combine(commonGit, "hooks", "post-checkout"), "#!/bin/sh\nexit 0\n");
+                    break;
+                case "packed-refs":
+                    // Keep the linked branch loose so the packed-refs guard is the reason for refusal.
+                    RealGit(main, "pack-refs", "--all", "--no-prune");
+                    Assert.True(File.Exists(Path.Combine(commonGit, "packed-refs")));
+                    Assert.True(File.Exists(Path.Combine(commonGit, "refs", "heads", "linked")));
+                    break;
+            }
+
+            File.WriteAllText(content, "fallback\n");
+            using (var observation = InProcessGitFunnel.Observe())
+            {
+                var result = RunGitProbe(worktree, add);
+                Assert.True(result.Succeeded, result.ToString());
+                Assert.NotNull(result.ChildProcessId);
+                Assert.Equal(new[] { "add" }, observation.Launched);
+                Assert.Empty(observation.Served);
+            }
+            Assert.Equal("fallback\n", RealGit(worktree, "show", ":content.txt"));
+        });
+    }
+
     [Fact]
     public void MutationFailure_AfterEligibility_ReturnsFailureWithoutRelaunch()
     {
@@ -216,6 +324,86 @@ public sealed class InProcessGitFunnelEquivalenceTests
     private sealed record ScriptResult((int? Exit, string Output)[] Calls, string Head, string Status, string Index,
         SortedDictionary<string, byte[]> InitFiles, string[] ReflogSubjects, string[] Served, int Launched);
 
+    private sealed record LinkedWorktreeResult(string PathspecTip, string PathspecStatus, string PathspecIndex,
+        string Tip, string BranchTip, string FinalStatus, string HeadReflog, string BranchReflog, string CommitMessage);
+
+    private static LinkedWorktreeResult RunLinkedWorktreeScript(string root, bool realOnly)
+    {
+        var main = Path.Combine(root, "main");
+        var worktree = Path.Combine(root, "linked");
+        Directory.CreateDirectory(main);
+        BuildSeed(main);
+        foreach (var path in new[] { "selected.txt", "unrelated.txt", "plain.txt" })
+            File.WriteAllText(Path.Combine(main, path), "seed\n");
+        RealGit(main, "add", "-A");
+        RealGitWithFixedEnvironment(main, "commit", "-m", "Seed tracked files");
+        RealGit(main, "worktree", "add", "-b", "linked", worktree);
+        var mainGit = Path.Combine(main, ".git");
+        var worktreeGit = Path.GetFullPath(RealGit(worktree, "rev-parse", "--absolute-git-dir").Trim());
+        // Git accepts these pointers relative to the files that contain them.
+        // Git for Windows marks the .git pointer hidden, so open the existing file in truncate mode.
+        using (var pointer = new StreamWriter(File.Open(Path.Combine(worktree, ".git"), FileMode.Truncate)))
+        {
+            pointer.Write("gitdir: " + Path.GetRelativePath(worktree, worktreeGit).Replace('\\', '/') + "\n");
+        }
+        File.WriteAllText(Path.Combine(worktreeGit, "commondir"), Path.GetRelativePath(worktreeGit, mainGit).Replace('\\', '/') + "\n");
+        var mainHead = RealGit(main, "rev-parse", "HEAD");
+        var mainHeadBytes = File.ReadAllBytes(Path.Combine(mainGit, "HEAD"));
+        var mainIndex = File.ReadAllBytes(Path.Combine(mainGit, "index"));
+        File.WriteAllText(Path.Combine(worktree, "selected.txt"), "staged selected\n");
+        File.WriteAllText(Path.Combine(worktree, "unrelated.txt"), "staged unrelated\n");
+        RealGit(worktree, "add", "selected.txt", "unrelated.txt");
+        File.WriteAllText(Path.Combine(worktree, "selected.txt"), "working selected\n");
+        File.WriteAllText(Path.Combine(worktree, "unrelated.txt"), "working unrelated\n");
+
+        string Call(params string[] args)
+        {
+            var result = RunGitProbe(worktree, args, FixedEnvironment);
+            Assert.True(result.Succeeded, result.ToString());
+            return result.StandardOutput;
+        }
+
+        string pathspecTip;
+        using (var observation = InProcessGitFunnel.Observe(realOnly))
+        {
+            Call("commit", "-m", "Selected tracked file", "--", "selected.txt");
+            pathspecTip = Call("rev-parse", "--verify", "HEAD");
+            Assert.Equal(realOnly ? Array.Empty<string>() : new[] { "commit-pathspec", "rev-parse" }, observation.Served);
+            Assert.Equal(realOnly ? new[] { "commit", "rev-parse" } : Array.Empty<string>(), observation.Launched);
+        }
+        Assert.Equal(RealGit(worktree, "rev-parse", "HEAD"), pathspecTip);
+        Assert.Equal("working selected\n", RealGit(worktree, "show", "HEAD:selected.txt"));
+        Assert.Equal("seed\n", RealGit(worktree, "show", "HEAD:unrelated.txt"));
+        Assert.Equal("staged unrelated\n", RealGit(worktree, "show", ":unrelated.txt"));
+        var pathspecStatus = RealGit(worktree, "status", "--porcelain");
+        var pathspecIndex = RealGit(worktree, "ls-files", "--stage");
+
+        File.WriteAllText(Path.Combine(worktree, "plain.txt"), "plain add\n");
+        using (var observation = InProcessGitFunnel.Observe(realOnly))
+        {
+            Call("add", "plain.txt");
+            Call("commit", "-m", "Plain commit");
+            Assert.Equal(realOnly ? Array.Empty<string>() : new[] { "add-paths", "commit-message" }, observation.Served);
+            Assert.Equal(realOnly ? new[] { "add", "commit" } : Array.Empty<string>(), observation.Launched);
+        }
+
+        Assert.Empty(RealGitWithFixedEnvironment(worktree, "fsck", "--strict").StandardError);
+        Assert.Equal(mainHead, RealGit(main, "rev-parse", "HEAD"));
+        Assert.Equal(mainHeadBytes, File.ReadAllBytes(Path.Combine(mainGit, "HEAD")));
+        Assert.Equal(mainIndex, File.ReadAllBytes(Path.Combine(mainGit, "index")));
+        Assert.False(Path.Exists(Path.Combine(worktreeGit, "logs", "refs")));
+        var tip = RealGit(worktree, "rev-parse", "HEAD");
+        var branchTip = RealGit(main, "rev-parse", "refs/heads/linked");
+        Assert.Equal(tip, branchTip);
+        var headLog = File.ReadAllText(Path.Combine(worktreeGit, "logs", "HEAD"));
+        var branchLog = File.ReadAllText(Path.Combine(mainGit, "logs", "refs", "heads", "linked"));
+        var commitMessage = File.ReadAllText(Path.Combine(worktreeGit, "COMMIT_EDITMSG"));
+        // Compare the commit entries, whose dates are pinned by the command environment.
+        return new(pathspecTip, pathspecStatus, pathspecIndex, tip, branchTip, RealGit(worktree, "status", "--porcelain"),
+            string.Join('\n', headLog.Split('\n').TakeLast(3)),
+            string.Join('\n', branchLog.Split('\n').TakeLast(3)), commitMessage);
+    }
+
     private static ScriptResult RunScript(string root, bool realOnly)
     {
         using var serving = InProcessGitFunnel.Observe(realOnly);
@@ -250,6 +438,8 @@ public sealed class InProcessGitFunnelEquivalenceTests
         Call("add", "--all");
         Call("add", "-A");
         Call("commit", "-m", "Child");
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "pathspec update\n");
+        Call("commit", "-m", "Select tracked path", "--", "seed.txt");
         var child = Call("rev-parse", "--verify", "HEAD");
         Call("checkout", "-b", "feature");
         Call("switch", "-c", "another");
@@ -311,6 +501,16 @@ public sealed class InProcessGitFunnelEquivalenceTests
         Assert.NotNull(result.ChildProcessId);
         Assert.True(result.Succeeded, result.ToString());
         return result.StandardOutput;
+    }
+
+    private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RealGitWithFixedEnvironment(
+        string root, params string[] args)
+    {
+        using var real = InProcessGitFunnel.Observe(realOnly: true);
+        var result = RunGitProbe(root, args, FixedEnvironment);
+        Assert.NotNull(result.ChildProcessId);
+        Assert.True(result.Succeeded, result.ToString());
+        return result;
     }
     private static Dictionary<string, string?> NativeEnvironment()
     {

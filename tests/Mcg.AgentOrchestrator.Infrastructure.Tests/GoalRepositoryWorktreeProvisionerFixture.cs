@@ -4,6 +4,8 @@ using Xunit;
 
 internal sealed class GoalRepositoryWorktreeProvisionerFixture : IDisposable
 {
+    private static readonly AsyncLocal<IReadOnlyDictionary<string, string>?> CommitEnvironment = new();
+
     internal string Root { get; } = SharedTestSupport.CreateTempDirectory();
     internal string CheckoutPath => Path.Combine(Root, "checkout");
     internal string IntegrationBranch { get; }
@@ -51,9 +53,36 @@ internal sealed class GoalRepositoryWorktreeProvisionerFixture : IDisposable
 
     internal static string Run(string directory, params string[] arguments)
     {
+        if (arguments.FirstOrDefault() != "rev-parse")
+            return RunProbe(directory, arguments);
+
+        // Landing checks use the product's revision lookup, including its metadata fast path.
         var result = GitCli.Run(directory, arguments);
         Assert.True(result.Succeeded && !result.DrainTimedOut && result.ProcessStarted, result.Error);
         return result.Output.TrimEnd('\r', '\n');
+    }
+
+    private static string RunProbe(string directory, string[] arguments)
+    {
+        var result = InfrastructureTestSupport.RunGitProbe(directory, arguments, CommitEnvironment.Value);
+        Assert.True(result.Succeeded && !result.DrainTimedOut && result.ProcessStarted, result.StandardError);
+        Assert.False(result.StandardOutputTruncated, result.Command);
+        return result.StandardOutput.TrimEnd('\r', '\n');
+    }
+
+    internal static IDisposable WithCommitDates(string date) => new CommitDateScope(date);
+
+    private sealed class CommitDateScope : IDisposable
+    {
+        private readonly IReadOnlyDictionary<string, string>? previous = CommitEnvironment.Value;
+
+        internal CommitDateScope(string date) => CommitEnvironment.Value = new Dictionary<string, string>
+        {
+            ["GIT_AUTHOR_DATE"] = date,
+            ["GIT_COMMITTER_DATE"] = date
+        };
+
+        public void Dispose() => CommitEnvironment.Value = previous;
     }
 
     internal static string CommitChange(string path, string content = "changed\n")
@@ -61,7 +90,7 @@ internal sealed class GoalRepositoryWorktreeProvisionerFixture : IDisposable
         File.WriteAllText(Path.Combine(path, "example.txt"), content);
         Run(path, "add", "example.txt");
         Run(path, "commit", "-m", "Change example");
-        return Run(path, "rev-parse", "HEAD");
+        return RunProbe(path, ["rev-parse", "HEAD"]);
     }
 
     internal static Dictionary<string, string> Checkouts(

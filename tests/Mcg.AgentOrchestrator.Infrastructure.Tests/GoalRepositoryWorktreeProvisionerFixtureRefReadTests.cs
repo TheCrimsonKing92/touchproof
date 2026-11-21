@@ -72,7 +72,7 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
     }
 
     [Fact]
-    public void CommitChange_LinkedWorktree_LaunchesAddCommitAndHeadRead()
+    public void CommitChange_LinkedWorktree_ServesAddAndCommitWithoutLaunchingGit()
     {
         using var fixture = new Fixture();
         var path = Path.Combine(fixture.Root, "linked");
@@ -81,11 +81,13 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
         var before = RealGit(path, "rev-parse", "HEAD");
         string after;
         using (var launches = new GitLaunches())
-        using (var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers())
+        using (var funnel = InProcessGitFunnel.Observe())
         {
             after = Fixture.CommitChange(path);
-            Assert.Equal(new[] { "add", "commit", "rev-parse" }, launches.Commands);
-            Assert.Equal(0, answers.Count);
+            Assert.Equal(new[] { "add-paths", "commit-message" },
+                funnel.Served.Where(shape => shape != "rev-parse"));
+            Assert.Empty(funnel.Launched);
+            Assert.Empty(launches.Commands);
         }
 
         Assert.NotEqual(before, after);
