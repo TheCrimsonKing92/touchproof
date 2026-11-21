@@ -166,7 +166,8 @@ internal static class SourceSizeRatchet
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 638),
             // Goal bc361051: attach producer-owned failure facts at the existing escalation outcome seam.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 311), // Provider hold redispatch hook and injected recovery seam.
+            // Goal ed4b8637 checks the inventory execution hold before automated recovery (+3 lines).
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 314),
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
             // holds new acceptance/landing work where candidate and terminal evidence meet.
@@ -360,7 +361,8 @@ internal static class SourceSizeRatchet
             // Goal 554f7db9: current candidate selector findings are captured once during Tester/Reviewer
             // preparation and delivered through this shared context boundary; keep that dispatch binding
             // beside the existing task-package preparation until the planned preflight extraction.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2526),
+            // ed4b8637 adds one dispatch boundary check to preserve the explicit inventory effort.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2527),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -582,7 +584,8 @@ internal static class SourceSizeRatchet
             // Goal 9eb2f8ba: eight measured wiring lines connect the separate recurrence handler; no new partial.
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
-            new SourceClassCeiling("ConductorDriver", 13427, 67),
+            // Goal ed4b8637 wires the explicit inventory execution hold into failed-goal recovery (+3 lines).
+            new SourceClassCeiling("ConductorDriver", 13430, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -632,7 +635,7 @@ internal static class SourceSizeRatchet
             // the Orchestration-to-Cli boundary; metric validation and auditing stay in CostGoalOutcomeMetric.
             // Measured 11024 lines across the existing 30 partials, with no extra headroom.
             // Goal a1a4aff1 adds three loop lifetime wiring lines. Notice processing lives in ProcessErrorModeEventObserver.
-            new SourceClassCeiling("CliCommandHandlers", 10931, 30),
+            new SourceClassCeiling("CliCommandHandlers", 10919, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.

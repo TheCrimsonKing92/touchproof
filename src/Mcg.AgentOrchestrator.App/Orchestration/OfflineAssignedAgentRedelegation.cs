@@ -13,6 +13,8 @@ internal static class OfflineAssignedAgentRedelegation
 
     internal static bool IsOperatorPin(Goal goal, TaskId taskId)
     {
+        if (InventoryModelAssignment.IsInventoryId(goal.Tasks.FirstOrDefault(task => task.Id == taskId)?.AssignedAgentId))
+            return true;
         // Timeline position is authoritative even when the clock gives several events the same timestamp.
         var latestAssignment = goal.Timeline.LastOrDefault(evt => evt.TaskId == taskId &&
             evt.Kind is ProgressKind.TaskDelegated or ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
@@ -33,6 +35,8 @@ internal static class OfflineAssignedAgentRedelegation
         {
             var task = kernel.GetTask(goal.Id, taskId);
             if (task.Status != WorkTaskStatus.Assigned || task.AssignedAgentId is not { } assignedId)
+                continue;
+            if (InventoryModelAssignment.IsInventoryId(assignedId))
                 continue;
             var assigned = agents.FirstOrDefault(agent => agent.Id == assignedId);
             if (assigned is null)

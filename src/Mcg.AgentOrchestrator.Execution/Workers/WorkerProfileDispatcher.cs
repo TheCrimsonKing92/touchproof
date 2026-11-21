@@ -1082,7 +1082,7 @@ public static partial class WorkerProfileDispatcher
         TaskSpec task,
         IReadOnlyList<AgentDefinition> agents)
     {
-        var agent = ResolveAssignedAgent(task, agents);
+        var agent = InventoryModelAssignment.Parse(task.AssignedAgentId)?.ToDispatchAgent() ?? ResolveAssignedAgent(task, agents);
         var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
         var modelName = ResolveEffectiveSubscriptionModelName(agent, selection);
         var brief = kernel.BuildTaskBrief(
@@ -1626,6 +1626,7 @@ public static partial class WorkerProfileDispatcher
         TaskSpec task,
         SubscriptionModelSelection selection)
     {
+        if (InventoryModelAssignment.IsInventoryId(agent.Id)) return new(agent.Subscription?.ReasoningEffort, "explicit inventory assignment");
         if (task.RequiredRole == AgentRole.Reviewer && WorkerSubscriptionModelResolver.HasHighRiskOrComplexIntakeRiskLabel(goal))
         {
             return new EffectiveReasoningEffortSelection(HighRiskReviewerReasoningEffort, "intake-risk");

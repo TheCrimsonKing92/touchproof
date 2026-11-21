@@ -354,6 +354,10 @@ progress <task-number> <running|completed|failed|cancelled> <message>
 ask <task-number> <question>
 ask-goal <question>
 answer <request-id> <answer>
+models [refresh]
+models declare <provider>/<model> [--profile <name>]
+models undeclare <provider>/<model> [--profile <name>]
+reassign-agent [--goal <goal-prefix>] <task-number> --model <provider>/<model> [--effort <level>] [--profile <name>]
 model-functions
 model-function-add <purpose> <lane> <provider> <model> [name]
 accept [goal-id] [--skip-verify] [--keep-workspace] [--autonomy <policy>]
@@ -491,6 +495,12 @@ Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to
 `doctor` does not make network calls. Use `provider-smoke` when you want to prove live model connectivity.
 
 ## Semantic Acceptance Judges / Model Functions
+
+`models refresh` updates the workspace inventory from the Codex cache, Grok CLI and Anthropic API when configured. It also probes declared Claude models. `models` reads the saved inventory and shows discovery sources, probe results, availability and roster usage.
+
+`reassign-agent --model` pins a task to an inventory model. Supply `--profile` when the model appears under multiple worker profiles. Goal intake accepts a role option such as `--developer model:anthropic/claude-haiku-5-5@high`. The goal's optional `--profile` applies to all its inventory role selections. An inventory assignment persists across retries and holds if the selected profile loses discovery evidence or the dispatch fails. An explicit roster reassignment replaces it.
+
+`agent-add` requires inventory membership for the supplied models. Use `--allow-unlisted` to add a seat before inventory discovery.
 
 `model-functions` lists the orchestrator's internal model function bindings — models the orchestrator invokes for its own functions such as acceptance judges, not worker agents assigned to goal tasks. `model-function-add <purpose> <lane> <provider> <model> [name]` registers a new binding. Unlike agent role assignments, model functions use an open `purpose` string and are stored under `.orchestrator/model-functions.json`. They compose with deterministic gates — LLM judgment results land advisory and never replace a deterministic acceptance gate.
 
