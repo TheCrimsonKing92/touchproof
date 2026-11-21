@@ -11,6 +11,7 @@ public sealed partial class CollaborationItemStore
         new(Path.Combine(directory, "collaboration-items.db"), readOnly: true);
 
     internal SqliteConnection OpenConnection() =>
+        _offlineCopy ? StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.OfflineCopyRead) :
         SqliteStoreConnectionPolicy.Open(_dbPath, _readOnly, SqliteStoreDurability.Strict,
             foreignKeys: false, operationTag: "CollaborationItemStore.Open");
 

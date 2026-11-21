@@ -8,6 +8,7 @@ internal enum StateDbConnectionProfile
     ReadWrite,
     FastFailRead,
     QueryOnlyRead,
+    OfflineCopyRead,
     MigrationProbeRead
 }
 
@@ -41,9 +42,15 @@ internal static class StateDbConnectionFactory
                 Directory.CreateDirectory(directory);
         }
 
+        var offlineCopy = profile == StateDbConnectionProfile.OfflineCopyRead;
+        // With no concurrent writer, the no-lock VFS and exclusive locking mode let SQLite
+        // read committed WAL frames using a private index, without opening or creating SHM.
+        var dataSource = offlineCopy
+            ? new Uri(Path.GetFullPath(dbPath)).AbsoluteUri + (OperatingSystem.IsWindows() ? "?vfs=win32-none" : "?vfs=unix-none")
+            : dbPath;
         var builder = new SqliteConnectionStringBuilder
         {
-            DataSource = dbPath,
+            DataSource = dataSource,
             Mode = profile == StateDbConnectionProfile.ReadWrite
                 ? SqliteOpenMode.ReadWriteCreate
                 : SqliteOpenMode.ReadOnly,
@@ -54,6 +61,14 @@ internal static class StateDbConnectionFactory
         try
         {
             connection.Open();
+            if (offlineCopy &&
+                !string.Equals(ExecuteScalar(connection, "PRAGMA locking_mode=EXCLUSIVE", statementObserver)?.ToString(),
+                    "exclusive", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Could not select a private WAL index for the offline state copy.");
+            }
+            if (offlineCopy)
+                ExecuteNonQuery(connection, "PRAGMA temp_store=MEMORY", statementObserver);
             ExecuteNonQuery(
                 connection,
                 "PRAGMA busy_timeout=" + timeoutMilliseconds.ToString(CultureInfo.InvariantCulture),
@@ -72,7 +87,7 @@ internal static class StateDbConnectionFactory
                     statementObserver)?.ToString() ?? string.Empty;
             }
 
-            if (profile != StateDbConnectionProfile.MigrationProbeRead &&
+            if (profile is not (StateDbConnectionProfile.MigrationProbeRead or StateDbConnectionProfile.OfflineCopyRead) &&
                 !journalMode.Equals("wal", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
