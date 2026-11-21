@@ -118,8 +118,10 @@ public sealed class SourceReaderBaselineReuseTests
         Assert.True(SourceReaderFileFacts.Valid(entry["Files"]!.Deserialize<SourceReaderFileFacts[]>()!));
         Assert.True(cache.TryRead(key, out _));
         // Pin the operator's compatibility boundary; a relative version alone cannot detect a reverted bump.
-        Assert.Equal(9, SourceReaderAnalysisCache.FormatVersion);
-        entry["FormatVersion"] = 8;
+        Assert.Equal(10, SourceReaderAnalysisCache.FormatVersion);
+        const int previousFormatVersion = 9;
+        // Change only the version so the fixture isolates the compatibility check.
+        entry["FormatVersion"] = previousFormatVersion;
         File.WriteAllText(path, entry.ToJsonString());
         Assert.False(cache.TryRead(key, out _));
         var candidate = new Dictionary<string, string>(baseline)
@@ -134,7 +136,7 @@ public sealed class SourceReaderBaselineReuseTests
         Assert.Null(Assert.Single(extractions));
         Assert.Equal(candidate.Count, freshCache.SemanticFileCount);
         AssertEquivalent(Analyze(new(null), candidate), actual);
-        Assert.Equal(8, JsonNode.Parse(File.ReadAllText(path))!["FormatVersion"]!.GetValue<int>());
+        Assert.Equal(previousFormatVersion, JsonNode.Parse(File.ReadAllText(path))!["FormatVersion"]!.GetValue<int>());
     }
 
     [Fact]
