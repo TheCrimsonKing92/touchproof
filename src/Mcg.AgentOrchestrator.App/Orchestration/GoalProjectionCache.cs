@@ -37,7 +37,7 @@ internal sealed class GoalProjectionCache
                     task.LastVerification is null ? "verification=none" : $"verification={task.LastVerification.Succeeded}:{task.LastVerification.ExitCode}:{task.LastVerification.CompletedAt.UtcTicks}",
                     task.LastExecution is null ? "execution=none" : $"execution={task.LastExecution.StopReason}:{task.LastExecution.CompletedAt.UtcTicks}"));
 
-        return string.Join("|", new[] { goal.Status.ToString(), $"timeline={goal.Timeline.Count}" }.Concat(taskParts));
+        return string.Join("|", new[] { goal.Status.ToString(), $"timeline={goal.TimelineCount}" }.Concat(taskParts));
     }
 }
 

@@ -7,6 +7,11 @@ public sealed partial class TaskSpec
 
     private readonly CappedVerificationHistory _verificationHistory = [];
     private readonly List<TaskDispatchRecord> _dispatchHistory = [];
+    private DeferredTaskHistory? _deferredHistory;
+    private Func<TaskHistoryRows>? _loadHistory;
+    private TaskHistoryRows? _historyBeforeChanges;
+    private TaskVerificationRecord[]? _initialVerifications;
+    private TaskDispatchRecord[]? _initialDispatches;
     private readonly List<RetryAdmissionReceipt> _retryAdmissionHistory = [];
     private readonly List<PreReviewEvidenceReceipt> _preReviewEvidenceHistory = [];
 
@@ -73,7 +78,18 @@ public sealed partial class TaskSpec
 
     public TaskVerificationRecord? LastVerification { get; private set; }
 
-    public IReadOnlyList<TaskVerificationRecord> VerificationHistory => _verificationHistory;
+    public IReadOnlyList<TaskVerificationRecord> VerificationHistory
+    {
+        get
+        {
+            EnsureTaskHistory();
+            return _verificationHistory;
+        }
+    }
+
+    internal int VerificationHistoryCount => _deferredHistory?.RestoredVerificationCount is { } count
+        ? _loadHistory is not null ? count : count + _verificationHistory.Count - (_initialVerifications?.Length ?? count)
+        : VerificationHistory.Count;
 
     public TaskDispatchRecord? LastDispatch { get; private set; }
 
@@ -90,7 +106,14 @@ public sealed partial class TaskSpec
         FindingEvidenceReviewContinuation = continuation;
     }
 
-    public IReadOnlyList<TaskDispatchRecord> DispatchHistory => _dispatchHistory;
+    public IReadOnlyList<TaskDispatchRecord> DispatchHistory
+    {
+        get
+        {
+            EnsureTaskHistory();
+            return _dispatchHistory;
+        }
+    }
 
     public IReadOnlyList<RetryAdmissionReceipt> RetryAdmissionHistory => _retryAdmissionHistory;
 
@@ -200,8 +223,13 @@ public sealed partial class TaskSpec
     internal TaskSnapshot ToSnapshot()
         => ToSnapshot(null);
 
-    internal TaskSnapshot ToSnapshot(IReadOnlyDictionary<int, string>? briefVersions)
+    internal TaskSnapshot ToSnapshot(IReadOnlyDictionary<int, string>? briefVersions, bool includeDeferredRows = true)
     {
+        if (includeDeferredRows) EnsureTaskHistory();
+        var changedHistory = _historyBeforeChanges is not null &&
+            (_initialVerifications is null || !_verificationHistory.SequenceEqual(_initialVerifications) ||
+             !_dispatchHistory.SequenceEqual(_initialDispatches!));
+        var exportHistory = includeDeferredRows || _deferredHistory is null || changedHistory;
         var lastStandardOutput = LastVerification is null ? string.Empty
             : VerificationTextBounds.BoundText(LastVerification.StandardOutput, LastVerification.StandardOutputPath);
         var lastStandardError = LastVerification is null ? string.Empty
@@ -281,7 +309,7 @@ public sealed partial class TaskSpec
                     LastVerification.DispatchAttemptAt,
                     LastVerification.FindingEvidenceRequestDispositions, LastVerification.PlannerEvidenceBatch, LastVerification.OrchestratorFailureReason,
                     LastVerification.FindingContractVersion),
-            _verificationHistory
+            (exportHistory ? _verificationHistory : Enumerable.Empty<TaskVerificationRecord>())
                 .Select(verification =>
                 {
                     var standardOutput = VerificationTextBounds.BoundText(verification.StandardOutput, verification.StandardOutputPath);
@@ -383,7 +411,7 @@ public sealed partial class TaskSpec
             PreReviewEvidenceReceipt,
             InterruptedDispatchRecoveryId,
             WasCancelledByConductor,
-            _dispatchHistory.Select((dispatch, index) => ToDispatchSnapshot(
+            (exportHistory ? _dispatchHistory : Enumerable.Empty<TaskDispatchRecord>()).Select((dispatch, index) => ToDispatchSnapshot(
                 dispatch, briefVersions, isNewest: index == _dispatchHistory.Count - 1)).ToArray(),
             PendingRetryCause,
             _retryAdmissionHistory.ToArray(),
@@ -403,7 +431,11 @@ public sealed partial class TaskSpec
             SubscriptionDeferralReleasedAt,
             CompletionBuildEvidence,
             WorkerBuildInvocations, FindingEvidenceReviewContinuation,
-            AcceptanceRetryRoutingHold, OperatorRoutingNotes, OperatorRoutingAutomaticFeedback);
+            AcceptanceRetryRoutingHold, OperatorRoutingNotes, OperatorRoutingAutomaticFeedback)
+        {
+            DeferredHistory = includeDeferredRows ? null : _deferredHistory,
+            HistoryBeforeChanges = !includeDeferredRows && changedHistory ? _historyBeforeChanges : null
+        };
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -442,6 +474,116 @@ public sealed partial class TaskSpec
                 PlannerEvidenceCriteriaVersionHash: snapshot.LastExecution.PlannerEvidenceCriteriaVersionHash));
         }
 
+        task.RestoreVerificationRows(snapshot);
+        foreach (var receipt in snapshot.RetryAdmissionHistory ?? [])
+            task.RecordRetryAdmission(receipt);
+
+        task.RestoreDispatchRows(snapshot, briefVersions);
+
+        if (snapshot.LastProcess is not null)
+        {
+            task.RecordProcess(new TaskProcessRecord(
+                snapshot.LastProcess.ProcessId,
+                snapshot.LastProcess.Command,
+                snapshot.LastProcess.WorkingDirectory,
+                snapshot.LastProcess.StandardOutputPath,
+                snapshot.LastProcess.StandardErrorPath,
+                snapshot.LastProcess.ExitCodePath,
+                snapshot.LastProcess.StartedAt,
+                snapshot.LastProcess.CompletedAt,
+                snapshot.LastProcess.ExitCode,
+                snapshot.LastProcess.WasCancelled,
+                snapshot.LastProcess.OwnedProcessIds,
+                snapshot.LastProcess.ResourceAccounting is null
+                    ? null
+                    : new TaskProcessResourceAccounting(
+                        snapshot.LastProcess.ResourceAccounting.CpuMilliseconds,
+                        snapshot.LastProcess.ResourceAccounting.PeakMemoryBytes,
+                        snapshot.LastProcess.ResourceAccounting.IoBytes,
+                        snapshot.LastProcess.ResourceAccounting.Reaped,
+                        snapshot.LastProcess.ResourceAccounting.AccountingSource),
+                snapshot.LastProcess.WasCancelledByConductor,
+                snapshot.LastProcess.ChildExitRecordPath,
+                snapshot.LastProcess.ChildProcessId,
+                snapshot.LastProcess.ChildExitCode,
+                snapshot.LastProcess.ExitArtifactOrigin,
+                snapshot.LastProcess.ExitArtifactReason,
+                snapshot.LastProcess.WasGracefullyDetachedByConductor,
+                snapshot.LastProcess.NonBlockingProcessIds,
+                snapshot.LastProcess.ProcessIdentityStartedAt,
+                snapshot.LastProcess.ProcessIdentityImagePath));
+        }
+
+        task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
+        task.SubscriptionDeferralReleasedAt = snapshot.SubscriptionDeferralReleasedAt;
+        task.RecordSubscriptionLimitReview(
+            snapshot.SubscriptionLimitReviewNote,
+            snapshot.SubscriptionLimitReviewedAt,
+            snapshot.SubscriptionLimitReviewedFailureCount);
+        task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
+        task.WorkerBuildCheckRecoveryCount = Math.Max(0, snapshot.WorkerBuildCheckRecoveryCount);
+        task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
+        task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
+        task.LatestRetryAt = snapshot.LatestRetryAt;
+        task.LatestRetryInherited = snapshot.LatestRetryInherited;
+        task.CriterionRetryFeedbackRoundAt = snapshot.CriterionRetryFeedbackRoundAt;
+        task.AcceptanceRetryRoutingHold = snapshot.AcceptanceRetryRoutingHold;
+        task.OperatorRoutingNotes = snapshot.OperatorRoutingNotes ?? [];
+        task.OperatorRoutingAutomaticFeedback = snapshot.OperatorRoutingAutomaticFeedback;
+        task.LatestRoleInputRetryAt = snapshot.LatestRoleInputRetryAt;
+        task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
+        task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
+        task.PendingRetryCause = snapshot.PendingRetryCause;
+        task.PendingPreDispatchIntegrationReceipt = snapshot.PendingPreDispatchIntegrationReceipt;
+        task.LatestProviderBudgetRecoveryAt = snapshot.LatestProviderBudgetRecoveryAt;
+        task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
+        task.FindingEvidenceReviewContinuation = snapshot.FindingEvidenceReviewContinuation;
+        task._preReviewEvidenceHistory.AddRange(
+            snapshot.PreReviewEvidenceHistory ??
+            (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
+        task.PreReviewEvidenceAttemptCount = Math.Max(
+            task._preReviewEvidenceHistory.Count(receipt =>
+                receipt is not null && !receipt.IsSyntheticReuse),
+            snapshot.PreReviewEvidenceAttemptCount);
+        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
+        task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
+        task.PendingInterruptedWorkCheckpoint = snapshot.PendingInterruptedWorkCheckpoint;
+        task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
+        task.CompletionBuildEvidence = snapshot.CompletionBuildEvidence;
+        task.WorkerBuildInvocations = snapshot.WorkerBuildInvocations ?? [];
+        task._deferredHistory = snapshot.DeferredHistory;
+        task._historyBeforeChanges = snapshot.HistoryBeforeChanges;
+        if (snapshot.DeferredHistory is { } deferred && snapshot.HistoryBeforeChanges is null)
+            task._loadHistory = () => task.RestoreDeferredTaskHistory(deferred, snapshot, briefVersions);
+        return task;
+    }
+
+    private void EnsureTaskHistory()
+    {
+        if (_loadHistory is not { } load) return;
+        _historyBeforeChanges = load();
+        _loadHistory = null;
+        _initialVerifications = _verificationHistory.ToArray();
+        _initialDispatches = _dispatchHistory.ToArray();
+    }
+
+    private TaskHistoryRows RestoreDeferredTaskHistory(DeferredTaskHistory deferred, TaskSnapshot snapshot,
+        IReadOnlyDictionary<int, string>? briefVersions)
+    {
+        var rows = deferred.Read();
+        var verificationCleared = LastVerification is null;
+        var dispatchCleared = LastDispatch is null;
+        _verificationHistory.Clear();
+        _dispatchHistory.Clear();
+        RestoreVerificationRows(snapshot with { VerificationHistory = rows.Verification });
+        RestoreDispatchRows(snapshot with { DispatchHistory = rows.Dispatch }, briefVersions);
+        if (verificationCleared) LastVerification = null;
+        if (dispatchCleared) LastDispatch = null;
+        return rows;
+    }
+
+    private void RestoreVerificationRows(TaskSnapshot snapshot)
+    {
         if (snapshot.VerificationHistory is { Count: > 0 })
         {
             foreach (var verification in snapshot.VerificationHistory)
@@ -450,7 +592,7 @@ public sealed partial class TaskSpec
                     verification.AuthoritativeStandardOutput, verification.AuthoritativeStandardOutputUnavailableReason, verification.StandardOutput);
                 var error = VerificationSnapshotText.Expand(
                     verification.AuthoritativeStandardError, verification.AuthoritativeStandardErrorUnavailableReason, verification.StandardError);
-                task.RestoreVerificationHistory(new TaskVerificationRecord(
+                AddRestoredVerification(new TaskVerificationRecord(
                     verification.Command,
                     verification.WorkingDirectory,
                     verification.ExitCode,
@@ -553,49 +695,50 @@ public sealed partial class TaskSpec
                 AuthoritativeStandardOutput = output.Text,
                 AuthoritativeStandardError = error.Text
             };
-            var historyIndex = task._verificationHistory.FindLastIndex(
+            var historyIndex = _verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
             {
-                task.RestoreVerificationHistory(latestVerification);
-                historyIndex = task._verificationHistory.FindLastIndex(
+                AddRestoredVerification(latestVerification);
+                historyIndex = _verificationHistory.FindLastIndex(
                     verification => verification.HasSameRoundIdentity(latestVerification));
             }
             else
             {
                 var mergedVerification = latestVerification.MergeSameRoundEnrichment(
-                    task._verificationHistory[historyIndex]);
+                    _verificationHistory[historyIndex]);
                 // Enrichment resolves authority into a full copy. Retain the original storage
                 // shape when both representations already rely on the authoritative preview.
-                task._verificationHistory[historyIndex] = mergedVerification with
+                _verificationHistory[historyIndex] = mergedVerification with
                 {
-                    FullStandardOutput = latestVerification.FullStandardOutput ?? task._verificationHistory[historyIndex].FullStandardOutput,
-                    FullStandardError = latestVerification.FullStandardError ?? task._verificationHistory[historyIndex].FullStandardError
+                    FullStandardOutput = latestVerification.FullStandardOutput ?? _verificationHistory[historyIndex].FullStandardOutput,
+                    FullStandardError = latestVerification.FullStandardError ?? _verificationHistory[historyIndex].FullStandardError
                 };
             }
 
-            task.LastVerification = task._verificationHistory[historyIndex];
+            LastVerification = _verificationHistory[historyIndex];
         }
 
+    }
+
+    private void RestoreDispatchRows(TaskSnapshot snapshot, IReadOnlyDictionary<int, string>? briefVersions)
+    {
         if (snapshot.DispatchHistory is { Count: > 0 })
         {
             foreach (var dispatch in snapshot.DispatchHistory)
             {
-                task._dispatchHistory.Add(FromDispatchSnapshot(DispatchSnapshotShaping.FromStorage(dispatch, briefVersions)));
+                _dispatchHistory.Add(FromDispatchSnapshot(DispatchSnapshotShaping.FromStorage(dispatch, briefVersions)));
             }
         }
-
-        foreach (var receipt in snapshot.RetryAdmissionHistory ?? [])
-            task.RecordRetryAdmission(receipt);
 
         if (snapshot.LastDispatch is not null)
         {
             var currentDispatch = FromDispatchSnapshot(DispatchSnapshotShaping.FromStorage(snapshot.LastDispatch, briefVersions));
-            var historyIndex = task._dispatchHistory.FindIndex(
+            var historyIndex = _dispatchHistory.FindIndex(
                 dispatch => dispatch.DispatchedAt == currentDispatch.DispatchedAt);
             if (historyIndex >= 0)
             {
-                var historical = task._dispatchHistory[historyIndex];
+                var historical = _dispatchHistory[historyIndex];
                 // Older snapshots omitted both admission fields from LastDispatch while
                 // preserving them in history. Recover only from the same dispatch identity.
                 if (currentDispatch.RetryContextFingerprint is null &&
@@ -613,88 +756,16 @@ public sealed partial class TaskSpec
                         PaidRoute = historical.PaidRoute
                     };
                 }
-                task._dispatchHistory[historyIndex] = currentDispatch;
+                _dispatchHistory[historyIndex] = currentDispatch;
             }
             else
             {
-                task._dispatchHistory.Add(currentDispatch);
+                _dispatchHistory.Add(currentDispatch);
             }
 
-            task.LastDispatch = currentDispatch;
+            LastDispatch = currentDispatch;
         }
 
-        if (snapshot.LastProcess is not null)
-        {
-            task.RecordProcess(new TaskProcessRecord(
-                snapshot.LastProcess.ProcessId,
-                snapshot.LastProcess.Command,
-                snapshot.LastProcess.WorkingDirectory,
-                snapshot.LastProcess.StandardOutputPath,
-                snapshot.LastProcess.StandardErrorPath,
-                snapshot.LastProcess.ExitCodePath,
-                snapshot.LastProcess.StartedAt,
-                snapshot.LastProcess.CompletedAt,
-                snapshot.LastProcess.ExitCode,
-                snapshot.LastProcess.WasCancelled,
-                snapshot.LastProcess.OwnedProcessIds,
-                snapshot.LastProcess.ResourceAccounting is null
-                    ? null
-                    : new TaskProcessResourceAccounting(
-                        snapshot.LastProcess.ResourceAccounting.CpuMilliseconds,
-                        snapshot.LastProcess.ResourceAccounting.PeakMemoryBytes,
-                        snapshot.LastProcess.ResourceAccounting.IoBytes,
-                        snapshot.LastProcess.ResourceAccounting.Reaped,
-                        snapshot.LastProcess.ResourceAccounting.AccountingSource),
-                snapshot.LastProcess.WasCancelledByConductor,
-                snapshot.LastProcess.ChildExitRecordPath,
-                snapshot.LastProcess.ChildProcessId,
-                snapshot.LastProcess.ChildExitCode,
-                snapshot.LastProcess.ExitArtifactOrigin,
-                snapshot.LastProcess.ExitArtifactReason,
-                snapshot.LastProcess.WasGracefullyDetachedByConductor,
-                snapshot.LastProcess.NonBlockingProcessIds,
-                snapshot.LastProcess.ProcessIdentityStartedAt,
-                snapshot.LastProcess.ProcessIdentityImagePath));
-        }
-
-        task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
-        task.SubscriptionDeferralReleasedAt = snapshot.SubscriptionDeferralReleasedAt;
-        task.RecordSubscriptionLimitReview(
-            snapshot.SubscriptionLimitReviewNote,
-            snapshot.SubscriptionLimitReviewedAt,
-            snapshot.SubscriptionLimitReviewedFailureCount);
-        task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
-        task.WorkerBuildCheckRecoveryCount = Math.Max(0, snapshot.WorkerBuildCheckRecoveryCount);
-        task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
-        task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
-        task.LatestRetryAt = snapshot.LatestRetryAt;
-        task.LatestRetryInherited = snapshot.LatestRetryInherited;
-        task.CriterionRetryFeedbackRoundAt = snapshot.CriterionRetryFeedbackRoundAt;
-        task.AcceptanceRetryRoutingHold = snapshot.AcceptanceRetryRoutingHold;
-        task.OperatorRoutingNotes = snapshot.OperatorRoutingNotes ?? [];
-        task.OperatorRoutingAutomaticFeedback = snapshot.OperatorRoutingAutomaticFeedback;
-        task.LatestRoleInputRetryAt = snapshot.LatestRoleInputRetryAt;
-        task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
-        task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
-        task.PendingRetryCause = snapshot.PendingRetryCause;
-        task.PendingPreDispatchIntegrationReceipt = snapshot.PendingPreDispatchIntegrationReceipt;
-        task.LatestProviderBudgetRecoveryAt = snapshot.LatestProviderBudgetRecoveryAt;
-        task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
-        task.FindingEvidenceReviewContinuation = snapshot.FindingEvidenceReviewContinuation;
-        task._preReviewEvidenceHistory.AddRange(
-            snapshot.PreReviewEvidenceHistory ??
-            (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
-        task.PreReviewEvidenceAttemptCount = Math.Max(
-            task._preReviewEvidenceHistory.Count(receipt =>
-                receipt is not null && !receipt.IsSyntheticReuse),
-            snapshot.PreReviewEvidenceAttemptCount);
-        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
-        task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
-        task.PendingInterruptedWorkCheckpoint = snapshot.PendingInterruptedWorkCheckpoint;
-        task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
-        task.CompletionBuildEvidence = snapshot.CompletionBuildEvidence;
-        task.WorkerBuildInvocations = snapshot.WorkerBuildInvocations ?? [];
-        return task;
     }
 
     internal void RecordExecution(TaskExecutionRecord execution) => LastExecution = execution;
@@ -715,6 +786,7 @@ public sealed partial class TaskSpec
 
     internal void RecordVerification(TaskVerificationRecord verification)
     {
+        EnsureTaskHistory();
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
         PendingReviewFindingRepairCheckpoint = null;
@@ -776,6 +848,12 @@ public sealed partial class TaskSpec
 
     internal void RestoreVerificationHistory(TaskVerificationRecord verification)
     {
+        EnsureTaskHistory();
+        AddRestoredVerification(verification);
+    }
+
+    private void AddRestoredVerification(TaskVerificationRecord verification)
+    {
         var historyIndex = _verificationHistory.FindLastIndex(
             item => item.HasSameRoundIdentity(verification));
         if (historyIndex >= 0)
@@ -798,6 +876,7 @@ public sealed partial class TaskSpec
 
     internal void RestoreFindingEvidenceVerification(TaskVerificationRecord verification)
     {
+        EnsureTaskHistory();
         var historyIndex = _verificationHistory.FindLastIndex(item => item.HasSameRoundIdentity(verification));
         if (historyIndex >= 0) _verificationHistory[historyIndex] = verification;
         LastVerification = verification;
@@ -805,6 +884,7 @@ public sealed partial class TaskSpec
 
     internal TaskStatusChange ReinstateVerification(TaskVerificationRecord verification)
     {
+        EnsureTaskHistory();
         if (!_verificationHistory.Any(item => ReferenceEquals(item, verification)))
             throw new InvalidOperationException("Only this task's retained verification can be reinstated.");
         var from = Status;
@@ -816,6 +896,7 @@ public sealed partial class TaskSpec
 
     internal void AdvanceVerifiedCandidateCoverage(string candidateSha)
     {
+        EnsureTaskHistory();
         ArgumentException.ThrowIfNullOrWhiteSpace(candidateSha);
         if (Status != WorkTaskStatus.Completed ||
             RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer) ||
@@ -832,6 +913,7 @@ public sealed partial class TaskSpec
 
     internal void RecordCompletionVerdict(bool verifiedSuccess, string? rule)
     {
+        EnsureTaskHistory();
         if (LastVerification is null)
         {
             throw new InvalidOperationException("A completion verdict requires an existing verification.");
@@ -855,6 +937,7 @@ public sealed partial class TaskSpec
     internal void RecordFindingEvidenceRequestDispositions(
         IReadOnlyList<FindingEvidenceRequestDisposition> dispositions)
     {
+        EnsureTaskHistory();
         if (LastVerification is null)
             throw new InvalidOperationException("Finding evidence decisions require an existing verification.");
         foreach (var disposition in dispositions)
@@ -891,6 +974,7 @@ public sealed partial class TaskSpec
         FindingEvidenceOutcome outcome,
         FindingEvidenceReceipt? receipt)
     {
+        EnsureTaskHistory();
         if (LastVerification is null)
         {
             throw new InvalidOperationException("A finding evidence outcome requires an existing verification.");
@@ -994,6 +1078,7 @@ public sealed partial class TaskSpec
         RetryRoundKind? retryRoundKind = null,
         bool inherited = false)
     {
+        EnsureTaskHistory();
         LatestRetryAt = retriedAt;
         AcceptanceRetryRoutingHold = null;
         OperatorRoutingAutomaticFeedback = null;
@@ -1038,6 +1123,7 @@ public sealed partial class TaskSpec
 
     internal void BindPreparedDispatch(TaskDispatchRecord dispatch)
     {
+        EnsureTaskHistory();
         ArgumentNullException.ThrowIfNull(dispatch);
         if (LastDispatch is not null && LastDispatch.DispatchedAt == dispatch.DispatchedAt)
         {
@@ -1178,6 +1264,7 @@ public sealed partial class TaskSpec
 
     internal void RecordDispatch(TaskDispatchRecord dispatch)
     {
+        EnsureTaskHistory();
         if (CompletionBuildEvidence is { IsPending: true })
             throw new InvalidOperationException("A pending completion build must be cancelled before another dispatch.");
         if (CompletionBuildEvidence is { CustodyReleased: false })
@@ -1239,6 +1326,7 @@ public sealed partial class TaskSpec
 
     private void ReplaceLastDispatch(TaskDispatchRecord dispatch)
     {
+        EnsureTaskHistory();
         LastDispatch = dispatch;
         if (_dispatchHistory.Count > 0)
         {
@@ -1266,6 +1354,7 @@ public sealed partial class TaskSpec
 
     internal void SetWorkerBuildProtocol(int version)
     {
+        EnsureTaskHistory();
         if (LastDispatch is null || LastProcess is not null || version != 1)
             throw new InvalidOperationException("Worker build enrollment must precede process launch.");
         var updated = LastDispatch with { WorkerBuildProtocolVersion = version };
@@ -1305,6 +1394,7 @@ public sealed partial class TaskSpec
 
     internal void SetDispatchContextPackageReceipt(DateTimeOffset dispatchedAt, WorkerContextPackageReceipt receipt)
     {
+        EnsureTaskHistory();
         ArgumentNullException.ThrowIfNull(receipt);
         var matches = _dispatchHistory
             .Select((dispatch, index) => (dispatch, index))
@@ -1332,6 +1422,7 @@ public sealed partial class TaskSpec
 
     internal void SetDispatchProviderUsage(DateTimeOffset dispatchedAt, DispatchProviderUsage usage)
     {
+        EnsureTaskHistory();
         ArgumentNullException.ThrowIfNull(usage);
         var matches = _dispatchHistory
             .Select((dispatch, index) => (dispatch, index))

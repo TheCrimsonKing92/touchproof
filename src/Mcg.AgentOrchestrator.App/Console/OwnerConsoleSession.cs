@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -19,8 +20,15 @@ internal sealed class OwnerConsoleSession(
     AnswerIntentStatusTracker? answerTracking = null,
     Func<OwnerFleetViewModel>? fleet = null,
     Func<int?>? terminalWidth = null,
-    string? projectLabel = null) : IDisposable
+    string? projectLabel = null,
+    Func<string, IReadOnlyList<CostGoalOutcomeAttentionView.Row>>? outcomes = null,
+    string? orchestratorDirectory = null) : IDisposable
 {
+    private readonly Func<string, IReadOnlyList<CostGoalOutcomeAttentionView.Row>> _outcomes =
+        outcomes ?? (orchestratorDirectory is { } directory
+            ? id => CostGoalOutcomeAttentionView.Read([id], directory)
+            : _ => []);
+
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     public void Dispose() => _answerTracking.Dispose();
     private readonly OwnerConsoleControlCommands _control = new(conductor, digestReport, output, clock);
@@ -170,11 +178,12 @@ internal sealed class OwnerConsoleSession(
         return kernel.Goals.Where(goal => IsActive(goal.Status)).Select(ToCard).ToArray();
     }
 
-    private static OwnerGoalCard ToCard(Goal goal)
+    private OwnerGoalCard ToCard(Goal goal)
     {
         var task = goal.Tasks.FirstOrDefault(item => item.Status != WorkTaskStatus.Completed) ?? goal.Tasks.LastOrDefault();
         return new OwnerGoalCard(goal.Id.Value, OwnerGoalTitle.From(goal.Objective), goal.Status, task?.RequiredRole,
-            goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt);
+            goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt,
+            OutcomeSummary: OwnerConsoleCostGoalOutcomeLines.Summary(_outcomes(goal.Id.Value)));
     }
 
     private static bool IsActive(GoalStatus status) => status is not

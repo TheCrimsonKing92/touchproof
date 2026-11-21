@@ -27,19 +27,26 @@ internal sealed record ContextUsageRow(
 internal sealed record ContextUsageResult(
     DateTimeOffset? Since,
     string? Role,
-    IReadOnlyList<ContextUsageRow> Rows);
+    IReadOnlyList<ContextUsageRow> Rows,
+    ContextUsageCoverage Coverage);
+
+internal sealed record ContextUsageCoverage(
+    int Live,
+    int Archived,
+    int UnknownUsage,
+    int Conflicting,
+    IReadOnlyList<DispatchUsageIdentity> ConflictIds);
 
 internal static class ContextUsageReport
 {
     internal static ContextUsageResult Build(
-        IEnumerable<Goal> goals, DateTimeOffset? since = null, string? role = null)
+        IEnumerable<Goal> goals, DateTimeOffset? since = null, string? role = null) =>
+        Build(DispatchUsagePopulation.Build(goals, since, role), since, role);
+
+    internal static ContextUsageResult Build(DispatchUsagePopulation population, DateTimeOffset? since, string? role)
     {
-        var groups = goals.SelectMany(goal => goal.Tasks)
-            .Where(task => role is null ||
-                task.RequiredRole.ToString().Equals(role, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(task => task.DispatchHistory.Select(dispatch => (Task: task, Dispatch: dispatch)))
-            .Where(item => since is null || item.Dispatch.DispatchedAt.ToUniversalTime() >= since.Value.ToUniversalTime())
-            .GroupBy(item => (Role: item.Task.RequiredRole.ToString(),
+        var groups = population.Dispatches
+            .GroupBy(item => (Role: item.Role.ToString(),
                 Model: string.IsNullOrWhiteSpace(item.Dispatch.ModelName) ? "unknown" : item.Dispatch.ModelName!));
 
         var rows = groups.Select(group =>
@@ -69,7 +76,8 @@ internal static class ContextUsageReport
         .ThenBy(row => row.Model == "unknown" ? 1 : 0)
         .ThenBy(row => row.Model, StringComparer.Ordinal)
         .ToArray();
-        return new(since, role, rows);
+        return new(since, role, rows, new(population.Live, population.Archived,
+            rows.Sum(row => row.MissingUsageCount), population.Conflicts.Count, population.Conflicts));
     }
 
     internal static long? RecordedTurns(TaskDispatchRecord dispatch) => DispatchUsageValues.RecordedTurns(dispatch);
@@ -87,10 +95,7 @@ internal static class ContextUsageReport
 
     private static long? RecordedToolCalls(TaskDispatchRecord dispatch)
     {
-        var receiptValue = dispatch.ContextPackageReceipt?.ToolCalls;
-        var toolCalls = receiptValue is { State: ProviderUsageState.Reported }
-            ? receiptValue
-            : dispatch.ProviderUsage?.ToolCalls;
+        var toolCalls = DispatchUsageValues.RecordedToolCalls(dispatch);
         return toolCalls is null ? null : ContextUsageFigures.Provider(toolCalls).Value;
     }
 

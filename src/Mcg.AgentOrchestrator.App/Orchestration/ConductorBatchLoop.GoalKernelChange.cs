@@ -26,7 +26,7 @@ internal static class GoalKernelChange
         GoalProjectionCache.BuildFingerprint(goal) + "|" + string.Join("|", goal.Tasks
             .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
             .Select(task => string.Join(":", task.Id.Value,
-                task.VerificationHistory.Count,
+                task.VerificationHistoryCount,
                 task.VerificationHistory.Sum(record => record.FindingEvidenceReceipts?.Count ?? 0),
                 task.LatestRetryAt?.UtcTicks, task.PendingRetryCause)));
 

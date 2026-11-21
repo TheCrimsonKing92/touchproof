@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -6,9 +7,15 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoalEventTail tail,
     Func<OwnerConsoleGateProgress?>? gate = null, OwnerGoalChangeSummaryQuery? summary = null,
-    OwnerConsoleEvidenceAttemptProgressReader? evidence = null)
+    OwnerConsoleEvidenceAttemptProgressReader? evidence = null,
+    Func<string, IReadOnlyList<CostGoalOutcomeAttentionView.Row>>? outcomes = null,
+    string? orchestratorDirectory = null)
 {
     private readonly OwnerGoalChangeSummaryQuery _summary = summary ?? new();
+    private readonly Func<string, IReadOnlyList<CostGoalOutcomeAttentionView.Row>> _outcomes =
+        outcomes ?? (orchestratorDirectory is { } directory
+            ? id => CostGoalOutcomeAttentionView.Read([id], directory)
+            : _ => []);
 
     internal async Task<OwnerGoalChangeSummary?> LoadSummaryAsync(string goalId, CancellationToken token)
     {
@@ -40,7 +47,8 @@ internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoa
             .Select(line => OwnerGoalLifecycleEvent.TryParse(line, goalId, out var item) ? item : null)
             .Where(item => item is not null).Select(item => OwnerGoalLifecycleEvent.WithRole(item!, roles)).ToArray();
         return Observe(new OwnerGoalDetailSnapshot(goal, position, events,
-            Changes: await _summary.LoadAsync(goal, cancellationToken)), gate?.Invoke());
+            Changes: await _summary.LoadAsync(goal, cancellationToken),
+            Outcomes: _outcomes(goal.Id.Value).ToArray()), gate?.Invoke());
     }
 
     internal OwnerGoalDetailSnapshot Observe(OwnerGoalDetailSnapshot detail, OwnerConsoleGateProgress? observed) =>

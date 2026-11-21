@@ -12,7 +12,9 @@ internal interface IExecutorWholeGateTrialSampler
 }
 
 internal sealed class ExecutorWholeGateTrialSshSampler(RemoteLaneExecutorEntry entry, string worktree,
-    string trialId, TimeSpan budget) : IExecutorWholeGateTrialSampler
+    string trialId, TimeSpan budget,
+    Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>>? runCommand = null)
+    : IExecutorWholeGateTrialSampler
 {
     private CancellationTokenSource? _cancel;
     private Task<GoalAcceptanceVerifier.CommandResult>? _collect;
@@ -28,12 +30,29 @@ internal sealed class ExecutorWholeGateTrialSshSampler(RemoteLaneExecutorEntry e
             $limit = [long]0
             $count = 0
             try {
+                Add-Type -Name CommitStatus -Namespace Mcg -MemberDefinition @'
+            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+            public struct MemoryStatus {
+                public uint Length, Load;
+                public ulong TotalPhysical, AvailablePhysical, TotalPageFile, AvailablePageFile;
+                public ulong TotalVirtual, AvailableVirtual, AvailableExtendedVirtual;
+            }
+            [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+            private static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
+            public static MemoryStatus Read() {
+                var status = new MemoryStatus { Length = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(MemoryStatus)) };
+                if (!GlobalMemoryStatusEx(ref status))
+                    throw new System.ComponentModel.Win32Exception();
+                return status;
+            }
+            '@
                 while ($elapsed.Elapsed.TotalSeconds -lt BUDGET) {
-                    $sample = Get-CimInstance -ClassName Win32_PerfRawData_PerfOS_Memory -OperationTimeoutSec 5
-                    if ($sample.CommittedBytes -le 0 -or $sample.CommitLimit -le 0) { throw 'Commit counters unavailable' }
-                    if ($sample.CommittedBytes -gt $peak) {
-                        $peak = [long]$sample.CommittedBytes
-                        $limit = [long]$sample.CommitLimit
+                    $sample = [Mcg.CommitStatus]::Read()
+                    $committed = [long]$sample.TotalPageFile - [long]$sample.AvailablePageFile
+                    if ($committed -le 0 -or $sample.TotalPageFile -le 0) { throw 'Commit counters unavailable' }
+                    if ($committed -gt $peak) {
+                        $peak = $committed
+                        $limit = [long]$sample.TotalPageFile
                     }
                     $count++
                     if ($count -eq 1) { [IO.File]::WriteAllText($ready, '') }
@@ -108,7 +127,7 @@ internal sealed class ExecutorWholeGateTrialSshSampler(RemoteLaneExecutorEntry e
             {{body}}
             """;
         var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-        return GoalAcceptanceVerifier.RunRemoteLaneTransportAsync([SshRemoteLaneExecutor.SshPath, "-o", "BatchMode=yes",
+        return (runCommand ?? GoalAcceptanceVerifier.RunRemoteLaneTransportAsync)([SshRemoteLaneExecutor.SshPath, "-o", "BatchMode=yes",
             entry.RunnerAlias!, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
             worktree, timeout, token);
     }
@@ -235,7 +254,8 @@ internal static class ExecutorScreeningRunner
         RemoteLaneExecutorEntry entry, ExecutorWholeGateTrialPlan plan, RemoteLaneExecutorConfiguration configuration,
         IRemoteLaneExecutor transport, string occupancyRoot, string receiptPath, string receiptId,
         TimeProvider clock, TimeSpan pollInterval, IExecutorWholeGateTrialSampler? sampler,
-        Func<DateTimeOffset, ExecutorWholeGateTrialLocalAttempt?>? readLocalAttempt, CancellationToken token = default)
+        Func<DateTimeOffset, ExecutorWholeGateTrialLocalAttempt?>? readLocalAttempt, CancellationToken token = default,
+        Func<CancellationToken, Task<bool>>? probe = null, int? maxLanes = null)
     {
         if (!entry.AdmissionEnabled || plan.Lanes.Count == 0 || token.IsCancellationRequested) return null;
         var attempt = "whole-gate-trial-" + receiptId;
@@ -258,7 +278,9 @@ internal static class ExecutorScreeningRunner
             var machineLocalKeys = configuration.MachineLocalResourceKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var rerunPolicy = new AcceptanceLaneTestFailureRerun(emit: _ => { });
             var settings = AcceptanceHostTestSettings.Overlay(plan.TestSettings, entry.TestSettings);
-            var stopReason = "trial-interrupted";
+            using var submissionGate = new SemaphoreSlim(1);
+            string? submissionBlocked = null;
+            var submissions = 0;
             ExecutorWholeGateTrialReceipt receipt;
             try
             {
@@ -269,15 +291,13 @@ internal static class ExecutorScreeningRunner
                 }
                 local = readLocalAttempt?.Invoke(started);
 
-                string? submissionBlocked = null;
                 while (pending.Count > 0 || running.Count > 0)
                 {
-                    while (submissionBlocked is null && !token.IsCancellationRequested && running.Count < entry.Slots)
+                    while (!token.IsCancellationRequested && running.Count < entry.Slots)
                     {
                         var index = pending.FindIndex(lane => running.All(active => MayOverlap(lane, active.Lane)));
                         if (index < 0) break;
                         var lane = pending[index];
-                        pending.RemoveAt(index);
                         var laneStarted = clock.GetUtcNow();
                         var request = new RemoteLaneRequest(entry.Id, attempt, candidate.GoalId,
                             ExecutorScreeningPlanner.TrialLaneName(lane, receiptId), lane.Project, lane.Filter,
@@ -285,27 +305,23 @@ internal static class ExecutorScreeningRunner
                             "whole-gate-trial-" + RemoteFocusedEvidenceShadow.ManifestIdentity(lane.Project, lane.Filter, ""),
                             TestHostTimeoutSeconds: RemoteLaneTestHostBudget.Resolve(lane.Timeout),
                             TestSettings: settings, TestSettingsHost: entry.Id);
-                        var submission = await SubmitTrialLaneAsync(request).ConfigureAwait(false);
-                        if (submission.Handle is not { } handle)
-                        {
-                            submissionBlocked = token.IsCancellationRequested ? "cancelled" : "executor-unreachable";
-                            outcomes.Add(new(lane.Name, Elapsed(laneStarted), null, null, [],
-                                submission.FailureReason ?? submissionBlocked));
-                        }
-                        else running.Add((lane, RunLaneWithRerunAsync(lane, request, handle, laneStarted)));
+                        var submission = await TrySubmitLaneAsync(request).ConfigureAwait(false);
+                        if (submission is null) break;
+                        pending.RemoveAt(index);
+                        if (submission.Handle is { } handle)
+                            running.Add((lane, RunLaneWithRerunAsync(lane, request, handle, laneStarted)));
+                        else
+                            outcomes.Add(new(lane.Name, Elapsed(laneStarted), null, null, [], submission.FailureReason));
                     }
 
-                    if (running.Count == 0)
-                    {
-                        stopReason = token.IsCancellationRequested ? "cancelled" : submissionBlocked ?? stopReason;
-                        break;
-                    }
+                    if (running.Count == 0) break;
                     var done = await Task.WhenAny(running.Select(item => item.Work)).ConfigureAwait(false);
                     var execution = await done.ConfigureAwait(false);
                     outcomes.Add(execution.Result);
                     running.RemoveAll(item => item.Work == done);
                     // An unconfirmed remote stop cannot free capacity for another machine-local lane.
-                    if (!execution.TerminalObserved) submissionBlocked ??= "executor-completion-unconfirmed";
+                    if (!execution.TerminalObserved)
+                        Interlocked.CompareExchange(ref submissionBlocked, "executor-completion-unconfirmed", null);
                 }
             }
             finally
@@ -321,13 +337,15 @@ internal static class ExecutorScreeningRunner
                     }
                     catch (Exception ex) { memory = ExecutorWholeGateTrialMemory.Unavailable("sampler-stop: " + ex.Message); }
                 }
-                outcomes.AddRange(pending.Select(lane => new ExecutorWholeGateTrialLaneResult(lane.Name, null, null, null, [],
-                    token.IsCancellationRequested ? "cancelled" : stopReason)));
+                var stopReason = token.IsCancellationRequested ? "cancelled" : submissionBlocked ??
+                    (submissions == maxLanes ? "max-lanes-reached" : "trial-interrupted");
+                outcomes.AddRange(pending.Select(lane => new ExecutorWholeGateTrialLaneResult(lane.Name, null, null, null, [], stopReason)));
                 var status = token.IsCancellationRequested ? ExecutorWholeGateTrialStatus.Cancelled :
                     outcomes.Count != plan.Lanes.Count || outcomes.Any(lane => lane.HasExecutionFailure)
                         ? ExecutorWholeGateTrialStatus.Incomplete : ExecutorWholeGateTrialStatus.Complete;
                 receipt = new(receiptId, candidate.GoalId, candidate.Commit, entry.Id, started, Elapsed(started), status,
-                    outcomes.OrderBy(lane => lane.LaneName, StringComparer.Ordinal).ToArray(), memory, local, plan.UnsupportedChecks);
+                    outcomes.OrderBy(lane => lane.LaneName, StringComparer.Ordinal).ToArray(), memory, local, plan.UnsupportedChecks,
+                    SubmissionAttempts: submissions);
                 ExecutorScreeningReceiptLedger.Append(receiptPath, receipt);
             }
             return receipt;
@@ -337,6 +355,24 @@ internal static class ExecutorScreeningRunner
                 !(lane.ExclusiveResourceKeys.Any(machineLocalKeys.Contains) &&
                   active.ExclusiveResourceKeys.Any(machineLocalKeys.Contains));
 
+            async Task<RemoteLaneSubmission?> TrySubmitLaneAsync(RemoteLaneRequest request)
+            {
+                // Keep admission closed to other submissions while a failed submission is probed.
+                await submissionGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    if (token.IsCancellationRequested || Volatile.Read(ref submissionBlocked) is not null ||
+                        submissions == maxLanes) return null;
+                    submissions++;
+                    var submission = await SubmitTrialLaneAsync(request).ConfigureAwait(false);
+                    if (submission.Handle is null && !token.IsCancellationRequested &&
+                        !await IsReachableAsync().ConfigureAwait(false))
+                        Interlocked.CompareExchange(ref submissionBlocked, "executor-unreachable", null);
+                    return submission;
+                }
+                finally { submissionGate.Release(); }
+            }
+
             async Task<TrialExecution> RunLaneWithRerunAsync(ExecutorWholeGateTrialLane lane, RemoteLaneRequest request,
                 IRemoteLaneHandle handle, DateTimeOffset at)
             {
@@ -344,6 +380,7 @@ internal static class ExecutorScreeningRunner
                 if (lane.RetryCheck is not { } check || first.Check is not { } firstCheck) return first;
 
                 TrialExecution? rerun = null;
+                ExecutorWholeGateTrialLaneResult? retryResult = null;
                 var rerunFilter = request.Filter;
                 var adjudicated = await rerunPolicy.RunAsync(check, firstCheck, async rerunCheck =>
                 {
@@ -357,38 +394,64 @@ internal static class ExecutorScreeningRunner
                         ManifestIdentity = "whole-gate-trial-" + RemoteFocusedEvidenceShadow.ManifestIdentity(lane.Project, rerunFilter, "")
                     };
                     var retryStarted = clock.GetUtcNow();
-                    var submission = await SubmitTrialLaneAsync(retryRequest).ConfigureAwait(false);
-                    rerun = submission.Handle is { } retryHandle
-                        ? await ObserveTrialLaneAsync(lane, retryRequest, retryHandle, retryStarted, 2).ConfigureAwait(false)
-                        : new(new(lane.Name, Elapsed(retryStarted), null, null, [], submission.FailureReason ?? "executor-unreachable"), false);
-                    return rerun.Check ?? new(lane.Name, false, null, null, TestResultRunOrdinal: 2);
+                    var submission = await TrySubmitLaneAsync(retryRequest).ConfigureAwait(false);
+                    if (submission?.Handle is { } retryHandle)
+                    {
+                        rerun = await ObserveTrialLaneAsync(lane, retryRequest, retryHandle, retryStarted, 2).ConfigureAwait(false);
+                        retryResult = rerun.Result;
+                    }
+                    else if (submission is not null)
+                        retryResult = new(lane.Name, Elapsed(retryStarted), null, null, [], submission.FailureReason);
+                    return rerun?.Check ?? new(lane.Name, false, null, null, TestResultRunOrdinal: 2);
                 }, result => result.TestResultRunOrdinal == 1 ? request.Lane : request.Lane + "-retry",
                     cancellationToken: token).ConfigureAwait(false);
 
-                if (rerun is null || adjudicated.LaneRerun is not { } evidence) return first;
+                if (retryResult is not { } observed || adjudicated.LaneRerun is not { } evidence) return first;
                 // The local comparison reads first-run TRX. Keep those counts comparable and record the rerun separately.
-                var observed = rerun.Result;
                 return new(first.Result with
                 {
                     WallSeconds = Elapsed(at),
                     Rerun = new(evidence.Outcome, rerunFilter, observed.WallSeconds, observed.Passed, observed.Failed,
                         observed.FailingTests, observed.ExecutionFailure)
-                }, rerun.TerminalObserved);
+                }, rerun?.TerminalObserved ?? first.TerminalObserved);
             }
         }
 
         double Elapsed(DateTimeOffset at) => Math.Max(0, (clock.GetUtcNow() - at).TotalSeconds);
 
+        async Task<bool> IsReachableAsync()
+        {
+            try
+            {
+                if (probe is not null) return await probe(token).ConfigureAwait(false);
+                var result = await GoalAcceptanceVerifier.RunRemoteLaneTransportAsync(
+                    [SshRemoteLaneExecutor.SshPath, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                        entry.RunnerAlias!, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+                    candidate.WorktreePath, TimeSpan.FromSeconds(30), token).ConfigureAwait(false);
+                return result.ExitCode == 0 && !result.TimedOut;
+            }
+            catch (Exception) { return false; }
+        }
+
         async Task<RemoteLaneSubmission> SubmitTrialLaneAsync(RemoteLaneRequest request)
         {
             try
             {
-                token.ThrowIfCancellationRequested();
-                return await transport.SubmitAsync(request, token).ConfigureAwait(false);
+                var submission = await transport.SubmitAsync(request, token).ConfigureAwait(false);
+                if (submission.Handle is not null) return submission;
+                var failedStep = submission.Steps?.LastOrDefault(step => step.TimedOut == true || step.ExitCode is not (null or 0));
+                return submission with
+                {
+                    FailureReason = $"submit-failed:{FirstLine(submission.FailureReason, "refused")}:{FirstLine(failedStep?.StderrTail, "no-detail")}"
+                };
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return new(null, "cancelled"); }
-            catch (Exception ex) { return new(null, ex.Message); }
+            catch (Exception ex) { return new(null, $"submit-failed:{ex.GetType().Name}:{FirstLine(ex.Message, "no-message")}"); }
         }
+
+        static string FirstLine(string? value, string fallback) =>
+            value?.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault() ?? fallback;
 
         async Task<TrialExecution> ObserveTrialLaneAsync(ExecutorWholeGateTrialLane lane, RemoteLaneRequest request,
             IRemoteLaneHandle handle, DateTimeOffset at, int ordinal)

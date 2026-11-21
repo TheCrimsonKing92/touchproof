@@ -367,7 +367,7 @@ internal sealed class TerminalGoalSweepCache
             {
                 goal.Id.Value,
                 goal.Status.ToString(),
-                $"timeline={goal.Timeline.Count}",
+                $"timeline={goal.TimelineCount}",
                 $"deps={string.Join(",", goal.DependsOn.Select(id => id.Value).Order(StringComparer.Ordinal))}"
             }
             .Concat(taskParts)
