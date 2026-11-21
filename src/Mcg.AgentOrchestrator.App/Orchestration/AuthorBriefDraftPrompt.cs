@@ -86,7 +86,11 @@ internal static class AuthorBriefDraftPrompt
         Keep What to build to at most four numbered items.
         Unless the backlog item is tagged measure, never draft work that only adds timers, counters or census output; propose the fix that measurement would inform, or return kind stale with staleKind refused and a reason saying the item needs a fix design.
         When drafting a cost brief and no listed metric measures what the goal changes, declare `metric: none; reason: <why no closed-set metric measures this>` as the only metric line under `## Outcome metric`. Never pick the nearest listed metric. A correctness-only goal carries no cost metric line. The listed metrics are {{string.Join(", ", CostGoalOutcomeMetric.MetricNames)}}.
-        When the backlog item needs more, draft only the first slice and list the remaining slices under Scope in a line beginning `Follow-up slices:`.
+        For an item without a recorded slice landing, draft only the first slice if the item needs to be split.
+        When the notes record a slice landing, use the latest applicable remaining-scope record and the history of landed work. Draft only the next listed slice that has not already been delivered.
+        When the recorded scope and delivery evidence establish that no slices remain, return kind stale with staleKind delivered and the required commit and path evidence.
+        A note saying `Remaining slices: not recorded`, or a historical landing without a remaining-scope declaration, leaves the scope unknown. Use source evidence to establish what remains.
+        List any remaining slices in order under Scope in a line beginning `Follow-up slices:`.
         Scope names only the files in scope and follow-up slices.
         Outside the numbered acceptance criteria, remove every sentence that names an owner, a gate or an after-landing action unless it is rewritten as a numbered criterion ending with an owner sentence.
         Check each sentence: does it say who owns, integrates, executes or supplies evidence for this goal's work; does it say a gate or test run is or remains required for this goal; or does it say what anyone does or observes after this goal lands? If any answer is yes, apply the rule above.
