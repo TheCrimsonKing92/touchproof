@@ -40,7 +40,14 @@ internal static class ConductorStatusAgentReadView
                         goal = goal.Goal, intents = goal.Intents, latest = RoundTrip(goal.Latest)
                     }).ToArray()
                 },
-                providerHolds = (snapshot.ProviderHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray()
+                providerHolds = (snapshot.ProviderHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray(),
+                mainFullVerification = snapshot.MainFullVerification is { } verification
+                    ? new
+                    {
+                        commit = verification.Commit, result = verification.Result, startedAt = RoundTrip(verification.StartedAt),
+                        completedAt = RoundTrip(verification.CompletedAt), durationSeconds = verification.DurationSeconds
+                    }
+                    : null
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 
     private static string? RoundTrip(DateTimeOffset? at) => at?.ToString("O", CultureInfo.InvariantCulture);
