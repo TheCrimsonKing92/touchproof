@@ -96,8 +96,8 @@ public sealed class PreTesterTestSourceGuardClassesTests(ITestOutputHelper outpu
         Assert.Equal(guardNames.Length + SharedNames.Length, selected.Count);
         try
         {
-            // Budget includes the dedicated OwnerConsoleSurfaceGuardTests; every guard remains selected.
-            Assert.InRange(selected.Count, 1, 54);
+            // Budget includes the dedicated OwnerConsoleSurfaceGuardTests and PostAdoptionRegressionGuardTests.
+            Assert.InRange(selected.Count, 1, 55);
         }
         catch
         {
