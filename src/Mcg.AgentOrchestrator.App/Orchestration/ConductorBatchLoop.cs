@@ -242,7 +242,8 @@ internal sealed partial class ConductorBatchLoop
         Func<bool>? hasTransientLoadHold = null,
         TimeSpan? maxDurationDeferralCeiling = null,
         Action<bool>? onMaxDurationDeferralStateChanged = null,
-        bool emitActivationHeartbeat = false)
+        bool emitActivationHeartbeat = false,
+        Action? observeTickWithoutDispatch = null)
     {
         var watchSleep = new ConductorWatchSleep(stopFilePath, ignoreInitialStopFile: onlyGoalId is not null);
         var drain = new ConductorDrainSignal(ConductorDrainSignal.PathFor(stopFilePath), _drainClock,
@@ -417,18 +418,21 @@ internal sealed partial class ConductorBatchLoop
             }, canaryDrain.Track, line => EmitProgress(line), changedFilesAvailable);
         }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
-        _selectedExecutionBackstop ??= SelectedExecutionBackstopCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
-        driver.GateMissDetector ??= _selectedExecutionBackstop is { } backstop ? new(backstop, line => EmitProgress(line)) : null;
-        driver.SuccessfulLandingSink = receipt =>
+        if (observeTickWithoutDispatch is null)
         {
-            var landedAt = _promptRolloutWatch is null ? default : _utcNow();
-            RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
-            HandleLandingRelaunch(totalTicks, receipt);
-            NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
-            _promptRolloutWatch?.NoteLanding(receipt, landedAt);
-            previousSuccessfulLandingSink?.Invoke(receipt);
-            _selectedExecutionBackstop?.NoteLanding(receipt, _workspace!.ExecutionDirectory);
-        };
+            _selectedExecutionBackstop ??= SelectedExecutionBackstopCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
+            driver.GateMissDetector ??= _selectedExecutionBackstop is { } backstop ? new(backstop, line => EmitProgress(line)) : null;
+            driver.SuccessfulLandingSink = receipt =>
+            {
+                var landedAt = _promptRolloutWatch is null ? default : _utcNow();
+                RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
+                HandleLandingRelaunch(totalTicks, receipt);
+                NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
+                _promptRolloutWatch?.NoteLanding(receipt, landedAt);
+                previousSuccessfulLandingSink?.Invoke(receipt);
+                _selectedExecutionBackstop?.NoteLanding(receipt, _workspace!.ExecutionDirectory);
+            };
+        }
         var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
         _loadTrxCoherenceVerdicts(_workspace?.OrchestratorDirectory ?? leaseDirectory);
         EmitProgress(
@@ -654,6 +658,32 @@ internal sealed partial class ConductorBatchLoop
 
         while (true)
         {
+            if (observeTickWithoutDispatch is not null)
+            {
+                if (watchSleep.IsStopRequested())
+                {
+                    stopRequested = true;
+                    StopLoop("stop-file");
+                    break;
+                }
+                if (maxIterations <= totalTicks)
+                {
+                    StopLoop("max-iter");
+                    break;
+                }
+                if (maxDuration is { } limit && _utcNow() - started >= limit)
+                {
+                    StopLoop("max-duration");
+                    break;
+                }
+                observeTickWithoutDispatch();
+                onTick?.Invoke(new BatchTickSummary(++totalTicks, 0, 0, 0, 0, 0, WatchSleeping: true));
+                if (watchSleep.Wait(watchInterval ?? TimeSpan.FromSeconds(1), null, []) != WatchSleepResult.StopRequested)
+                    continue;
+                stopRequested = true;
+                StopLoop("stop-file-during-sleep");
+                break;
+            }
             using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick");
             _tickPhaseElapsedMs.Clear();
             if (pendingSelfRelaunch is null &&
