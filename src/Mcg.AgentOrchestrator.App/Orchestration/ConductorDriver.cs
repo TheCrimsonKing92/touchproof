@@ -21,8 +21,8 @@ internal sealed partial class ConductorDriver
 {
     internal static DispatchReadinessVerdict EvaluateConductorReadiness(
         AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents,
-        WorkerProfileCatalog profiles, DateTimeOffset now) =>
-        DispatchReadinessAssessment.Evaluate(goal, kernel.ProviderHoldScope, agents, profiles, now).Verdict;
+        WorkerProfileCatalog profiles, DateTimeOffset now, ModelInventory? inventory = null) =>
+        DispatchReadinessAssessment.Evaluate(goal, kernel.ProviderHoldScope, agents, profiles, now, inventory).Verdict;
 
     private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
 
@@ -872,7 +872,7 @@ internal sealed partial class ConductorDriver
         _classifyChangeRisk = goal => _changeRiskMemo.Classify(dir, workspace.IntegrationBranch, GoalWorktrees.BranchName(goal.Id));
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
-        _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
+        _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow, Application.InventoryAssignedDispatchAgents.LoadForGoal(workspace, goal));
         _getLandingFileScopes = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-changed-files", () =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);

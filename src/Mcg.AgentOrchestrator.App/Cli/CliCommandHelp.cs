@@ -42,10 +42,10 @@ internal static class CliCommandHelp
     public const string RefreshDispatchUsage = "Usage: " + RefreshDispatchSyntax;
     public const string InquiryUsage = "Usage: inquiry <goal-prefix> <task-number> --text-file <question>";
     public const string AgentUsage = "Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
-    public const string AgentAddUsage = "Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
+    public const string AgentAddUsage = "Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>] [--allow-unlisted]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
-    public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
+    public const string ReassignAgentUsage = "Usage: reassign-agent [--goal <goal-prefix>|<goal-prefix>] <task-number> <agent-id>|--model <provider>/<model> [--effort <level>] [--profile <name>]";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json] [--newest-first] [--no-epic]";
     public const string GoalsUsage = "Usage: goals [--epic <id-or-title>] [--json] [--no-epic]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
@@ -155,7 +155,7 @@ internal static class CliCommandHelp
     private static readonly string[] HelpFlags = ["--help", "-h"];
 
     private static readonly string[] GoalRoleOverrideFlags =
-        ["--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer"];
+        ["--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer", "--profile"];
 
     private static readonly string[] GoalOwnFlags =
     [
@@ -233,7 +233,7 @@ internal static class CliCommandHelp
         "Atomically replace an eligible terminal goal while preserving source history.",
         [
             "--brief-file", "--reason-file", "--request-id", "--disposition", "--confirm-goal-replace", "--pipeline",
-            "--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer", "--help", "-h"
+            "--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer", "--profile", "--help", "-h"
         ]);
 
     private static readonly CommandHelpEntry GoalsSubscribe = new(
@@ -433,7 +433,12 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry AgentAdd = new(
         AgentAddUsage,
         "Add or replace a same-role alternate worker agent by id.",
-        ["--complex-model", "--subscription-model", "--subscription-reasoning", "--help", "-h"]);
+        ["--complex-model", "--subscription-model", "--subscription-reasoning", "--allow-unlisted", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Models = new(
+        CliModelsCommand.Usage,
+        "Show the model inventory, refresh provider listings, or manage probe declarations.",
+        ["--profile", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Workspace = new(
         WorkspaceUsage,
@@ -447,8 +452,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry ReassignAgent = new(
         ReassignAgentUsage,
-        "Persist an exact agent assignment for a task.",
-        ["--goal", "--help", "-h"]);
+        "Persist an exact roster-agent or inventory-model assignment for a task.",
+        ["--goal", "--model", "--effort", "--profile", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
@@ -961,7 +966,7 @@ internal static class CliCommandHelp
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
             "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by",
-            "--home-build-blocked-commit", "--override-draft-checks", "--bundled-reason"
+            "--home-build-blocked-commit", "--override-draft-checks", "--bundled-reason", "--model", "--profile", "--effort"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
@@ -1607,6 +1612,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("agent-add", StringComparison.OrdinalIgnoreCase))
         {
             entry = AgentAdd;
+            return true;
+        }
+
+        if (args[0].Equals("models", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Models;
             return true;
         }
 

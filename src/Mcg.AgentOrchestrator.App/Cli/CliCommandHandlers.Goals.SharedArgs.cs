@@ -272,6 +272,7 @@ private static string? GetFirstNonFlagArgument(IReadOnlyList<string> parts, int 
 private static bool IsCliValueFlag(string part)
 {
     return GoalRoleAgentFlags.ContainsKey(part) ||
+        part.Equals("--profile", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--backlog-coverage", StringComparison.OrdinalIgnoreCase) ||

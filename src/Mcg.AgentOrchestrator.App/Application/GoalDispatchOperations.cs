@@ -84,6 +84,17 @@ internal sealed partial class GoalDispatchOperations
         string? cascadeCheapModelAlias = null,
         WorkerProfileCatalog? subscriptionProfiles = null, bool? cascadeMechanicalReworkCheap = null)
     {
+        if (InventoryModelAssignment.IsInventoryId(task.AssignedAgentId))
+        {
+            var inventoryAgent = InventoryAssignedDispatchAgents.Resolve(workspace, task,
+                subscriptionProfiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath))!;
+            if (!ModelInventory.Same(inventoryAgent.Subscription!.WorkerProfileName, profile.Name))
+                throw AssignmentHold(DispatchAssignmentHoldCode.InventoryAssignmentIneligible, task,
+                    $"Inventory assignment '{inventoryAgent.Name}' requires profile '{inventoryAgent.Subscription.WorkerProfileName}'.",
+                    inventoryAgent.Id.Value, inventoryAgent.Subscription.WorkerProfileName);
+            agents = [inventoryAgent];
+        }
+
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
             TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath);
@@ -153,10 +164,11 @@ internal sealed partial class GoalDispatchOperations
 
         var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
         var resolvedProfiles = profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
+        var inventoryAgent = InventoryAssignedDispatchAgents.Resolve(workspace, task, resolvedProfiles);
         AgentDefinition assignedAgent;
         try
         {
-            assignedAgent = AssignedAgentResolver.Resolve(task, resolvedAgents);
+            assignedAgent = inventoryAgent ?? AssignedAgentResolver.Resolve(task, resolvedAgents);
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {
@@ -440,7 +452,9 @@ internal sealed partial class GoalDispatchOperations
         foreach (var id in held)
             if (intentAdmissions.TryGetValue(id, out var reference))
                 intentStore.RecordSuppression(reference, $"selection:{goal.Id.Value}:{id.Value}:{reference.Version}");
-        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, excludedTaskIds: held);
+        var inventory = InventoryAssignedDispatchAgents.ForBatch(workspace, goal, agents, profiles, held);
+        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents,
+            excludedTaskIds: held.Concat(inventory.Blocked.Keys).ToHashSet());
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         EnsureDeveloperTestLaneReadiness(goal, workspace, safeBatch.TaskIds);
@@ -448,7 +462,7 @@ internal sealed partial class GoalDispatchOperations
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
             goal,
-            agents,
+            inventory.Agents,
             profiles,
             workspace.PromptDirectory,
             GoalWorkerDirectory.Resolve(workspace, goal.Id),
@@ -465,7 +479,7 @@ internal sealed partial class GoalDispatchOperations
             deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
         foreach (var prepared in batch.Dispatches)
             intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
-        return batch;
+        return batch with { Blocked = [.. batch.Blocked.Where(item => !inventory.Blocked.ContainsKey(new TaskId(item.TaskId))), .. inventory.Blocked.Values] };
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -484,6 +498,12 @@ internal sealed partial class GoalDispatchOperations
         bool? cascadeTesterCheapFirst = null,
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
+        if (InventoryAssignedDispatchAgents.Resolve(workspace, task, profiles) is { } inventoryAgent)
+        {
+            agents = [inventoryAgent];
+            modelOverride = null;
+        }
+
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
             TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath);
