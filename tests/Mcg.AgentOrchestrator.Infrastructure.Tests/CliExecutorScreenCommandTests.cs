@@ -25,6 +25,34 @@ public sealed class CliExecutorScreenCommandTests
         Assert.Equal("", error.ToString());
     }
 
+    [Fact]
+    public async Task WholeGateRerunConsumesTheBudgetBeforeTheNextCandidate()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var at = fixture.Clock.GetUtcNow();
+        var next = fixture.Candidate with { GoalId = "fedcba9876543210", Commit = new string('e', 40) };
+        StoreAttempt(fixture, fixture.Candidate.GoalId, "newest-passed", fixture.Candidate.Commit, at,
+            ConductorParallelAcceptanceAttemptOutcome.Passed);
+        StoreAttempt(fixture, next.GoalId, "older-passed", next.Commit, at.AddMinutes(-1),
+            ConductorParallelAcceptanceAttemptOutcome.Passed);
+        fixture.Executor.Submit = (request, _) => Task.FromResult(
+            fixture.Submission(request, failure: request.VerifyingCommitSha == fixture.Candidate.Commit &&
+                request.Filter == "FullyQualifiedName~A"));
+
+        Assert.Equal(0, await Run(fixture, WriteConfiguration(fixture, "off"), [fixture.Candidate, next], output, error,
+            ["executor-screen", "--whole-gate", "--executor", "laptop", "--max-candidates", "2", "--max-lanes", "2"]));
+
+        Assert.Equal(new[] { "FullyQualifiedName~A", "Name~Suite.ExampleTests.Broken" },
+            fixture.Executor.Requests.Select(request => request.Filter));
+        Assert.All(fixture.Executor.Requests, request => Assert.Equal(fixture.Candidate.Commit, request.VerifyingCommitSha));
+        var receipt = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath));
+        Assert.Equal(2, receipt.SubmissionAttempts);
+        Assert.Equal(AcceptanceLaneRerunEvidence.Flake, Assert.Single(receipt.Lanes).Rerun?.Outcome);
+        Assert.Equal("", error.ToString());
+    }
+
     [Theory]
     [InlineData("off", "screening-off")]
     [InlineData("on", "screening-invalid")]
@@ -34,6 +62,8 @@ public sealed class CliExecutorScreenCommandTests
         var path = WriteConfiguration(fixture, mode);
         using var output = new StringWriter();
         using var error = new StringWriter();
+        StoreAttempt(fixture, fixture.Candidate.GoalId, "passed", fixture.Candidate.Commit,
+            fixture.Clock.GetUtcNow().AddMinutes(-1), ConductorParallelAcceptanceAttemptOutcome.Passed);
         Assert.Equal(0, await Run(fixture, path, [fixture.Candidate], output, error,
             ["executor-screen", "--whole-gate", "--executor", "laptop"]));
         var receipt = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath));
@@ -42,7 +72,7 @@ public sealed class CliExecutorScreenCommandTests
         Assert.Equal(1, Assert.Single(receipt.Lanes).Passed);
         Assert.Empty(ExecutorScreeningReceiptLedger.ReadAll(fixture.ReceiptPath));
         Assert.Equal("laptop", Assert.Single(fixture.Executor.Requests).ExecutorId);
-        Assert.Contains("TRIAL compare local attempt missing parity=unavailable", output.ToString());
+        Assert.Equal("passed", receipt.LocalAttempt?.AttemptId);
         Assert.Equal("", error.ToString());
 
         output.GetStringBuilder().Clear();
@@ -63,6 +93,83 @@ public sealed class CliExecutorScreenCommandTests
         Assert.Equal(CliCommandHelp.ExecutorScreenUsage + Environment.NewLine, error.ToString());
         Assert.Empty(fixture.Executor.Requests);
         Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Fact]
+    public async Task WholeGateSelectsOnlyPassedAttemptsAndKeepsTheSelectedAttemptBoundToItsCommit()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var at = fixture.Clock.GetUtcNow();
+        var historical = fixture.Candidate with { Commit = new string('d', 40) };
+        var otherGoal = fixture.Candidate with { GoalId = "fedcba9876543210", Commit = new string('e', 40) };
+        var failedOnly = fixture.Candidate with { GoalId = "f0123456789abcde" };
+        StoreAttempt(fixture, historical.GoalId, "historical", historical.Commit, at.AddMinutes(-3),
+            ConductorParallelAcceptanceAttemptOutcome.Passed);
+        StoreAttempt(fixture, historical.GoalId, "later-failed-same-commit", historical.Commit, at.AddMinutes(-2),
+            ConductorParallelAcceptanceAttemptOutcome.Failed);
+        StoreAttempt(fixture, historical.GoalId, "current-failed", fixture.Candidate.Commit, at.AddMinutes(-1),
+            ConductorParallelAcceptanceAttemptOutcome.Failed);
+        StoreAttempt(fixture, otherGoal.GoalId, "other-passed", otherGoal.Commit, at.AddMinutes(-2),
+            ConductorParallelAcceptanceAttemptOutcome.Passed);
+        StoreAttempt(fixture, failedOnly.GoalId, "failed-only", failedOnly.Commit, at,
+            ConductorParallelAcceptanceAttemptOutcome.Failed);
+        var path = WriteConfiguration(fixture, "off");
+        ExecutorScreeningCandidate[] candidates = [fixture.Candidate, otherGoal, failedOnly];
+
+        Assert.Equal(0, await Run(fixture, path, candidates, output, error,
+            ["executor-screen", "--whole-gate", "--executor", "laptop", "--max-candidates", "3", "--max-lanes", "1"]));
+        Assert.Equal(otherGoal.Commit, Assert.Single(fixture.Executor.Requests).VerifyingCommitSha);
+        Assert.Equal("other-passed", Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath)).LocalAttempt?.AttemptId);
+
+        Assert.Equal(0, await Run(fixture, path, candidates, output, error,
+            ["executor-screen", "--whole-gate", "--executor", "laptop", "--goal", "0123"]));
+        Assert.Equal(new[] { otherGoal.Commit, historical.Commit }, fixture.Executor.Requests.Select(r => r.VerifyingCommitSha));
+        var selected = Assert.Single(ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath),
+            receipt => receipt.GoalId == historical.GoalId);
+        Assert.Equal(historical.Commit, selected.CandidateCommit);
+        Assert.Equal(historical.Commit, selected.LocalAttempt?.CandidateCommit);
+        Assert.Equal("historical", selected.LocalAttempt?.AttemptId);
+        Assert.Equal("", error.ToString());
+    }
+
+    [Theory]
+    [InlineData(null, "no-eligible-candidates", 0)]
+    [InlineData("012", "goal-has-no-passed-gate", 2)]
+    [InlineData("0", "goal-ambiguous", 2)]
+    [InlineData("xyz", "goal-unknown", 2)]
+    public async Task WholeGateSelectionFailuresSubmitNothing(string? prefix, string reason, int exitCode)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        StoreAttempt(fixture, fixture.Candidate.GoalId, "failed", fixture.Candidate.Commit,
+            fixture.Clock.GetUtcNow(), ConductorParallelAcceptanceAttemptOutcome.Failed);
+        string[] args = ["executor-screen", "--whole-gate", "--executor", "laptop"];
+        if (prefix is not null) args = [.. args, "--goal", prefix];
+        Assert.Equal(exitCode, await Run(fixture, WriteConfiguration(fixture, "off"),
+            [fixture.Candidate, fixture.Candidate with { GoalId = "0fedcba987654321" }], output, error, args));
+        Assert.Equal($"SCREEN {(exitCode == 0 ? "idle" : "refused")} reason={reason}{Environment.NewLine}", output.ToString());
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Theory]
+    [InlineData("--max-lanes", "0", true)]
+    [InlineData("--max-lanes", "1", false)]
+    [InlineData("--goal", "012", false)]
+    [InlineData("--goal", " ", true)]
+    public async Task WholeGateOptionsValidateTheirScopeAndValue(string flag, string value, bool wholeGate)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        string[] args = ["executor-screen", "--executor", "laptop", flag, value];
+        if (wholeGate) args = [.. args, "--whole-gate"];
+        Assert.Equal(2, await Run(fixture, WriteConfiguration(fixture, "shadow"), [fixture.Candidate], output, error, args));
+        Assert.Equal(CliCommandHelp.ExecutorScreenUsage + Environment.NewLine, error.ToString());
+        Assert.Empty(fixture.Executor.Requests);
     }
 
     [Theory]
@@ -250,8 +357,11 @@ public sealed class CliExecutorScreenCommandTests
     public void HelpAcceptsDocumentedFlagsAndRejectsUnknownFlags()
     {
         CliCommandHelp.ThrowIfInvalidFlags(["executor-screen", "--max-candidates", "2", "--executor", "mcg-exec-1"]);
-        CliCommandHelp.ThrowIfInvalidFlags(["executor-screen", "--whole-gate", "--executor", "mcg-exec-1"]);
+        CliCommandHelp.ThrowIfInvalidFlags(["executor-screen", "--whole-gate", "--executor", "mcg-exec-1",
+            "--goal", "0123", "--max-lanes", "1"]);
         Assert.Contains("--whole-gate", CliCommandHelp.ExecutorScreenUsage);
+        Assert.Contains("--goal", CliCommandHelp.ExecutorScreenUsage);
+        Assert.Contains("--max-lanes", CliCommandHelp.ExecutorScreenUsage);
         Assert.ThrowsAny<Exception>(() => CliCommandHelp.ThrowIfInvalidFlags(["executor-screen", "--unknown"]));
         Assert.Contains("executor-screen", CliArgumentParser.RecognizedCommands);
         Assert.True(CliExecutorScreenCommand.IsCommand(["executor-screen"]));
@@ -267,8 +377,37 @@ public sealed class CliExecutorScreenCommandTests
                 return fixture.Executor;
             }, fixture.Clock, TimeSpan.FromMilliseconds(1), fixture.Root, fixture.ReceiptPath, output, error,
             trialPlanSource: _ => new(
-                [new("infrastructure tests: A", ExecutorScreeningPlanner.Project, "FullyQualifiedName~A", [], 1, TimeSpan.FromHours(1))],
-                [], AcceptanceDeclaredTestSettings.Empty));
+                [new("infrastructure tests: A", ExecutorScreeningPlanner.Project, "FullyQualifiedName~A", [], 1,
+                    TimeSpan.FromHours(1), RetryCheck: new()
+                    {
+                        Name = "infrastructure tests: A", Type = "dotnet-test", Runner = "mtp",
+                        Project = ExecutorScreeningPlanner.Project, Arguments = ["--filter", "FullyQualifiedName~A"],
+                        IsResolvedInfrastructureLane = true
+                    })],
+                [], AcceptanceDeclaredTestSettings.Empty),
+            localAttemptSource: (candidate, plan, at) => CliExecutorScreenCommand.ReadLocalAttempt(fixture.Root, candidate, plan, at),
+            passedGateSource: goal => CliExecutorScreenCommand.ReadPassedGates(fixture.Root, goal, CancellationToken.None),
+            goalIds: () => candidates.Select(candidate => candidate.GoalId),
+            trialCheckout: gate => (candidates.Single(candidate => candidate.GoalId == gate.GoalId) with
+            {
+                Commit = gate.Commit, MainSha = gate.MainSha, PassedGateAttemptId = gate.AttemptId
+            }, null));
+
+    private static void StoreAttempt(Fixture fixture, string goalId, string id, string commit, DateTimeOffset completed,
+        ConductorParallelAcceptanceAttemptOutcome outcome)
+    {
+        var directory = Path.Combine(fixture.Root, "acceptance-gate-attempts", goalId);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, id + ".attempt.json"), JsonSerializer.Serialize(new
+        {
+            AttemptId = id, GoalId = goalId, Kind = "gate", Outcome = outcome, StartedAt = completed.AddMinutes(-1),
+            CompletedAt = completed, BranchHeadSha = commit, MainHeadSha = fixture.Candidate.MainSha
+        }));
+        File.WriteAllText(Path.Combine(directory, id + ".result.json"), JsonSerializer.Serialize(new
+        {
+            Kind = "gate", BranchHeadSha = commit, MainHeadSha = fixture.Candidate.MainSha
+        }));
+    }
 
     private static string WriteConfiguration(Fixture fixture, string mode)
     {

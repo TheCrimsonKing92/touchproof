@@ -8,7 +8,7 @@ internal static class StartupHook
         var arguments = Environment.GetCommandLineArgs();
         var encodingReceipt = Environment.GetEnvironmentVariable("MCG_CLI_OUTPUT_ENCODING_RECEIPT");
         if (!string.IsNullOrWhiteSpace(encodingReceipt) && arguments.Length > 1 &&
-            Path.GetFileName(arguments[0]) == "Mcg.AgentOrchestrator.App.dll" && arguments[1] == "goal")
+            Path.GetFileName(arguments[0]) == "Mcg.AgentOrchestrator.App.dll")
         {
             // This hook belongs only to the explicitly instrumented CLI child, not
             // its refinement/worker descendants or the calling test host.

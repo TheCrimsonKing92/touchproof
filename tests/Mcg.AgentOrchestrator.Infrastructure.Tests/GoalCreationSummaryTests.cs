@@ -43,6 +43,13 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
             "--request-key", "long-brief");
 
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.Contains("\"state\":\"still-committing\"", result.Stdout);
+        Assert.Contains("conductor apply-intents --workspace", result.Stdout);
+        Assert.DoesNotContain(marker, result.Stdout);
+        Assert.Single(await fixture.Repository.ListGoalMetadataAsync());
+        File.Delete(brief);
+        result = await RunIsolatedApp(fixture, "conductor", "apply-intents", "--workspace");
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         var state = await fixture.Repository.LoadAsync();
         Assert.Equal(2, state.Goals.Count);
         var goal = Assert.Single(state.Goals, goal => goal.Id != existing.Id);
@@ -154,7 +161,8 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     {
         using var fixture = new Fixture(this);
         string[] args = ["goal", "Update the compact receipt formatter.", "--pipeline", "scout", "--request-key", "replay"];
-        Execute(fixture, args);
+        Assert.Contains("\"state\":\"still-committing\"", Execute(fixture, args));
+        KeyedGoalCreationIntentTests.ApplyWorkspace(fixture.Workspace);
         var state = await fixture.Repository.LoadAsync();
         var goal = Assert.Single(state.Goals);
         var ids = goal.Tasks.Select(task => task.Id).ToArray();
@@ -322,7 +330,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         var probeDirectory = FixtureProbeLocator.FindDirectory(typeof(GoalCreationSummaryTests), probeName, probeName + ".dll");
         Assert.True(probeDirectory is not null, "CLI encoding startup hook missing. Tried: " + string.Join(", ",
             FixtureProbeLocator.TriedPaths(typeof(GoalCreationSummaryTests), probeName, probeName + ".dll")));
-        var encodingReceipt = Path.Combine(root, "cli-output-encoding.txt");
+        var encodingReceipt = Path.Combine(root, $"cli-output-encoding-{Guid.NewGuid():N}.txt");
         var start = new ProcessStartInfo(ResolveDotnetHostPath())
         {
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,

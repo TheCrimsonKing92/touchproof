@@ -5,7 +5,11 @@ using Mcg.AgentOrchestrator.Core;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record ExecutorScreeningCandidate(string GoalId, GoalStatus Status, string Commit, string Tree,
-    string MainSha, DateTimeOffset CommittedAt, bool WorktreeClean, bool DevelopersComplete, string WorktreePath);
+    string MainSha, DateTimeOffset CommittedAt, bool WorktreeClean, bool DevelopersComplete, string WorktreePath,
+    string? PassedGateAttemptId = null);
+
+internal sealed record ExecutorPassedGate(string GoalId, string AttemptId, string Commit, string MainSha,
+    DateTimeOffset CompletedAt);
 
 internal sealed record ExecutorScreeningLaneSelection(IReadOnlyList<AcceptanceTestLane> Selected,
     IReadOnlyList<ExecutorScreeningExcludedLane> Excluded);
@@ -55,11 +59,16 @@ internal static class ExecutorScreeningPlanner
             !receipts.Any(receipt => receipt.GoalId == candidate.GoalId && receipt.CandidateCommit == candidate.Commit))
         .OrderBy(candidate => candidate.CommittedAt).ThenBy(candidate => candidate.GoalId, StringComparer.Ordinal).FirstOrDefault();
 
-    internal static ExecutorScreeningCandidate? PickTrialCandidate(IEnumerable<ExecutorScreeningCandidate> candidates,
-        IReadOnlyList<ExecutorWholeGateTrialReceipt> receipts)
+    internal static IEnumerable<ExecutorPassedGate> SelectTrialGates(IEnumerable<ExecutorPassedGate> gates,
+        IReadOnlyList<ExecutorWholeGateTrialReceipt> receipts, string? goalId)
     {
         var trialled = receipts.Select(receipt => (receipt.GoalId, receipt.CandidateCommit)).ToHashSet();
-        return PickCandidate(candidates.Where(candidate => !trialled.Contains((candidate.GoalId, candidate.Commit))), []);
+        var ordered = gates.Where(gate => goalId is null
+                ? !trialled.Contains((gate.GoalId, gate.Commit))
+                : gate.GoalId == goalId)
+            .OrderByDescending(gate => gate.CompletedAt).ThenBy(gate => gate.AttemptId, StringComparer.Ordinal)
+            .DistinctBy(gate => (gate.GoalId, gate.Commit));
+        return goalId is null ? ordered : ordered.Take(1);
     }
 
     internal static RemoteLaneExecutorEntry? PickIdleExecutor(IReadOnlyList<RemoteLaneExecutorEntry> executors,
