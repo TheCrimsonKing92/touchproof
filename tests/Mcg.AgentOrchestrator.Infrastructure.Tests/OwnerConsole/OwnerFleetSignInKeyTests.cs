@@ -48,8 +48,11 @@ public sealed class OwnerFleetSignInKeyTests
     {
         using var workspace = new OwnerConsoleExecutorsSettingsTestContext();
         using var context = new OwnerConsoleSettingsTestContext();
+        var pendingList = new TaskCompletionSource<IReadOnlyList<OwnerConsoleProviderConnection>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         using var provider = new OwnerConsoleProviderConnectionsTabTests.Fixture
         {
+            PendingList = pendingList.Task,
             Initial = [OwnerConsoleProviderConnectionsTabTests.Fixture.Connection("codex-cli"),
                 OwnerConsoleProviderConnectionsTabTests.Fixture.Connection("grok-cli")],
             Roster = [OwnerConsoleProviderConnectionsTabTests.Fixture.Agent("codex-cli", AgentRole.Developer),
@@ -82,6 +85,10 @@ public sealed class OwnerFleetSignInKeyTests
         Assert.True(settings.IsOpen);
         Assert.Equal(OwnerConsolePane.Board, settings.ReturnPane);
         Assert.Equal("xai", settings.TargetProvider);
+        await TestHangGuard.WaitAsync(provider.ListStarted.Task, "Fleet sign-in provider list request");
+        Assert.Equal(["Reading configured profiles and readiness evidence…"], settings.Lines);
+
+        pendingList.SetResult(provider.Initial);
         await provider.TakeCheckAsync();
         await provider.TakeCheckAsync();
         Assert.Contains("  Profiles: grok-cli", settings.Lines);
