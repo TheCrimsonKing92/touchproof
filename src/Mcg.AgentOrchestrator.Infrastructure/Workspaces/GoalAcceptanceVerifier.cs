@@ -1815,6 +1815,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (policyShardPlan.SupportFallbackProjects.Count > 0)
             policyRequiredChecks = policyRequiredChecks.Where(check => !IsFocusedProjectDotnetCheck(check) ||
                 !policyShardPlan.RequiresFullSupportRun(check.Project)).ToArray();
+        if (selectedExecution is not null)
+            policyRequiredChecks = selectedExecution.IncludeSupportInFocusedPolicyChecks(policyRequiredChecks);
         var focusedExpansion = balanceFocusedSelection ? FocusedReverseDependentLaneSplitter.Resolve(
             policyRequiredChecks, manifest.Checks, policyShardPlan,
             laneExpansion with { Lanes = infrastructureTestLanes }, engineSettings, worktreePath, sourceTexts) : null;

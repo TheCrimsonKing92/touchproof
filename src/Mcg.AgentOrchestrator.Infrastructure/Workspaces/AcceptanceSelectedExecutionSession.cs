@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
+using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
+using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -44,9 +46,40 @@ internal sealed class AcceptanceSelectedExecutionSession(
     internal IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks => _plan?.ProjectChecks ?? [];
 
     internal IReadOnlyList<ImpactReplayChangedSupportFileSummary> ReadSupportFallbacks() =>
+        (ReadEnforcedInput()?.SupportSelections ?? []).Where(item => item.FullRunTriggered).ToArray();
+
+    private AcceptanceSelectedExecutionInput? ReadEnforcedInput() =>
         _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && !attributionScoped && changedFiles is { Count: > 0 }
-            ? (ReadInput(changedFiles).SupportSelections ?? []).Where(item => item.FullRunTriggered).ToArray()
-            : [];
+            ? ReadInput(changedFiles) : null;
+
+    internal IReadOnlyList<Check> IncludeSupportInFocusedPolicyChecks(IReadOnlyList<Check> policyChecks)
+    {
+        var support = ReadEnforcedInput()?.SupportProjectClasses;
+        if (support is not { Count: > 0 }) return policyChecks;
+
+        // A generated focused policy check can replace the broad manifest check for this project.
+        return policyChecks.Select(check =>
+        {
+            if (!IsFocusedProjectDotnetCheck(check) ||
+                support.FirstOrDefault(item => ProjectMatches(check.Project!, item.Key)).Value is not { Count: > 0 } classes)
+                return check;
+
+            var arguments = check.Arguments.ToArray();
+            var index = Array.FindIndex(arguments, argument =>
+                argument.Equals("--filter", StringComparison.OrdinalIgnoreCase)) + 1;
+            var filter = arguments[index];
+            var additionalSelectors = classes.Select(name => "FullyQualifiedName~" + name)
+                .Except(filter.Split('|'), StringComparer.OrdinalIgnoreCase).ToArray();
+            if (additionalSelectors.Length == 0) return check;
+
+            arguments[index] = filter + "|" + string.Join('|', additionalSelectors);
+            return new Check
+            {
+                Name = check.Name, Type = check.Type, Project = check.Project,
+                Arguments = arguments, Runner = check.Runner
+            };
+        }).ToArray();
+    }
 
     private AcceptanceSelectedExecutionInput ReadInput(IReadOnlyList<string> changes)
     {
