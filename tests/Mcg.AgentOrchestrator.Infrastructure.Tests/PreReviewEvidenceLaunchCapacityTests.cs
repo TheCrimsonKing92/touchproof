@@ -7,13 +7,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class PreReviewEvidenceLaunchCapacityTests
 {
     [Theory]
-    [InlineData(0, 0)]
-    [InlineData(1, 1)]
-    [InlineData(2, 2)]
-    [InlineData(1, 2)]
-    public void BusySnapshot_RefusesBeforeAttemptSideEffects(int unheld, int waiting)
+    [InlineData(0, 0, 0)]
+    [InlineData(1, 1, 0)]
+    [InlineData(2, 2, 0)]
+    [InlineData(1, 2, 0)]
+    [InlineData(2, 1, 1)]
+    public void BusySnapshot_RefusesBeforeAttemptSideEffects(int unheld, int waiting, int waitingGates)
     {
-        using var fixture = new Fixture(new(unheld, 2, waiting, true), durableHolder: true);
+        using var fixture = new Fixture(new(unheld, 2, waiting, true, waitingGates), durableHolder: true);
 
         var exception = Assert.Throws<PreReviewEvidenceBuildSlotsBusyException>(() => fixture.Start());
 
@@ -82,16 +83,19 @@ public sealed class PreReviewEvidenceLaunchCapacityTests
     }
 
     [Theory]
-    [InlineData(true, 0, true)]
-    [InlineData(false, 1, false)]
-    public void RetainedTicket_CountsOnlyPredecessors(bool ownFirst, int waiting, bool mayStart)
+    [InlineData(BuildPermitClaimantKind.FocusedEvidence, true, 0, 0, true)]
+    [InlineData(BuildPermitClaimantKind.FocusedEvidence, false, 1, 0, false)]
+    [InlineData(BuildPermitClaimantKind.Gate, true, 1, 1, false)]
+    [InlineData(BuildPermitClaimantKind.Gate, false, 1, 1, false)]
+    public void RetainedTicket_CountsOnlyPredecessors(
+        BuildPermitClaimantKind otherKind, bool ownFirst, int waiting, int waitingGates, bool mayStart)
     {
         using var fixture = new Fixture(new(0, 2, 0, true));
         var clock = new RecordingTimeProvider();
         var queue = new BuildPermitWaitQueue(fixture.Storage, clock);
         var ownKey = FocusedEvidencePermitTicket.Key(fixture.Goal.Id);
         var own = new BuildPermitClaimant(ownKey, BuildPermitClaimantKind.FocusedEvidence, Environment.ProcessId, true);
-        var other = new BuildPermitClaimant("gate:other", BuildPermitClaimantKind.Gate, Environment.ProcessId, true);
+        var other = new BuildPermitClaimant("other", otherKind, Environment.ProcessId, true);
         queue.Register(ownFirst ? own : other);
         clock.Advance(TimeSpan.FromSeconds(1));
         queue.Register(ownFirst ? other : own);
@@ -100,10 +104,10 @@ public sealed class PreReviewEvidenceLaunchCapacityTests
 
         var snapshot = WorkerBuildCapacityGate.ReadHostSnapshot(fixture.Storage, clock, path => path == heldPath, ownKey);
 
-        Assert.Equal(new WorkerBuildCapacitySnapshot(1, 2, waiting, true), snapshot);
+        Assert.Equal(new WorkerBuildCapacitySnapshot(1, 2, waiting, true, waitingGates), snapshot);
         Assert.Equal(mayStart, PreReviewEvidenceLaunchCapacity.MayStart(snapshot));
         var unclaimed = WorkerBuildCapacityGate.ReadHostSnapshot(fixture.Storage, clock, path => path == heldPath);
-        Assert.Equal(new WorkerBuildCapacitySnapshot(1, 2, 2, true), unclaimed);
+        Assert.Equal(new WorkerBuildCapacitySnapshot(1, 2, 2, true, waitingGates), unclaimed);
         Assert.False(PreReviewEvidenceLaunchCapacity.MayStart(unclaimed));
         var absent = WorkerBuildCapacityGate.ReadHostSnapshot(fixture.Storage, clock, path => path == heldPath, "absent");
         Assert.Equal(unclaimed, absent);
