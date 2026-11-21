@@ -111,7 +111,7 @@ public sealed class ContextUsageArchiveCoverageTests
         var id = GoalId.New().Value;
         var taskStatus = status == GoalStatus.Completed ? WorkTaskStatus.Completed : WorkTaskStatus.Assigned;
         var task = new TaskSnapshot(TaskId.New().Value, "Fixture task", AgentRole.Developer, taskStatus,
-            null, null, null, null, latest, null, DispatchHistory: history);
+            null, null, null, null, latest, null, DispatchHistory: history, WorkerBuildInvocations: []);
         return new(id, "Fixture goal", status, [task],
             [new ProgressEventSnapshot(id, null, ProgressKind.GoalCreated, "Created", Start.AddDays(-1)),
             new ProgressEventSnapshot(id, null, ProgressKind.GoalPolicyDecision, "Updated", Start.AddDays(1))]);
