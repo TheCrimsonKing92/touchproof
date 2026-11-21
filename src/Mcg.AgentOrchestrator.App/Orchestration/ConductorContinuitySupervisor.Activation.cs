@@ -428,8 +428,13 @@ internal sealed partial class ConductorContinuitySupervisor
             return;
 
         AdoptedBuildPublicationReporting.Try(() =>
-            RevertPushPolicyGate.Push(workspace.OrchestratorDirectory, root, revert, branch,
-                TryAppendConductEvent, PushActivationRevert), "activation-main-revert-push");
+        {
+            var pushResult = RevertPushPolicyGate.Push(workspace.OrchestratorDirectory, root, revert, branch,
+                TryAppendConductEvent, PushActivationRevert);
+            if (pushResult.Status == RevertPushPolicyGate.Outcome.Held)
+                TryAppendConductEvent(Sanitize($"REVERT_PUSH_HELD source=activation failedCommit={failedCommit} " +
+                    $"commit={revert} branch={branch} reason={pushResult.Reason}"));
+        }, "activation-main-revert-push");
     }
 
     private void AppendAdoptedBuildEvent(string detail)
