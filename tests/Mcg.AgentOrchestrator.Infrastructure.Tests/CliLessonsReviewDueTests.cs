@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: explicit working directories and unique fixture stores; no ambient mutation.
 public sealed class CliLessonsReviewDueTests
@@ -33,6 +35,31 @@ public sealed class CliLessonsReviewDueTests
 
         Assert.Equal($"{lesson.Id} | active | {lesson.Rule}{Environment.NewLine}", List(fixture));
         Assert.Null(Assert.Single(fixture.LessonStore.List()).RetiredAt);
+    }
+
+    [Fact]
+    public async Task ControlReceipt_ShowsReviewDueOnlyAfterReceiptIsMissing()
+    {
+        using var fixture = new OperatorLessonHarness();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Goal with recorded control evidence");
+        _ = StateDbMigrations.EnsureUpToDate(fixture.Workspace.SqliteStatePath);
+        await new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath).SaveAsync(kernel);
+        var receipt = new OperatorControlReceiptStore(fixture.Workspace.OrchestratorDirectory)
+            .Record(goal.Id, "criterion-1", "negative-control", "verify", 1, 0, 1, [], "candidate-sha");
+        var reference = $"control-receipt:{receipt.ReceiptId}";
+        await fixture.Record([reference], goalId: goal.Id.Value);
+        OperatorIntentCoordinator.CreateDefault(fixture.Workspace).ExecuteWorkspacePending(new AgentOrchestratorKernel());
+        var lesson = Assert.Single(fixture.LessonStore.List());
+        Assert.Equal(reference, Assert.Single(lesson.Evidence).ReceiptId);
+        var line = $"{lesson.Id} | active | {lesson.Rule}";
+
+        Assert.Equal(line + Environment.NewLine, List(fixture));
+
+        var path = Path.Combine(fixture.Workspace.OrchestratorDirectory, "operator-evidence", "control-receipts",
+            receipt.ReceiptId + ".json");
+        File.Delete(path);
+        Assert.Equal($"{line} review-due evidence-missing {reference}{Environment.NewLine}", List(fixture));
     }
 
     [Fact]

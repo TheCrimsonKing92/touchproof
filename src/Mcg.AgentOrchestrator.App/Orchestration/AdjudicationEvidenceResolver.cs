@@ -49,6 +49,14 @@ internal sealed partial class AdjudicationEvidenceResolver(string? orchestratorD
                     entry = new EvidenceManifestEntry(reference, Hash(File.ReadAllBytes(attempt.AttemptMetadataPath)));
                     return true;
                 }
+                case "control-receipt":
+                {
+                    if (string.IsNullOrWhiteSpace(orchestratorDirectory)) break;
+                    var snapshot = new OperatorControlReceiptStore(orchestratorDirectory).Read(value);
+                    if (snapshot is not { } stored || !string.Equals(stored.Receipt.GoalId, goal.Id.Value, StringComparison.Ordinal)) break;
+                    entry = new EvidenceManifestEntry(reference, Hash(stored.Bytes));
+                    return true;
+                }
                 default:
                 {
                     if (colon > 1 && kind.All(ch => char.IsLetterOrDigit(ch) || ch == '-')) break;
