@@ -112,7 +112,9 @@ public sealed class GoalIntakeRequestMapperTests : CliCommandTestBase
         bool Execute(params string[] epicArgs) => CliPersistentStateRunner.ExecuteCommand(
             [..args, ..epicArgs], repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
-        _ = CaptureConsole(() => Xunit.Assert.True(Execute("--epic", epic.Id)));
+        var queued = CaptureConsole(() => Xunit.Assert.False(Execute("--epic", epic.Id)));
+        Xunit.Assert.Contains("\"state\":\"still-committing\"", queued);
+        KeyedGoalCreationIntentTests.ApplyWorkspace(workspace);
         var original = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
         _ = CaptureConsole(() => Xunit.Assert.False(Execute("--epic", epic.Id[..^1])));
         Xunit.Assert.Equal(original.Id, currentGoal!.Id);
@@ -143,6 +145,7 @@ public sealed class GoalIntakeRequestMapperTests : CliCommandTestBase
         // Historical intake stored the epic-free fingerprint even when it assigned an epic.
         _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        KeyedGoalCreationIntentTests.ApplyWorkspace(workspace);
         var original = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
         await portfolio.AssignGoalToEpicAsync(original.Id.Value, epic.Id);
         var requestStore = new GoalIntakeRequestStore(workspace.SqliteStatePath);
@@ -184,7 +187,9 @@ public sealed class GoalIntakeRequestMapperTests : CliCommandTestBase
         Xunit.Assert.Null(requestStore.Get(requestKey));
         Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
 
-        _ = CaptureConsole(() => Xunit.Assert.True(Execute(epic.Title)));
+        var queued = CaptureConsole(() => Xunit.Assert.False(Execute(epic.Title)));
+        Xunit.Assert.Contains("\"state\":\"still-committing\"", queued);
+        KeyedGoalCreationIntentTests.ApplyWorkspace(workspace);
         var created = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
         Xunit.Assert.Equal(created.Id.Value, requestStore.Get(requestKey)!.GoalId);
         Xunit.Assert.Equal(epic.Id, (await portfolio.GetGoalMembershipAsync(created.Id.Value))!.EpicId);
@@ -209,18 +214,14 @@ public sealed class GoalIntakeRequestMapperTests : CliCommandTestBase
         bool Execute() => CliPersistentStateRunner.ExecuteCommand(
             args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
-        var previousLaunchOverride = GoalRefinementWorkCoordinator.LaunchOverride;
-        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
-            throw new IOException("Injected interruption before epic assignment.");
-        try
+        var queued = CaptureConsole(() => Xunit.Assert.False(Execute()));
+        Xunit.Assert.Contains("\"state\":\"still-committing\"", queued);
+        using (GoalCreationSideEffectDelivery.UseBeforeEffectDelivery(_ =>
+            throw new IOException("Injected interruption before epic assignment.")))
         {
-            var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() => Execute()));
-            Xunit.Assert.StartsWith("GOAL_CREATE_DELIVERY_INCOMPLETE ", error.Message);
-            Xunit.Assert.Contains("Injected interruption before epic assignment.", error.Message);
-        }
-        finally
-        {
-            GoalRefinementWorkCoordinator.LaunchOverride = previousLaunchOverride;
+            var application = KeyedGoalCreationIntentTests.ApplyWorkspace(workspace, expectedExitCode: 1);
+            Xunit.Assert.Contains("GOAL_CREATE_DELIVERY_INCOMPLETE ", application);
+            Xunit.Assert.Contains("Injected interruption before epic assignment.", application);
         }
 
         var created = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
