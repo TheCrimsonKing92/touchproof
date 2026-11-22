@@ -177,6 +177,8 @@ public sealed class WorkerBuildSeedTests
     [InlineData("autocrlf\u00a0= false", 128, "Unsupported syntax in GIT_CONFIG_GLOBAL Git configuration.")]
     [InlineData("autocrlf = \u00a0false", 128, "Unsupported 'autocrlf' setting in GIT_CONFIG_GLOBAL Git configuration.")]
     [InlineData("autocrlf = false\u00a0", 128, "Unsupported 'autocrlf' setting in GIT_CONFIG_GLOBAL Git configuration.")]
+    [InlineData("autocrlf = false\r\nautocrlf = false", 0, null)]
+    [InlineData("autocrlf = false\rautocrlf = false", 128, "Could not read prepared Git inputs (DecoderFallbackException).")]
     public void ConfigWhitespaceMatchesDirectGitInit(string setting, int exitCode, string? fallbackReason)
     {
         var (executable, _) = InfrastructureTestSupport.CapturePreparedGitEnvironment();

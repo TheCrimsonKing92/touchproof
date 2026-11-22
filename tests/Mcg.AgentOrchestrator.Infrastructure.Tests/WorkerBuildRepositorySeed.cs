@@ -232,8 +232,11 @@ internal static class WorkerBuildRepositorySeed
             // Git accepts a UTF-8 BOM in config files. A non-UTF-8 BOM must not switch decoders.
             using var reader = new StreamReader(path, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true,
                 throwOnInvalidBytes: true), detectEncodingFromByteOrderMarks: false);
+            // ReadLine also splits on bare CR, which Git does not treat as a line ending.
+            var contents = reader.ReadToEnd().Replace("\r\n", "\n", StringComparison.Ordinal);
+            if (contents.Contains('\r')) throw new DecoderFallbackException("Bare CR in Git input.");
             var lines = new List<string>();
-            while (reader.ReadLine() is { } raw)
+            foreach (var raw in contents.Split('\n'))
             {
                 if (raw.Contains('\0')) throw new DecoderFallbackException("NUL byte in Git input.");
                 // Keep Unicode whitespace visible to the syntax and value checks.
