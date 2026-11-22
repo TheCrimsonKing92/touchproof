@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 using GoalDecision = Mcg.AgentOrchestrator.App.Orchestration.PostAdoptionRegressionEvaluator.GoalDecision;
 using HandleStatus = Mcg.AgentOrchestrator.App.Orchestration.PostAdoptionRegressionReverter.HandleStatus;
 using IncidentEvent = Mcg.AgentOrchestrator.App.Orchestration.PostAdoptionRegressionReverter.IncidentEvent;
@@ -38,11 +39,47 @@ public sealed class PostAdoptionRegressionRecoveryTests
         }, fixture.Trace);
     }
 
+    [Fact]
+    public async Task RevertedIncidentFilesOneOpenBacklogItemWithBothGoals()
+    {
+        using var fixture = new Fixture();
+        var admitted = new PolicyDecisionRecord("solo-landing-admission", "Admit", 0, "candidate-available",
+            "gate ready", []);
+        var deferred = new PolicyDecisionRecord("merge-train-admission", "Hold", 1, "train-unavailable",
+            "waiting for a train", []);
+        var incident = RevertedIncident() with
+        {
+            AffectedGoals = [new("first-goal", admitted, Hold), new("second-goal", null, deferred)],
+            GateStarved = true,
+            VerifiedGoalCount = 7
+        };
+
+        fixture.CreateRecovery().Recover(HandleStatus.Reverted, incident, 2, "first-goal", gateRunning: false);
+
+        var item = Assert.Single(await fixture.BacklogItemsAsync());
+        Assert.Equal(BacklogItemStatus.Open, item.Status);
+        Assert.Null(item.SourceGoalId);
+        Assert.Equal($"Re-land reverted landing {Landing}", item.Title);
+        var lines = item.Body.Split(Environment.NewLine);
+        Assert.Contains($"Landing commit: {Landing}", lines);
+        Assert.Contains($"Revert commit: {Revert}", lines);
+        Assert.Contains("Trigger: shared-blocker", lines);
+        Assert.Contains("Revert push: Pushed", lines);
+        Assert.Contains("Gate starved: True", lines);
+        Assert.Contains("Gate slot free: False", lines);
+        Assert.Contains("Verified goals: 7", lines);
+        Assert.Contains(
+            "- first-goal: before=solo-landing-admission/Admit reason=gate ready after=solo-landing-admission/Hold reason=shared blocker",
+            lines);
+        Assert.Contains("- second-goal: before=none after=merge-train-admission/Hold reason=waiting for a train", lines);
+        Assert.Contains("Re-land the change once the cause of the regression is fixed.", lines);
+    }
+
     [Theory]
     [InlineData("Held")]
     [InlineData("NotApplicable")]
     [InlineData("Suppressed")]
-    public void NonRevertedOutcomesNeverPushOrRelaunch(string outcome)
+    public async Task NonRevertedOutcomesNeverPushFileOrRelaunch(string outcome)
     {
         using var fixture = new Fixture();
         var guard = fixture.CreateGuard(outcome == "Held" ? RevertOutcome.Held : RevertOutcome.NotApplicable);
@@ -56,6 +93,7 @@ public sealed class PostAdoptionRegressionRecoveryTests
         Assert.Equal(Enum.Parse<HandleStatus>(outcome), ObserveRegression(guard));
 
         Assert.Empty(fixture.Pushes);
+        Assert.Empty(await fixture.BacklogItemsAsync());
         Assert.Empty(fixture.Requests);
         Assert.Equal(0, fixture.TargetResolutions);
         if (outcome == "Held")
@@ -89,7 +127,7 @@ public sealed class PostAdoptionRegressionRecoveryTests
     [Theory]
     [InlineData(false, "push-failed")]
     [InlineData(true, "IOException")]
-    public void FailedPushAppendsHeldEventKeepsRevertAndStillRequestsRelaunch(bool throws, string reason)
+    public async Task FailedPushAppendsHeldEventKeepsRevertAndStillRequestsRelaunch(bool throws, string reason)
     {
         using var fixture = new Fixture();
         fixture.Push = () => throws ? throw new IOException("injected push failure") : false;
@@ -98,6 +136,8 @@ public sealed class PostAdoptionRegressionRecoveryTests
 
         Assert.Equal(Revert, fixture.LocalTip);
         Assert.Equal((fixture.Root, Revert, Branch), Assert.Single(fixture.Pushes));
+        var item = Assert.Single(await fixture.BacklogItemsAsync());
+        Assert.Contains($"Revert push: Held ({reason})", item.Body.Split(Environment.NewLine));
         Assert.Single(fixture.Requests);
         var held = Assert.Single(fixture.Events, detail => detail.StartsWith("REVERT_PUSH_HELD ", StringComparison.Ordinal));
         Assert.Contains($"commit={Revert} branch={Branch} reason={reason} ", held);
@@ -109,7 +149,28 @@ public sealed class PostAdoptionRegressionRecoveryTests
     }
 
     [Fact]
-    public void RepeatedRegressionObservationsInOneIncidentRecoverOnce()
+    public async Task BacklogAddFailureIsRecordedAndRelaunchIsStillRequested()
+    {
+        using var fixture = new Fixture();
+        var recovery = fixture.CreateRecovery(addBacklogItem: (_, _) =>
+            throw new InvalidOperationException("injected backlog write failure"));
+
+        recovery.Recover(HandleStatus.Reverted, RevertedIncident(), 2, "one", gateRunning: false);
+
+        Assert.Equal(new ConductorSelfRelaunchRequest("one", 2, fixture.Target), Assert.Single(fixture.Requests));
+        Assert.Contains(
+            $"POST_ADOPTION_REGRESSION_BACKLOG_FILING_FAILED reason=InvalidOperationException landing={Landing} " +
+            $"trigger=shared-blocker goal=one tick=2 revertCommit={Revert}", fixture.Events);
+        Assert.Equal(new[]
+        {
+            $"push:{Revert}", "REVERT_PUSH_PUSHED", "POST_ADOPTION_REGRESSION_BACKLOG_FILING_FAILED",
+            "relaunch", "POST_ADOPTION_REGRESSION_RELAUNCH_REQUESTED"
+        }, fixture.Trace);
+        Assert.Empty(await fixture.BacklogItemsAsync());
+    }
+
+    [Fact]
+    public async Task RepeatedRegressionObservationsInOneIncidentRecoverOnce()
     {
         using var fixture = new Fixture();
         var guard = fixture.CreateGuard();
@@ -122,19 +183,24 @@ public sealed class PostAdoptionRegressionRecoveryTests
         Assert.Equal((fixture.Root, Branch, Landing), Assert.Single(fixture.Reverts));
         Assert.Single(fixture.Pushes);
         Assert.Single(fixture.Requests);
+        Assert.Equal($"Re-land reverted landing {Landing}", Assert.Single(await fixture.BacklogItemsAsync()).Title);
     }
 
     [Fact]
-    public void RunningGateObservationBlocksPushAndRelaunch()
+    public async Task RunningGateObservationBlocksPushFilingAndRelaunch()
     {
         using var fixture = new Fixture();
         var recovery = fixture.CreateRecovery();
         var incident = RevertedIncident();
 
         recovery.Recover(HandleStatus.Reverted, incident, 2, "one", gateRunning: true);
-        recovery.Recover(HandleStatus.Reverted, incident, 3, "one", gateRunning: false);
+        Assert.Empty(await fixture.BacklogItemsAsync());
+
+        recovery.Recover(HandleStatus.Reverted, incident with { Landing = "second-landing" },
+            3, "one", gateRunning: false);
 
         Assert.Empty(fixture.Pushes);
+        Assert.Empty(await fixture.BacklogItemsAsync());
         Assert.Empty(fixture.Requests);
         Assert.Equal(0, fixture.TargetResolutions);
         Assert.StartsWith("POST_ADOPTION_REGRESSION_RECOVERY_HELD reason=gate-running ", Assert.Single(fixture.Events));
@@ -157,7 +223,7 @@ public sealed class PostAdoptionRegressionRecoveryTests
     }
 
     [Fact]
-    public void MissingRestoredBuildAlertsOperatorAndConsumesTheAttempt()
+    public async Task MissingRestoredBuildAlertsOperatorAndConsumesTheAttempt()
     {
         using var fixture = new Fixture();
         var target = fixture.Target;
@@ -170,6 +236,7 @@ public sealed class PostAdoptionRegressionRecoveryTests
         recovery.Recover(HandleStatus.Reverted, incident, 3, "one", gateRunning: false);
 
         Assert.Single(fixture.Pushes);
+        Assert.Single(await fixture.BacklogItemsAsync());
         Assert.Empty(fixture.Requests);
         Assert.Equal(1, fixture.TargetResolutions);
         var hold = Assert.Single(fixture.Events, detail => detail.StartsWith("POST_ADOPTION_REGRESSION_RELAUNCH_HELD ", StringComparison.Ordinal));
@@ -181,7 +248,7 @@ public sealed class PostAdoptionRegressionRecoveryTests
     }
 
     [Fact]
-    public void RefusedRelaunchIsRecordedAndNeverRetried()
+    public async Task RefusedRelaunchIsRecordedAndNeverRetried()
     {
         using var fixture = new Fixture { AcceptRelaunch = false };
         var recovery = fixture.CreateRecovery();
@@ -192,6 +259,7 @@ public sealed class PostAdoptionRegressionRecoveryTests
 
         Assert.Single(fixture.Pushes);
         Assert.Single(fixture.Requests);
+        Assert.Single(await fixture.BacklogItemsAsync());
         Assert.Contains(fixture.Events, detail => detail.StartsWith(
             "POST_ADOPTION_REGRESSION_RELAUNCH_REFUSED reason=request-not-accepted ", StringComparison.Ordinal));
     }
@@ -247,7 +315,10 @@ public sealed class PostAdoptionRegressionRecoveryTests
             return new(Landing, Baseline, AdoptedAt, reverter, Append, CreateRecovery());
         }
 
-        internal PostAdoptionRegressionRecovery CreateRecovery() =>
+        internal Task<IReadOnlyList<BacklogItem>> BacklogItemsAsync() =>
+            new BacklogStore(Path.Combine(_orchestratorDirectory, "backlog.db")).ListAsync(includeAll: true);
+
+        internal PostAdoptionRegressionRecovery CreateRecovery(Func<string, string, BacklogItem>? addBacklogItem = null) =>
             new(Root, Branch, _orchestratorDirectory, Append, () =>
             {
                 TargetResolutions++;
@@ -262,7 +333,7 @@ public sealed class PostAdoptionRegressionRecoveryTests
                 Trace.Add($"push:{commit}");
                 Pushes.Add((root, commit, branch));
                 return Push();
-            }, (goalId, commit, detail) => OperatorHolds.Add((goalId, commit, detail)));
+            }, (goalId, commit, detail) => OperatorHolds.Add((goalId, commit, detail)), addBacklogItem);
 
         private void Append(string detail)
         {
