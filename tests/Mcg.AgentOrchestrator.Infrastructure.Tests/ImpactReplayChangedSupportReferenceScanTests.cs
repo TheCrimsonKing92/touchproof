@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-// Parallel-safe: every case owns small temporary sources and a per-call probe; no processes or global state.
+// Parallel-safe: temporary sources and probes are per case, and the shared CoreLib reference is immutable.
 public sealed class ImpactReplayChangedSupportReferenceScanTests
 {
     [Theory]
@@ -56,8 +56,11 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
             "reversed" => ["Unused.cs", "Support.cs"],
             _ => ["Support.cs"]
         };
-        var actual = sources.Select(changed);
-        var legacy = LegacySelection(sources.Root, changed, sources.Projects, sources.Runnable);
+        var probe = new ImpactReplayChangedSupportScanProbe();
+        var actual = sources.Select(changed, probe);
+        var legacy = LegacySelection(sources.Root, changed, sources.Projects, sources.Runnable, out var legacyReference);
+        Assert.Same(ImpactReplayChangedSupportReferenceScan.CoreLib.Reference, probe.CompilationReference);
+        Assert.Same(probe.CompilationReference, legacyReference);
         var abandon = shape switch
         {
             "collision" or "unreferenced" => "Changed test support has no resolvable test class: Support.cs",
@@ -287,7 +290,7 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         File.WriteAllText(Path.Combine(sources.Root, "Outside.cs"), "class Outside { }");
         string[] changed = unusedFirst ? ["Unused.cs", "Support.cs", "Outside.cs"] : ["Support.cs", "Outside.cs", "Unused.cs"];
         var actual = sources.Select(changed);
-        var legacy = LegacySelection(sources.Root, changed, sources.Projects, sources.Runnable);
+        var legacy = LegacySelection(sources.Root, changed, sources.Projects, sources.Runnable, out _);
         Assert.Empty(actual.Classes);
         Assert.Equal(unusedFirst ? "Changed test support has no resolvable test class: Unused.cs"
             : "Changed test support could not be resolved: Outside.cs", actual.AbandonReason);
@@ -331,13 +334,15 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
     // Frozen pre-change per-file loop, with runnable membership injected instead of scanning the repository.
     private static (IReadOnlyList<string> Classes, string? AbandonReason, IReadOnlyList<string> OtherFiles) LegacySelection(
         string checkout, IReadOnlyList<string> changedFiles,
-        IReadOnlyList<ImpactReplayChangedSourceRouting.Project> projects, ISet<string> runnable)
+        IReadOnlyList<ImpactReplayChangedSourceRouting.Project> projects, ISet<string> runnable,
+        out MetadataReference compilationReference)
     {
         var paths = projects.SelectMany(p => p.Sources).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var trees = paths.ToDictionary(p => p, p => CSharpSyntaxTree.ParseText(File.ReadAllText(p), path: p), StringComparer.OrdinalIgnoreCase);
         var compilation = CSharpCompilation.Create("ReplayTestSources", trees.Values,
-            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            [ImpactReplayChangedSupportReferenceScan.CoreLib.Reference],
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        compilationReference = compilation.References.Single();
         var infrastructurePaths = projects.Where(p => p.Infrastructure).SelectMany(p => p.Sources).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var selected = new SortedSet<string>(StringComparer.Ordinal);
         var other = new SortedSet<string>(StringComparer.Ordinal);
