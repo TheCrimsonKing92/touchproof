@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class AcceptanceCriterionEvidence
 {
-    internal sealed record RefusedCarryBinding(string ObligationId, string BoundSha);
+    internal sealed record RefusedCarryBinding(string ObligationId, string? BoundSha);
 
     internal static CriterionEvidenceObligation[] StaleFullGateBindings(Goal goal, string? candidateSha) =>
         goal.GetLandingPrerequisiteObligations(candidateSha)
@@ -20,10 +20,11 @@ internal static partial class AcceptanceCriterionEvidence
         new(obligation.Id, obligation.ExpectedCandidateSha!.ToLowerInvariant());
 
     internal static bool IsFullGateCarryRefused(
-        Goal goal, string candidateSha, string integrationBranch, string? executionDirectory, out string? refusal)
+        Goal goal, string candidateSha, string integrationBranch, string? executionDirectory, out string? refusal,
+        bool allowPassedHeadProof = true)
     {
         return !TryPlanPatchEquivalentBindings(goal, candidateSha, integrationBranch, executionDirectory,
-            out var eligible, out _, out _, out refusal, currentHeadSha: candidateSha) ||
+            out var eligible, out _, out _, out refusal, currentHeadSha: allowPassedHeadProof ? candidateSha : null) ||
             StaleFullGateBindings(goal, candidateSha).Any(item => !eligible.Contains(item));
     }
 

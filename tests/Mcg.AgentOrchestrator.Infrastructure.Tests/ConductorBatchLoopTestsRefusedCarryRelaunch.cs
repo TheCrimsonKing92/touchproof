@@ -10,6 +10,105 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
 {
     public ConductorBatchLoopTestsRefusedCarryRelaunch(ITestOutputHelper output) : base(output) { }
 
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void LegacyRefusalSurvivesNewerReconciledFailureUntilRebind()
+    {
+        var repository = CreateGitRepository();
+        var attemptRoot = CreateTempDirectory("mcg-legacy-refused-carry");
+        try
+        {
+            const string path = "src/goal.txt";
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, $"Update {path}");
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective, ["Full acceptance passes"], VerificationClass.TestVerifiable, [], []));
+            var originalMain = ReadGit(repository, "rev-parse", "main");
+            var worktree = GoalWorktrees.Ensure(repository, goal.Id);
+            AppendCommit(worktree, path, "reviewed goal line");
+            var bound = ReadGit(worktree, "rev-parse", "HEAD");
+            AppendCommit(worktree, path, "changed goal line");
+            var branch = ReadGit(worktree, "rev-parse", "HEAD");
+            var obligation = kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: bound);
+
+            // Seed the old attempt history independently of today's journal-writing path.
+            var now = DateTimeOffset.UtcNow;
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default, utcNow: () => now, runInline: true);
+            var passed = SeedAttempt(originalMain, passed: true);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passed.Outcome);
+            GoalOperationJournal.Completed(repository, goal, "conductor:criterion-evidence-refused-carry-hold",
+                $"obligations={obligation.Id}; candidate={branch}; main={originalMain}; Acceptance passed for {branch}, but obligation '{obligation.Id}' is bound to {bound}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=range-diff-not-identical; head={bound}. Operator rebind: criterion-evidence-map --goal {goal.Id.Value} 0 1 acceptance {obligation.RequiredScope} {obligation.Id} {branch}",
+                mainHeadSha: originalMain, operationInstanceId: $"{branch}:{originalMain}");
+            Assert.Null(Assert.Single(GoalOperationJournal.ReadActive(repository, goal.Id).Entries
+                .Where(entry => entry.Operation == "conductor:criterion-evidence-refused-carry-hold")).BranchHeadSha);
+
+            AppendCommit(repository, "src/main.txt", "in-between main");
+            now = now.AddSeconds(1);
+            var failed = SeedAttempt(ReadGit(repository, "rev-parse", "main"), passed: false);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, failed.Outcome);
+            AppendCommit(repository, "src/main.txt", "live main");
+            var liveMain = ReadGit(repository, "rev-parse", "main");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default, repository, utcNow: () => now, runInline: true);
+            var latest = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
+            Assert.Equal(failed.AttemptId, latest.AttemptId);
+            Assert.NotNull(latest.ReconciledAt);
+
+            var runs = new List<(string Branch, string Main)>();
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    runs.Add((branch, liveMain));
+                    return new AcceptanceVerificationSummary(true, [], BranchHeadSha: branch, MainHeadSha: liveMain);
+                },
+                resolveAcceptanceHeads: _ => (branch, liveMain),
+                getLandingFileScopes: _ => [path],
+                executionDirectory: repository,
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            BatchTickSummary? heldTick = null;
+            new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+                NoStopPath(), maxIterations: 1, onTick: result => heldTick = result);
+            Assert.Empty(runs);
+            Assert.Equal(failed.AttemptId, coordinator.TryReadLatest(goal.Id.Value)!.AttemptId);
+            Assert.Contains(heldTick!.ProgressLines!, line =>
+                line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
+                line.Contains(obligation.Id, StringComparison.Ordinal) &&
+                line.Contains(originalMain, StringComparison.Ordinal) &&
+                line.Contains(liveMain, StringComparison.Ordinal));
+
+            kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                "operator rebind", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: branch);
+            now = now.AddSeconds(1);
+            new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+                NoStopPath(), maxIterations: 1);
+            Assert.Equal((branch, liveMain), Assert.Single(runs));
+            var fresh = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
+            Assert.Equal((branch, liveMain), (fresh.BranchHeadSha, fresh.MainHeadSha));
+
+            ConductorParallelAcceptanceAttempt SeedAttempt(string mainSha, bool passed)
+            {
+                var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [path], branch, mainSha);
+                IReadOnlyList<AcceptanceCheckResult> unmet = passed ? [] : [new("historical check", false, 1, null)];
+                var decision = seedCoordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative,
+                    (current, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(current,
+                        new AcceptanceVerificationSummary(passed, unmet,
+                            BranchHeadSha: branch, MainHeadSha: mainSha)));
+                Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+                seedCoordinator.MarkReconciled(decision.Attempt);
+                return decision.Attempt;
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(repository);
+        }
+    }
+
     [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false, "rebind")]

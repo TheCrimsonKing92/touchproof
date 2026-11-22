@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -14,7 +16,15 @@ internal static partial class GoalOperationJournal
 
     internal sealed record RefusedCarryHistory(
         string BranchSha, string? MainSha, IReadOnlyList<AcceptanceCriterionEvidence.RefusedCarryBinding> Bindings,
-        string Diagnostic, string? AttemptId);
+        string Diagnostic, string? AttemptId)
+    {
+        // The shared landing path, including grouped landing, records a member revision without a solo gate pair.
+        [JsonIgnore] public bool RequiresLandingProof => MainSha is null && AttemptId is null;
+        [JsonIgnore] public bool IsLegacy { get; init; }
+    }
+
+    [GeneratedRegex(@"\Aobligations=(?<ids>[^;]+); candidate=(?<branch>[0-9a-f]+); main=(?<main>[0-9a-f]+); Acceptance passed for \k<branch>, but obligation '(?<id>[^']+)' is bound to (?<bound>[0-9a-f]+)\.", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex LegacyRefusedCarryDetail();
 
     internal static void RecordRefusedCarryHold(string? executionDirectory, Goal goal,
         string branchSha, string? mainSha, IReadOnlyList<CriterionEvidenceObligation> bindings, string diagnostic,
@@ -39,12 +49,35 @@ internal static partial class GoalOperationJournal
     {
         foreach (var entry in ReadActive(executionDirectory, goalId).Entries.Reverse())
         {
-            // Earlier entries used plain diagnostic text. Those entries still identify a pair for replay.
-            if (entry.Operation == RefusedCarryHoldOperation && entry.Status == GoalOperationStatus.Completed &&
-                entry.BranchHeadSha is not null && entry.Detail is not null &&
-                JsonSerializer.Deserialize<RefusedCarryHistory>(entry.Detail, JsonOptions) is { } history)
+            if (entry.Operation != RefusedCarryHoldOperation || entry.Status != GoalOperationStatus.Completed ||
+                entry.Detail is null)
+                continue;
+
+            var history = entry.BranchHeadSha is null
+                ? ReadLegacyRefusedCarryHold(entry, entry.Detail)
+                : JsonSerializer.Deserialize<RefusedCarryHistory>(entry.Detail, JsonOptions);
+            if (history is not null)
                 yield return history;
         }
+    }
+
+    private static RefusedCarryHistory? ReadLegacyRefusedCarryHold(GoalOperationJournalEntry entry, string detail)
+    {
+        var match = LegacyRefusedCarryDetail().Match(detail);
+        if (!match.Success) return null;
+        var branch = match.Groups["branch"].Value;
+        var main = match.Groups["main"].Value;
+        if (entry.OperationInstanceId != RefusedCarryPairKey(branch, main) ||
+            !string.Equals(entry.MainHeadSha, main, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var describedId = match.Groups["id"].Value;
+        var ids = match.Groups["ids"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        if (!ids.Contains(describedId, StringComparer.Ordinal)) return null;
+        var bound = match.Groups["bound"].Value.ToLowerInvariant();
+        var bindings = ids.Select(id => new AcceptanceCriterionEvidence.RefusedCarryBinding(
+            id, id == describedId ? bound : null)).ToArray();
+        return new RefusedCarryHistory(branch, main, bindings, detail, AttemptId: null) { IsLegacy = true };
     }
 
     internal static bool HasRefusedCarryHoldForPair(string executionDirectory, Goal goal,

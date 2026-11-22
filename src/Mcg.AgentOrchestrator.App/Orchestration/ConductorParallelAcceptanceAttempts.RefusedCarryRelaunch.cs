@@ -39,7 +39,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         var history = string.IsNullOrWhiteSpace(executionDirectory)
             ? [] : GoalOperationJournal.ReadRefusedCarryHolds(executionDirectory, goal.Id).ToArray();
         var liveBindings = stale.Select(AcceptanceCriterionEvidence.BindingOf).ToHashSet();
-        var prior = history.FirstOrDefault(note => note.Bindings.Any(liveBindings.Contains));
+        var prior = history.FirstOrDefault(note => note.RequiresLandingProof && note.Bindings.Any(liveBindings.Contains)) ??
+            history.FirstOrDefault(note => note.IsLegacy ? IsLiveLegacyRefusal(note) : note.Bindings.Any(liveBindings.Contains));
         var passedBranch = prior?.BranchSha;
         var passedMain = prior?.MainSha;
         CriterionEvidenceObligation[]? inferredBindings = null;
@@ -69,7 +70,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 return null;
         }
 
-        if (!AcceptanceCriterionEvidence.IsFullGateCarryRefused(goal, branchSha, _integrationBranch, executionDirectory, out var refusal))
+        if (!AcceptanceCriterionEvidence.IsFullGateCarryRefused(goal, branchSha, _integrationBranch, executionDirectory,
+                out var refusal, allowPassedHeadProof: prior?.RequiresLandingProof != true))
             return null;
         var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
             goal, branchSha, mainSha, passedBranch!, passedMain, stale, refusal);
@@ -77,5 +79,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             GoalOperationJournal.RecordRefusedCarryHold(executionDirectory, goal, passedBranch!, passedMain,
                 inferredBindings, hold.Reason, latest!.AttemptId);
         return new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8], policy.Name, hold);
+
+        bool IsLiveLegacyRefusal(GoalOperationJournal.RefusedCarryHistory note)
+        {
+            // The text named every obligation but only identified the first obligation's bound SHA.
+            var stillStale = AcceptanceCriterionEvidence.StaleFullGateBindings(goal, note.BranchSha)
+                .Select(AcceptanceCriterionEvidence.BindingOf)
+                .Where(liveBindings.Contains);
+            return stillStale.Any(live => note.Bindings.Any(recorded => recorded.ObligationId == live.ObligationId &&
+                    (recorded.BoundSha is null || recorded.BoundSha == live.BoundSha))) &&
+                AcceptanceCriterionEvidence.IsFullGateCarryRefused(goal, note.BranchSha, _integrationBranch,
+                    executionDirectory, out _);
+        }
     }
 }
