@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -9,6 +10,7 @@ public static class OperatorIntentBatchPolicy
     public static bool CanShareTick(string verb) => verb is
         OperatorIntentVerbs.CriterionEvidenceMap or
         OperatorIntentVerbs.CriterionEvidenceRecord or
+        OperatorIntentVerbs.CriterionEvidenceSupersede or
         OperatorIntentVerbs.CriterionEvidenceRepair or
         OperatorIntentVerbs.CriterionEvidenceRephase;
 
@@ -30,6 +32,27 @@ public static class OperatorIntentBatchPolicy
         appliedVerbs.Count == 0 ||
         (CanShareTick(intent.Verb) && appliedVerbs.All(CanShareTick)) ||
         (IsClarificationAnswer(intent) && appliedVerbs.All(verb => verb == OperatorIntentVerbs.Answer));
+
+    internal static (IReadOnlyList<OperatorIntentRecord> Prepared, IReadOnlySet<string>? RetryAnswerIds)
+        SelectPreparationBatch(IEnumerable<OperatorIntentRecord> target)
+    {
+        var intents = target.ToArray();
+        if (!intents.Any(IsSupersession)) return (intents, null);
+
+        // Match claim priority and stop when the next intent needs different preparation.
+        var inClaimOrder = intents.OrderBy(intent => intent.Status != OperatorIntentStatus.Claimed).ToArray();
+        var supersessionOnly = IsSupersession(inClaimOrder[0]);
+        var prepared = inClaimOrder.TakeWhile(intent => IsSupersession(intent) == supersessionOnly).ToArray();
+        if (!prepared.Any(intent => intent.Verb == OperatorIntentVerbs.Retry)) return (prepared, null);
+
+        // A retry can claim an answer past the preparation boundary while it waits.
+        var retryAnswerIds = intents.Where(intent => intent.Verb == OperatorIntentVerbs.Answer)
+            .Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
+        return (prepared, retryAnswerIds);
+    }
+
+    internal static bool IsSupersession(OperatorIntentRecord intent) =>
+        intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede;
 
     // Clarification answers may share a pass because each writes rows keyed by its own item or intent.
     // retry reads retry-cause clarification and task lifecycle state changed by sibling intents.

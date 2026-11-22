@@ -194,6 +194,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "integration-scope",
     "criterion-evidence-map",
     "criterion-evidence-record",
+    "criterion-evidence-supersede",
     "criterion-evidence-repair",
     "criterion-evidence-rephase",
     "verifications",

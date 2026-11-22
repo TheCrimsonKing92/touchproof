@@ -22,7 +22,9 @@ public enum CriterionEvidenceState
     // A malformed, Unknown claim may only reach this terminal history state
     // through the attributed repair operation.  It is not evidence and it
     // always names the replacement obligation in Detail.
-    Repaired
+    Repaired,
+    // An attributed retirement of a post-landing duty, without a receipt.
+    Superseded
 }
 
 public static class CriterionEvidenceScopes
@@ -73,8 +75,13 @@ public sealed record CriterionEvidenceObligation(
     public bool IsValidatedPostLanding => Phase == CriterionEvidencePhase.PostLanding &&
         CriterionEvidenceLifecycle.IsValid(Phase, Owner, ObservationScope);
 
+    [JsonIgnore]
+    public bool IsOutstandingPostLandingDuty => IsValidatedPostLanding &&
+        State is not (CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired or CriterionEvidenceState.Superseded);
+
     public bool IsLandingPrerequisite => !(IsValidatedPostLanding &&
-        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Satisfied && HasValidEvidenceState);
+        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Satisfied or CriterionEvidenceState.Superseded &&
+        HasValidEvidenceState);
 
     internal bool HasValidEvidenceState =>
         CriterionEvidenceLifecycle.IsValid(Phase, Owner, ObservationScope) &&
@@ -83,6 +90,7 @@ public sealed record CriterionEvidenceObligation(
           (PriorReceipts is null || PriorReceipts.All(receipt => receipt is { Observation: null })))) &&
         (Phase != CriterionEvidencePhase.PostLanding ||
          (State == CriterionEvidenceState.Pending ||
+          (State == CriterionEvidenceState.Superseded && Observation is null) ||
           (Observation is not null && !string.IsNullOrWhiteSpace(ObservationActor) &&
            CriterionEvidenceLifecycle.MatchesObservation(this, Observation, RecordedAt)))) &&
         (State != CriterionEvidenceState.Pending || Observation is null && ObservationActor is null && ObservationActorKind is null) &&
@@ -92,19 +100,29 @@ public sealed record CriterionEvidenceObligation(
              string.Equals(receipt.CandidateSha, Publication?.CandidateRevision, StringComparison.OrdinalIgnoreCase) &&
              CriterionEvidenceLifecycle.MatchesObservation(this, receipt.Observation, receipt.RecordedAt))) &&
         Owner is CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Unknown &&
-        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired &&
+        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied or
+            CriterionEvidenceState.Repaired or CriterionEvidenceState.Superseded &&
         (Owner != CriterionEvidenceOwner.Unknown || State is CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired) &&
         (Owner != CriterionEvidenceOwner.Acceptance ||
          (RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate &&
           (State == CriterionEvidenceState.Pending || !string.IsNullOrWhiteSpace(ExpectedCandidateSha)))) &&
-        (State is CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired
-            ? CandidateSha is null && ReceiptId is null && Detail is null
-            : CurrentReceipt() is { IsWellFormed: true } &&
-              (string.IsNullOrWhiteSpace(ExpectedCandidateSha) ||
-               string.Equals(ExpectedCandidateSha, CandidateSha, StringComparison.OrdinalIgnoreCase))) &&
+        HasValidCurrentRecord &&
         (PriorReceipts is null ||
          (PriorReceipts.All(receipt => receipt is { IsWellFormed: true } && receipt.ReceiptId != ReceiptId) &&
           PriorReceipts.Select(receipt => receipt.ReceiptId).Distinct(StringComparer.Ordinal).Count() == PriorReceipts.Count));
+
+    private bool HasValidCurrentRecord => State switch
+    {
+        CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired =>
+            CandidateSha is null && ReceiptId is null && Detail is null,
+        CriterionEvidenceState.Superseded =>
+            Owner == CriterionEvidenceOwner.Operator && Phase == CriterionEvidencePhase.PostLanding &&
+            CandidateSha is null && ReceiptId is null && Observation is null &&
+            !string.IsNullOrWhiteSpace(Detail) && !string.IsNullOrWhiteSpace(ObservationActor),
+        _ => CurrentReceipt() is { IsWellFormed: true } &&
+             (string.IsNullOrWhiteSpace(ExpectedCandidateSha) ||
+              string.Equals(ExpectedCandidateSha, CandidateSha, StringComparison.OrdinalIgnoreCase))
+    };
 
     public bool HasSatisfiedEvidenceFor(string? candidateSha) =>
         State == CriterionEvidenceState.Satisfied && HasValidEvidenceState &&
@@ -122,7 +140,7 @@ public sealed record CriterionEvidenceObligation(
         CurrentReceipt() is { } current ? [.. PriorReceipts ?? [], current] : PriorReceipts;
 
     private CriterionEvidenceReceipt? CurrentReceipt() =>
-        State is not (CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired) && CandidateSha is not null && ReceiptId is not null && Detail is not null
+        State is CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied && CandidateSha is not null && ReceiptId is not null && Detail is not null
             ? new(Owner, CandidateSha, ReceiptId, RequiredScope, State == CriterionEvidenceState.Satisfied,
                 Detail, Provenance, RecordedAt, Observation, ObservationActor, ObservationActorKind)
             : null;
