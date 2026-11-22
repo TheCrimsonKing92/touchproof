@@ -356,7 +356,14 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
     public void TypedPreparationPreservesLiteralGitPathsAcrossPreviewCap(bool capped)
     {
         using var repo = new InProcessGitFixture(commit: false);
-        var literalPaths = new[] { "caf\u00e9.txt", "cafe\u0301.txt", " leading.txt", "leading.txt", "dir\\file.txt", "dir/file.txt" };
+        var rootPaths = new (string LiteralPath, string GitPath)[]
+        {
+            ("caf\u00e9.txt", "\"caf\\303\\251.txt\""),
+            ("cafe\u0301.txt", "\"cafe\\314\\201.txt\""),
+            (" leading.txt", " leading.txt"),
+            ("leading.txt", "leading.txt"),
+            ("dir\\file.txt", "\"dir\\\\file.txt\"")
+        };
         var extraPaths = capped
             ? Enumerable.Range(0, WorkerGitContext.ReviewerChangedFilePromptMaxFiles).Select(index => $"z-{index:D3}.txt").ToArray()
             : [];
@@ -369,15 +376,24 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         var subtree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds,
             $"100644 blob {blob}\tfile.txt\n", "mktree");
         Assert.True(subtree.Succeeded, subtree.Error);
-        var rootPaths = new[] { "\"caf\\303\\251.txt\"", "\"cafe\\314\\201.txt\"", " leading.txt", "leading.txt", "\"dir\\\\file.txt\"" };
-        var treeInput = string.Concat(rootPaths.Concat(extraPaths).Select(path => $"100644 blob {blob}\t{path}\n")) +
+        var quotedPaths = rootPaths.Select(path => path.GitPath);
+        var treeInput = string.Concat(quotedPaths.Concat(extraPaths).Select(path => $"100644 blob {blob}\t{path}\n")) +
             $"040000 tree {subtree.Output.Trim()}\tdir\n";
         var tree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds, treeInput, "mktree");
         Assert.True(tree.Succeeded, tree.Error);
         var candidate = repo.Git("commit-tree", tree.Output.Trim(), "-p", "HEAD", "-m", "Literal path identities");
         repo.Git("update-ref", "HEAD", candidate);
 
+        // Check the committed bytes through Git before exercising the scope decoder.
+        // The whitespace in a path is significant, including at the start of stdout.
+        var gitPaths = GitCli.RunDirect(repo.Worktree, "-c", "core.quotePath=true",
+            "diff", "--name-only", $"trunk...{candidate}", "--");
+        Assert.True(gitPaths.Succeeded && !gitPaths.DrainTimedOut, gitPaths.Error);
+        Assert.Equal(quotedPaths.Append("dir/file.txt").Concat(extraPaths).Order(StringComparer.Ordinal),
+            gitPaths.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal));
+
         var scope = Capture(repo);
+        var literalPaths = rootPaths.Select(path => path.LiteralPath).Append("dir/file.txt");
         var expected = literalPaths.Concat(extraPaths).Order(StringComparer.Ordinal);
         Assert.Equal(expected, scope.ChangedFiles.Order(StringComparer.Ordinal));
         var work = NewWork(AgentRole.Reviewer);
