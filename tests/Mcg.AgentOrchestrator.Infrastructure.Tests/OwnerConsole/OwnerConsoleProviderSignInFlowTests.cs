@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.Input;
 using Fixture = OwnerConsoleProviderConnectionsTabTests.Fixture;
 
@@ -123,6 +124,183 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         fixture.Press('d');
         await fixture.ApplyAsync();
         Assert.True(Assert.Single(DrainLaunches(fixture)).DeviceCode);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UnusedProfileKeysKeepExactIdWithSharedNativeTarget(bool siblingInUse)
+    {
+        var sibling = Fixture.Connection("codex-cli");
+        var selected = sibling with { Report = sibling.Report with { ProfileId = "codex-secondary" } };
+        var session = new Session();
+        using var fixture = new Fixture
+        {
+            Initial = [sibling, selected],
+            Roster = siblingInUse ? [Fixture.Agent("codex-cli", AgentRole.Developer)] : [],
+            Launch = new(session)
+        };
+        await fixture.LoadAsync(initialChecks: siblingInUse ? 1 : 0);
+        if (siblingInUse) fixture.Tab.HandleKey(Key.CursorDown);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        if (!siblingInUse) fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  codex-secondary | signed in: no", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        fixture.Press('s');
+        await fixture.ApplyAsync();
+        Assert.Equal("codex-secondary", Assert.Single(fixture.SignInLookups));
+        Assert.Equal(sibling.SignIn, Assert.Single(DrainLaunches(fixture)).Target);
+        Assert.StartsWith("t return  x stop waiting  c check", fixture.Tab.KeyHint);
+        fixture.Press('t');
+        var returnCheck = await fixture.TakeCheckAsync();
+        Assert.Equal("codex-secondary", returnCheck.ProfileId);
+        var signedIn = Fixture.Connection("codex-cli", ProviderConnectionResult.SignedIn, at: fixture.Clock.GetUtcNow());
+        returnCheck.Result.SetResult(signedIn with { Report = signedIn.Report with { ProfileId = "codex-secondary" } });
+        await fixture.ApplyAsync();
+        Assert.StartsWith("  codex-secondary | signed in: yes", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        fixture.Press('c');
+        var explicitCheck = await fixture.TakeCheckAsync();
+        Assert.Equal("codex-secondary", explicitCheck.ProfileId);
+        await fixture.FinishCheckAsync(explicitCheck);
+        session.Exit.SetResult(new(ProviderSignInOutcome.Unknown, 0));
+        await fixture.ApplyAsync();
+        Assert.Equal((siblingInUse ? 1 : 0) + 2, fixture.CheckCalls);
+        Assert.Equal("codex-secondary", Assert.Single(fixture.SignInLookups));
+        Assert.Empty(DrainLaunches(fixture));
+    }
+
+    [Theory]
+    [InlineData(true, "Using API key from the host")]
+    [InlineData(false, "has no native sign-in command")]
+    public async Task UnsupportedUnusedProfileOffersCheckAndNeverLaunches(bool apiKey, string explanation)
+    {
+        var unsupported = apiKey
+            ? Fixture.Connection("grok-cli", mode: ProviderConnectionAuthMode.ApiKey)
+            : Fixture.Connection("grok-cli") with { SignIn = null };
+        using var fixture = new Fixture { Initial = [unsupported], Roster = [] };
+        await fixture.LoadAsync(initialChecks: 0);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.StartsWith("c check  Enter collapse Not in use", fixture.Tab.KeyHint);
+        Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
+        Assert.DoesNotContain("d device code", fixture.Tab.KeyHint);
+        Assert.Contains(fixture.Tab.Lines, line => line.Contains(explanation, StringComparison.Ordinal));
+        Assert.Equal(1, fixture.ScheduledProviderWork); // Only the initial list.
+        fixture.Press('s');
+        fixture.Press('d');
+        Assert.Equal(1, fixture.ScheduledProviderWork);
+        fixture.Press('c');
+        var check = await fixture.TakeCheckAsync();
+        Assert.Equal("grok-cli", check.ProfileId);
+        await fixture.FinishCheckAsync(check);
+        Assert.Equal(2, fixture.ScheduledProviderWork);
+        Assert.Empty(fixture.SignInLookups);
+        Assert.Empty(DrainLaunches(fixture));
+        Assert.Equal(0, fixture.DeviceCodeProbes);
+    }
+
+    [Fact]
+    public async Task RemovingUnusedProfileDoesNotRedirectPendingLoginOrCheck()
+    {
+        var selected = Fixture.Connection("grok-cli");
+        var sibling = selected with { Report = selected.Report with { ProfileId = "grok-secondary" } };
+        var session = new Session();
+        using var fixture = new Fixture
+        {
+            Initial = [sibling, selected], Roster = [], Launch = new(session)
+        };
+        await fixture.LoadAsync(initialChecks: 0);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        fixture.Press('s');
+        await fixture.ApplyAsync();
+        Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
+        Assert.Single(DrainLaunches(fixture));
+        fixture.Press('c');
+        var pendingCheck = await fixture.TakeCheckAsync();
+        Assert.Equal("grok-cli", pendingCheck.ProfileId);
+
+        fixture.Initial = [sibling];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.Equal("Not in use (1) [-]", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        foreach (var action in "csdtx") fixture.Press(action);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-secondary | signed in: no", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.StartsWith("c check", fixture.Tab.KeyHint); // The old process still holds the shared credentials.
+
+        pendingCheck.Result.SetResult(Fixture.Connection("grok-cli", ProviderConnectionResult.SignedIn,
+            at: fixture.Clock.GetUtcNow()));
+        await fixture.ApplyAsync();
+        session.Exit.SetResult(new(ProviderSignInOutcome.Succeeded, 0));
+        await fixture.ApplyAsync();
+        Assert.StartsWith("  grok-secondary | signed in: no", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.StartsWith("s sign in", fixture.Tab.KeyHint);
+        Assert.Equal("", fixture.Tab.StatusText);
+        Assert.Equal(1, fixture.CheckCalls);
+        Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
+        Assert.Empty(DrainLaunches(fixture));
+    }
+
+    [Fact]
+    public async Task RemovingUnusedProfileDuringExecutableResolutionRevokesNativeLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var selected = Fixture.Connection("grok-cli");
+        var sibling = selected with { Report = selected.Report with { ProfileId = "grok-secondary" } };
+        var resolving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolution = new TaskCompletionSource<WorkerProcessRunResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolved = new WorkerProcessRunResult(0, @"C:\tools\grok.exe" + "\r\n", "");
+        var starts = 0;
+        var session = new Session();
+        var launcher = new ProviderSignInLauncher(@"C:\workspace", (_, token) =>
+        {
+            if (!resolving.TrySetResult()) return Task.FromResult(resolved);
+            return resolution.Task.WaitAsync(token);
+        }, _ =>
+        {
+            Interlocked.Increment(ref starts);
+            return session;
+        });
+        using var fixture = new Fixture(launcher) { Initial = [selected, sibling], Roster = [] };
+        await fixture.LoadAsync(initialChecks: 0);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        fixture.Press('s');
+        await TestHangGuard.WaitAsync(resolving.Task, "native executable resolution started");
+        Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
+        fixture.Initial = [sibling];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.Equal("Not in use (1) [-]", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        foreach (var action in "csdtx") fixture.Press(action);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-secondary |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.StartsWith("s sign in", fixture.Tab.KeyHint);
+        Assert.Equal(3, fixture.ScheduledProviderWork); // Initial list, original action, and reload.
+
+        resolution.SetResult(resolved);
+        await fixture.ApplyAsync(); // The launch result settles after the resolver is released.
+        Assert.Equal(0, Volatile.Read(ref starts));
+        Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
+
+        fixture.Press('s');
+        await fixture.ApplyAsync();
+        Assert.Equal(1, Volatile.Read(ref starts));
+        Assert.Equal(new[] { "grok-cli", "grok-secondary" }, fixture.SignInLookups);
+        session.Exit.SetResult(new(ProviderSignInOutcome.Unknown, 0));
+        await fixture.ApplyAsync();
+        var recheck = await fixture.TakeCheckAsync();
+        Assert.Equal("grok-secondary", recheck.ProfileId);
+        await fixture.FinishCheckAsync(recheck);
     }
 
     private static List<(ProviderSignInTarget Target, bool DeviceCode)> DrainLaunches(Fixture fixture)

@@ -8,6 +8,7 @@ internal sealed class OwnerConsoleProviderSignInFlow(
     Func<string, OwnerConsoleProviderConnectionState?> findProfile,
     Action<OwnerConsoleProviderConnectionState> check,
     Action<Action> post,
+    Action<Func<Task>> scheduleWork,
     CancellationToken lifetime)
 {
     private readonly Dictionary<ProviderSignInTarget, bool> _deviceCode = [];
@@ -47,7 +48,7 @@ internal sealed class OwnerConsoleProviderSignInFlow(
         if (profile is null || HasHostApiKey(profile.Connection.Report) ||
             profile.Connection.SignIn is not { CanProbeDeviceCode: true } target ||
             !_deviceCode.TryAdd(target, false)) return;
-        _ = Task.Run(async () =>
+        scheduleWork(async () =>
         {
             try
             {
@@ -57,13 +58,23 @@ internal sealed class OwnerConsoleProviderSignInFlow(
         });
     }
 
-    internal void BeginSignIn(OwnerConsoleProviderConnectionState profile, bool deviceCode)
+    internal void BeginSignIn(OwnerConsoleProviderConnectionState profile, bool deviceCode, bool selectedFromUnused)
     {
         if (!CanSignIn(profile)) return;
-        var operation = new SignInOperation(profile.Connection.SignIn!);
+        var operation = new SignInOperation(profile.Connection.SignIn!, selectedFromUnused);
         _activeSignIns.Add(profile.Id, operation);
         profile.InteractionText = "Opening the provider's native sign-in…";
-        _ = Task.Run(() => RunSignInAsync(profile.Id, operation, deviceCode));
+        scheduleWork(() => RunSignInAsync(profile.Id, operation, deviceCode));
+    }
+
+    internal void RevokeRemovedUnusedLaunches(Func<string, bool> profileStillListed)
+    {
+        // Dictionary.Remove preserves enumeration on .NET. This and all other dictionary access run on the UI thread.
+        foreach (var (id, operation) in _activeSignIns)
+        {
+            if (operation.SelectedFromUnused && !profileStillListed(id) && operation.TryRevokeLaunch())
+                _activeSignIns.Remove(id);
+        }
     }
 
     private async Task RunSignInAsync(string profileId, SignInOperation operation, bool deviceCode)
@@ -72,9 +83,10 @@ internal sealed class OwnerConsoleProviderSignInFlow(
         try
         {
             lifetime.ThrowIfCancellationRequested();
+            if (operation.LaunchRevoked) return;
             var target = connections.GetSignInTarget(profileId);
             launch = target is not null && target == operation.Target
-                ? await launcher.LaunchAsync(target, deviceCode, lifetime)
+                ? await launcher.LaunchAsync(target, deviceCode, lifetime, operation.TryCommitLaunch)
                 : new(null, ProviderSignInOutcome.Unsupported);
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
@@ -101,6 +113,11 @@ internal sealed class OwnerConsoleProviderSignInFlow(
             if (findProfile(profileId) is { } profile)
                 profile.InteractionText = "Native sign-in is open. Press t after returning, or x to stop waiting.";
         });
+        await ObserveNativeExitAsync(profileId, operation, session);
+    }
+
+    private async Task ObserveNativeExitAsync(string profileId, SignInOperation operation, IProviderSignInSession session)
+    {
         try
         {
             var exit = await session.WaitAsync(lifetime);
@@ -138,11 +155,22 @@ internal sealed class OwnerConsoleProviderSignInFlow(
         check(profile);
     }
 
-    private sealed class SignInOperation(ProviderSignInTarget target)
+    private sealed class SignInOperation(ProviderSignInTarget target, bool selectedFromUnused)
     {
+        private const int Pending = 0;
+        private const int Committed = 1;
+        private const int Revoked = 2;
+        private int _launchDecision;
+
         internal ProviderSignInTarget Target { get; } = target;
+        internal bool SelectedFromUnused { get; } = selectedFromUnused;
+        internal bool LaunchRevoked => Volatile.Read(ref _launchDecision) == Revoked;
         internal bool Started { get; set; }
         internal bool RecheckRequested { get; set; }
         internal bool ObservationFailed { get; set; }
+
+        // Reload can revoke unresolved launches. A committed launch keeps its credential scope through exit.
+        internal bool TryCommitLaunch() => Interlocked.CompareExchange(ref _launchDecision, Committed, Pending) == Pending;
+        internal bool TryRevokeLaunch() => Interlocked.CompareExchange(ref _launchDecision, Revoked, Pending) == Pending;
     }
 }

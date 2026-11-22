@@ -58,5 +58,13 @@ internal static class OwnerConsoleSurfaceText
             yield return new(TextKind.TabFooter, title, variant, FormatKeyHint(action, deviceCodeAvailable: false));
             yield return new(TextKind.TabFooter, title, $"{variant} with device code", FormatKeyHint(action, deviceCodeAvailable: true));
         }
+        yield return new(TextKind.TabFooter, title, "Collapsed unused group", FormatUnusedHeaderHint(expanded: false));
+        yield return new(TextKind.TabFooter, title, "Expanded unused group", FormatUnusedHeaderHint(expanded: true));
+        foreach (var action in HintActions.OfType<string>())
+        {
+            yield return new(TextKind.TabFooter, title, $"Unused profile {action}", FormatKeyHint(action, false, unused: true));
+            if (action == SignInKey)
+                yield return new(TextKind.TabFooter, title, $"Unused profile {action} with device code", FormatKeyHint(action, true, unused: true));
+        }
     }
 }
