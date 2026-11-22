@@ -206,7 +206,7 @@ internal static class WorkerBuildRepositorySeed
                 section = line[1..^1].ToLowerInvariant();
                 continue;
             }
-            var setting = Regex.Match(line, """^([A-Za-z]+)\s*=\s*([^"\\]*|"[^"\\]*")\z""");
+            var setting = Regex.Match(line, """^([A-Za-z]+)[ \t]*=[ \t]*([^"\\]*|"[^"\\]*")\z""");
             if (!setting.Success) return $"Unsupported syntax in {source} Git configuration.";
             var key = setting.Groups[1].Value.ToLowerInvariant();
             var value = setting.Groups[2].Value.Trim('"').ToLowerInvariant();
@@ -236,7 +236,8 @@ internal static class WorkerBuildRepositorySeed
             while (reader.ReadLine() is { } raw)
             {
                 if (raw.Contains('\0')) throw new DecoderFallbackException("NUL byte in Git input.");
-                var line = raw.Trim();
+                // Keep Unicode whitespace visible to the syntax and value checks.
+                var line = raw.Trim(' ', '\t');
                 if (line.Length > 0 && line[0] is not ('#' or ';')) lines.Add(line);
             }
             return lines;

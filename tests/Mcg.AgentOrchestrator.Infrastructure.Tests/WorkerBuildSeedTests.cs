@@ -171,6 +171,49 @@ public sealed class WorkerBuildSeedTests
         }
     }
 
+    [Theory]
+    [InlineData(" \tautocrlf \t= \tfalse \t", 0, null)]
+    [InlineData("\u00a0autocrlf = false", 128, "Unsupported syntax in GIT_CONFIG_GLOBAL Git configuration.")]
+    [InlineData("autocrlf\u00a0= false", 128, "Unsupported syntax in GIT_CONFIG_GLOBAL Git configuration.")]
+    [InlineData("autocrlf = \u00a0false", 128, "Unsupported 'autocrlf' setting in GIT_CONFIG_GLOBAL Git configuration.")]
+    [InlineData("autocrlf = false\u00a0", 128, "Unsupported 'autocrlf' setting in GIT_CONFIG_GLOBAL Git configuration.")]
+    public void ConfigWhitespaceMatchesDirectGitInit(string setting, int exitCode, string? fallbackReason)
+    {
+        var (executable, _) = InfrastructureTestSupport.CapturePreparedGitEnvironment();
+        var profile = Directory.CreateTempSubdirectory("mcg-worker-build-git-whitespace-");
+        try
+        {
+            var configPath = Path.Combine(profile.FullName, "gitconfig");
+            var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["HOME"] = profile.FullName,
+                ["XDG_CONFIG_HOME"] = profile.FullName,
+                ["GIT_CONFIG_GLOBAL"] = configPath,
+                ["GIT_CONFIG_NOSYSTEM"] = "1",
+                ["GIT_ATTR_NOSYSTEM"] = "1"
+            };
+            File.WriteAllText(configPath, $"[core]\n{setting}\n");
+
+            var result = GitCli.RunProgressExecutable(executable, profile.FullName, ["init", "-b", "main"],
+                new GitIdleGapHistory(), configureStart: start =>
+                {
+                    foreach (var name in start.Environment.Keys.Where(name => name.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase)).ToArray())
+                        start.Environment.Remove(name);
+                    foreach (var (name, value) in environment)
+                        start.Environment[name] = value;
+                });
+
+            Assert.True(result.ProcessStarted, result.Error);
+            Assert.Equal(exitCode, result.ExitCode);
+            Assert.Equal(exitCode == 0, Directory.Exists(Path.Combine(profile.FullName, ".git")));
+            Assert.Equal(fallbackReason, WorkerBuildRepositorySeed.ReadGitInputs(executable, environment, out _));
+        }
+        finally
+        {
+            profile.Delete(recursive: true);
+        }
+    }
+
     [Fact]
     public void GitAttributesFallBackToRealStagingAndCommit()
     {
