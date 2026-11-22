@@ -1,9 +1,115 @@
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalLeanTickReloadTests
 {
+    [Fact]
+    public async Task MixedSnapshotOperationsReportLogicalUtf8Bytes()
+    {
+        using var fixture = new GoalTaskHistoryTestFixture();
+        var seed = GoalTaskHistoryTestFixture.Snapshot(entries: 2);
+        await fixture.Repository.SaveGoalSnapshotsAsync([seed]);
+        var archiveJson = " \r\n" + fixture.RawGoal(seed.Id).Replace(
+            "History fixture", "café \\u2603", StringComparison.Ordinal) + "\n";
+        fixture.ReplaceDocument(seed.Id, archiveJson);
+        Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(
+            GoalTaskHistoryTestFixture.At.AddDays(1), compressSnapshots: true));
+        var archiveBytes = Encoding.UTF8.GetByteCount(archiveJson);
+        Assert.True(archiveBytes > archiveJson.Length);
+
+        // Archive hydration parses the same exact payload for the snapshot and the timeline marker.
+        using (var exact = GoalSnapshotByteAccounting.Begin())
+        using (var connection = fixture.Open())
+        {
+            var snapshot = await new GoalSnapshotArchive(GoalTaskHistoryTestFixture.Options)
+                .HydrateAsync(connection, seed with { IsMetadataOnly = true });
+            Assert.Equal("café ☃", snapshot!.Objective);
+            Assert.Equal(((long?)2 * archiveBytes, (long?)0), exact.Seal());
+        }
+
+        using (var streamed = GoalSnapshotByteAccounting.Begin())
+        {
+            var dispatches = await fixture.Repository.ReadArchivedDispatchUsageAsync((_, _) => true);
+            Assert.NotEmpty(dispatches);
+            Assert.Equal(((long?)archiveBytes, (long?)0), streamed.Seal());
+        }
+
+        using (var connection = fixture.Open())
+        {
+            using var update = connection.CreateCommand();
+            update.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = $json WHERE goal_id = $id";
+            update.Parameters.AddWithValue("$json", archiveJson);
+            update.Parameters.AddWithValue("$id", seed.Id);
+            Assert.Equal(1, update.ExecuteNonQuery());
+            using var legacyText = GoalSnapshotByteAccounting.Begin();
+            var snapshot = await new GoalSnapshotArchive(GoalTaskHistoryTestFixture.Options)
+                .HydrateAsync(connection, seed with { IsMetadataOnly = true });
+            Assert.Equal("café ☃", snapshot!.Objective);
+            Assert.Equal(((long?)null, (long?)0), legacyText.Seal());
+        }
+
+        var hotId = new GoalId("bbbbbbbb000000000000000000000000");
+        var hot = seed with
+        {
+            Id = hotId.Value,
+            Timeline = seed.Timeline.Select(entry => entry with { GoalId = hotId.Value }).ToArray()
+        };
+        await fixture.Repository.SaveGoalSnapshotsAsync([hot]);
+        var memory = new GoalReloadMemory();
+        var loaded = await fixture.Repository.LoadGoalsReusingUnchangedAsync([hotId], memory);
+        Assert.Equal(1, loaded.Reloaded);
+
+        using (var cached = GoalSnapshotByteAccounting.Begin())
+        {
+            var reused = await fixture.Repository.LoadGoalsReusingUnchangedAsync([hotId], memory);
+            Assert.Equal((0, 1), (reused.Reloaded, reused.Reused));
+            Assert.Equal(((long?)0, (long?)0), cached.Seal());
+        }
+
+        using (var deferred = GoalSnapshotByteAccounting.Begin())
+        {
+            Assert.Equal("Created", Assert.Single(loaded.Kernel.GetGoal(hotId).Timeline).Message);
+            Assert.Equal(((long?)null, (long?)0), deferred.Seal());
+        }
+
+        var changed = hot with { Objective = "Change café" };
+        using (var mixed = GoalSnapshotByteAccounting.Begin())
+        {
+            var reused = await fixture.Repository.LoadGoalsReusingUnchangedAsync([hotId], memory);
+            Assert.Equal((0, 1), (reused.Reloaded, reused.Reused));
+            await fixture.Repository.SaveGoalSnapshotsAsync([changed]);
+            await fixture.Repository.LoadGoalsAsync([hotId]);
+            Assert.Equal(((long?)null, (long?)Encoding.UTF8.GetByteCount(fixture.RawGoal(hot.Id))), mixed.Seal());
+        }
+
+        using (var unchanged = GoalSnapshotByteAccounting.Begin())
+        {
+            await fixture.Repository.SaveGoalSnapshotsAsync([changed]);
+            Assert.Equal(((long?)0, (long?)null), unchanged.Seal());
+        }
+
+        fixture.Execute("""
+            CREATE TRIGGER fixture_reject_goal_update BEFORE UPDATE ON goals
+            BEGIN SELECT RAISE(ABORT, 'fixture rejected goal upsert'); END
+            """);
+        using (var failed = GoalSnapshotByteAccounting.Begin())
+        {
+            var error = await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() =>
+                fixture.Repository.SaveGoalSnapshotsAsync([changed with { Objective = "Rejected" }]));
+            Assert.Contains("fixture rejected goal upsert", error.Message);
+            Assert.Equal(((long?)0, (long?)null), failed.Seal());
+        }
+
+        using (var beforeSerialization = GoalSnapshotByteAccounting.Begin())
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                fixture.Repository.SaveGoalSnapshotsAsync([changed with { IsMetadataOnly = true }]));
+            Assert.Equal(((long?)0, (long?)0), beforeSerialization.Seal());
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

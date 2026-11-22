@@ -29,7 +29,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 {
                     using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(reader.GetValue(1))
                         ?? throw new InvalidDataException("Snapshot payload is missing.");
-                    var goal = await JsonSerializer.DeserializeAsync<ArchivedUsageGoal>(stream, SerializerOptions, token);
+                    var goal = await GoalSnapshotByteAccounting.DeserializeAsync<ArchivedUsageGoal>(stream, SerializerOptions, token);
                     if (goal is null || goal.Id != goalId || goal.IsMetadataOnly || goal.Tasks is null)
                         throw new InvalidDataException("Snapshot identity or task collection is invalid.");
                     var archivedAt = DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture,

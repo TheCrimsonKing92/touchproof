@@ -364,7 +364,10 @@ public sealed class RunEventStoreTests
             db,
             new BatchTickSummary(3, Advanced: 2, Held: 1, Escalated: 0, Retried: 0, Done: 1, WatchSleeping: false)
             {
-                ProgressLines = ["TICK tick=3 eligible=4", "TICK_END tick=3 advanced=2 held=1 escalated=0 done=1"]
+                ProgressLines = ["TICK tick=3 eligible=4", "TICK_END tick=3 advanced=2 held=1 escalated=0 done=1",
+                    .. Enumerable.Repeat(new string('x', 300), ConductorTickPusher.MaxPersistedProgressLines)],
+                GoalSnapshotDeserializedUtf8Bytes = null,
+                GoalSnapshotSerializedUtf8Bytes = 0
             });
 
         var events = await new SqliteRunEventStore(db).ReadSinceAsync();
@@ -373,6 +376,13 @@ public sealed class RunEventStoreTests
         Assert.Equal("conduct:tick", evt.Operation);
         Assert.True(evt.Detail?.Contains("advanced=2", StringComparison.Ordinal) == true);
         Assert.True(evt.PayloadJson?.Contains("TICK_END tick=3", StringComparison.Ordinal) == true);
+        using var payload = System.Text.Json.JsonDocument.Parse(evt.PayloadJson!);
+        Assert.Equal(System.Text.Json.JsonValueKind.Null,
+            payload.RootElement.GetProperty("goal_snapshot_deserialized_utf8_bytes").ValueKind);
+        Assert.Equal(0, payload.RootElement.GetProperty("goal_snapshot_serialized_utf8_bytes").GetInt64());
+        var lines = payload.RootElement.GetProperty("progressLines");
+        Assert.Equal(ConductorTickPusher.MaxPersistedProgressLines, lines.GetArrayLength());
+        Assert.Equal(ConductorTickPusher.MaxPersistedProgressLineChars, lines[2].GetString()!.Length);
     }
 
     [Xunit.Fact(DisplayName = "ConductorTickPusher_persists_bounded_tick_payload_without_full_disposition_snapshot")]

@@ -1,7 +1,10 @@
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
@@ -69,8 +72,123 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
             Assert.Matches(@"owned-root-reap:\d+:[12](?:,| )", sweep);
             Assert.Matches(@" cpu_ms=\d+ ts=\S+\s*$", sweep);
             Assert.Equal(3, context.Kernel.Goals.Count);
+
+            var counters = Assert.Single(text.Split('\n'), line =>
+                line.StartsWith("TICK_LOAD_COUNTERS tick=1 ", StringComparison.Ordinal));
+            var events = new SqliteRunEventStore(workspace.RunEventStorePath).ReadSinceAsync().GetAwaiter().GetResult();
+            var tick = Assert.Single(events, entry => entry.EventType == RunEventTypes.ConductorTick);
+            using var payload = JsonDocument.Parse(tick.PayloadJson!);
+            Assert.Equal(1, payload.RootElement.GetProperty("Tick").GetInt32());
+            Assert.Equal(JsonValueKind.Null, payload.RootElement.GetProperty("goal_snapshot_deserialized_utf8_bytes").ValueKind);
+            var writeBytes = payload.RootElement.GetProperty("goal_snapshot_serialized_utf8_bytes");
+            Assert.True(writeBytes.ValueKind is JsonValueKind.Null or JsonValueKind.Number);
+            Assert.Contains("goal_snapshot_deserialized_utf8_bytes=unknown", counters);
+            Assert.Contains($"goal_snapshot_serialized_utf8_bytes={(writeBytes.ValueKind == JsonValueKind.Null ? "unknown" : writeBytes.GetRawText())} ", counters);
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
+    [Fact]
+    public async Task RestartAndOverlappingTicksKeepSeparateReceipts()
+    {
+        using var firstStore = new GoalTaskHistoryTestFixture();
+        using var secondStore = new GoalTaskHistoryTestFixture();
+        var firstSeed = GoalTaskHistoryTestFixture.Snapshot(entries: 1);
+        var secondSeed = firstSeed with { Objective = "Second tick writes a different payload café" };
+        var firstInSweep = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondWrote = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLateRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateReadFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? lateRead = null;
+        var sweepCalls = 0;
+        var checkpoints = 0;
+        var kernel = new AgentOrchestratorKernel();
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Quiet checkpoint");
+        var firstLoop = new ConductorBatchLoop(measuredSweep: _ =>
+        {
+            sweepCalls++;
+            var pendingRead = GoalSnapshotByteAccounting.TrackDeferredSnapshotWork(maySerialize: false);
+            lateRead = Task.Run(async () =>
+            {
+                using var observation = pendingRead;
+                await WaitFor(releaseLateRead.Task, "first receipt published");
+                var loaded = await firstStore.Repository.LoadGoalsAsync([new GoalId(firstSeed.Id)]);
+                Assert.Equal(firstSeed.Id, Assert.Single(loaded.Goals).Id.Value);
+                lateReadFinished.SetResult();
+            });
+            firstInSweep.SetResult();
+            WaitFor(secondWrote.Task, "second tick wrote").GetAwaiter().GetResult();
+            return null;
+        });
+
+        var firstRun = Task.Run(() =>
+        {
+            BatchTickSummary? receipt = null;
+            firstLoop.Run(kernel, ConductorBatchLoopTestsStepLedger.FixtureDriver(), ConductorAutonomyPolicy.Manual,
+                Path.Combine(Path.GetDirectoryName(firstStore.DatabasePath)!, "stop"), maxIterations: 1,
+                quiet: true, onTick: tick => receipt = tick, persistTick: _ =>
+                {
+                    if (++checkpoints == 1)
+                        firstStore.Repository.SaveGoalSnapshotsAsync([firstSeed]).GetAwaiter().GetResult();
+                });
+            return Assert.IsType<BatchTickSummary>(receipt);
+        });
+        var secondRun = Task.Run(() => ObserveSecondStore(() =>
+        {
+            WaitFor(firstInSweep.Task, "first tick entered sweep").GetAwaiter().GetResult();
+            secondStore.Repository.SaveGoalSnapshotsAsync([secondSeed]).GetAwaiter().GetResult();
+            secondWrote.SetResult();
+            WaitFor(lateReadFinished.Task, "late read finished during second tick").GetAwaiter().GetResult();
+        }));
+
+        BatchTickSummary first;
+        try
+        {
+            first = await WaitForReceipt(firstRun, "first receipt");
+        }
+        finally
+        {
+            releaseLateRead.TrySetResult();
+        }
+        var second = await WaitForReceipt(secondRun, "second receipt");
+        await WaitFor(lateRead!, "late read task");
+
+        Assert.Equal(1, sweepCalls);
+        Assert.True(checkpoints > 0);
+        Assert.Equal((1, 0, 0), (first.Tick, first.Advanced, first.Done));
+        Assert.Null(first.GoalSnapshotDeserializedUtf8Bytes);
+        Assert.Equal(Encoding.UTF8.GetByteCount(firstStore.RawGoal(firstSeed.Id)), first.GoalSnapshotSerializedUtf8Bytes);
+        Assert.Equal(1, second.Tick);
+        Assert.Equal(0, second.GoalSnapshotDeserializedUtf8Bytes);
+        Assert.Equal(Encoding.UTF8.GetByteCount(secondStore.RawGoal(secondSeed.Id)), second.GoalSnapshotSerializedUtf8Bytes);
+        Assert.NotEqual(first.GoalSnapshotSerializedUtf8Bytes, second.GoalSnapshotSerializedUtf8Bytes);
+
+        var restarted = ObserveSecondStore(() => Assert.Single(
+            secondStore.Repository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult()));
+        Assert.Equal(1, restarted.Tick);
+        Assert.Equal(0, restarted.GoalSnapshotDeserializedUtf8Bytes);
+        Assert.Equal(0, restarted.GoalSnapshotSerializedUtf8Bytes);
+
+        BatchTickSummary ObserveSecondStore(Action observe)
+        {
+            BatchTickSummary? receipt = null;
+            new ConductorBatchLoop().Run(new AgentOrchestratorKernel(), ConductorBatchLoopTestsStepLedger.FixtureDriver(),
+                ConductorAutonomyPolicy.Manual, Path.Combine(Path.GetDirectoryName(secondStore.DatabasePath)!, "stop"),
+                maxIterations: 1, watchInterval: TimeSpan.Zero, onTick: tick => receipt = tick, observeTickWithoutDispatch: observe);
+            return Assert.IsType<BatchTickSummary>(receipt);
+        }
+
+        static async Task WaitFor(Task task, string signal)
+        {
+            try { await task.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException error) { throw new TimeoutException($"Missing signal: {signal}", error); }
+        }
+
+        static async Task<BatchTickSummary> WaitForReceipt(Task<BatchTickSummary> task, string signal)
+        {
+            await WaitFor(task, signal);
+            return await task;
+        }
     }
 
     private static void AssertPopulation(string line) => Assert.Contains(

@@ -44,6 +44,7 @@ internal static class ConductProgressEventClassifier
             "LOOP_DRAINED" => "loop-drained",
             "LOOP_STOP" => "loop-stop", "POLICY_RELOAD" => "policy-reload",
             "PHASE_TIMING" => "phase-timing",
+            "TICK_LOAD_COUNTERS" => "tick-load-counters",
             "POLICY_RELOAD_FAILED" => "policy-reload-failed", "POLICY_INVALID" => "policy-invalid",
             "POLICY_WARNING" => "policy-warning",
             "SPECULATIVE_COHORT_PLAN" => "speculative-cohort-plan", "PRIORITY_ADMISSION" or "PRIORITY_STARVATION_GUARD" or "PRIORITY_DRIFT" or "PRIORITY_DILUTION" or "PRIORITY_OVERLAP" => "priority",
