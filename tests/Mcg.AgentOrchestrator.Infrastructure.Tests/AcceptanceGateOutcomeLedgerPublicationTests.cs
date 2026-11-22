@@ -27,6 +27,29 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     [Fact]
     public async Task OwnedTrainPublication_WritesOneRowFromResultAndLanePlan()
     {
+        var prefix = await PublishOwnedTrain();
+        AssertPublication(prefix, StartedAt, StartedAt, LaunchMain, "Failed", LaunchMain, hasSoloMetadata: false);
+    }
+
+    [Fact]
+    public async Task OwnedTrainPublication_DoesNotDuplicateAnObservationAppendedByBackfill()
+    {
+        var prefix = await PublishOwnedTrain(() =>
+        {
+            var reader = new CostGoalOutcomeGateLedgerReader(root);
+            Assert.Single(reader.Read(StartedAt.AddMinutes(1)));
+            Assert.Equal(1, reader.GateFileReads);
+        });
+
+        var lines = File.ReadAllLines(Path.Combine(root, AcceptanceGateOutcomeLedger.FileName));
+        var observations = lines.Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+            .Where(row => row.GetProperty("kind").ValueEquals(AcceptanceGateOutcomeLedger.GateKind));
+        Assert.Equal(Path.GetFileName(prefix), Assert.Single(observations).GetProperty("attemptId").GetString());
+        Assert.Equal(2, lines.Length);
+    }
+
+    private async Task<string> PublishOwnedTrain(Action? resultWritten = null)
+    {
         var group = GoalId.New().Value;
         var attemptId = FormattableString.Invariant($"{group[..8]}-gate-{StartedAt:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
         var directory = Directory.CreateDirectory(Path.Combine(root, "acceptance-gate-attempts", group));
@@ -35,9 +58,8 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         PublishLanePlan(owner);
 
         owner.TryWriteResultRecord(new AcceptanceVerificationResult(false, false, 1, null,
-            TestResultPaths: [prefix + ".trx"]));
-
-        AssertPublication(prefix, StartedAt, StartedAt, LaunchMain, "Failed", LaunchMain, hasSoloMetadata: false);
+            TestResultPaths: [prefix + ".trx"]), resultWrittenForTests: resultWritten);
+        return prefix;
     }
 
     internal static (ConductorParallelAcceptanceAttemptCoordinator Coordinator, ConductorParallelAcceptanceAttempt Attempt)

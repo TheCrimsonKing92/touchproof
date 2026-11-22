@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -11,6 +9,7 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
     private readonly string path = Path.GetFullPath(Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.FileName));
     private readonly Dictionary<(string Directory, string AttemptId), RetainedObservation> observations = new();
     private readonly HashSet<(string Directory, string AttemptId)> invalidated = [];
+    private readonly HashSet<(string Directory, string AttemptId)> pendingInvalidations = [];
     private long offset;
     private bool backfilled;
 
@@ -22,6 +21,7 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         LinesReadLastRun = 0;
         ReadTail();
         if (!backfilled) Backfill();
+        ConfirmInvalidations();
 
         return observations.Values
             .Where(entry => entry.Gate.RecordedAt < recordedBefore && HasRetainedEvidence(entry.Gate.Id))
@@ -36,29 +36,50 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
     private static bool HasRetainedEvidence(string prefix) =>
         File.Exists(prefix + AcceptanceGateLanePlan.ArtifactSuffix) && File.Exists(prefix + ".result.json");
 
-    private void Backfill()
+    private void Backfill() => AcceptanceGateOutcomeLedger.WithBackfillLock(path, () =>
     {
-        var lockPath = OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(lockPath)));
-        using var mutex = new Mutex(false, $"Mcg.CostGoalOutcomeGateBackfill.{hash}");
-        try { mutex.WaitOne(); }
-        catch (AbandonedMutexException) { /* Read the durable ledger after taking ownership. */ }
+        ReadTail();
+        if (backfilled) return;
+
+        var lines = CostGoalOutcomeMetric.ScanRecordedGateRows(orchestratorDirectory, DateTimeOffset.MaxValue,
+            (directory, attemptId) => !observations.ContainsKey((directory, attemptId)) &&
+                !invalidated.Contains((directory, attemptId)),
+            () => GateFileReads++)
+            .Select(row => JsonSerializer.Serialize(row, AcceptanceGateOutcomeLedger.Json)).ToList();
+        lines.Add(JsonSerializer.Serialize(new { Kind = AcceptanceGateOutcomeLedger.BackfillKind }, AcceptanceGateOutcomeLedger.Json));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        SharedJsonlFile.AppendLines(path, lines);
+        ReadTail();
+    });
+
+    private void ConfirmInvalidations()
+    {
+        foreach (var key in pendingInvalidations.ToArray())
+        {
+            var metadataPath = Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.AttemptRoot,
+                key.Directory, key.AttemptId + ".attempt.json");
+            if (HasStaleMetadata(metadataPath, key.AttemptId)) Invalidate(key);
+        }
+    }
+
+    // The ledger row is written first. If publishing stale metadata failed, keep the old observation until retry.
+    private static bool HasStaleMetadata(string path, string attemptId)
+    {
         try
         {
-            ReadTail();
-            if (backfilled) return;
-
-            var lines = CostGoalOutcomeMetric.ScanRecordedGateRows(orchestratorDirectory, DateTimeOffset.MaxValue,
-                (directory, attemptId) => !observations.ContainsKey((directory, attemptId)) &&
-                    !invalidated.Contains((directory, attemptId)),
-                () => GateFileReads++)
-                .Select(row => JsonSerializer.Serialize(row, AcceptanceGateOutcomeLedger.Json)).ToList();
-            lines.Add(JsonSerializer.Serialize(new { Kind = AcceptanceGateOutcomeLedger.BackfillKind }, AcceptanceGateOutcomeLedger.Json));
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            SharedJsonlFile.AppendLines(path, lines);
-            ReadTail();
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(stream, AcceptanceGateOutcomeLedger.Json) is
+                { Outcome: ConductorParallelAcceptanceAttemptOutcome.StaleCandidate } attempt && attempt.AttemptId == attemptId;
         }
-        finally { mutex.ReleaseMutex(); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return false; }
+    }
+
+    private void Invalidate((string Directory, string AttemptId) key)
+    {
+        pendingInvalidations.Remove(key);
+        invalidated.Add(key);
+        observations.Remove(key);
     }
 
     private void ReadTail()
@@ -111,8 +132,10 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
             var key = (directory, attemptId);
             if (kind.ValueEquals(AcceptanceGateOutcomeLedger.InvalidationKind))
             {
-                invalidated.Add(key);
-                observations.Remove(key);
+                if (json.TryGetProperty("requiresStaleMetadata", out var required) && required.ValueKind == JsonValueKind.True)
+                    pendingInvalidations.Add(key);
+                else
+                    Invalidate(key);
             }
             else if (kind.ValueEquals(AcceptanceGateOutcomeLedger.GateKind) && !invalidated.Contains(key) &&
                 json.Deserialize<AcceptanceGateOutcomeObservation>(AcceptanceGateOutcomeLedger.Json) is
@@ -147,5 +170,6 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         backfilled = false;
         observations.Clear();
         invalidated.Clear();
+        pendingInvalidations.Clear();
     }
 }

@@ -1838,6 +1838,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             var artifact = ToArtifact(run);
+            var prefix = attempt.ResultPath[..^".result.json".Length];
+            var publicationOffset = AcceptanceGateOutcomeLedger.CapturePublicationOffset(prefix, gateSelection);
             WriteResult(attempt.ResultPath, artifact);
             var resultFingerprint = HashReplayResult(JsonSerializer.Serialize(artifact, JsonOptions));
             var originalFocusedReceipt = CaptureOriginalFocusedReceipt(attempt, run);
@@ -1860,7 +1862,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             // A result observer can persist the same terminal classification before this process claims it.
             if (gateSelection is not null &&
                 (terminal ?? TryReadAttemptFile(attempt.MetadataPath))?.RecordedGateProvenance(attempt.AttemptId) is { } recorded)
-                AcceptanceGateOutcomeLedger.Publish(attempt.ResultPath[..^".result.json".Length], artifact, gateSelection, recorded);
+                AcceptanceGateOutcomeLedger.Publish(prefix, artifact, gateSelection, publicationOffset, recorded);
             WriteTerminalExitReceipt(
                 attempt,
                 claimedTerminal,
@@ -2312,7 +2314,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return false;
         }
 
-        WriteAttemptFile(current with
+        var stale = current with
         {
             Outcome = ConductorParallelAcceptanceAttemptOutcome.StaleCandidate,
             InvalidatedAt = current.InvalidatedAt ?? _utcNow(),
@@ -2321,9 +2323,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             LastHeartbeatAt = _utcNow(),
             Detail = detail,
             SupersessionCause = supersessionCause
-        });
+        };
+        // A failed append must leave the terminal metadata eligible for a retry.
         if (current.RecordedGateProvenance(attempt.AttemptId) is not null)
             AcceptanceGateOutcomeLedger.Invalidate(current.ResultPath[..^".result.json".Length]);
+        WriteAttemptFile(stale);
         return true;
     }
 

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -85,25 +87,89 @@ internal static class AcceptanceGateOutcomeLedger
         };
     }
 
-    internal static void Publish(string prefix, ConductorParallelAcceptanceRunArtifact result,
-        AcceptanceSelectedExecutionRecord? selection, SoloGateOutcomeProvenance? solo = null)
+    // Take this before exposing the result. Backfill can only see this publication after this offset.
+    internal static long CapturePublicationOffset(string prefix, AcceptanceSelectedExecutionRecord? selection)
     {
-        if (selection is null || !IsRecordedGate(result) || RecordedAt(Path.GetFileName(prefix)) is not { } recordedAt) return;
-        Append(prefix, CreateObservation(prefix, recordedAt, result, selection, solo));
+        if (selection is null || LedgerPath(prefix) is not { } path) return 0;
+        var file = new FileInfo(path);
+        return file.Exists ? file.Length : 0;
     }
 
-    internal static void Invalidate(string prefix) => Append(prefix,
-        new { Kind = InvalidationKind, AttemptId = Path.GetFileName(prefix), Directory = Path.GetFileName(Path.GetDirectoryName(prefix)) });
-
-    private static void Append<T>(string prefix, T row)
+    internal static void Publish(string prefix, ConductorParallelAcceptanceRunArtifact result,
+        AcceptanceSelectedExecutionRecord? selection, long publicationOffset, SoloGateOutcomeProvenance? solo = null)
     {
-        var root = Path.GetDirectoryName(Path.GetDirectoryName(prefix));
-        if (Path.GetFileName(root) != AttemptRoot) return;
-        var path = Path.Combine(Path.GetDirectoryName(root!)!, FileName);
-        try { SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(row, Json)); }
+        if (selection is null || !IsRecordedGate(result) || RecordedAt(Path.GetFileName(prefix)) is not { } recordedAt ||
+            LedgerPath(prefix) is not { } path) return;
+        var row = CreateObservation(prefix, recordedAt, result, selection, solo);
+        try
+        {
+            WithBackfillLock(path, () =>
+            {
+                if (!HasPublishedObservation(path, publicationOffset, row))
+                    SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(row, Json));
+            });
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome ledger unavailable for {prefix}: {ex.Message}");
         }
+    }
+
+    internal static void Invalidate(string prefix)
+    {
+        if (LedgerPath(prefix) is not { } path) return;
+        SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(new
+        {
+            Kind = InvalidationKind,
+            AttemptId = Path.GetFileName(prefix),
+            Directory = Path.GetFileName(Path.GetDirectoryName(prefix)),
+            RequiresStaleMetadata = true
+        }, Json));
+    }
+
+    internal static void WithBackfillLock(string path, Action action)
+    {
+        var lockPath = Path.GetFullPath(path);
+        if (OperatingSystem.IsWindows()) lockPath = lockPath.ToUpperInvariant();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(lockPath)));
+        using var mutex = new Mutex(false, $"Mcg.CostGoalOutcomeGateBackfill.{hash}");
+        try { mutex.WaitOne(); }
+        catch (AbandonedMutexException) { /* Read the durable ledger after taking ownership. */ }
+        try { action(); }
+        finally { mutex.ReleaseMutex(); }
+    }
+
+    private static string? LedgerPath(string prefix)
+    {
+        var root = Path.GetDirectoryName(Path.GetDirectoryName(prefix));
+        return Path.GetFileName(root) == AttemptRoot ? Path.Combine(Path.GetDirectoryName(root!)!, FileName) : null;
+    }
+
+    private static bool HasPublishedObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
+    {
+        FileStream stream;
+        try { stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
+        using (stream)
+        {
+            if (offset > stream.Length) offset = 0;
+            if (offset == stream.Length) return false;
+            stream.Position = offset;
+            using var reader = new StreamReader(stream);
+            while (reader.ReadLine() is { } line)
+            {
+                try
+                {
+                    var json = JsonSerializer.Deserialize<JsonElement>(line);
+                    if (json.ValueKind == JsonValueKind.Object &&
+                        json.TryGetProperty("kind", out var kind) && kind.ValueKind == JsonValueKind.String && kind.ValueEquals(GateKind) &&
+                        json.TryGetProperty("attemptId", out var id) && id.ValueKind == JsonValueKind.String && id.ValueEquals(row.AttemptId) &&
+                        json.TryGetProperty("directory", out var directory) && directory.ValueKind == JsonValueKind.String &&
+                        directory.ValueEquals(row.Directory)) return true;
+                }
+                catch (JsonException) { /* A publication offset can fall inside another append. */ }
+            }
+        }
+        return false;
     }
 }

@@ -439,7 +439,8 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
         }
     }
 
-    internal void TryWriteResultRecord(AcceptanceVerificationResult? result = null, Exception? exception = null)
+    internal void TryWriteResultRecord(AcceptanceVerificationResult? result = null, Exception? exception = null,
+        Action? resultWrittenForTests = null)
     {
         if (!_writesResultRecord) return;
         var branch = Identity.VerifyingCommitSha == "unavailable" ? null : Identity.VerifyingCommitSha;
@@ -449,8 +450,10 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
             var artifact = exception is not null
                 ? AcceptanceAttemptResultRecord.ForFault(exception, exception.Message, branch, main)
                 : AcceptanceAttemptResultRecord.ForVerification(result!, branch, main);
+            var publicationOffset = AcceptanceGateOutcomeLedger.CapturePublicationOffset(Identity.ResultsPrefix, _gateOutcomeSelection);
             AcceptanceAttemptResultRecord.Write(Identity.ResultsPrefix + ".result.json", artifact);
-            AcceptanceGateOutcomeLedger.Publish(Identity.ResultsPrefix, artifact, _gateOutcomeSelection);
+            resultWrittenForTests?.Invoke();
+            AcceptanceGateOutcomeLedger.Publish(Identity.ResultsPrefix, artifact, _gateOutcomeSelection, publicationOffset);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -132,6 +132,49 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
         Assert.Empty(new CostGoalOutcomeGateLedgerReader(root).Read(EvaluatedAt));
     }
 
+    [Fact]
+    public void Run_FailedInvalidationAppendLeavesSoloGateRetryable()
+    {
+        var (coordinator, attempt) = AcceptanceGateOutcomeLedgerPublicationTests.PublishSolo(root, AdoptedAt.AddMinutes(1));
+        SharedJsonlFile.AppendLine(LedgerPath, """{"kind":"backfill-complete"}""");
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Single(reader.Read(EvaluatedAt));
+
+        using (File.Open(LedgerPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.ThrowsAny<IOException>(() => coordinator.InvalidateCurrent(attempt.GoalId, "candidate changed"));
+            var unchanged = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(attempt.GoalId));
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, unchanged.Outcome);
+            Assert.Null(unchanged.ReconciledAt);
+            Assert.Single(Scan());
+            Assert.Single(reader.Read(EvaluatedAt));
+        }
+
+        Assert.True(coordinator.InvalidateCurrent(attempt.GoalId, "candidate changed"));
+        var stale = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(attempt.GoalId));
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, stale.Outcome);
+        Assert.Empty(Scan());
+        Assert.Empty(reader.Read(EvaluatedAt));
+        Assert.Equal(1, reader.LinesReadLastRun);
+        Assert.Equal(0, reader.GateFileReads);
+    }
+
+    [Fact]
+    public void Run_ObservesInvalidationAfterStaleMetadataIsPublished()
+    {
+        var (coordinator, attempt) = AcceptanceGateOutcomeLedgerPublicationTests.PublishSolo(root, AdoptedAt.AddMinutes(1));
+        SharedJsonlFile.AppendLine(LedgerPath, """{"kind":"backfill-complete"}""");
+        AcceptanceGateOutcomeLedger.Invalidate(attempt.ResultPath[..^".result.json".Length]);
+
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Single(Scan());
+        Assert.Single(reader.Read(EvaluatedAt));
+
+        Assert.True(coordinator.InvalidateCurrent(attempt.GoalId, "candidate changed"));
+        Assert.Empty(Scan());
+        Assert.Empty(reader.Read(EvaluatedAt));
+    }
+
     private GoalId FileGoal(int window)
     {
         var goal = GoalId.New();
