@@ -719,8 +719,8 @@ internal static partial class GoalOperationJournal
     public static GoalOperationJournalSummary Read(string executionDirectory, GoalId goalId)
         => Read(executionDirectory, goalId, includeArchive: true, rejectMalformedEntries: false);
 
-    internal static GoalOperationJournalSummary ReadStrict(string executionDirectory, GoalId goalId)
-        => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: true);
+    internal static GoalOperationJournalSummary ReadStrict(string executionDirectory, GoalId goalId, bool includeArchive = false)
+        => Read(executionDirectory, goalId, includeArchive, rejectMalformedEntries: true);
 
     public static GoalOperationJournalSummary ReadActive(string executionDirectory, GoalId goalId)
         => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: false);
@@ -731,37 +731,37 @@ internal static partial class GoalOperationJournal
         bool includeArchive,
         bool rejectMalformedEntries) =>
         ReadPaths(PathFor(executionDirectory, goalId), ArchivePathFor(executionDirectory, goalId),
-            includeArchive, rejectMalformedEntries);
+            includeArchive, rejectMalformedEntries ? goalId : null);
 
     internal static GoalOperationJournalSummary ReadFromStateCopy(string stateDirectory, GoalId goalId)
     {
         var directory = Path.Combine(stateDirectory, "goal-operations");
         var name = $"{goalId.Value}.jsonl";
         return ReadPaths(Path.Combine(directory, name), Path.Combine(directory, "archive", name),
-            includeArchive: true, rejectMalformedEntries: false);
+            includeArchive: true, strictGoalId: null);
     }
 
     private static GoalOperationJournalSummary ReadPaths(
-        string path, string archivePath, bool includeArchive, bool rejectMalformedEntries)
+        string path, string archivePath, bool includeArchive, GoalId? strictGoalId)
     {
-        var plainExists = File.Exists(path);
         var compressedPath = path + ".gz";
-        var compressedExists = File.Exists(compressedPath);
-        var plainEntries = plainExists ? ReadEntries(path, rejectMalformedEntries) : [];
-        GoalOperationJournalEntry[] compressedEntries;
-        try { compressedEntries = compressedExists ? ReadEntries(compressedPath, rejectMalformedEntries) : []; }
-        catch (InvalidDataException) when (plainExists) { compressedEntries = []; }
+        var plainEntries = ReadEntriesIfPresent(path, strictGoalId);
+        GoalOperationJournalEntry[]? compressedEntries;
+        try { compressedEntries = ReadEntriesIfPresent(compressedPath, strictGoalId); }
+        catch (InvalidDataException) when (plainEntries is not null && strictGoalId is null) { compressedEntries = []; }
+        if (includeArchive && plainEntries is null && compressedEntries is null &&
+            ReadEntriesIfPresent(archivePath, strictGoalId) is { } archivedEntries)
+            return BuildSummary(archivePath, archivedEntries);
+
+        var resolvedPath = plainEntries is null && compressedEntries is not null ? compressedPath : path;
+        plainEntries ??= [];
+        compressedEntries ??= [];
         var plainIncludesCompressed = plainEntries.Length >= compressedEntries.Length &&
             plainEntries.Take(compressedEntries.Length).Select(entry => JsonSerializer.Serialize(entry, JsonOptions))
                 .SequenceEqual(compressedEntries.Select(entry => JsonSerializer.Serialize(entry, JsonOptions)));
         var entries = plainIncludesCompressed ? plainEntries : compressedEntries.Concat(plainEntries)
             .OrderBy(entry => entry.At).ToArray();
-        if (includeArchive && !plainExists && !compressedExists && File.Exists(archivePath))
-            entries = ReadEntries(archivePath, rejectMalformedEntries).Concat(entries)
-                .OrderBy(entry => entry.At).ToArray();
-        path = plainExists ? path : compressedExists ? compressedPath :
-            includeArchive && File.Exists(archivePath) ? archivePath : path;
-        return BuildSummary(path, entries);
+        return BuildSummary(resolvedPath, entries);
     }
 
     internal static string? ResolveReadPath(string executionDirectory, GoalId goalId)
@@ -997,19 +997,19 @@ internal static partial class GoalOperationJournal
         }
     }
 
-    private static GoalOperationJournalEntry[] ReadEntries(
-        string path,
-        bool rejectMalformedEntries = false)
+    private static GoalOperationJournalEntry[]? ReadEntriesIfPresent(string path, GoalId? strictGoalId)
     {
+        var lines = ReadJournalLinesIfPresent(path, strictGoalId is not null);
+        if (lines is null) return null;
         var entries = new List<GoalOperationJournalEntry>();
         var lineNumber = 0;
-        foreach (var line in ReadJournalLines(path))
+        foreach (var line in lines)
         {
             lineNumber++;
             var entry = TryDeserialize(line, out var failure);
             if (entry is null)
             {
-                if (rejectMalformedEntries)
+                if (strictGoalId is not null)
                 {
                     throw new FormatException(
                         $"Malformed goal operation journal entry in '{path}' at line {lineNumber}: {failure}.");
@@ -1017,6 +1017,10 @@ internal static partial class GoalOperationJournal
 
                 continue;
             }
+
+            if (strictGoalId is not null && entry.GoalId != strictGoalId)
+                throw new FormatException(
+                    $"Malformed goal operation journal entry in '{path}' at line {lineNumber}: expected goal '{strictGoalId.Value}', found '{entry.GoalId.Value}'.");
 
             entries.Add(entry);
         }

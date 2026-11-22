@@ -6,6 +6,7 @@ public sealed class CliHelpTestsCriterionEvidence
     [Xunit.Theory]
     [Xunit.InlineData("criterion-evidence-map")]
     [Xunit.InlineData("criterion-evidence-record")]
+    [Xunit.InlineData("criterion-evidence-supersede")]
     [Xunit.InlineData("criterion-evidence-rephase")]
     public void PublicEvidenceCommandsAcceptGoalAndIntentAttribution(string command)
     {
@@ -16,12 +17,25 @@ public sealed class CliHelpTestsCriterionEvidence
     [Xunit.Theory]
     [Xunit.InlineData("criterion-evidence-map")]
     [Xunit.InlineData("criterion-evidence-record")]
+    [Xunit.InlineData("criterion-evidence-supersede")]
     [Xunit.InlineData("criterion-evidence-rephase")]
     public void PublicEvidenceCommandsStillRejectUnknownFlags(string command)
     {
         var error = Xunit.Assert.Throws<ArgumentException>(() =>
             CliCommandHelp.ThrowIfInvalidFlags([command, "--waive-evidence"]));
         Xunit.Assert.Contains("Unknown option '--waive-evidence'", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Supersede_UsageAndFlags_RequireAnAttributedReasonFile()
+    {
+        var output = AsyncLocalConsoleRouter.Capture(() => Xunit.Assert.True(
+            CliCommandHelp.TryPrintStartupHelp(["criterion-evidence-supersede", "--help"])));
+        Xunit.Assert.Contains("criterion-evidence-supersede --goal <goal-prefix> <obligation-id> --reason-file <path>",
+            output, StringComparison.Ordinal);
+        CliCommandHelp.ThrowIfInvalidFlags(["criterion-evidence-supersede", "--reason-file", "reason.txt",
+            "--actor-kind", "human", "--driver-session", "driver", "--json"]);
+        Xunit.Assert.Equal(CliCommandCapability.Execution, CliCommandCapabilities.Classify(["criterion-evidence-supersede"]));
     }
 
     [Xunit.Fact]

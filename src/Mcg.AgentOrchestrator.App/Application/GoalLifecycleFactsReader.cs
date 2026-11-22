@@ -8,12 +8,15 @@ internal static class GoalLifecycleFactsReader
     public static GoalLifecycleFacts Read(
         OrchestratorWorkspace workspace,
         Goal goal,
-        bool? hasOpenClarification = null)
+        bool? hasOpenClarification = null,
+        bool rejectMalformedJournalEntries = false)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var workspaceExists = worktree is not null;
-        var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+        var journal = rejectMalformedJournalEntries
+            ? GoalOperationJournal.ReadStrict(executionDirectory, goal.Id, includeArchive: true)
+            : GoalOperationJournal.Read(executionDirectory, goal.Id);
         var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
         var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
         var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);

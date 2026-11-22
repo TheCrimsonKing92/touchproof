@@ -22,6 +22,7 @@ public static class OperatorIntentVerbs
     public const string ApprovePolicyChange = "approve-policy-change";
     public const string CriterionEvidenceMap = "criterion-evidence-map";
     public const string CriterionEvidenceRecord = "criterion-evidence-record";
+    public const string CriterionEvidenceSupersede = "criterion-evidence-supersede";
     public const string CriterionEvidenceRepair = "criterion-evidence-repair";
     public const string CriterionEvidenceRephase = "criterion-evidence-rephase";
     public const string LessonRecord = "lesson-record";
@@ -143,6 +144,8 @@ public sealed record CriterionEvidenceRepairOperatorIntentPayload(
     string FindingStableId,
     string CandidateSha,
     string Reason);
+
+public sealed record CriterionEvidenceSupersedeOperatorIntentPayload(string ObligationId, string Reason);
 
 public sealed record CriterionEvidenceRephaseOperatorIntentPayload(
     string ObligationId,

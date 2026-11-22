@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliArgumentParser
@@ -26,7 +28,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
     }
 
     if (command.Equals("adjudicate", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals(RecordControlReceiptCommand.Name, StringComparison.OrdinalIgnoreCase))
+        command.Equals(RecordControlReceiptCommand.Name, StringComparison.OrdinalIgnoreCase) ||
+        command.Equals(OperatorIntentVerbs.CriterionEvidenceSupersede, StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeArgs([command, .. TokenizeQuotedArguments(remainder)]);
     }
