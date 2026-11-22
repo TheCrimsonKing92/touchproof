@@ -12,7 +12,8 @@ public sealed class BuildPermitWaitQueue
     public static readonly TimeSpan TicketStaleAfter = TimeSpan.FromMinutes(4);
     // Ten minutes is about 1.5 x the worst refused evidence retry gap on 2026-10-25 (6 min 26 s).
     public static readonly TimeSpan EvidenceTicketStaleAfter = TimeSpan.FromMinutes(10);
-    // Gates and focused evidence share five-minute promotion and remain FIFO with each other.
+    // Gates and focused evidence share five-minute promotion past workers.
+    // Gates take the earliest gate/evidence positions, with FIFO order within each kind.
     // This leaves a displaced, earlier worker at least seven minutes of its 12 min queue budget.
     public static readonly TimeSpan GatePrecedenceAfter = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan SynchronizationRetryBudget = TimeSpan.FromSeconds(1);
@@ -149,9 +150,21 @@ public sealed class BuildPermitWaitQueue
             if (IsDead(ticket, now)) { DeleteTicket(path); continue; }
             if (!IsSatisfied(path)) tickets.Add(ticket);
         }
-        return tickets.OrderBy(t => (t.Kind is BuildPermitClaimantKind.Gate or BuildPermitClaimantKind.FocusedEvidence) &&
+        var ordered = tickets.OrderBy(t => (t.Kind is BuildPermitClaimantKind.Gate or BuildPermitClaimantKind.FocusedEvidence) &&
                 now - t.FirstWaitedAt >= GatePrecedenceAfter ? 0 : 1)
             .ThenBy(t => t.FirstWaitedAt).ThenBy(t => t.Key, StringComparer.Ordinal).ToList();
+        // Refill only gate and evidence positions so workers keep their original positions.
+        var gateAndEvidence = ordered
+            .Where(t => t.Kind is BuildPermitClaimantKind.Gate or BuildPermitClaimantKind.FocusedEvidence)
+            .OrderBy(t => t.Kind == BuildPermitClaimantKind.FocusedEvidence)
+            .ToList();
+        var next = 0;
+        for (var index = 0; index < ordered.Count; index++)
+        {
+            if (ordered[index].Kind is BuildPermitClaimantKind.Gate or BuildPermitClaimantKind.FocusedEvidence)
+                ordered[index] = gateAndEvidence[next++];
+        }
+        return ordered;
     }
 
     private bool IsDead(Ticket ticket, DateTimeOffset now) =>
