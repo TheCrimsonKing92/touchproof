@@ -70,7 +70,7 @@ public sealed class CliProcessEnvironmentWorkerBuildSeedTests
         finally
         {
             Environment.SetEnvironmentVariable("GIT_DIR", previous);
-            parent.Delete(recursive: true);
+            SharedTestSupport.RemoveTempDirectory(parent.FullName);
         }
     }
 
