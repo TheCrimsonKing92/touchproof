@@ -175,17 +175,17 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             primaryPrefix = await PublishOwnedTrain();
         var primaryIntent = Assert.Single(pendingDirectory.GetFiles("*.jsonl")).FullName;
 
-        var original = pendingDirectory.GetAccessControl();
-        var denied = pendingDirectory.GetAccessControl();
+        var access = pendingDirectory.GetAccessControl(AccessControlSections.Access);
+        var original = access.GetSecurityDescriptorBinaryForm();
         using var identity = WindowsIdentity.GetCurrent();
-        denied.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.ListDirectory | FileSystemRights.CreateFiles,
+        access.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.ListDirectory | FileSystemRights.CreateFiles,
             AccessControlType.Deny));
         var reader = new CostGoalOutcomeGateLedgerReader(root);
         var evaluatedAt = StartedAt.AddMinutes(1);
         string fallbackPrefix;
-        pendingDirectory.SetAccessControl(denied);
         try
         {
+            pendingDirectory.SetAccessControl(access);
             Assert.Throws<UnauthorizedAccessException>(() => pendingDirectory.GetFiles("*.jsonl"));
             Assert.Throws<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(pendingDirectory.FullName, "probe"), ""));
             using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -197,7 +197,12 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.False(File.Exists(fallback));
             Assert.Equal(Path.GetFileName(fallbackPrefix), Assert.Single(ReadRows()).AttemptId);
         }
-        finally { pendingDirectory.SetAccessControl(original); }
+        finally
+        {
+            // SetAccessControl persists only sections marked as modified.
+            access.SetSecurityDescriptorBinaryForm(original, AccessControlSections.Access);
+            pendingDirectory.SetAccessControl(access);
+        }
 
         Assert.True(File.Exists(primaryIntent));
         Assert.Equal(new[] { primaryPrefix, fallbackPrefix }.Order(StringComparer.Ordinal),
