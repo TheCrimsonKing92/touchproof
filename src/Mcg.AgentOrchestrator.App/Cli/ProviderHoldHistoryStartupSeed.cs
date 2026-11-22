@@ -38,9 +38,10 @@ internal static class ProviderHoldHistoryStartupSeed
             var workingIds = working.Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal);
             var selection = ProviderHoldHistory.SelectSeedEvidence(rows, workingIds);
             var ids = selection.Sources.Concat(selection.Dependencies).Select(id => new GoalId(id)).ToHashSet();
-            if (selection.Sources.Count > 0 || rows.Count > 0 || working.Count > 0 || existing.Count > 0)
-                ids.UnionWith(repository.ListProviderHoldSeedMarkerGoalsAsync().GetAwaiter().GetResult()
-                    .Where(id => !workingIds.Contains(id.Value)));
+            var markerGoals = selection.Sources.Count > 0 || rows.Count > 0 || working.Count > 0 || existing.Count > 0
+                ? repository.ListProviderHoldSeedMarkerGoalsAsync().GetAwaiter().GetResult().ToHashSet()
+                : [];
+            ids.UnionWith(markerGoals.Where(id => !workingIds.Contains(id.Value)));
             var candidates = ids.OrderBy(id => id.Value, StringComparer.Ordinal).ToArray();
             var historyMs = Elapsed(historyStarted);
             var evidenceStarted = time.GetTimestamp();
@@ -53,16 +54,22 @@ internal static class ProviderHoldHistoryStartupSeed
             var projected = evidence?.Where(row => requestedIds.Contains(row.GoalId) &&
                     (row.Tasks.Count != 0 || !RequiresDispatchHistory(row.GoalId)))
                 .GroupBy(row => row.GoalId, StringComparer.Ordinal).Where(group => group.Count() == 1)
-                .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal) ?? [];
+                .ToDictionary(group => group.Key, group => ProviderHoldSeedPruning.Adapt(group.Single()), StringComparer.Ordinal) ?? [];
             var canonical = Load(candidates.Where(id => !projected.ContainsKey(id.Value)).ToArray());
-            var inputs = projected.Values.Select(ProviderHoldSeedPruning.Adapt).Concat(canonical.Values).ToArray();
+            var inputs = projected.Values.Concat(canonical.Values).ToArray();
             var pruneStarted = time.GetTimestamp();
             var index = ProviderHoldSeedIndex.Evaluate(working, existing, inputs, selection.Sources);
             var pruneMs = Elapsed(pruneStarted);
-            var hydrate = index.RequiredGoals.Where(id => projected.ContainsKey(id) && !canonical.ContainsKey(id))
-                .Select(id => new GoalId(id)).ToArray();
+            // Historical witnesses feed the read-only hold scope. Keep full snapshots for
+            // selected hold sources, current indexed hold owners, and operator/probe marker owners.
+            var holdOwners = index.Evaluations.Values.Select(entry => entry.Schedule?.Hold.SourceGoalId)
+                .OfType<GoalId>().ToHashSet();
+            var hydrate = index.RequiredGoals.Where(projected.ContainsKey).Select(id => new GoalId(id))
+                .Where(id => selection.Sources.Contains(id.Value) || holdOwners.Contains(id) || markerGoals.Contains(id))
+                .ToArray();
             foreach (var (id, goal) in Load(hydrate)) canonical.Add(id, goal);
             var byId = existing.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
+            foreach (var (id, goal) in projected) byId[id] = goal;
             foreach (var (id, goal) in canonical) byId[id] = goal;
             var retained = index.RequiredGoals.Order(StringComparer.Ordinal).Select(id => byId[id]).ToArray();
             var elapsedMs = Elapsed(started);

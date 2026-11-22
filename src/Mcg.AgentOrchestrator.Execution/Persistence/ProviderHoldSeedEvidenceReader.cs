@@ -67,7 +67,7 @@ internal static class ProviderHoldSeedEvidenceReader
                 history.LatestVerification.ValueKind != JsonValueKind.Undefined
                     ? history.LatestVerification.Deserialize<TaskVerificationSnapshot>(options) : task.LastVerification,
                 history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray(),
-                task.LatestProviderBudgetRecoveryAt));
+                task.LatestProviderBudgetRecoveryAt) { LastProcess = task.LastProcess });
         }
         var timeline = row.IsMetadataOnly ? [] : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
             ? row.Timeline ?? [] : (await new GoalTimelineStore(options).ReadAsync(
@@ -99,7 +99,7 @@ internal static class ProviderHoldSeedEvidenceReader
         TaskVerificationSnapshot? LastVerification,
         [property: JsonPropertyName(GoalTaskHistoryStore.VerificationProperty)] JsonElement VerificationEntries,
         JsonElement HistoryInTable,
-        DateTimeOffset? LatestProviderBudgetRecoveryAt);
+        DateTimeOffset? LatestProviderBudgetRecoveryAt, TaskProcessSnapshot? LastProcess);
 
     private sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,
         DateTimeOffset DispatchedAt, string? ProviderName, string? ClaudeCredentialSourceDirectory,

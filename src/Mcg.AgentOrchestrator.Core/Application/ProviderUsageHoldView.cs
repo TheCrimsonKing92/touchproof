@@ -14,7 +14,10 @@ public sealed record ProviderUsageHoldRow(ProviderBudgetExhaustionHold Hold, Pro
 public sealed record ProviderUsageTaskEvidence(string TaskId, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
     TaskDispatchSnapshot? LastDispatch, IReadOnlyList<TaskDispatchSnapshot> DispatchHistory,
     TaskVerificationSnapshot? LastVerification, IReadOnlyList<TaskVerificationSnapshot> VerificationHistory,
-    DateTimeOffset? LatestProviderBudgetRecoveryAt);
+    DateTimeOffset? LatestProviderBudgetRecoveryAt)
+{
+    public TaskProcessSnapshot? LastProcess { get; init; }
+}
 
 public sealed record ProviderUsageGoalEvidence(string GoalId, GoalStatus Status,
     IReadOnlyList<ProviderUsageTaskEvidence> Tasks, IReadOnlyList<ProgressEvent> Timeline);

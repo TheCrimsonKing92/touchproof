@@ -22,7 +22,7 @@ public static class ProviderHoldSeedPruning
     {
         var tasks = row.Tasks.Select(task => TaskSpec.FromSnapshot(new TaskSnapshot(
             task.TaskId, "Provider seed input", task.RequiredRole, task.Status, task.AssignedAgentId,
-            null, task.LastVerification, task.VerificationHistory, task.LastDispatch, null,
+            null, task.LastVerification, task.VerificationHistory, task.LastDispatch, task.LastProcess,
             DispatchHistory: task.DispatchHistory, LatestProviderBudgetRecoveryAt: task.LatestProviderBudgetRecoveryAt)))
             .ToArray();
         var goal = tasks.Length == 0

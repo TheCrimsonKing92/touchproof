@@ -66,12 +66,15 @@ public static class GoalSnapshotArchiveCodec
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    public static byte[] Encode(string json)
+    public static byte[] Encode(string json) =>
+        Encode(Encoding.UTF8.GetBytes(json), CompressionLevel.Optimal);
+
+    internal static byte[] Encode(ReadOnlySpan<byte> json, CompressionLevel level)
     {
         using var output = new MemoryStream();
         output.Write(Marker);
-        using (var compressor = new BrotliStream(output, CompressionLevel.Optimal, leaveOpen: true))
-            compressor.Write(Encoding.UTF8.GetBytes(json));
+        using (var compressor = new BrotliStream(output, level, leaveOpen: true))
+            compressor.Write(json);
         return output.ToArray();
     }
 
