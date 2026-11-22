@@ -23,5 +23,6 @@
              Link="config\trials\hermes-acp-v2026.8.27.json"
              CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\docs\owner-console-changelog.md" Link="docs\owner-console-changelog.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\config\worker-tools.json" Link="config\worker-tools.json" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

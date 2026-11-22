@@ -14,6 +14,144 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
 {
     private static readonly DateTimeOffset Now = new(2026, 10, 6, 0, 0, 0, TimeSpan.Zero);
     private static readonly JsonSerializerOptions Options = new() { Converters = { new JsonStringEnumConverter() } };
+    private const string ArchivePayloadSelect = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ArchiveTerminalGoals_WritesValidMarkersOnlyForNewArchives(bool compress)
+    {
+        using var fixture = await Fixture.CreateAsync(3);
+        var terminal = fixture.Goals.Select(CompleteForArchive).ToArray();
+        var existing = terminal[0];
+        await fixture.WriteGoalAsync(existing, archive: true, compress: compress);
+        foreach (var goal in terminal.Skip(1))
+            await fixture.WriteGoalAsync(goal);
+
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
+        Assert.Equal(2, await repository.ArchiveTerminalGoalSnapshotsAsync(Now.AddDays(1), compressSnapshots: compress));
+
+        await using var connection = new SqliteConnection($"Data Source={fixture.Workspace.SqliteStatePath};Pooling=False");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT goal_id, format_version FROM attention_archive_evidence ORDER BY goal_id";
+        var marked = new List<string>();
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                marked.Add(reader.GetString(0));
+                Assert.Equal(1, reader.GetInt32(1));
+            }
+        }
+        Assert.Equal(terminal.Skip(1).Select(goal => goal.Id).Order(), marked);
+
+        var reads = new List<GoalSnapshotReadObservation>();
+        var projection = await fixture.OpenObservedQueries(reads).ReadAttentionProjectionAsync();
+        Assert.NotNull(projection);
+        Assert.Equal(1, projection.Reads.ArchivePayloadsRead);
+        Assert.Equal(existing.Id, Assert.Single(reads.Where(read => read.Operation == "attention-archive-decode")).GoalId);
+    }
+
+    [Fact]
+    public async Task ArchiveTimeMarkers_SkipManyArchiveReadsAndPreserveProjection()
+    {
+        const int goalCount = 100;
+        using var fixture = await Fixture.CreateAsync(goalCount);
+        foreach (var goal in fixture.Goals)
+            await fixture.WriteGoalAsync(CompleteForArchive(goal));
+        Assert.Equal(goalCount, await fixture.ArchiveTerminalGoalsAsync());
+
+        var statements = new List<string>();
+        var reads = new List<GoalSnapshotReadObservation>();
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath,
+            statements.Add, telemetryOptions: null, readObserver: reads.Add);
+
+        async Task<AttentionReadProjection> ReadProjectionAsync(int expectedArchiveReads)
+        {
+            statements.Clear();
+            reads.Clear();
+            var projection = await repository.ReadAttentionProjectionAsync();
+            Assert.NotNull(projection);
+            Assert.Equal(goalCount, projection.Goals.Count);
+            Assert.Equal(expectedArchiveReads, projection.Reads.ArchivePayloadsRead);
+            Assert.Equal(expectedArchiveReads, projection.Reads.ArchivePayloadsDecoded);
+            Assert.Equal(expectedArchiveReads, statements.Count(statement => statement == ArchivePayloadSelect));
+            Assert.Equal(expectedArchiveReads, reads.Count(read => read.Operation == "attention-archive-decode"));
+            return projection;
+        }
+
+        var archiveTime = await ReadProjectionAsync(0);
+        Assert.Equal(goalCount, await fixture.DeleteAttentionMarkersAsync());
+        var withoutMarkers = await ReadProjectionAsync(goalCount);
+        await fixture.WriteAttentionMarkersAsync();
+        var backfilled = await ReadProjectionAsync(0);
+
+        var expected = JsonSerializer.Serialize(withoutMarkers with { Reads = null! }, Options);
+        AssertJsonEqual(expected, JsonSerializer.Serialize(archiveTime with { Reads = null! }, Options));
+        AssertJsonEqual(expected, JsonSerializer.Serialize(backfilled with { Reads = null! }, Options));
+    }
+
+    [Fact]
+    public async Task ArchiveTimeMarkers_ReadPendingDutyWhileSkippingCoveredArchives()
+    {
+        using var fixture = await Fixture.CreateAsync(3);
+        var dutyGoal = WithPendingDuty(CompleteForArchive(fixture.Goals[0]));
+        await fixture.WriteGoalAsync(dutyGoal);
+        foreach (var goal in fixture.Goals.Skip(1))
+            await fixture.WriteGoalAsync(CompleteForArchive(goal));
+        Assert.Equal(3, await fixture.ArchiveTerminalGoalsAsync());
+
+        var reads = new List<GoalSnapshotReadObservation>();
+        var projection = await fixture.OpenObservedQueries(reads).ReadAttentionProjectionAsync();
+        Assert.NotNull(projection);
+        Assert.Equal(1, projection.Reads.ArchivePayloadsRead);
+        Assert.Equal(1, projection.Reads.ArchivePayloadsDecoded);
+        Assert.Equal(dutyGoal.Id, Assert.Single(reads.Where(read => read.Operation == "attention-archive-decode")).GoalId);
+        var duty = Assert.Single(projection.PostLandingDuties!);
+        Assert.Equal(dutyGoal.Id, duty.GoalId);
+        Assert.Equal(Assert.Single(dutyGoal.CriterionEvidenceObligations!).Id, duty.Obligation.Id);
+        Assert.Equal(CriterionEvidenceState.Pending, duty.Obligation.State);
+    }
+
+    [Fact]
+    public async Task ArchiveTimeMarkerProjectionFailure_CommitsArchiveAndFallsBackToReadingIt()
+    {
+        using var fixture = await Fixture.CreateAsync(2);
+        var failingGoal = CompleteForArchive(fixture.Goals[0]);
+        var coveredGoal = CompleteForArchive(fixture.Goals[1]);
+        var identity = Identity(failingGoal, 1) with { EvidenceKey = "gate" };
+        var evidence = new PlannerEvidencePayload(0, identity.EvidenceKey, "post-implementation", "acceptance-gate",
+            "Check the fixture", "Fixture verification", null, null, ["Selector"]);
+        var gate = Gate(1) with
+        {
+            RequestingTaskId = identity.RequestingTaskId, PlannerIdentity = identity, PlannerEvidence = evidence
+        };
+        await fixture.WriteGoalAsync(failingGoal with
+        {
+            GateTestObligations =
+            [
+                gate,
+                gate with { Id = "conflicting-gate", PlannerEvidence = evidence with { Needed = "Check a different fixture" } }
+            ]
+        });
+        await fixture.WriteGoalAsync(coveredGoal);
+        Assert.Equal(2, await fixture.ArchiveTerminalGoalsAsync());
+
+        var archives = await fixture.ReadArchivedMarkerVersionsAsync();
+        Assert.Equal(2, archives.Count);
+        Assert.Contains((failingGoal.Id, (int?)null), archives);
+        Assert.Contains((coveredGoal.Id, (int?)1), archives);
+        var reads = new List<GoalSnapshotReadObservation>();
+        var queries = fixture.OpenObservedQueries(reads);
+        var projection = await queries.ReadAttentionProjectionAsync(new(IncludeGateEvidence: false), default);
+        Assert.NotNull(projection);
+        Assert.Equal(1, projection.Reads.ArchivePayloadsRead);
+        Assert.Equal(1, projection.Reads.ArchivePayloadsDecoded);
+        Assert.Equal(failingGoal.Id, Assert.Single(reads.Where(read => read.Operation == "attention-archive-decode")).GoalId);
+        var conflict = await Assert.ThrowsAsync<InvalidOperationException>(() => queries.ReadAttentionProjectionAsync());
+        Assert.Equal("Conflicting stored Planner evidence payload.", conflict.Message);
+    }
 
     [Theory]
     [InlineData(4, false)]
@@ -423,6 +561,14 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
     private static GoalHoldSnapshot Hold(string state, string blocker) => new("hold-" + state, state, blocker, Now);
     private sealed class FixedTime : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
 
+    private static GoalSnapshot CompleteForArchive(GoalSnapshot goal) => goal with
+    {
+        Status = GoalStatus.Completed,
+        TerminatedAt = Now,
+        Tasks = goal.Tasks.Select(task => task with { Status = WorkTaskStatus.Completed }).ToArray(),
+        Timeline = goal.Timeline.Select(entry => entry with { OccurredAt = Now }).ToArray()
+    };
+
     private static GoalSnapshot WithArchiveEvidence(GoalSnapshot goal, string section)
     {
         var terminal = goal with { Status = GoalStatus.Completed, TerminatedAt = Now };
@@ -526,6 +672,35 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
 
         public Task WriteAttentionMarkersAsync() =>
             new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath).WriteAttentionArchiveEvidenceMarkersAsync();
+
+        public Task<int> ArchiveTerminalGoalsAsync() => new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath)
+            .ArchiveTerminalGoalSnapshotsAsync(Now.AddDays(1), compressSnapshots: true);
+
+        public async Task<int> DeleteAttentionMarkersAsync()
+        {
+            await using var connection = new SqliteConnection($"Data Source={Workspace.SqliteStatePath};Pooling=False");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM attention_archive_evidence";
+            return await command.ExecuteNonQueryAsync();
+        }
+
+        public async Task<IReadOnlyList<(string GoalId, int? FormatVersion)>> ReadArchivedMarkerVersionsAsync()
+        {
+            await using var connection = new SqliteConnection($"Data Source={Workspace.SqliteStatePath};Pooling=False");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT a.goal_id, e.format_version
+                FROM goal_snapshot_archive a LEFT JOIN attention_archive_evidence e ON e.goal_id = a.goal_id
+                ORDER BY a.goal_id
+                """;
+            var rows = new List<(string, int?)>();
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                rows.Add((reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetInt32(1)));
+            return rows;
+        }
 
         public async Task SeedMarkedHistoryAsync()
         {

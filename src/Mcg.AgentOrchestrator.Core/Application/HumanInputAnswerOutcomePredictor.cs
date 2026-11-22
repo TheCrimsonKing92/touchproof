@@ -49,7 +49,7 @@ internal static class HumanInputAnswerOutcomePredictor
             return new(HumanInputAnswerEffect.ReturnsTaskForAnotherRound, WorkTaskStatus.Assigned);
 
         if (!premiseInvalidPlanner &&
-            PassingVerificationCompletion.IsEligible(goal, task, projectedRequests, out var verification) &&
+            PassingVerificationCompletion.IsEligible(goal, task, projectedRequests, request.IsCurrentForBrief(briefVersion), out var verification) &&
             CanProjectPlannerCompletion(goal, task, verification))
             return new(HumanInputAnswerEffect.CompletesTask, WorkTaskStatus.Completed);
 
@@ -69,6 +69,28 @@ internal static class HumanInputAnswerOutcomePredictor
 
 internal static class HumanInputAnswerRouting
 {
+    internal static bool RecordPlannerDispatchWait(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task,
+        TaskVerificationRecord verification, HumanInputDirectiveParseResult batch, PendingPlannerArtifact? artifact,
+        object requestLock)
+    {
+        lock (requestLock)
+        {
+            var diagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, verification, out var briefVersion);
+            var blocked = false;
+            diagnostic ??= kernel.RecordPlannerEvidenceBatch(goal, task, batch, briefVersion, out blocked);
+            if (diagnostic is not null)
+            {
+                PlannerEvidenceCompletion.Reject(kernel, goal, task, verification, diagnostic);
+                return true;
+            }
+
+            if (blocked && artifact is not null)
+                artifact.Bind(goal, task, verification, kernel.GetPendingBlockingHumanInput(goal.Id).Where(request =>
+                    batch.Directives.Any(directive => request.Kind == directive.Kind && request.QuestionFingerprint == directive.QuestionFingerprint)));
+            return blocked;
+        }
+    }
+
     internal static bool HasOpenBlockingRequest(Goal goal, TaskSpec task, IEnumerable<HumanInputRequest> requests) =>
         requests.Any(candidate =>
             candidate.GoalId == goal.Id &&
@@ -102,7 +124,7 @@ internal static class HumanInputAnswerRouting
 internal static class PassingVerificationCompletion
 {
     internal static bool IsEligible(
-        Goal goal, TaskSpec task, IEnumerable<HumanInputRequest> requests,
+        Goal goal, TaskSpec task, IEnumerable<HumanInputRequest> requests, bool allowPlannerArtifactPromotion,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TaskVerificationRecord? verification)
     {
         verification = task.LastVerification;
@@ -120,7 +142,22 @@ internal static class PassingVerificationCompletion
             (task.RequiredRole == AgentRole.Developer &&
              WorkerResultBlockers.GetAssignedScopeComplete(verification) is false)) return false;
 
-        return !HumanInputAnswerRouting.HasOpenBlockingRequest(goal, task, requests);
+        if (HumanInputAnswerRouting.HasOpenBlockingRequest(goal, task, requests)) return false;
+        if (task.RequiredRole != AgentRole.Planner) return true;
+
+        if (verification.PendingPlannerArtifact is { } pending)
+        {
+            var promoted = allowPlannerArtifactPromotion ? pending.Promote(goal, task, verification, requests) : null;
+            if (promoted is null) return false;
+            verification = verification with { PendingPlannerArtifact = promoted };
+        }
+        else if (verification.DispatchStartedAt is not null &&
+            verification.PlannerEvidenceBatch?.Directives.Any(PendingPlannerArtifact.IsBlockingDirective) == true)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     internal static HumanInputDirectiveParseResult? GetPlannerEvidenceBatch(

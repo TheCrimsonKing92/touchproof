@@ -60,7 +60,17 @@ public static class WorkerStandingRules
         }
 
         var lines = role == AgentRole.Planner
-            ? new[] { "## Planner Standing Rules", AgentOutputDirectives.PlannerStandingRules }
+            ? new[]
+            {
+                "## Planner Standing Rules",
+                AgentOutputDirectives.PlannerStandingRules,
+                "",
+                "## Plan and evidence format",
+                AgentOutputDirectives.PlannerResponseFormat,
+                "",
+                "## Evidence validation and repository citations",
+                AgentOutputDirectives.PlannerResponseValidation
+            }
             : RenderBriefSection(role, stack: stack);
         if (role == AgentRole.Developer)
             lines = [.. lines, "## Write-denial reports", AgentOutputDirectives.WorkerWriteDenialGuidance];

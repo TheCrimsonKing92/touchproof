@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -167,9 +169,11 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ConsecutiveSameLaneTimeoutRoutesToOperatorWithoutWorkerDispatch(bool priorTimeoutHasFailingTest)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ConsecutiveSameLaneTimeoutRoutesToOperatorWithoutWorkerDispatch(
+        bool priorTimeoutHasFailingTest, bool hasRecordedDetail)
     {
         var root = ConductorDriverTests.CreateTempDirectory();
         try
@@ -180,10 +184,36 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
             var policy = ConductorAutonomyPolicy.Conservative with { AutomaticRetryOperatorRoutingHoldSeconds = 0 };
             var firstTimeout = priorTimeoutHasFailingTest ? TimeoutCheckWithFailingIdentity() : TimeoutCheck();
             const string secondTimeout = "acceptance-check-timeout: focused-reverse-dependent-infrastructure-tests elapsed=42m budget=42m";
+            const string detailPrefix = "LANE_TIMEOUT_DETAIL lane=focused-reverse-dependent-infrastructure-tests ";
+            var secondCheck = TimeoutCheck() with { Name = secondTimeout };
+            var conductLog = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+            string? unrelatedTrx = null;
+            if (hasRecordedDetail)
+            {
+                var firstTrx = WriteTrx(root, "lane-first.trx",
+                    ("Ns.Slow", "00:00:10", "Passed"), ("Ns.Beta", "00:00:06.250", "Passed"),
+                    ("Ns.Ignored", "00:09:00", "NotExecuted"));
+                var secondTrx = WriteTrx(root, "lane-second.trx",
+                    ("Ns.Slow", "00:00:02.500", "Passed"), ("Ns.Alpha", "00:00:06.250", "Passed"),
+                    ("Ns.Fourth", "00:00:01", "Passed"));
+                var malformed = Path.Combine(root, "malformed.trx");
+                File.WriteAllText(malformed, "<TestRun>");
+                unrelatedTrx = WriteTrx(root, "unrelated.trx", ("Ns.Unrelated", "00:09:00", "Passed"));
+                firstTimeout = firstTimeout with { TestResultPaths = [unrelatedTrx] };
+                secondCheck = secondCheck with
+                {
+                    TestResultPaths = [firstTrx, secondTrx, firstTrx, Path.Combine(root, "missing.trx"), malformed],
+                    TestResultAttemptId = "timeout-attempt-2"
+                };
+                WriteTimeoutLoad(root, conductLog, goal.Id);
+            }
             var driver = MakeDriver(
                 executionDirectory: root,
                 runAcceptanceSummary: candidate => RecordTimeout(root, candidate, ++attempt,
-                    attempt == 1 ? firstTimeout : TimeoutCheck() with { Name = secondTimeout }),
+                    attempt == 1 ? firstTimeout : secondCheck) with
+                {
+                    TestResultPaths = unrelatedTrx is null ? null : [unrelatedTrx]
+                },
                 retryTaskWithCause: (goalId, taskId, message, _, cause) =>
                 {
                     Assert.True(priorTimeoutHasFailingTest);
@@ -196,6 +226,7 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
                 dispatchAndStart: _ => throw new InvalidOperationException("Timeout must not dispatch a worker."),
                 recordTaskNote: (goalId, taskId, note) => kernel.RecordTaskNote(goalId, taskId, note),
                 writeEscalation: (_, _, reason) => escalation = reason);
+            driver.LaneTimeoutConductEventLogPathOverride = conductLog;
 
             var first = driver.AdvanceOnce(goal, policy).Outcome;
             if (priorTimeoutHasFailingTest)
@@ -220,6 +251,15 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
             var reason = Assert.IsType<string>(escalation);
             Assert.Contains($"attempt timeout-attempt-1 ({TimeoutCheckName})", reason);
             Assert.Contains($"attempt timeout-attempt-2 ({secondTimeout})", reason);
+            var expectedDetail = detailPrefix + (hasRecordedDetail
+                ? "slowest=[Ns.Slow 12.5s, Ns.Alpha 6.25s, Ns.Beta 6.25s] trx_unavailable=[trx-missing:missing.trx, trx-unparseable:malformed.trx] " +
+                  "host_available_memory=8192 MiB concurrent_gates=3"
+                : "slowest=unavailable(no-trx-paths) host_available_memory=unavailable(no-lane-receipt-store) " +
+                  "concurrent_gates=unavailable(no-conduct-event-log)");
+            Assert.EndsWith("\n" + expectedDetail, reason);
+            Assert.Equal(reason, escalated.Reason);
+            Assert.Equal(reason, decision.Reason);
+            Assert.Contains(new PolicyDecisionFact("timeoutLaneDetail", expectedDetail), decision.Facts);
             Assert.Equal(2, attempt);
             Assert.Equal(priorTimeoutHasFailingTest ? 1 : 0, goal.AutomaticAcceptanceRetryCount);
         }
@@ -302,6 +342,43 @@ public sealed class ConductorDriverTestsGateFailureLandingAttribution :
         FailingTestIdentities = [Identity],
         OutputTail = $"[FAIL] {Identity}"
     };
+
+    private static string WriteTrx(string root, string fileName, params (string Class, string Duration, string Outcome)[] tests)
+    {
+        var path = Path.Combine(root, fileName);
+        new XElement("TestRun",
+            new XElement("TestDefinitions", tests.Select((test, index) =>
+                new XElement("UnitTest", new XAttribute("id", index),
+                    new XElement("TestMethod", new XAttribute("className", test.Class))))),
+            new XElement("Results", tests.Select((test, index) =>
+                new XElement("UnitTestResult", new XAttribute("testId", index),
+                    new XAttribute("duration", test.Duration), new XAttribute("outcome", test.Outcome))))).Save(path);
+        return path;
+    }
+
+    private static void WriteTimeoutLoad(string root, string conductLog, GoalId goalId)
+    {
+        const string lane = "Focused reverse dependent infrastructure tests";
+        var receiptPath = GateLaneReceiptLedger.ResolveStorePath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+        var writer = new ConductEventLogWriter(conductLog);
+        WriteSample(lane, DateTimeOffset.UnixEpoch.AddHours(2).AddMinutes(42), 8192, 3);
+        WriteSample(lane, DateTimeOffset.UnixEpoch.AddHours(1).AddMinutes(40), 512, 7);
+        WriteSample("Unrelated lane", DateTimeOffset.UnixEpoch.AddHours(2).AddMinutes(43), 1024, 9);
+
+        void WriteSample(string target, DateTimeOffset at, int memory, int gateCount)
+        {
+            SharedJsonlFile.AppendLine(receiptPath, JsonSerializer.Serialize(new
+            {
+                goal_id = goalId.Value, lane = target, recorded_at = at, host_available_memory_mb = memory
+            }));
+            var sample = GateLoadSample.Available(gateCount);
+            var progress = new AcceptanceGateProgress(goalId.Value, "shard-complete", target, null, null, null,
+                at.AddMinutes(-40), at, at, TimeSpan.FromMinutes(40), 0, "fixture heartbeat",
+                new GateLoadContext(sample, sample, sample, sample, sample, sample), Outcome: "failed");
+            writer.Append("gate-progress", goalId.Value[..8], GateProgressConductEvents.Format(progress), at);
+        }
+    }
 
     private AcceptanceVerificationSummary RecordTimeout(
         string root, Goal goal, int ordinal, params AcceptanceCheckResult[] checks)
