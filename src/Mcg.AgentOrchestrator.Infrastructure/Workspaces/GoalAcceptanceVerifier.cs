@@ -644,13 +644,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var scopedNames = scopedChecks?.Select(check => check.Name).ToHashSet(StringComparer.Ordinal);
         var dispatchedChecks = scopedNames is null ? effectiveChecks : effectiveChecks.Where(check =>
             !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedNames.Contains(check.Name)).ToArray();
-        phaseAccountant.BalancedPlan = FocusedReverseDependentLaneSplitter.PublishLanePlan(focusedExpansion,
+        phaseAccountant.BalancedPlan = executionOwner.PublishGateLanePlan(focusedExpansion,
             AcceptanceGateLanePlanPublisher.Classify(
             executionOwner.Identity.AttemptId, effectivePlan.CandidateLanes, infrastructureTestLanes,
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
             dispatchedChecks, engineSettings.DeclaredTestSettings, selectedExecution), dispatchedChecks,
-            AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
+            goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)
         {
