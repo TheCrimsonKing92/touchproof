@@ -82,13 +82,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
                 File.WriteAllText(Path.Combine(RepositoryRoot, OtherSource), "public sealed class Other { }");
             }
             seedRepository?.Invoke(RepositoryRoot);
-            Git("init", "-b", "main");
-            Git("config", "user.email", "worker-build@fixture.invalid");
-            Git("config", "user.name", "Worker build fixture");
-            // Match repository hygiene: host custody journals are runtime state, not candidate content.
-            File.WriteAllText(Path.Combine(RepositoryRoot, ".git", "info", "exclude"), ".orchestrator/\n.orchestrator-context/\nbin/\nobj/\n");
-            Git("add", ".");
-            Git("commit", "-m", "fixture seed");
+            if (!WorkerBuildRepositorySeed.TryWrite(RepositoryRoot)) SeedWithGit();
             var task = new TaskSpec(TaskId.New(), "Implement fixture", AgentRole.Developer);
             var goal = Kernel.CreateGoal("Host worker build fixture", [task]);
             var agent = new AgentDefinition(new AgentId("fixture-worker"), "Fixture worker", AgentRole.Developer,
@@ -153,6 +147,16 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             catch (Exception cleanup) { throw new AggregateException("Worker build fixture setup and cleanup failed.", setup, cleanup); }
             throw;
         }
+    }
+
+    private void SeedWithGit()
+    {
+        Git("init", "-b", "main");
+        Git("config", "user.email", WorkerBuildRepositorySeed.Email);
+        Git("config", "user.name", WorkerBuildRepositorySeed.Name);
+        File.WriteAllText(Path.Combine(RepositoryRoot, ".git", "info", "exclude"), WorkerBuildRepositorySeed.Excludes);
+        Git("add", ".");
+        Git("commit", "-m", WorkerBuildRepositorySeed.Message);
     }
 
     internal WorkerBuildRequestHost Host(Action<WorkerBuildInvocation>? observe = null,
