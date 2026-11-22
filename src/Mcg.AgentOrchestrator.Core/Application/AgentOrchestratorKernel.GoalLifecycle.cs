@@ -118,7 +118,7 @@ public sealed partial class AgentOrchestratorKernel
         var refinedCriteriaReDerived = false;
         IReadOnlyList<HumanInputRequestId> closedPlannerEvidenceRequestIds = [];
         var removalSet = DeclaredTestRemovalSet.FromObjective(newBrief);
-        var declaredCriteria = removalSet.Ordinary;
+        var declaredCriteria = CommittedArtifactCriterionOwner.RewriteAll(removalSet.Ordinary);
         if (discardFailedRefinement)
         {
             goal.DiscardRefinedSpecForFailedRefinement();
