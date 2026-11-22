@@ -5,21 +5,30 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: scripted processes, per-test signals and a unique artifact directory.
 public sealed class ConductorStartupHeartbeatSupervisorTests
 {
+    private const string ReadyLine = "LOOP_READY lock=acquired";
+    private const string StateLoadHeartbeat = "STARTUP_PROGRESS phase=state-load elapsed_ms=0";
+
     [Xunit.Theory]
-    [Xunit.InlineData("LOOP_READY lock=acquired")]
-    [Xunit.InlineData("STARTUP_PROGRESS phase=state-load elapsed_ms=0")]
+    [Xunit.InlineData(ReadyLine)]
+    [Xunit.InlineData(StateLoadHeartbeat)]
     public async Task StartupHeartbeat_RearmsSilenceWindow_AdoptsWithoutRestore(string firstLine)
     {
         await using var scenario = new Scenario(restoring: false, firstLine);
-        var firstDeadline = await scenario.NextDeadlineAsync();
+        var beforeReadiness = firstLine == StateLoadHeartbeat;
+        var firstDeadline = await scenario.NextDeadlineAsync(beforeReadiness);
         var heartbeat = ConductorStartupHeartbeat.Format(ConductorStartupHeartbeat.Phases.TerminalSweep,
             TimeSpan.FromSeconds(15));
         Assert.Equal("STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=15000", heartbeat);
         scenario.Emit(heartbeat);
         firstDeadline.Release.TrySetResult();
-        await scenario.NextDeadlineAsync();
+        await scenario.NextDeadlineAsync(beforeReadiness);
         Assert.Equal(2, scenario.Host.Requests.Count);
         Assert.DoesNotContain(scenario.Events.Events, evt => evt.Status == "reverted");
+        if (beforeReadiness)
+        {
+            scenario.Emit(ReadyLine);
+            await scenario.NextDeadlineAsync(beforeReadiness: false);
+        }
         scenario.Emit("LOOP_START tick=0");
         for (var tick = 1; tick <= 3; tick++)
             scenario.Emit($"TICK_END tick={tick} activation=true");
@@ -35,12 +44,12 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("LOOP_READY lock=acquired")]
-    [Xunit.InlineData("STARTUP_PROGRESS phase=state-load elapsed_ms=0")]
+    [Xunit.InlineData(ReadyLine)]
+    [Xunit.InlineData(StateLoadHeartbeat)]
     public async Task SilentStartup_SilenceDeadline_RevertsAndLaunchesRestore(string firstLine)
     {
         await using var scenario = new Scenario(restoring: false, firstLine);
-        var deadline = await scenario.NextDeadlineAsync();
+        var deadline = await scenario.NextDeadlineAsync(beforeReadiness: firstLine == StateLoadHeartbeat);
         deadline.Release.TrySetResult();
 
         Assert.Equal(0, await scenario.WaitForRunAsync());
@@ -51,9 +60,8 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
         Assert.Contains("reason=ReadinessNeverReported", reverted.Detail, StringComparison.Ordinal);
     }
 
-    private sealed class ScriptedDeadline(TimeSpan duration)
+    private sealed class ScriptedDeadline
     {
-        public TimeSpan Duration { get; } = duration;
         public TaskCompletionSource Release { get; } = NewSignal();
     }
 
@@ -63,7 +71,8 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
     private sealed class Scenario : IAsyncDisposable
     {
         internal static readonly TimeSpan SilenceWindow = TimeSpan.FromSeconds(30);
-        private readonly Channel<ScriptedDeadline> _deadlines = Channel.CreateUnbounded<ScriptedDeadline>();
+        private readonly Channel<ScriptedDeadline> _readinessDeadlines = Channel.CreateUnbounded<ScriptedDeadline>();
+        private readonly Channel<ScriptedDeadline> _activationDeadlines = Channel.CreateUnbounded<ScriptedDeadline>();
         private readonly CancellationTokenSource _runCts =
             CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         private readonly TaskCompletionSource<ConductorSupervisorProcessResult> _activeExit =
@@ -71,16 +80,12 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
         private readonly string _outputDirectory =
             Path.Combine(Path.GetTempPath(), $"mcg-startup-progress-{Guid.NewGuid():N}");
         private readonly MemoryStream _lease = new();
-        private int _activationDelayCalls;
 
         public ScriptedHost Host { get; }
         public RecordingRunEventStore Events { get; } = new();
         public TaskCompletionSource Activated { get; } = NewSignal();
-        public TaskCompletionSource ReadinessDelayCreated { get; } = NewSignal();
-        public ScriptedDeadline ReadinessDelay { get; } = new(SilenceWindow);
         public ConductorSupervisorProcessRequest? ActiveRequest { get; private set; }
         public Task<int> Run { get; }
-        public int ActivationDelayCalls => Volatile.Read(ref _activationDelayCalls);
 
         public Scenario(bool restoring, string initialLine)
         {
@@ -118,19 +123,8 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
                 "head-startup", "head-startup", "LOOP_START selfCheck=true", _lease);
             var supervisor = new ConductorContinuitySupervisor(Host, Events,
                 inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared, activationHealthyTicks: 3, readinessTimeout: SilenceWindow,
-                delay: (_, _) =>
-                {
-                    ReadinessDelayCreated.TrySetResult();
-                    return ReadinessDelay.Release.Task;
-                },
-                activationDelay: (duration, _) =>
-                {
-                    Interlocked.Increment(ref _activationDelayCalls);
-                    var deadline = new ScriptedDeadline(duration);
-                    if (!_deadlines.Writer.TryWrite(deadline))
-                        throw new InvalidOperationException("Could not record activation delay");
-                    return deadline.Release.Task;
-                },
+                delay: (_, _) => RecordDeadline(_readinessDeadlines.Writer),
+                activationDelay: (_, _) => RecordDeadline(_activationDeadlines.Writer),
                 verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             Run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo", _outputDirectory,
                 "default", "default", cancellationToken: _runCts.Token);
@@ -138,10 +132,19 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
 
         public void Emit(string line) => ActiveRequest!.OnStandardOutputLine!(line);
 
-        public async Task<ScriptedDeadline> NextDeadlineAsync()
+        private static Task RecordDeadline(ChannelWriter<ScriptedDeadline> writer)
         {
-            var next = _deadlines.Reader.ReadAsync(_runCts.Token).AsTask();
-            await WaitForAsync(next, "activation delay re-arm");
+            var deadline = new ScriptedDeadline();
+            if (!writer.TryWrite(deadline))
+                throw new InvalidOperationException("Could not record startup delay");
+            return deadline.Release.Task;
+        }
+
+        public async Task<ScriptedDeadline> NextDeadlineAsync(bool beforeReadiness)
+        {
+            var deadlines = beforeReadiness ? _readinessDeadlines : _activationDeadlines;
+            var next = deadlines.Reader.ReadAsync(_runCts.Token).AsTask();
+            await WaitForAsync(next, beforeReadiness ? "readiness deadline" : "activation deadline");
             return await next;
         }
 
