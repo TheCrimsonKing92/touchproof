@@ -132,7 +132,7 @@ public sealed class PostLandingEvidenceClosureTests : Xunit.IClassFixture<Isolat
     [InlineData("different-candidate")]
     [InlineData("different-scope")]
     [InlineData("different-version")]
-    public async Task OperatorIntent_InvalidAuthorityOrObservation_LeavesPending(string scenario)
+    public async Task OperatorIntent_ValidAgentClosesAndInvalidObservationLeavesPending(string scenario)
     {
         using var fixture = await PostLandingObligationTests.Fixture.Create();
         await fixture.Land();
@@ -151,7 +151,23 @@ public sealed class PostLandingEvidenceClosureTests : Xunit.IClassFixture<Isolat
         var store = SqliteOperatorIntentStore.ForDirectories(fixture.Workspace.OrchestratorDirectory, fixture.Workspace.LogDirectory);
         var intent = await Enqueue(store, fixture.Goal, payload,
             scenario == "agent" ? OperatorActorKind.Agent : OperatorActorKind.Human);
-        var result = new OperatorIntentCoordinator(store).ExecutePending(fixture.Kernel, fixture.Goal);
+        var coordinator = new OperatorIntentCoordinator(store);
+        var result = coordinator.ExecutePending(fixture.Kernel, fixture.Goal);
+        if (scenario == "agent")
+        {
+            Assert.True(result.MutatedGoalState);
+            await fixture.Repository.SaveAsync(fixture.Kernel);
+            coordinator.CompletePersisted([fixture.Goal.Id]);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+            await fixture.Reload();
+            Assert.Equal(GoalStatus.Completed, fixture.Goal.Status);
+            Assert.Empty(fixture.Goal.OutstandingPostLandingDuties);
+            var accepted = fixture.Goal.CriterionEvidenceObligations.Single(item => item.Id == duty.Id);
+            Assert.Equal(CriterionEvidenceState.Satisfied, accepted.State);
+            Assert.Equal(OperatorActorKind.Agent, accepted.ObservationActorKind);
+            Assert.Equal(intent.Actor, accepted.ObservationActor);
+            return;
+        }
         Assert.False(result.MutatedGoalState);
         Assert.Equal(OperatorIntentStatus.Rejected, (await store.GetAsync(intent.Id))!.Status);
         Assert.Equal(CriterionEvidenceState.Pending, Assert.Single(fixture.Goal.OutstandingPostLandingDuties).State);
@@ -224,9 +240,17 @@ public sealed class PostLandingEvidenceClosureTests : Xunit.IClassFixture<Isolat
         Assert.Equal(OperatorActorKind.Agent, intent.ActorKind);
         Assert.Equal(observation, JsonSerializer.Deserialize<CriterionEvidenceReceiptOperatorIntentPayload>(intent.PayloadJson,
             OperatorIntentJson.Options)!.Observation);
-        new OperatorIntentCoordinator(store).ExecutePending(fixture.Kernel, fixture.Goal);
-        Assert.Equal(OperatorIntentStatus.Rejected, (await store.GetAsync(intent.Id))!.Status);
-        Assert.Single(fixture.Goal.OutstandingPostLandingDuties);
+        var coordinator = new OperatorIntentCoordinator(store);
+        Assert.True(coordinator.ExecutePending(fixture.Kernel, fixture.Goal).MutatedGoalState);
+        await fixture.Repository.SaveAsync(fixture.Kernel);
+        coordinator.CompletePersisted([fixture.Goal.Id]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+        await fixture.Reload();
+        Assert.Empty(fixture.Goal.OutstandingPostLandingDuties);
+        var accepted = fixture.Goal.CriterionEvidenceObligations.Single(item => item.Id == duty.Id);
+        Assert.Equal(CriterionEvidenceState.Satisfied, accepted.State);
+        Assert.Equal(OperatorActorKind.Agent, accepted.ObservationActorKind);
+        Assert.Equal("worker", accepted.ObservationActor);
     }
 
     [Theory]
