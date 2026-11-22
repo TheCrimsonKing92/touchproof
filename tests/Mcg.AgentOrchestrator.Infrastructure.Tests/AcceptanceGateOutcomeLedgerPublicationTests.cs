@@ -51,17 +51,21 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Publication_RecoversOneObservationAfterLedgerAppendFails(bool solo)
+    public async Task Publication_RecoversOneObservationWhenLedgerAndLegacyPendingAreLocked(bool solo)
     {
         var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
-        var pending = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
+        var legacyPending = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
+        var pendingDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName);
         const string marker = """{"kind":"backfill-complete"}""";
         SharedJsonlFile.AppendLine(ledger, marker);
         var evaluatedAt = StartedAt.AddMinutes(1);
         var reader = new CostGoalOutcomeGateLedgerReader(root);
         Assert.Empty(reader.Read(evaluatedAt));
 
+        File.WriteAllText(legacyPending, "");
+        string pending;
         using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (File.Open(legacyPending, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             if (solo)
                 PublishSolo(root, StartedAt);
@@ -69,6 +73,8 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
                 await PublishOwnedTrain();
 
             Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
+            Assert.Empty(File.ReadAllLines(legacyPending));
+            pending = Assert.Single(Directory.GetFiles(pendingDirectory, "*.jsonl"));
             Assert.Single(File.ReadAllLines(pending));
             Assert.Empty(reader.Read(evaluatedAt));
         }
@@ -79,6 +85,8 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Path.Combine(root, AcceptanceGateOutcomeLedger.AttemptRoot, expected.Directory, expected.AttemptId),
             expected.RecordedAt, expected.StartedAt, expected.LaunchMainCommit, expected.Mode,
             expected.FullGateReason, expected.ExecutedClassCount, expected.SelectionMilliseconds);
+        // Replay a legacy copy too, exercising deduplication across the two recovery paths.
+        File.Copy(pending, legacyPending, overwrite: true);
         using (File.Open(pending, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             // Interrupt cleanup after replay so the next read must recognize the already published row.
@@ -87,6 +95,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         }
 
         Assert.Equal(0, freshReader.GateFileReads);
+        Assert.False(File.Exists(legacyPending));
         Assert.Equal(expectedGate, Assert.Single(reader.Read(evaluatedAt)));
         Assert.False(File.Exists(pending));
         Assert.Equal(1, reader.LinesReadLastRun);
