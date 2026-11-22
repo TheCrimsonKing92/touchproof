@@ -252,8 +252,17 @@ internal static class CostGoalOutcomeMetric
     }
 
     internal static IEnumerable<OutcomeGateObservation> ReadRecordedGates(
-        string orchestratorDirectory, DateTimeOffset recordedBefore) =>
-        DiscoverGatePlans(orchestratorDirectory, recordedBefore).Select(ReadGate).OfType<OutcomeGateObservation>();
+        string orchestratorDirectory, DateTimeOffset recordedBefore, CostGoalOutcomeGateMemo? memo = null)
+    {
+        var plans = DiscoverGatePlans(orchestratorDirectory, recordedBefore);
+        if (memo is null)
+            return plans.Select(ReadGate).OfType<OutcomeGateObservation>();
+
+        var discovered = plans.ToArray();
+        memo.Retain(discovered.Select(path => path.Prefix).ToHashSet(StringComparer.Ordinal));
+        return discovered.Select(path => memo.GetOrRead(path.Prefix, path.ResultPath, path.MetadataPath,
+            path.LanePlanPath, () => ReadGate(path))).OfType<OutcomeGateObservation>();
+    }
 
     internal static IReadOnlyList<OutcomeMetricBaseline> BaselinesAt(IReadOnlyList<OutcomeMetricLine> lines,
         IEnumerable<OutcomeGateObservation> gates, DateTimeOffset filedAt, IEnumerable<TickStepObservation>? ticks = null) =>
@@ -338,7 +347,12 @@ internal static class CostGoalOutcomeMetric
         return values.Count % 2 == 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
     }
 
-    private sealed record GatePlanPath(string Prefix, string AttemptId, DateTimeOffset RecordedAt);
+    private sealed record GatePlanPath(string Prefix, string AttemptId, DateTimeOffset RecordedAt)
+    {
+        internal string ResultPath => Prefix + ".result.json";
+        internal string MetadataPath => Prefix + ".attempt.json";
+        internal string LanePlanPath => Prefix + AcceptanceGateLanePlan.ArtifactSuffix;
+    }
 
     private static IEnumerable<GatePlanPath> DiscoverGatePlans(string orchestratorDirectory, DateTimeOffset filedAt)
     {
@@ -373,18 +387,17 @@ internal static class CostGoalOutcomeMetric
     // This is repository provenance. The caller supplies adoption and build containment for verdicts.
     private static OutcomeGateObservation? ReadGate(GatePlanPath path)
     {
-        var result = ReadEvidence<ConductorParallelAcceptanceRunArtifact>(path.Prefix + ".result.json");
+        var result = ReadEvidence<ConductorParallelAcceptanceRunArtifact>(path.ResultPath);
         if (result is not { Kind: "accepted", DispatchKind: "gate", Acceptance.TestResultPaths.Count: > 0 })
             return null;
-        var metadataPath = path.Prefix + ".attempt.json";
+        var metadataPath = path.MetadataPath;
         var metadata = ReadEvidence<ConductorParallelAcceptanceAttempt>(metadataPath);
         if (metadata is null && File.Exists(metadataPath)) return null;
         if (metadata is not null && (metadata.AttemptId != path.AttemptId || metadata.Kind != "gate" ||
             metadata.CompletedAt is null || metadata.Outcome is not
                 (ConductorParallelAcceptanceAttemptOutcome.Passed or ConductorParallelAcceptanceAttemptOutcome.Failed)))
             return null;
-        var plan = new OwnerConsoleGateLanePlanReader().Read(
-            path.Prefix + AcceptanceGateLanePlan.ArtifactSuffix, path.AttemptId);
+        var plan = new OwnerConsoleGateLanePlanReader().Read(path.LanePlanPath, path.AttemptId);
         if (plan?.SelectedExecution is not { } selection) return null;
         var launchCommit = metadata?.HolderCandidateKey?.Split(':') switch
         {
