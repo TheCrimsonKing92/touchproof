@@ -39,6 +39,16 @@ public sealed class CliHelpTestsCriterionEvidence
     }
 
     [Xunit.Fact]
+    public void RecordHelpExplainsRuntimeAttestationAndObservationAttribution()
+    {
+        var output = AsyncLocalConsoleRouter.Capture(() => Xunit.Assert.True(
+            CliCommandHelp.TryPrintStartupHelp(["criterion-evidence-record", "--help"])));
+        Xunit.Assert.Contains("the recording actor (human or agent) attests verified activation with ActivationAttested=true",
+            output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("The observation records the actor kind and identity.", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void Rephase_UsageAndFlags_ExposeExplicitScopeWithoutCriterionSelection()
     {
         Xunit.Assert.Equal("Usage: criterion-evidence-rephase --goal <goal-prefix> <obligation-id> <repositorystate|runtime> <condition> <target> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]",

@@ -785,7 +785,8 @@ public sealed class Goal
         string detail,
         DateTimeOffset recordedAt,
         CriterionPostLandingObservation? observation = null,
-        string? actor = null)
+        string? actor = null,
+        OperatorActorKind? observationActorKind = null)
     {
         var index = _criterionEvidenceObligations.FindIndex(item => item.Id == obligationId);
         if (index < 0)
@@ -798,9 +799,11 @@ public sealed class Goal
             (existing.Publication is not { } publication || publication.GoalId != Id.Value ||
              !string.Equals(publication.CandidateRevision, candidateSha, StringComparison.OrdinalIgnoreCase) ||
              observation is null || string.IsNullOrWhiteSpace(actor) ||
+             observationActorKind is not (null or OperatorActorKind.Human or OperatorActorKind.Agent) ||
              !CriterionEvidenceLifecycle.MatchesObservation(existing, observation, recordedAt)))
             throw new InvalidOperationException("Post-landing evidence requires attributed activation and a subsequent matching observation of the original landed artifact.");
-        if (existing.Phase != CriterionEvidencePhase.PostLanding && (observation is not null || actor is not null))
+        if (existing.Phase != CriterionEvidencePhase.PostLanding &&
+            (observation is not null || actor is not null || observationActorKind is not null))
             throw new InvalidOperationException("Observation metadata cannot change an obligation's phase.");
         var replacesStaleOperatorEvidence = passed && owner == CriterionEvidenceOwner.Operator &&
             existing.Owner == CriterionEvidenceOwner.Operator && existing.Phase == CriterionEvidencePhase.PreLanding &&
@@ -821,7 +824,7 @@ public sealed class Goal
         receiptId = RequireText(receiptId, nameof(receiptId));
         detail = RequireText(detail, nameof(detail));
         var incoming = new CriterionEvidenceReceipt(owner, candidateSha, receiptId, scope.Trim(), passed,
-            detail, existing.Provenance, recordedAt, observation, actor);
+            detail, existing.Provenance, recordedAt, observation, actor, observationActorKind);
         if (existing.FindReceipt(receiptId) is { } recorded)
         {
             if (recorded.HasSamePayload(incoming)) return existing;
@@ -842,6 +845,7 @@ public sealed class Goal
             RecordedAt = recordedAt,
             Observation = observation,
             ObservationActor = actor,
+            ObservationActorKind = observationActorKind,
             PriorReceipts = existing.ArchiveCurrentReceipt()
         };
         _criterionEvidenceObligations[index] = updated;

@@ -6,6 +6,7 @@ public sealed class OnDiskParsedRootRoutingTests : IDisposable
 {
     private const string Project = "tests/P/P.csproj";
     private readonly string _root = InfrastructureTestSupport.CreateTempDirectory();
+    private readonly string _marker = "\n// fixture " + Guid.NewGuid().ToString("N");
 
     [Fact]
     public void ReplayIndex_UnchangedThenRewritten_ReusesAndRefreshesTrees()
@@ -15,7 +16,7 @@ public sealed class OnDiskParsedRootRoutingTests : IDisposable
         AssertReload(file, "class Before {}", "class AfterWithLongerName {}",
             () => new ImpactReplayTestSourceIndex(new[] { path }).Trees
                 .Select(tree => (tree.FilePath, tree.GetRoot().ToFullString())).ToArray(),
-            [(path, "class Before {}")], [(path, "class AfterWithLongerName {}")]);
+            [(path, "class Before {}" + _marker)], [(path, "class AfterWithLongerName {}" + _marker)]);
     }
 
     [Fact]
@@ -126,7 +127,7 @@ public sealed class OnDiskParsedRootRoutingTests : IDisposable
         FocusedEvidenceRequestResolver.ParseCSharpRoot(alias);
         var tree = Assert.Single(new ImpactReplayTestSourceIndex(new[] { path }).Trees);
         Assert.Equal(path, tree.FilePath);
-        Assert.Equal("class Tests {}", tree.GetRoot().ToFullString());
+        Assert.Equal("class Tests {}" + _marker, tree.GetRoot().ToFullString());
         Assert.Equal(1, parses.CountFor(path));
     }
 
@@ -166,16 +167,19 @@ public sealed class OnDiskParsedRootRoutingTests : IDisposable
     {
         var path = Path.Combine(_root, file.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, text);
+        File.WriteAllText(path, WithFixtureMarker(path, text));
         return path;
     }
 
-    private static void Rewrite(string path, string text)
+    private void Rewrite(string path, string text)
     {
         var size = new FileInfo(path).Length;
-        File.WriteAllText(path, text);
+        File.WriteAllText(path, WithFixtureMarker(path, text));
         Assert.NotEqual(size, new FileInfo(path).Length);
     }
+
+    private string WithFixtureMarker(string path, string text) =>
+        path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ? text + _marker : text;
 
     public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
 }
