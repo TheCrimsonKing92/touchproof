@@ -169,19 +169,29 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
         var unusedSelected = UnusedHeaderSelected || unusedId is not null;
         (_rows, _notInUse) = OwnerConsoleProviderRowModel.Build(_profiles.Select(profile => profile.Connection).ToArray(), _roster);
         if (_notInUse.Length == 0) _unusedExpanded = false;
-        if (unusedSelected && _notInUse.Length > 0)
+        if (unusedSelected)
         {
+            _selected = _notInUse.Length > 0 ? _rows.Length : 0;
+            if (unusedId is null) return;
+
             var index = Array.FindIndex(_notInUse, id => StringComparer.OrdinalIgnoreCase.Equals(id, unusedId));
-            _selected = _rows.Length + 1 + index; // A missing child selects the surviving header.
+            if (index >= 0)
+            {
+                _selected = _rows.Length + 1 + index;
+                return;
+            }
+
+            var activeIndex = Array.FindIndex(_rows, row => row.Members.Any(member =>
+                StringComparer.OrdinalIgnoreCase.Equals(member.Report.ProfileId, unusedId)));
+            if (activeIndex >= 0) _selected = activeIndex;
+            return;
         }
-        else
-        {
-            _selected = selected is { } key
-                ? Math.Max(0, Array.FindIndex(_rows, row => row.Key.Kind == key.Kind &&
-                    StringComparer.OrdinalIgnoreCase.Equals(row.Key.ProfileId, key.ProfileId)))
-                : 0;
-        }
-        if (!unusedSelected) ProbeSelectedDeviceCode();
+
+        _selected = selected is { } key
+            ? Math.Max(0, Array.FindIndex(_rows, row => row.Key.Kind == key.Kind &&
+                StringComparer.OrdinalIgnoreCase.Equals(row.Key.ProfileId, key.ProfileId)))
+            : 0;
+        ProbeSelectedDeviceCode();
     }
 
     private void StartInitialChecks()

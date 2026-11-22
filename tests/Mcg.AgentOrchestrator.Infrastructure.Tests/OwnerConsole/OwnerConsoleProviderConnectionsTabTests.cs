@@ -173,6 +173,39 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         Assert.False(fixture.Launches.Reader.TryRead(out _));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReloadFollowsSelectedUnusedProfileIntoActiveGroup(bool keepUnusedGroup)
+    {
+        var codex = Fixture.Connection("codex-cli");
+        var grok = Fixture.Connection("grok-cli");
+        OwnerConsoleProviderConnection[] otherUnused = keepUnusedGroup ? [Fixture.Connection("claude-cli")] : [];
+        var developer = Fixture.Agent("codex-cli", AgentRole.Developer);
+        using var fixture = new Fixture
+        {
+            Initial = [codex, grok, .. otherUnused],
+            Roster = [developer]
+        };
+        await fixture.LoadAsync(initialChecks: 1);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        var sibling = grok with { Report = grok.Report with { ProfileId = "grok-secondary" } };
+        fixture.Initial = [codex, sibling, grok with { Report = grok.Report with { ProfileId = "GROK-CLI" } }, .. otherUnused];
+        fixture.Roster = [developer, Fixture.Agent("grok-secondary", AgentRole.Tester), Fixture.Agent("grok-cli", AgentRole.Reviewer)];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+
+        Assert.StartsWith("xAI |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.Contains("  Profiles: grok-secondary, GROK-CLI", fixture.Tab.Lines);
+        Assert.Equal(3, fixture.ScheduledProviderWork);
+        Assert.Empty(fixture.SignInLookups);
+        Assert.False(fixture.Launches.Reader.TryRead(out _));
+    }
+
     [Fact]
     public async Task TargetedOpen_PendingList_SelectsProviderIgnoringCase()
     {
