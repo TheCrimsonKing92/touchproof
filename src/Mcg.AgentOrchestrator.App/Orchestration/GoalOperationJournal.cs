@@ -744,24 +744,24 @@ internal static partial class GoalOperationJournal
     private static GoalOperationJournalSummary ReadPaths(
         string path, string archivePath, bool includeArchive, GoalId? strictGoalId)
     {
-        var plainExists = File.Exists(path);
         var compressedPath = path + ".gz";
-        var compressedExists = File.Exists(compressedPath);
-        var plainEntries = plainExists ? ReadEntries(path, strictGoalId) : [];
-        GoalOperationJournalEntry[] compressedEntries;
-        try { compressedEntries = compressedExists ? ReadEntries(compressedPath, strictGoalId) : []; }
-        catch (InvalidDataException) when (plainExists && strictGoalId is null) { compressedEntries = []; }
+        var plainEntries = ReadEntriesIfPresent(path, strictGoalId);
+        GoalOperationJournalEntry[]? compressedEntries;
+        try { compressedEntries = ReadEntriesIfPresent(compressedPath, strictGoalId); }
+        catch (InvalidDataException) when (plainEntries is not null && strictGoalId is null) { compressedEntries = []; }
+        if (includeArchive && plainEntries is null && compressedEntries is null &&
+            ReadEntriesIfPresent(archivePath, strictGoalId) is { } archivedEntries)
+            return BuildSummary(archivePath, archivedEntries);
+
+        var resolvedPath = plainEntries is null && compressedEntries is not null ? compressedPath : path;
+        plainEntries ??= [];
+        compressedEntries ??= [];
         var plainIncludesCompressed = plainEntries.Length >= compressedEntries.Length &&
             plainEntries.Take(compressedEntries.Length).Select(entry => JsonSerializer.Serialize(entry, JsonOptions))
                 .SequenceEqual(compressedEntries.Select(entry => JsonSerializer.Serialize(entry, JsonOptions)));
         var entries = plainIncludesCompressed ? plainEntries : compressedEntries.Concat(plainEntries)
             .OrderBy(entry => entry.At).ToArray();
-        if (includeArchive && !plainExists && !compressedExists && File.Exists(archivePath))
-            entries = ReadEntries(archivePath, strictGoalId).Concat(entries)
-                .OrderBy(entry => entry.At).ToArray();
-        path = plainExists ? path : compressedExists ? compressedPath :
-            includeArchive && File.Exists(archivePath) ? archivePath : path;
-        return BuildSummary(path, entries);
+        return BuildSummary(resolvedPath, entries);
     }
 
     internal static string? ResolveReadPath(string executionDirectory, GoalId goalId)
@@ -997,11 +997,13 @@ internal static partial class GoalOperationJournal
         }
     }
 
-    private static GoalOperationJournalEntry[] ReadEntries(string path, GoalId? strictGoalId)
+    private static GoalOperationJournalEntry[]? ReadEntriesIfPresent(string path, GoalId? strictGoalId)
     {
+        var lines = ReadJournalLinesIfPresent(path, strictGoalId is not null);
+        if (lines is null) return null;
         var entries = new List<GoalOperationJournalEntry>();
         var lineNumber = 0;
-        foreach (var line in ReadJournalLines(path))
+        foreach (var line in lines)
         {
             lineNumber++;
             var entry = TryDeserialize(line, out var failure);

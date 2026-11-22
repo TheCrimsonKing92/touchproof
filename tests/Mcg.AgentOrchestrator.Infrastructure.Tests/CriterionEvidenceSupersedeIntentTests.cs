@@ -136,9 +136,12 @@ public sealed class CriterionEvidenceSupersedeIntentTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task UntrustedCleanupJournal_KeepsSameClaimUntilRepaired(bool corruptCompressedSibling)
+    [InlineData("foreign-row")]
+    [InlineData("invalid-header")]
+    [InlineData("directory")]
+    [InlineData("truncated-header")]
+    [InlineData("truncated-trailer")]
+    public async Task UntrustedCleanupJournal_KeepsSameClaimUntilRepaired(string fault)
     {
         using var scenario = new Scenario(GoalStatus.Verified);
         await scenario.Repository.SaveAsync(scenario.Kernel);
@@ -152,15 +155,28 @@ public sealed class CriterionEvidenceSupersedeIntentTests
         GoalOperationJournal.RecordCleanupCompleted(directory, scenario.Goal, "Cleaned up.");
         var cleanupRow = File.ReadAllText(journalPath)[plainHistory.Length..];
         File.WriteAllText(journalPath, plainHistory);
-        if (corruptCompressedSibling)
+        var cleanupMember = Compress(cleanupRow);
+        switch (fault)
         {
-            File.WriteAllText(compressedPath, "invalid gzip header");
-        }
-        else
-        {
-            var foreignGoal = scenario.Kernel.CreateGoal("A different goal");
-            GoalOperationJournal.RecordCleanupCompleted(directory, foreignGoal, "Other goal cleaned up.");
-            File.AppendAllText(journalPath, File.ReadAllText(GoalOperationJournal.PathFor(directory, foreignGoal.Id)));
+            case "foreign-row":
+                var foreignGoal = scenario.Kernel.CreateGoal("A different goal");
+                GoalOperationJournal.RecordCleanupCompleted(directory, foreignGoal, "Other goal cleaned up.");
+                File.AppendAllText(journalPath, File.ReadAllText(GoalOperationJournal.PathFor(directory, foreignGoal.Id)));
+                break;
+            case "invalid-header":
+                File.WriteAllText(compressedPath, "invalid gzip header");
+                break;
+            case "directory":
+                Directory.CreateDirectory(compressedPath);
+                break;
+            case "truncated-header":
+                File.WriteAllBytes(compressedPath, cleanupMember[..10]);
+                break;
+            case "truncated-trailer":
+                File.WriteAllBytes(compressedPath, cleanupMember[..^1]);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(fault), fault, "Unknown journal fault.");
         }
 
         var intent = await scenario.Enqueue(Reason);
@@ -172,15 +188,14 @@ public sealed class CriterionEvidenceSupersedeIntentTests
         Assert.Equal(CriterionEvidenceState.Pending,
             Assert.Single(scenario.Kernel.GetGoal(goalId).CriterionEvidenceObligations).State);
 
-        if (corruptCompressedSibling)
+        if (fault == "foreign-row")
         {
-            using var gzip = new GZipStream(File.Create(compressedPath), CompressionMode.Compress);
-            using var writer = new StreamWriter(gzip);
-            writer.Write(cleanupRow);
+            File.WriteAllText(journalPath, plainHistory + cleanupRow);
         }
         else
         {
-            File.WriteAllText(journalPath, plainHistory + cleanupRow);
+            if (fault == "directory") Directory.Delete(compressedPath);
+            File.WriteAllBytes(compressedPath, cleanupMember);
         }
 
         Assert.Contains(goalId, scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
@@ -189,6 +204,15 @@ public sealed class CriterionEvidenceSupersedeIntentTests
         Assert.Equal(OperatorIntentStatus.Applied, (await scenario.Store.GetAsync(intent.Id))!.Status);
         Assert.Equal(CriterionEvidenceState.Superseded,
             Assert.Single(scenario.Kernel.GetGoal(goalId).CriterionEvidenceObligations).State);
+    }
+
+    private static byte[] Compress(string text)
+    {
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionMode.Compress, leaveOpen: true))
+        using (var writer = new StreamWriter(gzip))
+            writer.Write(text);
+        return output.ToArray();
     }
 
     [Theory]
