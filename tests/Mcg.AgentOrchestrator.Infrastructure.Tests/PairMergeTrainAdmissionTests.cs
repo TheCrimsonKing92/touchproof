@@ -98,7 +98,7 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
         Assert.Equal(0, scenario.CohortCalls);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void RefusedCarryOldestLeavesBothTrainSlotsForEligiblePeers()
     {

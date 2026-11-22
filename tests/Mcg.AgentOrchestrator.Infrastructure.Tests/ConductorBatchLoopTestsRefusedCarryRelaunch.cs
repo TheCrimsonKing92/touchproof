@@ -10,7 +10,7 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
 {
     public ConductorBatchLoopTestsRefusedCarryRelaunch(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false, "rebind")]
     [Xunit.InlineData(true, "rebind")]
