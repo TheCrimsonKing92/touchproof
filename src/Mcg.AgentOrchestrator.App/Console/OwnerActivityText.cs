@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 
@@ -5,6 +6,16 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerActivityText
 {
+    private static readonly (Regex Pattern, string Phrase)[] Vocabulary = new (string Term, string Phrase)[]
+    {
+        ("ticket", "issue"), ("sticky", "persistent"), ("none", "no issue"), ("child result", "test result"),
+        ("handoff", "switch"), ("cohort", "joint run"), ("receipt", "proof"), ("canary", "main check"),
+        ("tick", "step"), ("eventKind", "event type")
+    }.Select(entry => (
+        new Regex("`[^`]*`|" + Regex.Escape(entry.Term) + "(?<plural>s)?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+        entry.Phrase)).ToArray();
+
     internal static string WaitingOn(string? value)
     {
         // Known category-only blockers have friendly labels; recorded sentences retain their subject.
@@ -14,7 +25,11 @@ internal static class OwnerActivityText
         if (reason is null) return "a blocker needs review";
         if (reason.Contains(' ') || reason.Contains('?')) return reason;
         var category = Blocker(reason);
-        return category == "a blocker needs review" ? Words(reason.Replace('_', ' '), category) : category;
+        if (category != "a blocker needs review") return category;
+
+        // Hyphens delimit the fields of a blocker code.
+        var label = string.Join("-", reason.Split('-').Select(part => Words(part.Replace('_', ' '), "")));
+        return string.IsNullOrWhiteSpace(label) ? category : label;
     }
 
     internal static string Blocker(string? value) => value?.ToLowerInvariant() switch
@@ -39,12 +54,22 @@ internal static class OwnerActivityText
     {
         if (string.IsNullOrWhiteSpace(value)) return fallback;
         var text = string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        // Keep the owner's subject and question, translating quoted implementation vocabulary.
-        foreach (var (term, phrase) in new[] { ("ticket", "issue"), ("sticky", "persistent"),
-            ("none", "no issue"), ("child result", "test result"), ("handoff", "switch"),
-            ("cohort", "joint run"), ("receipt", "proof"), ("canary", "main check"),
-            ("tick", "step"), ("eventKind", "event type") })
-            text = Regex.Replace(text, Regex.Escape(term), phrase, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        foreach (var (pattern, phrase) in Vocabulary)
+        {
+            text = pattern.Replace(text, match =>
+            {
+                // Preserve spans consumed by the backtick alternative.
+                if (text[match.Index] == '`') return match.Value;
+                Rune.DecodeLastFromUtf16(text.AsSpan(0, match.Index), out var before, out _);
+                Rune.DecodeFromUtf16(text.AsSpan(match.Index + match.Length), out var after, out _);
+                if (IsWordNeighbor(before) || IsWordNeighbor(after)) return match.Value;
+                if (!match.Groups["plural"].Success) return phrase;
+                return phrase + (phrase.EndsWith("ch", StringComparison.Ordinal) ? "es" : "s");
+            });
+        }
         return text;
     }
+
+    private static bool IsWordNeighbor(Rune value) =>
+        Rune.IsLetterOrDigit(value) || value.Value is '_' or '-' or '.' or '`';
 }
