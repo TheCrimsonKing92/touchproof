@@ -77,7 +77,10 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             StateDbMigrations.EnsureUpToDate(statePath);
             var repository = new SqliteOrchestratorStateRepository(statePath);
             var store = Store(root);
-            var coordinator = new OperatorIntentCoordinator(store);
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var coordinator = new OperatorIntentCoordinator(store,
+                decisions: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                goalStateVersionResolver: _ => 0);
             var retry = await store.EnqueueAsync(Intent(goal, "retry", OperatorIntentVerbs.Retry, task.Id.Value,
                 new RetryOperatorIntentPayload("repair after classification", null, RetryCause: RetryCause.Unknown)));
             var driver = MakeDriver();
