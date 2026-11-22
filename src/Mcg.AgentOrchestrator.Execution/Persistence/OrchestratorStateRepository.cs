@@ -189,7 +189,10 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 
 public sealed record ProviderHoldSeedHistory(IReadOnlyList<ModelFitHistoryRow> Rows,
     IReadOnlyList<ProviderHoldSeedAttempt> Attempts, IReadOnlySet<GoalId> MarkerGoals,
-    IReadOnlyList<ProviderUsageGoalEvidence> Evidence);
+    IReadOnlyList<ProviderUsageGoalEvidence> Evidence)
+{
+    internal IReadOnlyList<ProviderHoldSeedAttempt> Recoveries { get; init; } = [];
+}
 
 internal static class ConductLoopGoalStatus
 {

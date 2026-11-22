@@ -6,72 +6,52 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class ProviderUsageHoldReader
 {
     internal static IReadOnlyList<ProviderUsageHoldRow> ReadStatus(SqliteOrchestratorStateRepository repository,
-        IReadOnlyCollection<Goal> loaded, IReadOnlyCollection<GoalId> failed, DateTimeOffset now)
+        IReadOnlyCollection<Goal> loaded, IReadOnlyCollection<GoalId> failed, DateTimeOffset now) =>
+        Read(repository, loaded, now, failed);
+
+    internal static IReadOnlyList<ProviderUsageHoldRow> Read(IOrchestratorStateRepository repository,
+        IReadOnlyCollection<Goal> loaded, DateTimeOffset now, IReadOnlyCollection<GoalId>? failed = null)
     {
+        var loadedIds = loaded.Select(goal => goal.Id).ToHashSet();
+        var failedIds = (failed ?? []).Where(id => !loadedIds.Contains(id)).ToHashSet();
+        var workingIds = loadedIds.Concat(failedIds).Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
         IReadOnlyCollection<Goal> working = loaded;
         try
         {
-            // Failed goals affect holds, but are not printed goal rows. Historical candidates may
-            // be Completed; neither dependency requires restoring its full task/brief graph.
-            var workingIds = loaded.Select(goal => goal.Id.Value).Concat(failed.Select(id => id.Value))
-                .ToHashSet(StringComparer.Ordinal);
-            var candidates = ProviderHoldHistory.SeedCandidates(
-                repository.ListProviderHoldHistoryAsync().GetAwaiter().GetResult(), workingIds);
-            var ids = failed.Concat(candidates.Select(id => new GoalId(id))).Distinct().ToArray();
-            var evidence = repository.ReadProviderHoldSeedEvidenceAsync(ids).GetAwaiter().GetResult();
-            if (evidence is null) throw new InvalidOperationException("Provider evidence unavailable.");
-            var adapted = evidence.Select(Adapt).ToArray();
-            working = loaded.Concat(adapted.Where(goal => workingIds.Contains(goal.Id.Value)))
+            var history = repository.ReadProviderHoldSeedHistoryAsync().GetAwaiter().GetResult();
+            var selection = ProviderHoldHistory.SelectSeedEvidence(history.Rows, history.Attempts, workingIds, history.Recoveries);
+            var ids = selection.Sources.Concat(selection.Dependencies).Select(id => new GoalId(id))
+                .Concat(history.MarkerGoals).Concat(failedIds).Where(id => !loadedIds.Contains(id)).ToHashSet();
+            var projected = history.Evidence.Where(row => ids.Contains(new GoalId(row.GoalId)))
+                .ToDictionary(row => new GoalId(row.GoalId));
+            var remaining = ids.Where(id => !projected.ContainsKey(id)).ToArray();
+            if (remaining.Length != 0)
+                foreach (var row in ProviderHoldSeedEvidenceRead.TryRead(repository, remaining) ?? [])
+                    projected.Add(new GoalId(row.GoalId), row);
+            var evidence = projected.Values.Where(row => row.Tasks.Count != 0)
+                .Select(ProviderHoldSeedPruning.Adapt).ToDictionary(goal => goal.Id);
+            var missing = ids.Where(id => !evidence.ContainsKey(id)).ToArray();
+            if (missing.Length != 0)
+                foreach (var goal in repository.LoadGoalsAsync(missing).GetAwaiter().GetResult().Goals)
+                    evidence.TryAdd(goal.Id, goal);
+
+            working = loaded.Concat(evidence.Values.Where(goal => failedIds.Contains(goal.Id)))
                 .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal).ToArray();
-            if (candidates.Count == 0) return ProviderUsageHoldView.Read(working, now);
-            var history = new ProviderHoldHistory();
-            history.Retain(adapted.Where(goal => !workingIds.Contains(goal.Id.Value)).ToArray(), working);
-            return ProviderUsageHoldView.Read(history.Scope(working), now);
+            var retained = evidence.Values.Where(goal => !workingIds.Contains(goal.Id.Value)).ToArray();
+            if (retained.Length == 0) return ProviderUsageHoldView.Read(working, now);
+            var index = ProviderHoldSeedIndex.Evaluate(working, [], retained, selection.Sources);
+            return ProviderUsageHoldView.Read(working.Concat(retained.Where(goal =>
+                index.RequiredGoals.Contains(goal.Id.Value))).ToArray(), now);
         }
         catch (Exception)
         {
-            // Preserve the legacy failure path if sparse evidence is unsupported or unreadable.
-            try
+            if (ReferenceEquals(working, loaded) && failedIds.Count != 0)
             {
-                working = loaded.Concat(repository.LoadGoalsAsync(failed).GetAwaiter().GetResult().Goals)
-                    .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal).ToArray();
+                try { working = loaded.Concat(repository.LoadGoalsAsync(failedIds).GetAwaiter().GetResult().Goals).ToArray(); }
+                catch (Exception) { }
             }
-            catch (Exception) { }
-            return Read(repository, working, now);
+            return ProviderUsageHoldView.Read(working, now);
         }
-    }
-
-    private static Goal Adapt(ProviderUsageGoalEvidence row)
-    {
-        var tasks = row.Tasks.Select(task => TaskSpec.FromSnapshot(new TaskSnapshot(
-            task.TaskId, "Provider seed input", task.RequiredRole, task.Status, task.AssignedAgentId,
-            null, task.LastVerification, task.VerificationHistory, task.LastDispatch, null,
-            DispatchHistory: task.DispatchHistory, LatestProviderBudgetRecoveryAt: task.LatestProviderBudgetRecoveryAt)))
-            .ToArray();
-        var goal = tasks.Length == 0
-            ? Goal.CreateMetadataOnlyTerminal(new TerminalGoalMetadata(new GoalId(row.GoalId),
-                GoalStatus.Completed, "Provider seed input"))
-            : new Goal(new GoalId(row.GoalId), "Provider seed input", tasks);
-        goal.SetStatus(row.Status);
-        foreach (var evt in row.Timeline.OrderBy(evt => evt.OccurredAt)) goal.Append(evt);
-        return goal;
-    }
-
-    internal static IReadOnlyList<ProviderUsageHoldRow> Read(IOrchestratorStateRepository repository,
-        IReadOnlyCollection<Goal> loaded, DateTimeOffset now)
-    {
-        try
-        {
-            var candidates = ProviderHoldHistory.SeedCandidates(
-                repository.ListModelFitHistoryAsync().GetAwaiter().GetResult(),
-                loaded.Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal));
-            if (candidates.Count == 0) return ProviderUsageHoldView.Read(loaded, now);
-            var retained = repository.LoadGoalsAsync(candidates.Select(id => new GoalId(id)).ToArray()).GetAwaiter().GetResult();
-            var history = new ProviderHoldHistory();
-            history.Retain(retained.Goals, loaded);
-            return ProviderUsageHoldView.Read(history.Scope(loaded), now);
-        }
-        catch (Exception) { return ProviderUsageHoldView.Read(loaded, now); }
     }
 
     internal static IReadOnlyList<ProviderUsageHoldRow> ReadWorkspace(OrchestratorWorkspace workspace, DateTimeOffset now)

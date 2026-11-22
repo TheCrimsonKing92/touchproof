@@ -207,11 +207,14 @@ public static class ProviderLimitSignals
         var reset = history.LatestReset();
         var placements = observations.Where(item => item.Evidence.Confirmed)
             .Select(item => (item.Goal, item.Task.Id, item.Verification.CompletedAt)).ToHashSet();
-        var checkedAvailabilityAt = history.Notes.Select(note =>
-                ProviderBudgetHoldSchedules.TryParseStandaloneResult(note.Event, out var result) &&
+        var availabilityResults = new List<(ProviderHoldBindingHistory.Note, ProviderBudgetHoldSchedules.StandaloneResult)>();
+        foreach (var note in history.Notes)
+            if (ProviderBudgetHoldSchedules.TryParseStandaloneResult(note.Event, out var result) &&
                 result.Outcome == "available" && ProviderBudgetHoldSchedules.IsApplicable(result, reset) &&
-                note.Event.TaskId is { } taskId && placements.Contains((note.Goal, taskId, result.PlacedAt))
-                    ? (DateTimeOffset?)result.StartedAt : null).Max();
+                note.Event.TaskId is { } taskId && placements.Contains((note.Goal, taskId, result.PlacedAt)))
+                availabilityResults.Add((note, result));
+        var checkedAvailabilityAt = ProviderBudgetHoldSchedules.ApplicableWhenRecorded(history, availabilityResults)
+            .Select(item => (DateTimeOffset?)item.Result.StartedAt).Max();
 
         foreach (var observation in observations)
         {

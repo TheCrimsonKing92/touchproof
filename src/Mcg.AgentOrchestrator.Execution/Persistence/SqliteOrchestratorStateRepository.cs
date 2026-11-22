@@ -2384,34 +2384,54 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         CancellationToken cancellationToken = default)
     {
         await using var connection = OpenConnection();
-        var (failureGoals, markerGoals) = await ProviderHoldSeedEvidenceReader.FindCandidatesAsync(
+        var candidates = await ProviderHoldSeedEvidenceReader.FindCandidatesAsync(
             connection, SerializerOptions, cancellationToken);
-        IReadOnlyList<ProviderUsageGoalEvidence> evidence = [];
-        Goal[] goals = [];
-        if (failureGoals.Count != 0)
+        var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
+        var attempts = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals)
+            .SelectMany(ProviderHoldHistory.SeedAttempts).Distinct().ToArray();
+        var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
+            cancellationToken, attempts);
+        var selection = ProviderHoldHistory.SelectSeedEvidence(rows, attempts, new HashSet<string>(StringComparer.Ordinal));
+        var recoveryIds = await ProviderHoldSeedEvidenceReader.FindRecoveryCandidatesAsync(
+            connection, candidates, selection, cancellationToken);
+        recoveryIds.ExceptWith(candidates.FailureGoals);
+        var (recoveryEvidence, recoveryGoals) = await ReadAttemptsAsync(recoveryIds);
+        var recoveries = recoveryEvidence.Select(ProviderHoldSeedPruning.Adapt).Concat(recoveryGoals)
+            .SelectMany(ProviderHoldHistory.SeedRecoveryAttempts).Where(attempt =>
+                selection.LowerBounds.TryGetValue(attempt.ProviderName, out var first) && attempt.Timestamp >= first)
+            .Distinct().ToArray();
+        var witnesses = recoveries.Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
+        return new(rows, attempts, candidates.MarkerGoals,
+            evidence.Concat(recoveryEvidence.Where(row => witnesses.Contains(row.GoalId))).ToArray())
         {
+            Recoveries = recoveries
+        };
+
+        async Task<(IReadOnlyList<ProviderUsageGoalEvidence> Evidence, Goal[] Goals)> ReadAttemptsAsync(
+            IReadOnlyCollection<GoalId> ids)
+        {
+            if (ids.Count == 0) return ([], []);
+            IReadOnlyList<ProviderUsageGoalEvidence> projected = [];
             try
             {
-                evidence = await ReadProviderHoldSeedEvidenceAsync(failureGoals, cancellationToken) ?? [];
+                projected = await ReadProviderHoldSeedEvidenceAsync(ids, cancellationToken) ?? [];
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 // Fall back to the same canonical load used when sparse seed evidence is unavailable.
             }
-            var missing = failureGoals.Except(evidence.Select(row => new GoalId(row.GoalId))).ToHashSet();
+            var missing = ids.Except(projected.Where(row => row.Tasks.Count != 0)
+                .Select(row => new GoalId(row.GoalId))).ToHashSet();
+            Goal[] canonical = [];
             if (missing.Count != 0)
             {
                 var loaded = await LoadGoalsAsync(missing, cancellationToken);
-                goals = loaded.Goals.Where(goal => missing.Contains(goal.Id) && !goal.IsMetadataOnly).ToArray();
-                if (goals.Length != missing.Count)
+                canonical = loaded.Goals.Where(goal => missing.Contains(goal.Id) && !goal.IsMetadataOnly).ToArray();
+                if (canonical.Length != missing.Count)
                     throw new InvalidDataException("Required provider hold attempt history is unavailable.");
             }
+            return (projected.Where(row => !missing.Contains(new GoalId(row.GoalId))).ToArray(), canonical);
         }
-        var attempts = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals)
-            .SelectMany(ProviderHoldHistory.SeedAttempts).Distinct().ToArray();
-        var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
-            cancellationToken, attempts);
-        return new(rows, attempts, markerGoals, evidence);
     }
 
     private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(IReadOnlyList<string>? providerHoldRule,

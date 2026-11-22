@@ -15,6 +15,7 @@ internal sealed class ProviderHoldBindingHistory(string key)
     internal List<(Goal Goal, DateTimeOffset At)> Recoveries { get; } = [];
     internal List<Note> Notes { get; } = [];
     private Dictionary<TaskId, SortedList<DateTimeOffset, Note>>? _probeNotes;
+    private Dictionary<(Goal Goal, TaskId TaskId), List<(TaskSpec Task, TaskDispatchRecord Dispatch)>>? _probeDispatches;
     private ResetEntry[]? _resetsByTime;
     private SortedList<DateTimeOffset, (ResetGeneration? Latest, int Count)>? _resetGenerations;
     private Dictionary<Goal, SortedList<DateTimeOffset, int>>? _resetNoteIndices;
@@ -24,6 +25,7 @@ internal sealed class ProviderHoldBindingHistory(string key)
     internal int EvaluationCount { get; set; }
     internal int ObservationVisits { get; private set; }
     internal int ResetVisits { get; private set; }
+    internal int DispatchVisits { get; private set; }
     internal IReadOnlySet<(TaskSpec, TaskDispatchRecord)> ObservationsByAttempt =>
         _observationsByAttempt ??= ReadObservations().Select(item => (item.Task, item.Dispatch)).ToHashSet();
 
@@ -54,6 +56,36 @@ internal sealed class ProviderHoldBindingHistory(string key)
             });
         return _probeNotes.TryGetValue(task.Id, out var markers)
             ? AtOrBefore(markers, dispatch.DispatchedAt) : null;
+    }
+
+    internal (TaskSpec Task, TaskDispatchRecord Dispatch)? FindProbeDispatch(Note probe)
+    {
+        if (probe.Event.TaskId is not { } taskId) return null;
+        if (_probeDispatches is null)
+        {
+            _probeDispatches = [];
+            foreach (var (goal, task, dispatch) in Dispatches)
+            {
+                DispatchVisits++;
+                if (!_probeDispatches.TryGetValue((goal, task.Id), out var attempts))
+                    _probeDispatches.Add((goal, task.Id), attempts = []);
+                // Only a new timestamp maximum can be the first match in stored order.
+                if (attempts.Count == 0 || dispatch.DispatchedAt > attempts[^1].Dispatch.DispatchedAt)
+                    attempts.Add((task, dispatch));
+            }
+        }
+
+        if (!_probeDispatches.TryGetValue((probe.Goal, taskId), out var candidates)) return null;
+        var low = 0;
+        var high = candidates.Count;
+        while (low < high)
+        {
+            var middle = low + (high - low) / 2;
+            DispatchVisits++;
+            if (candidates[middle].Dispatch.DispatchedAt < probe.Event.OccurredAt) low = middle + 1;
+            else high = middle;
+        }
+        return low < candidates.Count ? candidates[low] : null;
     }
 
     internal ResetGeneration? LatestReset(DateTimeOffset? asOf = null)

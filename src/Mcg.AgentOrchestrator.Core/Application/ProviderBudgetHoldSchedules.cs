@@ -62,6 +62,15 @@ public static class ProviderBudgetHoldSchedules
         result.StartedAt >= reset.AppliedAt && result.StartedAt >= reset.Marker.ResetAt &&
         (result.ResetIntentId == reset.Marker.IntentId || result.ResetIntentId is null && result.StartedAt > reset.AppliedAt);
 
+    internal static IEnumerable<(ProviderHoldBindingHistory.Note Note, StandaloneResult Result)> ApplicableWhenRecorded(
+        ProviderHoldBindingHistory history,
+        IReadOnlyCollection<(ProviderHoldBindingHistory.Note Note, StandaloneResult Result)> results)
+    {
+        if (results.Count == 0) return [];
+        var resetsBefore = history.ResetsBefore(results.Select(item => item.Note));
+        return results.Where(item => IsApplicable(item.Result, resetsBefore[item.Note]));
+    }
+
     public static bool IsCurrentDispatch(IEnumerable<Goal> goals, string bindingKey, TaskSpec task,
         TaskDispatchRecord dispatch, DateTimeOffset? asOf = null) =>
         IsCurrentDispatch(ProviderHoldBindingHistory.Read(goals, bindingKey), task, dispatch, asOf);
@@ -288,8 +297,7 @@ public static class ProviderBudgetHoldSchedules
             if (item.Event.TaskId is { } taskId && TryParseStandaloneResult(item.Event, out var result) &&
                 heldPlacements.Contains((taskId, result.PlacedAt)))
                 standaloneResults.Add((item, result));
-        var resetsBefore = history.ResetsBefore(standaloneResults.Select(item => item.Note));
-        var standaloneHistory = standaloneResults.Where(item => IsApplicable(item.Result, resetsBefore[item.Note]))
+        var standaloneHistory = ApplicableWhenRecorded(history, standaloneResults)
             .Select(item => item.Note)
             .OrderBy(item => item.Event.OccurredAt).ToArray();
         var latestRecovery = history.Recoveries.Select(item => item.At)
@@ -314,9 +322,7 @@ public static class ProviderBudgetHoldSchedules
         var byAttempt = observations.ToLookup(item => (item.Task, item.Dispatch));
         var probeResults = probes.Select(probe =>
             {
-                var task = probe.Goal.Tasks.FirstOrDefault(task => task.Id == probe.Event.TaskId);
-                var dispatch = task?.DispatchHistory.FirstOrDefault(dispatch => IsBinding(dispatch, hold.BindingKey) && dispatch.DispatchedAt >= probe.Event.OccurredAt);
-                return task is not null && dispatch is not null ? byAttempt[(task, dispatch)].FirstOrDefault() : null;
+                return history.FindProbeDispatch(probe) is { } attempt ? byAttempt[attempt].FirstOrDefault() : null;
             })
             .OfType<ProviderHoldBindingHistory.Observation>().Distinct().ToArray();
         // Applicability is judged at completion; a later exhaustion must not erase prior attempts.

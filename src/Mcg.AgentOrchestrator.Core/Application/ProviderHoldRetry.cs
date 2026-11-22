@@ -11,7 +11,8 @@ internal static class ProviderHoldRetry
     internal static bool TryRequeueInconclusiveCheck(Goal goal, TaskSpec task, TaskVerificationRecord verification,
         DispatchOutcome outcome, DateTimeOffset now, IGoalLifecycleEventWriter eventWriter)
     {
-        if (outcome.Kind == DispatchOutcomeKind.VerifiedSuccess || task.LastDispatch is not { } dispatch ||
+        if (outcome.Kind is DispatchOutcomeKind.VerifiedSuccess or DispatchOutcomeKind.DirtyWorktreeRecoverable ||
+            task.LastDispatch is not { } dispatch ||
             !ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch) ||
             DispatchCompletionEvidence.HasWorkerEvidenceThatOutranksSubscriptionLimit(
                 verification, verification.WorkerResultPresent, verification.HasCommittedChanges) ||

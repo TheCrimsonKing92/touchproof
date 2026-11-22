@@ -87,11 +87,12 @@ public sealed class ProviderHoldHistory
         _retained = retained;
     }
 
-    internal sealed record SeedSelection(IReadOnlySet<string> Sources, IReadOnlySet<string> Dependencies, int RowsRead);
+    internal sealed record SeedSelection(IReadOnlySet<string> Sources, IReadOnlySet<string> Dependencies, int RowsRead,
+        IReadOnlyDictionary<string, DateTimeOffset> LowerBounds);
 
     internal static SeedSelection SelectSeedEvidence(
         IReadOnlyList<ModelFitHistoryRow> rows, IReadOnlyList<ProviderHoldSeedAttempt> attempts,
-        IReadOnlySet<string> workingGoalIds)
+        IReadOnlySet<string> workingGoalIds, IReadOnlyList<ProviderHoldSeedAttempt>? recoveries = null)
     {
         var lowerBounds = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         var sources = new HashSet<string>(StringComparer.Ordinal);
@@ -102,11 +103,13 @@ public sealed class ProviderHoldHistory
         }
         foreach (var attempt in attempts) AddSource(attempt.GoalId, attempt.ProviderName, attempt.Timestamp);
 
-        var dependencies = rows.Where(row => (row.IsCompleted || row.OutcomeClass == TaskOutcomeClass.Success) &&
-                lowerBounds.TryGetValue(row.ProviderName, out var first) && row.Timestamp >= first &&
-                !sources.Contains(row.GoalId) && !workingGoalIds.Contains(row.GoalId))
-            .Select(row => row.GoalId).ToHashSet(StringComparer.Ordinal);
-        return new(sources, dependencies, rows.Count);
+        var dependencies = rows.Where(row => row.IsCompleted || row.OutcomeClass == TaskOutcomeClass.Success)
+            .Select(row => new ProviderHoldSeedAttempt(row.GoalId, row.ProviderName, row.Timestamp))
+            .Concat(recoveries ?? []).Where(attempt =>
+                lowerBounds.TryGetValue(attempt.ProviderName, out var first) && attempt.Timestamp >= first &&
+                !sources.Contains(attempt.GoalId) && !workingGoalIds.Contains(attempt.GoalId))
+            .Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
+        return new(sources, dependencies, rows.Count, lowerBounds);
 
         void AddSource(string goalId, string provider, DateTimeOffset at)
         {
@@ -123,6 +126,18 @@ public sealed class ProviderHoldHistory
         where dispatch is not null
         select new ProviderHoldSeedAttempt(goal.Id.Value, dispatch.ProviderName ?? dispatch.WorkerName,
             verification.CompletedAt);
+
+    internal static IEnumerable<ProviderHoldSeedAttempt> SeedRecoveryAttempts(Goal goal)
+    {
+        var recoveries = new List<ProviderHoldSeedAttempt>();
+        ProviderHoldBindingHistory.Populate([goal], _ => null, observe: observation =>
+        {
+            if (ProviderLimitSignals.HasAvailabilityEvidence(observation.Verification))
+                recoveries.Add(new(goal.Id.Value, observation.Dispatch.ProviderName ?? observation.Dispatch.WorkerName,
+                    observation.Verification.CompletedAt));
+        });
+        return recoveries;
+    }
 
     public static IReadOnlyList<string> SeedCandidates(
         IEnumerable<ModelFitHistoryRow> rows, IReadOnlySet<string> workingGoalIds)

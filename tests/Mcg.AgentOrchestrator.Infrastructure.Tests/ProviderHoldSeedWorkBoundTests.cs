@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
@@ -135,6 +136,28 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(744), schedule.NextProbeAt);
     }
 
+    [Fact]
+    public async Task Seed_ProbesOnOnePersistedTask_BoundDispatchVisits()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        var probeGoal = new GoalId(ProviderHoldSeedFixture.Id(807));
+        await fixture.PopulateSameTaskProbeCaseAsync();
+        var canonical = await fixture.Repository.LoadGoalsAsync([probeGoal], TestContext.Current.CancellationToken);
+        var persisted = Assert.Single(canonical.Goals);
+        var task = Assert.Single(persisted.Tasks);
+        Assert.Equal(128, task.DispatchHistory.Count);
+        Assert.Equal(128, persisted.Timeline.Count(evt => ProviderBudgetHoldSchedules.TryParseProbe(evt, out _)));
+
+        var evaluation = Assert.Single(Seed(fixture, new()).Index.Evaluations).Value;
+        Assert.Equal(1, evaluation.Count);
+        Assert.InRange(evaluation.DispatchVisits, 129, 1160);
+        var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Schedule);
+        Assert.Equal(2, schedule.Attempt);
+        Assert.Equal("inconclusive", schedule.LastProbeOutcome);
+        Assert.Equal(task.LastVerification!.CompletedAt, schedule.LastProbeAt);
+        Assert.Equal(task.LastVerification.CompletedAt.AddMinutes(60), schedule.NextProbeAt);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -162,8 +185,23 @@ public sealed class ProviderHoldSeedWorkBoundTests
             ProviderHoldSeedFixture.At.AddMinutes(3)));
     }
 
-    [Fact]
-    public async Task Seed_RefusedAttemptSurvivesRequeueAndAlternateProviderSuccess()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Seed_AvailableCheckClearsOnlyAfterItsResetIsVisible(bool afterReset)
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateStandaloneResultCaseAsync(backdated: false, availableAfterReset: afterReset);
+        var evaluation = Assert.Single(Seed(fixture, new()).Index.Evaluations).Value;
+        if (afterReset) Assert.Null(evaluation.Schedule);
+        else Assert.Equal(ProviderHoldSeedFixture.Id(0), Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Schedule)
+            .Hold.SourceGoalId.Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Seed_RefusedAttemptSurvivesRequeueAndAlternateProviderSuccess(bool legacyModel)
     {
         using var fixture = new ProviderHoldSeedFixture();
         var id = ProviderHoldSeedFixture.Id(0);
@@ -180,12 +218,26 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal("OpenAI", row.ProviderName);
         Assert.True(row.IsCompleted);
         AssertOriginalHold(Seed(repository, new()));
+        var now = ProviderHoldSeedFixture.At.AddMinutes(4);
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
+        var status = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
+        Assert.Equal(id, status.Hold.SourceGoalId.Value);
+        Assert.Equal(status, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now)));
 
-        await fixture.CompleteOnOriginalBindingAsync();
+        await fixture.CompleteOnOriginalBindingAsync(legacyModel);
+        var witness = ProviderHoldSeedFixture.Id(806);
+        var rows = await repository.ListModelFitHistoryAsync(token);
+        Assert.Equal(!legacyModel, rows.Any(row => row.GoalId == witness));
+        var canonical = await repository.LoadGoalsAsync([new(id), new(witness)], token);
+        Assert.Equal(2, canonical.Goals.Count);
+        Assert.Empty(ProviderUsageHoldView.Read(canonical.Goals, now));
         var recovered = Seed(new SqliteOrchestratorStateRepository(fixture.Database), new());
         Assert.Equal(new[] { id }, recovered.Selection.Sources);
-        Assert.Equal(new[] { ProviderHoldSeedFixture.Id(806) }, recovered.Selection.Dependencies);
+        Assert.Equal(new[] { witness }, recovered.Selection.Dependencies);
         Assert.Null(Assert.Single(recovered.Index.Evaluations).Value.Schedule);
+        Assert.Empty(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
+        Assert.Empty(ProviderUsageHoldReader.ReadWorkspace(workspace, now));
 
         void AssertOriginalHold(ProviderHoldHistoryStartupSeed.Result result)
         {
@@ -308,7 +360,30 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         }).Prepend(MakeHold(0)));
     }
 
-    internal Task PopulateStandaloneResultCaseAsync(bool backdated)
+    internal Task PopulateSameTaskProbeCaseAsync()
+    {
+        const string binding = "anthropic::c:/profiles/old";
+        var lastStart = At.AddMinutes(128);
+        var probeGoal = Make(807, lastStart.AddSeconds(1), Credentials[0], stderr: "fixture configuration failed");
+        var task = probeGoal.Tasks[0];
+        var dispatches = Enumerable.Range(1, 128).Select(attempt =>
+            task.LastDispatch! with { DispatchedAt = At.AddMinutes(attempt) }).ToArray();
+        var verification = task.LastVerification! with { DispatchStartedAt = lastStart, DispatchAttemptAt = lastStart };
+        return SaveAsync([MakeHold(0), probeGoal with
+        {
+            Tasks = [task with
+            {
+                DispatchHistory = dispatches, LastDispatch = dispatches[^1],
+                VerificationHistory = [verification], LastVerification = verification
+            }],
+            Timeline = dispatches.Select((dispatch, index) => new ProgressEventSnapshot(probeGoal.Id, task.Id,
+                ProgressKind.TaskNote, ProviderBudgetHoldSchedules.FormatProbe(
+                    new(binding, dispatch.DispatchedAt, index + 1, "backoff") { HoldPlacedAt = At }),
+                dispatch.DispatchedAt)).ToArray()
+        }]);
+    }
+
+    internal Task PopulateStandaloneResultCaseAsync(bool backdated, bool? availableAfterReset = null)
     {
         const string binding = "anthropic::c:/profiles/old";
         const string visibleIntent = "fixture-visible-reset";
@@ -332,11 +407,12 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
                     // Replay sorts by timestamp and preserves stored order at a tie. The
                     // authentication result would be applicable if the later reset were visible.
                     .. Enumerable.Range(0, 128).Select(index => Result(visibleIntent, "exhausted", $"refusal-{index}", hiddenAt)),
-                    Result(hiddenIntent, "authentication-required", "generation is not yet visible", hiddenAt),
+                    Result(hiddenIntent, availableAfterReset is null ? "authentication-required" : "available",
+                        "generation is not yet visible", hiddenAt),
                     .. Enumerable.Range(0, 128).Select(index => new ProgressEventSnapshot(source.Id, source.Tasks[0].Id,
                         ProgressKind.TaskNote, ProviderBudgetHoldSchedules.FormatReset(
                             new(binding, hiddenAt, $"fixture-hidden-reset-{index}")), hiddenAt)),
-                    Result(hiddenIntent, "failed", "generation is now visible", checkedAt)
+                    Result(hiddenIntent, availableAfterReset == true ? "available" : "failed", "generation is now visible", checkedAt)
                 ]
             },
             other with
@@ -386,8 +462,14 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         }]);
     }
 
-    internal Task CompleteOnOriginalBindingAsync() =>
-        SaveAsync([Make(806, At.AddMinutes(3), Credentials[0], success: true)]);
+    internal Task CompleteOnOriginalBindingAsync(bool legacyModel)
+    {
+        var goal = Make(806, At.AddMinutes(3), Credentials[0], success: true);
+        if (!legacyModel) return SaveAsync([goal]);
+        var task = goal.Tasks.Single();
+        var dispatch = task.LastDispatch! with { ModelName = null };
+        return SaveAsync([goal with { Tasks = [task with { LastDispatch = dispatch, DispatchHistory = [dispatch] }] }]);
+    }
 
     internal int CountDispatchGoals()
     {

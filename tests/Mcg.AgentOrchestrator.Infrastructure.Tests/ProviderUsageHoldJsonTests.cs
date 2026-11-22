@@ -133,10 +133,10 @@ public sealed class ProviderUsageHoldJsonTests
         {
             switch (method!.Name)
             {
-                case nameof(IOrchestratorStateRepository.ListModelFitHistoryAsync):
+                case nameof(IOrchestratorStateRepository.ReadProviderHoldSeedHistoryAsync):
                     HistoryCalls++;
-                    return FailHistory ? Task.FromException<IReadOnlyList<ModelFitHistoryRow>>(new IOException("fixture history failure"))
-                        : Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
+                    return FailHistory ? Task.FromException<ProviderHoldSeedHistory>(new IOException("fixture history failure"))
+                        : Task.FromResult(new ProviderHoldSeedHistory([], [], new HashSet<GoalId>(), []));
                 case nameof(IOrchestratorStateQueries.LoadGoalsAsync):
                     LoadCalls++;
                     return Task.FromResult(new AgentOrchestratorKernel());

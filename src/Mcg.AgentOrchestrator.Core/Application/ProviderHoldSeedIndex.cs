@@ -1,7 +1,7 @@
 namespace Mcg.AgentOrchestrator.Core;
 
 internal sealed record ProviderHoldSeedEvaluation(
-    ProviderBudgetHoldSchedule? Schedule, int Count, int ObservationVisits, int ResetVisits);
+    ProviderBudgetHoldSchedule? Schedule, int Count, int ObservationVisits, int ResetVisits, int DispatchVisits);
 
 internal sealed record ProviderHoldSeedIndexResult(
     IReadOnlySet<string> RequiredGoals,
@@ -78,7 +78,8 @@ internal static class ProviderHoldSeedIndex
                     keys.Add(binding.Key);
                 }
             }
-            evaluations.Add(binding.Key, new(schedule, bucket.EvaluationCount, bucket.ObservationVisits, bucket.ResetVisits));
+            evaluations.Add(binding.Key, new(schedule, bucket.EvaluationCount, bucket.ObservationVisits,
+                bucket.ResetVisits, bucket.DispatchVisits));
         }
 
         required.UnionWith(workingIds);

@@ -9,7 +9,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// by the streaming serializer, including briefs, execution output and acceptance evidence.</summary>
 internal static class ProviderHoldSeedEvidenceReader
 {
-    internal static async Task<(HashSet<GoalId> FailureGoals, HashSet<GoalId> MarkerGoals)> FindCandidatesAsync(
+    internal sealed record Candidates(HashSet<GoalId> FailureGoals, HashSet<GoalId> MarkerGoals,
+        Dictionary<GoalId, DateTimeOffset> ArchivedRecoveries, bool HasHistory);
+
+    internal static async Task<Candidates> FindCandidatesAsync(
         SqliteConnection connection, JsonSerializerOptions options, CancellationToken cancellationToken)
     {
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, cancellationToken);
@@ -17,6 +20,7 @@ internal static class ProviderHoldSeedEvidenceReader
         var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, cancellationToken);
         var failures = new HashSet<GoalId>();
         var markers = new HashSet<GoalId>();
+        var archivedRecoveries = new Dictionary<GoalId, DateTimeOffset>();
         await using var command = connection.CreateCommand();
         var sidecarMarkers = hasTimeline ? """
             UNION SELECT t.goal_id FROM goal_timeline t JOIN goals g ON g.id = t.goal_id
@@ -64,7 +68,7 @@ internal static class ProviderHoldSeedEvidenceReader
             }
         }
 
-        if (!hasArchive) return (failures, markers);
+        if (!hasArchive) return new(failures, markers, archivedRecoveries, hasHistory);
         command.CommandText = """
             SELECT a.goal_id, a.snapshot_json FROM goal_snapshot_archive a JOIN goals g ON g.id = a.goal_id
             WHERE json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1
@@ -84,12 +88,96 @@ internal static class ProviderHoldSeedEvidenceReader
                 if (!failures.Contains(id) && row.Tasks?.Any(task => IsRefusal(task.LastVerification) ||
                     task.VerificationHistory?.Any(IsRefusal) == true) == true)
                     failures.Add(id);
+                if (failures.Contains(id) || row.Tasks is null) continue;
+                foreach (var task in row.Tasks)
+                {
+                    foreach (var verification in (task.VerificationHistory ?? []).Append(task.LastVerification)
+                        .OfType<TaskVerificationSnapshot>())
+                        if (verification.ExitCode == 0 && verification.CompletionVerdictVerifiedSuccess &&
+                            verification.CompletedAt > archivedRecoveries.GetValueOrDefault(id))
+                            archivedRecoveries[id] = verification.CompletedAt;
+                    // A mixed legacy task can keep its dispatches inline and its verdicts in the sidecar.
+                    if (hasHistory && task.HistoryInTable.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null) &&
+                        (task.LastDispatch.ValueKind == JsonValueKind.Object || task.DispatchHistory.ValueKind == JsonValueKind.Array &&
+                            task.DispatchHistory.GetArrayLength() > 0))
+                        archivedRecoveries[id] = DateTimeOffset.MaxValue;
+                }
             }
         }
-        return (failures, markers);
+        return new(failures, markers, archivedRecoveries, hasHistory);
 
         static bool IsRefusal(TaskVerificationSnapshot? verification) =>
             verification is { ExitCode: not 0 } && ProviderHoldEvidence.Read(TaskSpec.RestoreVerification(verification)).Confirmed;
+    }
+
+    internal static async Task<HashSet<GoalId>> FindRecoveryCandidatesAsync(SqliteConnection connection,
+        Candidates candidates, ProviderHoldHistory.SeedSelection selection, CancellationToken cancellationToken)
+    {
+        if (selection.LowerBounds.Count == 0) return [];
+        var earliest = selection.LowerBounds.Values.Min();
+        var known = selection.Sources.Concat(selection.Dependencies).ToHashSet(StringComparer.Ordinal);
+        var found = candidates.ArchivedRecoveries.Where(item => item.Value >= earliest && !known.Contains(item.Key.Value))
+            .Select(item => item.Key).ToHashSet();
+
+        await using var command = connection.CreateCommand();
+        // The SQL joins a potentially successful task to its provider dispatches. Canonical replay
+        // then resolves which attempt produced the verdict and applies the exact event boundary.
+        var verificationRows = candidates.HasHistory ? """
+            UNION ALL
+            SELECT v.goal_id, v.task_id, v.entry_json FROM goal_task_history v
+            WHERE v.kind = 'verification' AND v.goal_id NOT IN (SELECT value FROM known)
+                AND json_extract(v.entry_json, '$.CompletionVerdictVerifiedSuccess') = 1
+            """ : "";
+        var sidecarDispatches = candidates.HasHistory ? """
+            UNION ALL
+            SELECT s.goal_id, s.completed_at, d.entry_json FROM successes s
+            JOIN goal_task_history d ON d.goal_id = s.goal_id AND d.task_id = s.task_id AND d.kind = 'dispatch'
+            """ : "";
+        command.CommandText = $"""
+            WITH known AS (SELECT value FROM json_each($known)),
+            inline_tasks AS MATERIALIZED (
+                SELECT g.id, json_extract(task.value, '$.Id') AS task_id,
+                    json_extract(task.value, '$.LastVerification') AS last_verification,
+                    json_extract(task.value, '$.VerificationHistory') AS verification_history,
+                    json_extract(task.value, '$.LastDispatch') AS last_dispatch,
+                    json_extract(task.value, '$.DispatchHistory') AS dispatch_history
+                FROM goals g JOIN json_each(g.snapshot_json, '$.Tasks') task
+                WHERE g.id NOT IN (SELECT value FROM known) AND json_valid(g.snapshot_json)
+            ), verifications(goal_id, task_id, verification) AS (
+                SELECT id, task_id, last_verification FROM inline_tasks WHERE last_verification IS NOT NULL
+                UNION ALL
+                SELECT t.id, t.task_id, v.value FROM inline_tasks t JOIN json_each(t.verification_history) v
+                {verificationRows}
+            ), successes AS MATERIALIZED (
+                SELECT goal_id, task_id, max(julianday(json_extract(verification, '$.CompletedAt'))) AS completed_at
+                FROM verifications
+                WHERE json_extract(verification, '$.ExitCode') = 0
+                    AND json_extract(verification, '$.CompletionVerdictVerifiedSuccess') = 1
+                GROUP BY goal_id, task_id
+            ), dispatches(goal_id, completed_at, dispatch) AS (
+                SELECT s.goal_id, s.completed_at, t.last_dispatch FROM successes s
+                JOIN inline_tasks t ON t.id = s.goal_id AND t.task_id = s.task_id
+                UNION ALL
+                SELECT s.goal_id, s.completed_at, d.value FROM successes s
+                JOIN inline_tasks t ON t.id = s.goal_id AND t.task_id = s.task_id
+                JOIN json_each(t.dispatch_history) d
+                {sidecarDispatches}
+            ), providers AS (
+                SELECT goal_id, completed_at, coalesce(json_extract(dispatch, '$.ProviderName'),
+                    json_extract(dispatch, '$.WorkerName')) AS provider FROM dispatches
+            )
+            SELECT DISTINCT p.goal_id FROM providers p JOIN goals g ON g.id = p.goal_id
+            WHERE p.provider IS NOT NULL AND EXISTS (
+                SELECT 1 FROM json_each($bounds) b
+                WHERE (p.completed_at IS NULL OR p.completed_at >= julianday(json_extract(b.value, '$.Value')))
+                    AND (p.provider = json_extract(b.value, '$.Key') COLLATE NOCASE
+                        OR p.provider GLOB '*[^ -~]*' OR json_extract(b.value, '$.Key') GLOB '*[^ -~]*'))
+            """;
+        command.Parameters.AddWithValue("$known", JsonSerializer.Serialize(known.Concat(found.Select(id => id.Value))));
+        command.Parameters.AddWithValue("$bounds", JsonSerializer.Serialize(selection.LowerBounds.ToArray()));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) found.Add(new(reader.GetString(0)));
+        return found;
     }
 
     internal static async Task<IReadOnlyList<ProviderUsageGoalEvidence>> ReadAsync(SqliteConnection connection,
@@ -175,7 +263,8 @@ internal static class ProviderHoldSeedEvidenceReader
         IReadOnlyList<EventFields>? Timeline, JsonElement TimelineInTable);
 
     private sealed record DiscoveryTask(TaskVerificationSnapshot? LastVerification,
-        IReadOnlyList<TaskVerificationSnapshot>? VerificationHistory);
+        IReadOnlyList<TaskVerificationSnapshot>? VerificationHistory, JsonElement LastDispatch,
+        JsonElement DispatchHistory, JsonElement HistoryInTable);
 
     private sealed record EventFields(string? TaskId, ProgressKind Kind, string Message,
         DateTimeOffset OccurredAt, DateTimeOffset? OperatorIntentCreatedAt);

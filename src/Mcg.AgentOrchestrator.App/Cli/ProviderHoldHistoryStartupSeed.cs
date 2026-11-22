@@ -36,7 +36,7 @@ internal static class ProviderHoldHistoryStartupSeed
             var working = kernel.Goals;
             var existing = kernel.ProviderHoldHistory.Retained;
             var workingIds = working.Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal);
-            var selection = ProviderHoldHistory.SelectSeedEvidence(history.Rows, history.Attempts, workingIds);
+            var selection = ProviderHoldHistory.SelectSeedEvidence(history.Rows, history.Attempts, workingIds, history.Recoveries);
             var ids = selection.Sources.Concat(selection.Dependencies).Select(id => new GoalId(id)).ToHashSet();
             var markerGoals = history.MarkerGoals;
             ids.UnionWith(markerGoals.Where(id => !workingIds.Contains(id.Value)));
