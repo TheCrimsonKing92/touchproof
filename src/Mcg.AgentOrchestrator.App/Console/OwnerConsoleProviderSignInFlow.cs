@@ -14,10 +14,18 @@ internal sealed class OwnerConsoleProviderSignInFlow(
     private readonly Dictionary<ProviderSignInTarget, bool> _deviceCode = [];
     private readonly Dictionary<string, SignInOperation> _activeSignIns = new(StringComparer.OrdinalIgnoreCase);
 
-    internal bool CanSignIn(OwnerConsoleProviderConnectionState profile) => profile.Connection.SignIn is { } target &&
-        !HasHostApiKey(profile.Connection.Report) &&
-        !_activeSignIns.ContainsKey(profile.Id) &&
-        !_activeSignIns.Values.Any(operation => SharesCredentialSource(target, operation.Target));
+    internal bool CanSignIn(OwnerConsoleProviderConnectionState profile) =>
+        !HasActiveSignIn(profile) && SignInUnavailableReason(profile) is null;
+
+    private string? SignInUnavailableReason(OwnerConsoleProviderConnectionState profile)
+    {
+        if (HasHostApiKey(profile.Connection.Report))
+            return "Sign-in is unavailable while using an API key from the host.";
+        if (profile.Connection.SignIn is not { } target)
+            return "Native sign-in is unavailable for this launch command. Review the worker profile settings.";
+        return _activeSignIns.Values.Any(operation => SharesCredentialSource(target, operation.Target))
+            ? "Another native sign-in for this credential scope blocked this attempt." : null;
+    }
 
     private SignInOperation? AwaitingSignInReturn(OwnerConsoleProviderConnectionState profile) =>
         _activeSignIns.GetValueOrDefault(profile.Id) is { Started: true, RecheckRequested: false } operation
@@ -60,7 +68,12 @@ internal sealed class OwnerConsoleProviderSignInFlow(
 
     internal void BeginSignIn(OwnerConsoleProviderConnectionState profile, bool deviceCode, bool selectedFromUnused)
     {
-        if (!CanSignIn(profile)) return;
+        if (HasActiveSignIn(profile)) return;
+        if (SignInUnavailableReason(profile) is { } reason)
+        {
+            profile.InteractionText = reason;
+            return;
+        }
         var operation = new SignInOperation(profile.Connection.SignIn!, selectedFromUnused);
         _activeSignIns.Add(profile.Id, operation);
         profile.InteractionText = "Opening the provider's native sign-in…";
