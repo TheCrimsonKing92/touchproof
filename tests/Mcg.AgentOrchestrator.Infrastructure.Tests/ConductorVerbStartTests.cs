@@ -275,6 +275,6 @@ public sealed class ConductorVerbStartTests
             Directory.CreateDirectory(_root);
             Workspace = OrchestratorWorkspace.ForDirectory(_root);
         }
-        public void Dispose() => Directory.Delete(_root, recursive: true);
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
     }
 }

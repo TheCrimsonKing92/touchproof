@@ -1,9 +1,41 @@
 using Mcg.AgentOrchestrator.Core;
+using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static partial class AcceptancePolicyShardPlanner
 {
+    internal static PolicyShardPlan ApplyGateProjectRequirements(PolicyShardPlan policy,
+        DotnetShardDisposition disposition, IReadOnlyList<Check> manifestChecks,
+        IReadOnlyList<ImpactReplayChangedSupportFileSummary> supportFallbacks)
+    {
+        var dotnetChecks = manifestChecks.Where(check =>
+            check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (disposition == DotnetShardDisposition.RunDotnetShards && !policy.ForceFull && dotnetChecks.Length > 0 &&
+            !dotnetChecks.Any(check => policy.IncludesProject(check.Project)))
+        {
+            policy = policy with
+            {
+                Applies = true,
+                ForceFull = true,
+                Evidence = $"strict candidate path disposition requires dotnet shards; {policy.Evidence}"
+            };
+        }
+
+        if (supportFallbacks.Count == 0) return policy;
+
+        var projectScopeUnknown = supportFallbacks.Any(fallback => fallback.AffectedProjects.Count == 0);
+        var affectedProjects = supportFallbacks.SelectMany(fallback => fallback.AffectedProjects)
+            .Select(NormalizePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return policy with
+        {
+            SupportFallbackProjects = dotnetChecks.Where(check => !policy.IsAbsentProject(check.Project))
+                .Select(check => NormalizePath(check.Project)).OfType<string>()
+                .Where(project => projectScopeUnknown || affectedProjects.Contains(project))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+        };
+    }
+
     internal static PolicyShardPlan BuildPolicyShardPlan(
         IReadOnlyList<string>? changedFiles,
         AcceptanceShardPolicySwitches? switches,

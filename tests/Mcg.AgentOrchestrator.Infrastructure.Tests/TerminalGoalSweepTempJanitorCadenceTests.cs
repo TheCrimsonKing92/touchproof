@@ -36,10 +36,10 @@ public sealed class TerminalGoalSweepTempJanitorCadenceTests : IDisposable
         var skipped = RunTick();
 
         Assert.Contains(
-            ",owned-root-reap:0:1,owned-root-build-roots:0:1,owned-root-temp-janitor:0:0,owned-root-orphan-fixtures:0:1,",
+            ",owned-root-reap:0:1,owned-root-build-roots:0:0,owned-root-temp-janitor:0:0,owned-root-orphan-fixtures:0:1,",
             skipped.SweepTiming);
         Assert.Equal(
-            "SWEEP_OWNED_ROOT_OBSERVED detail=\"owned-root-reap roots_examined=0 roots_removed=0 temp-artifact-janitor skipped=cadence\"",
+            "SWEEP_OWNED_ROOT_OBSERVED detail=\"owned-root-reap roots_examined=0 roots_removed=0 build-root-reap skipped=cadence temp-artifact-janitor skipped=cadence\"",
             skipped.Observation);
         Assert.True(File.Exists(leaked));
     }

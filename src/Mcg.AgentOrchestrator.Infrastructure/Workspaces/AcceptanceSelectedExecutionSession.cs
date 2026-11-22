@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
+using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
+using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -15,6 +17,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
 {
     private readonly AcceptanceSelectedExecutionMode _effectiveMode = mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null
         ? AcceptanceSelectedExecutionMode.Shadow : mode;
+    private readonly Stopwatch _inputTimer = new();
+    private AcceptanceSelectedExecutionInput? _input;
     private AcceptanceSelectedExecutionPlan? _plan;
     private IReadOnlyList<AcceptanceTestClassDescriptor> _classes = [];
     private IReadOnlyList<AcceptanceTestLane> _actual = [];
@@ -41,6 +45,58 @@ internal sealed class AcceptanceSelectedExecutionSession(
         mode == AcceptanceSelectedExecutionMode.Off ? null : TransformProjectChecks;
     internal IReadOnlyList<AcceptanceSelectedExecutionProjectCheckEntry> ProjectChecks => _plan?.ProjectChecks ?? [];
 
+    internal IReadOnlyList<ImpactReplayChangedSupportFileSummary> ReadSupportFallbacks() =>
+        (ReadEnforcedInput()?.SupportSelections ?? []).Where(item => item.FullRunTriggered).ToArray();
+
+    private AcceptanceSelectedExecutionInput? ReadEnforcedInput() =>
+        _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && !attributionScoped && changedFiles is { Count: > 0 }
+            ? ReadInput(changedFiles) : null;
+
+    internal IReadOnlyList<Check> IncludeSupportInFocusedPolicyChecks(IReadOnlyList<Check> policyChecks)
+    {
+        var support = ReadEnforcedInput()?.SupportProjectClasses;
+        if (support is not { Count: > 0 }) return policyChecks;
+
+        // A generated focused policy check can replace the broad manifest check for this project.
+        return policyChecks.Select(check =>
+        {
+            if (!IsFocusedProjectDotnetCheck(check) ||
+                support.FirstOrDefault(item => ProjectMatches(check.Project!, item.Key)).Value is not { Count: > 0 } classes)
+                return check;
+
+            var arguments = check.Arguments.ToArray();
+            var index = Array.FindIndex(arguments, argument =>
+                argument.Equals("--filter", StringComparison.OrdinalIgnoreCase)) + 1;
+            var filter = arguments[index];
+            var additionalSelectors = classes.Select(name => "FullyQualifiedName~" + name)
+                .Except(filter.Split('|'), StringComparer.OrdinalIgnoreCase).ToArray();
+            if (additionalSelectors.Length == 0) return check;
+
+            arguments[index] = filter + "|" + string.Join('|', additionalSelectors);
+            return new Check
+            {
+                Name = check.Name, Type = check.Type, Project = check.Project,
+                Arguments = arguments, Runner = check.Runner
+            };
+        }).ToArray();
+    }
+
+    private AcceptanceSelectedExecutionInput ReadInput(IReadOnlyList<string> changes)
+    {
+        if (_input is not null) return _input;
+        _inputTimer.Start();
+        try
+        {
+            return _input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changes, engineSettings, integrationBranch)
+                : read(worktreePath, changes);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return _input = new(ReverseDependencyTestSelection.Unreadable($"{ex.GetType().Name}: {ex.Message}"), [], [], []);
+        }
+        finally { _inputTimer.Stop(); }
+    }
+
     internal IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> TransformProjectChecks(
         IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> checks)
     {
@@ -60,6 +116,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
     {
         if (mode == AcceptanceSelectedExecutionMode.Off) return lanes;
         _actual = lanes;
+        var priorInputMilliseconds = _inputTimer.Elapsed.TotalMilliseconds;
         var timer = Stopwatch.StartNew();
         try
         {
@@ -68,8 +125,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                     attributionScoped ? "Attribution-scoped attempt." : "Candidate changes are unavailable.", lanes, [], [], [], []);
             else
             {
-                var input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changedFiles, engineSettings, integrationBranch)
-                    : read(worktreePath, changedFiles);
+                var input = ReadInput(changedFiles);
                 _classes = input.Classes;
                 var targets = wholeProjectChecks.Where(check => check.SupportsSelectedExecution).ToArray();
                 var inventories = new Dictionary<AcceptanceWholeProjectCheck, AcceptanceWholeProjectCheckInventory>();
@@ -121,7 +177,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
                         .Select(lane => lane.Name).ToArray(), input.GuardClasses,
                     obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable, SelectableInventories,
-                    changedTestProjects, input.AssemblyScanReasons);
+                    changedTestProjects, input.AssemblyScanReasons, input.SupportSelections, input.SupportProjectClasses);
                 IReadOnlyList<AcceptanceTestClassDescriptor> ReadProject(string project)
                 {
                     try { return input.ProjectClasses?.Invoke(project) ?? []; }
@@ -135,7 +191,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 $"{ex.GetType().Name}: {ex.Message}", lanes, [], [], [], []);
             _classes = []; // An incomplete inventory cannot certify counts.
         }
-        finally { _milliseconds = timer.Elapsed.TotalMilliseconds; }
+        finally { _milliseconds = priorInputMilliseconds + timer.Elapsed.TotalMilliseconds; }
         return _actual = Applied ? _plan!.ExecutionLanes : lanes;
     }
 
@@ -172,7 +228,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
             MethodFormResolutions = _plan?.MethodFormResolutions ?? [],
             UnresolvedObligationSelectors = _plan?.UnresolvedObligationSelectors ?? [],
             WholeProjectCoverage = _plan?.WholeProjectCoverage is { Count: > 0 } covered ? covered : null,
-            AssemblyScanReasons = _plan?.AssemblyScanReasons is { Count: > 0 } reasons ? reasons : null
+            AssemblyScanReasons = _plan?.AssemblyScanReasons is { Count: > 0 } reasons ? reasons : null,
+            SupportSelections = _plan?.SupportSelections is { Count: > 0 } support ? support : null
         };
         return observation with { SelectedExecution = record };
     }

@@ -34,6 +34,8 @@ public sealed class ConductorContinuitySupervisorStopHonoredTests
     [Xunit.Theory]
     [Xunit.InlineData("stop-file-during-sleep")]
     [Xunit.InlineData("stop-file")]
+    [Xunit.InlineData("drained")]
+    [Xunit.InlineData("drain-timeout")]
     public async Task StopReasonArtifact_NonZeroExit_DoesNotRespawn(string reason)
     {
         using var scenario = new SupervisorScenario(request =>
@@ -57,6 +59,22 @@ public sealed class ConductorContinuitySupervisorStopHonoredTests
         Assert.Equal("loop-handoff", line.Kind);
         Assert.StartsWith($"SUPERVISOR_STOP_HONORED basis=exit-reason={reason} ", line.Detail);
         Assert.StartsWith(line.Detail + " stdout=", stopped.Detail);
+    }
+
+    [Xunit.Fact]
+    public async Task DrainFilePresent_NonZeroExit_DoesNotRespawn()
+    {
+        using var scenario = new SupervisorScenario(_ => new ConductorSupervisorProcessResult(1, 101));
+        var path = ConductorDrainSignal.PathFor(scenario.StopFilePath);
+        ConductorDrainSignal.Write(path, ConductorDrainSignal.DefaultTimeoutSeconds);
+
+        Assert.Equal(0, await scenario.RunAsync());
+        Assert.Single(scenario.Host.Requests);
+        Assert.Empty(scenario.Delays);
+        Assert.Equal("SUPERVISOR_STOP_HONORED basis=drain-file-present exit=1 pid=101 attempt=1",
+            Assert.Single(scenario.ConductEvents).Detail);
+        Assert.False(File.Exists(scenario.StopFilePath));
+        Assert.True(File.Exists(path));
     }
 
     [Xunit.Theory]

@@ -26,7 +26,7 @@ internal sealed partial class ConductorBatchLoop
             activeCohorts,
             tick,
             new List<string>(),
-            blockAdmissionOnFailure: true);
+            blockAdmissionOnFailure: true, coordinator.GetMainFullVerificationRunId?.Invoke());
         if (census.CaptureFailure is null &&
             census.Occupants.Contains($"goal:{ShortIdentity(goalId)}", StringComparer.OrdinalIgnoreCase))
         {
