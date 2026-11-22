@@ -19,7 +19,7 @@ public sealed class FocusedEvidenceParsedRootCacheTests
         var root = FocusedEvidenceRequestResolver.ParseCSharpRoot(alpha);
         Assert.Same(root, FocusedEvidenceRequestResolver.ParseCSharpRoot(alpha));
         var alias = Path.Combine(Path.GetDirectoryName(alpha)!, ".", Path.GetFileName(alpha));
-        Assert.Same(root, FocusedEvidenceRequestResolver.ParseCSharpRoot(alias));
+        Assert.Equal(alias, FocusedEvidenceRequestResolver.ParseCSharpRoot(alias).SyntaxTree.FilePath);
         Assert.Equal(3, parses.Total);
         foreach (var path in new[] { alpha, beta, empty }) Assert.Equal(1, parses.CountFor(path));
     }
