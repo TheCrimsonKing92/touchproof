@@ -24,9 +24,10 @@ internal static class OperatorIntentGoalApplication
         OperatorIntentCoordinator intents,
         ConductorParallelAcceptanceAttemptCoordinator attempts,
         IReadOnlySet<string>? intentIds = null,
-        bool supersessionOnly = false)
+        bool supersessionOnly = false,
+        IReadOnlySet<string>? retryAnswerIds = null)
     {
-        var result = intents.ExecutePending(kernel, goal, intentIds);
+        var result = intents.ExecutePending(kernel, goal, intentIds, retryAnswerIds);
         goal = kernel.GetGoal(goal.Id);
         var lines = new List<string>();
         if (result.MutatedGoalState && !supersessionOnly && goal.Status != GoalStatus.Completed)
@@ -82,7 +83,7 @@ internal static class OperatorIntentGoalApplication
             if (goal is null)
                 return new OperatorIntentOfflineOutcome.NothingPending();
 
-            var batch = OperatorIntentBatchPolicy.SelectPreparationBatch(
+            var (batch, retryAnswerIds) = OperatorIntentBatchPolicy.SelectPreparationBatch(
                 intents.CaptureGoalBatch().Where(intent => intent.GoalId == goalId.Value));
             var supersessionOnly = batch.Count > 0 && OperatorIntentBatchPolicy.IsSupersession(batch[0]);
             var publicationBound = false;
@@ -94,7 +95,7 @@ internal static class OperatorIntentGoalApplication
                     baseline.CriterionEvidenceObligations?.Any(prior => prior.Id == item.Id && prior.Publication is null) == true);
             }
             var ids = batch.Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
-            var application = ApplyPending(kernel, goal, intents, attempts, ids, supersessionOnly);
+            var application = ApplyPending(kernel, goal, intents, attempts, ids, supersessionOnly, retryAnswerIds);
             if (!application.Result.MutatedGoalState && !publicationBound)
             {
                 return application.Lines.Count == 0

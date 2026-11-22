@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -126,6 +127,62 @@ public sealed class CriterionEvidenceSupersedeIntentTests
         Assert.Equal(before, JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(goalId)));
 
         File.WriteAllText(journalPath, completeJournal);
+        Assert.Contains(goalId, scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
+        coordinator.CompletePersisted([goalId]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await scenario.Store.GetAsync(intent.Id))!.Status);
+        Assert.Equal(CriterionEvidenceState.Superseded,
+            Assert.Single(scenario.Kernel.GetGoal(goalId).CriterionEvidenceObligations).State);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UntrustedCleanupJournal_KeepsSameClaimUntilRepaired(bool corruptCompressedSibling)
+    {
+        using var scenario = new Scenario(GoalStatus.Verified);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
+        var directory = scenario.Workspace.ExecutionDirectory;
+        var goalId = scenario.Goal.Id;
+        var journalPath = GoalOperationJournal.PathFor(directory, goalId);
+        var compressedPath = journalPath + ".gz";
+        GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:land", "Landed.");
+        GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:record", "Recorded.");
+        var plainHistory = File.ReadAllText(journalPath);
+        GoalOperationJournal.RecordCleanupCompleted(directory, scenario.Goal, "Cleaned up.");
+        var cleanupRow = File.ReadAllText(journalPath)[plainHistory.Length..];
+        File.WriteAllText(journalPath, plainHistory);
+        if (corruptCompressedSibling)
+        {
+            File.WriteAllText(compressedPath, "invalid gzip header");
+        }
+        else
+        {
+            var foreignGoal = scenario.Kernel.CreateGoal("A different goal");
+            GoalOperationJournal.RecordCleanupCompleted(directory, foreignGoal, "Other goal cleaned up.");
+            File.AppendAllText(journalPath, File.ReadAllText(GoalOperationJournal.PathFor(directory, foreignGoal.Id)));
+        }
+
+        var intent = await scenario.Enqueue(Reason);
+        var coordinator = OperatorIntentCoordinator.CreateDefault(scenario.Workspace);
+        var hold = scenario.ApplyTickBoundary(coordinator);
+        Assert.Empty(hold.ChangedGoalIds);
+        Assert.Contains(hold.Lines, line => line.Contains("result=retryable reason=lifecycle-read-failed", StringComparison.Ordinal));
+        Assert.Equal(OperatorIntentStatus.Claimed, (await scenario.Store.GetAsync(intent.Id))!.Status);
+        Assert.Equal(CriterionEvidenceState.Pending,
+            Assert.Single(scenario.Kernel.GetGoal(goalId).CriterionEvidenceObligations).State);
+
+        if (corruptCompressedSibling)
+        {
+            using var gzip = new GZipStream(File.Create(compressedPath), CompressionMode.Compress);
+            using var writer = new StreamWriter(gzip);
+            writer.Write(cleanupRow);
+        }
+        else
+        {
+            File.WriteAllText(journalPath, plainHistory + cleanupRow);
+        }
+
         Assert.Contains(goalId, scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
         await scenario.Repository.SaveAsync(scenario.Kernel);
         coordinator.CompletePersisted([goalId]);

@@ -731,33 +731,33 @@ internal static partial class GoalOperationJournal
         bool includeArchive,
         bool rejectMalformedEntries) =>
         ReadPaths(PathFor(executionDirectory, goalId), ArchivePathFor(executionDirectory, goalId),
-            includeArchive, rejectMalformedEntries);
+            includeArchive, rejectMalformedEntries ? goalId : null);
 
     internal static GoalOperationJournalSummary ReadFromStateCopy(string stateDirectory, GoalId goalId)
     {
         var directory = Path.Combine(stateDirectory, "goal-operations");
         var name = $"{goalId.Value}.jsonl";
         return ReadPaths(Path.Combine(directory, name), Path.Combine(directory, "archive", name),
-            includeArchive: true, rejectMalformedEntries: false);
+            includeArchive: true, strictGoalId: null);
     }
 
     private static GoalOperationJournalSummary ReadPaths(
-        string path, string archivePath, bool includeArchive, bool rejectMalformedEntries)
+        string path, string archivePath, bool includeArchive, GoalId? strictGoalId)
     {
         var plainExists = File.Exists(path);
         var compressedPath = path + ".gz";
         var compressedExists = File.Exists(compressedPath);
-        var plainEntries = plainExists ? ReadEntries(path, rejectMalformedEntries) : [];
+        var plainEntries = plainExists ? ReadEntries(path, strictGoalId) : [];
         GoalOperationJournalEntry[] compressedEntries;
-        try { compressedEntries = compressedExists ? ReadEntries(compressedPath, rejectMalformedEntries) : []; }
-        catch (InvalidDataException) when (plainExists) { compressedEntries = []; }
+        try { compressedEntries = compressedExists ? ReadEntries(compressedPath, strictGoalId) : []; }
+        catch (InvalidDataException) when (plainExists && strictGoalId is null) { compressedEntries = []; }
         var plainIncludesCompressed = plainEntries.Length >= compressedEntries.Length &&
             plainEntries.Take(compressedEntries.Length).Select(entry => JsonSerializer.Serialize(entry, JsonOptions))
                 .SequenceEqual(compressedEntries.Select(entry => JsonSerializer.Serialize(entry, JsonOptions)));
         var entries = plainIncludesCompressed ? plainEntries : compressedEntries.Concat(plainEntries)
             .OrderBy(entry => entry.At).ToArray();
         if (includeArchive && !plainExists && !compressedExists && File.Exists(archivePath))
-            entries = ReadEntries(archivePath, rejectMalformedEntries).Concat(entries)
+            entries = ReadEntries(archivePath, strictGoalId).Concat(entries)
                 .OrderBy(entry => entry.At).ToArray();
         path = plainExists ? path : compressedExists ? compressedPath :
             includeArchive && File.Exists(archivePath) ? archivePath : path;
@@ -997,9 +997,7 @@ internal static partial class GoalOperationJournal
         }
     }
 
-    private static GoalOperationJournalEntry[] ReadEntries(
-        string path,
-        bool rejectMalformedEntries = false)
+    private static GoalOperationJournalEntry[] ReadEntries(string path, GoalId? strictGoalId)
     {
         var entries = new List<GoalOperationJournalEntry>();
         var lineNumber = 0;
@@ -1009,7 +1007,7 @@ internal static partial class GoalOperationJournal
             var entry = TryDeserialize(line, out var failure);
             if (entry is null)
             {
-                if (rejectMalformedEntries)
+                if (strictGoalId is not null)
                 {
                     throw new FormatException(
                         $"Malformed goal operation journal entry in '{path}' at line {lineNumber}: {failure}.");
@@ -1017,6 +1015,10 @@ internal static partial class GoalOperationJournal
 
                 continue;
             }
+
+            if (strictGoalId is not null && entry.GoalId != strictGoalId)
+                throw new FormatException(
+                    $"Malformed goal operation journal entry in '{path}' at line {lineNumber}: expected goal '{strictGoalId.Value}', found '{entry.GoalId.Value}'.");
 
             entries.Add(entry);
         }

@@ -206,7 +206,8 @@ internal sealed partial class OperatorIntentCoordinator
         _pendingCompletions.TryGetValue(goalId, out var pending) && pending.Count > 0;
 
     public OperatorIntentExecutionResult ExecutePending(
-        AgentOrchestratorKernel kernel, Goal goal, IReadOnlySet<string>? intentIds = null)
+        AgentOrchestratorKernel kernel, Goal goal, IReadOnlySet<string>? intentIds = null,
+        IReadOnlySet<string>? retryAnswerIds = null)
     {
         if (_pendingCompletions.TryGetValue(goal.Id.Value, out var uncommitted) && uncommitted.Count > 0)
         {
@@ -333,7 +334,7 @@ internal sealed partial class OperatorIntentCoordinator
                     RetryClarificationHandling.AwaitingNewAnswer or RetryClarificationHandling.AwaitingOtherHumanInput)
                 {
                     pendingWait = (intent.Id, BuildRetryWaitNote(retryClarification, blockers));
-                    if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated, intentIds))
+                    if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated, retryAnswerIds ?? intentIds))
                     {
                         mutated |= answerMutated || retryClarification == RetryClarificationHandling.AwaitingNewAnswer;
                         break;

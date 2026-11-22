@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -32,15 +33,22 @@ public static class OperatorIntentBatchPolicy
         (CanShareTick(intent.Verb) && appliedVerbs.All(CanShareTick)) ||
         (IsClarificationAnswer(intent) && appliedVerbs.All(verb => verb == OperatorIntentVerbs.Answer));
 
-    internal static IReadOnlyList<OperatorIntentRecord> SelectPreparationBatch(IEnumerable<OperatorIntentRecord> target)
+    internal static (IReadOnlyList<OperatorIntentRecord> Prepared, IReadOnlySet<string>? RetryAnswerIds)
+        SelectPreparationBatch(IEnumerable<OperatorIntentRecord> target)
     {
         var intents = target.ToArray();
-        if (!intents.Any(IsSupersession)) return intents;
+        if (!intents.Any(IsSupersession)) return (intents, null);
 
         // Match claim priority and stop when the next intent needs different preparation.
         var inClaimOrder = intents.OrderBy(intent => intent.Status != OperatorIntentStatus.Claimed).ToArray();
         var supersessionOnly = IsSupersession(inClaimOrder[0]);
-        return inClaimOrder.TakeWhile(intent => IsSupersession(intent) == supersessionOnly).ToArray();
+        var prepared = inClaimOrder.TakeWhile(intent => IsSupersession(intent) == supersessionOnly).ToArray();
+        if (!prepared.Any(intent => intent.Verb == OperatorIntentVerbs.Retry)) return (prepared, null);
+
+        // A retry can claim an answer past the preparation boundary while it waits.
+        var retryAnswerIds = intents.Where(intent => intent.Verb == OperatorIntentVerbs.Answer)
+            .Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
+        return (prepared, retryAnswerIds);
     }
 
     internal static bool IsSupersession(OperatorIntentRecord intent) =>

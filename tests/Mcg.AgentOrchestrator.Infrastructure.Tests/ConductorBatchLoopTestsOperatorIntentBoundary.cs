@@ -62,6 +62,66 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
         finally { TryDeleteDirectory(root); }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task ClaimedRetry_ConsumesCapturedAnswerAfterSupersede(bool deferPreparation)
+    {
+        var root = CreateTempDirectory("mcg-intent-retry-answer-boundary");
+        try
+        {
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "repair");
+            var statePath = Path.Combine(root, "state.db");
+            StateDbMigrations.EnsureUpToDate(statePath);
+            var repository = new SqliteOrchestratorStateRepository(statePath);
+            var store = Store(root);
+            var coordinator = new OperatorIntentCoordinator(store);
+            var retry = await store.EnqueueAsync(Intent(goal, "retry", OperatorIntentVerbs.Retry, task.Id.Value,
+                new RetryOperatorIntentPayload("repair after classification", null, RetryCause: RetryCause.Unknown)));
+            var driver = MakeDriver();
+            ConductorOperatorIntentBoundary.Result Apply(bool prepared = true, IReadOnlyList<OperatorIntentRecord>? captured = null) =>
+                ConductorOperatorIntentBoundary.Apply(kernel, driver, goal.Id.Value,
+                    new Dictionary<string, GoalSnapshotCheckpointResult>(), coordinator,
+                    (_, _, supersessionOnly) => prepared && !supersessionOnly,
+                    _ => new ConductorGoalReloadObservation.NotObserved(), captured);
+
+            Assert.Contains(goal.Id, Apply().ChangedGoalIds);
+            Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(retry.Id))!.Status);
+            var request = Assert.Single(kernel.GetPendingBlockingHumanInput(goal.Id));
+            var supersede = await store.EnqueueAsync(Intent(goal, "supersede", OperatorIntentVerbs.CriterionEvidenceSupersede,
+                null, new CriterionEvidenceSupersedeOperatorIntentPayload("duty", "overtaken"))
+                with { CreatedAt = retry.CreatedAt.AddSeconds(1) });
+            var answer = await store.EnqueueAsync(Intent(goal, "answer", OperatorIntentVerbs.Answer, request.TaskId?.Value,
+                new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput, request.Id.Value, goal.Id.Value,
+                    nameof(RetryCause.NewSourceFinding), OperatorActorKind.Human))
+                with { CreatedAt = retry.CreatedAt.AddSeconds(2) });
+
+            var tick = Apply(prepared: !deferPreparation);
+            if (deferPreparation)
+            {
+                Assert.Empty(tick.ChangedGoalIds);
+                tick = Apply(captured: tick.DeferredIntents);
+            }
+            Assert.Contains(goal.Id, tick.ChangedGoalIds);
+            Assert.Equal(nameof(RetryCause.NewSourceFinding), request.Answer);
+            await repository.SaveAsync(kernel);
+            coordinator.CompletePersisted([goal.Id]);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(answer.Id))!.Status);
+            Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(retry.Id))!.Status);
+            Assert.Equal(OperatorIntentStatus.Pending, (await store.GetAsync(supersede.Id))!.Status);
+
+            Assert.Contains(goal.Id, Apply().ChangedGoalIds);
+            await repository.SaveAsync(kernel);
+            coordinator.CompletePersisted([goal.Id]);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(retry.Id))!.Status);
+            Assert.Equal(RetryCause.NewSourceFinding, task.PendingRetryCause);
+            Assert.Equal(OperatorIntentStatus.Pending, (await store.GetAsync(supersede.Id))!.Status);
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
     [Xunit.Fact]
     public void NoIntent_StillRunsOrdinaryMaintenance()
     {
