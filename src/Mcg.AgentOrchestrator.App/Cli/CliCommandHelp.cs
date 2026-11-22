@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliCommandHelp
 {
-    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
+    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--no-dispatch] [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
     public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --text-file <path> [--override-draft-checks <reason>] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --brief-file <path> [--override-draft-checks <reason>] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] (--depends-on is repeatable, combines with --backlog-item and cannot be combined with --simple, --run or --from-backlog)";
     public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
     public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
@@ -135,6 +135,7 @@ internal static class CliCommandHelp
         [
             "--policy",
             "--loop",
+            CliShadowStartCommand.NoDispatchFlag,
             "--max-iterations",
             "--max-duration",
             "--watch",
@@ -151,6 +152,10 @@ internal static class CliCommandHelp
             "--help",
             "-h"
         ]);
+
+    private static readonly CommandHelpEntry ShadowStart = new(
+        CliShadowStartCommandHelp.Usage, CliShadowStartCommandHelp.Description,
+        CliShadowStartCommandHelp.Flags, CliShadowStartCommandHelp.DetailLines);
 
     private static readonly string[] HelpFlags = ["--help", "-h"];
 
@@ -966,7 +971,8 @@ internal static class CliCommandHelp
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
             "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by",
-            "--home-build-blocked-commit", "--override-draft-checks", "--bundled-reason", "--model", "--profile", "--effort"
+            "--home-build-blocked-commit", "--override-draft-checks", "--bundled-reason", "--model", "--profile", "--effort",
+            "--candidate-arg"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
@@ -1004,6 +1010,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  goals             List goals [--epic <id-or-title>].");
         Console.WriteLine("  status            Show goal or orchestrator status.");
         Console.WriteLine("  impact-replay     Measure historical lane savings and missed failures.");
+        Console.WriteLine($"  {CliShadowStartCommand.Name,-17}{CliShadowStartCommandHelp.Description}");
         Console.WriteLine("  experiment-replay Import recorded rounds; register, execute and report the paired pilot.");
         Console.WriteLine("  attention         List or answer operator attention items.");
         Console.WriteLine("  backlog-list      List backlog items.");
@@ -1435,6 +1442,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("impact-replay", StringComparison.OrdinalIgnoreCase))
         {
             entry = ImpactReplay;
+            return true;
+        }
+        if (args[0].Equals(CliShadowStartCommand.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ShadowStart;
             return true;
         }
         if (args[0].Equals("experiment-replay", StringComparison.OrdinalIgnoreCase))
