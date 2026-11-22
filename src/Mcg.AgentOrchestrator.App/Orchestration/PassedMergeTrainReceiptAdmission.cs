@@ -92,6 +92,13 @@ internal static class PassedMergeTrainReceiptAdmission
         foreach (var (selection, receipt) in operations.Find(
                      candidates, ineligibleGoalIds, ReportStale, (receipt, observation) =>
                      {
+                         // Leave this receipt unobserved so EndPass drops any earlier hold on its peers.
+                         if (observation.NotReadyGoalIds.Any(member =>
+                                 PassedAcceptanceReceiptReplay.HasRefusedCarryHold(member, results)))
+                         {
+                             return;
+                         }
+
                          var landingHeldRequestIds = new Dictionary<GoalId, string>();
                          foreach (var member in observation.NotReadyGoalIds)
                          {

@@ -100,10 +100,12 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public void RefusedCarryOldestLeavesBothTrainSlotsForEligiblePeers(bool groupedOrigin, bool satisfiedOnBoundSha)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void RefusedCarryOldestLeavesBothTrainSlotsForEligiblePeers(bool groupedOrigin, bool satisfiedOnBoundSha,
+        bool retainedReceipt)
     {
         const string goalPath = "src/goal.txt";
         var repository = CreateGitRepository();
@@ -184,8 +186,9 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
             }
 
             var peers = scenario.Goals.Skip(1).ToArray();
-            AppendCommit(GoalWorktrees.Ensure(repository, peers[0].Id),
-                "tests/Mcg.AgentOrchestrator.Core.Tests/FirstPeer.cs", "first peer");
+            const string firstPeerPath = "tests/Mcg.AgentOrchestrator.Core.Tests/FirstPeer.cs";
+            var firstPeerWorktree = GoalWorktrees.Ensure(repository, peers[0].Id);
+            AppendCommit(firstPeerWorktree, firstPeerPath, "first peer");
             AppendCommit(GoalWorktrees.Ensure(repository, peers[1].Id),
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondPeer.cs", "second peer");
             AppendCommit(repository, "src/main.txt", "advanced main");
@@ -193,6 +196,24 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
                 Assert.True(PassedHeadCandidateDrift.TryProve(repository, bound, branch, "main", out _));
 
             var workspace = OrchestratorWorkspace.ForDirectory(repository);
+            if (retainedReceipt)
+            {
+                var firstPeerHead = ReadGit(firstPeerWorktree, "rev-parse", "HEAD");
+                var identity = MergeTrainIdentity.Create(
+                    [Bind(oldest, branch, goalPath), Bind(peers[0], firstPeerHead, firstPeerPath)],
+                    ReadGit(repository, "rev-parse", "main"), ReadGit(repository, "rev-parse", "main^{tree}"),
+                    "retained-binding-hold-test");
+                var store = new MergeTrainAcceptanceStore(
+                    Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
+                var trx = MergeTrainFocusedRecheckTests.WriteTrx(attemptRoot, "retained-train.trx", [("Train.Passes", "Passed")]);
+                store.SaveGateReceipt(new MergeTrainReceipt("retained-binding-hold-receipt", identity,
+                    MergeTrainGateOutcome.Passed, DateTimeOffset.UnixEpoch, 0, [], 0, [trx], ValidForLanding: true));
+                Assert.Equal(identity.Value, Assert.Single(store.ReadPassedReceiptsForGoal(peers[0].Id)).Identity.Value);
+
+                MergeTrainMemberBinding Bind(Goal goal, string head, string path) => new(goal.Id, head, head, [path], [],
+                    ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto, nameof(GateReadyMergeStatus.Clean),
+                    nameof(GateReadyMergeReason.NoConflictsDetected), head, scenario.Kernel.GetGoal(goal.Id).AuthoritativeBrief.Version);
+            }
             var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
                 new AcceptanceVerificationResult(true, false, 0, null));
             var driver = new ConductorDriver(scenario.Kernel, workspace, verifier, DefaultAgents(),

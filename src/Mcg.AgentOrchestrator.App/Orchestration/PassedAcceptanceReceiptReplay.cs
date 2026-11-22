@@ -170,9 +170,13 @@ internal static class PassedAcceptanceReceiptReplay
 
     internal static Goal[] ExcludeRefusedCarryHolds(IReadOnlyList<Goal> goals,
         IReadOnlyDictionary<string, ParallelLandingOutcome> outcomes) =>
-        goals.Where(goal => !outcomes.TryGetValue(goal.Id.Value, out var outcome) ||
-            outcome.Result.Outcome is not ConductorAdvanceOutcome.Held
-                { Decision.DiscriminatingEvidence: AcceptanceCriterionEvidence.RefusedCarryAdmissionReason }).ToArray();
+        goals.Where(goal => !HasRefusedCarryHold(goal.Id, outcomes)).ToArray();
+
+    internal static bool HasRefusedCarryHold(GoalId goalId,
+        IReadOnlyDictionary<string, ParallelLandingOutcome> outcomes) =>
+        outcomes.TryGetValue(goalId.Value, out var outcome) &&
+        outcome.Result.Outcome is ConductorAdvanceOutcome.Held
+            { Decision.DiscriminatingEvidence: AcceptanceCriterionEvidence.RefusedCarryAdmissionReason };
 
     internal static ConductorAdvanceResult? CircuitHold(
         Goal goal, ConductorAutonomyPolicy policy, AcceptanceEngineHealthSnapshot? health) =>
