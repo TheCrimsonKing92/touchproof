@@ -45,6 +45,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
 
         Assert.True(output.FlushAttempted);
         Assert.Contains("phase=lane-plan", output.ToString());
+        Assert.Contains("focused expansion fallback", output.ToString());
         AssertPublication(prefix, StartedAt, StartedAt, LaunchMain, solo ? "Passed" : "Failed",
             solo ? ResultMain : LaunchMain, hasSoloMetadata: solo);
     }
@@ -448,9 +449,11 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         {
             SelectedExecution = CostGoalOutcomeBaselineTests.Selection(12.345678901, 17, "fixture full gate")
         };
-        AsyncLocalConsoleRouter.CaptureTo(() => AcceptanceGateLanePlanPublisher.Publish(plan, owner.ResultsPrefix,
-            new GoalId(owner.Identity.GoalId), progress => AcceptanceGateProgressReporter.Emit(progress, null, owner),
-            TimeProvider.System), progressOutput ?? TextWriter.Null);
+        var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifier((_, _, _) =>
+            throw new InvalidOperationException("Lane plan publication must run in-process.")), owner);
+        AsyncLocalConsoleRouter.CaptureTo(() => verifier.PublishGateLanePlan(new([], "focused expansion fallback"),
+            plan, [], new GoalId(owner.Identity.GoalId), owner.Identity.WorktreePath, layout: null),
+            progressOutput ?? TextWriter.Null);
     }
 
     private sealed class FailingProgressOutput : StringWriter

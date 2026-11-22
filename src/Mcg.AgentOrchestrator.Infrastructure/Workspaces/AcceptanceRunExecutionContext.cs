@@ -231,7 +231,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     internal void MarkCancelled() =>
         Interlocked.Exchange(ref _releaseOutcome, (int)OwnedRunRootReleaseOutcome.Cancelled);
 
-    public virtual void ReportProgress(AcceptanceGateProgress progress) =>
+    public void ReportProgress(AcceptanceGateProgress progress) =>
         _options.ProgressSink?.Invoke(
             this is AcceptanceFocusedVerificationOwner && FocusedRunBinding is null
                 ? progress
@@ -378,15 +378,11 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
     public override string? TreeRevision => Identity.CandidateTreeSha;
     internal string? ArtifactResultsPrefix { get; }
 
-    public override void ReportProgress(AcceptanceGateProgress progress)
+    internal void RecordGateOutcomeSelection(AcceptanceGateLanePlan plan)
     {
-        if (progress.Phase == "lane-plan" && (_writesResultRecord || _gateOutcomeSelectionSink is not null))
-        {
-            var selection = AcceptanceGateOutcomeLedger.ReadSelection(progress, Path.GetFileName(Identity.ResultsPrefix));
-            _gateOutcomeSelection = selection;
-            _gateOutcomeSelectionSink?.Invoke(selection);
-        }
-        base.ReportProgress(progress);
+        if (ArtifactResultsPrefix is null || (!_writesResultRecord && _gateOutcomeSelectionSink is null)) return;
+        _gateOutcomeSelection = AcceptanceGateOutcomeLedger.GetValidatedSelection(plan, Path.GetFileName(ArtifactResultsPrefix));
+        _gateOutcomeSelectionSink?.Invoke(_gateOutcomeSelection);
     }
 
     internal async Task<AcceptanceVerificationResult> ExecuteAsync(

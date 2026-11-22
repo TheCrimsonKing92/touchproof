@@ -35,7 +35,6 @@ internal static class AcceptanceGateOutcomeLedger
     internal const string GateKind = "gate";
     internal const string InvalidationKind = "invalidation";
     internal const string BackfillKind = "backfill-complete";
-    private const string PlanTargetPrefix = "GATE_LANE_PLAN ";
     private static readonly Regex GateAttemptId = new(@"-(?<time>[0-9]{17})-[0-9a-f]{32}$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -50,20 +49,11 @@ internal static class AcceptanceGateOutcomeLedger
             CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time) ? time : null;
     }
 
-    internal static AcceptanceSelectedExecutionRecord? ReadSelection(AcceptanceGateProgress progress, string attemptId)
-    {
-        if (!progress.CurrentTarget.StartsWith(PlanTargetPrefix, StringComparison.Ordinal) ||
-            !File.Exists(progress.HeartbeatPath)) return null;
-        try
-        {
-            return ParseSelection(progress.CurrentTarget.AsSpan(PlanTargetPrefix.Length), attemptId);
-        }
-        catch (JsonException) { return null; }
-    }
+    internal static AcceptanceSelectedExecutionRecord? ParseSelection(ReadOnlySpan<char> json, string attemptId) =>
+        GetValidatedSelection(JsonSerializer.Deserialize<AcceptanceGateLanePlan>(json, AcceptanceGateLanePlan.JsonOptions), attemptId);
 
-    internal static AcceptanceSelectedExecutionRecord? ParseSelection(ReadOnlySpan<char> json, string attemptId)
+    internal static AcceptanceSelectedExecutionRecord? GetValidatedSelection(AcceptanceGateLanePlan? plan, string attemptId)
     {
-        var plan = JsonSerializer.Deserialize<AcceptanceGateLanePlan>(json, AcceptanceGateLanePlan.JsonOptions);
         // Match OwnerConsoleGateLanePlanReader, which validates the historical lane plans.
         if (plan is null || plan.SchemaVersion != AcceptanceGateLanePlan.CurrentSchemaVersion ||
             plan.AttemptId != attemptId || plan.Scheduled is null || plan.Skipped is null ||
@@ -99,7 +89,7 @@ internal static class AcceptanceGateOutcomeLedger
         AcceptanceSelectedExecutionRecord? selection, SoloGateOutcomeProvenance? solo = null)
     {
         if (selection is null || !IsRecordedGate(result) || RecordedAt(Path.GetFileName(prefix)) is not { } recordedAt ||
-            LedgerPath(prefix) is not { } path) return null;
+            LedgerPath(prefix) is not { } path || !File.Exists(prefix + AcceptanceGateLanePlan.ArtifactSuffix)) return null;
         var row = CreateObservation(prefix, recordedAt, result, selection, solo);
         var file = new FileInfo(path);
         var offset = file.Exists ? file.Length : 0;
