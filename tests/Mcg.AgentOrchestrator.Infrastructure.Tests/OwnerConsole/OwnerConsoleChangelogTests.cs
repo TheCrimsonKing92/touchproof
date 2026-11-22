@@ -53,6 +53,20 @@ public sealed class OwnerConsoleChangelogTests
     }
 
     [Fact]
+    public void SplitNavigationPreservesOrderedKeySpansAndLiteralUnmatchedSuffix()
+    {
+        Assert.Equal<OwnerConsoleKeySpan>(
+            [new("Press "), new("s", IsKey: true), new(" in any pane")],
+            OwnerConsoleKeySpan.Split("Press `s` in any pane"));
+        Assert.Equal<OwnerConsoleKeySpan>(
+            [new("a", IsKey: true), new("b", IsKey: true), new(" `then")],
+            OwnerConsoleKeySpan.Split("`a``b``` `then"));
+        Assert.Equal(new OwnerConsoleKeySpan("Plain navigation"),
+            Assert.Single(OwnerConsoleKeySpan.Split("Plain navigation")));
+        Assert.Empty(OwnerConsoleKeySpan.Split("``"));
+    }
+
+    [Fact]
     public void NavigationKeySpansRenderAsPlainKeyText()
     {
         OwnerConsoleChangelogEntry[] entries =

@@ -52,6 +52,9 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
             $"1 - {Summary}\n- {Navigation}\n\n" +
             $"2 - {SecondSummary}\n- {SecondNavigation}";
         Assert.Equal(("Console news", expectedDetails), Assert.Single(dialogs.Shown));
+        var marked = Assert.IsType<OwnerConsoleMarkedText>(dialogs.Marked);
+        Assert.Equal(new Range(7, 16), Assert.Single(marked.KeysAt(1)));
+        Assert.Equal(new Range(7, 12), Assert.Single(marked.KeysAt(4)));
         Assert.Equal("2", File.ReadAllText(RecordPath));
         Assert.Empty(strip.Visible);
 
@@ -163,6 +166,7 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
     private sealed class NewsDialogs : IOwnerConsoleDialogs
     {
         internal List<(string Title, string Text)> Shown { get; } = [];
+        internal OwnerConsoleMarkedText? Marked { get; private set; }
 
         public Task<bool> ConfirmAsync(string title, string text) =>
             throw new InvalidOperationException("News opened a confirmation dialog.");
@@ -174,6 +178,12 @@ public sealed class OwnerConsoleNewsAnnouncementTests : IDisposable
         {
             Shown.Add((title, text));
             return Task.CompletedTask;
+        }
+
+        public Task ShowMarkedTextAsync(string title, OwnerConsoleMarkedText text)
+        {
+            Marked = text;
+            return ShowTextAsync(title, text.PlainText);
         }
     }
 }
