@@ -32,6 +32,7 @@ internal static class AcceptanceGateOutcomeLedger
     internal const string PendingDirectoryName = "cost-goal-outcome-gate-publications";
     internal const string FallbackDirectoryName = "cost-goal-outcome-gate-publications-fallback";
     internal const string AttemptRoot = "acceptance-gate-attempts";
+    internal const string AttemptPendingSuffix = ".outcome-pending.jsonl";
     internal const string GateKind = "gate";
     internal const string InvalidationKind = "invalidation";
     internal const string BackfillKind = "backfill-complete";
@@ -120,11 +121,19 @@ internal static class AcceptanceGateOutcomeLedger
             catch (Exception fallbackError) when (fallbackError is IOException or UnauthorizedAccessException)
             {
                 try { return WriteSeparateIntent(FallbackDirectoryName); }
-                catch (Exception intentError) when (intentError is IOException or UnauthorizedAccessException)
+                catch (Exception sharedError) when (sharedError is IOException or UnauthorizedAccessException)
                 {
-                    // Even when every recovery location is unavailable, preserve the gate's result.
-                    System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome intent unavailable for {prefix}: {intentError.Message}");
-                    return new(path, null, pending);
+                    var attemptPendingPath = prefix + AttemptPendingSuffix;
+                    try
+                    {
+                        WritePending(attemptPendingPath, [line]);
+                        return new(path, attemptPendingPath, pending);
+                    }
+                    catch (Exception intentError) when (intentError is IOException or UnauthorizedAccessException)
+                    {
+                        System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome intent unavailable for {prefix}: {intentError.Message}");
+                        return new(path, null, pending);
+                    }
                 }
             }
         }
@@ -182,12 +191,13 @@ internal static class AcceptanceGateOutcomeLedger
         var legacyPath = LegacyPendingPath(path);
         var (fallbackPaths, fallbackError) = ListPending(FallbackDirectoryName);
         if (EvidenceExists(legacyPath)) fallbackPaths = [.. fallbackPaths, legacyPath];
+        var (attemptPaths, attemptError) = ListAttemptPending(path);
 
-        if (pendingPaths.Length != 0 || fallbackPaths.Length != 0)
-            WithBackfillLock(path, () => ReplayPending(pendingPaths.Concat(fallbackPaths)));
+        if (pendingPaths.Length != 0 || fallbackPaths.Length != 0 || attemptPaths.Length != 0)
+            WithBackfillLock(path, () => ReplayPending(pendingPaths.Concat(fallbackPaths).Concat(attemptPaths)));
 
         // Replay reachable intents, then fail the read if any directory could still hide observations.
-        if ((primaryError ?? fallbackError) is { } error)
+        if ((primaryError ?? fallbackError ?? attemptError) is { } error)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error);
 
         (string[] Paths, Exception? Error) ListPending(string directoryName)
@@ -216,6 +226,26 @@ internal static class AcceptanceGateOutcomeLedger
                 }
                 if (allReady) RemovePending(pendingPath);
             }
+        }
+    }
+
+    private static (string[] Paths, Exception? Error) ListAttemptPending(string ledgerPath)
+    {
+        var attemptRoot = Path.Combine(Path.GetDirectoryName(ledgerPath)!, AttemptRoot);
+        try
+        {
+            // Intent sidecars share the attempt's directory and can outlive a shared write outage.
+            return (Directory.GetFiles(attemptRoot, "*" + AttemptPendingSuffix, new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                MaxRecursionDepth = 1,
+                IgnoreInaccessible = false,
+                AttributesToSkip = FileAttributes.ReparsePoint
+            }), null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ([], ex is DirectoryNotFoundException ? null : ex);
         }
     }
 

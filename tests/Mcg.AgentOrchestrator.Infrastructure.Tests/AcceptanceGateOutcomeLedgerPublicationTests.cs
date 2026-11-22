@@ -33,6 +33,22 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         AssertPublication(prefix, StartedAt, StartedAt, LaunchMain, "Failed", LaunchMain, hasSoloMetadata: false);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Publication_CapturesLaneSelectionWhenProgressOutputFails(bool solo)
+    {
+        using var output = new FailingProgressOutput();
+        var prefix = solo
+            ? PublishSolo(root, StartedAt, progressOutput: output).Attempt.ResultPath[..^".result.json".Length]
+            : await PublishOwnedTrain(progressOutput: output);
+
+        Assert.True(output.FlushAttempted);
+        Assert.Contains("phase=lane-plan", output.ToString());
+        AssertPublication(prefix, StartedAt, StartedAt, LaunchMain, solo ? "Passed" : "Failed",
+            solo ? ResultMain : LaunchMain, hasSoloMetadata: solo);
+    }
+
     [Fact]
     public async Task OwnedTrainPublication_DoesNotDuplicateAnObservationAppendedByBackfill()
     {
@@ -161,6 +177,64 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             AcceptanceGateOutcomeLedger.Json));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Publication_RecoversAttemptIntentWhenAllSharedDestinationsAreBlocked(bool solo)
+    {
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        var sharedPending = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
+        const string marker = """{"kind":"backfill-complete"}""";
+        SharedJsonlFile.AppendLine(ledger, marker);
+        File.WriteAllText(sharedPending, "");
+        File.WriteAllText(Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName), "Blocks directory creation.");
+        File.WriteAllText(Path.Combine(root, AcceptanceGateOutcomeLedger.FallbackDirectoryName), "Blocks directory creation.");
+        var evaluatedAt = StartedAt.AddMinutes(1);
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Empty(reader.Read(evaluatedAt));
+        File.WriteAllText(sharedPending, "");
+
+        string prefix;
+        string pendingPath;
+        using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (File.Open(sharedPending, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            if (solo)
+            {
+                var (coordinator, attempt) = PublishSolo(root, StartedAt);
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
+                    coordinator.TryReadLatest(attempt.GoalId)!.Outcome);
+                prefix = attempt.ResultPath[..^".result.json".Length];
+            }
+            else
+            {
+                prefix = await PublishOwnedTrain();
+            }
+
+            Assert.True(File.Exists(prefix + ".result.json"));
+            Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
+            Assert.Empty(File.ReadAllLines(sharedPending));
+            pendingPath = prefix + AcceptanceGateOutcomeLedger.AttemptPendingSuffix;
+            Assert.Single(File.ReadAllLines(pendingPath));
+        }
+
+        var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
+        Assert.Equal(solo ? "Passed" : "Failed", expected.Outcome);
+        using (File.Open(prefix + ".result.json", FileMode.Open, FileAccess.Read, FileShare.None))
+        using (File.Open(prefix + AcceptanceGateLanePlan.ArtifactSuffix, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var freshReader = new CostGoalOutcomeGateLedgerReader(root);
+            var recovered = Assert.Single(freshReader.Read(evaluatedAt));
+            Assert.Equal(prefix, recovered.Id);
+            Assert.Equal(recovered, Assert.Single(reader.Read(evaluatedAt)));
+            Assert.Equal(0, freshReader.GateFileReads);
+            Assert.Equal(0, reader.GateFileReads);
+        }
+        Assert.False(File.Exists(pendingPath));
+        var line = Assert.Single(File.ReadAllLines(ledger).Skip(1));
+        Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(line, AcceptanceGateOutcomeLedger.Json));
+    }
+
     [Fact]
     public async Task Publication_ReplaysFallbackAndReportsUnreadablePrimaryUntilItCanRecoverBoth()
     {
@@ -285,14 +359,14 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         Assert.Empty(Directory.GetFiles(Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName), "*.jsonl"));
     }
 
-    private async Task<string> PublishOwnedTrain(Action? resultWritten = null)
+    private async Task<string> PublishOwnedTrain(Action? resultWritten = null, TextWriter? progressOutput = null)
     {
         var group = GoalId.New().Value;
         var attemptId = FormattableString.Invariant($"{group[..8]}-gate-{StartedAt:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
         var directory = Directory.CreateDirectory(Path.Combine(root, "acceptance-gate-attempts", group));
         var prefix = Path.Combine(directory.FullName, attemptId);
         await using var owner = CreateOwner(root, group, prefix, writesResultRecord: true);
-        PublishLanePlan(owner);
+        PublishLanePlan(owner, progressOutput);
 
         owner.TryWriteResultRecord(new AcceptanceVerificationResult(false, false, 1, null,
             TestResultPaths: [prefix + ".trx"]), resultWrittenForTests: resultWritten);
@@ -303,7 +377,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         PublishSolo(string root, DateTimeOffset startedAt,
             Action<ConductorParallelAcceptanceAttemptCoordinator, ConductorParallelAcceptanceAttempt,
                 ConductorParallelAcceptanceCandidate>? resultWritten = null,
-            bool useDurableHolder = true)
+            bool useDurableHolder = true, TextWriter? progressOutput = null)
     {
         var goal = new AgentOrchestratorKernel().CreateGoal("Record a selected gate");
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", LaunchMain);
@@ -320,7 +394,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
                 var owner = CreateOwner(root, goal.Id.Value, options.ResultsPrefix!, options: options);
                 return AcceptanceExecutionOwnerLifetime.Run(owner, () =>
                 {
-                    PublishLanePlan(owner);
+                    PublishLanePlan(owner, progressOutput);
                     return ConductorParallelAcceptanceRunResult.Accepted(current with { MainHeadSha = ResultMain },
                         new AcceptanceVerificationSummary(true, [], TestResultPaths: [options.ResultsPrefix + ".trx"]));
                 });
@@ -333,14 +407,26 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         new(new(Path.GetFileName(prefix), goalId, root, "tree", LaunchMain, "branch", prefix, null, 0, null),
             new AcceptanceGateEngineSettings(), options: options, writesResultRecord: writesResultRecord);
 
-    private static void PublishLanePlan(AcceptanceAttemptExecutionOwner owner)
+    private static void PublishLanePlan(AcceptanceAttemptExecutionOwner owner, TextWriter? progressOutput)
     {
         var plan = new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, owner.RunId, ["lane"], [])
         {
             SelectedExecution = CostGoalOutcomeBaselineTests.Selection(12.345678901, 17, "fixture full gate")
         };
         AcceptanceGateLanePlanPublisher.Publish(plan, owner.ResultsPrefix, new GoalId(owner.Identity.GoalId),
-            owner.ReportProgress, TimeProvider.System);
+            progress => AcceptanceGateProgressReporter.Emit(progress, null, owner, progressOutput ?? TextWriter.Null),
+            TimeProvider.System);
+    }
+
+    private sealed class FailingProgressOutput : StringWriter
+    {
+        internal bool FlushAttempted { get; private set; }
+
+        public override void Flush()
+        {
+            FlushAttempted = true;
+            throw new IOException("Progress output is unavailable.");
+        }
     }
 
     private void AssertPublication(string prefix, DateTimeOffset recordedAt, DateTimeOffset startedAt,

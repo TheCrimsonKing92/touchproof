@@ -75,9 +75,9 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         ReadTail();
         if (backfilled) return;
 
-        // Observe the outer holder before discovering inner files. A detached train may not
+        // Observe the outer holder before discovering inner files. A detached grouped gate may not
         // have created its inner execution owner yet, and the old owner cannot publish ledger rows.
-        var waiting = HasUnfinishedTrain();
+        var waiting = HasUnfinishedGroupedGate();
         var lines = new List<string>();
         foreach (var gate in CostGoalOutcomeMetric.DiscoverGatePlans(orchestratorDirectory, DateTimeOffset.MaxValue,
             requireReadable: true, includeRunningSolo: true))
@@ -97,7 +97,7 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         ReadTail();
     });
 
-    private bool HasUnfinishedTrain()
+    private bool HasUnfinishedGroupedGate()
     {
         string[] metadataPaths;
         try
@@ -111,7 +111,7 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
             ConductorGroupedGateAttempt attempt;
             try { attempt = ConductorGroupedGateAttemptCoordinator.Read(metadataPath); }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { continue; }
-            if (attempt is { Kind: "train", Outcome: "Running", ReconciledAt: null } &&
+            if (attempt is { Kind: "train" or "cohort", Outcome: "Running", ReconciledAt: null } &&
                 !AcceptanceGateOutcomeLedger.EvidenceExists(attempt.ResultPath) &&
                 !AcceptanceGateOutcomeLedger.EvidenceExists(attempt.ExitCodePath)) return true;
         }

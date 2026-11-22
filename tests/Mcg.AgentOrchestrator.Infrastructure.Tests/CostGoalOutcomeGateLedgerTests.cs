@@ -188,12 +188,14 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
         Assert.Equal(2, File.ReadAllLines(LedgerPath).Length);
     }
 
-    [Fact]
-    public void Read_BackfillWaitsForDetachedTrainBeforeItsInnerFilesExist()
+    [Theory]
+    [InlineData("train")]
+    [InlineData("cohort")]
+    public void Read_BackfillWaitsForDetachedGroupedGateBeforeItsInnerFilesExist(string kind)
     {
         var grouped = new ConductorGroupedGateAttemptCoordinator(Path.Combine(root, "grouped-gate-attempts"),
             utcNow: () => AdoptedAt);
-        var predecessor = grouped.Create("train", [], Main, "tree", "manifest", "train-identity", root,
+        var predecessor = grouped.Create(kind, [], Main, "tree", "manifest", "grouped-identity", root,
             ConductorAutonomyPolicy.Permissive);
         ConductorGroupedGateAttemptCoordinator.Save(predecessor);
         var first = new CostGoalOutcomeGateLedgerReader(root);
@@ -203,13 +205,17 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
         Assert.Equal(0, first.GateFileReads);
 
         var prefix = WriteGate(1, Main);
-        var expected = Project(Assert.Single(Scan()));
+        var scanned = Scan();
+        var expected = Project(Assert.Single(scanned));
         Assert.Equal(expected, Assert.Single(first.Read(EvaluatedAt)));
         Assert.Single(File.ReadAllLines(LedgerPath));
         Assert.Equal(1, first.GateFileReads);
 
         File.WriteAllText(predecessor.ExitCodePath, "0");
         var successor = new CostGoalOutcomeGateLedgerReader(root);
+        var goal = FileGoal(window: 1);
+        var expectedVerdict = Assert.Single(ScanVerdicts(Store.Read(goal)!, scanned));
+        var sweep = CreateSweep();
         WithLockedGateFiles([prefix], () =>
         {
             Assert.Equal(expected, Assert.Single(successor.Read(EvaluatedAt)));
@@ -217,7 +223,10 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
             Assert.Equal("""{"kind":"backfill-complete"}""", File.ReadLines(LedgerPath).Last());
             Assert.Equal(expected, Assert.Single(first.Read(EvaluatedAt)));
             Assert.Equal(1, first.GateFileReads);
+            Run(sweep);
+            Assert.Equal(0, sweep.GateLedger.GateFileReads);
         });
+        Assert.Equal(expectedVerdict, Assert.Single(Store.Read(goal)!.FinalVerdicts));
         Assert.Equal(2, File.ReadAllLines(LedgerPath).Length);
     }
 
