@@ -82,10 +82,10 @@ public sealed class ActivationFailedMainRevertSupervisorTests
     }
 
     [Theory]
-    [InlineData("false")]
-    [InlineData("exception")]
-    [InlineData("cancellation")]
-    public async Task PushFailurePreservesRestore(string failure)
+    [InlineData("false", "push-failed")]
+    [InlineData("exception", nameof(InvalidOperationException))]
+    [InlineData("cancellation", nameof(OperationCanceledException))]
+    public async Task PushFailurePreservesRestore(string failure, string reason)
     {
         using var repo = new Repository();
         repo.SetPushPolicy(true);
@@ -103,6 +103,9 @@ public sealed class ActivationFailedMainRevertSupervisorTests
         });
 
         AssertLocalRevert(repo, pushed);
+        Assert.Equal($"REVERT_PUSH_HELD source=activation failedCommit={repo.Merge} " +
+            $"commit={repo.Tip} branch={Repository.Branch} reason={reason}",
+            Assert.Single(repo.Lines, line => line.StartsWith("REVERT_PUSH_HELD ", StringComparison.Ordinal)));
     }
 
     [Fact]

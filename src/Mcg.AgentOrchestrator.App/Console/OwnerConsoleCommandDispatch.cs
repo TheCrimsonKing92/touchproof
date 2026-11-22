@@ -6,7 +6,8 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
     IOwnerConsoleDigestReport digest, IOwnerDigestSummary summary, TimeProvider clock,
     Func<OwnerFleetViewModel>? fleet, Func<string, OwnerLandingsPage>? landings, OwnerConsoleSoundCommand? sound,
     OwnerGoalDetailQuery goalDetail, OwnerFleetViewKeys fleetKeys, object notificationGate, OwnerConsoleBellCommand bell,
-    Func<bool> settingsRequested, Action requestSettings, Func<string?> requestedEpicId, Func<string?> requestedGateGoalId,
+    Func<bool> settingsRequested, Action requestSettings, Action<string> requestProviderSettings,
+    Func<string?> requestedEpicId, Func<string?> requestedGateGoalId,
     Func<string, OwnerConsoleScreenOperation?, CancellationToken, Task> showGoalDetail, Func<Action<string>?> commandNotice,
     Func<OwnerConsoleNewsRecord?> news)
 {
@@ -37,7 +38,11 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
         cancellationToken.ThrowIfCancellationRequested();
         if (settingsRequested()) return;
         if (goalId is not null) { await showGoalDetail(goalId, operation, cancellationToken); return; }
-        if (fleetModel is not null) { await dialogs.ShowFleetAsync(_fleetKeys, fleetModel, OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth)); return; }
+        if (fleetModel is not null)
+        {
+            await ShowFleetAsync(fleetModel);
+            return;
+        }
         if (landingsPage is not null) { await ShowLandingsAsync(landingsPage, operation, cancellationToken); return; }
         if (output.Acknowledged && output.Structured is null && control.Fields is null &&
             output.TryAcknowledgementLine(out var acknowledgement) && commandNotice() is { } notice)
@@ -48,6 +53,17 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
         if ((output.Structured ?? control.Fields) is { } commandFields)
             await dialogs.ShowStructuredAsync("Command result", output.Text, commandFields);
         else await dialogs.ShowTextAsync("Command result", output.Text);
+    }
+
+    private async Task ShowFleetAsync(OwnerFleetViewModel model)
+    {
+        string? provider;
+        try
+        {
+            await dialogs.ShowFleetAsync(_fleetKeys, model, OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth));
+        }
+        finally { provider = _fleetKeys.TakeSignInRequest(); }
+        if (provider is not null) requestProviderSettings(provider);
     }
 
     private async Task<(string? GoalId, OwnerFleetViewModel? FleetModel, OwnerLandingsPage? LandingsPage)> ExecuteAsync(

@@ -62,6 +62,7 @@ public sealed class PlannerEvidenceDispatchTests
         Assert.Equal("operator", request.EvidenceOwner);
         Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
         Assert.Equal(HumanWaitKind.ProspectiveAcceptanceEvidence, planner.LastVerification!.HumanInputKind);
+        Assert.Null(planner.LastVerification.PendingPlannerArtifact);
         Assert.Equal("operator", planner.LastVerification.HumanInputEvidenceOwner);
         Assert.DoesNotContain("PLANNER_EVIDENCE_REQUEST:", planner.LastVerification.StandardOutput, StringComparison.Ordinal);
         Assert.Equal(WorkTaskStatus.Completed, planner.Status);

@@ -224,7 +224,8 @@ internal static class SourceSizeRatchet
             // Goal 5ca3f5c0: five PR-tracking phase lines alongside shared gate-attention reconciliation.
             // Goal bc361051: retain typed progress facts in tick-local state and forward them at emission.
             // Goal 7ca0990d: ten lines wire backstop landing intake, admission, idle resumption and lifecycle drains.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2489),
+            // Goal f53529b7 wires scheduled main verification into admission, idle service and shutdown.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2511),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -362,7 +363,7 @@ internal static class SourceSizeRatchet
             // preparation and delivered through this shared context boundary; keep that dispatch binding
             // beside the existing task-package preparation until the planned preflight extraction.
             // ed4b8637 adds one dispatch boundary check to preserve the explicit inventory effort.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2546),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2526),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -635,7 +636,7 @@ internal static class SourceSizeRatchet
             // the Orchestration-to-Cli boundary; metric validation and auditing stay in CostGoalOutcomeMetric.
             // Measured 11024 lines across the existing 30 partials, with no extra headroom.
             // Goal a1a4aff1 adds three loop lifetime wiring lines. Notice processing lives in ProcessErrorModeEventObserver.
-            new SourceClassCeiling("CliCommandHandlers", 10915, 30),
+            new SourceClassCeiling("CliCommandHandlers", 10871, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -698,7 +699,7 @@ internal static class SourceSizeRatchet
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
             // Goal bc361051: carry the dispatch failure payload through existing timeline recording boundaries.
             // Goal 350ad330: declaration mutation and brief-section call; rendering remains in its own type.
-            new SourceClassCeiling("AgentOrchestratorKernel", 8943, 27),
+            new SourceClassCeiling("AgentOrchestratorKernel", 8940, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -738,7 +739,8 @@ internal static class SourceSizeRatchet
             // Follower removal integrated with main: measured 8792 lines in 53 partial files.
             // Goal 98758ac2: injected tick census scope and completion emission; measured 7765 lines in the same 50 partials.
             // Goal 7ca0990d: sixteen lines reserve backstop capacity and wire its lifecycle; no new partial or headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 7495, 49),
+            // Goal f53529b7 also counts the scheduled run in acceptance capacity, with no new partials.
+            new SourceClassCeiling("ConductorBatchLoop", 7533, 49),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
