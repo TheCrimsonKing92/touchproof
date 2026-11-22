@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliCommandHelp
 {
-    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
+    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--no-dispatch] [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
     public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --text-file <path> [--override-draft-checks <reason>] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --brief-file <path> [--override-draft-checks <reason>] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] (--depends-on is repeatable, combines with --backlog-item and cannot be combined with --simple, --run or --from-backlog)";
     public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
     public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
@@ -110,7 +110,7 @@ internal static class CliCommandHelp
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
-    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>] [--whole-gate [--goal <prefix>] [--max-lanes <n>]]";
+    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>] [--wait <minutes>] [--whole-gate [--goal <prefix>] [--max-lanes <n>]]";
     public const string ImpactReplayStatusUsage = "Usage: impact-replay --status --checkpoint-file <path>";
     public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] [--attempts-file <path>] --out <directory> [--floor <name> ...]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -135,6 +135,7 @@ internal static class CliCommandHelp
         [
             "--policy",
             "--loop",
+            CliShadowStartCommand.NoDispatchFlag,
             "--max-iterations",
             "--max-duration",
             "--watch",
@@ -151,6 +152,10 @@ internal static class CliCommandHelp
             "--help",
             "-h"
         ]);
+
+    private static readonly CommandHelpEntry ShadowStart = new(
+        CliShadowStartCommandHelp.Usage, CliShadowStartCommandHelp.Description,
+        CliShadowStartCommandHelp.Flags, CliShadowStartCommandHelp.DetailLines);
 
     private static readonly string[] HelpFlags = ["--help", "-h"];
 
@@ -315,7 +320,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry CriterionEvidenceRecord = new(
         CriterionEvidenceRecordUsage,
-        "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor. For a post-landing duty add --observation-json with GoalId, ObligationId, PromotedMainRevision, Scope (Kind, Condition, Target), ActivationIdentity, ActivationEvidence, ActivatedAt, ObservedAt and ActivationAttested. Runtime activation requires the human operator's explicit ActivationAttested=true attestation of verified activation; a timestamp or path alone is insufficient.",
+        "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor. For a post-landing duty add --observation-json with GoalId, ObligationId, PromotedMainRevision, Scope (Kind, Condition, Target), ActivationIdentity, ActivationEvidence, ActivatedAt, ObservedAt and ActivationAttested. For Runtime activation, the recording actor (human or agent) attests verified activation with ActivationAttested=true. The observation records the actor kind and identity.",
         ["--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--observation-json", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRepair = new(
@@ -736,8 +741,8 @@ internal static class CliCommandHelp
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
     private static readonly CommandHelpEntry ExecutorScreen = new(
-        ExecutorScreenUsage, "Screen a candidate on an idle executor. --whole-gate requires --executor and selects passed local gates. Use --goal for a specific goal and --max-lanes to cap lane submissions.",
-        ["--max-candidates", "--executor", "--whole-gate", "--goal", "--max-lanes", "--help", "-h"]);
+        ExecutorScreenUsage, "Screen a candidate on an idle executor. Use --wait to retry when a slot is busy. --whole-gate requires --executor and selects passed local gates. Use --goal for a specific goal and --max-lanes to cap lane submissions.",
+        ["--max-candidates", "--executor", "--wait", "--whole-gate", "--goal", "--max-lanes", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
         ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor. Use --attempts-file to select listed attempt ids. It cannot be combined with --since or --limit.",
         ["--since", "--limit", "--attempts-file", "--out", "--floor", "--status", "--checkpoint-file", "--help", "-h"]);
@@ -966,7 +971,8 @@ internal static class CliCommandHelp
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
             "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by",
-            "--home-build-blocked-commit", "--override-draft-checks", "--bundled-reason", "--model", "--profile", "--effort"
+            "--home-build-blocked-commit", "--override-draft-checks", "--bundled-reason", "--model", "--profile", "--effort",
+            "--candidate-arg"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
@@ -1004,6 +1010,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  goals             List goals [--epic <id-or-title>].");
         Console.WriteLine("  status            Show goal or orchestrator status.");
         Console.WriteLine("  impact-replay     Measure historical lane savings and missed failures.");
+        Console.WriteLine($"  {CliShadowStartCommand.Name,-17}{CliShadowStartCommandHelp.Description}");
         Console.WriteLine("  experiment-replay Import recorded rounds; register, execute and report the paired pilot.");
         Console.WriteLine("  attention         List or answer operator attention items.");
         Console.WriteLine("  backlog-list      List backlog items.");
@@ -1435,6 +1442,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("impact-replay", StringComparison.OrdinalIgnoreCase))
         {
             entry = ImpactReplay;
+            return true;
+        }
+        if (args[0].Equals(CliShadowStartCommand.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ShadowStart;
             return true;
         }
         if (args[0].Equals("experiment-replay", StringComparison.OrdinalIgnoreCase))

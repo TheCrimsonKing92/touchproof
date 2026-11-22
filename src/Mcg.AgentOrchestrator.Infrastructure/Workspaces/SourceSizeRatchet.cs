@@ -224,8 +224,8 @@ internal static class SourceSizeRatchet
             // Goal 5ca3f5c0: five PR-tracking phase lines alongside shared gate-attention reconciliation.
             // Goal bc361051: retain typed progress facts in tick-local state and forward them at emission.
             // Goal 7ca0990d: ten lines wire backstop landing intake, admission, idle resumption and lifecycle drains.
-            // Goal f53529b7 wires scheduled main verification into admission, idle service and shutdown.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2511),
+            // Goals e986e021 (observation-only conduct ticks) and f53529b7 (scheduled main verification).
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2541),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -391,7 +391,7 @@ internal static class SourceSizeRatchet
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
             // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
             // extracting this single switch case would split route ownership. No additional headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 2979),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 2990), // Goal e986e021: guard startup effects against copied paths.
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -636,7 +636,7 @@ internal static class SourceSizeRatchet
             // the Orchestration-to-Cli boundary; metric validation and auditing stay in CostGoalOutcomeMetric.
             // Measured 11024 lines across the existing 30 partials, with no extra headroom.
             // Goal a1a4aff1 adds three loop lifetime wiring lines. Notice processing lives in ProcessErrorModeEventObserver.
-            new SourceClassCeiling("CliCommandHandlers", 10871, 30),
+            new SourceClassCeiling("CliCommandHandlers", 10890, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -739,8 +739,8 @@ internal static class SourceSizeRatchet
             // Follower removal integrated with main: measured 8792 lines in 53 partial files.
             // Goal 98758ac2: injected tick census scope and completion emission; measured 7765 lines in the same 50 partials.
             // Goal 7ca0990d: sixteen lines reserve backstop capacity and wire its lifecycle; no new partial or headroom.
-            // Goal f53529b7 also counts the scheduled run in acceptance capacity, with no new partials.
-            new SourceClassCeiling("ConductorBatchLoop", 7533, 49),
+            // Goals e986e021 (observation-only conduct ticks) and f53529b7 (scheduled main verification in acceptance capacity).
+            new SourceClassCeiling("ConductorBatchLoop", 7563, 49),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
@@ -753,7 +753,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 4114, 17),
+            new SourceClassCeiling("CliPersistentStateRunner", 4125, 17), // Goal e986e021: guard startup effects against copied paths.
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
