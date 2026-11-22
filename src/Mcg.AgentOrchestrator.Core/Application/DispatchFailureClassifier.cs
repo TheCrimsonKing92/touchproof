@@ -436,6 +436,9 @@ public static class DispatchFailureClassifier
         var terminalContract = assessTerminalContract(task, verification);
         if (!terminalContract.AllowsCompletion)
         {
+            if (IsRecoverableDirtyDispatch(task.RequiredRole, verification))
+                return BuildDirtyWorktreeOutcome();
+
             // Preserve positively identified provider faults before diagnosing absent reporting.
             if (providerFailureKind != ProviderFailureKind.Unknown ||
                 IsRecoverableSubscriptionLimitFailure(verification) ||
@@ -770,23 +773,8 @@ public static class DispatchFailureClassifier
                 DispatchEvidenceSummaries.BuildEvidenceSummary(verification)));
         }
 
-        if (TryBuildDirtyDispatchRecovery(task, out _))
-        {
-            return BuildOutcome(
-                TaskOutcomeRules.DirtyDispatchRecovery,
-                task,
-                verification,
-                workerResultPresent,
-                hasCommittedChanges,
-                new DispatchOutcome(
-                DispatchOutcomeKind.DirtyWorktreeRecoverable,
-                exitCode,
-                hasZeroByteOutput,
-                null,
-                null,
-                RecoveryRecommendation.OperatorNeeded,
-                DispatchEvidenceSummaries.BuildEvidenceSummary(verification)));
-        }
+        if (IsRecoverableDirtyDispatch(task.RequiredRole, verification))
+            return BuildDirtyWorktreeOutcome();
 
         if (providerFailureKind == ProviderFailureKind.Sandbox1312)
         {
@@ -1092,6 +1080,21 @@ public static class DispatchFailureClassifier
             null,
             RecoveryRecommendation.OperatorNeeded,
             DispatchEvidenceSummaries.BuildUnknownFailureEvidenceSummary(verification)));
+
+        DispatchOutcome BuildDirtyWorktreeOutcome() => BuildOutcome(
+            TaskOutcomeRules.DirtyDispatchRecovery,
+            task,
+            verification,
+            workerResultPresent,
+            hasCommittedChanges,
+            new DispatchOutcome(
+                DispatchOutcomeKind.DirtyWorktreeRecoverable,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                DispatchEvidenceSummaries.BuildEvidenceSummary(verification)));
     }
 
     internal static bool TryGetOrchestratorAuthoredFailure(

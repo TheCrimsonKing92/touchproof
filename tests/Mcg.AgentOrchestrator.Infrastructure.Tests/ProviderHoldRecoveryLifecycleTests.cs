@@ -172,8 +172,15 @@ public sealed class ProviderHoldRecoveryLifecycleTests
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.True(DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery));
         Assert.Contains("M Fixture.cs", recovery.ChangedFiles);
+        var recorded = Assert.IsType<TaskVerificationRecord>(task.LastVerification);
+        Assert.Equal(TaskOutcomeRules.DirtyDispatchRecovery.Token, recorded.CompletionVerdictRule);
         Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable,
-            DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
+            DispatchFailureClassifier.Classify(task, recorded).Kind);
+        Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable,
+            DispatchFailureClassifier.ClassifyStoredRound(task, recorded).Kind);
+        var gate = Assert.Single(fixture.Kernel.BuildVerificationGate(waiting.Id).Tasks);
+        Assert.Equal(VerificationGateStatus.FailedVerification, gate.GateStatus);
+        Assert.Equal(VerificationGateReason.DirtyUnverifiedRecovery, gate.Reason);
     }
 
     [Fact]
