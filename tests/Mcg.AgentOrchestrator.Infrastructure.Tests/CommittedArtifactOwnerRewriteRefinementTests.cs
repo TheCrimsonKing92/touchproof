@@ -73,6 +73,8 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
     [InlineData("Existing tests are included in the focused evidence run.")]
     [InlineData("A new focused evidence run of existing tests is produced.")]
     [InlineData("The change adds the requested existing tests to the focused evidence run.")]
+    [InlineData("The change adds the previously committed tests to the focused evidence run.")]
+    [InlineData("The change adds the already checked-in tests to the focused evidence run.")]
     public async Task EvidenceRunLanguageKeepsTesterOwnerWithoutRewriteDiagnostic(string requirement)
     {
         var criterion = $"{requirement} Tester owns; Acceptance executes. TEST-VERIFIABLE.";

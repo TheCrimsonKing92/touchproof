@@ -24,7 +24,10 @@ internal sealed partial class GoalRefinementService
         """;
 
     private const string QualifiedArtifact = ArtifactModifiers + Artifact;
+
+    // Adding tests already in the repository to an evidence run only changes the run's selection.
     private const string ProductionQualifiedArtifact =
+        "(?!" + ArtifactModifiers + @"\b(?:already|previously)\s+(?:committed|checked-in)\s+)" +
         ArtifactModifiers + @"\b(?:new|committed|checked-in)\s+" + QualifiedArtifact;
 
     private static Dictionary<string, string> RewriteCommittedArtifactOwners(
