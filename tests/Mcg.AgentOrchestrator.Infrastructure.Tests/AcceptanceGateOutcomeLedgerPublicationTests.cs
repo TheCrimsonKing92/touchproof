@@ -126,11 +126,11 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         {
             PublishSolo(root, StartedAt, (coordinator, attempt, candidate) =>
             {
-                // Result adoption can complete terminal metadata after the wrapper exposes the result.
+                // Legacy result adoption completes terminal metadata while the wrapper still owns the attempt.
                 Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
                     coordinator.ObserveExistingAttempt(attempt, candidate).Attempt.Outcome);
                 Interrupt();
-            });
+            }, useDurableHolder: false);
         }
         else
         {
@@ -189,7 +189,8 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     internal static (ConductorParallelAcceptanceAttemptCoordinator Coordinator, ConductorParallelAcceptanceAttempt Attempt)
         PublishSolo(string root, DateTimeOffset startedAt,
             Action<ConductorParallelAcceptanceAttemptCoordinator, ConductorParallelAcceptanceAttempt,
-                ConductorParallelAcceptanceCandidate>? resultWritten = null)
+                ConductorParallelAcceptanceCandidate>? resultWritten = null,
+            bool useDurableHolder = true)
     {
         var goal = new AgentOrchestratorKernel().CreateGoal("Record a selected gate");
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", LaunchMain);
@@ -197,6 +198,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(root, "acceptance-gate-attempts"), "main", utcNow: () => startedAt,
             runInline: true, acquireStableSlotLease: (_, _) => null,
+            holderLease: useDurableHolder ? new AcceptanceHolderLease(utcNow: () => startedAt) : null,
             resultPublishedForTests: published => resultWritten?.Invoke(coordinator!, published, candidate));
         var attempt = coordinator.CreateAttemptForTests(candidate);
         coordinator.RunAttemptForTests(attempt, candidate, ConductorAutonomyPolicy.Permissive,
