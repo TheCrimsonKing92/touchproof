@@ -33,8 +33,8 @@ public sealed class PostAdoptionRegressionRecoveryTests
         Assert.Equal(new ConductorSelfRelaunchRequest("closing-goal", 11, fixture.Target), Assert.Single(fixture.Requests));
         Assert.Equal(new[]
         {
-            "POST_ADOPTION_REGRESSION_REVERTED", $"push:{Revert}", "REVERT_PUSH_PUSHED", "relaunch",
-            "POST_ADOPTION_REGRESSION_RELAUNCH_REQUESTED"
+            "POST_ADOPTION_REGRESSION_REVERTED", $"push:{Revert}", "REVERT_PUSH_PUSHED",
+            "POST_ADOPTION_REGRESSION_BACKLOG_FILED", "relaunch", "POST_ADOPTION_REGRESSION_RELAUNCH_REQUESTED"
         }, fixture.Trace);
     }
 
@@ -81,8 +81,8 @@ public sealed class PostAdoptionRegressionRecoveryTests
         Assert.Contains("reason=adopted-build-push-disabled", skipped);
         Assert.Equal(new[]
         {
-            "POST_ADOPTION_REGRESSION_REVERTED", "REVERT_PUSH_SKIPPED", "relaunch",
-            "POST_ADOPTION_REGRESSION_RELAUNCH_REQUESTED"
+            "POST_ADOPTION_REGRESSION_REVERTED", "REVERT_PUSH_SKIPPED", "POST_ADOPTION_REGRESSION_BACKLOG_FILED",
+            "relaunch", "POST_ADOPTION_REGRESSION_RELAUNCH_REQUESTED"
         }, fixture.Trace);
     }
 
@@ -103,8 +103,8 @@ public sealed class PostAdoptionRegressionRecoveryTests
         Assert.Contains($"commit={Revert} branch={Branch} reason={reason} ", held);
         Assert.Equal(new[]
         {
-            "POST_ADOPTION_REGRESSION_REVERTED", $"push:{Revert}", "REVERT_PUSH_HELD", "relaunch",
-            "POST_ADOPTION_REGRESSION_RELAUNCH_REQUESTED"
+            "POST_ADOPTION_REGRESSION_REVERTED", $"push:{Revert}", "REVERT_PUSH_HELD",
+            "POST_ADOPTION_REGRESSION_BACKLOG_FILED", "relaunch", "POST_ADOPTION_REGRESSION_RELAUNCH_REQUESTED"
         }, fixture.Trace);
     }
 
