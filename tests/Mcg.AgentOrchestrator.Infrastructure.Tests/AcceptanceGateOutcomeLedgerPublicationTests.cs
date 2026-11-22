@@ -179,9 +179,11 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Publication_RecoversAttemptIntentWhenAllSharedDestinationsAreBlocked(bool solo)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Publication_RecoversAttemptIntentWhenAllSharedDestinationsAreBlocked(bool solo, bool blockIndependentDirectory)
     {
         var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
         var sharedPending = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
@@ -199,6 +201,9 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         var pendingPath = Path.Combine(attemptRoot, AcceptanceGateOutcomeLedger.PendingFileName);
         var pendingDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.IndependentPendingDirectoryName);
         File.WriteAllText(pendingPath, "");
+        if (blockIndependentDirectory) File.WriteAllText(pendingDirectory, "Blocks independent directory creation.");
+        var recoveryDirectory = blockIndependentDirectory ? root : pendingDirectory;
+        var recoveryPattern = blockIndependentDirectory ? AcceptanceGateOutcomeLedger.PendingFilePattern : "*.jsonl";
         string prefix;
         using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (File.Open(sharedPending, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -220,7 +225,11 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
             Assert.Empty(File.ReadAllLines(sharedPending));
             Assert.Empty(File.ReadAllLines(pendingPath));
-            Assert.Single(Directory.GetFiles(pendingDirectory, "*.jsonl"));
+            var intent = Assert.Single(Directory.GetFiles(recoveryDirectory, recoveryPattern));
+            var pending = JsonSerializer.Deserialize<AcceptanceGateOutcomeLedger.PendingPublication>(
+                Assert.Single(File.ReadAllLines(intent)), AcceptanceGateOutcomeLedger.Json);
+            Assert.NotNull(pending);
+            Assert.Equal(prefix, Path.Combine(attemptRoot, pending.Observation.Directory, pending.Observation.AttemptId));
         }
 
         var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
@@ -236,7 +245,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.Equal(0, reader.GateFileReads);
         }
         Assert.False(File.Exists(pendingPath));
-        Assert.Empty(Directory.GetFiles(pendingDirectory, "*.jsonl"));
+        Assert.Empty(Directory.GetFiles(recoveryDirectory, recoveryPattern));
         var line = Assert.Single(File.ReadAllLines(ledger).Skip(1));
         Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(line, AcceptanceGateOutcomeLedger.Json));
     }
