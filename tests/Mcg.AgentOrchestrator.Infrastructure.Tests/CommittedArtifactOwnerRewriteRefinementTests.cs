@@ -22,7 +22,45 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
             Assert.Single(RewriteDiagnostics(goal)));
     }
 
+    [Fact]
+    public async Task RevisingContextKeepsRefinedCriterionAndOwner()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = await FileAndRefine(kernel, false, TesterArtifact);
+        var refinedSpec = goal.RefinedSpec;
+
+        var revision = kernel.ReviseGoalBrief(goal.Id, "Additional implementation context.\n\n" + goal.Objective);
+
+        Assert.False(revision.RefinedCriteriaReDerived);
+        Assert.Same(refinedSpec, kernel.GetGoal(goal.Id).RefinedSpec);
+        Assert.Equal(DeveloperArtifact, Assert.Single(refinedSpec!.AcceptanceCriteria));
+    }
+
+    [Fact]
+    public async Task RevisingCriterionDerivesCorrectedOwnerAndKeepsEvidenceAssignment()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = await FileAndRefine(kernel, false, TesterArtifact);
+        const string revisedCriterion = "A committed test asserts Y. Reviewer owns; Acceptance executes. TEST-VERIFIABLE.";
+        const string expected = "A committed test asserts Y. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+
+        var revision = kernel.ReviseGoalBrief(goal.Id,
+            goal.Objective.Replace(TesterArtifact, revisedCriterion, StringComparison.Ordinal));
+
+        Assert.True(revision.RefinedCriteriaReDerived);
+        var revisedSpec = kernel.GetGoal(goal.Id).RefinedSpec!;
+        Assert.Equal(expected, Assert.Single(revisedSpec.AcceptanceCriteria));
+        Assert.Equal(expected, Assert.Single(revisedSpec.AcceptanceGateOwnedAcceptanceCriteria));
+    }
+
     [Theory]
+    [InlineData("A new committed test asserts X.")]
+    [InlineData("A committed source-guard test asserts X.")]
+    [InlineData("A committed xUnit test asserts X.")]
+    [InlineData("The new committed test asserts X.")]
+    [InlineData("The committed regression test asserts X.")]
+    [InlineData("Given a brief X, a committed test asserts Y.")]
+    [InlineData("The filed owner is Developer, asserted by a committed test.")]
     [InlineData("A new machine-readable audit report is committed.")]
     [InlineData("The change writes a machine-readable audit report.")]
     [InlineData("A report is included in the commit.")]
@@ -73,8 +111,13 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
     [InlineData("Existing tests are included in the focused evidence run.")]
     [InlineData("A new focused evidence run of existing tests is produced.")]
     [InlineData("The change adds the requested existing tests to the focused evidence run.")]
+    [InlineData("The change adds the existing committed tests to the focused evidence run.")]
     [InlineData("The change adds the previously committed tests to the focused evidence run.")]
     [InlineData("The change adds the already checked-in tests to the focused evidence run.")]
+    [InlineData("The committed tests in the BriefLintTests file pass on the candidate.")]
+    [InlineData("On the candidate, committed tests in BriefLintTests pass.")]
+    [InlineData("Committed tests in BriefLintTests pass.")]
+    [InlineData("Run committed tests from BriefLintTests.")]
     public async Task EvidenceRunLanguageKeepsTesterOwnerWithoutRewriteDiagnostic(string requirement)
     {
         var criterion = $"{requirement} Tester owns; Acceptance executes. TEST-VERIFIABLE.";
@@ -90,7 +133,11 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
                         entry.Message.StartsWith(DiagnosticPrefix, StringComparison.Ordinal))
         .Select(entry => entry.Message);
 
-    private static async Task<Goal> FileAndRefine(bool useFallback, params string[] criteria)
+    private static Task<Goal> FileAndRefine(bool useFallback, params string[] criteria) =>
+        FileAndRefine(new AgentOrchestratorKernel(), useFallback, criteria);
+
+    private static async Task<Goal> FileAndRefine(
+        AgentOrchestratorKernel kernel, bool useFallback, params string[] criteria)
     {
         const string contract = "Implement the focused behavior.";
         var objective = $"{contract}\n\n## Acceptance criteria\n\n" +
@@ -117,7 +164,6 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
                 new FakeCollaborationItemStore(),
                 new SpecRefinerPrecedentStore(Path.Combine(root.FullName, "precedents.json")),
                 rawOutputDirectory: Path.Combine(root.FullName, "logs"));
-            var kernel = new AgentOrchestratorKernel();
             var filed = kernel.CreateGoal(objective);
 
             var result = await service.RefineAsync(kernel, filed.Id);
