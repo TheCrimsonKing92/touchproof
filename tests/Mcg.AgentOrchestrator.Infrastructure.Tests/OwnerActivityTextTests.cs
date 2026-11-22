@@ -44,4 +44,30 @@ public sealed class OwnerActivityTextTests
     {
         Assert.Equal(expected, OwnerActivityText.Words(value, fallback));
     }
+
+    [Theory]
+    [InlineData("TICK_END follows all per-tick work")]
+    [InlineData("nonetheless")]
+    [InlineData("ReceiptReader.Read")]
+    [InlineData("a `tick` value")]
+    [InlineData("tick. .tick _tick tick_ 2tick tick2")]
+    [InlineData("\U00010400tick tick\U00010400 \U0001D7CEtick tick\U0001D7CE")]
+    public void Words_TermInsideLargerWordOrIdentifier_IsUnchanged(string value)
+    {
+        Assert.Equal(value, OwnerActivityText.Words(value, ""));
+    }
+
+    [Theory]
+    [InlineData("ticks", "steps")]
+    [InlineData("CANARY", "main check")]
+    [InlineData("receipt", "proof")]
+    [InlineData("cohort", "joint run")]
+    [InlineData("handoff", "switch")]
+    [InlineData("none", "no issue")]
+    [InlineData("handoffs", "switches")]
+    [InlineData("[tickets], sticky!", "[issues], persistent!")]
+    public void Words_StandaloneTermOrPlural_IsTranslated(string value, string expected)
+    {
+        Assert.Equal(expected, OwnerActivityText.Words(value, ""));
+    }
 }
