@@ -144,7 +144,8 @@ public sealed class ProviderHoldSeedWorkBoundTests
         await fixture.PopulateStandaloneResultCaseAsync(backdated);
         Assert.Equal(2, fixture.CountDispatchGoals());
 
-        var seeded = Seed(new SqliteOrchestratorStateRepository(fixture.Database), new());
+        var kernel = new AgentOrchestratorKernel();
+        var seeded = Seed(new SqliteOrchestratorStateRepository(fixture.Database), kernel);
         var evaluation = Assert.Single(seeded.Index.Evaluations).Value;
         Assert.Equal(2, seeded.Index.IndexedGoals);
         Assert.Equal(1, evaluation.Count);
@@ -156,7 +157,9 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(62), schedule.NextProbeAt);
         Assert.Equal("inconclusive", schedule.LastProbeOutcome);
         Assert.Equal(ProviderFailureKind.BudgetExhausted, schedule.LastActionableFailure);
-        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(2), schedule.LastActionableFailureAt);
+        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(2).AddSeconds(backdated ? -10 : 0), schedule.LastActionableFailureAt);
+        Assert.Equal(schedule, ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, schedule.Hold,
+            ProviderHoldSeedFixture.At.AddMinutes(3)));
     }
 
     [Fact]
@@ -314,10 +317,10 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         var hiddenAt = backdated ? checkedAt.AddSeconds(-10) : checkedAt;
         var source = MakeHold(0);
         var other = MakeUnrelated(805);
-        var visible = ProviderBudgetHoldSchedules.FormatReset(new(binding, checkedAt, visibleIntent));
-        ProgressEventSnapshot Result(string intent, string outcome, string reason, DateTimeOffset? completedAt = null) =>
+        var visible = ProviderBudgetHoldSchedules.FormatReset(new(binding, hiddenAt, visibleIntent));
+        ProgressEventSnapshot Result(string intent, string outcome, string reason, DateTimeOffset at) =>
             new(source.Id, source.Tasks[0].Id, ProgressKind.TaskNote, ProviderBudgetHoldSchedules.FormatStandaloneResult(
-                new(binding, At, checkedAt, 1, checkedAt, outcome, reason) { ResetIntentId = intent }), completedAt ?? checkedAt);
+                new(binding, At, at, 1, at, outcome, reason) { ResetIntentId = intent }), at);
         return SaveAsync([
             source with
             {
@@ -326,17 +329,19 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
                     .. source.Timeline,
                     new(source.Id, source.Tasks[0].Id, ProgressKind.TaskNote, visible, checkedAt.AddMinutes(1),
                         OperatorIntentCreatedAt: At.AddMinutes(1)),
-                    .. Enumerable.Range(0, 128).Select(index => Result(visibleIntent, "exhausted", $"refusal-{index}")),
-                    Result(hiddenIntent, "authentication-required", "generation is not yet visible", checkedAt.AddSeconds(1)),
+                    // Replay sorts by timestamp and preserves stored order at a tie. The
+                    // authentication result would be applicable if the later reset were visible.
+                    .. Enumerable.Range(0, 128).Select(index => Result(visibleIntent, "exhausted", $"refusal-{index}", hiddenAt)),
+                    Result(hiddenIntent, "authentication-required", "generation is not yet visible", hiddenAt),
                     .. Enumerable.Range(0, 128).Select(index => new ProgressEventSnapshot(source.Id, source.Tasks[0].Id,
                         ProgressKind.TaskNote, ProviderBudgetHoldSchedules.FormatReset(
-                            new(binding, checkedAt, $"fixture-hidden-reset-{index}")), hiddenAt)),
-                    Result(hiddenIntent, "failed", "generation is now visible")
+                            new(binding, hiddenAt, $"fixture-hidden-reset-{index}")), hiddenAt)),
+                    Result(hiddenIntent, "failed", "generation is now visible", checkedAt)
                 ]
             },
             other with
             {
-                Timeline = [new(other.Id, other.Tasks[0].Id, ProgressKind.TaskNote, visible, checkedAt,
+                Timeline = [new(other.Id, other.Tasks[0].Id, ProgressKind.TaskNote, visible, hiddenAt,
                     OperatorIntentCreatedAt: At.AddMinutes(1))]
             }
         ]);
