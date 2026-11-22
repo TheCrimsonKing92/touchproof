@@ -173,6 +173,7 @@ public sealed partial class AgentOrchestratorKernel
             Append(goal, taskId, ProgressKind.TaskNote, "Ignored stale verification-role dispatch completion; current attempt is unchanged.");
             return;
         }
+        var capturedPlannerArtifact = verification.PendingPlannerArtifact;
         verification = verification with
         {
             EvidenceSource = VerificationEvidenceSource.Dispatch, FindingContractVersion = task.LastDispatch.FindingContractVersion,
@@ -180,7 +181,8 @@ public sealed partial class AgentOrchestratorKernel
                 SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task) && verification.DispatchStartedAt is not null
                 ? verification.DispatchAttemptAt ?? task.LastDispatch.DispatchedAt : verification.DispatchAttemptAt,
             CompletionVerdictVerifiedSuccess = false,
-            CompletionVerdictRule = null
+            CompletionVerdictRule = null,
+            PendingPlannerArtifact = null
         };
         var terminalContract = WorkerResultBlockers.AssessSubscriptionVerification(task, verification);
         if (!terminalContract.AllowsCompletion)
@@ -258,19 +260,8 @@ public sealed partial class AgentOrchestratorKernel
             return;
         if (parsedHumanInput.Directives.Any(item => item.PlannerEvidence is not null))
         {
-            var provenanceDiagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, verification, out var briefVersion);
-            if (provenanceDiagnostic is not null)
-            {
-                PlannerEvidenceCompletion.Reject(this, goal, task, verification, provenanceDiagnostic);
-                return;
-            }
-            var diagnostic = RecordPlannerEvidenceBatch(goal, task, parsedHumanInput, briefVersion, out var blocked);
-            if (diagnostic is not null)
-            {
-                PlannerEvidenceCompletion.Reject(this, goal, task, verification, diagnostic);
-                return;
-            }
-            if (blocked) return;
+            if (HumanInputAnswerRouting.RecordPlannerDispatchWait(this, goal, task,
+                verification, parsedHumanInput, capturedPlannerArtifact, _humanInputRequestLock)) return;
             parsedHumanInput = new(null, null);
             verification = verification with { HumanInputQuestion = null };
         }
@@ -306,26 +297,31 @@ public sealed partial class AgentOrchestratorKernel
             }
             else
             {
-                var requestResult = RequestHumanInputDeduplicated(
-                    goal.Id,
-                    task.Id,
-                    humanInputQuestion,
-                    kind: kind,
-                    questionFingerprint: fingerprint,
-                    blockerFingerprint: verification.HumanInputBlockerFingerprint
-                        ?? parsedHumanInput.Directive?.BlockerFingerprint
-                        ?? HumanInputRequest.BuildWorkerResultBlockerFingerprint(
-                            task.Id,
-                            task.RequiredRole,
-                            rawQuestion,
-                            accompanyingBlocker),
-                    completedRound: verification.WorkerResultPresent ? completedRound : null,
-                    workerResultLogReference: verification.StandardOutputPath,
-                    recordDuplicateSuppression: verification.WorkerResultPresent,
-                    evidenceOwner: owner,
-                    storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
-                    testNames: testNames, amendmentCriterionIndex: parsedHumanInput.Directive?.AmendmentCriterionIndex,
-                    amendmentProposedText: parsedHumanInput.Directive?.AmendmentProposedText);
+                HumanInputRequestCreationResult requestResult;
+                lock (_humanInputRequestLock)
+                {
+                    requestResult = RequestHumanInputDeduplicated(
+                        goal.Id,
+                        task.Id,
+                        humanInputQuestion,
+                        kind: kind,
+                        questionFingerprint: fingerprint,
+                        blockerFingerprint: verification.HumanInputBlockerFingerprint
+                            ?? parsedHumanInput.Directive?.BlockerFingerprint
+                            ?? HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                                task.Id,
+                                task.RequiredRole,
+                                rawQuestion,
+                                accompanyingBlocker),
+                        completedRound: verification.WorkerResultPresent ? completedRound : null,
+                        workerResultLogReference: verification.StandardOutputPath,
+                        recordDuplicateSuppression: verification.WorkerResultPresent,
+                        evidenceOwner: owner,
+                        storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
+                        testNames: testNames, amendmentCriterionIndex: parsedHumanInput.Directive?.AmendmentCriterionIndex,
+                        amendmentProposedText: parsedHumanInput.Directive?.AmendmentProposedText);
+                    capturedPlannerArtifact?.Bind(goal, task, verification, [requestResult.Request]);
+                }
                 if (verification.WorkerResultPresent &&
                     requestResult.WasSuppressedByAnswer &&
                     WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
@@ -2063,9 +2059,10 @@ public sealed partial class AgentOrchestratorKernel
             : null;
     }
 
-    private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
+    private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message, bool allowPlannerArtifactPromotion = false)
     {
-        if (!PassingVerificationCompletion.IsEligible(goal, task, _humanInputRequests.Values, out var verification))
+        if (!PassingVerificationCompletion.IsEligible(goal, task, _humanInputRequests.Values,
+                allowPlannerArtifactPromotion, out var verification))
             return false;
 
         if (PassingVerificationCompletion.GetPlannerEvidenceBatch(task, verification) is { } acceptedBatch)
@@ -2078,6 +2075,8 @@ public sealed partial class AgentOrchestratorKernel
                 return false;
             }
         }
+        if (verification.PendingPlannerArtifact is { IsPromoted: true } artifact)
+            task.RecordPlannerArtifact(verification, artifact);
         TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Completed), TaskStatusTransitionRecorder.RecordingTryCompleteTaskWithPassingVerification);
         Append(goal, task.Id, ProgressKind.TaskCompleted, message);
         ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);
