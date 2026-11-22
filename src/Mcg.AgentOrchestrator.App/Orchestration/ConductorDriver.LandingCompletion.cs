@@ -311,6 +311,8 @@ internal sealed partial class ConductorDriver
     private static string FormatUnmetCriteria(IReadOnlyList<AcceptanceCheckResult> criteria) =>
         string.Join("; ", criteria.Select(FormatUnmetCriterion));
 
+    internal string? LaneTimeoutConductEventLogPathOverride { get; set; }
+
     private ConductorAdvanceResult? TryDisposeTimeoutOnlyGateFailure(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
@@ -335,12 +337,12 @@ internal sealed partial class ConductorDriver
             !current.HasCandidate(branch, main) ||
             !recorded.ToHashSet(StringComparer.Ordinal).SetEquals(acceptance.RequiredUnmetCriteria.Select(check => check.Name)))
             return null;
-        var attemptKey = TimeoutGateAttemptKey(current);
+        var attemptKey = LaneTimeoutEscalationDetail.TimeoutGateAttemptKey(current);
         if (SelectTaskForCriterionRetry(goal) is { } noteTask)
             _recordTaskNote(goal.Id, noteTask.Id, $"ACCEPTANCE_TIMEOUT_ATTEMPT: {attemptKey}{attemptId}");
         if (acceptance.FailedChecks?.Any(name => !IsBlockingTimeoutCheck(name)) == true ||
             acceptance.UnmetCriteria.Any(check =>
-                (!check.Passed && TimeoutLane(check.Name) is null) ||
+                (!check.Passed && LaneTimeoutEscalationDetail.TimeoutLane(check.Name) is null) ||
                 check.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) == true ||
                 check.FailingTestAttributions?.Any(attribution => !string.IsNullOrWhiteSpace(attribution.TestIdentity)) == true))
             return null;
@@ -348,23 +350,27 @@ internal sealed partial class ConductorDriver
         var checks = acceptance.UnmetCriteria.Where(check => !check.Passed).Select(check => check.Name).ToArray();
         if (attempts.Length > 1 && attempts[^2] is { AcceptanceOutcome: timeout, FailedCheckNames: { } priorChecks } prior &&
             prior.HasCandidate(branch, main) &&
-            checks.Join(priorChecks, TimeoutLane, TimeoutLane, (check, previous) => (Current: check, Prior: previous),
+            checks.Join(priorChecks, LaneTimeoutEscalationDetail.TimeoutLane, LaneTimeoutEscalationDetail.TimeoutLane,
+                (check, previous) => (Current: check, Prior: previous),
                 StringComparer.OrdinalIgnoreCase).Distinct().ToArray() is { Length: > 0 } repeated)
         {
-            var priorKey = TimeoutGateAttemptKey(prior);
+            var priorKey = LaneTimeoutEscalationDetail.TimeoutGateAttemptKey(prior);
             var priorId = goal.Timeline.LastOrDefault(evt => evt.Kind == ProgressKind.TaskNote &&
                 evt.Message.StartsWith("ACCEPTANCE_TIMEOUT_", StringComparison.Ordinal) && evt.Message.Contains(priorKey, StringComparison.Ordinal))
                 ?.Message.Split(priorKey, 2)[1].Split(' ', 2)[0];
             if (priorId is null or "" or "unknown") return null;
             var details = repeated.Select(pair => $"attempt {priorId} ({pair.Prior}), attempt {attemptId} ({pair.Current})");
+            var timeoutLaneDetail = LaneTimeoutEscalationDetail.Format(acceptance, repeated.Select(pair => pair.Current), current,
+                _executionDirectory, LaneTimeoutConductEventLogPathOverride ?? _cohortWorkspace?.ConductEventsLogPath);
             var escalationReason = $"ACCEPTANCE_TIMEOUT_CONSECUTIVE: candidate {branch}/{main} timed out on consecutive gate attempts. " +
-                string.Join("; ", details);
+                string.Join("; ", details) + "\n" + timeoutLaneDetail;
             var state = GoalLifecycle.ResolveState(goal);
             RecordEscalation(goal, state, escalationReason);
             return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(
                 state, escalationReason, ConductorEscalationKind.BackgroundAcceptanceFailed)
                 { Decision = new(decisionStage, "Escalate", 1, "consecutive-same-lane-timeout", escalationReason,
-                    [new("branchSha", branch), new("mainSha", main), new("previousAttemptId", priorId), new("attemptId", attemptId)]) });
+                    [new("branchSha", branch), new("mainSha", main), new("previousAttemptId", priorId), new("attemptId", attemptId),
+                        new("timeoutLaneDetail", timeoutLaneDetail)]) });
         }
         if (attempts.SkipLast(1).Any(entry => entry.AcceptanceOutcome == timeout &&
             (!entry.HasCandidatePair || entry.HasCandidate(branch, main))))
@@ -379,12 +385,6 @@ internal sealed partial class ConductorDriver
             { Decision = new(decisionStage, "Hold", 2, "first-timeout-on-candidate", reason,
                 [new("branchSha", branch), new("mainSha", main), new("attemptId", attemptId)]) });
     }
-
-    private static string TimeoutGateAttemptKey(GoalOperationJournalEntry entry) =>
-        $"candidate={entry.BranchHeadSha}/{entry.MainHeadSha} started={entry.At:O} attempt=";
-
-    private static string? TimeoutLane(string name) =>
-        FailedGoalTimedOutSelectionRerunRule.TryParseSelection(name, out var lane) ? lane : null;
 
     internal static string[] InferRecordedFileScopes(Goal goal)
     {
