@@ -11,7 +11,12 @@ public sealed class CriterionEvidenceLegacySnapshotRestoreTests
             "Id": "b0896141a89b450dbd2a40d354308920",
             "Objective": "Legacy evidence",
             "Status": 1,
-            "Tasks": [],
+            "Tasks": [{
+              "Id": "d04e42abdc244d0f8099ec3d2b7df3dc",
+              "Description": "Implement legacy behavior",
+              "RequiredRole": "Developer",
+              "Status": "Pending"
+            }],
             "Timeline": [],
             "CreatedAt": "2026-10-01T00:00:00Z",
             "RefinedSpecVersions": [{
