@@ -72,8 +72,11 @@ internal static partial class CliPersistentStateRunner
                 ref workerProfiles, ref currentGoal);
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
-        DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
-        DrainGoalLifecycleEventOutbox(stateRepository, workspace);
+        if (!CliShadowStartCommand.IsNoDispatch(args))
+        {
+            DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
+            DrainGoalLifecycleEventOutbox(stateRepository, workspace);
+        }
 
         if (IsGoalRefinementWorkCommand(args))
         {
@@ -882,6 +885,9 @@ internal static partial class CliPersistentStateRunner
         AgentOrchestratorKernel RunStartupSweep(AgentOrchestratorKernel startupKernel)
         {
             tickBaselines = OrchestratorSnapshot.Capture(startupKernel, includeDeferredRows: false).Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+            // Copied goals retain process, worktree and build paths owned by the live workspace.
+            if (CliShadowStartCommand.IsNoDispatch(args))
+                return SeedProviderHoldHistory();
             try
             {
                 var openWorkGoalIds = new Lazy<IReadOnlyList<GoalId>>(() => TerminalOpenWorkCandidates.Read(stateRepository, Console.WriteLine));
@@ -917,8 +923,13 @@ internal static partial class CliPersistentStateRunner
             {
                 EmitPreLoopJanitorialFailure(workspace, ex);
             }
-            ProviderHoldHistorySeed.Apply(startupKernel, stateRepository, Console.WriteLine, ConductorStartupHeartbeat.Shipped);
-            return startupKernel;
+            return SeedProviderHoldHistory();
+
+            AgentOrchestratorKernel SeedProviderHoldHistory()
+            {
+                ProviderHoldHistorySeed.Apply(startupKernel, stateRepository, Console.WriteLine, ConductorStartupHeartbeat.Shipped);
+                return startupKernel;
+            }
         }
 
         var loopCurrentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -1058,7 +1069,7 @@ internal static partial class CliPersistentStateRunner
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
-        if (conductLoopLease.IsHeld)
+        if (conductLoopLease.IsHeld && !CliShadowStartCommand.IsNoDispatch(args))
             _ = CheckpointGoals(kernel, kernel.Goals.Select(goal => goal.Id).ToArray());
         currentGoal = loopCurrentGoal;
         return shouldSave;
