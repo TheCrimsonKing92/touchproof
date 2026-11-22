@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -124,10 +123,9 @@ internal static class WorkerBuildRepositorySeed
         if (Environment.GetEnvironmentVariables().Keys.Cast<string>().Any(
             key => key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) && !SupportedGitVariables.Contains(key)))
             return false;
-        var start = new ProcessStartInfo("git");
-        GitExecutable.Prepare(start);
-        string? Get(string name) => start.Environment.TryGetValue(name, out var value) ? value : null;
-        var installation = Path.GetDirectoryName(Path.GetDirectoryName(start.FileName));
+        var (executable, environment) = InfrastructureTestSupport.CapturePreparedGitEnvironment();
+        string? Get(string name) => environment.TryGetValue(name, out var value) ? value : null;
+        var installation = Path.GetDirectoryName(Path.GetDirectoryName(executable));
         var installRoot = Path.GetDirectoryName(installation);
         var home = Get("HOME");
         if (installRoot is null || string.IsNullOrEmpty(home)) return false;
