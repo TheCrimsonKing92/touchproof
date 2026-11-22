@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Terminal.Gui.Input;
+using Terminal.Gui.Views;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleProviderConnectionRows;
 
 public sealed class OwnerConsoleProviderConnectionsTabTests
@@ -16,14 +17,14 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         Assert.Contains(BrowseKey, help);
         Assert.DoesNotContain("profile", help, StringComparison.OrdinalIgnoreCase);
         var keys = help.Split("  ");
-        string[] expected = [BrowseKey, CheckKey, SignInKey, DeviceCodeKey, ReturnKey, StopWaitingKey, ReloadKey];
+        string[] expected = [BrowseKey, CheckKey, SignInKey, DeviceCodeKey, ReturnKey, StopWaitingKey, ReloadKey,
+            "Enter expand Not in use", "Enter collapse Not in use"];
         Assert.Equal(expected, keys);
 
-        var footers = HintActions.SelectMany(action => new[]
-        {
-            FormatKeyHint(action, deviceCodeAvailable: false),
-            FormatKeyHint(action, deviceCodeAvailable: true)
-        }).Select(footer => footer.Split("  ")).ToArray();
+        var footers = OwnerConsoleSurfaceText.All
+            .Where(entry => entry.Kind == OwnerConsoleSurfaceText.TextKind.TabFooter &&
+                entry.Group == OwnerConsoleProviderConnectionsTab.TabTitle)
+            .Select(entry => entry.Text.Split("  ")).ToArray();
         foreach (var key in keys)
             Assert.Contains(footers, footer => footer.Contains(key, StringComparer.Ordinal));
     }
@@ -47,7 +48,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         {
             "OpenAI | signed in: yes | used by: Developer, Tester | confirmed: 2026-01-01 00:04 (1 min ago) | s sign in",
             "xAI | signed in: no | used by: Reviewer | confirmed: 2026-01-01 00:04 (1 min ago) | s sign in",
-            "Not in use (2): claude-cli, unrouted"
+            "Not in use (2) [+]"
         }, fixture.Tab.Lines.Where(line => !line.StartsWith(' ')));
         Assert.Contains("  Profiles: codex-cli, codex-luna", fixture.Tab.Lines);
         Assert.DoesNotContain(fixture.Tab.Lines.SkipLast(1),
@@ -64,6 +65,145 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         check.Result.SetResult(Fixture.Connection("codex-luna", ProviderConnectionResult.SignedOut));
         await fixture.ApplyAsync();
         Assert.StartsWith("OpenAI | signed in: no", fixture.Tab.Lines[0]);
+    }
+
+    [Fact]
+    public async Task SettingsKeysExpandSelectAndCollapseUnusedProfilesWithoutProbing()
+    {
+        using var context = new OwnerConsoleSettingsTestContext();
+        using var fixture = new Fixture
+        {
+            Initial = [Fixture.Connection("codex-cli"), Fixture.Connection("codex-luna"),
+                Fixture.Connection("claude-cli"), Fixture.Connection("grok-cli")],
+            Roster = [Fixture.Agent("codex-cli", AgentRole.Developer), Fixture.Agent("codex-luna", AgentRole.Researcher),
+                Fixture.Agent("claude-cli", AgentRole.Reviewer)]
+        };
+        using var view = new OwnerConsoleSettingsView([new OwnerConsoleAlertsSettingsTab(context.Sound), fixture.Tab]);
+        fixture.Tab.Invalidate = view.Refresh;
+        var list = Assert.Single(view.SubViews.OfType<ListView>());
+        string Highlighted() => view.Lines[Assert.IsType<int>(list.SelectedItem)];
+
+        view.Open(OwnerConsolePane.Board);
+        Assert.Equal(0, view.ActiveTab);
+        view.HandleKey(Key.CursorRight);
+        await fixture.ApplyAsync();
+        var first = await fixture.TakeCheckAsync();
+        var second = await fixture.TakeCheckAsync();
+        Assert.Equal(["claude-cli", "codex-cli"], new[] { first.ProfileId, second.ProfileId }.Order(StringComparer.Ordinal));
+        await fixture.FinishCheckAsync(first);
+        await fixture.FinishCheckAsync(second);
+        Assert.StartsWith("OpenAI | signed in: no | used by: Researcher, Developer", Highlighted());
+        Assert.Contains("  Profiles: codex-cli, codex-luna", view.Lines);
+        Assert.DoesNotContain(view.Lines, line => line.Contains("grok-cli", StringComparison.Ordinal));
+        Assert.Equal(3, fixture.ScheduledProviderWork); // One list and two initial checks.
+
+        view.HandleKey(Key.CursorDown);
+        view.HandleKey(Key.CursorDown);
+        Assert.Equal("Not in use (1) [+]", Highlighted());
+        Assert.StartsWith("Enter expand Not in use", fixture.Tab.KeyHint);
+        foreach (var action in "csdtx") view.HandleKey(new Key(action));
+        view.HandleKey(Key.Enter);
+        Assert.Equal("Not in use (1) [-]", Highlighted());
+        Assert.StartsWith("Enter collapse Not in use", fixture.Tab.KeyHint);
+        view.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli | signed in: no", Highlighted());
+        Assert.Contains("Enter collapse Not in use", fixture.Tab.KeyHint);
+        view.HandleKey(Key.Enter);
+        Assert.Equal("Not in use (1) [+]", Highlighted());
+        Assert.DoesNotContain(view.Lines, line => line.Contains("grok-cli", StringComparison.Ordinal));
+
+        view.HandleKey(Key.Enter);
+        view.HandleKey(Key.CursorDown);
+        view.HandleKey(Key.CursorLeft);
+        view.HandleKey(Key.CursorRight);
+        Assert.Equal("Not in use (1) [+]", Highlighted());
+        view.HandleKey(Key.Enter);
+        view.HandleKey(Key.CursorDown);
+        Assert.True(view.HandleKey(Key.Esc));
+        view.Open(OwnerConsolePane.Board);
+        Assert.Equal("Not in use (1) [+]", Highlighted());
+        Assert.Equal(3, fixture.ScheduledProviderWork);
+        Assert.Equal(2, fixture.CheckCalls);
+        Assert.Equal(0, fixture.DeviceCodeProbes);
+        Assert.Empty(fixture.SignInLookups);
+        Assert.False(fixture.Launches.Reader.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task ReloadTracksUnusedIdAcrossCaseAndOrderChangesThenFallsBackSafely()
+    {
+        var active = Fixture.Connection("codex-cli");
+        var sibling = Fixture.Connection("claude-cli");
+        var selected = Fixture.Connection("grok-cli");
+        using var fixture = new Fixture
+        {
+            Initial = [active, sibling, selected],
+            Roster = [Fixture.Agent("codex-cli", AgentRole.Developer)]
+        };
+        await fixture.LoadAsync(initialChecks: 1);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        fixture.Initial = [active, selected with { Report = selected.Report with { ProfileId = "GROK-CLI" } }, sibling];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.Equal("Not in use (2) [-]", fixture.Tab.Lines[1]);
+        Assert.StartsWith("  GROK-CLI |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        fixture.Initial = [active, sibling];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.Equal("Not in use (1) [-]", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        fixture.Initial = [active];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.StartsWith("OpenAI |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.DoesNotContain(fixture.Tab.Lines, line => line.StartsWith("Not in use", StringComparison.Ordinal));
+        fixture.Initial = [];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.Equal("No configured worker profiles.", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        foreach (var action in "csdtx") fixture.Press(action);
+        Assert.Equal(1, fixture.CheckCalls);
+        Assert.Equal(0, fixture.DeviceCodeProbes);
+        Assert.Empty(fixture.SignInLookups);
+        Assert.False(fixture.Launches.Reader.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReloadFollowsSelectedUnusedProfileIntoActiveGroup(bool keepUnusedGroup)
+    {
+        var codex = Fixture.Connection("codex-cli");
+        var grok = Fixture.Connection("grok-cli");
+        OwnerConsoleProviderConnection[] otherUnused = keepUnusedGroup ? [Fixture.Connection("claude-cli")] : [];
+        var developer = Fixture.Agent("codex-cli", AgentRole.Developer);
+        using var fixture = new Fixture
+        {
+            Initial = [codex, grok, .. otherUnused],
+            Roster = [developer]
+        };
+        await fixture.LoadAsync(initialChecks: 1);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        var sibling = grok with { Report = grok.Report with { ProfileId = "grok-secondary" } };
+        fixture.Initial = [codex, sibling, grok with { Report = grok.Report with { ProfileId = "GROK-CLI" } }, .. otherUnused];
+        fixture.Roster = [developer, Fixture.Agent("grok-secondary", AgentRole.Tester), Fixture.Agent("grok-cli", AgentRole.Reviewer)];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+
+        Assert.StartsWith("xAI |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.Contains("  Profiles: grok-secondary, GROK-CLI", fixture.Tab.Lines);
+        Assert.Equal(3, fixture.ScheduledProviderWork);
+        Assert.Empty(fixture.SignInLookups);
+        Assert.False(fixture.Launches.Reader.TryRead(out _));
     }
 
     [Fact]
@@ -335,6 +475,8 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         private readonly Channel<CheckRequest> _checks = Channel.CreateUnbounded<CheckRequest>();
         private readonly CancellationTokenSource _stop = new();
         private int _checkCalls;
+        private int _deviceCodeProbes;
+        private int _scheduledProviderWork;
         internal OwnerConsoleTestClock Clock { get; } = new();
         internal OwnerConsoleProviderConnectionsTab Tab { get; }
         internal IReadOnlyList<OwnerConsoleProviderConnection> Initial { get; set; } =
@@ -343,17 +485,24 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
             [Agent("codex-cli", AgentRole.Developer), Agent("codex-luna", AgentRole.Researcher), Agent("grok-cli", AgentRole.Reviewer)];
         internal bool RosterUnavailable { get; set; }
         internal int CheckCalls => Volatile.Read(ref _checkCalls);
+        internal int DeviceCodeProbes => Volatile.Read(ref _deviceCodeProbes);
+        internal int ScheduledProviderWork => Volatile.Read(ref _scheduledProviderWork);
         internal Task<IReadOnlyList<OwnerConsoleProviderConnection>>? PendingList { get; set; }
         internal TaskCompletionSource<bool> ListStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal ProviderSignInLaunch Launch { get; set; } = new(null, ProviderSignInOutcome.LaunchFailed);
         internal Channel<(ProviderSignInTarget Target, bool DeviceCode)> Launches { get; } =
             Channel.CreateUnbounded<(ProviderSignInTarget, bool)>();
+        internal System.Collections.Concurrent.ConcurrentQueue<string> SignInLookups { get; } = new();
         internal TaskCompletionSource<bool>? DeviceCodeProbe { get; set; }
 
-        internal Fixture() => Tab = new(this, this,
+        internal Fixture(IProviderSignInLauncher? launcher = null) => Tab = new(this, launcher ?? this,
             () => RosterUnavailable ? throw new InvalidOperationException("fixture roster unavailable") : Roster,
-            action => _callbacks.Writer.TryWrite(action), Clock, _stop.Token);
+            action => _callbacks.Writer.TryWrite(action), Clock, _stop.Token, work =>
+            {
+                Interlocked.Increment(ref _scheduledProviderWork);
+                _ = Task.Run(work);
+            });
 
         internal static AgentDefinition Agent(string? profile, AgentRole role, AgentStatus status = AgentStatus.Available,
             string provider = "OpenAI") => new(new AgentId($"{role}-{profile}"), role.ToString(), role,
@@ -420,13 +569,23 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
             return completion.Task.WaitAsync(token);
         }
 
-        public ProviderSignInTarget? GetSignInTarget(string profileId) => Initial.Single(p => p.Report.ProfileId == profileId).SignIn;
-
-        public Task<bool> SupportsDeviceCodeAsync(ProviderSignInTarget target, CancellationToken token) =>
-            DeviceCodeProbe?.Task.WaitAsync(token) ?? Task.FromResult(false);
-
-        public Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token)
+        public ProviderSignInTarget? GetSignInTarget(string profileId)
         {
+            SignInLookups.Enqueue(profileId);
+            return Initial.Single(p => StringComparer.OrdinalIgnoreCase.Equals(p.Report.ProfileId, profileId)).SignIn;
+        }
+
+        public Task<bool> SupportsDeviceCodeAsync(ProviderSignInTarget target, CancellationToken token)
+        {
+            Interlocked.Increment(ref _deviceCodeProbes);
+            return DeviceCodeProbe?.Task.WaitAsync(token) ?? Task.FromResult(false);
+        }
+
+        public Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token,
+            Func<bool>? tryCommitLaunch = null)
+        {
+            if (tryCommitLaunch?.Invoke() == false)
+                return Task.FromResult(new ProviderSignInLaunch(null, ProviderSignInOutcome.Cancelled));
             Launches.Writer.TryWrite((target, deviceCode));
             return Task.FromResult(Launch);
         }
