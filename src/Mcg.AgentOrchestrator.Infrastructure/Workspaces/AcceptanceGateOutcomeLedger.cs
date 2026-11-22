@@ -30,6 +30,7 @@ internal static class AcceptanceGateOutcomeLedger
     internal const string FileName = "cost-goal-outcome-gates.jsonl";
     internal const string PendingFileName = "cost-goal-outcome-gates.pending.jsonl";
     internal const string PendingDirectoryName = "cost-goal-outcome-gate-publications";
+    internal const string FallbackDirectoryName = "cost-goal-outcome-gate-publications-fallback";
     internal const string AttemptRoot = "acceptance-gate-attempts";
     internal const string GateKind = "gate";
     internal const string InvalidationKind = "invalidation";
@@ -103,20 +104,37 @@ internal static class AcceptanceGateOutcomeLedger
         var file = new FileInfo(path);
         var offset = file.Exists ? file.Length : 0;
         var pending = new PendingPublication(offset, row, RequiresResult: true);
+        var line = JsonSerializer.Serialize(pending, Json);
         try
         {
-            var directory = Directory.CreateDirectory(PendingDirectoryPath(path)).FullName;
-            var pendingPath = Path.Combine(directory, $"{Guid.NewGuid():N}.jsonl");
-            WritePending(pendingPath, [JsonSerializer.Serialize(pending, Json)]);
-            return new(path, pendingPath, pending);
+            return WriteSeparateIntent(PendingDirectoryName);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Keep the intent durable before either writer makes its result visible.
-            var fallbackPath = LegacyPendingPath(path);
-            WithBackfillLock(path, () => WritePending(fallbackPath,
-                ReadPending(fallbackPath).Append(JsonSerializer.Serialize(pending, Json))));
-            return new(path, fallbackPath, pending, SharedPending: true);
+            try
+            {
+                var fallbackPath = LegacyPendingPath(path);
+                WithBackfillLock(path, () => WritePending(fallbackPath, ReadPending(fallbackPath).Append(line)));
+                return new(path, fallbackPath, pending, SharedPending: true);
+            }
+            catch (Exception fallbackError) when (fallbackError is IOException or UnauthorizedAccessException)
+            {
+                try { return WriteSeparateIntent(FallbackDirectoryName); }
+                catch (Exception intentError) when (intentError is IOException or UnauthorizedAccessException)
+                {
+                    // Even when every recovery location is unavailable, preserve the gate's result.
+                    System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome intent unavailable for {prefix}: {intentError.Message}");
+                    return new(path, null, pending);
+                }
+            }
+        }
+
+        PreparedPublication WriteSeparateIntent(string directoryName)
+        {
+            var directory = Directory.CreateDirectory(PendingDirectoryPath(path, directoryName)).FullName;
+            var pendingPath = Path.Combine(directory, $"{Guid.NewGuid():N}.jsonl");
+            WritePending(pendingPath, [line]);
+            return new(path, pendingPath, pending);
         }
     }
 
@@ -129,12 +147,12 @@ internal static class AcceptanceGateOutcomeLedger
             WithBackfillLock(path, () =>
             {
                 AppendObservation(path, pending.Offset, WithSoloProvenance(pending.Observation, solo));
-                if (!sharedPending) RemovePending(pendingPath);
+                if (!sharedPending && pendingPath is not null) RemovePending(pendingPath);
             });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome ledger unavailable for {pendingPath}: {ex.Message}");
+            System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome ledger unavailable for {pending.Observation.AttemptId}: {ex.Message}");
         }
     }
 
@@ -160,20 +178,31 @@ internal static class AcceptanceGateOutcomeLedger
     internal static void RecoverPublications(string path,
         Func<string, AcceptanceGateOutcomeObservation, (bool Ready, AcceptanceGateOutcomeObservation? Observation)> readSoloObservation)
     {
-        string[] pendingPaths;
-        var pendingDirectory = PendingDirectoryPath(path);
-        try { pendingPaths = Directory.GetFiles(pendingDirectory, "*.jsonl"); }
-        catch (IOException ex) when (ex is DirectoryNotFoundException || File.Exists(pendingDirectory))
-        {
-            pendingPaths = [];
-        }
+        var (pendingPaths, primaryError) = ListPending(PendingDirectoryName);
         var legacyPath = LegacyPendingPath(path);
-        if (EvidenceExists(legacyPath)) pendingPaths = [.. pendingPaths, legacyPath];
-        if (pendingPaths.Length == 0) return;
+        var (fallbackPaths, fallbackError) = ListPending(FallbackDirectoryName);
+        if (EvidenceExists(legacyPath)) fallbackPaths = [.. fallbackPaths, legacyPath];
 
-        WithBackfillLock(path, () =>
+        if (pendingPaths.Length != 0 || fallbackPaths.Length != 0)
+            WithBackfillLock(path, () => ReplayPending(pendingPaths.Concat(fallbackPaths)));
+
+        // Replay reachable intents, then fail the read if any directory could still hide observations.
+        if ((primaryError ?? fallbackError) is { } error)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error);
+
+        (string[] Paths, Exception? Error) ListPending(string directoryName)
         {
-            foreach (var pendingPath in pendingPaths)
+            var directory = PendingDirectoryPath(path, directoryName);
+            try { return (Directory.GetFiles(directory, "*.jsonl"), null); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return ([], ex is DirectoryNotFoundException || File.Exists(directory) ? null : ex);
+            }
+        }
+
+        void ReplayPending(IEnumerable<string> paths)
+        {
+            foreach (var pendingPath in paths)
             {
                 var allReady = true;
                 foreach (var line in ReadPending(pendingPath))
@@ -187,7 +216,7 @@ internal static class AcceptanceGateOutcomeLedger
                 }
                 if (allReady) RemovePending(pendingPath);
             }
-        });
+        }
     }
 
     private static IEnumerable<string> ReadPending(string path)
@@ -284,7 +313,7 @@ internal static class AcceptanceGateOutcomeLedger
         return Path.GetFileName(root) == AttemptRoot ? Path.Combine(Path.GetDirectoryName(root!)!, FileName) : null;
     }
 
-    private static string PendingDirectoryPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingDirectoryName);
+    private static string PendingDirectoryPath(string path, string directoryName) => Path.Combine(Path.GetDirectoryName(path)!, directoryName);
 
     private static string LegacyPendingPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
 
@@ -294,7 +323,7 @@ internal static class AcceptanceGateOutcomeLedger
             AppendCompleteLines(path, [JsonSerializer.Serialize(row, Json)]);
     }
 
-    internal sealed record PreparedPublication(string LedgerPath, string PendingPath, PendingPublication Pending,
+    internal sealed record PreparedPublication(string LedgerPath, string? PendingPath, PendingPublication Pending,
         bool SharedPending = false);
     internal sealed record PendingPublication(long Offset, AcceptanceGateOutcomeObservation Observation, bool RequiresResult = false);
 

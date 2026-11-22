@@ -46,6 +46,8 @@ internal static class OrchestratorArtifactRegistry
             note: "Legacy and fallback publication intents are removed after recovery."),
         Source("cost-goal-outcome-gate-publications", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
             note: "Per-publication recovery files are removed after the observation is in the ledger."),
+        Source("cost-goal-outcome-gate-publications-fallback", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
+            note: "Independent publication intents are used when both primary and shared recovery paths are unavailable."),
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs",

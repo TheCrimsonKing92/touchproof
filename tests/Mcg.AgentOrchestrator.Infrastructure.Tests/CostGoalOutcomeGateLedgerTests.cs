@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: all artifact, ledger, and verdict files belong to a temporary directory.
@@ -141,7 +142,7 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Read_RecoversDetachedSoloAfterBackfill(bool resultBeforeMarker)
+    public void Read_BackfillWaitsForDetachedSolo(bool resultBeforeFirstRead)
     {
         var goal = new AgentOrchestratorKernel().CreateGoal("Observe a detached solo gate");
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", Main);
@@ -163,13 +164,14 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
                 AcceptanceAttemptResultRecord.ForVerification(result, "branch", Main));
         }
 
-        if (resultBeforeMarker) WriteLegacyResult();
+        if (resultBeforeFirstRead) WriteLegacyResult();
         var first = new CostGoalOutcomeGateLedgerReader(root);
         Assert.Empty(first.Read(EvaluatedAt));
-        Assert.Equal("""{"kind":"backfill-complete"}""", File.ReadLines(LedgerPath).Last());
+        Assert.False(File.Exists(LedgerPath));
+        Assert.Equal(0, first.GateFileReads);
         Assert.Empty(Scan());
 
-        if (!resultBeforeMarker) WriteLegacyResult();
+        if (!resultBeforeFirstRead) WriteLegacyResult();
         Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
             coordinator.ObserveExistingAttempt(attempt, candidate).Attempt.Outcome);
         var expected = Project(Assert.Single(Scan()));
@@ -177,12 +179,46 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
         var successor = new CostGoalOutcomeGateLedgerReader(root);
         Assert.Equal(expected, Assert.Single(successor.Read(EvaluatedAt)));
         Assert.Equal(1, successor.GateFileReads);
+        Assert.Equal("""{"kind":"backfill-complete"}""", File.ReadLines(LedgerPath).Last());
         WithLockedGateFiles([prefix], () =>
         {
             Assert.Equal(expected, Assert.Single(first.Read(EvaluatedAt)));
             Assert.Equal(0, first.GateFileReads);
         });
-        Assert.Equal(3, File.ReadAllLines(LedgerPath).Length);
+        Assert.Equal(2, File.ReadAllLines(LedgerPath).Length);
+    }
+
+    [Fact]
+    public void Read_BackfillWaitsForDetachedTrainBeforeItsInnerFilesExist()
+    {
+        var grouped = new ConductorGroupedGateAttemptCoordinator(Path.Combine(root, "grouped-gate-attempts"),
+            utcNow: () => AdoptedAt);
+        var predecessor = grouped.Create("train", [], Main, "tree", "manifest", "train-identity", root,
+            ConductorAutonomyPolicy.Permissive);
+        ConductorGroupedGateAttemptCoordinator.Save(predecessor);
+        var first = new CostGoalOutcomeGateLedgerReader(root);
+
+        Assert.Empty(first.Read(EvaluatedAt));
+        Assert.False(File.Exists(LedgerPath));
+        Assert.Equal(0, first.GateFileReads);
+
+        var prefix = WriteGate(1, Main);
+        var expected = Project(Assert.Single(Scan()));
+        Assert.Equal(expected, Assert.Single(first.Read(EvaluatedAt)));
+        Assert.Single(File.ReadAllLines(LedgerPath));
+        Assert.Equal(1, first.GateFileReads);
+
+        File.WriteAllText(predecessor.ExitCodePath, "0");
+        var successor = new CostGoalOutcomeGateLedgerReader(root);
+        WithLockedGateFiles([prefix], () =>
+        {
+            Assert.Equal(expected, Assert.Single(successor.Read(EvaluatedAt)));
+            Assert.Equal(0, successor.GateFileReads);
+            Assert.Equal("""{"kind":"backfill-complete"}""", File.ReadLines(LedgerPath).Last());
+            Assert.Equal(expected, Assert.Single(first.Read(EvaluatedAt)));
+            Assert.Equal(1, first.GateFileReads);
+        });
+        Assert.Equal(2, File.ReadAllLines(LedgerPath).Length);
     }
 
     [Fact]

@@ -426,8 +426,9 @@ internal static class CostGoalOutcomeMetric
         if (solo is null && (metadata is not null || AcceptanceGateOutcomeLedger.EvidenceExists(path.MetadataPath)))
             return (false, null);
         if (!AcceptanceGateOutcomeLedger.EvidenceExists(path.LanePlanPath)) return (false, null);
-        // For an owner-written gate, the lane plan can precede the result without any solo metadata.
-        if (!AcceptanceGateOutcomeLedger.EvidenceExists(path.ResultPath)) return (solo is null, null);
+        // The outer train record fences still-running train owners. A plan alone can be
+        // left behind by a completed or cancelled owner and does not hold backfill open.
+        if (!AcceptanceGateOutcomeLedger.EvidenceExists(path.ResultPath)) return (false, null);
 
         readingGate();
         var result = ReadEvidence<ConductorParallelAcceptanceRunArtifact>(path.ResultPath, requireReadable: true);

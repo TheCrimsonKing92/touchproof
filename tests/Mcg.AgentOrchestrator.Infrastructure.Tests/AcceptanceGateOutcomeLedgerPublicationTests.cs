@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -105,19 +107,24 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Publication_PreservesTerminalResultWhenRecoveryDirectoryIsBlocked(bool solo)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Publication_PreservesTerminalResultWhenRecoveryDirectoryIsBlocked(bool solo, bool lockSharedFallback)
     {
         var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
         var pendingDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName);
         var fallback = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
+        var fallbackDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.FallbackDirectoryName);
         const string marker = """{"kind":"backfill-complete"}""";
         SharedJsonlFile.AppendLine(ledger, marker);
         File.WriteAllText(pendingDirectory, "Blocks recovery directory creation.");
+        if (lockSharedFallback) File.WriteAllText(fallback, "");
 
         string prefix;
         using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (lockSharedFallback ? File.Open(fallback, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
         {
             if (solo)
             {
@@ -133,7 +140,12 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
 
             Assert.True(File.Exists(prefix + ".result.json"));
             Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
-            Assert.Single(File.ReadAllLines(fallback));
+            if (lockSharedFallback)
+            {
+                Assert.Empty(File.ReadAllLines(fallback));
+                Assert.Single(Directory.GetFiles(fallbackDirectory, "*.jsonl"));
+            }
+            else Assert.Single(File.ReadAllLines(fallback));
         }
 
         var evaluatedAt = StartedAt.AddMinutes(1);
@@ -143,9 +155,61 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         Assert.Equal(prefix, Assert.Single(reader.Read(evaluatedAt)).Id);
         Assert.Equal(0, reader.GateFileReads);
         Assert.False(File.Exists(fallback));
+        if (lockSharedFallback) Assert.Empty(Directory.GetFiles(fallbackDirectory, "*.jsonl"));
         var lines = File.ReadAllLines(ledger);
         Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(Assert.Single(lines.Skip(1)),
             AcceptanceGateOutcomeLedger.Json));
+    }
+
+    [Fact]
+    public async Task Publication_ReplaysFallbackAndReportsUnreadablePrimaryUntilItCanRecoverBoth()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Requires Windows directory ACLs.");
+        if (!OperatingSystem.IsWindows()) return;
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        var pendingDirectory = new DirectoryInfo(Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName));
+        var fallback = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
+        SharedJsonlFile.AppendLine(ledger, """{"kind":"backfill-complete"}""");
+        string primaryPrefix;
+        using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
+            primaryPrefix = await PublishOwnedTrain();
+        var primaryIntent = Assert.Single(pendingDirectory.GetFiles("*.jsonl")).FullName;
+
+        var original = pendingDirectory.GetAccessControl();
+        var denied = pendingDirectory.GetAccessControl();
+        using var identity = WindowsIdentity.GetCurrent();
+        denied.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.ListDirectory | FileSystemRights.CreateFiles,
+            AccessControlType.Deny));
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        var evaluatedAt = StartedAt.AddMinutes(1);
+        string fallbackPrefix;
+        pendingDirectory.SetAccessControl(denied);
+        try
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => pendingDirectory.GetFiles("*.jsonl"));
+            Assert.Throws<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(pendingDirectory.FullName, "probe"), ""));
+            using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
+                fallbackPrefix = await PublishOwnedTrain();
+            Assert.True(File.Exists(fallbackPrefix + ".result.json"));
+            Assert.Single(File.ReadAllLines(fallback));
+
+            Assert.Throws<UnauthorizedAccessException>(() => reader.Read(evaluatedAt));
+            Assert.False(File.Exists(fallback));
+            Assert.Equal(Path.GetFileName(fallbackPrefix), Assert.Single(ReadRows()).AttemptId);
+        }
+        finally { pendingDirectory.SetAccessControl(original); }
+
+        Assert.True(File.Exists(primaryIntent));
+        Assert.Equal(new[] { primaryPrefix, fallbackPrefix }.Order(StringComparer.Ordinal),
+            reader.Read(evaluatedAt).Select(row => row.Id).Order(StringComparer.Ordinal));
+        Assert.False(File.Exists(primaryIntent));
+        Assert.Equal(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt).OrderBy(row => row.AttemptId),
+            ReadRows().OrderBy(row => row.AttemptId));
+        Assert.Equal(0, reader.GateFileReads);
+
+        AcceptanceGateOutcomeObservation[] ReadRows() => File.ReadLines(ledger).Skip(1)
+            .Select(line => JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(line, AcceptanceGateOutcomeLedger.Json)!)
+            .ToArray();
     }
 
     [Theory]
