@@ -96,10 +96,13 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
     public void BoundsEveryFileAndEntireSectionInUtf8AndIdentifiesOmittedPaths()
     {
         using var repo = new InProcessGitFixture();
-        for (var i = 0; i < 6; i++)
-            Write(repo, $"wide-{i}.txt", string.Concat(Enumerable.Repeat("界🙂", 3000)) + "\n");
+        repo.Git("switch", "-c", "candidate");
+        var paths = Enumerable.Range(0, 6).Select(i => $"wide-{i}.txt").ToArray();
+        foreach (var path in paths)
+            Write(repo, path, string.Concat(Enumerable.Repeat("界🙂", 3000)) + "\n");
         Commit(repo, "Large scoped files");
         var scope = Capture(repo);
+        Assert.Equal(paths, scope.ChangedFiles);
         var section = ReviewerCandidateDiffSection.Render(repo.Worktree, scope, scope.TotalChangedFileCount);
         Assert.InRange(Encoding.UTF8.GetByteCount(section), 16000, ReviewerCandidateDiffSection.SectionBytes);
         Assert.DoesNotContain("\ufffd", section);
