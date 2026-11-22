@@ -22,8 +22,8 @@ internal static class CliExecutorScreenCommand
             eventArgs.Cancel = true;
             cancellation.Cancel();
         };
-        var trial = args.Contains("--whole-gate", StringComparer.Ordinal);
-        if (trial) Console.CancelKeyPress += cancel;
+        var cancellable = args.Contains("--whole-gate", StringComparer.Ordinal) || args.Contains("--wait", StringComparer.Ordinal);
+        if (cancellable) Console.CancelKeyPress += cancel;
         try
         {
             return await RunAsync(args, RemoteLaneExecutorConfiguration.ResolveStorePath(root),
@@ -40,7 +40,7 @@ internal static class CliExecutorScreenCommand
                 goalIds: () => ReadTrialGoalIds(workspace, attemptsDirectory),
                 trialCheckout: gate => OpenTrialCheckout(workspace.ExecutionDirectory, gate, Console.Error)).ConfigureAwait(false);
         }
-        finally { if (trial) Console.CancelKeyPress -= cancel; }
+        finally { if (cancellable) Console.CancelKeyPress -= cancel; }
     }
 
     internal static async Task<int> RunAsync(IReadOnlyList<string> args, string configurationPath,
@@ -55,18 +55,20 @@ internal static class CliExecutorScreenCommand
         CancellationToken token = default,
         Func<string?, IReadOnlyList<ExecutorPassedGate>>? passedGateSource = null,
         Func<IEnumerable<string>>? goalIds = null,
-        Func<ExecutorPassedGate, (ExecutorScreeningCandidate Candidate, IDisposable? Checkout)?>? trialCheckout = null)
+        Func<ExecutorPassedGate, (ExecutorScreeningCandidate Candidate, IDisposable? Checkout)?>? trialCheckout = null,
+        IExecutorSlotOccupancy? occupancy = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         var maximum = 1;
         string? executorId = null;
         string? goalPrefix = null;
         int? remainingLanes = null;
+        double? waitMinutes = null;
         var wholeGate = false;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] is "--help" or "-h") { output.WriteLine(CliCommandHelp.ExecutorScreenUsage); return 0; }
             if (args[i] == "--whole-gate") { wholeGate = true; continue; }
-            if (args[i] is not ("--max-candidates" or "--executor" or "--goal" or "--max-lanes") ||
+            if (args[i] is not ("--max-candidates" or "--executor" or "--goal" or "--max-lanes" or "--wait") ||
                 i + 1 == args.Count || args[i + 1].StartsWith("-", StringComparison.Ordinal)) return Usage();
             var flag = args[i++];
             if (flag == "--executor") { executorId = args[i]; continue; }
@@ -74,6 +76,13 @@ internal static class CliExecutorScreenCommand
             {
                 if (string.IsNullOrWhiteSpace(args[i])) return Usage();
                 goalPrefix = args[i];
+                continue;
+            }
+            if (flag == "--wait")
+            {
+                if (!double.TryParse(args[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var minutes) ||
+                    !double.IsFinite(minutes) || minutes < 0) return Usage();
+                waitMinutes = minutes;
                 continue;
             }
             if (!int.TryParse(args[i], NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count < 1)
@@ -90,6 +99,7 @@ internal static class CliExecutorScreenCommand
         if (refusal is not null) { output.WriteLine("SCREEN refused reason=" + refusal); return 2; }
         if (executorId is not null && !configuration.Executors.Any(entry => entry.Id == executorId && entry.Transport == "ssh"))
             return Usage();
+        occupancy ??= ExecutorSlotOccupancy.Instance;
         if (wholeGate)
         {
             try { return await RunWholeGateTrialsAsync().ConfigureAwait(false); }
@@ -112,16 +122,19 @@ internal static class CliExecutorScreenCommand
             var prefix = Path.Combine(occupancyRoot, ".orchestrator", "executor-screening", id, "result");
             try
             {
-                var receipt = await ExecutorScreeningRunner.RunAsync(candidate, entry, selection, configuration,
-                    executorFactory(configuration, candidate.WorktreePath, prefix), occupancyRoot, receiptPath,
-                    id, timeout, clock, pollInterval).ConfigureAwait(false);
-                if (receipt is null) return Idle("no-idle-executor");
+                var transport = executorFactory(configuration, candidate.WorktreePath, prefix);
+                var (outcome, waited) = await AcquireAsync(() => ExecutorScreeningRunner.RunAsync(candidate, entry,
+                    selection, configuration, transport, occupancyRoot, receiptPath, id, timeout, clock, pollInterval,
+                    token, occupancy)).ConfigureAwait(false);
+                if (outcome.Refusal is { } refused) return ReportRefusal(refused, waited);
+                var receipt = outcome.Receipt;
                 output.WriteLine($"SCREEN goal={candidate.GoalId[..Math.Min(8, candidate.GoalId.Length)]} " +
                     $"commit={candidate.Commit[..Math.Min(9, candidate.Commit.Length)]} executor={entry.Id} " +
                     $"verdict={receipt.Verdict.ToString().ToLowerInvariant()} lanes={receipt.LaneOutcomes.Count} " +
                     $"failing={receipt.LaneOutcomes.Count(lane => lane.FailingTests.Count > 0)} " +
                     $"excluded={receipt.ExcludedLanes.Count} receipt={receipt.ReceiptId}");
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return 0; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             { error.WriteLine($"SCREEN error={ex.GetType().Name}: {ex.Message}"); return 1; }
         }
@@ -173,20 +186,18 @@ internal static class CliExecutorScreenCommand
                 error.WriteLine(ex.Message);
                 return 2;
             }
-            if (plan.Lanes.Count == 0)
-            {
-                output.WriteLine("SCREEN refused reason=empty-trial-plan");
-                return 2;
-            }
             var id = Guid.NewGuid().ToString("N");
             var prefix = Path.Combine(occupancyRoot, ".orchestrator", "executor-screening", id, "result");
             try
             {
-                var receipt = await ExecutorScreeningRunner.RunWholeGateAsync(candidate, entry, plan, configuration,
-                    executorFactory(configuration, candidate.WorktreePath, prefix), occupancyRoot, receiptPath, id,
-                    clock, pollInterval, samplerFactory?.Invoke(entry, candidate, id, plan),
-                    at => localAttemptSource?.Invoke(candidate, plan, at), token, maxLanes: remainingLanes).ConfigureAwait(false);
-                if (receipt is null) return Idle("no-idle-executor");
+                var transport = executorFactory(configuration, candidate.WorktreePath, prefix);
+                var sampler = samplerFactory?.Invoke(entry, candidate, id, plan);
+                var (outcome, waited) = await AcquireAsync(() => ExecutorScreeningRunner.RunWholeGateAsync(candidate,
+                    entry, plan, configuration, transport, occupancyRoot, receiptPath, id, clock, pollInterval, sampler,
+                    at => localAttemptSource?.Invoke(candidate, plan, at), token, maxLanes: remainingLanes,
+                    occupancy: occupancy)).ConfigureAwait(false);
+                if (outcome.Refusal is { } refused) return ReportRefusal(refused, waited);
+                var receipt = outcome.Receipt;
                 if (remainingLanes is not null)
                     remainingLanes -= receipt.SubmissionAttempts!.Value;
                 output.WriteLine(FormattableString.Invariant(
@@ -198,11 +209,44 @@ internal static class CliExecutorScreenCommand
             { error.WriteLine($"TRIAL error={ex.GetType().Name}: {ex.Message}"); return 1; }
         }
 
+        async Task<(ExecutorScreeningOutcome<T> Outcome, double? Waited)> AcquireAsync<T>(
+            Func<Task<ExecutorScreeningOutcome<T>>> run) where T : class
+        {
+            var started = clock.GetTimestamp();
+            token.ThrowIfCancellationRequested();
+            var outcome = await run().ConfigureAwait(false);
+            while (waitMinutes is { } budget && outcome.Refusal?.Cause == ExecutorScreeningRefusalCause.SlotBusy)
+            {
+                token.ThrowIfCancellationRequested();
+                var remainingTicks = RemainingTicks(budget);
+                if (remainingTicks <= 0) return (outcome, budget);
+                var interval = remainingTicks >= pollInterval.Ticks
+                    ? pollInterval
+                    : TimeSpan.FromTicks((long)Math.Ceiling(remainingTicks));
+                if (delay is not null) await delay(interval, token).ConfigureAwait(false);
+                else if (interval > TimeSpan.Zero) await Task.Delay(interval, clock, token).ConfigureAwait(false);
+                else await Task.Yield();
+                token.ThrowIfCancellationRequested();
+                if (RemainingTicks(budget) <= 0) return (outcome, budget);
+                outcome = await run().ConfigureAwait(false);
+            }
+            return (outcome, null);
+
+            double RemainingTicks(double budget) => budget * TimeSpan.TicksPerMinute - clock.GetElapsedTime(started).Ticks;
+        }
+
         int Usage() { error.WriteLine(CliCommandHelp.ExecutorScreenUsage); return 2; }
         int Idle(string reason) { output.WriteLine("SCREEN idle reason=" + reason); return 0; }
         int Refuse(string reason) { output.WriteLine("SCREEN refused reason=" + reason); return 2; }
+        int ReportRefusal(ExecutorScreeningRefusal reason, double? waited)
+        {
+            output.WriteLine(reason.FormatIdleLine(waited));
+            return 0;
+        }
+
         RemoteLaneExecutorEntry? PickIdleExecutor() => ExecutorScreeningPlanner.PickIdleExecutor(configuration.Executors,
-            id => RemoteExecutorOccupancy.IsOccupied(occupancyRoot, id), executorId);
+            id => executorId is null && occupancy.IsOccupied(occupancyRoot, id), executorId)
+            ?? (waitMinutes is not null ? ExecutorScreeningPlanner.PickIdleExecutor(configuration.Executors, _ => false, executorId) : null);
         int NoExecutor() => Idle(configuration.Executors.Any(executor => executor.AdmissionEnabled &&
             executor.Transport == "ssh" && (executorId is null || executor.Id == executorId))
                 ? "no-idle-executor" : "no-enabled-executor");

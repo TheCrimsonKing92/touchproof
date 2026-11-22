@@ -134,8 +134,9 @@ public sealed class RemoteExecutorAdmissionConsumersTests : RemoteFirstFocusedEv
         Assert.Equal(peer, ExecutorScreeningPlanner.PickIdleExecutor([disabled, peer], _ => false));
         var candidate = new ExecutorScreeningCandidate("goal", GoalStatus.Active, "commit", "tree", "main", scenario.Clock.GetUtcNow(), true, true, scenario.Root);
         var receiptPath = Path.Combine(scenario.Root, "screening.jsonl");
-        Assert.Null(await ExecutorScreeningRunner.RunAsync(candidate, disabled, new([new("A", "filter", 1)], []),
-            scenario.Configuration(false), scenario.Executor, scenario.Root, receiptPath, "disabled", TimeSpan.FromMinutes(1), scenario.Clock, TimeSpan.Zero));
+        var outcome = await ExecutorScreeningRunner.RunAsync(candidate, disabled, new([new("A", "filter", 1)], []),
+            scenario.Configuration(false), scenario.Executor, scenario.Root, receiptPath, "disabled", TimeSpan.FromMinutes(1), scenario.Clock, TimeSpan.Zero);
+        Assert.Equal(ExecutorScreeningRefusalCause.AdmissionDisabled, outcome.Refusal?.Cause);
         Assert.Empty(scenario.Executor.Requests);
         Assert.False(File.Exists(receiptPath));
         Assert.False(RemoteExecutorOccupancy.IsOccupied(scenario.Root, "one"));
@@ -159,7 +160,7 @@ public sealed class RemoteExecutorAdmissionConsumersTests : RemoteFirstFocusedEv
             Assert.Null(ExecutorScreeningPlanner.PickIdleExecutor(future.Executors, _ => throw new Exception("disabled probe")));
             var handle = scenario.CompletedHandle(request);
             release.SetResult(new(handle));
-            var receipt = Assert.IsType<ExecutorScreeningReceipt>(await RemoteExecutorAdmissionTests.Event(work, "owned job settlement"));
+            var receipt = (await RemoteExecutorAdmissionTests.Event(work, "owned job settlement")).Receipt;
             Assert.Equal(ExecutorScreeningVerdict.Pass, receipt.Verdict);
             Assert.Single(ExecutorScreeningReceiptLedger.ReadAll(receiptPath));
             Assert.Equal(1, handle.Abandons);
