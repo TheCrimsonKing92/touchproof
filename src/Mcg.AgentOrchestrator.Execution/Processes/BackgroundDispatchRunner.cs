@@ -259,7 +259,7 @@ public sealed partial class BackgroundDispatchRunner
         if (DeclaredToolHomeEnvironment.DescribeMissing(toolHomes) is { } missingToolHome)
             throw new InvalidOperationException(missingToolHome);
         Directory.CreateDirectory(logRoot);
-        var prefix = $"{goalId.Value[..8]}-{taskId.Value[..8]}-{_clock.UtcNow:yyyyMMddHHmmss}";
+        var prefix = WorkerToolsArtifactPrefix(task.RequiredRole, $"{goalId.Value[..8]}-{taskId.Value[..8]}-{_clock.UtcNow:yyyyMMddHHmmss}");
         var stdoutPath = Path.Combine(logRoot, $"{prefix}.out.log");
         var stderrPath = Path.Combine(logRoot, $"{prefix}.err.log");
         var exitCodePath = Path.Combine(logRoot, $"{prefix}.exit.txt");
@@ -367,7 +367,7 @@ public sealed partial class BackgroundDispatchRunner
         // and writes logs/heartbeat/exit natively.
         var startInfo = DispatchHostStartInfoFactory.Create(dispatch.WorkingDirectory,
             ResolveDispatchHostAssembly(), parametersPath, startGatePath, ConductorChildEnvironment.Capture());
-        DeclaredToolHomeEnvironment.Apply(startInfo.Environment, toolHomes);
+        ApplyWorkerToolsEnvironment(kernel, goalId, task, dispatch, startInfo, stdoutPath, useSandbox, toolHomes);
 
         WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(kernel, goalId, task, dispatch.WorkingDirectory, spawnReceipt.WorktreeHeadSha);
         if (WorkerBuildInvocations is not null && task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
@@ -406,8 +406,7 @@ public sealed partial class BackgroundDispatchRunner
             process, runParameters.WorkerBuildHost is not null, _tryKillOwnedProcess);
 
         var sampleArtifacts = task.RequiredRole == AgentRole.Planner
-            ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount)
-            : [];
+            ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount) : [];
         IReadOnlyList<PlannerSampleLaunch> sampleLaunches;
         try
         {
@@ -416,7 +415,8 @@ public sealed partial class BackgroundDispatchRunner
                 runParameters,
                 ResolveDispatchHostAssembly(),
                 $"{goalId.Value}:{taskId.Value}",
-                _startProcess);
+                _startProcess, configureEnvironment: (info, sampleStdout) =>
+                    ConfigureWorkerToolsEnvironment(kernel, goalId, task, dispatch, info, sampleStdout, useSandbox));
         }
         catch
         {
@@ -884,7 +884,7 @@ public sealed partial class BackgroundDispatchRunner
             // Missing telemetry targets must not fail process verification or reconciliation.
             if (matches.Length == 1 && matches[0].ContextPackageReceipt is { } receipt)
             {
-                var measuredReceipt = receipt
+                var measuredReceipt = (receipt with { WtCalls = outcome.WtCalls ?? receipt.WtCalls })
                     .WithProviderUsage(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason)
                     .WithToolTranscriptCharacters(
                         outcome.Verification.AuthoritativeStandardOutput?.Length ??

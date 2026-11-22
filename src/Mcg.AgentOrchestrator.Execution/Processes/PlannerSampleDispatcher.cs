@@ -48,7 +48,8 @@ internal static class PlannerSampleDispatcher
         string dispatchHostAssembly,
         string jobPrefix,
         Func<ProcessStartInfo, Process?> startProcess,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        Action<ProcessStartInfo, string>? configureEnvironment = null)
     {
         var launches = new List<PlannerSampleLaunch>();
         foreach (var sample in artifacts)
@@ -76,6 +77,7 @@ internal static class PlannerSampleDispatcher
                 };
                 DispatchProcessHost.WriteParameters(sample.ParametersPath, parameters);
                 var startInfo = CreateStartInfo(parameters.WorkingDirectory, dispatchHostAssembly, sample.ParametersPath, sample.StartGatePath);
+                configureEnvironment?.Invoke(startInfo, sample.StandardOutputPath);
                 ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
                 var process = startProcess(startInfo);
                 if (process is null)

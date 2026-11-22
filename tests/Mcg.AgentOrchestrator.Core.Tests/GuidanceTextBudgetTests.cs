@@ -28,12 +28,12 @@ public sealed class GuidanceTextBudgetTests
         new("requirements/Researcher/Simple", 1370, () => Requirements(AgentRole.Researcher, TaskComplexity.Simple)),
         // Researcher Complex requirements are loaded in every complex Researcher brief.
         new("requirements/Researcher/Complex", 1949, () => Requirements(AgentRole.Researcher, TaskComplexity.Complex)),
-        // Developer Auto requirements add the evidence-bound premise-invalid stop instruction (120 chars).
-        new("requirements/Developer/Auto", 1083, () => Requirements(AgentRole.Developer, TaskComplexity.Auto)),
-        // Developer Simple requirements add the evidence-bound premise-invalid stop instruction (120 chars).
-        new("requirements/Developer/Simple", 1083, () => Requirements(AgentRole.Developer, TaskComplexity.Simple)),
-        // Developer Complex requirements add the evidence-bound premise-invalid stop instruction (120 chars).
-        new("requirements/Developer/Complex", 1136, () => Requirements(AgentRole.Developer, TaskComplexity.Complex)),
+        // Reference discovery, criterion checks, and overflow instructions add 838 normalized chars.
+        new("requirements/Developer/Auto", 1921, () => Requirements(AgentRole.Developer, TaskComplexity.Auto)),
+        // Reference discovery, criterion checks, and overflow instructions add 838 normalized chars.
+        new("requirements/Developer/Simple", 1921, () => Requirements(AgentRole.Developer, TaskComplexity.Simple)),
+        // Reference discovery, criterion checks, and overflow instructions add 838 normalized chars.
+        new("requirements/Developer/Complex", 1974, () => Requirements(AgentRole.Developer, TaskComplexity.Complex)),
         // Tester Auto requirements add the evidence-bound premise-invalid stop instruction (120 chars).
         new("requirements/Tester/Auto", 3521, () => Requirements(AgentRole.Tester, TaskComplexity.Auto)),
         // Tester Simple requirements add the evidence-bound premise-invalid stop instruction (120 chars).

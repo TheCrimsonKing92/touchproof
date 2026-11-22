@@ -14,6 +14,10 @@ internal static class ConductorSupervisorStopDecision
                 {
                     return "stop-file-present";
                 }
+                if (File.Exists(ConductorDrainSignal.PathFor(stopFilePath)))
+                {
+                    return "drain-file-present";
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                 ArgumentException or NotSupportedException or SecurityException)
@@ -23,6 +27,7 @@ internal static class ConductorSupervisorStopDecision
         }
 
         return artifact?.StopReason is "stop-file" or "stop-file-during-sleep"
+            or ConductorDrainSignal.DrainedReason or ConductorDrainSignal.TimeoutReason
             ? $"exit-reason={artifact.StopReason}"
             : null;
     }

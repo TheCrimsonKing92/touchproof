@@ -75,60 +75,29 @@ internal sealed partial class ConductorBatchLoop
         ConductorAutonomyPolicy policy,
         int tick,
         List<string> changedGoalLines,
-        HashSet<GoalId> changedGoalIds)
+        HashSet<GoalId> changedGoalIds,
+        bool reconcileOnly = false)
     {
         // Admission candidates exclude parks; already-owned attempts still need their terminal
         // evidence consumed. Do not put these goals into OrderedEligible or start new work.
-        foreach (var goal in state.OrderedEligible.Concat(scopedGoals.Where(goal =>
+        var goalsToReconcile = reconcileOnly ? scopedGoals : state.OrderedEligible.Concat(scopedGoals.Where(goal =>
                      goal.IsExplicitlyParked &&
                      driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count > 0))
-                     .DistinctBy(goal => goal.Id))
+                     .DistinctBy(goal => goal.Id);
+        foreach (var goal in goalsToReconcile)
         {
             try
             {
             var sameGoalAttempts = driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]);
+            if (reconcileOnly && sameGoalAttempts.Count == 0)
+                continue;
             if (PassedAcceptanceReceiptReplay.TryBeforeAdmission(sameGoalAttempts.Count, goal, driver, policy,
                     () => _acceptanceEngineCircuit?.Read(), state.Results, changedGoalIds, tick, changedGoalLines,
                     RecordParallelAcceptanceProgress))
                 continue;
 
-            var observed = sameGoalAttempts
-                .Select(attempt =>
-                {
-                    var persistedCandidate = ConductorParallelAcceptanceCandidate.Create(
-                        goal,
-                        attempt.SlotIndex,
-                        attempt.ScopePaths ?? [],
-                        attempt.BranchHeadSha,
-                        attempt.MainHeadSha);
-                    return driver.ParallelAcceptanceAttemptCoordinator.ObserveExistingAttempt(
-                        attempt,
-                        persistedCandidate);
-                })
-                .OrderByDescending(decision => decision.Attempt.StartedAt)
-                .ThenByDescending(decision => decision.Attempt.AttemptId, StringComparer.Ordinal)
-                .ToArray();
-            var running = observed
-                .Where(decision => decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Running)
-                .ToArray();
-            var terminal = observed
-                .Where(decision => decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Completed or
-                    ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun)
-                .ToArray();
-
-            // Terminal siblings release only their own durable claims. A single newest terminal
-            // owns the goal-level transition when every same-goal producer is terminal; otherwise
-            // every terminal drains and the remaining live producer keeps the goal held.
-            var retainedTerminal = running.Length == 0 ? terminal.FirstOrDefault() : null;
-            foreach (var terminalSibling in terminal.Where(decision =>
-                         retainedTerminal is null ||
-                         !string.Equals(
-                             decision.Attempt.AttemptId,
-                             retainedTerminal.Attempt.AttemptId,
-                             StringComparison.Ordinal)))
-            {
-                driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalSibling.Attempt);
-            }
+            var (running, retainedTerminal) = ParallelAcceptanceAttemptReconciliation.ObserveAndReconcileSiblings(
+                driver.ParallelAcceptanceAttemptCoordinator, goal, sameGoalAttempts);
 
             if (running.Length > 0)
             {
@@ -196,19 +165,28 @@ internal sealed partial class ConductorBatchLoop
                         retainedTerminal.Attempt.MainHeadSha),
                     new InvalidOperationException("Completed acceptance attempt had no run result."));
                 ReconcileParallelAcceptanceTerminalState(kernel, goal, run, retainedTerminal.Attempt);
-                var result = CompleteParallelAcceptanceRun(
-                    driver,
-                    policy,
-                    run,
-                    retainedTerminal.Attempt,
-                    out var evidenceMutationLeaseHeld);
-                MarkParallelAcceptanceReconciledUnlessLeaseHeld(
-                    driver,
-                    run,
-                    evidenceMutationLeaseHeld,
-                    retainedTerminal.Attempt);
+                if (reconcileOnly)
+                {
+                    // The finished gate owns its result. Landing or re-gating would require
+                    // a new acceptance lease, so retain the settled receipt for normal replay.
+                    driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(retainedTerminal.Attempt);
+                }
+                else
+                {
+                    var result = CompleteParallelAcceptanceRun(
+                        driver,
+                        policy,
+                        run,
+                        retainedTerminal.Attempt,
+                        out var evidenceMutationLeaseHeld);
+                    MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+                        driver,
+                        run,
+                        evidenceMutationLeaseHeld,
+                        retainedTerminal.Attempt);
+                    state.Results[goal.Id.Value] = new ParallelLandingOutcome(result, retainedTerminal.Attempt.SlotIndex);
+                }
                 changedGoalIds.Add(goal.Id);
-                state.Results[goal.Id.Value] = new ParallelLandingOutcome(result, retainedTerminal.Attempt.SlotIndex);
                 RecordParallelAcceptanceProgress(
                     AcceptanceLifecycleEventFormatter.Format(goal.Id.Value[..8], retainedTerminal.Attempt.SlotIndex, AcceptanceRunDisposition(run), retainedTerminal.Attempt.AttemptId, tick),
                     changedGoalLines);
@@ -284,7 +262,7 @@ internal sealed partial class ConductorBatchLoop
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = ConductorTickStepLedger.Measure("prep-census", () => CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,
-            changedGoalLines, blockAdmissionOnFailure: true));
+            changedGoalLines, blockAdmissionOnFailure: true, _mainFullVerification?.ActiveRunId));
         ConductorTickStepLedger.Measure("prep-plan-receipt", () => EmitSpeculativeCohortPlanReceipt(scopedGoals, verifiedGoalIdsAtTickStart,
             preWalkIntentChangedGoalIds, eligible, state.OrderedEligible, speculativeCandidates,
             state.LiveAttempts, state.ActiveCohortCapacity, state.AcceptanceCensus, driver, policy,
@@ -397,7 +375,7 @@ internal sealed partial class ConductorBatchLoop
             state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
             state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
                 state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick, changedGoalLines,
-                blockAdmissionOnFailure: true);
+                blockAdmissionOnFailure: true, _mainFullVerification?.ActiveRunId);
             state.CohortEligible = state.CohortEligible
                 .Where(goal => !state.Results.ContainsKey(goal.Id.Value))
                 .ToArray();
@@ -668,7 +646,7 @@ internal sealed partial class ConductorBatchLoop
                 state.ActiveCohortCapacity,
                 tick,
                 changedGoalLines,
-                blockAdmissionOnFailure: true);
+                blockAdmissionOnFailure: true, _mainFullVerification?.ActiveRunId);
             }
             catch (AcceptanceArtifactWriterLeaseBusyException ex)
             {

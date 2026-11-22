@@ -95,7 +95,8 @@ internal static class ConductorStatusSnapshotReader
         return new(owner, since, buildCommit, generation, tick, goalSnapshot,
             landing,
             ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace), providerHolds,
-            ReadSupervisorJob(build?.Detail), loopBuild, lateFleetAdoption);
+            ReadSupervisorJob(build?.Detail), loopBuild, lateFleetAdoption,
+            ConductorStatusMainFullVerificationReader.Read(workspace.RunEventStorePath));
     }
 
     private static ConductorStatusSnapshot.LandingObservation? ReadLatestLanding(string path,

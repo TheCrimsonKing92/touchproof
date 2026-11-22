@@ -25,6 +25,8 @@ internal static class ConductEventOperatorClassifier
             "rebase-automerge" when StartsWithToken("REBASE_CONFLICT_AUTOMERGE") && HasToken("result=refused") && !HasToken("result=merged") => Decision,
             "cohort-attribution-retracted" when StartsWithToken("COHORT_ATTRIBUTION_RETRACTED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_DEGRADED") => Decision,
+            "main-full-verification" when StartsWithToken(MainFullVerificationCoordinator.HoldEvent) => Decision,
+            "main-full-verification" when StartsWithToken(MainFullVerificationCoordinator.Event) && HasToken("result=passed") => Outcome,
             "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
             "program-health" when StartsWithToken("PROGRAM_HEALTH_ALERT") => Decision,
             "program-health" when StartsWithToken("PROGRAM_HEALTH_CLEARED") => Outcome,

@@ -9,38 +9,50 @@ internal static class DeveloperWorkerResultContextSection
     private const int HardCap = 12_000;
     private const int ProseBudget = 2_000;
 
-    internal static IReadOnlyList<string> Build(Goal goal, TaskSpec task, string? candidateCommit)
+    internal sealed record CandidateReport(TaskSpec Task, int TaskNumber, TaskVerificationRecord Verification, string? Commit);
+
+    internal sealed record CandidateReportSelection(string? Candidate, CandidateReport? Selected, CandidateReport? NewestWithCommit, bool HasReports);
+
+    internal static CandidateReportSelection SelectCandidateReport(Goal goal, string? candidateCommit)
+    {
+        var candidate = string.IsNullOrWhiteSpace(candidateCommit) ? null : candidateCommit.Trim();
+        var reports = goal.Tasks
+            .Where(source => source.RequiredRole == AgentRole.Developer &&
+                source.Status is WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled)
+            .SelectMany(source => source.VerificationHistory.Select(verification => new CandidateReport(
+                source, TaskDisplayNumber.Resolve(goal, source.Id), verification,
+                ReviewerEvidenceBriefSection.ResolveVerifiedCommit(source, verification))))
+            .OrderByDescending(report => report.Verification.CompletedAt)
+            .ThenByDescending(report => report.TaskNumber)
+            .ToArray();
+
+        var selected = candidate is null ? null : reports.FirstOrDefault(report =>
+            string.Equals(report.Commit?.Trim(), candidate, StringComparison.OrdinalIgnoreCase));
+        return new CandidateReportSelection(candidate, selected,
+            selected is null ? reports.FirstOrDefault(report => !string.IsNullOrWhiteSpace(report.Commit)) : null,
+            reports.Length > 0);
+    }
+
+    internal static IReadOnlyList<string> Build(Goal goal, TaskSpec task, string? candidateCommit,
+        CandidateReportSelection? selection = null)
     {
         if (task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
         {
             return [];
         }
 
-        var candidate = string.IsNullOrWhiteSpace(candidateCommit) ? null : candidateCommit.Trim();
-        var reports = goal.Tasks
-            .Where(source => source.RequiredRole == AgentRole.Developer &&
-                source.Status is WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled)
-            .SelectMany(source => source.VerificationHistory.Select(verification => new
-            {
-                TaskNumber = TaskDisplayNumber.Resolve(goal, source.Id),
-                Verification = verification,
-                Commit = ReviewerEvidenceBriefSection.ResolveVerifiedCommit(source, verification)
-            }))
-            .OrderByDescending(report => report.Verification.CompletedAt)
-            .ThenByDescending(report => report.TaskNumber)
-            .ToArray();
-
+        selection ??= SelectCandidateReport(goal, candidateCommit);
+        var candidate = selection.Candidate;
         // Undispatched briefs without a candidate or Developer history retain their existing shape.
-        if (string.IsNullOrEmpty(candidate) && reports.Length == 0)
+        if (candidate is null && !selection.HasReports)
         {
             return [];
         }
 
-        var selected = string.IsNullOrEmpty(candidate) ? null : reports.FirstOrDefault(report =>
-            string.Equals(report.Commit?.Trim(), candidate, StringComparison.OrdinalIgnoreCase));
+        var selected = selection.Selected;
         if (selected is null)
         {
-            var newest = reports.FirstOrDefault(report => !string.IsNullOrWhiteSpace(report.Commit));
+            var newest = selection.NewestWithCommit;
             var newestCommit = newest is null
                 ? "no completed Developer commit was found"
                 : $"newest Developer commit found: {newest.Commit} (Task {newest.TaskNumber})";
@@ -52,7 +64,7 @@ internal static class DeveloperWorkerResultContextSection
             $"Source: Task {selected.TaskNumber} Developer verification completed {selected.Verification.CompletedAt:O}; verified commit {selected.Commit}; candidate {candidate}.",
             Authority);
         var output = selected.Verification.AuthoritativeStandardOutput ?? selected.Verification.StandardOutput;
-        if (!TryLocateBlock(output, out var start, out var endMarkerStart, out var end))
+        if (!WorkerResultMarkers.TryLocateBlock(output, out var start, out var endMarkerStart, out var end))
         {
             return [$"{framing}{Environment.NewLine}Complete WORKER_RESULT unavailable for this verification.", string.Empty];
         }
@@ -117,44 +129,5 @@ internal static class DeveloperWorkerResultContextSection
 
             return text;
         }
-    }
-
-    private static bool TryLocateBlock(string output, out int start, out int endMarkerStart, out int end)
-    {
-        start = endMarkerStart = end = -1;
-        for (var offset = 0; offset < output.Length;)
-        {
-            var lineEnd = output.IndexOfAny(['\r', '\n'], offset);
-            if (lineEnd < 0)
-            {
-                lineEnd = output.Length;
-            }
-
-            var line = output[offset..lineEnd];
-            // Match the existing terminal-result convention: last opener, first following end.
-            if (WorkerResultMarkers.IsWorkerResultOpener(line))
-            {
-                start = offset;
-                endMarkerStart = end = -1;
-            }
-            else if (start >= 0 && end < 0 && WorkerResultMarkers.IsWorkerResultEndMarker(line))
-            {
-                endMarkerStart = offset;
-                end = lineEnd;
-            }
-
-            offset = lineEnd;
-            if (offset < output.Length && output[offset] == '\r')
-            {
-                offset++;
-            }
-
-            if (offset < output.Length && output[offset] == '\n')
-            {
-                offset++;
-            }
-        }
-
-        return start >= 0 && end >= 0;
     }
 }

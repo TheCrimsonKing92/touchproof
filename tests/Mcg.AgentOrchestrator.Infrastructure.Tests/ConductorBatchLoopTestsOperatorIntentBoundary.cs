@@ -280,7 +280,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             var completedTicks = 0;
             new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
                 prepareOperatorIntentTarget: (_, _) => { preparations++; return true; },
-                measuredSweepWithCheckpointHolds: (_, held) =>
+                measuredSweepWithCheckpointHolds: (_, held, _) =>
                 {
                     var row = store.GetAsync(intent.Id).GetAwaiter().GetResult()!;
                     Assert.Equal(sweeps == 0 ? OperatorIntentStatus.Claimed : OperatorIntentStatus.Applied, row.Status);
