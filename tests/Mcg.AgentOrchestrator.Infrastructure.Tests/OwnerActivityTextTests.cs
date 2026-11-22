@@ -50,6 +50,7 @@ public sealed class OwnerActivityTextTests
     [InlineData("nonetheless")]
     [InlineData("ReceiptReader.Read")]
     [InlineData("a `tick` value")]
+    [InlineData("`before tick after`")]
     [InlineData("tick. .tick _tick tick_ 2tick tick2")]
     [InlineData("\U00010400tick tick\U00010400 \U0001D7CEtick tick\U0001D7CE")]
     public void Words_TermInsideLargerWordOrIdentifier_IsUnchanged(string value)
@@ -66,6 +67,9 @@ public sealed class OwnerActivityTextTests
     [InlineData("none", "no issue")]
     [InlineData("handoffs", "switches")]
     [InlineData("[tickets], sticky!", "[issues], persistent!")]
+    [InlineData("tick `before tick after` receipt `before cohort after` tick",
+        "step `before tick after` proof `before cohort after` step")]
+    [InlineData("tick` receipt", "tick` proof")]
     public void Words_StandaloneTermOrPlural_IsTranslated(string value, string expected)
     {
         Assert.Equal(expected, OwnerActivityText.Words(value, ""));

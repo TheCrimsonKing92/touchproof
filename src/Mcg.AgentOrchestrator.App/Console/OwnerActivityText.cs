@@ -12,7 +12,8 @@ internal static class OwnerActivityText
         ("handoff", "switch"), ("cohort", "joint run"), ("receipt", "proof"), ("canary", "main check"),
         ("tick", "step"), ("eventKind", "event type")
     }.Select(entry => (
-        new Regex(Regex.Escape(entry.Term) + "(?<plural>s)?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+        new Regex("`[^`]*`|" + Regex.Escape(entry.Term) + "(?<plural>s)?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
         entry.Phrase)).ToArray();
 
     internal static string WaitingOn(string? value)
@@ -57,6 +58,8 @@ internal static class OwnerActivityText
         {
             text = pattern.Replace(text, match =>
             {
+                // Preserve spans consumed by the backtick alternative.
+                if (text[match.Index] == '`') return match.Value;
                 Rune.DecodeLastFromUtf16(text.AsSpan(0, match.Index), out var before, out _);
                 Rune.DecodeFromUtf16(text.AsSpan(match.Index + match.Length), out var after, out _);
                 if (IsWordNeighbor(before) || IsWordNeighbor(after)) return match.Value;
