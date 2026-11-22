@@ -94,6 +94,47 @@ public sealed class CriterionEvidenceSupersedeIntentTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MalformedCleanupJournal_KeepsIntentRetryableUntilRepaired(bool archived)
+    {
+        using var scenario = new Scenario(GoalStatus.Verified);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
+        var directory = scenario.Workspace.ExecutionDirectory;
+        var goalId = scenario.Goal.Id;
+        var journalPath = GoalOperationJournal.PathFor(directory, goalId);
+        GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:land", "Landed.");
+        GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:record", "Recorded.");
+        var beforeCleanup = File.ReadAllText(journalPath);
+        GoalOperationJournal.RecordCleanupCompleted(directory, scenario.Goal, "Cleaned up.");
+        var completeJournal = File.ReadAllText(journalPath);
+        if (archived)
+        {
+            var archivePath = GoalOperationJournal.ArchivePathFor(directory, goalId);
+            Directory.CreateDirectory(Path.GetDirectoryName(archivePath)!);
+            File.Move(journalPath, archivePath);
+            journalPath = archivePath;
+        }
+
+        File.WriteAllText(journalPath, beforeCleanup + "{\"operation\":\"conductor:cleanup\"");
+        var intent = await scenario.Enqueue(Reason);
+        var before = JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(goalId));
+        var coordinator = OperatorIntentCoordinator.CreateDefault(scenario.Workspace);
+
+        Assert.Empty(scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
+        Assert.Equal(OperatorIntentStatus.Claimed, (await scenario.Store.GetAsync(intent.Id))!.Status);
+        Assert.Equal(before, JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(goalId)));
+
+        File.WriteAllText(journalPath, completeJournal);
+        Assert.Contains(goalId, scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
+        coordinator.CompletePersisted([goalId]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await scenario.Store.GetAsync(intent.Id))!.Status);
+        Assert.Equal(CriterionEvidenceState.Superseded,
+            Assert.Single(scenario.Kernel.GetGoal(goalId).CriterionEvidenceObligations).State);
+    }
+
+    [Theory]
     [InlineData(GoalLifecycleState.CleanedUp)]
     [InlineData(GoalLifecycleState.Verified)]
     public async Task UnreadableLifecycle_KeepsClaimUntilAuthoritativeRetry(GoalLifecycleState recoveredState)

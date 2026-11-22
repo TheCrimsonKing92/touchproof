@@ -719,8 +719,8 @@ internal static partial class GoalOperationJournal
     public static GoalOperationJournalSummary Read(string executionDirectory, GoalId goalId)
         => Read(executionDirectory, goalId, includeArchive: true, rejectMalformedEntries: false);
 
-    internal static GoalOperationJournalSummary ReadStrict(string executionDirectory, GoalId goalId)
-        => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: true);
+    internal static GoalOperationJournalSummary ReadStrict(string executionDirectory, GoalId goalId, bool includeArchive = false)
+        => Read(executionDirectory, goalId, includeArchive, rejectMalformedEntries: true);
 
     public static GoalOperationJournalSummary ReadActive(string executionDirectory, GoalId goalId)
         => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: false);

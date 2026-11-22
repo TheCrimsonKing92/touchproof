@@ -143,7 +143,8 @@ internal sealed partial class OperatorIntentCoordinator
             GateCancellation = new(solo, grouped, events),
             LandingRepair = new(workspace, OrchestratorProjectRegistry.CreateDefault()),
             ReopenedMemberGateAbandonment = new(grouped, events),
-            ResolveLifecycleState = goal => GoalLifecycle.ResolveState(goal, GoalLifecycleFactsReader.Read(workspace, goal)),
+            ResolveLifecycleState = goal => GoalLifecycle.ResolveState(goal,
+                GoalLifecycleFactsReader.Read(workspace, goal, rejectMalformedJournalEntries: true)),
             CancelLatestProcess = (kernel, goalId, taskId) =>
                 OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goalId, taskId),
             CancelCompletionBuild = (kernel, goalId, taskId, target) =>
