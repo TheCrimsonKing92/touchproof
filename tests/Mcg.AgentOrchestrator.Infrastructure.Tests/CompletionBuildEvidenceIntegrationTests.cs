@@ -183,6 +183,7 @@ public sealed class CompletionBuildEvidenceIntegrationTests(ITestOutputHelper ou
             info.Environment["NUGET_PACKAGES"] = Path.Combine(profile, "packages");
             info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
             info.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+            info.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
             info.Environment["MSBUILDDISABLENODEREUSE"] = "1";
             info.Environment["MCG_ORCHESTRATOR_HOME"] = repository;
             info.Environment[DotnetBuildStorageLayout.IsolatedRootOverrideVariable] = storage.RootPath;
