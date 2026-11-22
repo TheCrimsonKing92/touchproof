@@ -25,7 +25,10 @@ public sealed record DispatchRefreshOutcome(
     FailedRoundCheckpointReceipt? FailedRoundReceipt = null,
     string? SkillsReceipt = null,
     CompletionBuildEvidenceOperation? PendingBuildEvidence = null,
-    TaskIntentSuppressionReceipt? IntentSuppression = null);
+    TaskIntentSuppressionReceipt? IntentSuppression = null)
+{
+    public IReadOnlyDictionary<string, long>? WtCalls { get; init; }
+}
 
 public sealed record DispatchDiagnosticPayload(int ExitCode, string StandardOutput, string StandardError);
 

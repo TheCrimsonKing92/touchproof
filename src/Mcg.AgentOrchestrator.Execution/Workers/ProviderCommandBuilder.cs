@@ -21,7 +21,8 @@ public static class ProviderCommandBuilder
         string? openaiApiKey = null,
         string? approvalMode = null,
         int repositoryPolicyMaxBytes = 0,
-        ClaudeBashAvailability claudeBashAvailability = ClaudeBashAvailability.Available)
+        ClaudeBashAvailability claudeBashAvailability = ClaudeBashAvailability.Available,
+        bool allowClaudePlannerWorkerTools = false)
     {
         return providerKind switch
         {
@@ -46,7 +47,8 @@ public static class ProviderCommandBuilder
                 reasoningEffort,
                 resolvedPermissionMode,
                 sessionId,
-                claudeBashAvailability),
+                claudeBashAvailability,
+                allowClaudePlannerWorkerTools),
             ProviderKind.OllamaQwenCodeCli => BuildQwen(modelAlias, workingDirectory, openaiBaseUrl, openaiApiKey, approvalMode),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(providerKind),
@@ -118,7 +120,8 @@ public static class ProviderCommandBuilder
         string? reasoningEffort,
         string resolvedPermissionMode,
         string? sessionId,
-        ClaudeBashAvailability claudeBashAvailability = ClaudeBashAvailability.Available)
+        ClaudeBashAvailability claudeBashAvailability,
+        bool allowPlannerWorkerTools)
     {
         var isReadOnly = string.Equals(resolvedPermissionMode, "plan", StringComparison.Ordinal);
         var command = new List<string>
@@ -138,10 +141,13 @@ public static class ProviderCommandBuilder
             command.Add(Expand(reasoningEffort));
         }
 
+        var readOnlyAllowedTools = allowPlannerWorkerTools
+            ? ClaudeReadOnlyAllowedTools + ",Bash(wt read *),Bash(wt find *),Bash(wt --help*)"
+            : ClaudeReadOnlyAllowedTools;
         var toolLists = ClaudeBashToolLists.Apply(
             claudeBashAvailability,
             isReadOnly ? ClaudeReadOnlyTools : string.Empty,
-            isReadOnly ? ClaudeReadOnlyAllowedTools : string.Empty,
+            isReadOnly ? readOnlyAllowedTools : string.Empty,
             isReadOnly ? ClaudeReadOnlyDisallowedTools : string.Empty);
         if (isReadOnly)
         {

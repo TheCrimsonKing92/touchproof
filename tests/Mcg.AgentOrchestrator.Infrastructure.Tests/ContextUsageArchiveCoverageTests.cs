@@ -19,7 +19,10 @@ public sealed class ContextUsageArchiveCoverageTests
     public async Task TotalsAreIdenticalBeforeAndAfterArchival(bool compress)
     {
         using var fixture = new Fixture();
-        var earlier = NewDispatch(Start, 25) with { ContextPackageReceipt = Receipt(20) };
+        var earlier = NewDispatch(Start, 25) with
+        {
+            ContextPackageReceipt = Receipt(20) with { WtCalls = new Dictionary<string, long> { ["read"] = 2, ["find"] = 1 } }
+        };
         var latest = NewDispatch(Start.AddHours(1), 40);
         var goal = NewGoal(GoalStatus.Completed, latest, [NewDispatch(Start.AddMinutes(-1), 800), earlier, latest]);
         await fixture.Repository.SaveGoalSnapshotsAsync([goal]);
@@ -31,6 +34,11 @@ public sealed class ContextUsageArchiveCoverageTests
         Assert.Equal(30, row.GetProperty("input").GetProperty("median").GetDouble());
         Assert.Equal(9, row.GetProperty("turns").GetProperty("p90").GetInt64());
         Assert.Equal(6, row.GetProperty("toolCalls").GetProperty("p90").GetInt64());
+        var wtCalls = row.GetProperty("wtCalls");
+        Assert.Equal(1, wtCalls.GetProperty("reportedDispatchCount").GetInt32());
+        var bySubcommand = wtCalls.GetProperty("bySubcommand");
+        Assert.Equal(2, bySubcommand.GetProperty("read").GetInt64());
+        Assert.Equal(1, bySubcommand.GetProperty("find").GetInt64());
         Assert.Equal(18, row.GetProperty("harnessOverhead").GetProperty("p90").GetInt64());
         AssertCoverage(before.RootElement, live: 2, archived: 0);
 

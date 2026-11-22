@@ -17,17 +17,34 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(null)]
-    [Xunit.InlineData("context")]
-    public void PlannerDirectiveStatesCitationDecisionProcedure(string? contextDirectory)
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PlannerDirectiveStatesCitationDecisionProcedure(bool fileAccess)
     {
-        var directive = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner, contextDirectory)[0];
+        var context = fileAccess ? Directory.CreateTempSubdirectory("planner-rules-") : null;
+        try
+        {
+            var directive = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner, context?.FullName)[0];
+            const string citationRule = "Cited repository paths must exist unless explicitly marked as a new file to create.";
+            if (context is not null)
+            {
+                WorkerStandingRules.WriteContextArtifact(AgentRole.Planner, context.FullName);
+                Xunit.Assert.Contains($"Read {WorkerStandingRules.PlannerContextFileName}", directive, StringComparison.Ordinal);
+                Xunit.Assert.DoesNotContain(citationRule, directive, StringComparison.Ordinal);
+                directive = File.ReadAllText(Path.Combine(context.FullName, WorkerStandingRules.PlannerContextFileName));
+                Xunit.Assert.Contains("Repeat `PLANNER_EVIDENCE_REQUEST:` JSON-object lines", directive, StringComparison.Ordinal);
+            }
 
-        Xunit.Assert.Contains("every backticked target is a full repository-relative path that `git ls-files <path>` lists, or carries a new-file marker.", directive, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Never cite a bare file name or a name with only a line suffix, because it can match several files; write the full path.", directive, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Describe a runtime output, a file name pattern, or a conventional path this repository lacks in prose, not in backticks.", directive, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Cited repository paths must exist unless explicitly marked as a new file to create.", directive, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file.", directive, StringComparison.Ordinal);
+            Xunit.Assert.Contains("every backticked target is a full repository-relative path that `git ls-files <path>` lists, or carries a new-file marker.", directive, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Never cite a bare file name or a name with only a line suffix, because it can match several files; write the full path.", directive, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Describe a runtime output, a file name pattern, or a conventional path this repository lacks in prose, not in backticks.", directive, StringComparison.Ordinal);
+            Xunit.Assert.Contains(citationRule, directive, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file.", directive, StringComparison.Ordinal);
+        }
+        finally
+        {
+            context?.Delete(recursive: true);
+        }
     }
 
     [Xunit.Fact]
