@@ -118,7 +118,7 @@ public sealed partial class AgentOrchestratorKernel
         var refinedCriteriaReDerived = false;
         IReadOnlyList<HumanInputRequestId> closedPlannerEvidenceRequestIds = [];
         var removalSet = DeclaredTestRemovalSet.FromObjective(newBrief);
-        var declaredCriteria = removalSet.Ordinary;
+        var declaredCriteria = CommittedArtifactCriterionOwner.RewriteAll(removalSet.Ordinary);
         if (discardFailedRefinement)
         {
             goal.DiscardRefinedSpecForFailedRefinement();
@@ -1974,7 +1974,7 @@ public sealed partial class AgentOrchestratorKernel
                     else if (ShouldRequeueAnsweredTesterBlocker(goal, task, request, answer))
                         answeredTesterToRequeue = task;
                     else
-                        RestoreTaskAfterHumanInput(goal, task);
+                        RestoreTaskAfterHumanInput(goal, task, request.IsCurrentForBrief(goal.AuthoritativeBrief.Version));
                 }
             }
 
@@ -2190,14 +2190,15 @@ public sealed partial class AgentOrchestratorKernel
             satisfiedAt);
     }
 
-    private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)
+    private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task, bool allowPlannerArtifactPromotion = false)
     {
         if (RouteAnsweredPlannerBriefAmendment(goal, task, out var amendmentPending) || amendmentPending) return;
         if (PlannerRoundRecovery.TryRequeueAfterAnswer(goal, task, _eventWriter, _clock, out var premiseInvalidPlanner))
             return;
 
         if (!premiseInvalidPlanner &&
-            TryCompleteTaskWithPassingVerification(goal, task, "Task completed after required human input was answered."))
+            TryCompleteTaskWithPassingVerification(goal, task, "Task completed after required human input was answered.",
+                allowPlannerArtifactPromotion))
         {
             return;
         }

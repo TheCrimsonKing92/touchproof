@@ -7,6 +7,7 @@ public sealed class SourceConfirmedTheoryRowRemovalsParsedRootRoutingTests : IDi
     private const string Declaration = "Rows.Runs";
     private const string AssemblyName = "Fixture, Version=1.0.0.0";
     private readonly string _root = InfrastructureTestSupport.CreateTempDirectory();
+    private readonly string _marker = "\n// fixture " + Guid.NewGuid().ToString("N");
 
     [Fact]
     public void Resolve_UnchangedThenRewritten_ReusesAndRefreshesRemovalProof()
@@ -76,11 +77,11 @@ public sealed class SourceConfirmedTheoryRowRemovalsParsedRootRoutingTests : IDi
         }
         """;
 
-    private static string Write(string root, string text)
+    private string Write(string root, string text)
     {
         var path = Path.Combine(root, FileName.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, text);
+        File.WriteAllText(path, text + _marker);
         return path;
     }
 

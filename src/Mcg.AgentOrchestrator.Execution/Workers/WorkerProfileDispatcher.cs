@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using SubscriptionModelSelection = Mcg.AgentOrchestrator.Infrastructure.WorkerSubscriptionModelResolver.SubscriptionModelSelection;
@@ -836,7 +835,7 @@ public static partial class WorkerProfileDispatcher
         {
             var plannerTask = goal.Tasks[plannerIndex];
             if (plannerTask.Status != WorkTaskStatus.Completed ||
-                !TryResolveLatestPlannerArtifact(plannerTask, out var plan))
+                !WorkerArtifactWriter.TryResolveLatestDurablePlannerPlan(plannerTask, out var plan, out _))
             {
                 findings.Add(
                     $"blocked: {MissingPlannerArtifactErrorCode}: downstream {task.RequiredRole} task {task.Id.Value} requires complete Planner task {plannerTask.Id.Value} artifact");
@@ -875,25 +874,7 @@ public static partial class WorkerProfileDispatcher
         return false;
     }
 
-    private static bool TryResolveLatestPlannerArtifact(TaskSpec task, out string plan)
-    {
-        foreach (var verification in task.VerificationHistory.Reverse())
-        {
-            if (WorkerArtifactWriter.TryResolveDurablePlannerPlan(
-                    verification,
-                    out plan,
-                    out _))
-            {
-                return true;
-            }
-        }
-
-        plan = string.Empty;
-        return false;
-    }
-
-    private static string Sha256(string text) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    private static string Sha256(string text) => PendingPlannerArtifact.ComputeSha256(text);
 
     private static bool UsesResearchFirstArtifactHandoff(Goal goal, TaskSpec task)
     {

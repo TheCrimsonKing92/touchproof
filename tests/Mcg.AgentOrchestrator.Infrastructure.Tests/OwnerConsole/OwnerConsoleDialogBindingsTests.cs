@@ -10,7 +10,7 @@ public sealed class OwnerConsoleDialogBindingsTests
         Assert.Equal(new[] { "d", "f", "e", "g", "q" }, Keys(OwnerConsoleScope.GoalDetail));
         Assert.Equal(new[] { "w", "Ctrl+R", "q" }, Keys(OwnerConsoleScope.EpicView));
         Assert.Equal(new[] { "q" }, Keys(OwnerConsoleScope.GateView));
-        Assert.Equal(new[] { "x" }, Keys(OwnerConsoleScope.FleetView));
+        Assert.Equal(new[] { "x", "s" }, Keys(OwnerConsoleScope.FleetView));
         Assert.Single(OwnerConsoleBindings.All.Where(row => row.Scope == OwnerConsoleScope.GateView && row.Key is null));
         Assert.All(OwnerConsoleDialogBindings.All, row => Assert.False(string.IsNullOrWhiteSpace(row.KeyHelp)));
     }

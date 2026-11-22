@@ -120,6 +120,16 @@ public sealed class OwnerActivityNarratorTests
     }
 
     [Fact]
+    public void ActivityTitleKeepsIdentifiersAndHyphenatedTermsUnchanged()
+    {
+        var lines = OwnerActivityNarrator.Narrate([
+            new(DateTimeOffset.UnixEpoch, "loop-relaunch", "11111111", "LOOP_RELAUNCH_SCHEDULED")],
+            _ => "TICK_END follows all per-tick work");
+
+        Assert.Equal("Landed: TICK_END follows all per-tick work (11111111)", Assert.Single(lines).Phrase);
+    }
+
+    [Fact]
     public void InteractionFailureDoesNotClaimAnUnrelatedFlakyTest()
     {
         var lines = OwnerActivityNarrator.Narrate([
