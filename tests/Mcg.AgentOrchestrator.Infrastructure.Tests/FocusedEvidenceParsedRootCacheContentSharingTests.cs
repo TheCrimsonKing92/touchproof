@@ -95,8 +95,71 @@ public sealed class FocusedEvidenceParsedRootCacheContentSharingTests : IDisposa
         Assert.Equal(2, _store.Count);
     }
 
+    [Fact]
+    public void ParseCallback_ReadingIdenticalCopy_ReusesCompletedParse()
+    {
+        var (first, copy) = WriteIdenticalPair();
+        var callbackCalls = 0;
+
+        var file = CSharpSourceFileRootReader.ReadFile(_store, first, () =>
+        {
+            callbackCalls++;
+            Assert.Equal(copy, ReadFile(copy).Root.SyntaxTree.FilePath);
+        });
+
+        Assert.Equal(first, file.Root.SyntaxTree.FilePath);
+        Assert.Equal(1, callbackCalls);
+        Assert.Equal(0, _parses);
+        Assert.Equal(1, _store.Count);
+    }
+
+    [Fact]
+    public async Task ParseCallback_ThrowingWhileCopyIsRead_OnlyFailsOwningRead()
+    {
+        var (first, copy) = WriteIdenticalPair();
+        var failure = new InvalidOperationException("Parse notification failed.");
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        var timeout = TimeSpan.FromSeconds(30);
+        var firstRead = Task.Run(() => Record.Exception(() =>
+            CSharpSourceFileRootReader.ReadFile(_store, first, () =>
+            {
+                callbackEntered.SetResult();
+                releaseCallback.Wait();
+                throw failure;
+            })));
+        Task<FocusedEvidenceParsedRootCache.ParsedFile>? copyRead = null;
+        try
+        {
+            await callbackEntered.Task.WaitAsync(timeout);
+            copyRead = Task.Run(() => ReadFile(copy));
+            var file = await copyRead.WaitAsync(timeout);
+            Assert.Equal(copy, file.Root.SyntaxTree.FilePath);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            await firstRead.WaitAsync(timeout);
+            if (copyRead is not null)
+                await copyRead.WaitAsync(timeout);
+        }
+
+        Assert.Same(failure, await firstRead);
+        Assert.Equal(0, _parses);
+        Assert.Equal(1, _store.Count);
+    }
+
     private FocusedEvidenceParsedRootCache.ParsedFile ReadFile(string path) =>
         CSharpSourceFileRootReader.ReadFile(_store, path, () => _parses++);
+
+    private (string First, string Copy) WriteIdenticalPair()
+    {
+        var first = Path.Combine(_root, "First.cs");
+        var copy = Path.Combine(_root, "Copy.cs");
+        File.WriteAllText(first, "class Shared {}");
+        File.Copy(first, copy);
+        return (first, copy);
+    }
 
     private (string[] First, string[] Second) WriteTwoRoots()
     {
