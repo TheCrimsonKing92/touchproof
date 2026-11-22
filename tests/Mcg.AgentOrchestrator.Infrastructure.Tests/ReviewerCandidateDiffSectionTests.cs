@@ -218,6 +218,45 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Contains($"git diff {Range(scope)}", section);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PreparationUsesCandidateAttributesForRenameScope(bool typed)
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        const string attributes = ".gitattributes";
+        const string binaryDiff = "*.txt -text -diff\n";
+        const string oldPath = "old.txt";
+        const string newPath = "new.txt";
+        repo.Git("config", "core.autocrlf", "false");
+        repo.Git("config", "diff.renames", "true");
+        var lines = Enumerable.Range(1, 32).Select(i => $"rename line {i:D2}").ToArray();
+        Write(repo, attributes, binaryDiff);
+        Write(repo, oldPath, string.Join('\n', lines) + "\n");
+        Commit(repo, "Base");
+        var integrationCommit = repo.Git("rev-parse", "HEAD");
+
+        repo.Git("switch", "-c", "candidate");
+        repo.Git("rm", oldPath);
+        // Text similarity ignores CR before LF. Binary similarity sees different lines.
+        Write(repo, attributes, "*.txt -text diff\n");
+        Write(repo, newPath, string.Join("\r\n", lines) + "\r\ncandidate added line\r\n");
+        Commit(repo, "Rename with text diff enabled");
+        var candidateCommit = repo.Git("rev-parse", "HEAD");
+        Write(repo, attributes, binaryDiff);
+
+        var dispatch = Prepare(repo, NewWork(AgentRole.Reviewer), typed, scope: null);
+        var captured = Assert.IsType<ReviewerDispatchScope>(dispatch.Task.LastDispatch?.ReviewerScope).Scope;
+        Assert.Equal(candidateCommit, captured.CandidateCommit);
+        Assert.Equal(new[] { new ReviewerScopedChange(attributes, null, 'M', true),
+            new ReviewerScopedChange(newPath, oldPath, 'R', true) }, captured.Changes);
+
+        var oracle = repo.Git($"--attr-source={candidateCommit}", "diff", "--no-ext-diff", "--no-textconv", "--no-color",
+            $"{integrationCommit}...{candidateCommit}", "--");
+        var section = CandidateSection(File.ReadAllText(dispatch.PromptPath));
+        Assert.Contains($"### {oldPath} → {newPath}\n{Hunks(oracle, newPath, oldPath)}", section);
+    }
+
     [Fact]
     public void DeliversBothHunksForTypeChangeWithIdenticalBlobIds()
     {

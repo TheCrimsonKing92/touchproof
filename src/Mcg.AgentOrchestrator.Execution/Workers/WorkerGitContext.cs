@@ -142,9 +142,11 @@ internal sealed class WorkerGitContext
         }
 
         var mergeBase = mergeBaseResult.Output.Trim();
+        // Diff drivers affect rename detection, so use the same candidate attributes as patch extraction.
         // Git quotes non-ASCII bytes and separator characters before the pipe decodes them.
-        var diffResult = GitCli.RunWithUtf8Output(workingDirectory, "--no-lazy-fetch", "-c", "core.quotePath=true", "diff", "--raw", "--no-abbrev",
-            "--no-ext-diff", "--no-textconv", "--no-relative", mergeBase, candidateCommit, "--");
+        var diffResult = GitCli.RunWithUtf8Output(workingDirectory, "--no-lazy-fetch", $"--attr-source={candidateCommit}",
+            "-c", "core.quotePath=true", "diff", "--raw", "--no-abbrev", "--no-ext-diff", "--no-textconv", "--no-relative",
+            mergeBase, candidateCommit, "--");
         if (!diffResult.Succeeded || diffResult.DrainTimedOut)
         {
             throw new ReviewerChangedFileScopeException(
