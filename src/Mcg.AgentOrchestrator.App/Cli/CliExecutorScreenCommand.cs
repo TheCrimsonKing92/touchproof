@@ -93,10 +93,11 @@ internal static class CliExecutorScreenCommand
         }
         if (wholeGate ? string.IsNullOrWhiteSpace(executorId) : goalPrefix is not null || remainingLanes is not null)
             return Usage();
+        const string invalidScreeningReason = "screening-invalid";
         var configuration = RemoteLaneExecutorConfiguration.Load(configurationPath);
-        var refusal = !configuration.Enabled ? "remote-lanes-disabled" : wholeGate ? null : configuration.Screening.FaultReason == "invalid"
-            ? "screening-invalid" : configuration.Screening.Mode != "shadow" ? "screening-off" : null;
-        if (refusal is not null) { output.WriteLine("SCREEN refused reason=" + refusal); return 2; }
+        if (!configuration.Enabled) return Refuse("remote-lanes-disabled");
+        if (HasInvalidScreeningSettings(configuration)) return Refuse(invalidScreeningReason);
+        if (!wholeGate && configuration.Screening.Mode != "shadow") return Refuse("screening-off");
         if (executorId is not null && !configuration.Executors.Any(entry => entry.Id == executorId && entry.Transport == "ssh"))
             return Usage();
         occupancy ??= ExecutorSlotOccupancy.Instance;
@@ -126,6 +127,7 @@ internal static class CliExecutorScreenCommand
                     $"excluded={receipt.ExcludedLanes.Count} receipt={receipt.ReceiptId}");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return 0; }
+            catch (InvalidScreeningSettingsException) { return Refuse(invalidScreeningReason); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             { error.WriteLine($"SCREEN error={ex.GetType().Name}: {ex.Message}"); return 1; }
 
@@ -268,11 +270,15 @@ internal static class CliExecutorScreenCommand
             var current = RemoteLaneExecutorConfiguration.Load(configurationPath);
             if (current.DisabledReason == "invalid")
                 throw new InvalidDataException($"Invalid remote lane executor configuration: {configurationPath}");
+            if (HasInvalidScreeningSettings(current)) throw new InvalidScreeningSettingsException();
             var refreshed = current.Enabled && (wholeGate || current.Screening.Mode == "shadow")
                 ? current.Executors.FirstOrDefault(executor => executor.Id == entry.Id && executor.Transport == "ssh")
                 : null;
             return (current, refreshed ?? entry with { AdmissionEnabled = false });
         }
+
+        bool HasInvalidScreeningSettings(RemoteLaneExecutorConfiguration settings) =>
+            !wholeGate && settings.Screening.FaultReason == "invalid";
 
         ExecutorScreeningRefusal? CheckTarget(RemoteLaneExecutorEntry entry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
         {
@@ -299,6 +305,8 @@ internal static class CliExecutorScreenCommand
             executor.Transport == "ssh" && (executorId is null || executor.Id == executorId))
                 ? "no-idle-executor" : "no-enabled-executor");
     }
+
+    private sealed class InvalidScreeningSettingsException : Exception;
 
     private sealed class TrialPlanReadException(Exception cause) : Exception(cause.Message, cause);
 

@@ -201,6 +201,37 @@ public sealed class CliExecutorScreenWaitTests
     }
 
     [Fact]
+    public async Task InvalidScreeningSettingsDuringOrdinaryPollRefuseBeforeAnyRetryClaim()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var config = CliExecutorScreenCommandTests.WriteConfiguration(fixture, "shadow");
+        var occupancy = new SlotOccupancy { BusySlot = 1 };
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+        var polls = 0;
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(false, "1"), (interval, _) =>
+        {
+            Assert.Equal(1, ++polls);
+            clock.Advance(interval);
+            occupancy.BusySlot = null;
+            CliExecutorScreenCommandTests.WriteConfiguration(fixture, "on");
+            return Task.CompletedTask;
+        }, configurationPath: config, error: error);
+
+        Assert.Equal(2, exit);
+        Assert.Equal("SCREEN refused reason=screening-invalid" + Environment.NewLine, output.ToString());
+        Assert.Empty(error.ToString());
+        Assert.Equal(1, polls);
+        Assert.Equal((1, (int?)1, false), Assert.Single(occupancy.ClaimAttempts));
+        Assert.Empty(occupancy.HeldSlots);
+        Assert.Empty(occupancy.Markers);
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Fact]
     public async Task WholeGatePlanBecomingEmptyDuringPollStopsBeforeAnyRetryClaim()
     {
         using var fixture = new Fixture();
