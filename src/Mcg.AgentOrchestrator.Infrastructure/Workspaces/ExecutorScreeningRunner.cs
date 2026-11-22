@@ -136,22 +136,26 @@ internal sealed class ExecutorWholeGateTrialSshSampler(RemoteLaneExecutorEntry e
 // Owns only screening receipts and occupancy; never constructs the gate coordinator.
 internal static class ExecutorScreeningRunner
 {
-    internal static async Task<ExecutorScreeningReceipt?> RunAsync(ExecutorScreeningCandidate candidate,
+    internal static async Task<ExecutorScreeningOutcome<ExecutorScreeningReceipt>> RunAsync(ExecutorScreeningCandidate candidate,
         RemoteLaneExecutorEntry entry, ExecutorScreeningLaneSelection selection,
         RemoteLaneExecutorConfiguration configuration, IRemoteLaneExecutor transport,
         string occupancyRoot, string receiptPath, string receiptId, TimeSpan laneTimeout,
-        TimeProvider clock, TimeSpan pollInterval, CancellationToken token = default)
+        TimeProvider clock, TimeSpan pollInterval, CancellationToken token = default, IExecutorSlotOccupancy? occupancy = null,
+        Func<ExecutorScreeningRefusal?>? acquisitionExpiry = null)
     {
-        if (!entry.AdmissionEnabled) return null;
+        if (!entry.AdmissionEnabled) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
+        token.ThrowIfCancellationRequested();
+        occupancy ??= ExecutorSlotOccupancy.Instance;
         var attempt = "screening-" + receiptId;
-        var claims = new List<IDisposable>();
+        var claims = new List<(int Slot, IDisposable Handle)>();
         var started = clock.GetUtcNow();
         var outcomes = new List<ExecutorScreeningLaneOutcome>();
         var pending = selection.Selected.OrderByDescending(lane => lane.EstimatedSerialSeconds).ToList();
         var running = new List<(AcceptanceTestLane Lane, Task<ExecutorScreeningLaneOutcome> Work)>();
         try
         {
-            if (!TryClaimSlots(entry, occupancyRoot, attempt, claims)) return null;
+            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, acquisitionExpiry) is { } refusal)
+                return new(refusal);
             var unreachable = false;
             while (pending.Count > 0 || running.Count > 0)
             {
@@ -192,13 +196,13 @@ internal static class ExecutorScreeningRunner
                 ExecutorScreeningReceiptLedger.DecideVerdict(outcomes), outcomes, selection.Excluded);
             // Unlike advisory health telemetry, failure to persist this receipt must be visible to the operator.
             ExecutorScreeningReceiptLedger.Append(receiptPath, receipt);
-            return receipt;
+            return new(receipt);
         }
         finally
         {
             // Poll tasks close their handles before completing. Retain the claims until all have drained.
             try { await Task.WhenAll(running.Select(active => active.Work)).ConfigureAwait(false); }
-            finally { ReleaseSlots(entry, occupancyRoot, attempt, claims); }
+            finally { ReleaseSlots(entry, occupancyRoot, attempt, claims, occupancy); }
         }
 
         ExecutorScreeningLaneOutcome Outcome(AcceptanceTestLane lane, RemoteLaneRequest request,
@@ -250,22 +254,27 @@ internal static class ExecutorScreeningRunner
         }
     }
 
-    internal static async Task<ExecutorWholeGateTrialReceipt?> RunWholeGateAsync(ExecutorScreeningCandidate candidate,
+    internal static async Task<ExecutorScreeningOutcome<ExecutorWholeGateTrialReceipt>> RunWholeGateAsync(ExecutorScreeningCandidate candidate,
         RemoteLaneExecutorEntry entry, ExecutorWholeGateTrialPlan plan, RemoteLaneExecutorConfiguration configuration,
         IRemoteLaneExecutor transport, string occupancyRoot, string receiptPath, string receiptId,
         TimeProvider clock, TimeSpan pollInterval, IExecutorWholeGateTrialSampler? sampler,
         Func<DateTimeOffset, ExecutorWholeGateTrialLocalAttempt?>? readLocalAttempt, CancellationToken token = default,
-        Func<CancellationToken, Task<bool>>? probe = null, int? maxLanes = null)
+        Func<CancellationToken, Task<bool>>? probe = null, int? maxLanes = null, IExecutorSlotOccupancy? occupancy = null,
+        Func<ExecutorScreeningRefusal?>? acquisitionExpiry = null)
     {
-        if (!entry.AdmissionEnabled || plan.Lanes.Count == 0 || token.IsCancellationRequested) return null;
+        if (!entry.AdmissionEnabled) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
+        if (plan.Lanes.Count == 0) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.NoLanes));
+        token.ThrowIfCancellationRequested();
+        occupancy ??= ExecutorSlotOccupancy.Instance;
         var attempt = "whole-gate-trial-" + receiptId;
-        var claims = new List<IDisposable>();
+        var claims = new List<(int Slot, IDisposable Handle)>();
         try
         {
-            if (!TryClaimSlots(entry, occupancyRoot, attempt, claims)) return null;
-            return await RunClaimedAsync().ConfigureAwait(false);
+            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, acquisitionExpiry) is { } refusal)
+                return new(refusal);
+            return new(await RunClaimedAsync().ConfigureAwait(false));
         }
-        finally { ReleaseSlots(entry, occupancyRoot, attempt, claims); }
+        finally { ReleaseSlots(entry, occupancyRoot, attempt, claims, occupancy); }
 
         async Task<ExecutorWholeGateTrialReceipt> RunClaimedAsync()
         {
@@ -499,24 +508,56 @@ internal static class ExecutorScreeningRunner
     private sealed record TrialExecution(ExecutorWholeGateTrialLaneResult Result, bool TerminalObserved,
         AcceptanceCheckResult? Check = null);
 
-    private static bool TryClaimSlots(RemoteLaneExecutorEntry entry, string root, string attempt, List<IDisposable> claims)
+    private static ExecutorScreeningRefusal? TryClaimSlots(RemoteLaneExecutorEntry entry, string root, string attempt,
+        List<(int Slot, IDisposable Handle)> claims, IExecutorSlotOccupancy occupancy, CancellationToken token,
+        Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
     {
-        for (var slot = 0; slot < entry.Slots; slot++)
+        // Take higher slots before slot zero so a busy slot 1 never leaves slot 0 held.
+        for (var slot = entry.Slots - 1; slot >= 0; slot--)
         {
-            var claim = RemoteExecutorOccupancy.TryClaimExclusive(root, entry.Id, slot);
-            if (claim is null) return false;
-            claims.Add(claim);
-            RemoteExecutorOccupancy.Claim(root, entry.Id, attempt, slot, RemoteExecutorClaimClass.Screening);
+            token.ThrowIfCancellationRequested();
+            if (acquisitionExpiry?.Invoke() is { } expired) return expired;
+            var claim = occupancy.TryClaimExclusive(root, entry.Id, slot);
+            if (claim is null) return Busy(slot, ReadHolders()[slot]);
+            claims.Add((slot, claim));
         }
-        return true;
+        token.ThrowIfCancellationRequested();
+        if (acquisitionExpiry?.Invoke() is { } expiredAfterLocking) return expiredAfterLocking;
+        foreach (var (slot, _) in claims)
+            occupancy.Claim(root, entry.Id, attempt, slot, RemoteExecutorClaimClass.Screening);
+        token.ThrowIfCancellationRequested();
+        return acquisitionExpiry?.Invoke();
+
+        ILookup<int, (string Attempt, string? Class)> ReadHolders() =>
+            occupancy.LiveMarkers(root, entry.Id)
+                .Select(marker =>
+                {
+                    var suffix = marker.Attempt.LastIndexOf(".slot-", StringComparison.Ordinal);
+                    return suffix > 0 && int.TryParse(marker.Attempt.AsSpan(suffix + ".slot-".Length),
+                        System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slot) && slot > 0
+                        ? (Slot: slot, Attempt: marker.Attempt[..suffix], marker.Class)
+                        : (Slot: 0, marker.Attempt, marker.Class);
+                })
+                .Where(marker => marker.Attempt != attempt)
+                .ToLookup(marker => marker.Slot, marker => (marker.Attempt, marker.Class));
+
+        static ExecutorScreeningRefusal Busy(int slot, IEnumerable<(string Attempt, string? Class)> holders) =>
+            new(ExecutorScreeningRefusalCause.SlotBusy)
+            {
+                Slot = slot,
+                Holders = holders.OrderBy(holder => holder.Attempt, StringComparer.Ordinal)
+                    .ThenBy(holder => holder.Class, StringComparer.Ordinal).ToArray()
+            };
     }
 
-    private static void ReleaseSlots(RemoteLaneExecutorEntry entry, string root, string attempt, List<IDisposable> claims)
+    private static void ReleaseSlots(RemoteLaneExecutorEntry entry, string root, string attempt,
+        List<(int Slot, IDisposable Handle)> claims, IExecutorSlotOccupancy occupancy)
     {
-        for (var slot = claims.Count - 1; slot >= 0; slot--)
+        for (var index = claims.Count - 1; index >= 0; index--)
         {
-            RemoteExecutorOccupancy.Release(root, entry.Id, attempt, slot);
-            claims[slot].Dispose();
+            var (slot, handle) = claims[index];
+            occupancy.Release(root, entry.Id, attempt, slot);
+            handle.Dispose();
         }
     }
 
