@@ -243,7 +243,7 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe includes parked goals only in owned-attempt reconciliation, keeping
             // them outside admission candidates at the existing batch selection boundary.
             // b596bd5a: grouped workspace-probe backoff exclusion adds 5 lines, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 690), // Goal 1f6500ae: follower admission and receipt carry removed.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 688), // Goal 1f6500ae: follower admission and receipt carry removed.
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -586,7 +586,7 @@ internal static class SourceSizeRatchet
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
             // Goal ed4b8637 wires the explicit inventory execution hold into failed-goal recovery (+3 lines).
-            new SourceClassCeiling("ConductorDriver", 13390, 67),
+            new SourceClassCeiling("ConductorDriver", 13385, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -740,7 +740,7 @@ internal static class SourceSizeRatchet
             // Goal 98758ac2: injected tick census scope and completion emission; measured 7765 lines in the same 50 partials.
             // Goal 7ca0990d: sixteen lines reserve backstop capacity and wire its lifecycle; no new partial or headroom.
             // Goals e986e021 (observation-only conduct ticks) and f53529b7 (scheduled main verification in acceptance capacity).
-            new SourceClassCeiling("ConductorBatchLoop", 7563, 49),
+            new SourceClassCeiling("ConductorBatchLoop", 7561, 49),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
