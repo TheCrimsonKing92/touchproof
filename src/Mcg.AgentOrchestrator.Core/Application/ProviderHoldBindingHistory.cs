@@ -15,8 +15,8 @@ internal sealed class ProviderHoldBindingHistory(string key)
     internal List<(Goal Goal, DateTimeOffset At)> Recoveries { get; } = [];
     internal List<Note> Notes { get; } = [];
     private Dictionary<TaskId, SortedList<DateTimeOffset, Note>>? _probeNotes;
-    private (Note Note, ResetGeneration Generation)[]? _resets;
-    private SortedList<DateTimeOffset, ResetGeneration>? _resetGenerations;
+    private ResetEntry[]? _resetsByTime;
+    private SortedList<DateTimeOffset, (ResetGeneration? Latest, int Count)>? _resetGenerations;
     private Dictionary<Goal, SortedList<DateTimeOffset, int>>? _resetNoteIndices;
     private SortedList<DateTimeOffset, (LatestAttempts Holds, LatestAttempts Quotas)>? _placements;
     private HashSet<DateTimeOffset>? _quotaPlacements;
@@ -56,67 +56,160 @@ internal sealed class ProviderHoldBindingHistory(string key)
             ? AtOrBefore(markers, dispatch.DispatchedAt) : null;
     }
 
-    internal ResetGeneration? LatestReset(DateTimeOffset? asOf = null, Note? before = null)
+    internal ResetGeneration? LatestReset(DateTimeOffset? asOf = null)
     {
         if (_resetGenerations is null) IndexResets();
-        if (before is null || !_resetNoteIndices!.TryGetValue(before.Goal, out var indices) ||
-            AtOrBefore(indices, asOf) <= before.Index)
-            return AtOrBefore(_resetGenerations!, asOf);
+        return AtOrBefore(_resetGenerations!, asOf).Latest;
+    }
 
-        // A standalone result can precede a reset in the same timeline even when
-        // their timestamps tie or arrive out of order. Preserve timeline precedence.
-        return _resets!.Where(item =>
+    internal IReadOnlyDictionary<Note, ResetGeneration?> ResetsBefore(IEnumerable<Note> results)
+    {
+        if (_resetGenerations is null) IndexResets();
+        var answers = new Dictionary<Note, ResetGeneration?>();
+        var timelineQueries = new List<(Note Note, int Count)>();
+        foreach (var result in results)
+        {
+            var at = result.Event.OccurredAt;
+            var (latest, count) = AtOrBefore(_resetGenerations!, at);
+            if (_resetNoteIndices!.TryGetValue(result.Goal, out var indices) && AtOrBefore(indices, at) > result.Index)
+                timelineQueries.Add((result, count));
+            else
+                answers[result] = latest;
+        }
+        if (timelineQueries.Count > 0) ResolveTimelineResets(timelineQueries, answers);
+        return answers;
+    }
+
+    private void ResolveTimelineResets(List<(Note Note, int Count)> queries, Dictionary<Note, ResetGeneration?> answers)
+    {
+        var resets = _resetsByTime!;
+        var timeline = new ResetEntry[resets.Length];
+        foreach (var reset in resets)
+        {
+            ResetVisits++;
+            timeline[reset.Order] = reset;
+        }
+        var byGoal = new Dictionary<Goal, List<ResetEntry>>();
+        foreach (var reset in timeline)
+        {
+            ResetVisits++;
+            if (!byGoal.TryGetValue(reset.Note.Goal, out var goalTimeline))
+                byGoal.Add(reset.Note.Goal, goalTimeline = []);
+            goalTimeline.Add(reset);
+        }
+        foreach (var goalTimeline in byGoal.Values)
+            goalTimeline.Sort(static (left, right) => left.Note.Index.CompareTo(right.Note.Index));
+        var active = new ActiveResets(timeline);
+        var visibleByTime = 0;
+        Note? before = null;
+        IReadOnlyList<ResetEntry> goalResets = [];
+        var excluded = 0;
+
+        // A reset must be visible by timestamp and must precede the result in its
+        // own goal. Group nearby timestamp cutoffs, then sweep each timeline in
+        // order within the group. Within a group, time moves only across that
+        // group's cutoffs, and each goal's excluded suffix moves in one direction.
+        var blockSize = (int)Math.Ceiling(resets.Length / Math.Sqrt(queries.Count));
+        foreach (var (result, cutoff) in queries.OrderBy(query => query.Count / blockSize)
+            .ThenBy(query => query.Note.Goal.Id.Value, StringComparer.Ordinal).ThenBy(query => query.Note.Index))
+        {
+            while (visibleByTime < cutoff) MoveTime(resets[visibleByTime++], add: true);
+            while (visibleByTime > cutoff) MoveTime(resets[--visibleByTime], add: false);
+            if (before?.Goal != result.Goal)
             {
-                ResetVisits++;
-                return (asOf is null || item.Generation.AppliedAt <= asOf) &&
-                    (item.Note.Goal != before.Goal || item.Note.Index < before.Index);
-            })
-            .Select(item => item.Generation)
-            .GroupBy(reset => reset.Marker.IntentId, StringComparer.Ordinal)
-            .Select(group => group.MinBy(reset => reset.AppliedAt)!)
-            .OrderBy(reset => reset.Marker.IssuedAt ?? reset.AppliedAt).ThenBy(reset => reset.AppliedAt).LastOrDefault();
+                while (excluded < goalResets.Count) MoveTimeline(goalResets[excluded++], add: true, result);
+                goalResets = byGoal[result.Goal];
+                excluded = goalResets.Count;
+            }
+            while (excluded > 0 && goalResets[excluded - 1].Note.Index >= result.Index)
+                MoveTimeline(goalResets[--excluded], add: false, result);
+            while (excluded < goalResets.Count && goalResets[excluded].Note.Index < result.Index)
+                MoveTimeline(goalResets[excluded++], add: true, result);
+            before = result;
+            answers[result] = active.Latest;
+        }
+
+        void MoveTime(ResetEntry entry, bool add)
+        {
+            ResetVisits++;
+            if (before is null || before.Goal != entry.Note.Goal || entry.Note.Index < before.Index)
+                active.Update(entry, add);
+        }
+
+        void MoveTimeline(ResetEntry entry, bool add, Note result)
+        {
+            ResetVisits++;
+            if (entry.Generation.AppliedAt <= result.Event.OccurredAt)
+                active.Update(entry, add);
+        }
     }
 
     private void IndexResets()
     {
-        var resets = new List<(Note Note, ResetGeneration Generation)>();
+        var resets = new List<ResetEntry>();
         foreach (var note in Notes)
         {
             ResetVisits++;
             if (ProviderBudgetHoldSchedules.TryParseReset(note.Event, out var marker))
-                resets.Add((note, new(marker, note.Event.OccurredAt)));
+                resets.Add(new(note, new(marker, note.Event.OccurredAt), resets.Count));
         }
-        _resets = resets.ToArray();
+        _resetsByTime = resets.OrderBy(entry => entry.Generation.AppliedAt).ToArray();
         _resetGenerations = new();
         _resetNoteIndices = new();
-        var byIntent = new Dictionary<string, (ResetGeneration Generation, int FirstNote)>(StringComparer.Ordinal);
-        var ranked = new SortedSet<(DateTimeOffset Issued, DateTimeOffset Applied, int FirstNote)>();
-        var generations = new Dictionary<int, ResetGeneration>();
-        foreach (var (item, order) in _resets.Select((item, order) => (item, order))
-            .OrderBy(entry => entry.item.Generation.AppliedAt))
+        var active = new ActiveResets(resets);
+        for (var i = 0; i < _resetsByTime.Length; i++)
         {
             ResetVisits++;
-            var (note, reset) = item;
+            var entry = _resetsByTime[i];
+            var (note, reset, _) = entry;
             if (!_resetNoteIndices.TryGetValue(note.Goal, out var indices))
                 _resetNoteIndices.Add(note.Goal, indices = new());
             indices[reset.AppliedAt] = Math.Max(note.Index + 1, indices.Count == 0 ? 0 : indices.Values[^1]);
+            active.Update(entry, add: true);
+            _resetGenerations[reset.AppliedAt] = (active.Latest, i + 1);
+        }
+    }
 
-            var first = order;
-            if (byIntent.TryGetValue(reset.Marker.IntentId, out var previous))
-            {
-                if (previous.FirstNote <= order) continue;
-                ranked.Remove(Rank(previous.Generation, previous.FirstNote));
-                generations.Remove(previous.FirstNote);
-                reset = previous.Generation;
-            }
-            byIntent[reset.Marker.IntentId] = (reset, first);
-            ranked.Add(Rank(reset, first));
-            generations.Add(first, reset);
-            _resetGenerations[item.Generation.AppliedAt] = generations[ranked.Max.FirstNote];
+    private readonly record struct ResetEntry(Note Note, ResetGeneration Generation, int Order);
+
+    private sealed class ActiveResets(IReadOnlyList<ResetEntry> timeline)
+    {
+        private sealed class IntentResets
+        {
+            internal SortedSet<(DateTimeOffset Applied, int Order)> ByTime { get; } = [];
+            internal SortedSet<int> ByNote { get; } = [];
         }
 
-        static (DateTimeOffset, DateTimeOffset, int) Rank(ResetGeneration reset, int firstNote) =>
-            (reset.Marker.IssuedAt ?? reset.AppliedAt, reset.AppliedAt, firstNote);
+        private readonly Dictionary<string, IntentResets> _byIntent = new(StringComparer.Ordinal);
+        private readonly SortedSet<(DateTimeOffset Issued, DateTimeOffset Applied, int FirstNote, int EarliestReset)> _ranked = [];
+
+        internal ResetGeneration? Latest => _ranked.Count == 0 ? null : timeline[_ranked.Max.EarliestReset].Generation;
+
+        internal void Update(ResetEntry entry, bool add)
+        {
+            var reset = entry.Generation;
+            if (!_byIntent.TryGetValue(reset.Marker.IntentId, out var intent))
+                _byIntent.Add(reset.Marker.IntentId, intent = new());
+            if (intent.ByNote.Count > 0) _ranked.Remove(Rank(intent));
+            if (add)
+            {
+                intent.ByTime.Add((reset.AppliedAt, entry.Order));
+                intent.ByNote.Add(entry.Order);
+            }
+            else
+            {
+                intent.ByTime.Remove((reset.AppliedAt, entry.Order));
+                intent.ByNote.Remove(entry.Order);
+            }
+            if (intent.ByNote.Count > 0) _ranked.Add(Rank(intent));
+        }
+
+        private (DateTimeOffset Issued, DateTimeOffset Applied, int FirstNote, int EarliestReset) Rank(IntentResets intent)
+        {
+            // Replays cannot refresh an intent. The first note breaks ties between intents.
+            var (applied, order) = intent.ByTime.Min;
+            return (timeline[order].Generation.Marker.IssuedAt ?? applied, applied, intent.ByNote.Min, order);
+        }
     }
 
     internal bool HasCompetingPlacement(TaskSpec task, TaskDispatchRecord dispatch, DateTimeOffset placed,

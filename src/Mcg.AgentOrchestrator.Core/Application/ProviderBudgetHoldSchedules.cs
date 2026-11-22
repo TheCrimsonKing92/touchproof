@@ -283,9 +283,14 @@ public static class ProviderBudgetHoldSchedules
         var notes = history.Notes;
         var heldPlacements = held.Select(item => (item.Task.Id, item.Verification.CompletedAt)).ToHashSet();
         // Each receipt must have been applicable when observed, on its original source.
-        var standaloneHistory = notes.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
-            item.Event.TaskId is { } taskId && heldPlacements.Contains((taskId, result.PlacedAt)) &&
-            IsApplicable(result, history.LatestReset(item.Event.OccurredAt, item)))
+        var standaloneResults = new List<(ProviderHoldBindingHistory.Note Note, StandaloneResult Result)>();
+        foreach (var item in notes)
+            if (item.Event.TaskId is { } taskId && TryParseStandaloneResult(item.Event, out var result) &&
+                heldPlacements.Contains((taskId, result.PlacedAt)))
+                standaloneResults.Add((item, result));
+        var resetsBefore = history.ResetsBefore(standaloneResults.Select(item => item.Note));
+        var standaloneHistory = standaloneResults.Where(item => IsApplicable(item.Result, resetsBefore[item.Note]))
+            .Select(item => item.Note)
             .OrderBy(item => item.Event.OccurredAt).ToArray();
         var latestRecovery = history.Recoveries.Select(item => item.At)
             .Concat(observations.Where(item => ProviderLimitSignals.HasAvailabilityEvidence(item.Verification) &&

@@ -135,6 +135,30 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(744), schedule.NextProbeAt);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Seed_PersistedStandaloneResults_RespectTimelinePrecedenceWithBoundedResetVisits(bool backdated)
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateStandaloneResultCaseAsync(backdated);
+        Assert.Equal(2, fixture.CountDispatchGoals());
+
+        var seeded = Seed(new SqliteOrchestratorStateRepository(fixture.Database), new());
+        var evaluation = Assert.Single(seeded.Index.Evaluations).Value;
+        Assert.Equal(2, seeded.Index.IndexedGoals);
+        Assert.Equal(1, evaluation.Count);
+        Assert.InRange(evaluation.ResetVisits, 390, 920);
+        var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Schedule);
+        Assert.Equal(ProviderHoldSeedFixture.Id(0), schedule.Hold.SourceGoalId.Value);
+        Assert.Equal("fixture-hidden-reset-127", schedule.ResetIntentId);
+        Assert.Equal(2, schedule.Attempt);
+        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(62), schedule.NextProbeAt);
+        Assert.Equal("inconclusive", schedule.LastProbeOutcome);
+        Assert.Equal(ProviderFailureKind.BudgetExhausted, schedule.LastActionableFailure);
+        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(2), schedule.LastActionableFailureAt);
+    }
+
     [Fact]
     public async Task Seed_RefusedAttemptSurvivesRequeueAndAlternateProviderSuccess()
     {
@@ -279,6 +303,43 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
                 ]
             };
         }).Prepend(MakeHold(0)));
+    }
+
+    internal Task PopulateStandaloneResultCaseAsync(bool backdated)
+    {
+        const string binding = "anthropic::c:/profiles/old";
+        const string visibleIntent = "fixture-visible-reset";
+        const string hiddenIntent = "fixture-hidden-reset-127";
+        var checkedAt = At.AddMinutes(2);
+        var hiddenAt = backdated ? checkedAt.AddSeconds(-10) : checkedAt;
+        var source = MakeHold(0);
+        var other = MakeUnrelated(805);
+        var visible = ProviderBudgetHoldSchedules.FormatReset(new(binding, checkedAt, visibleIntent));
+        ProgressEventSnapshot Result(string intent, string outcome, string reason, DateTimeOffset? completedAt = null) =>
+            new(source.Id, source.Tasks[0].Id, ProgressKind.TaskNote, ProviderBudgetHoldSchedules.FormatStandaloneResult(
+                new(binding, At, checkedAt, 1, checkedAt, outcome, reason) { ResetIntentId = intent }), completedAt ?? checkedAt);
+        return SaveAsync([
+            source with
+            {
+                Timeline =
+                [
+                    .. source.Timeline,
+                    new(source.Id, source.Tasks[0].Id, ProgressKind.TaskNote, visible, checkedAt.AddMinutes(1),
+                        OperatorIntentCreatedAt: At.AddMinutes(1)),
+                    .. Enumerable.Range(0, 128).Select(index => Result(visibleIntent, "exhausted", $"refusal-{index}")),
+                    Result(hiddenIntent, "authentication-required", "generation is not yet visible", checkedAt.AddSeconds(1)),
+                    .. Enumerable.Range(0, 128).Select(index => new ProgressEventSnapshot(source.Id, source.Tasks[0].Id,
+                        ProgressKind.TaskNote, ProviderBudgetHoldSchedules.FormatReset(
+                            new(binding, checkedAt, $"fixture-hidden-reset-{index}")), hiddenAt)),
+                    Result(hiddenIntent, "failed", "generation is now visible")
+                ]
+            },
+            other with
+            {
+                Timeline = [new(other.Id, other.Tasks[0].Id, ProgressKind.TaskNote, visible, checkedAt,
+                    OperatorIntentCreatedAt: At.AddMinutes(1))]
+            }
+        ]);
     }
 
     internal async Task RequeueRefusedAttemptAsync()
