@@ -4,7 +4,7 @@ using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleProviderConnecti
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettingsTab
+internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettingsTab
 {
     private readonly IProviderConnectionsConsoleGateway _connections;
     private readonly Func<IReadOnlyList<AgentDefinition>> _loadRoster;
@@ -51,26 +51,8 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         ReturnKey + "  " + StopWaitingKey + "  " + ReloadKey + "  " + ExpandUnusedKey + "  " + CollapseUnusedKey;
     public string Title => TabTitle;
     public bool Editing => false;
-    public int SelectedLine => _selected + (_rows.Length == 0 && _notInUse.Length > 0 ? 1 : 0);
-    public IReadOnlyList<string> Lines => RenderLines().ToArray();
-    public string StatusText => _listing ? "Reading provider connections…" :
-        _loadError ?? _target.Notice ?? (SelectedActiveRow is { } row ? RowStatus(row) :
-            SelectedUnusedProfile is { } profile ? CheckStatus(profile) ?? _signIn.StatusText(profile) : null) ?? "";
 
     internal void Target(string? provider) => _target.Set(provider, _listed && !_listing);
-
-    public string KeyHint
-    {
-        get
-        {
-            if (UnusedHeaderSelected) return FormatUnusedHeaderHint(_unusedExpanded);
-            if (SelectedUnusedProfile is { } unused)
-                return FormatKeyHint(PrimaryAction(unused, unused), _signIn.DeviceCodeAvailable(unused), unused: true);
-            if (SelectedActiveRow is not { } row) return FormatKeyHint(null, deviceCodeAvailable: false);
-            return FormatKeyHint(PrimaryAction(Representative(row), SignInProfile(row)),
-                _signIn.DeviceCodeAvailable(Representative(row)));
-        }
-    }
 
     public void Activate()
     {
@@ -127,59 +109,12 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         }
     }
 
-    private IEnumerable<string> RenderLines()
-    {
-        if (_rows.Length == 0)
-            yield return _notInUse.Length > 0 ? "No provider is used by an active agent." :
-                _listing ? "Reading configured profiles and readiness evidence…" :
-                _loadError ?? (_listed ? "No configured worker profiles." : "Provider connections have not been loaded.");
-
-        for (var index = 0; index < _rows.Length; index++)
-        {
-            var row = _rows[index];
-            var profile = Representative(row);
-            var signIn = SignInProfile(row);
-            var action = PrimaryAction(profile, signIn);
-            yield return Summary(row, _clock, action);
-            if (index != _selected) continue;
-            foreach (var line in Details(row, action == SignInKey, action == ReturnKey))
-                yield return line;
-            foreach (var line in OperationDetails(profile, signIn)) yield return line;
-        }
-        if (_notInUse.Length == 0) yield break;
-        yield return $"Not in use ({_notInUse.Length}) {(_unusedExpanded ? "[-]" : "[+]")}";
-        if (!_unusedExpanded) yield break;
-        for (var index = 0; index < _notInUse.Length; index++)
-        {
-            var profile = FindProfile(_notInUse[index])!;
-            var action = PrimaryAction(profile, profile);
-            var evidence = OwnerConsoleProviderRowModel.SelectSignInEvidence(profile.Connection.Report.Observations);
-            yield return UnusedSummary(profile.Connection, evidence, _clock, action);
-            if (_rows.Length + 1 + index != _selected) continue;
-            foreach (var line in UnusedDetails(profile.Connection, evidence, action == SignInKey, action == ReturnKey))
-                yield return line;
-            foreach (var line in OperationDetails(profile, profile)) yield return line;
-        }
-    }
-
-    private IEnumerable<string> OperationDetails(OwnerConsoleProviderConnectionState profile, OwnerConsoleProviderConnectionState signIn)
-    {
-        if (_signIn.StatusText(signIn) is { } interaction) yield return $"  Sign-in: {interaction}";
-        if (CheckStatus(profile) is { } check) yield return $"  {check}";
-    }
-
-    private string PrimaryAction(OwnerConsoleProviderConnectionState profile, OwnerConsoleProviderConnectionState signIn) =>
-        _signIn.CanReportReturn(signIn) ? ReturnKey : _signIn.CanSignIn(profile) ? SignInKey : CheckKey;
-
     private OwnerConsoleProviderConnectionState Representative(OwnerConsoleProviderRowModel row) =>
         FindProfile(row.Representative.Report.ProfileId)!;
 
     private OwnerConsoleProviderConnectionState SignInProfile(OwnerConsoleProviderRowModel row) =>
         row.Members.Select(member => FindProfile(member.Report.ProfileId)!)
             .FirstOrDefault(_signIn.HasActiveSignIn) ?? Representative(row);
-
-    private string? RowStatus(OwnerConsoleProviderRowModel row) =>
-        CheckStatus(Representative(row)) ?? _signIn.StatusText(SignInProfile(row));
 
     private void ProbeSelectedDeviceCode() => _signIn.ProbeDeviceCode(SelectedActiveRow is { } row ? Representative(row) : null);
 
@@ -291,9 +226,6 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
             RebuildRows();
         });
     }
-
-    private static string? CheckStatus(OwnerConsoleProviderConnectionState profile) =>
-        profile.Checking ? "Checking connection…" : profile.OperationText;
 
     private void Post(Action apply, Action? afterInvalidate = null)
     {
