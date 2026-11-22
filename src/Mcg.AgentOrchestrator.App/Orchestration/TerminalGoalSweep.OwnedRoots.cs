@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
@@ -74,6 +75,8 @@ internal static partial class TerminalGoalSweep
         internal string? UnstoredRetentionCursor;
         internal readonly OwnedRunRootObservationLedger ObservationLedger = new();
         internal readonly TempJanitorCadenceGate TempJanitorGate = new(TempJanitorCadenceGate.DefaultInterval);
+        internal readonly BuildRootReapCadenceGate BuildRootGate = new();
+        internal readonly BuildRootRetainedByteCache RetainedBytes = new();
     }
 
     internal static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(
@@ -83,19 +86,25 @@ internal static partial class TerminalGoalSweep
         TimeProvider? clock = null,
         OwnedRootSweepState? sweepState = null,
         DotnetBuildStorageRoot? storageRoot = null,
-        string? orchestratorTempParent = null)
+        string? orchestratorTempParent = null,
+        IEnumerable<(GoalId Id, bool IsTerminal)>? goals = null,
+        int buildRootReapIntervalSeconds = ConductorAutonomyPolicy.DefaultBuildRootReapIntervalSeconds,
+        Func<TerminalGoalSweepOwnedRootResult>? reapCore = null)
     {
         var state = sweepState ?? s_ownedRootState;
-        var result = ConductorTickStepLedger.Measure("owned-root-build-roots", () =>
-        {
-            var buildStorageRoot = storageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
-            return ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
-                stateDbPath, buildStorageRoot, state, usesSharedStorageRoot: true,
-                reclaimGoalRoots: reclaimGoalRoots, requireSharedRootOwnership: reclaimGoalRoots),
-                writeFailureScope: storageRoot);
-        });
-
         var janitorClock = clock ?? TimeProvider.System;
+        var result = state.BuildRootGate.RunIfDue(
+            janitorClock, TimeSpan.FromSeconds(buildRootReapIntervalSeconds), reclaimGoalRoots, goals,
+            () => ConductorTickStepLedger.Measure("owned-root-build-roots", () => ExecuteOwnedBuildRootReap(
+                reapCore ?? (() => ReapOwnedBuildRootsCore(stateDbPath,
+                    storageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(), state,
+                    usesSharedStorageRoot: true, reclaimGoalRoots: reclaimGoalRoots,
+                    requireSharedRootOwnership: reclaimGoalRoots, useIncrementalRetainedBytes: storageRoot is null)),
+                writeFailureScope: storageRoot)));
+        var cadenceReport = result is null ? "build-root-reap skipped=cadence " : "";
+        result ??= new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, [],
+            ReclaimedGoalRoots: [], GoalRootReclaimFailures: []);
+
         var artifactReport = "temp-artifact-janitor skipped=cadence";
         if (state.TempJanitorGate.TryBeginPass(janitorClock))
         {
@@ -114,7 +123,7 @@ internal static partial class TerminalGoalSweep
             });
         }
 
-        var observation = $"owned-root-reap roots_examined={result.ProcessedCount} roots_removed={result.RemovedCount} {artifactReport}";
+        var observation = $"owned-root-reap roots_examined={result.ProcessedCount} roots_removed={result.RemovedCount} {cadenceReport}{artifactReport}";
         return result with
         {
             ObserveOnlyReports = [.. result.ObserveOnlyReports, observation],
@@ -166,7 +175,8 @@ internal static partial class TerminalGoalSweep
         Func<int, bool>? isOwnerRunning = null, bool usesSharedStorageRoot = false,
         string? canonicalRepoRoot = null, OrchestratorProjectRegistry? projectRegistry = null,
         bool reclaimGoalRoots = true, bool requireSharedRootOwnership = false,
-        ConductorAutonomyPolicy? policy = null, TimeProvider? timeProvider = null)
+        ConductorAutonomyPolicy? policy = null, TimeProvider? timeProvider = null,
+        bool useIncrementalRetainedBytes = false)
     {
         ArgumentNullException.ThrowIfNull(storageRoot);
         ArgumentNullException.ThrowIfNull(state);
@@ -221,7 +231,8 @@ internal static partial class TerminalGoalSweep
                     path => GoalStoreReadFailureLabeler.Describe(path, repoRoot, projectRegistry));
                 if (read.Unavailable.Count == 0 || read.ReadableStoreCount > 0)
                     retentionSummary = new TerminalBuildRootRetention(storageRoot, registry,
-                        isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
+                        isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System,
+                        useIncrementalRetainedBytes && maxBytes is null ? state.RetainedBytes.ForStorage(storageRoot) : null)
                         .Run(read.ReadableFacts, retentionDays, MaxTerminalBuildRootReclaimsPerSweep, maxBytes).SummaryLine;
                 if (read.Unavailable.Count == 0)
                 {
