@@ -129,10 +129,11 @@ internal static class CliExecutorScreenCommand
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             { error.WriteLine($"SCREEN error={ex.GetType().Name}: {ex.Message}"); return 1; }
 
-            Task<ExecutorScreeningOutcome<ExecutorScreeningReceipt>> RunAttemptAsync(Func<ExecutorScreeningRefusal?>? retryExpiry)
+            Task<ExecutorScreeningOutcome<ExecutorScreeningReceipt>> RunAttemptAsync(
+                bool isRetry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
             {
-                var (currentConfiguration, currentEntry) = ReadTarget(entry, retryExpiry is not null);
-                if (CheckTarget(currentEntry, retryExpiry) is { } refused)
+                var (currentConfiguration, currentEntry) = ReadTarget(entry, isRetry);
+                if (CheckTarget(currentEntry, acquisitionExpiry) is { } refused)
                     return Task.FromResult(new ExecutorScreeningOutcome<ExecutorScreeningReceipt>(refused));
 
                 IReadOnlyList<AcceptanceTestLane> lanes = [];
@@ -143,7 +144,7 @@ internal static class CliExecutorScreenCommand
                 var selection = ExecutorScreeningPlanner.SelectLanes(lanes, currentConfiguration);
                 var transport = executorFactory(currentConfiguration, candidate.WorktreePath, prefix);
                 return ExecutorScreeningRunner.RunAsync(candidate, currentEntry, selection, currentConfiguration, transport,
-                    occupancyRoot, receiptPath, id, timeout, clock, pollInterval, token, occupancy, retryExpiry);
+                    occupancyRoot, receiptPath, id, timeout, clock, pollInterval, token, occupancy, acquisitionExpiry);
             }
         }
         return 0;
@@ -208,10 +209,11 @@ internal static class CliExecutorScreenCommand
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             { error.WriteLine($"TRIAL error={ex.GetType().Name}: {ex.Message}"); return 1; }
 
-            Task<ExecutorScreeningOutcome<ExecutorWholeGateTrialReceipt>> RunTrialAttemptAsync(Func<ExecutorScreeningRefusal?>? retryExpiry)
+            Task<ExecutorScreeningOutcome<ExecutorWholeGateTrialReceipt>> RunTrialAttemptAsync(
+                bool isRetry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
             {
-                var (currentConfiguration, currentEntry) = ReadTarget(entry, retryExpiry is not null);
-                if (CheckTarget(currentEntry, retryExpiry) is { } refused)
+                var (currentConfiguration, currentEntry) = ReadTarget(entry, isRetry);
+                if (CheckTarget(currentEntry, acquisitionExpiry) is { } refused)
                     return Task.FromResult(new ExecutorScreeningOutcome<ExecutorWholeGateTrialReceipt>(refused));
 
                 ExecutorWholeGateTrialPlan plan;
@@ -224,16 +226,18 @@ internal static class CliExecutorScreenCommand
                 return ExecutorScreeningRunner.RunWholeGateAsync(candidate, currentEntry, plan, currentConfiguration, transport,
                     occupancyRoot, receiptPath, id, clock, pollInterval, sampler,
                     at => localAttemptSource?.Invoke(candidate, plan, at), token, maxLanes: remainingLanes,
-                    occupancy: occupancy, retryExpiry: retryExpiry);
+                    occupancy: occupancy, acquisitionExpiry: acquisitionExpiry);
             }
         }
 
         async Task<(ExecutorScreeningOutcome<T> Outcome, double? Waited)> AcquireAsync<T>(
-            Func<Func<ExecutorScreeningRefusal?>?, Task<ExecutorScreeningOutcome<T>>> run) where T : class
+            Func<bool, Func<ExecutorScreeningRefusal?>?, Task<ExecutorScreeningOutcome<T>>> run) where T : class
         {
             var started = clock.GetTimestamp();
             token.ThrowIfCancellationRequested();
-            var outcome = await run(null).ConfigureAwait(false);
+            var outcome = await run(false, waitMinutes is double minutes && minutes > 0
+                ? () => CheckExpiry(minutes)
+                : null).ConfigureAwait(false);
             while (waitMinutes is { } budget && outcome.Refusal is { Cause: ExecutorScreeningRefusalCause.SlotBusy } busy)
             {
                 token.ThrowIfCancellationRequested();
@@ -247,11 +251,14 @@ internal static class CliExecutorScreenCommand
                 else await Task.Yield();
                 token.ThrowIfCancellationRequested();
                 if (RemainingTicks(budget) <= 0) return (outcome, budget);
-                outcome = await run(() => RemainingTicks(budget) <= 0 ? busy : null).ConfigureAwait(false);
+                outcome = await run(true, () => CheckExpiry(budget, busy)).ConfigureAwait(false);
             }
-            return (outcome, null);
+            return (outcome, outcome.Refusal?.Cause == ExecutorScreeningRefusalCause.WaitExpired ? waitMinutes : null);
 
             double RemainingTicks(double budget) => budget * TimeSpan.TicksPerMinute - clock.GetElapsedTime(started).Ticks;
+
+            ExecutorScreeningRefusal? CheckExpiry(double budget, ExecutorScreeningRefusal? lastBusy = null) =>
+                RemainingTicks(budget) > 0 ? null : lastBusy ?? new(ExecutorScreeningRefusalCause.WaitExpired);
         }
 
         (RemoteLaneExecutorConfiguration Configuration, RemoteLaneExecutorEntry Entry) ReadTarget(
@@ -265,10 +272,10 @@ internal static class CliExecutorScreenCommand
             return (current, refreshed ?? entry with { AdmissionEnabled = false });
         }
 
-        ExecutorScreeningRefusal? CheckTarget(RemoteLaneExecutorEntry entry, Func<ExecutorScreeningRefusal?>? retryExpiry)
+        ExecutorScreeningRefusal? CheckTarget(RemoteLaneExecutorEntry entry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
         {
             token.ThrowIfCancellationRequested();
-            return retryExpiry?.Invoke() ?? (entry.AdmissionEnabled
+            return acquisitionExpiry?.Invoke() ?? (entry.AdmissionEnabled
                 ? null : new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
         }
 

@@ -55,6 +55,53 @@ public sealed class CliExecutorScreenWaitTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task DeadlineDuringInitialFinalLockReleasesAllSlotsWithoutExecuting(bool wholeGate)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+        var occupancy = new SlotOccupancy
+        {
+            AfterLockAcquired = slot =>
+            {
+                if (slot == 0) clock.Advance(TimeSpan.FromSeconds(2));
+            }
+        };
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(wholeGate, "0.025"),
+            (_, _) => throw new InvalidOperationException("The initial acquisition exhausted the wait budget."));
+
+        Assert.Equal(0, exit);
+        Assert.Equal(new[] { (1, (int?)null, true), (0, (int?)null, true) }, occupancy.ClaimAttempts);
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.Empty(occupancy.HeldSlots);
+        Assert.Empty(occupancy.Markers);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+        Assert.Equal("SCREEN idle reason=wait-expired waited=0.025" + Environment.NewLine, output.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ZeroWaitAllowsOneImmediateAcquisition(bool wholeGate)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        var occupancy = new SlotOccupancy();
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(wholeGate, "0"),
+            (_, _) => throw new InvalidOperationException("Zero wait cannot poll."));
+
+        Assert.Equal(0, exit);
+        Assert.Equal(new[] { (1, (int?)null, true), (0, (int?)null, true) }, occupancy.ClaimAttempts);
+        Assert.Single(fixture.Executor.Requests);
+        Assert.Empty(occupancy.HeldSlots);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task DeadlineDuringFinalRetryLockReleasesAllSlotsWithoutExecuting(bool wholeGate)
     {
         using var fixture = new Fixture();

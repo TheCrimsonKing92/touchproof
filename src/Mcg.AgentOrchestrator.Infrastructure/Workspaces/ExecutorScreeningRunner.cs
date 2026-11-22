@@ -141,7 +141,7 @@ internal static class ExecutorScreeningRunner
         RemoteLaneExecutorConfiguration configuration, IRemoteLaneExecutor transport,
         string occupancyRoot, string receiptPath, string receiptId, TimeSpan laneTimeout,
         TimeProvider clock, TimeSpan pollInterval, CancellationToken token = default, IExecutorSlotOccupancy? occupancy = null,
-        Func<ExecutorScreeningRefusal?>? retryExpiry = null)
+        Func<ExecutorScreeningRefusal?>? acquisitionExpiry = null)
     {
         if (!entry.AdmissionEnabled) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
         token.ThrowIfCancellationRequested();
@@ -154,7 +154,7 @@ internal static class ExecutorScreeningRunner
         var running = new List<(AcceptanceTestLane Lane, Task<ExecutorScreeningLaneOutcome> Work)>();
         try
         {
-            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, retryExpiry) is { } refusal)
+            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, acquisitionExpiry) is { } refusal)
                 return new(refusal);
             var unreachable = false;
             while (pending.Count > 0 || running.Count > 0)
@@ -260,7 +260,7 @@ internal static class ExecutorScreeningRunner
         TimeProvider clock, TimeSpan pollInterval, IExecutorWholeGateTrialSampler? sampler,
         Func<DateTimeOffset, ExecutorWholeGateTrialLocalAttempt?>? readLocalAttempt, CancellationToken token = default,
         Func<CancellationToken, Task<bool>>? probe = null, int? maxLanes = null, IExecutorSlotOccupancy? occupancy = null,
-        Func<ExecutorScreeningRefusal?>? retryExpiry = null)
+        Func<ExecutorScreeningRefusal?>? acquisitionExpiry = null)
     {
         if (!entry.AdmissionEnabled) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
         if (plan.Lanes.Count == 0) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.NoLanes));
@@ -270,7 +270,7 @@ internal static class ExecutorScreeningRunner
         var claims = new List<(int Slot, IDisposable Handle)>();
         try
         {
-            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, retryExpiry) is { } refusal)
+            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, acquisitionExpiry) is { } refusal)
                 return new(refusal);
             return new(await RunClaimedAsync().ConfigureAwait(false));
         }
@@ -510,23 +510,23 @@ internal static class ExecutorScreeningRunner
 
     private static ExecutorScreeningRefusal? TryClaimSlots(RemoteLaneExecutorEntry entry, string root, string attempt,
         List<(int Slot, IDisposable Handle)> claims, IExecutorSlotOccupancy occupancy, CancellationToken token,
-        Func<ExecutorScreeningRefusal?>? retryExpiry)
+        Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
     {
         // Take higher slots before slot zero so a busy slot 1 never leaves slot 0 held.
         for (var slot = entry.Slots - 1; slot >= 0; slot--)
         {
             token.ThrowIfCancellationRequested();
-            if (retryExpiry?.Invoke() is { } expired) return expired;
+            if (acquisitionExpiry?.Invoke() is { } expired) return expired;
             var claim = occupancy.TryClaimExclusive(root, entry.Id, slot);
             if (claim is null) return Busy(slot, ReadHolders()[slot]);
             claims.Add((slot, claim));
         }
         token.ThrowIfCancellationRequested();
-        if (retryExpiry?.Invoke() is { } expiredAfterLocking) return expiredAfterLocking;
+        if (acquisitionExpiry?.Invoke() is { } expiredAfterLocking) return expiredAfterLocking;
         foreach (var (slot, _) in claims)
             occupancy.Claim(root, entry.Id, attempt, slot, RemoteExecutorClaimClass.Screening);
         token.ThrowIfCancellationRequested();
-        return retryExpiry?.Invoke();
+        return acquisitionExpiry?.Invoke();
 
         ILookup<int, (string Attempt, string? Class)> ReadHolders() =>
             occupancy.LiveMarkers(root, entry.Id)

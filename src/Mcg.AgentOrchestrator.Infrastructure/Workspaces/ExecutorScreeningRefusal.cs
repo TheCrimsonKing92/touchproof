@@ -8,7 +8,8 @@ internal enum ExecutorScreeningRefusalCause
 {
     AdmissionDisabled,
     NoLanes,
-    SlotBusy
+    SlotBusy,
+    WaitExpired
 }
 
 internal sealed record ExecutorScreeningRefusal(ExecutorScreeningRefusalCause Cause)
@@ -23,6 +24,7 @@ internal sealed record ExecutorScreeningRefusal(ExecutorScreeningRefusalCause Ca
             ExecutorScreeningRefusalCause.AdmissionDisabled => "admission-disabled",
             ExecutorScreeningRefusalCause.NoLanes => "no-lanes",
             ExecutorScreeningRefusalCause.SlotBusy => "slot-busy",
+            ExecutorScreeningRefusalCause.WaitExpired => "wait-expired",
             _ => throw new InvalidOperationException($"Unknown executor-screen refusal cause {Cause}.")
         };
         var line = new StringBuilder("SCREEN idle reason=").Append(reason);
