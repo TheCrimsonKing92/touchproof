@@ -126,7 +126,7 @@ internal static class CliExecutorScreenCommand
                     $"excluded={receipt.ExcludedLanes.Count} receipt={receipt.ReceiptId}");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return 0; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             { error.WriteLine($"SCREEN error={ex.GetType().Name}: {ex.Message}"); return 1; }
 
             Task<ExecutorScreeningOutcome<ExecutorScreeningReceipt>> RunAttemptAsync(
@@ -206,7 +206,7 @@ internal static class CliExecutorScreenCommand
                 error.WriteLine(ex.Message);
                 return 2;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             { error.WriteLine($"TRIAL error={ex.GetType().Name}: {ex.Message}"); return 1; }
 
             Task<ExecutorScreeningOutcome<ExecutorWholeGateTrialReceipt>> RunTrialAttemptAsync(
@@ -266,6 +266,8 @@ internal static class CliExecutorScreenCommand
         {
             if (!retry) return (configuration, entry);
             var current = RemoteLaneExecutorConfiguration.Load(configurationPath);
+            if (current.DisabledReason == "invalid")
+                throw new InvalidDataException($"Invalid remote lane executor configuration: {configurationPath}");
             var refreshed = current.Enabled && (wholeGate || current.Screening.Mode == "shadow")
                 ? current.Executors.FirstOrDefault(executor => executor.Id == entry.Id && executor.Transport == "ssh")
                 : null;
@@ -275,8 +277,10 @@ internal static class CliExecutorScreenCommand
         ExecutorScreeningRefusal? CheckTarget(RemoteLaneExecutorEntry entry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
         {
             token.ThrowIfCancellationRequested();
-            return acquisitionExpiry?.Invoke() ?? (entry.AdmissionEnabled
-                ? null : new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
+            if (acquisitionExpiry?.Invoke() is { } expired) return expired;
+            if (!entry.AdmissionEnabled) return new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled);
+            if (!ExecutorSlotOccupancy.IsValidExecutorId(entry.Id)) throw new InvalidDataException("Invalid executor id.");
+            return null;
         }
 
         int Usage() { error.WriteLine(CliCommandHelp.ExecutorScreenUsage); return 2; }

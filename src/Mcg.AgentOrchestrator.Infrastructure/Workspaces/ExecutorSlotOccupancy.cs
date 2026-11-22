@@ -14,13 +14,15 @@ internal sealed class ExecutorSlotOccupancy : IExecutorSlotOccupancy
 {
     internal static ExecutorSlotOccupancy Instance { get; } = new();
 
+    internal static bool IsValidExecutorId(string executor) => !string.IsNullOrWhiteSpace(executor) &&
+        executor is not ("." or "..") && executor.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+
     private ExecutorSlotOccupancy() { }
 
     public IDisposable? TryClaimExclusive(string root, string executor, int slot)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(slot);
-        if (string.IsNullOrWhiteSpace(executor) || executor is "." or ".." ||
-            executor.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        if (!IsValidExecutorId(executor))
             throw new ArgumentException("Invalid executor id.", nameof(executor));
 
         // Use the same cross-process locks as RemoteExecutorOccupancy, with faults visible to screening.

@@ -166,6 +166,40 @@ public sealed class CliExecutorScreenWaitTests
         Assert.False(File.Exists(fixture.ReceiptPath));
     }
 
+    [Theory]
+    [InlineData(false, "SCREEN")]
+    [InlineData(true, "TRIAL")]
+    public async Task MalformedConfigurationDuringPollReportsErrorBeforeAnyRetryClaim(bool wholeGate, string prefix)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var config = CliExecutorScreenCommandTests.WriteConfiguration(fixture, "shadow");
+        var occupancy = new SlotOccupancy { BusySlot = 1 };
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+        var polls = 0;
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(wholeGate, "1"), (interval, _) =>
+        {
+            Assert.Equal(1, ++polls);
+            clock.Advance(interval);
+            occupancy.BusySlot = null;
+            File.WriteAllText(config, "{");
+            return Task.CompletedTask;
+        }, configurationPath: config, error: error);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(1, polls);
+        Assert.Equal((1, (int?)1, false), Assert.Single(occupancy.ClaimAttempts));
+        Assert.Empty(occupancy.HeldSlots);
+        Assert.Empty(occupancy.Markers);
+        Assert.Empty(output.ToString());
+        Assert.Equal($"{prefix} error=InvalidDataException: Invalid remote lane executor configuration: {config}" +
+            Environment.NewLine, error.ToString());
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
     [Fact]
     public async Task WholeGatePlanBecomingEmptyDuringPollStopsBeforeAnyRetryClaim()
     {
@@ -217,6 +251,31 @@ public sealed class CliExecutorScreenWaitTests
         using var released = RemoteExecutorOccupancy.TryClaimExclusive(fixture.Root, fixture.Entry.Id, 1);
         Assert.NotNull(released);
         Assert.Empty(RemoteExecutorOccupancy.LiveMarkers(fixture.Root, fixture.Entry.Id));
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Theory]
+    [InlineData(false, "SCREEN")]
+    [InlineData(true, "TRIAL")]
+    public async Task InvalidExecutorIdReportsErrorWithoutPollingOrLeavingClaims(bool wholeGate, string prefix)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var config = CliExecutorScreenCommandTests.WriteConfiguration(fixture, "shadow");
+        File.WriteAllText(config, File.ReadAllText(config).Replace("\"id\":\"laptop\"", "\"id\":\".\"", StringComparison.Ordinal));
+        var occupancy = new SlotOccupancy();
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(wholeGate, "1", executorId: "."),
+            (_, _) => throw new InvalidOperationException("An invalid executor ID must never poll."),
+            configurationPath: config, error: error);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(output.ToString());
+        Assert.Equal(prefix + " error=InvalidDataException: Invalid executor id." + Environment.NewLine, error.ToString());
+        Assert.Empty(occupancy.ClaimAttempts);
         Assert.Empty(fixture.Executor.Requests);
         Assert.False(File.Exists(fixture.ReceiptPath));
     }
@@ -282,9 +341,9 @@ public sealed class CliExecutorScreenWaitTests
         Assert.False(File.Exists(fixture.ReceiptPath));
     }
 
-    private static string[] WaitArgs(bool wholeGate, string minutes) => wholeGate
-        ? ["--whole-gate", "--executor", "laptop", "--wait", minutes]
-        : ["--executor", "laptop", "--wait", minutes];
+    private static string[] WaitArgs(bool wholeGate, string minutes, string executorId = "laptop") => wholeGate
+        ? ["--whole-gate", "--executor", executorId, "--wait", minutes]
+        : ["--executor", executorId, "--wait", minutes];
 
     private static ExecutorWholeGateTrialPlan TrialPlan() => new(
         [new("A", ExecutorScreeningPlanner.Project, "A", [], 1, TimeSpan.FromMinutes(1))],
