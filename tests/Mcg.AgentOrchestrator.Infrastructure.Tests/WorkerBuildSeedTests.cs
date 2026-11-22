@@ -15,12 +15,12 @@ public sealed class WorkerBuildSeedTests
     [InlineData(true)]
     public void SupportedSeedMatchesGitAndKeepsRealLinkedCheckout(bool customSeed)
     {
-        var measured = FixtureGitLaunchBudget.Measure("worker-build supported seed", () =>
+        var measured = MeasureFixture("worker-build supported seed", () =>
             new WorkerBuildRequestFixture(extraProject: customSeed, linkedWorktree: true,
                 seedRepository: root => Customize(root, customSeed)));
-        using var fixture = measured.Value;
+        using var fixture = measured.Fixture;
         AssertSetupLaunches(measured.Counts, 0);
-        Assert.Equal(1, measured.Counts.Count("worktree"));
+        Assert.Equal(1, measured.Counts.Subcommands.GetValueOrDefault("worktree"));
 
         var main = Path.Combine(fixture.Root, "repository");
         var linked = fixture.RepositoryRoot;
@@ -138,14 +138,14 @@ public sealed class WorkerBuildSeedTests
         const string content = "first\nsecond";
         var workingBytes = Encoding.Unicode.GetBytes(content + "\n");
         var callbacks = 0;
-        var measured = FixtureGitLaunchBudget.Measure("worker-build Git fallback", () =>
+        var measured = MeasureFixture("worker-build Git fallback", () =>
             new WorkerBuildRequestFixture(seedRepository: root =>
             {
                 callbacks++;
                 Write(root, ".gitattributes", "*.txt working-tree-encoding=UTF-16LE text eol=lf\n");
                 File.WriteAllBytes(Path.Combine(root, "converted.txt"), workingBytes);
             }));
-        using var fixture = measured.Value;
+        using var fixture = measured.Fixture;
         AssertSetupLaunches(measured.Counts, 1);
         Assert.Equal(1, callbacks);
         Assert.Equal(workingBytes, File.ReadAllBytes(Path.Combine(fixture.RepositoryRoot, "converted.txt")));
@@ -210,10 +210,42 @@ public sealed class WorkerBuildSeedTests
         foreach (var excluded in ExcludedPaths) Write(root, excluded, "retained only in the seed checkout\n");
     }
 
-    private static void AssertSetupLaunches(FixtureGitLaunchBudget.Launches counts, int constructions)
+    private static (WorkerBuildRequestFixture Fixture, HostCapacitySlotGitCensus.GitLaunchDelta Counts) MeasureFixture(
+        string phase, Func<WorkerBuildRequestFixture> create)
+    {
+        // Opt in to the shared observer and keep the measurement window in memory.
+        // A temporary observer can prevent another test from installing the shared one.
+        HostCapacitySlotGitCensus.EnsureInstalled(phase);
+        var testName = HostCapacitySlotTimingWriter.CurrentTestName();
+        Assert.NotEqual("<unknown>", testName);
+        var window = HostCapacitySlotGitCensus.Shared.Open(testName);
+        Assert.NotNull(window);
+
+        WorkerBuildRequestFixture fixture;
+        HostCapacitySlotGitCensus.GitLaunchDelta? counts;
+        try { fixture = create(); }
+        finally { counts = window.Close(); }
+
+        if (counts is null)
+        {
+            fixture.Dispose();
+            throw new InvalidOperationException($"Git launch counts unavailable for {phase}.");
+        }
+
+        var commands = counts.Subcommands.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => $"{pair.Key}={pair.Value}");
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"{phase}: real git={counts.Launches}; launches by command=[{string.Join(", ", commands)}]");
+        return (fixture, counts);
+    }
+
+    private static void AssertSetupLaunches(HostCapacitySlotGitCensus.GitLaunchDelta counts, int constructions)
     {
         var expected = (Init: constructions, Config: 2 * constructions, Add: constructions, Commit: constructions);
-        var actual = (Init: counts.Count("init"), Config: counts.Count("config"), Add: counts.Count("add"), Commit: counts.Count("commit"));
+        var actual = (Init: counts.Subcommands.GetValueOrDefault("init"),
+            Config: counts.Subcommands.GetValueOrDefault("config"),
+            Add: counts.Subcommands.GetValueOrDefault("add"),
+            Commit: counts.Subcommands.GetValueOrDefault("commit"));
         if (actual != expected)
             Assert.Fail($"Git seed launches (init, config, add, commit): expected {expected}, observed {actual}.\n" +
                 TestContext.Current.TestOutputHelper?.Output);
