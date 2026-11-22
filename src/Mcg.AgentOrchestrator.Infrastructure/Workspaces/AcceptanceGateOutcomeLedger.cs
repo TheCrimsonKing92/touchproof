@@ -32,6 +32,7 @@ internal static class AcceptanceGateOutcomeLedger
     internal const string PendingDirectoryName = "cost-goal-outcome-gate-publications";
     internal const string FallbackDirectoryName = "cost-goal-outcome-gate-publications-fallback";
     internal const string IndependentPendingDirectoryName = "cost-goal-outcome-gate-publications-independent";
+    internal const string RecoveryDirectoryName = "cost-goal-outcome-gate-publications-recovery";
     private const string PendingFilePrefix = "cost-goal-outcome-gates.pending-";
     internal const string PendingFilePattern = PendingFilePrefix + "*.jsonl";
     internal const string AttemptRootFallbackPendingFileName = PendingFilePrefix + "fallback.jsonl";
@@ -120,10 +121,16 @@ internal static class AcceptanceGateOutcomeLedger
         {
             return WriteSeparateIntent(Path.GetDirectoryName(path)!, PendingFilePrefix);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+        try
+        {
+            return WriteSharedIntent(AttemptRootPendingPath(path, AttemptRootFallbackPendingFileName));
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // The project directory can deny file creation independently of its existing attempts root.
-            return WriteSharedIntent(AttemptRootPendingPath(path, AttemptRootFallbackPendingFileName));
+            // A non-inheriting file creation denial on either root permits writing inside a new directory.
+            return WriteSeparateIntent(Directory.CreateDirectory(PendingDirectoryPath(path, RecoveryDirectoryName)).FullName);
         }
 
         PreparedPublication WriteSeparateIntent(string directory, string filePrefix = "")
@@ -185,6 +192,7 @@ internal static class AcceptanceGateOutcomeLedger
         var (fallbackPaths, fallbackError) = ListPending(PendingDirectoryPath(path, FallbackDirectoryName));
         var (independentPaths, independentError) = ListPending(PendingDirectoryPath(path, IndependentPendingDirectoryName));
         var (projectPaths, projectError) = ListPending(Path.GetDirectoryName(path)!, PendingFilePattern);
+        var (recoveryPaths, recoveryError) = ListPending(PendingDirectoryPath(path, RecoveryDirectoryName));
         if (EvidenceExists(legacyPath)) fallbackPaths = [.. fallbackPaths, legacyPath];
         Exception? attemptRootPendingError = null;
         foreach (var name in new[] { PendingFileName, AttemptRootFallbackPendingFileName })
@@ -200,12 +208,12 @@ internal static class AcceptanceGateOutcomeLedger
             }
         }
 
-        var pendingPaths = primaryPaths.Concat(independentPaths).Concat(projectPaths).Concat(fallbackPaths);
+        var pendingPaths = primaryPaths.Concat(independentPaths).Concat(projectPaths).Concat(fallbackPaths).Concat(recoveryPaths);
         if (pendingPaths.Any())
             WithBackfillLock(path, () => ReplayPending(pendingPaths));
 
         // Replay reachable intents, then fail the read if any recovery path could still hide observations.
-        if ((primaryError ?? fallbackError ?? attemptRootPendingError ?? independentError ?? projectError) is { } error)
+        if ((primaryError ?? fallbackError ?? attemptRootPendingError ?? independentError ?? projectError ?? recoveryError) is { } error)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error);
 
         static (string[] Paths, Exception? Error) ListPending(string directory, string pattern = "*.jsonl")

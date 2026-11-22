@@ -179,14 +179,16 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
-    [InlineData(false, true, false)]
-    [InlineData(true, true, false)]
-    [InlineData(false, true, true)]
-    [InlineData(true, true, true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, true, true, true)]
     public async Task Publication_RecoversAttemptIntentWhenAllSharedDestinationsAreBlocked(
-        bool solo, bool blockIndependentDirectory, bool denyProjectFileCreation)
+        bool solo, bool blockIndependentDirectory, bool denyProjectFileCreation, bool denyAttemptRootFileCreation)
     {
         Assert.SkipUnless(!denyProjectFileCreation || OperatingSystem.IsWindows(), "Requires Windows directory ACLs.");
         var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
@@ -206,12 +208,12 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         var pendingDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.IndependentPendingDirectoryName);
         File.WriteAllText(pendingPath, "");
         if (blockIndependentDirectory) File.WriteAllText(pendingDirectory, "Blocks independent directory creation.");
-        var recoveryDirectory = blockIndependentDirectory ? root : pendingDirectory;
-        var recoveryPattern = blockIndependentDirectory ? AcceptanceGateOutcomeLedger.PendingFilePattern : "*.jsonl";
+        var recoveryDirectory = denyAttemptRootFileCreation
+            ? Path.Combine(root, AcceptanceGateOutcomeLedger.RecoveryDirectoryName)
+            : blockIndependentDirectory ? root : pendingDirectory;
+        var recoveryPattern = recoveryDirectory == root ? AcceptanceGateOutcomeLedger.PendingFilePattern : "*.jsonl";
         var fallbackJournal = Path.Combine(attemptRoot, AcceptanceGateOutcomeLedger.AttemptRootFallbackPendingFileName);
-        var projectDirectory = new DirectoryInfo(root);
-        DirectorySecurity? projectAccess = null;
-        byte[]? originalProjectAccess = null;
+        var originalAccess = new Dictionary<DirectoryInfo, byte[]>();
         string prefix;
         using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (File.Open(sharedPending, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -221,13 +223,18 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             {
                 if (denyProjectFileCreation && OperatingSystem.IsWindows())
                 {
-                    projectAccess = projectDirectory.GetAccessControl(AccessControlSections.Access);
-                    originalProjectAccess = projectAccess.GetSecurityDescriptorBinaryForm();
                     using var identity = WindowsIdentity.GetCurrent();
-                    projectAccess.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.CreateFiles,
-                        AccessControlType.Deny));
-                    projectDirectory.SetAccessControl(projectAccess);
-                    Assert.Throws<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(root, "denied-probe"), ""));
+                    string[] deniedDirectories = denyAttemptRootFileCreation ? [root, attemptRoot] : [root];
+                    foreach (var path in deniedDirectories)
+                    {
+                        var directory = new DirectoryInfo(path);
+                        var access = directory.GetAccessControl(AccessControlSections.Access);
+                        originalAccess.Add(directory, access.GetSecurityDescriptorBinaryForm());
+                        access.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.CreateFiles,
+                            AccessControlType.Deny));
+                        directory.SetAccessControl(access);
+                        Assert.Throws<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(path, "denied-probe"), ""));
+                    }
                 }
 
                 if (solo)
@@ -246,7 +253,9 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
                 Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
                 Assert.Empty(File.ReadAllLines(sharedPending));
                 Assert.Empty(File.ReadAllLines(pendingPath));
-                var intent = denyProjectFileCreation ? fallbackJournal : Assert.Single(Directory.GetFiles(recoveryDirectory, recoveryPattern));
+                var intent = denyProjectFileCreation && !denyAttemptRootFileCreation
+                    ? fallbackJournal
+                    : Assert.Single(Directory.GetFiles(recoveryDirectory, recoveryPattern));
                 var pending = JsonSerializer.Deserialize<AcceptanceGateOutcomeLedger.PendingPublication>(
                     Assert.Single(File.ReadAllLines(intent)), AcceptanceGateOutcomeLedger.Json);
                 Assert.NotNull(pending);
@@ -254,10 +263,14 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             }
             finally
             {
-                if (OperatingSystem.IsWindows() && projectAccess is not null && originalProjectAccess is not null)
+                if (OperatingSystem.IsWindows())
                 {
-                    projectAccess.SetSecurityDescriptorBinaryForm(originalProjectAccess, AccessControlSections.Access);
-                    projectDirectory.SetAccessControl(projectAccess);
+                    foreach (var (directory, original) in originalAccess)
+                    {
+                        var access = directory.GetAccessControl(AccessControlSections.Access);
+                        access.SetSecurityDescriptorBinaryForm(original, AccessControlSections.Access);
+                        directory.SetAccessControl(access);
+                    }
                 }
             }
         }
