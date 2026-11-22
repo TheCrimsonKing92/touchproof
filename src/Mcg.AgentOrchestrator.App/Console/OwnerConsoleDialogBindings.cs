@@ -16,13 +16,16 @@ internal static class OwnerConsoleDialogBindings
         Row(OwnerConsoleScope.GateView, 'q', "quit", "Back", "GATE view q: Back out of the GATE view."),
         Row(OwnerConsoleScope.GateView, null, "gate", "Up/Down PgUp/PgDn scroll  Enter expand passed and baseline  Esc close",
             "GATE view Up/Down PgUp/PgDn: Scroll lanes; Esc: Close the GATE view."),
-        Row(OwnerConsoleScope.FleetView, 'x', "expand", "All lanes", "Fleet view x: Toggle between the top five lanes and all lanes for every executor.")
+        Row(OwnerConsoleScope.FleetView, 'x', "expand", "All lanes", "Fleet view x: Toggle between the top five lanes and all lanes for every executor."),
+        Row(OwnerConsoleScope.FleetView, 's', OwnerConsoleBindings.SettingsCommand, "Sign in",
+            "Fleet view s: Open Provider connections for the first hold that offers sign-in.")
     ]);
 
     internal static IEnumerable<OwnerConsoleBinding> GoalDetail => All.Where(row => row.Scope == OwnerConsoleScope.GoalDetail);
     internal static OwnerConsoleBinding Reload => All.Single(row => row.Scope == OwnerConsoleScope.EpicView && row.Command == "reload");
     internal static OwnerConsoleBinding GateHelp => All.Single(row => row.Scope == OwnerConsoleScope.GateView && row.Key is null);
     internal static OwnerConsoleBinding FleetExpand => All.Single(row => row.Scope == OwnerConsoleScope.FleetView && row.Command == "expand");
+    internal static OwnerConsoleBinding FleetSignIn => All.Single(row => row.Scope == OwnerConsoleScope.FleetView && row.Command == OwnerConsoleBindings.SettingsCommand);
     internal static string KeyLabel(OwnerConsoleBinding row) => row.Ctrl ? $"Ctrl+{char.ToUpperInvariant(row.Key!.Value)}" : $"{row.Key}";
     internal static string Label(OwnerConsoleBinding row) => $"{row.HintLabel} ({KeyLabel(row)})";
 
