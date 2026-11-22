@@ -1,7 +1,8 @@
 using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: fixture repositories, linked checkouts and Git readback roots are private to each test.
+// The fixtures are private, but the launch census installs process-wide Git observers.
+[Collection(TestCollections.CliProcessEnvironment)]
 public sealed class WorkerBuildSeedTests
 {
     private const string ManifestRules = "!.orchestrator/\n.orchestrator/*\n!.orchestrator/acceptance-manifest.json\n";
@@ -48,7 +49,8 @@ public sealed class WorkerBuildSeedTests
         Git(oracle, "config", "user.name", "Worker build fixture");
         Write(oracle, ".git/info/exclude", SeedExcludes);
         Git(oracle, "add", ".");
-        var dates = Git(main, "show", "-s", "--format=%aI%n%cI", "HEAD").Split('\n');
+        // Match the seed's epoch seconds and let Git determine its own timezone offsets.
+        var dates = Git(main, "show", "-s", "--format=%at%n%ct", "HEAD").Split('\n');
         DirectGit(oracle, new Dictionary<string, string>
         {
             ["GIT_AUTHOR_DATE"] = dates[0].TrimEnd('\r'),
@@ -124,6 +126,43 @@ public sealed class WorkerBuildSeedTests
 
             File.WriteAllText(systemConfig, "[core]\n\tfilemode = true\n");
             Assert.Equal("Unsupported 'filemode' setting in system Git configuration.",
+                WorkerBuildRepositorySeed.ReadGitInputs(executable, environment, out _));
+        }
+        finally
+        {
+            profile.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Utf16ConfigRejectedBeforeSeeding(bool withBom)
+    {
+        const string config = "[core]\n\tautocrlf = false\n";
+        var (executable, _) = InfrastructureTestSupport.CapturePreparedGitEnvironment();
+        var profile = Directory.CreateTempSubdirectory("mcg-worker-build-git-encoding-");
+        try
+        {
+            var configPath = Path.Combine(profile.FullName, "gitconfig");
+            var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["HOME"] = profile.FullName,
+                ["XDG_CONFIG_HOME"] = profile.FullName,
+                ["GIT_CONFIG_GLOBAL"] = configPath,
+                ["GIT_CONFIG_NOSYSTEM"] = "1",
+                ["GIT_ATTR_NOSYSTEM"] = "1"
+            };
+
+            File.WriteAllText(configPath, config, new UTF8Encoding(encoderShouldEmitUTF8Identifier: withBom));
+            Assert.Equal("false", Git(profile.FullName, "config", "--file", configPath, "--get", "core.autocrlf"));
+            Assert.Null(WorkerBuildRepositorySeed.ReadGitInputs(executable, environment, out _));
+
+            File.WriteAllText(configPath, config, new UnicodeEncoding(bigEndian: false, byteOrderMark: withBom));
+            var result = GitCli.RunDirect(profile.FullName, "config", "--file", configPath, "--get", "core.autocrlf");
+            Assert.True(result.ProcessStarted, result.Error);
+            Assert.Equal(128, result.ExitCode);
+            Assert.Equal("Could not read prepared Git inputs (DecoderFallbackException).",
                 WorkerBuildRepositorySeed.ReadGitInputs(executable, environment, out _));
         }
         finally
@@ -214,7 +253,7 @@ public sealed class WorkerBuildSeedTests
         string phase, Func<WorkerBuildRequestFixture> create) =>
         FixtureGitLaunchBudget.Measure(phase, create);
 
-    private static void AssertSetupLaunches(FixtureGitLaunchBudget.Launches counts, long constructions)
+    internal static void AssertSetupLaunches(FixtureGitLaunchBudget.Launches counts, long constructions)
     {
         var expected = (Init: constructions, Config: 2 * constructions, Add: constructions, Commit: constructions);
         var actual = (Init: counts.Count("init"), Config: counts.Count("config"),

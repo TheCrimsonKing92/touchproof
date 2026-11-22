@@ -133,8 +133,10 @@ internal static class WorkerBuildRepositorySeed
     internal static string? ReadGitInputs(string executable, IDictionary<string, string?> environment, out string templates)
     {
         templates = "";
+        // Git for Windows honors TZ when formatting commit timestamps. DateTimeOffset.Now does not.
         var unsupportedVariable = environment.Keys.FirstOrDefault(
-            key => key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) && !SupportedGitVariables.Contains(key));
+            key => key.Equals("TZ", StringComparison.OrdinalIgnoreCase) ||
+                (key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) && !SupportedGitVariables.Contains(key)));
         if (unsupportedVariable is not null) return $"Unsupported Git environment variable '{unsupportedVariable}'.";
         string? Get(string name) => environment.TryGetValue(name, out var value) ? value : null;
         var installation = Path.GetDirectoryName(Path.GetDirectoryName(executable));
@@ -225,7 +227,20 @@ internal static class WorkerBuildRepositorySeed
 
     private static IEnumerable<string> ReadGitLines(string path)
     {
-        try { return File.ReadAllLines(path).Select(line => line.Trim()).Where(line => line.Length > 0 && line[0] is not ('#' or ';')); }
+        try
+        {
+            // Git accepts a UTF-8 BOM in config files. A non-UTF-8 BOM must not switch decoders.
+            using var reader = new StreamReader(path, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true,
+                throwOnInvalidBytes: true), detectEncodingFromByteOrderMarks: false);
+            var lines = new List<string>();
+            while (reader.ReadLine() is { } raw)
+            {
+                if (raw.Contains('\0')) throw new DecoderFallbackException("NUL byte in Git input.");
+                var line = raw.Trim();
+                if (line.Length > 0 && line[0] is not ('#' or ';')) lines.Add(line);
+            }
+            return lines;
+        }
         catch (FileNotFoundException) { return []; }
         catch (DirectoryNotFoundException) { return []; }
     }

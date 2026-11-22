@@ -1,8 +1,20 @@
+using System.Reflection;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliProcessEnvironmentWorkerBuildSeedTests
 {
+    [Fact]
+    public void SeedCensusRunsInANonParallelCollection()
+    {
+        var membership = typeof(WorkerBuildSeedTests).GetCustomAttribute<CollectionAttribute>();
+        var definition = typeof(CliProcessEnvironmentCollection).GetCustomAttribute<CollectionDefinitionAttribute>();
+        Assert.NotNull(membership);
+        Assert.NotNull(definition);
+        Assert.Equal(definition.Name, membership.Name);
+        Assert.True(definition.DisableParallelization);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -33,6 +45,26 @@ public sealed class CliProcessEnvironmentWorkerBuildSeedTests
         finally
         {
             Interlocked.Exchange(ref GitCli.LaunchObserver, original);
+        }
+    }
+
+    [Fact]
+    public void TimezoneOverrideUsesGitForCommitTimestamps()
+    {
+        var previous = Environment.GetEnvironmentVariable("TZ");
+        try
+        {
+            Environment.SetEnvironmentVariable("TZ", "UTC0");
+            var measurement = WorkerBuildSeedTests.MeasureFixture("worker-build Git TZ fallback", () =>
+                new WorkerBuildRequestFixture());
+            using var fixture = measurement.Fixture;
+            WorkerBuildSeedTests.AssertSetupLaunches(measurement.Counts, 1);
+            Assert.Equal("+0000", Git(fixture.RepositoryRoot, "show", "-s", "--format=%ai", "HEAD")[^5..]);
+            Assert.Equal("+0000", Git(fixture.RepositoryRoot, "show", "-s", "--format=%ci", "HEAD")[^5..]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TZ", previous);
         }
     }
 
