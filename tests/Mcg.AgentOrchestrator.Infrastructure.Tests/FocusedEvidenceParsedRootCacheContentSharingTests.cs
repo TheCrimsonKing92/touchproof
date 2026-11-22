@@ -114,6 +114,27 @@ public sealed class FocusedEvidenceParsedRootCacheContentSharingTests : IDisposa
     }
 
     [Fact]
+    public void ParseCallback_ColdReadFails_RetryParsesAgain()
+    {
+        var (path, _) = WriteIdenticalPair();
+        using var parses = FocusedEvidenceParsedRootCache.Observe(_root);
+        var failure = new InvalidOperationException("Parse notification failed.");
+
+        Assert.Same(failure, Assert.Throws<InvalidOperationException>(() =>
+            CSharpSourceFileRootReader.ReadFile(_store, path, () => throw failure)));
+        Assert.Equal(0, _store.Count);
+        Assert.Equal(1, parses.CountFor(path));
+
+        var retried = ReadFile(path);
+
+        Assert.Equal(path, retried.Root.SyntaxTree.FilePath);
+        Assert.Same(retried, ReadFile(path));
+        Assert.Equal(1, _parses);
+        Assert.Equal(2, parses.CountFor(path));
+        Assert.Equal(1, _store.Count);
+    }
+
+    [Fact]
     public async Task ParseCallback_ThrowingWhileCopyIsRead_OnlyFailsOwningRead()
     {
         var (first, copy) = WriteIdenticalPair();
@@ -131,22 +152,54 @@ public sealed class FocusedEvidenceParsedRootCacheContentSharingTests : IDisposa
         Task<FocusedEvidenceParsedRootCache.ParsedFile>? copyRead = null;
         try
         {
-            await callbackEntered.Task.WaitAsync(timeout);
+            await WaitFor(callbackEntered.Task, timeout, "the parse callback to enter");
             copyRead = Task.Run(() => ReadFile(copy));
-            var file = await copyRead.WaitAsync(timeout);
+            await WaitFor(copyRead, timeout, "the copy read to finish while the callback is blocked");
+            var file = await copyRead;
             Assert.Equal(copy, file.Root.SyntaxTree.FilePath);
         }
         finally
         {
             releaseCallback.Set();
-            await firstRead.WaitAsync(timeout);
+            await WaitFor(firstRead, timeout, "the callback-owning read to finish during cleanup");
             if (copyRead is not null)
-                await copyRead.WaitAsync(timeout);
+                await WaitFor(copyRead, timeout, "the copy read to finish during cleanup");
         }
 
         Assert.Same(failure, await firstRead);
         Assert.Equal(0, _parses);
         Assert.Equal(1, _store.Count);
+    }
+
+    [Fact]
+    public void EvictedContent_RepublishedAtAnotherPath_ReplacesLiveWrapper()
+    {
+        var (original, copy) = WriteIdenticalPair();
+        var store = new FocusedEvidenceParsedRootCache.Store(2);
+        using var parses = FocusedEvidenceParsedRootCache.Observe(_root);
+        var old = CSharpSourceFileRootReader.ReadFile(store, original);
+
+        // Rewriting one path evicts content while the original path entry stays indexed.
+        File.WriteAllText(copy, "class FirstReplacement {}");
+        CSharpSourceFileRootReader.ReadFile(store, copy);
+        File.WriteAllText(copy, "class SecondLongerReplacement {}");
+        CSharpSourceFileRootReader.ReadFile(store, copy);
+
+        File.Copy(original, copy, overwrite: true);
+        var republished = CSharpSourceFileRootReader.ReadFile(store, copy);
+        var current = CSharpSourceFileRootReader.ReadFile(store, original);
+
+        Assert.Equal(1, parses.CountFor(original));
+        Assert.Equal(3, parses.CountFor(copy));
+        Assert.NotSame(old.Root, current.Root);
+        Assert.True(republished.Names.Equals(current.Names));
+        Assert.Equal(original, current.Root.SyntaxTree.FilePath);
+    }
+
+    private static async Task WaitFor(Task task, TimeSpan timeout, string outcome)
+    {
+        try { await task.WaitAsync(timeout); }
+        catch (TimeoutException ex) { throw new TimeoutException($"Timed out waiting for {outcome}.", ex); }
     }
 
     private FocusedEvidenceParsedRootCache.ParsedFile ReadFile(string path) =>
