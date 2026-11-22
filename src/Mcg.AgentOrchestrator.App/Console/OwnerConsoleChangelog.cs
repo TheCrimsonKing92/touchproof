@@ -46,19 +46,24 @@ internal static class OwnerConsoleChangelog
             $"{entry.Summary} {string.Join("; ", entry.Navigation.Select(PlainKeyText))}"));
 
     internal static string FormatDetails(IReadOnlyList<OwnerConsoleChangelogEntry> entries) =>
-        string.Join("\n\n", entries.Select(entry =>
-            $"{entry.Id.ToString(CultureInfo.InvariantCulture)} - {entry.Summary}\n" +
-            string.Join("\n", entry.Navigation.Select(item => "- " + PlainKeyText(item)))));
+        FormatMarkedDetails(entries).PlainText;
 
-    private static string PlainKeyText(string navigation)
+    internal static OwnerConsoleMarkedText FormatMarkedDetails(IReadOnlyList<OwnerConsoleChangelogEntry> entries)
     {
-        if (!navigation.Contains('`')) return navigation;
-
-        var parts = navigation.Split('`');
-        // An even part count leaves the last delimiter unpaired.
-        if (parts.Length % 2 == 0) parts[^2] += "`";
-        return string.Concat(parts);
+        var lines = new List<IReadOnlyList<OwnerConsoleKeySpan>>();
+        foreach (var entry in entries)
+        {
+            if (lines.Count > 0) lines.Add([]);
+            lines.Add([new($"{entry.Id.ToString(CultureInfo.InvariantCulture)} - {entry.Summary}")]);
+            if (entry.Navigation.Count == 0) lines.Add([]);
+            foreach (var item in entry.Navigation)
+                lines.Add([new("- "), .. OwnerConsoleKeySpan.Split(item)]);
+        }
+        return new(lines);
     }
+
+    private static string PlainKeyText(string navigation) =>
+        OwnerConsoleKeySpan.ToPlainText(OwnerConsoleKeySpan.Split(navigation));
 
     private static bool TryReadHeading(string line, out int id, out string summary)
     {

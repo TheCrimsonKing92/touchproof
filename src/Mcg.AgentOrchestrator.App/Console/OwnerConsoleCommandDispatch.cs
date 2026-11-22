@@ -129,7 +129,7 @@ internal sealed class OwnerConsoleCommandDispatch(IOwnerConsoleDialogs dialogs, 
             await dialogs.ShowTextAsync("Console news", "No unseen console changes.");
         else
         {
-            await dialogs.ShowTextAsync("Console news", OwnerConsoleChangelog.FormatDetails(unseen));
+            await dialogs.ShowMarkedTextAsync("Console news", OwnerConsoleChangelog.FormatMarkedDetails(unseen));
             await RunDependencyAsync(OwnerConsoleBindings.NewsCommand, session.AcknowledgeAsync, operation, cancellationToken);
         }
     }

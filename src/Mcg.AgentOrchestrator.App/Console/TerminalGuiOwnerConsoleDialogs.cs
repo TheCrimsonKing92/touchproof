@@ -47,6 +47,12 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
 
     public async Task ShowTextAsync(string title, string text) => await ShowPageAsync(title, text);
 
+    public Task ShowMarkedTextAsync(string title, OwnerConsoleMarkedText text) => OnUiAsync(() =>
+    {
+        using var dialog = new OwnerConsoleTextDialog(title, text);
+        return RunPage(dialog);
+    });
+
     public async Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail) => await OnUiAsync(() =>
     {
         using var dialog = new OwnerConsoleDecisionDialog(detail, action => app.Invoke(action));
@@ -97,6 +103,11 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
     {
         using var dialog = new OwnerConsoleTextDialog(title, text, choiceLines);
         dialog.Structured = fields;
+        return RunPage(dialog);
+    }
+
+    private int? RunPage(OwnerConsoleTextDialog dialog)
+    {
         int? selected = null;
         dialog.ChoiceAccepted += choice => { selected = choice; app.RequestStop(dialog); };
         dialog.CloseRequested += () => app.RequestStop(dialog);
