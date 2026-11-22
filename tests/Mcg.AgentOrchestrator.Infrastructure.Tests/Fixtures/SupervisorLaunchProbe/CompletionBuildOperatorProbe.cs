@@ -315,6 +315,7 @@ internal static class CompletionBuildOperatorProbe
         info.Environment["NUGET_PACKAGES"] = Path.Combine(f.Profile, "packages");
         info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         info.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+        info.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
         info.Environment["MCG_ORCHESTRATOR_HOME"] = f.Source;
         info.Environment[DotnetBuildStorageLayout.IsolatedRootOverrideVariable] = f.Storage;
         var process = Process.Start(info)!;

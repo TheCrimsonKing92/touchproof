@@ -371,6 +371,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         info.Environment["TEMP"] = temporaryDirectory;
         info.Environment["TMP"] = temporaryDirectory;
         info.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        info.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
         info.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         info.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
         if (gcEnvironment is not null) BuildGcEnvironment.Apply(info.Environment, gcEnvironment);
