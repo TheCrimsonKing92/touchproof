@@ -73,8 +73,8 @@ public sealed class OwnerConsoleActivityPresentationTests
         var detail = "reason=receipt_waiting_for_capacity; " + command + "\nraw=full raw second line";
         var activity = Assert.Single(OwnerActivityNarrator.Narrate(
             [new(default, "goal-escalation", "11111111", detail)], _ => "Search"));
-        Assert.Equal("proof waiting for capacity.", activity.Why);
-        Assert.Equal("11111111 escalated: proof waiting for capacity.", activity.Phrase);
+        Assert.Equal("receipt waiting for capacity.", activity.Why);
+        Assert.Equal("11111111 escalated: receipt waiting for capacity.", activity.Phrase);
         Assert.Equal(detail, activity.Detail);
     }
 
