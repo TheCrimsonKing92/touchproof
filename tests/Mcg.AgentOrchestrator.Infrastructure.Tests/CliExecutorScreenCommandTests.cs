@@ -330,9 +330,61 @@ public sealed class CliExecutorScreenCommandTests
         using var held = RemoteExecutorOccupancy.TryClaimExclusive(fixture.Root, fixture.Entry.Id, 1);
         Assert.NotNull(held);
         Assert.Equal(0, await Run(fixture, path, [fixture.Candidate], output, error));
-        Assert.Equal("SCREEN idle reason=no-idle-executor" + Environment.NewLine, output.ToString());
+        Assert.Equal("SCREEN idle reason=slot-busy slot=1" + Environment.NewLine, output.ToString());
         Assert.Empty(fixture.Executor.Requests);
         Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Fact]
+    public async Task NamedExecutorReportsTheLiveSlotHolderWithoutWaiting()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var occupancy = new CliExecutorScreenWaitTests.SlotOccupancy { BusySlot = 1, BusyMarkerVisible = true };
+
+        Assert.Equal(0, await Run(fixture, WriteConfiguration(fixture, "shadow"), [fixture.Candidate], output, error,
+            ["executor-screen", "--executor", "laptop"], occupancy));
+
+        Assert.Equal("SCREEN idle reason=slot-busy slot=1 attempt=external class=FocusedEvidence" + Environment.NewLine,
+            output.ToString());
+        Assert.Equal((1, (int?)1, false), Assert.Single(occupancy.ClaimAttempts));
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Fact]
+    public async Task NamedExecutorRunsWhenOnlyALiveMarkerRemains()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        RemoteExecutorOccupancy.Claim(fixture.Root, fixture.Entry.Id, "previous", 1, RemoteExecutorClaimClass.FocusedEvidence);
+
+        Assert.Equal(0, await Run(fixture, WriteConfiguration(fixture, "shadow"), [fixture.Candidate], output, error,
+            ["executor-screen", "--executor", "laptop"]));
+
+        Assert.StartsWith("SCREEN goal=", output.ToString());
+        Assert.Single(fixture.Executor.Requests);
+        Assert.Equal("previous.slot-1", Assert.Single(RemoteExecutorOccupancy.LiveMarkers(fixture.Root, fixture.Entry.Id)).Attempt);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("-1")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("1,5")]
+    public async Task InvalidWaitMinutesReportUsage(string? value)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var args = value is null ? new[] { "executor-screen", "--wait" } : ["executor-screen", "--wait", value];
+
+        Assert.Equal(2, await Run(fixture, WriteConfiguration(fixture, "shadow"), [fixture.Candidate], output, error, args));
+        Assert.Equal(CliCommandHelp.ExecutorScreenUsage + Environment.NewLine, error.ToString());
+        Assert.Empty(fixture.Executor.Requests);
     }
 
     [Fact]
@@ -358,17 +410,19 @@ public sealed class CliExecutorScreenCommandTests
     {
         CliCommandHelp.ThrowIfInvalidFlags(["executor-screen", "--max-candidates", "2", "--executor", "mcg-exec-1"]);
         CliCommandHelp.ThrowIfInvalidFlags(["executor-screen", "--whole-gate", "--executor", "mcg-exec-1",
-            "--goal", "0123", "--max-lanes", "1"]);
+            "--goal", "0123", "--max-lanes", "1", "--wait", "0.5"]);
         Assert.Contains("--whole-gate", CliCommandHelp.ExecutorScreenUsage);
         Assert.Contains("--goal", CliCommandHelp.ExecutorScreenUsage);
         Assert.Contains("--max-lanes", CliCommandHelp.ExecutorScreenUsage);
+        Assert.Contains("--wait <minutes>", CliCommandHelp.ExecutorScreenUsage);
         Assert.ThrowsAny<Exception>(() => CliCommandHelp.ThrowIfInvalidFlags(["executor-screen", "--unknown"]));
         Assert.Contains("executor-screen", CliArgumentParser.RecognizedCommands);
         Assert.True(CliExecutorScreenCommand.IsCommand(["executor-screen"]));
     }
 
     private static Task<int> Run(Fixture fixture, string config, IReadOnlyList<ExecutorScreeningCandidate> candidates,
-        TextWriter output, TextWriter error, string[]? args = null) => CliExecutorScreenCommand.RunAsync(
+        TextWriter output, TextWriter error, string[]? args = null, IExecutorSlotOccupancy? occupancy = null) =>
+        CliExecutorScreenCommand.RunAsync(
             args ?? ["executor-screen"], config, () => candidates,
             _ => (new[] { new AcceptanceTestLane("A", "FullyQualifiedName~A") }, TimeSpan.FromHours(1)),
             (_, _, prefix) =>
@@ -391,7 +445,7 @@ public sealed class CliExecutorScreenCommandTests
             trialCheckout: gate => (candidates.Single(candidate => candidate.GoalId == gate.GoalId) with
             {
                 Commit = gate.Commit, MainSha = gate.MainSha, PassedGateAttemptId = gate.AttemptId
-            }, null));
+            }, null), occupancy: occupancy);
 
     private static void StoreAttempt(Fixture fixture, string goalId, string id, string commit, DateTimeOffset completed,
         ConductorParallelAcceptanceAttemptOutcome outcome)
@@ -409,7 +463,7 @@ public sealed class CliExecutorScreenCommandTests
         }));
     }
 
-    private static string WriteConfiguration(Fixture fixture, string mode)
+    internal static string WriteConfiguration(Fixture fixture, string mode)
     {
         var path = Path.Combine(fixture.Root, "remote-lanes.json");
         File.WriteAllText(path, """

@@ -22,8 +22,8 @@ internal static class CliExecutorScreenCommand
             eventArgs.Cancel = true;
             cancellation.Cancel();
         };
-        var trial = args.Contains("--whole-gate", StringComparer.Ordinal);
-        if (trial) Console.CancelKeyPress += cancel;
+        var cancellable = args.Contains("--whole-gate", StringComparer.Ordinal) || args.Contains("--wait", StringComparer.Ordinal);
+        if (cancellable) Console.CancelKeyPress += cancel;
         try
         {
             return await RunAsync(args, RemoteLaneExecutorConfiguration.ResolveStorePath(root),
@@ -40,7 +40,7 @@ internal static class CliExecutorScreenCommand
                 goalIds: () => ReadTrialGoalIds(workspace, attemptsDirectory),
                 trialCheckout: gate => OpenTrialCheckout(workspace.ExecutionDirectory, gate, Console.Error)).ConfigureAwait(false);
         }
-        finally { if (trial) Console.CancelKeyPress -= cancel; }
+        finally { if (cancellable) Console.CancelKeyPress -= cancel; }
     }
 
     internal static async Task<int> RunAsync(IReadOnlyList<string> args, string configurationPath,
@@ -55,18 +55,20 @@ internal static class CliExecutorScreenCommand
         CancellationToken token = default,
         Func<string?, IReadOnlyList<ExecutorPassedGate>>? passedGateSource = null,
         Func<IEnumerable<string>>? goalIds = null,
-        Func<ExecutorPassedGate, (ExecutorScreeningCandidate Candidate, IDisposable? Checkout)?>? trialCheckout = null)
+        Func<ExecutorPassedGate, (ExecutorScreeningCandidate Candidate, IDisposable? Checkout)?>? trialCheckout = null,
+        IExecutorSlotOccupancy? occupancy = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         var maximum = 1;
         string? executorId = null;
         string? goalPrefix = null;
         int? remainingLanes = null;
+        double? waitMinutes = null;
         var wholeGate = false;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] is "--help" or "-h") { output.WriteLine(CliCommandHelp.ExecutorScreenUsage); return 0; }
             if (args[i] == "--whole-gate") { wholeGate = true; continue; }
-            if (args[i] is not ("--max-candidates" or "--executor" or "--goal" or "--max-lanes") ||
+            if (args[i] is not ("--max-candidates" or "--executor" or "--goal" or "--max-lanes" or "--wait") ||
                 i + 1 == args.Count || args[i + 1].StartsWith("-", StringComparison.Ordinal)) return Usage();
             var flag = args[i++];
             if (flag == "--executor") { executorId = args[i]; continue; }
@@ -74,6 +76,13 @@ internal static class CliExecutorScreenCommand
             {
                 if (string.IsNullOrWhiteSpace(args[i])) return Usage();
                 goalPrefix = args[i];
+                continue;
+            }
+            if (flag == "--wait")
+            {
+                if (!double.TryParse(args[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var minutes) ||
+                    !double.IsFinite(minutes) || minutes < 0) return Usage();
+                waitMinutes = minutes;
                 continue;
             }
             if (!int.TryParse(args[i], NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count < 1)
@@ -84,12 +93,14 @@ internal static class CliExecutorScreenCommand
         }
         if (wholeGate ? string.IsNullOrWhiteSpace(executorId) : goalPrefix is not null || remainingLanes is not null)
             return Usage();
+        const string invalidScreeningReason = "screening-invalid";
         var configuration = RemoteLaneExecutorConfiguration.Load(configurationPath);
-        var refusal = !configuration.Enabled ? "remote-lanes-disabled" : wholeGate ? null : configuration.Screening.FaultReason == "invalid"
-            ? "screening-invalid" : configuration.Screening.Mode != "shadow" ? "screening-off" : null;
-        if (refusal is not null) { output.WriteLine("SCREEN refused reason=" + refusal); return 2; }
+        if (!configuration.Enabled) return Refuse("remote-lanes-disabled");
+        if (HasInvalidScreeningSettings(configuration)) return Refuse(invalidScreeningReason);
+        if (!wholeGate && configuration.Screening.Mode != "shadow") return Refuse("screening-off");
         if (executorId is not null && !configuration.Executors.Any(entry => entry.Id == executorId && entry.Transport == "ssh"))
             return Usage();
+        occupancy ??= ExecutorSlotOccupancy.Instance;
         if (wholeGate)
         {
             try { return await RunWholeGateTrialsAsync().ConfigureAwait(false); }
@@ -102,28 +113,41 @@ internal static class CliExecutorScreenCommand
             if (entry is null) return NoExecutor();
             var candidate = ExecutorScreeningPlanner.PickCandidate(candidateSource(), ExecutorScreeningReceiptLedger.ReadAll(receiptPath));
             if (candidate is null) return Idle("no-candidate");
-            IReadOnlyList<AcceptanceTestLane> lanes = [];
-            var timeout = new AcceptanceGateEngineSettings().ResolveCheckTimeout(null);
-            try { (lanes, timeout) = laneSource(candidate.WorktreePath); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or ArgumentException)
-            { /* An unreadable manifest retires this candidate with an incomplete receipt. */ }
-            var selection = ExecutorScreeningPlanner.SelectLanes(lanes, configuration);
             var id = Guid.NewGuid().ToString("N");
             var prefix = Path.Combine(occupancyRoot, ".orchestrator", "executor-screening", id, "result");
             try
             {
-                var receipt = await ExecutorScreeningRunner.RunAsync(candidate, entry, selection, configuration,
-                    executorFactory(configuration, candidate.WorktreePath, prefix), occupancyRoot, receiptPath,
-                    id, timeout, clock, pollInterval).ConfigureAwait(false);
-                if (receipt is null) return Idle("no-idle-executor");
+                var (outcome, waited) = await AcquireAsync<ExecutorScreeningReceipt>(RunAttemptAsync).ConfigureAwait(false);
+                if (outcome.Refusal is { } refused) return ReportRefusal(refused, waited);
+                var receipt = outcome.Receipt;
                 output.WriteLine($"SCREEN goal={candidate.GoalId[..Math.Min(8, candidate.GoalId.Length)]} " +
                     $"commit={candidate.Commit[..Math.Min(9, candidate.Commit.Length)]} executor={entry.Id} " +
                     $"verdict={receipt.Verdict.ToString().ToLowerInvariant()} lanes={receipt.LaneOutcomes.Count} " +
                     $"failing={receipt.LaneOutcomes.Count(lane => lane.FailingTests.Count > 0)} " +
                     $"excluded={receipt.ExcludedLanes.Count} receipt={receipt.ReceiptId}");
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return 0; }
+            catch (InvalidScreeningSettingsException) { return Refuse(invalidScreeningReason); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             { error.WriteLine($"SCREEN error={ex.GetType().Name}: {ex.Message}"); return 1; }
+
+            Task<ExecutorScreeningOutcome<ExecutorScreeningReceipt>> RunAttemptAsync(
+                bool isRetry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
+            {
+                var (currentConfiguration, currentEntry) = ReadTarget(entry, isRetry);
+                if (CheckTarget(currentEntry, acquisitionExpiry) is { } refused)
+                    return Task.FromResult(new ExecutorScreeningOutcome<ExecutorScreeningReceipt>(refused));
+
+                IReadOnlyList<AcceptanceTestLane> lanes = [];
+                var timeout = new AcceptanceGateEngineSettings().ResolveCheckTimeout(null);
+                try { (lanes, timeout) = laneSource(candidate.WorktreePath); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or ArgumentException)
+                { /* An unreadable manifest retires this candidate with an incomplete receipt. */ }
+                var selection = ExecutorScreeningPlanner.SelectLanes(lanes, currentConfiguration);
+                var transport = executorFactory(currentConfiguration, candidate.WorktreePath, prefix);
+                return ExecutorScreeningRunner.RunAsync(candidate, currentEntry, selection, currentConfiguration, transport,
+                    occupancyRoot, receiptPath, id, timeout, clock, pollInterval, token, occupancy, acquisitionExpiry);
+            }
         }
         return 0;
 
@@ -164,29 +188,13 @@ internal static class CliExecutorScreenCommand
 
         async Task<int?> RunTrialAsync(ExecutorScreeningCandidate candidate, RemoteLaneExecutorEntry entry)
         {
-            ExecutorWholeGateTrialPlan plan;
-            try { plan = trialPlanSource?.Invoke(candidate.WorktreePath) ?? ReadCandidateTrialPlan(candidate); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
-                InvalidDataException or ArgumentException or InvalidOperationException)
-            {
-                output.WriteLine("SCREEN refused reason=invalid-trial-plan");
-                error.WriteLine(ex.Message);
-                return 2;
-            }
-            if (plan.Lanes.Count == 0)
-            {
-                output.WriteLine("SCREEN refused reason=empty-trial-plan");
-                return 2;
-            }
             var id = Guid.NewGuid().ToString("N");
             var prefix = Path.Combine(occupancyRoot, ".orchestrator", "executor-screening", id, "result");
             try
             {
-                var receipt = await ExecutorScreeningRunner.RunWholeGateAsync(candidate, entry, plan, configuration,
-                    executorFactory(configuration, candidate.WorktreePath, prefix), occupancyRoot, receiptPath, id,
-                    clock, pollInterval, samplerFactory?.Invoke(entry, candidate, id, plan),
-                    at => localAttemptSource?.Invoke(candidate, plan, at), token, maxLanes: remainingLanes).ConfigureAwait(false);
-                if (receipt is null) return Idle("no-idle-executor");
+                var (outcome, waited) = await AcquireAsync<ExecutorWholeGateTrialReceipt>(RunTrialAttemptAsync).ConfigureAwait(false);
+                if (outcome.Refusal is { } refused) return ReportRefusal(refused, waited);
+                var receipt = outcome.Receipt;
                 if (remainingLanes is not null)
                     remainingLanes -= receipt.SubmissionAttempts!.Value;
                 output.WriteLine(FormattableString.Invariant(
@@ -194,19 +202,114 @@ internal static class CliExecutorScreenCommand
                 output.WriteLine(ExecutorWholeGateTrialComparison.Format(receipt));
                 return null;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (TrialPlanReadException ex)
+            {
+                output.WriteLine("SCREEN refused reason=invalid-trial-plan");
+                error.WriteLine(ex.Message);
+                return 2;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             { error.WriteLine($"TRIAL error={ex.GetType().Name}: {ex.Message}"); return 1; }
+
+            Task<ExecutorScreeningOutcome<ExecutorWholeGateTrialReceipt>> RunTrialAttemptAsync(
+                bool isRetry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
+            {
+                var (currentConfiguration, currentEntry) = ReadTarget(entry, isRetry);
+                if (CheckTarget(currentEntry, acquisitionExpiry) is { } refused)
+                    return Task.FromResult(new ExecutorScreeningOutcome<ExecutorWholeGateTrialReceipt>(refused));
+
+                ExecutorWholeGateTrialPlan plan;
+                try { plan = trialPlanSource?.Invoke(candidate.WorktreePath) ?? ReadCandidateTrialPlan(candidate); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                    InvalidDataException or ArgumentException or InvalidOperationException)
+                { throw new TrialPlanReadException(ex); }
+                var transport = executorFactory(currentConfiguration, candidate.WorktreePath, prefix);
+                var sampler = samplerFactory?.Invoke(currentEntry, candidate, id, plan);
+                return ExecutorScreeningRunner.RunWholeGateAsync(candidate, currentEntry, plan, currentConfiguration, transport,
+                    occupancyRoot, receiptPath, id, clock, pollInterval, sampler,
+                    at => localAttemptSource?.Invoke(candidate, plan, at), token, maxLanes: remainingLanes,
+                    occupancy: occupancy, acquisitionExpiry: acquisitionExpiry);
+            }
+        }
+
+        async Task<(ExecutorScreeningOutcome<T> Outcome, double? Waited)> AcquireAsync<T>(
+            Func<bool, Func<ExecutorScreeningRefusal?>?, Task<ExecutorScreeningOutcome<T>>> run) where T : class
+        {
+            var started = clock.GetTimestamp();
+            token.ThrowIfCancellationRequested();
+            var outcome = await run(false, waitMinutes is double minutes && minutes > 0
+                ? () => CheckExpiry(minutes)
+                : null).ConfigureAwait(false);
+            while (waitMinutes is { } budget && outcome.Refusal is { Cause: ExecutorScreeningRefusalCause.SlotBusy } busy)
+            {
+                token.ThrowIfCancellationRequested();
+                var remainingTicks = RemainingTicks(budget);
+                if (remainingTicks <= 0) return (outcome, budget);
+                var interval = remainingTicks >= pollInterval.Ticks
+                    ? pollInterval
+                    : TimeSpan.FromTicks((long)Math.Ceiling(remainingTicks));
+                if (delay is not null) await delay(interval, token).ConfigureAwait(false);
+                else if (interval > TimeSpan.Zero) await Task.Delay(interval, clock, token).ConfigureAwait(false);
+                else await Task.Yield();
+                token.ThrowIfCancellationRequested();
+                if (RemainingTicks(budget) <= 0) return (outcome, budget);
+                outcome = await run(true, () => CheckExpiry(budget, busy)).ConfigureAwait(false);
+            }
+            return (outcome, outcome.Refusal?.Cause == ExecutorScreeningRefusalCause.WaitExpired ? waitMinutes : null);
+
+            double RemainingTicks(double budget) => budget * TimeSpan.TicksPerMinute - clock.GetElapsedTime(started).Ticks;
+
+            ExecutorScreeningRefusal? CheckExpiry(double budget, ExecutorScreeningRefusal? lastBusy = null) =>
+                RemainingTicks(budget) > 0 ? null : lastBusy ?? new(ExecutorScreeningRefusalCause.WaitExpired);
+        }
+
+        (RemoteLaneExecutorConfiguration Configuration, RemoteLaneExecutorEntry Entry) ReadTarget(
+            RemoteLaneExecutorEntry entry, bool retry)
+        {
+            if (!retry) return (configuration, entry);
+            var current = RemoteLaneExecutorConfiguration.Load(configurationPath);
+            if (current.DisabledReason == "invalid")
+                throw new InvalidDataException($"Invalid remote lane executor configuration: {configurationPath}");
+            if (HasInvalidScreeningSettings(current)) throw new InvalidScreeningSettingsException();
+            configuration = current;
+            var refreshed = current.Enabled && (wholeGate || current.Screening.Mode == "shadow")
+                ? current.Executors.FirstOrDefault(executor => executor.Id == entry.Id && executor.Transport == "ssh")
+                : null;
+            return (current, refreshed ?? entry with { AdmissionEnabled = false });
+        }
+
+        bool HasInvalidScreeningSettings(RemoteLaneExecutorConfiguration settings) =>
+            !wholeGate && settings.Screening.FaultReason == "invalid";
+
+        ExecutorScreeningRefusal? CheckTarget(RemoteLaneExecutorEntry entry, Func<ExecutorScreeningRefusal?>? acquisitionExpiry)
+        {
+            token.ThrowIfCancellationRequested();
+            if (acquisitionExpiry?.Invoke() is { } expired) return expired;
+            if (!entry.AdmissionEnabled) return new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled);
+            if (!ExecutorSlotOccupancy.IsValidExecutorId(entry.Id)) throw new InvalidDataException("Invalid executor id.");
+            return null;
         }
 
         int Usage() { error.WriteLine(CliCommandHelp.ExecutorScreenUsage); return 2; }
         int Idle(string reason) { output.WriteLine("SCREEN idle reason=" + reason); return 0; }
         int Refuse(string reason) { output.WriteLine("SCREEN refused reason=" + reason); return 2; }
+        int ReportRefusal(ExecutorScreeningRefusal reason, double? waited)
+        {
+            output.WriteLine(reason.FormatIdleLine(waited));
+            return 0;
+        }
+
         RemoteLaneExecutorEntry? PickIdleExecutor() => ExecutorScreeningPlanner.PickIdleExecutor(configuration.Executors,
-            id => RemoteExecutorOccupancy.IsOccupied(occupancyRoot, id), executorId);
+            id => executorId is null && occupancy.IsOccupied(occupancyRoot, id), executorId)
+            ?? (waitMinutes is not null ? ExecutorScreeningPlanner.PickIdleExecutor(configuration.Executors, _ => false, executorId) : null);
         int NoExecutor() => Idle(configuration.Executors.Any(executor => executor.AdmissionEnabled &&
             executor.Transport == "ssh" && (executorId is null || executor.Id == executorId))
                 ? "no-idle-executor" : "no-enabled-executor");
     }
+
+    private sealed class InvalidScreeningSettingsException : Exception;
+
+    private sealed class TrialPlanReadException(Exception cause) : Exception(cause.Message, cause);
 
     private static ExecutorWholeGateTrialPlan ReadCandidateTrialPlan(ExecutorScreeningCandidate candidate)
     {
