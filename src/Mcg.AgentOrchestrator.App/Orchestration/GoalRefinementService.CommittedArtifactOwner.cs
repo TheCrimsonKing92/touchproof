@@ -16,12 +16,16 @@ internal sealed partial class GoalRefinementService
 
     // Explicit production verbs allow descriptive modifiers within the artifact noun phrase.
     // Stop at clause and preposition boundaries, such as "a run of existing tests".
-    private const string QualifiedArtifact = """
+    private const string ArtifactModifiers = """
         (?:
             (?!\b(?:a|an|the|and|or|that|which|whether|of|from|for|in|on|to|by|with|without|using|about|no|not)\b)
             [\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*[ \t]+
         )*
-        """ + Artifact;
+        """;
+
+    private const string QualifiedArtifact = ArtifactModifiers + Artifact;
+    private const string ProductionQualifiedArtifact =
+        ArtifactModifiers + @"\b(?:new|committed|checked-in)\s+" + QualifiedArtifact;
 
     private static Dictionary<string, string> RewriteCommittedArtifactOwners(
         List<string> criteria, List<string> diagnostics)
@@ -63,7 +67,10 @@ internal sealed partial class GoalRefinementService
         """ + Artifact + """
           | (?:(?:the\s+|this\s+)?(?:developer|candidate|change|implementation|patch|solution)\s+(?:(?:must|will|shall)\s+)?)?
             (?!
-                adds?\s+(?:(?:an?|the)\s+)?(?!(?:new|committed|checked-in)\s+)
+                adds?\s+(?:(?:an?|the)\s+)?
+                (?!
+        """ + ProductionQualifiedArtifact + """
+                )
         """ + QualifiedArtifact + """
                 \s+to\s+(?:(?:an?|the)\s+)?(?:focused\s+)?(?:evidence|test)\s+(?:run|selection)\b
             )

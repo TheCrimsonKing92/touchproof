@@ -27,6 +27,8 @@ public sealed class CommittedArtifactOwnerRewriteRefinementTests
     [InlineData("The change writes a machine-readable audit report.")]
     [InlineData("A report is included in the commit.")]
     [InlineData("The change adds a new test to the focused evidence run.")]
+    [InlineData("The change adds the requested new tests to the focused evidence run.")]
+    [InlineData("The change adds the requested committed integration tests to the focused evidence run.")]
     public async Task QualifiedArtifactProductionMovesTesterOwnershipToDeveloper(string requirement)
     {
         var goal = await FileAndRefine(false,
