@@ -4,14 +4,14 @@ using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleProviderConnecti
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettingsTab
+internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettingsTab
 {
     private readonly IProviderConnectionsConsoleGateway _connections;
     private readonly Func<IReadOnlyList<AgentDefinition>> _loadRoster;
     private readonly OwnerConsoleProviderSignInFlow _signIn;
+    private readonly OwnerConsoleProviderConnectionList _list;
     private readonly Action<Action> _invoke;
     private readonly Action<Func<Task>> _scheduleWork;
-    private readonly TimeProvider _clock;
     private readonly CancellationToken _lifetime;
     private List<OwnerConsoleProviderConnectionState> _profiles = [];
     private IReadOnlyList<AgentDefinition> _roster = [];
@@ -30,10 +30,10 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
         _loadRoster = loadRoster;
         _invoke = invoke;
         _scheduleWork = scheduleWork ?? (work => { _ = Task.Run(work); });
-        _clock = clock;
         _lifetime = lifetime;
         _signIn = new(connections, launcher, FindProfile, Check, apply => Post(apply), _scheduleWork, lifetime);
-        _target = new(() => _rows, index => { _selected = index; ProbeSelectedDeviceCode(); });
+        _list = new(FindProfile, _signIn, clock);
+        _target = new(() => _list.ActiveRows, index => { _list.SelectActiveRow(index); ProbeSelectedDeviceCode(); });
     }
 
     internal Action? Invalidate { get; set; }
@@ -42,12 +42,17 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
         ReturnKey + "  " + StopWaitingKey + "  " + ReloadKey + "  " + ExpandUnusedKey + "  " + CollapseUnusedKey;
     public string Title => TabTitle;
     public bool Editing => false;
+    public int SelectedLine => _list.SelectedLine;
+    public IReadOnlyList<string> Lines => _list.RenderLines(_listing ? "Reading configured profiles and readiness evidence…" :
+        _loadError ?? (_listed ? "No configured worker profiles." : "Provider connections have not been loaded.")).ToArray();
+    public string StatusText => _listing ? "Reading provider connections…" : _loadError ?? _target.Notice ?? _list.SelectionStatus ?? "";
+    public string KeyHint => _list.KeyHint;
 
     internal void Target(string? provider) => _target.Set(provider, _listed && !_listing);
 
     public void Activate()
     {
-        if (_unusedExpanded) CollapseUnused();
+        _list.CollapseUnused();
         if (!_listed && _loadError is null) Refresh();
     }
 
@@ -66,20 +71,15 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
         if (_lifetime.IsCancellationRequested || key.IsAlt || key.IsCtrl) return;
         if (key == Key.CursorUp || key == Key.CursorDown)
         {
-            _selected = Math.Clamp(_selected + (key == Key.CursorUp ? -1 : 1), 0, Math.Max(0, SelectionCount - 1));
+            _list.Move(key == Key.CursorUp ? -1 : 1);
             ProbeSelectedDeviceCode();
             return;
         }
-        if (key == Key.Enter && (UnusedHeaderSelected || SelectedUnusedId is not null))
-        {
-            if (_unusedExpanded) CollapseUnused();
-            else _unusedExpanded = true;
-            return;
-        }
+        if (key == Key.Enter && _list.ToggleUnused()) return;
         var action = char.ToLowerInvariant((char)key.AsRune.Value);
         if (action == 'r') { Refresh(); return; }
-        var row = SelectedActiveRow;
-        var profile = row is null ? SelectedUnusedProfile : Representative(row);
+        var row = _list.SelectedActiveRow;
+        var profile = row is null ? _list.SelectedUnusedProfile : _list.Representative(row);
         if (profile is null) return;
         switch (action)
         {
@@ -91,19 +91,13 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
             case 'd' when _signIn.DeviceCodeAvailable(profile):
                 _signIn.BeginSignIn(profile, deviceCode: true, selectedFromUnused: row is null);
                 break;
-            case 't': _signIn.ReportReturn(row is null ? profile : SignInProfile(row), stoppedWaiting: false); break;
-            case 'x': _signIn.ReportReturn(row is null ? profile : SignInProfile(row), stoppedWaiting: true); break;
+            case 't': _signIn.ReportReturn(row is null ? profile : _list.SignInProfile(row), stoppedWaiting: false); break;
+            case 'x': _signIn.ReportReturn(row is null ? profile : _list.SignInProfile(row), stoppedWaiting: true); break;
         }
     }
 
-    private OwnerConsoleProviderConnectionState Representative(OwnerConsoleProviderRowModel row) =>
-        FindProfile(row.Representative.Report.ProfileId)!;
-
-    private OwnerConsoleProviderConnectionState SignInProfile(OwnerConsoleProviderRowModel row) =>
-        row.Members.Select(member => FindProfile(member.Report.ProfileId)!)
-            .FirstOrDefault(_signIn.HasActiveSignIn) ?? Representative(row);
-
-    private void ProbeSelectedDeviceCode() => _signIn.ProbeDeviceCode(SelectedActiveRow is { } row ? Representative(row) : null);
+    private void ProbeSelectedDeviceCode() =>
+        _signIn.ProbeDeviceCode(_list.SelectedActiveRow is { } row ? _list.Representative(row) : null);
 
     private async Task LoadAsync(long revision)
     {
@@ -145,12 +139,19 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
         _target.Apply();
     }
 
+    private void RebuildRows()
+    {
+        var browsingUnused = _list.HasUnusedSelection;
+        _list.Rebuild(_profiles.Select(profile => profile.Connection).ToArray(), _roster);
+        if (!browsingUnused) ProbeSelectedDeviceCode();
+    }
+
     private void StartInitialChecks()
     {
         if (_initialChecksStarted || _lifetime.IsCancellationRequested) return;
         _initialChecksStarted = true;
-        foreach (var row in _rows) Check(Representative(row));
-        if (_rows.Length > 0) Invalidate?.Invoke();
+        foreach (var row in _list.ActiveRows) Check(_list.Representative(row));
+        if (_list.ActiveRows.Length > 0) Invalidate?.Invoke();
     }
 
     private OwnerConsoleProviderConnectionState? FindProfile(string profileId) =>
