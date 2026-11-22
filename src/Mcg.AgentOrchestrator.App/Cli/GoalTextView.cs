@@ -70,6 +70,14 @@ public static void PrintGoal(
         Console.WriteLine("Criterion evidence obligations:");
         foreach (var obligation in goal.CriterionEvidenceObligations.OrderBy(item => item.CriterionVersion).ThenBy(item => item.CriterionIndex))
         {
+            if (obligation.State == CriterionEvidenceState.Superseded)
+            {
+                var reason = OutputTextPreview.CreateSummary(obligation.Detail!).Text;
+                var actor = OutputTextPreview.CreateSummary(obligation.ObservationActor!).Text;
+                Console.WriteLine($"  - {obligation.DisplayLabel}: owner=operator state=Superseded reason={reason} actor={actor} at={obligation.RecordedAt:u}");
+                continue;
+            }
+
             var observedBy = obligation.Observation is null
                 ? string.Empty
                 : $" observed-by={(obligation.ObservationActorKind ?? OperatorActorKind.Human).ToString().ToLowerInvariant()}:{obligation.ObservationActor}";

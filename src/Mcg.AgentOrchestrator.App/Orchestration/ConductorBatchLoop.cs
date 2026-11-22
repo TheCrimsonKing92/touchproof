@@ -71,7 +71,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly GoalDispatchRefresh _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly OperatorIntentCoordinator? _operatorIntents;
-    private readonly Func<AgentOrchestratorKernel, GoalId, bool>? _prepareOperatorIntentTarget;
+    private readonly Func<AgentOrchestratorKernel, GoalId, bool, bool>? _prepareOperatorIntentTarget;
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
     private readonly ProgressiveReviewSteeringCoordinator? _progressiveReviewSteering;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
@@ -143,7 +143,7 @@ internal sealed partial class ConductorBatchLoop
         Func<TimeSpan>? processCpuTime = null,
         Action<string>? loadTrxCoherenceVerdicts = null,
         Func<int>? countLiveGroupedGates = null,
-        Func<AgentOrchestratorKernel, GoalId, bool>? prepareOperatorIntentTarget = null,
+        Func<AgentOrchestratorKernel, GoalId, bool, bool>? prepareOperatorIntentTarget = null,
         HomeBuildAdoptionDetector? homeBuildAdoption = null,
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? homeBuildRelaunch = null,
         Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null,
@@ -243,7 +243,8 @@ internal sealed partial class ConductorBatchLoop
         Func<bool>? hasTransientLoadHold = null,
         TimeSpan? maxDurationDeferralCeiling = null,
         Action<bool>? onMaxDurationDeferralStateChanged = null,
-        bool emitActivationHeartbeat = false)
+        bool emitActivationHeartbeat = false,
+        Action? observeTickWithoutDispatch = null)
     {
         var watchSleep = new ConductorWatchSleep(stopFilePath, ignoreInitialStopFile: onlyGoalId is not null);
         var drain = new ConductorDrainSignal(ConductorDrainSignal.PathFor(stopFilePath), _drainClock,
@@ -418,22 +419,25 @@ internal sealed partial class ConductorBatchLoop
             }, canaryDrain.Track, line => EmitProgress(line), changedFilesAvailable);
         }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
-        _selectedExecutionBackstop ??= SelectedExecutionBackstopCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
-        if (keepAliveWhenIdle && onlyGoalId is null)
-            _mainFullVerification = MainFullVerificationCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
-        if (_mainFullVerification is { } scheduledVerification)
-            driver.ParallelAcceptanceAttemptCoordinator.GetMainFullVerificationRunId = () => scheduledVerification.ActiveRunId;
-        driver.GateMissDetector ??= _selectedExecutionBackstop is { } backstop ? new(backstop, line => EmitProgress(line)) : null;
-        driver.SuccessfulLandingSink = receipt =>
+        if (observeTickWithoutDispatch is null)
         {
-            var landedAt = _promptRolloutWatch is null ? default : _utcNow();
-            RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
-            HandleLandingRelaunch(totalTicks, receipt);
-            NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
-            _promptRolloutWatch?.NoteLanding(receipt, landedAt);
-            previousSuccessfulLandingSink?.Invoke(receipt);
-            _selectedExecutionBackstop?.NoteLanding(receipt, _workspace!.ExecutionDirectory);
-        };
+            _selectedExecutionBackstop ??= SelectedExecutionBackstopCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
+            if (keepAliveWhenIdle && onlyGoalId is null)
+                _mainFullVerification = MainFullVerificationCoordinator.Create(_workspace, driver, _utcNow, line => EmitProgress(line));
+            if (_mainFullVerification is { } scheduledVerification)
+                driver.ParallelAcceptanceAttemptCoordinator.GetMainFullVerificationRunId = () => scheduledVerification.ActiveRunId;
+            driver.GateMissDetector ??= _selectedExecutionBackstop is { } backstop ? new(backstop, line => EmitProgress(line)) : null;
+            driver.SuccessfulLandingSink = receipt =>
+            {
+                var landedAt = _promptRolloutWatch is null ? default : _utcNow();
+                RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
+                HandleLandingRelaunch(totalTicks, receipt);
+                NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
+                _promptRolloutWatch?.NoteLanding(receipt, landedAt);
+                previousSuccessfulLandingSink?.Invoke(receipt);
+                _selectedExecutionBackstop?.NoteLanding(receipt, _workspace!.ExecutionDirectory);
+            };
+        }
         var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
         _loadTrxCoherenceVerdicts(_workspace?.OrchestratorDirectory ?? leaseDirectory);
         EmitProgress(
@@ -659,6 +663,32 @@ internal sealed partial class ConductorBatchLoop
 
         while (true)
         {
+            if (observeTickWithoutDispatch is not null)
+            {
+                if (watchSleep.IsStopRequested())
+                {
+                    stopRequested = true;
+                    StopLoop("stop-file");
+                    break;
+                }
+                if (maxIterations <= totalTicks)
+                {
+                    StopLoop("max-iter");
+                    break;
+                }
+                if (maxDuration is { } limit && _utcNow() - started >= limit)
+                {
+                    StopLoop("max-duration");
+                    break;
+                }
+                observeTickWithoutDispatch();
+                onTick?.Invoke(new BatchTickSummary(++totalTicks, 0, 0, 0, 0, 0, WatchSleeping: true));
+                if (watchSleep.Wait(watchInterval ?? TimeSpan.FromSeconds(1), null, []) != WatchSleepResult.StopRequested)
+                    continue;
+                stopRequested = true;
+                StopLoop("stop-file-during-sleep");
+                break;
+            }
             using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick");
             _tickPhaseElapsedMs.Clear();
             if (_mainFullVerification is { } mainVerification)

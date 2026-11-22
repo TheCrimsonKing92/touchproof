@@ -129,20 +129,23 @@ catch (Exception ex)
     return 1;
 }
 
-var startupArgs = tenantSelection.CommandArgs.Count == 0
-    ? []
-    : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
+IReadOnlyList<string> startupArgs;
 try
 {
+    startupArgs = tenantSelection.CommandArgs.Count == 0
+        ? []
+        : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
     if (!(startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcommand) &&
         CliCommandHandlers.TryPrintStartupHelp(startupArgs))
     {
         return 0;
     }
+    if (CliShadowStartCommand.IsCommand(startupArgs))
+        return CliShadowStartCommand.Run(startupArgs, Console.Out, Console.Error);
     if (CliArgumentParser.IsAskGoal(startupArgs))
         _ = CliArgumentParser.ParseAskGoalArgs(startupArgs);
 }
-catch (ArgumentException ex)
+catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
 {
     Console.Error.WriteLine($"Error: {ex.Message}");
     return 1;
@@ -433,7 +436,7 @@ if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(startupArgs))
     return ExitCompletedStartupCommand(0);
 }
 
-if (ConductorContinuitySupervisor.ShouldSupervise(
+if (!CliShadowStartCommand.IsNoDispatch(startupArgs) && ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
 {
@@ -673,6 +676,7 @@ try
     if (!isConductLoop && !defersStateUpgrade) ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
     if (!defersStateUpgrade && commandCapability == CliCommandCapability.Execution &&
+        !CliShadowStartCommand.IsNoDispatch(startupArgs) &&
         !CliArgumentParser.IsAskGoal(startupArgs) &&
         !CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs))
     {

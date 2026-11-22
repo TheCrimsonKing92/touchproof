@@ -116,8 +116,7 @@ public sealed partial class SqliteOrchestratorStateRepository
 
             var criterionEvidence = ReadAttentionArray<CriterionEvidenceObligation>(root, "CriterionEvidenceObligations");
             Duties.AddRange(criterionEvidence
-                .Where(item => item.IsValidatedPostLanding &&
-                    item.State is not (CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired))
+                .Where(item => item.IsOutstandingPostLandingDuty)
                 .Select(item => new AttentionPostLandingDuty(id, item)));
 
             if (options.IncludeGateEvidence)
