@@ -378,11 +378,19 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
     public override string? TreeRevision => Identity.CandidateTreeSha;
     internal string? ArtifactResultsPrefix { get; }
 
-    internal void RecordGateOutcomeSelection(AcceptanceGateLanePlan plan)
+    internal AcceptanceBalancedLanePlanWriter PublishGateLanePlan(
+        FocusedReverseDependentLaneSplitter.Expansion? expansion, AcceptanceGateLanePlan plan,
+        IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> dispatchedChecks, GoalId? goalId,
+        Action<AcceptanceGateProgress> emit, TimeProvider clock, string worktreePath, AcceptanceBalancedLaneLayout? layout)
     {
-        if (ArtifactResultsPrefix is null || (!_writesResultRecord && _gateOutcomeSelectionSink is null)) return;
-        _gateOutcomeSelection = AcceptanceGateOutcomeLedger.GetValidatedSelection(plan, Path.GetFileName(ArtifactResultsPrefix));
-        _gateOutcomeSelectionSink?.Invoke(_gateOutcomeSelection);
+        var writer = FocusedReverseDependentLaneSplitter.PublishLanePlan(expansion, plan, dispatchedChecks,
+            ArtifactResultsPrefix, goalId, emit, clock, worktreePath, layout);
+        if (ArtifactResultsPrefix is not null && (_writesResultRecord || _gateOutcomeSelectionSink is not null))
+        {
+            _gateOutcomeSelection = AcceptanceGateOutcomeLedger.GetValidatedSelection(writer.Snapshot, Path.GetFileName(ArtifactResultsPrefix));
+            _gateOutcomeSelectionSink?.Invoke(_gateOutcomeSelection);
+        }
+        return writer;
     }
 
     internal async Task<AcceptanceVerificationResult> ExecuteAsync(

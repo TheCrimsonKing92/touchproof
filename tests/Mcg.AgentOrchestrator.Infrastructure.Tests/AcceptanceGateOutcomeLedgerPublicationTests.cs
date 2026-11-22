@@ -449,10 +449,10 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         {
             SelectedExecution = CostGoalOutcomeBaselineTests.Selection(12.345678901, 17, "fixture full gate")
         };
-        var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifier((_, _, _) =>
-            throw new InvalidOperationException("Lane plan publication must run in-process.")), owner);
-        AsyncLocalConsoleRouter.CaptureTo(() => verifier.PublishGateLanePlan(new([], "focused expansion fallback"),
-            plan, [], new GoalId(owner.Identity.GoalId), owner.Identity.WorktreePath, layout: null),
+        AsyncLocalConsoleRouter.CaptureTo(() => owner.PublishGateLanePlan(new([], "focused expansion fallback"),
+            plan, [], new GoalId(owner.Identity.GoalId),
+            progress => AcceptanceGateProgressReporter.Emit(progress, null, owner),
+            TimeProvider.System, owner.Identity.WorktreePath, layout: null),
             progressOutput ?? TextWriter.Null);
     }
 

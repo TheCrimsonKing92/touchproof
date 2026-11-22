@@ -644,13 +644,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var scopedNames = scopedChecks?.Select(check => check.Name).ToHashSet(StringComparer.Ordinal);
         var dispatchedChecks = scopedNames is null ? effectiveChecks : effectiveChecks.Where(check =>
             !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedNames.Contains(check.Name)).ToArray();
-        phaseAccountant.BalancedPlan = PublishGateLanePlan(focusedExpansion,
+        phaseAccountant.BalancedPlan = executionOwner.PublishGateLanePlan(focusedExpansion,
             AcceptanceGateLanePlanPublisher.Classify(
             executionOwner.Identity.AttemptId, effectivePlan.CandidateLanes, infrastructureTestLanes,
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
             dispatchedChecks, engineSettings.DeclaredTestSettings, selectedExecution), dispatchedChecks,
-            goalId, worktreePath, effectivePlan.BalancedLayout);
+            goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)
         {
@@ -3736,18 +3736,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     // Kept only for ConductorParallelAcceptanceAttempts.cs and existing test callers until a follow-up re-points them.
     public static void ConfigureHermeticVerificationEnvironment(IDictionary<string, string?> environment, string repositoryRoot, string? buildEnvironmentRoot = null) =>
         AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, repositoryRoot, buildEnvironmentRoot);
-
-    internal AcceptanceBalancedLanePlanWriter PublishGateLanePlan(
-        FocusedReverseDependentLaneSplitter.Expansion? expansion, AcceptanceGateLanePlan plan,
-        IReadOnlyList<AcceptanceManifestCheck> dispatchedChecks, GoalId? goalId, string worktreePath,
-        AcceptanceBalancedLaneLayout? layout)
-    {
-        var writer = FocusedReverseDependentLaneSplitter.PublishLanePlan(expansion, plan, dispatchedChecks,
-            AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, layout);
-        if (_executionContext is AcceptanceAttemptExecutionOwner owner)
-            owner.RecordGateOutcomeSelection(writer.Snapshot);
-        return writer;
-    }
 
     private void EmitGateProgress(AcceptanceGateProgress progress) => EmitGateProgress(progress, null);
 
