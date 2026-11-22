@@ -19,6 +19,7 @@ public sealed class WorkerBuildSeedTests
             new WorkerBuildRequestFixture(extraProject: customSeed, linkedWorktree: true,
                 seedRepository: root => Customize(root, customSeed)));
         using var fixture = measured.Value;
+        Assert.True(fixture.SeedFallbackReason is null, fixture.SeedFallbackReason);
         AssertSetupLaunches(measured.Counts, 0);
         Assert.Equal(1, measured.Counts.Count("worktree"));
 
@@ -115,6 +116,7 @@ public sealed class WorkerBuildSeedTests
                 File.WriteAllBytes(Path.Combine(root, "converted.txt"), workingBytes);
             }));
         using var fixture = measured.Value;
+        Assert.False(string.IsNullOrWhiteSpace(fixture.SeedFallbackReason));
         AssertSetupLaunches(measured.Counts, 1);
         Assert.Equal(1, callbacks);
         Assert.Equal(workingBytes, File.ReadAllBytes(Path.Combine(fixture.RepositoryRoot, "converted.txt")));

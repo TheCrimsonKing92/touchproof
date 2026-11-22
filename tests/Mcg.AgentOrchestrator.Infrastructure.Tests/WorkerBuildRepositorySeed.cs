@@ -23,17 +23,22 @@ internal static class WorkerBuildRepositorySeed
         "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"
     };
 
-    internal static bool TryWrite(string root)
+    // A rejection describes the first failed eligibility check. No writes have happened at that point.
+    internal static string? WriteOrDescribeFallback(string root)
     {
         var date = DateTimeOffset.Now;
-        if (!OperatingSystem.IsWindows() ||
-            !Directory.Exists(Path.Combine(Path.GetDirectoryName(root)!, Path.GetFileName(root).ToUpperInvariant())) ||
-            (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0 ||
-            !TryReadGitInputs(out var templates) ||
-            !TryReadIdentity("AUTHOR", date, out var author) ||
-            !TryReadIdentity("COMMITTER", date, out var committer) ||
-            !TryReadSeedFiles(root, out var files))
-            return false;
+        if (!OperatingSystem.IsWindows()) return "The seed writer requires Windows.";
+        if (!Directory.Exists(Path.Combine(Path.GetDirectoryName(root)!, Path.GetFileName(root).ToUpperInvariant())))
+            return "The seed root does not support case-insensitive lookup.";
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            return "The seed root is a reparse point.";
+
+        var rejection = ReadGitInputs(out var templates);
+        if (rejection is not null) return rejection;
+        if (!TryReadIdentity("AUTHOR", date, out var author)) return "Unsupported Git author identity.";
+        if (!TryReadIdentity("COMMITTER", date, out var committer)) return "Unsupported Git committer identity.";
+        rejection = ReadSeedFiles(root, out var files);
+        if (rejection is not null) return rejection;
 
         // All eligibility checks happen before initialization. Partial writes enter fixture cleanup.
         var writer = new FixtureRepositoryWriter(root);
@@ -48,10 +53,10 @@ internal static class WorkerBuildRepositorySeed
         writer.AppendReflog(branch, null, head, committer, $"commit (initial): {Message}");
         writer.AppendReflog("HEAD", null, head, committer, $"commit (initial): {Message}");
         File.WriteAllText(Path.Combine(writer.GitDirectory, "COMMIT_EDITMSG"), Message + "\n");
-        return true;
+        return null;
     }
 
-    private static bool TryReadSeedFiles(string root, out Dictionary<string, byte[]> files)
+    private static string? ReadSeedFiles(string root, out Dictionary<string, byte[]> files)
     {
         files = new(StringComparer.Ordinal);
         var hasRootIgnore = File.Exists(Path.Combine(root, ".gitignore"));
@@ -65,16 +70,18 @@ internal static class WorkerBuildRepositorySeed
                 var relative = Path.GetRelativePath(root, entry).Replace('\\', '/');
                 var name = Path.GetFileName(entry);
                 var attributes = File.GetAttributes(entry);
-                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0 ||
-                    name.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals(".gitattributes", StringComparison.OrdinalIgnoreCase) ||
-                    !Regex.IsMatch(name, @"^[A-Za-z0-9_. -]+\z") || name.EndsWith('.') || name.EndsWith(' ') ||
-                    !paths.Add(relative))
-                    return false;
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+                    return "The seed contains a reparse point or device.";
+                if (name.Equals(".git", StringComparison.OrdinalIgnoreCase)) return "The seed contains .git metadata.";
+                if (name.Equals(".gitattributes", StringComparison.OrdinalIgnoreCase)) return "The seed contains .gitattributes.";
+                if (!Regex.IsMatch(name, @"^[A-Za-z0-9_. -]+\z") || name.EndsWith('.') || name.EndsWith(' '))
+                    return "The seed contains a path outside the supported name format.";
+                if (!paths.Add(relative)) return $"Case-insensitive path collision at '{relative}'.";
 
                 var isDirectory = (attributes & FileAttributes.Directory) != 0;
                 var isIgnoreFile = name.Equals(".gitignore", StringComparison.OrdinalIgnoreCase);
-                if (isIgnoreFile && (relative != ".gitignore" || isDirectory)) return false;
+                if (isIgnoreFile && (relative != ".gitignore" || isDirectory))
+                    return $"Unsupported .gitignore location or type at '{relative}'.";
                 if (isDirectory)
                 {
                     // The supported negation matches .orchestrator at any depth.
@@ -86,8 +93,9 @@ internal static class WorkerBuildRepositorySeed
                 }
 
                 var bytes = File.ReadAllBytes(entry);
-                if (bytes.Contains((byte)'\r') ||
-                    (isIgnoreFile && !bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(ManifestRules)))) return false;
+                if (bytes.Contains((byte)'\r')) return $"Seed file '{relative}' contains carriage returns.";
+                if (isIgnoreFile && !bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(ManifestRules)))
+                    return "The seed .gitignore differs from the supported manifest rules.";
                 files.Add(relative, bytes);
             }
         }
@@ -103,12 +111,12 @@ internal static class WorkerBuildRepositorySeed
                 !Directory.EnumerateFiles(directory, "acceptance-manifest.json").Contains(manifest, StringComparer.Ordinal) ||
                 Path.Exists(Path.Combine(directory, ".gitignore")) || Path.Exists(Path.Combine(directory, ".gitattributes")) ||
                 Path.Exists(Path.Combine(directory, ".git")))
-                return false;
+                return "The seed manifest or its containing directory has an unsupported layout.";
             var bytes = File.ReadAllBytes(manifest);
-            if (bytes.Contains((byte)'\r')) return false;
+            if (bytes.Contains((byte)'\r')) return $"Seed file '{Manifest}' contains carriage returns.";
             files.Add(Manifest, bytes);
         }
-        return files.Count > 0;
+        return files.Count == 0 ? "The seed has no files to stage." : null;
     }
 
     private static bool TryReadIdentity(string kind, DateTimeOffset date, out FixtureRepositoryWriter.Identity identity)
@@ -121,18 +129,19 @@ internal static class WorkerBuildRepositorySeed
             Regex.IsMatch(email, @"^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\z");
     }
 
-    private static bool TryReadGitInputs(out string templates)
+    private static string? ReadGitInputs(out string templates)
     {
         templates = "";
-        if (Environment.GetEnvironmentVariables().Keys.Cast<string>().Any(
-            key => key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) && !SupportedGitVariables.Contains(key)))
-            return false;
+        var unsupportedVariable = Environment.GetEnvironmentVariables().Keys.Cast<string>().FirstOrDefault(
+            key => key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) && !SupportedGitVariables.Contains(key));
+        if (unsupportedVariable is not null) return $"Unsupported Git environment variable '{unsupportedVariable}'.";
         var (executable, environment) = InfrastructureTestSupport.CapturePreparedGitEnvironment();
         string? Get(string name) => environment.TryGetValue(name, out var value) ? value : null;
         var installation = Path.GetDirectoryName(Path.GetDirectoryName(executable));
         var installRoot = Path.GetDirectoryName(installation);
         var home = Get("HOME");
-        if (installRoot is null || string.IsNullOrEmpty(home)) return false;
+        if (installRoot is null) return "The prepared Git executable has no recognized installation root.";
+        if (string.IsNullOrEmpty(home)) return "The prepared Git environment has no HOME.";
         templates = Path.Combine(installation!, "share", "git-core", "templates");
         var xdg = Get("XDG_CONFIG_HOME");
         var gitHome = Path.Combine(string.IsNullOrEmpty(xdg) ? Path.Combine(home, ".config") : xdg, "git");
@@ -144,21 +153,34 @@ internal static class WorkerBuildRepositorySeed
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         try
         {
-            return (noSystem is null or "0" or "1") && (noSystemAttributes is null or "0" or "1") &&
-                HasOrdinaryTemplates(templates) &&
-                (global is null ? IsSupportedConfig(Path.Combine(home, ".gitconfig")) &&
-                    IsSupportedConfig(Path.Combine(gitHome, "config")) : IsSupportedConfig(global)) &&
-                (noSystem == "1" ||
-                    IsSupportedConfig(system) && IsSupportedConfig(Path.Combine(programData, "Git", "config"))) &&
-                !File.Exists(Path.Combine(gitHome, "ignore")) &&
-                IsDiffOnlyAttributes(Path.Combine(gitHome, "attributes")) &&
-                (noSystemAttributes == "1" ||
-                    IsDiffOnlyAttributes(Path.Combine(installRoot, "etc", "gitattributes")) &&
-                    IsDiffOnlyAttributes(Path.Combine(installation!, "etc", "gitattributes")));
+            if (noSystem is not (null or "0" or "1")) return "Unsupported GIT_CONFIG_NOSYSTEM value.";
+            if (noSystemAttributes is not (null or "0" or "1")) return "Unsupported GIT_ATTR_NOSYSTEM value.";
+            if (!HasOrdinaryTemplates(templates)) return "The Git installation has missing or unsupported templates.";
+            var rejection = global is null
+                ? ReadConfigRejection(Path.Combine(home, ".gitconfig"), "HOME") ??
+                    ReadConfigRejection(Path.Combine(gitHome, "config"), "XDG")
+                : ReadConfigRejection(global, "GIT_CONFIG_GLOBAL");
+            if (rejection is not null) return rejection;
+            if (noSystem != "1")
+            {
+                rejection = ReadConfigRejection(system, "system") ??
+                    ReadConfigRejection(Path.Combine(programData, "Git", "config"), "ProgramData");
+                if (rejection is not null) return rejection;
+            }
+            if (File.Exists(Path.Combine(gitHome, "ignore"))) return "The XDG Git ignore file is present.";
+            if (!IsDiffOnlyAttributes(Path.Combine(gitHome, "attributes"))) return "Unsupported XDG Git attributes.";
+            if (noSystemAttributes != "1")
+            {
+                if (!IsDiffOnlyAttributes(Path.Combine(installRoot, "etc", "gitattributes")))
+                    return "Unsupported system Git attributes.";
+                if (!IsDiffOnlyAttributes(Path.Combine(installation!, "etc", "gitattributes")))
+                    return "Unsupported Git prefix attributes.";
+            }
+            return null;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            return false;
+            return $"Could not read prepared Git inputs ({error.GetType().Name}).";
         }
     }
 
@@ -172,10 +194,10 @@ internal static class WorkerBuildRepositorySeed
     private static bool IsDiffOnlyAttributes(string path) => Path.IsPathFullyQualified(path) &&
         ReadGitLines(path).All(line => Regex.IsMatch(line, @"^\*\.[A-Za-z0-9]+\s+diff=astextplain\z"));
 
-    private static bool IsSupportedConfig(string path)
+    private static string? ReadConfigRejection(string path, string source)
     {
-        if (path.Equals("NUL", StringComparison.OrdinalIgnoreCase)) return true;
-        if (!Path.IsPathFullyQualified(path)) return false;
+        if (path.Equals("NUL", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!Path.IsPathFullyQualified(path)) return $"The {source} Git configuration path is not fully qualified.";
         var section = "";
         foreach (var line in ReadGitLines(path))
         {
@@ -185,7 +207,7 @@ internal static class WorkerBuildRepositorySeed
                 continue;
             }
             var setting = Regex.Match(line, """^([A-Za-z]+)\s*=\s*([^"\\]*|"[^"\\]*")\z""");
-            if (!setting.Success) return false;
+            if (!setting.Success) return $"Unsupported syntax in {source} Git configuration.";
             var key = setting.Groups[1].Value.ToLowerInvariant();
             var value = setting.Groups[2].Value.Trim('"').ToLowerInvariant();
             if (!((section, key) switch
@@ -198,9 +220,9 @@ internal static class WorkerBuildRepositorySeed
                         ("credential", "helper") or ("credential \"https://dev.azure.com\"", "usehttppath") or
                         ("diff \"astextplain\"", "textconv") or ("filter \"lfs\"", "clean" or "smudge" or "process") => true,
                     _ => false
-                })) return false;
+                })) return $"Unsupported '{key}' setting in {source} Git configuration.";
         }
-        return true;
+        return null;
     }
 
     private static IEnumerable<string> ReadGitLines(string path)
