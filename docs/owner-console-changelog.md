@@ -46,3 +46,11 @@ Surface fingerprint: sha256:608e69855daebe49a1f879db3b61695c76e05ad8ff6591d3ab22
 Surface fingerprint: sha256:0dcbeca515d05e7e75367b043dddfcb436467e7e95a803424cc2892b4c3897c7
 
 - Type `:fleet`, then press `s` when a hold offers sign-in to open Provider connections with that provider selected.
+
+## 5 - Select an unused profile in Provider connections.
+
+Surface fingerprint: sha256:e749659d6e887d4a68ea6a30dc2c4d3169e2b7f3d78c561d5eef319a030ff45c
+
+- Press `s` or type `:settings`, then use Left/Right to open Provider connections.
+- Use Up/Down to reach **Not in use**. Press Enter to expand it and Up/Down to select a profile. Press Enter on the group or a profile to collapse it.
+- Use the keys shown for the selected profile. Press `s` to sign in when offered, `t` to report your return, and `c` to check the connection.

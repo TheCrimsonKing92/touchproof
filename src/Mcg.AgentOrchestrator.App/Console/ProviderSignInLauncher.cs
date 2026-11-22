@@ -55,7 +55,8 @@ internal sealed record ProviderSignInLaunch(IProviderSignInSession? Session, Pro
 internal interface IProviderSignInLauncher
 {
     Task<bool> SupportsDeviceCodeAsync(ProviderSignInTarget target, CancellationToken token);
-    Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token);
+    Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token,
+        Func<bool>? tryCommitLaunch = null);
 }
 
 internal sealed class ProviderSignInLauncher(
@@ -74,7 +75,8 @@ internal sealed class ProviderSignInLauncher(
         return path is not null && await AdvertisesDeviceCodeAsync(path, token);
     }
 
-    public async Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token)
+    public async Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token,
+        Func<bool>? tryCommitLaunch = null)
     {
         if (!target.IsNative || !OperatingSystem.IsWindows() || deviceCode && !target.CanProbeDeviceCode)
             return new(null, ProviderSignInOutcome.Unsupported);
@@ -86,6 +88,7 @@ internal sealed class ProviderSignInLauncher(
                 return new(null, ProviderSignInOutcome.Unsupported);
             var info = BuildStartInfo(path, target.Kind, workingDirectory, deviceCode);
             token.ThrowIfCancellationRequested();
+            if (tryCommitLaunch?.Invoke() == false) return new(null, ProviderSignInOutcome.Cancelled);
             return new((start ?? StartInNewConsole)(info));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
