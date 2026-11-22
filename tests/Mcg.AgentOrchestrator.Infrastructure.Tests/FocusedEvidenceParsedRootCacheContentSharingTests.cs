@@ -196,6 +196,42 @@ public sealed class FocusedEvidenceParsedRootCacheContentSharingTests : IDisposa
         Assert.Equal(original, current.Root.SyntaxTree.FilePath);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EarlyEof_ReturnsAvailableTextWithoutCaching(bool hasInitialMetadata)
+    {
+        const string availableSource = "class Available {}";
+        const string originalSource = availableSource + " class Truncated {}";
+        var path = Path.Combine(_root, "Truncated.cs");
+        if (hasInitialMetadata) File.WriteAllText(path, originalSource);
+
+        var opens = 0;
+        var store = new FocusedEvidenceParsedRootCache.Store(2, sourcePath =>
+        {
+            Assert.Equal(path, sourcePath);
+            if (++opens > 1) return File.OpenRead(sourcePath);
+            File.WriteAllText(sourcePath, availableSource);
+            return new EarlyEofStream(Encoding.UTF8.GetBytes(availableSource), Encoding.UTF8.GetByteCount(originalSource));
+        });
+
+        var first = CSharpSourceFileRootReader.ReadFile(store, path, () => _parses++);
+        Assert.Equal(availableSource, first.Root.ToFullString());
+        Assert.Equal(path, first.Root.SyntaxTree.FilePath);
+        Assert.Equal(0, store.Count);
+
+        var retry = CSharpSourceFileRootReader.ReadFile(store, path, () => _parses++);
+        Assert.Equal(availableSource, retry.Root.ToFullString());
+        Assert.Equal(2, opens);
+        Assert.Equal(2, _parses);
+        Assert.Equal(1, store.Count);
+    }
+
+    private sealed class EarlyEofStream(byte[] bytes, long reportedLength) : MemoryStream(bytes)
+    {
+        public override long Length => reportedLength;
+    }
+
     private static async Task WaitFor(Task task, TimeSpan timeout, string outcome)
     {
         try { await task.WaitAsync(timeout); }

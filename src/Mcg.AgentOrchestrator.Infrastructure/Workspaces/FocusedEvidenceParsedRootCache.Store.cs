@@ -10,6 +10,7 @@ internal static partial class FocusedEvidenceParsedRootCache
     internal sealed class Store
     {
         private readonly int _capacity;
+        private readonly Func<string, Stream> _openRead;
         private readonly object _sync = new();
         private readonly Dictionary<string, LinkedListNode<PathEntry>> _paths = new(PathComparer);
         private readonly LinkedList<PathEntry> _pathRecency = new();
@@ -21,10 +22,11 @@ internal static partial class FocusedEvidenceParsedRootCache
         // A caller may hold only ParsedFile.Root. Keep its wrapper available for as long as that root is live.
         private readonly ConditionalWeakTable<CompilationUnitSyntax, ParsedFile> _wrappers = new();
 
-        internal Store(int capacity)
+        internal Store(int capacity, Func<string, Stream>? openRead = null)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
             _capacity = capacity;
+            _openRead = openRead ?? File.OpenRead;
         }
 
         internal int Count
@@ -84,7 +86,7 @@ internal static partial class FocusedEvidenceParsedRootCache
         {
             try
             {
-                var bytes = File.ReadAllBytes(path);
+                var bytes = ReadSourceBytes(path);
                 var hash = Convert.ToHexString(SHA256.HashData(bytes));
                 return LoadContent(path, fullPath, fingerprint, hash, bytes, parse, onParse);
             }
@@ -191,12 +193,21 @@ internal static partial class FocusedEvidenceParsedRootCache
             return file;
         }
 
-        private static ParsedFile LoadUncached(string path, Func<string, byte[], CompilationUnitSyntax> parse,
+        private ParsedFile LoadUncached(string path, Func<string, byte[], CompilationUnitSyntax> parse,
             Action? onParse)
         {
-            var content = Parse(path, File.ReadAllBytes(path), parse);
+            var content = Parse(path, ReadSourceBytes(path), parse);
             onParse?.Invoke();
             return Relabel(content, path);
+        }
+
+        private byte[] ReadSourceBytes(string path)
+        {
+            using var source = _openRead(path);
+            using var bytes = new MemoryStream();
+            // A file can shrink during the read. Parse whatever was available through EOF.
+            source.CopyTo(bytes);
+            return bytes.ToArray();
         }
 
         private static ParsedFile Parse(string path, byte[] bytes, Func<string, byte[], CompilationUnitSyntax> parse)
