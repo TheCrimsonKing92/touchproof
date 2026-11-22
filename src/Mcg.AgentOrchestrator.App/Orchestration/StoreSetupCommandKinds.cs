@@ -29,6 +29,7 @@ internal static class StoreSetupCommandKinds
         args.Count > 0 && args[0].ToLowerInvariant() is
             OperatorIntentVerbs.CriterionEvidenceMap or
             OperatorIntentVerbs.CriterionEvidenceRecord or
+            OperatorIntentVerbs.CriterionEvidenceSupersede or
             OperatorIntentVerbs.CriterionEvidenceRepair or
             OperatorIntentVerbs.CriterionEvidenceRephase;
 

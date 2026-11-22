@@ -76,6 +76,7 @@ public sealed class ConductCommandArgumentsTests
         { ["note", "1"], false, false, false },
         { ["criterion-evidence-map"], false, false, true },
         { ["criterion-evidence-record"], false, false, true },
+        { ["criterion-evidence-supersede"], false, false, true },
         { ["criterion-evidence-repair"], false, false, true },
         { ["goals"], false, false, false },
         { [], false, false, false }

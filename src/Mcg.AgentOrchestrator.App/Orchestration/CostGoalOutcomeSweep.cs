@@ -22,6 +22,10 @@ internal sealed class CostGoalOutcomeSweep(
     private readonly Dictionary<GoalId, string> reportedFailures = new();
     private (BacklogStore Backlog, ConductEventLogWriter Events)? stores;
 
+    internal CostGoalOutcomeGateLedgerReader GateLedger { get; } = new(orchestratorDirectory);
+
+    internal static void UseForTests(ConductorBatchLoop loop, CostGoalOutcomeSweep sweep) => TickSweeps.Add(loop, sweep);
+
     internal static void ObserveTick(ConductorBatchLoop loop, OrchestratorWorkspace? workspace,
         Func<DateTimeOffset> utcNow, ConductEventLogWriter? events)
     {
@@ -49,8 +53,7 @@ internal sealed class CostGoalOutcomeSweep(
             var evaluatedAt = utcNow();
             var adoptions = new Lazy<(string Commit, DateTimeOffset At)[]>(() => readAdoptions()
                 .Where(adoption => adoption.At <= evaluatedAt).Distinct().OrderBy(adoption => adoption.At).ToArray());
-            var gates = new Lazy<OutcomeGateObservation[]>(() =>
-                CostGoalOutcomeMetric.ReadRecordedGates(orchestratorDirectory, evaluatedAt).ToArray());
+            var gates = new Lazy<OutcomeGateObservation[]>(() => GateLedger.Read(evaluatedAt));
             var ticks = new Lazy<IReadOnlyList<TickStepObservation>>(() => readTicks?.Invoke() ?? []);
             var workerUsage = new Lazy<WorkerUsageSampleSource?>(() => readWorkerUsage?.Invoke());
             var ancestry = new Dictionary<(string Ancestor, string Commit), bool>();

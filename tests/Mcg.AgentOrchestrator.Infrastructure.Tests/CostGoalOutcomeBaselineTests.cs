@@ -173,6 +173,37 @@ public sealed class CostGoalOutcomeBaselineTests
         int? classCount = 1, string? reason = null, string? commit = "landed") =>
         new(id, startedAt, startedAt, commit, Selection(milliseconds, classCount, reason));
 
+    [Fact]
+    public void Filing_TickOnlyMetricDoesNotOpenLockedGateLedger()
+    {
+        var root = Directory.CreateTempSubdirectory("tick-only-filing-").FullName;
+        try
+        {
+            var registry = new OrchestratorProjectRegistry(Path.Combine(root, "registry"), root);
+            var workspace = OrchestratorWorkspace.ForDirectory(root, root, null, registry);
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            var ledger = Path.Combine(workspace.OrchestratorDirectory, AcceptanceGateOutcomeLedger.FileName);
+            File.WriteAllText(ledger, "");
+            using var gateLock = File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.None);
+            var log = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+            var sampledAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+            for (var tick = 1; tick <= 3; tick++)
+                log.Append("phase-timing", null, $"PHASE_TIMING tick={tick} phase=sweep sweep_steps=owned-root-reap:{15 + tick}:1",
+                    sampledAt.AddSeconds(tick));
+
+            var filing = CostGoalOutcomeMetric.CaptureAtFiling("goal-file", """
+                Expected effect: reduce tick cost
+                ## Outcome metric
+                metric: tick-step-milliseconds:owned-root-reap; direction: decrease; target: 20%; window: 30 ticks
+                """, null, workspace, null);
+
+            Assert.NotNull(filing);
+            Assert.Equal(new OutcomeMetricBaseline(new("tick-step-milliseconds:owned-root-reap", "decrease", "20%", 30),
+                17, 3, null), Assert.Single(filing.Baselines));
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
     internal static AcceptanceSelectedExecutionRecord Selection(double milliseconds, int? classCount, string? reason) =>
         new("Enforce", reason is null ? "plan" : "full-gate", null, reason, [], [], [], [],
             classCount, null, null, null, milliseconds, false);

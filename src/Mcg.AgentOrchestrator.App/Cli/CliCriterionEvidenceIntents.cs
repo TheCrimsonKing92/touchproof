@@ -14,6 +14,7 @@ internal static partial class CliCriterionEvidenceIntents
     public static void Submit(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         Goal goal, CliPersistentStateRunner.OperatorIntentAttribution attribution)
     {
+        var capturedReason = (args as CliArgumentParser.CriterionEvidenceSupersedeArgs)?.Reason;
         args = OperatorIntentSubmissionOutput.StripJsonFlag(args, out var emitAgentReadEnvelope);
         if (CliCriterionNumberList.TrySubmit(args, workspace, goal, attribution, emitAgentReadEnvelope)) return;
         var verb = args[0].ToLowerInvariant();
@@ -32,6 +33,7 @@ internal static partial class CliCriterionEvidenceIntents
             },
             OperatorIntentVerbs.CriterionEvidenceRepair => BuildCriterionEvidenceRepairPayload(values, target!.Value.Index, target.Value.Version),
             OperatorIntentVerbs.CriterionEvidenceRephase => BuildCriterionEvidenceRephasePayload(values),
+            OperatorIntentVerbs.CriterionEvidenceSupersede => BuildCriterionEvidenceSupersedePayload(values, capturedReason),
             _ => throw new ArgumentException($"Unsupported criterion evidence command '{args[0]}'.")
         };
         var intentId = Guid.NewGuid().ToString("N");
@@ -128,14 +130,16 @@ internal static partial class CliCriterionEvidenceIntents
 
     internal static IReadOnlyList<string> PositionalCriterionEvidenceArguments(IReadOnlyList<string> args)
     {
+        var verb = args[0].ToLowerInvariant();
         var values = new List<string>();
         for (var index = 1; index < args.Count; index++)
         {
             var flag = args[index].ToLowerInvariant();
             if (args[index] is "--goal" or "--operator-actor" or "--actor-kind" or "--idempotency-key" ||
                 flag == "--driver-session" ||
-                (args[0].ToLowerInvariant() == OperatorIntentVerbs.CriterionEvidenceRecord && flag == "--observation-json") ||
-                (args[0].ToLowerInvariant() is OperatorIntentVerbs.CriterionEvidenceMap or OperatorIntentVerbs.CriterionEvidenceRepair &&
+                (verb == OperatorIntentVerbs.CriterionEvidenceRecord && flag == "--observation-json") ||
+                (verb == OperatorIntentVerbs.CriterionEvidenceSupersede && flag == "--reason-file") ||
+                (verb is OperatorIntentVerbs.CriterionEvidenceMap or OperatorIntentVerbs.CriterionEvidenceRepair &&
                  flag is "--criterion" or "--version"))
             {
                 index++;
@@ -199,6 +203,15 @@ internal static partial class CliCriterionEvidenceIntents
             throw new ArgumentException(CliCommandHelp.CriterionEvidenceRephaseUsage);
 
         return new CriterionEvidenceRephaseOperatorIntentPayload(values[0], kind, values[2], values[3], values[4]);
+    }
+
+    private static CriterionEvidenceSupersedeOperatorIntentPayload BuildCriterionEvidenceSupersedePayload(
+        IReadOnlyList<string> values, string? capturedReason)
+    {
+        if (values.Count != 1 || capturedReason is null)
+            throw new ArgumentException(CliCommandHelp.CriterionEvidenceSupersedeUsage);
+
+        return new CriterionEvidenceSupersedeOperatorIntentPayload(values[0], capturedReason);
     }
 
     public static void PrintStatus(

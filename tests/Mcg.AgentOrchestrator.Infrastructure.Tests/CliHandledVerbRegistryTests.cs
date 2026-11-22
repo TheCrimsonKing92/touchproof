@@ -23,6 +23,7 @@ public sealed class CliHandledVerbRegistryTests
     [InlineData("obligation-rebind")]
     [InlineData("criterion-evidence-map")]
     [InlineData("criterion-evidence-record")]
+    [InlineData("criterion-evidence-supersede")]
     [InlineData("criterion-evidence-repair")]
     [InlineData("criterion-evidence-rephase")]
     [InlineData("operator-intent-status")]
