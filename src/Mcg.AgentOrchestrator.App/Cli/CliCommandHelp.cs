@@ -30,7 +30,7 @@ internal static class CliCommandHelp
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
-    public const string AttentionUsage = "Usage: attention [list] --json | attention list --summary --json | attention list --json --summary | attention show [--goal] [<goal-id-prefix>] --json | attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> [--amendment decline] [--json] | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--amendment decline] [--route developer [--cause <RetryCause>]] [--idempotency-key <key>] [--json]";
+    public const string AttentionUsage = "Usage: attention [list] --json | attention list --summary --json | attention list --json --summary | attention show [--goal] [<goal-id-prefix>] --json | attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> [--amendment accept|decline] [--json] | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--amendment accept|decline] [--route developer [--cause <RetryCause>]] [--idempotency-key <key>] [--json]";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
@@ -309,6 +309,7 @@ internal static class CliCommandHelp
 
     public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> --criterion <brief-number>[,<brief-number>...] [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
     public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
+    public const string CriterionEvidenceSupersedeUsage = "Usage: criterion-evidence-supersede --goal <goal-prefix> <obligation-id> --reason-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
     public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> --criterion <brief-number> [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
 
     public const string CriterionEvidenceRephaseUsage = "Usage: criterion-evidence-rephase --goal <goal-prefix> <obligation-id> <repositorystate|runtime> <condition> <target> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
@@ -327,6 +328,11 @@ internal static class CliCommandHelp
         CriterionEvidenceRepairUsage,
         "Queue an attributed repair that rebinds one malformed Unknown claim; the replacement remains pending until valid evidence arrives.",
         ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--driver-session", "--help", "-h", "--json"]);
+
+    private static readonly CommandHelpEntry CriterionEvidenceSupersede = new(
+        CriterionEvidenceSupersedeUsage,
+        "Queue an attributed retirement of a pending Operator-owned post-landing duty on a completed or cleaned-up goal.",
+        ["--goal", "--reason-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRephase = new(
         CriterionEvidenceRephaseUsage,
@@ -1296,6 +1302,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("criterion-evidence-record", StringComparison.OrdinalIgnoreCase))
         {
             entry = CriterionEvidenceRecord;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-supersede", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceSupersede;
             return true;
         }
 

@@ -124,6 +124,17 @@ public sealed class OperatorIntentAnswerRouteTests
     public void Help_mentions_developer_route_and_cause()
     {
         Assert.Contains("[--route developer [--cause <RetryCause>]]", CliCommandHelp.AttentionUsage);
+        Assert.DoesNotContain("--amendment decline]", CliCommandHelp.AttentionUsage);
+
+        var answerForms = CliCommandHelp.AttentionUsage.Split(" | attention answer ").Skip(1);
+        Assert.Collection(
+            answerForms,
+            shortForm => Assert.Contains("<answer> [--amendment accept|decline]", shortForm),
+            textFileForm =>
+            {
+                Assert.Contains("--text-file <path>", textFileForm);
+                Assert.Contains("[--amendment accept|decline]", textFileForm);
+            });
     }
 
     [Theory]

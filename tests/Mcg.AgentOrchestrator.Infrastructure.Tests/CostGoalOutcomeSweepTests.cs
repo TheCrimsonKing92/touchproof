@@ -289,8 +289,7 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
             SelectedExecution = CostGoalOutcomeBaselineTests.Selection(milliseconds, 10, null)
         };
         File.WriteAllText(prefix + AcceptanceGateLanePlan.ArtifactSuffix, plan.ToJson());
-        var result = new AcceptanceVerificationResult(true, false, 0, null, TestResultPaths: [prefix + ".trx"]);
-        AcceptanceAttemptResultRecord.Write(prefix + ".result.json", AcceptanceAttemptResultRecord.ForVerification(result, null, commit));
+        WriteGateResult(prefix, commit);
         if (startedAt is { } started)
         {
             var gateGoal = GoalId.New().Value;
@@ -302,6 +301,23 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
             };
             File.WriteAllText(metadata.MetadataPath, JsonSerializer.Serialize(metadata, Json));
         }
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        if (gateNumber == 1)
+            SharedJsonlFile.AppendLine(ledger, """{"kind":"backfill-complete"}""");
+        var row = new AcceptanceGateOutcomeObservation(attempt, directory.Name, recordedAt, startedAt ?? recordedAt,
+            commit, plan.SelectedExecution!.Mode, plan.SelectedExecution.FullGateReason,
+            plan.SelectedExecution.ExecutedClassCount, milliseconds, "Passed")
+        {
+            HasSoloMetadata = startedAt.HasValue,
+            OwnerFallbackLaunchMainCommit = startedAt.HasValue ? commit : null
+        };
+        SharedJsonlFile.AppendLine(ledger, JsonSerializer.Serialize(row, Json));
+    }
+
+    private static void WriteGateResult(string prefix, string commit)
+    {
+        var result = new AcceptanceVerificationResult(true, false, 0, null, TestResultPaths: [prefix + ".trx"]);
+        AcceptanceAttemptResultRecord.Write(prefix + ".result.json", AcceptanceAttemptResultRecord.ForVerification(result, null, commit));
     }
 
     private string RecordPath(GoalId goal) => Path.Combine(root, "cost-goal-outcomes", $"{goal}.json");
