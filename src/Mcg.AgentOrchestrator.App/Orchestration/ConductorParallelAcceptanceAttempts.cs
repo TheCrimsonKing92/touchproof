@@ -268,6 +268,17 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     string? FocusedEvidenceRepository = null)
 {
     public int? BriefVersion { get; init; }
+
+    internal SoloGateOutcomeProvenance? RecordedGateProvenance(string attemptId)
+    {
+        if (AttemptId != attemptId || Kind != AcceptanceGateOutcomeLedger.GateKind || CompletedAt is null ||
+            Outcome is not (ConductorParallelAcceptanceAttemptOutcome.Passed or ConductorParallelAcceptanceAttemptOutcome.Failed))
+            return null;
+        var launchMain = HolderCandidateKey?.Split(':') is [var goalId, _, var main] &&
+            goalId == GoalId && main != "unknown-main" ? main : null;
+        return new(StartedAt, launchMain, Outcome.ToString());
+    }
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonConverter(typeof(AcceptanceLaneWaitJsonConverter))]
     public IReadOnlyList<AcceptanceLaneWaitOccurrence>? LaneWaits { get; init; }
@@ -1722,6 +1733,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         (ConductorParallelAcceptanceAttemptOutcome Outcome, string Detail, bool Transient)? terminalWithoutResult = null;
         string? stderrDetail = null;
         string? preReviewManifestIdentity = null;
+        AcceptanceSelectedExecutionRecord? gateSelection = null;
         using var heartbeatTimer = new Timer(
             _ => WriteHeartbeat(attempt, "running"),
             null,
@@ -1756,7 +1768,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                             attempt.AttemptId,
                             attempt.MetadataPath,
                             Environment.ProcessId);
-                    });
+                    },
+                    selection => gateSelection = selection);
             }
         }
         catch (OperationCanceledException ex)
@@ -1778,7 +1791,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             {
                 if (run is not null)
                 {
-                    CompleteWithRunResult(attempt, run, stderrDetail, preReviewManifestIdentity);
+                    CompleteWithRunResult(attempt, run, stderrDetail, preReviewManifestIdentity, gateSelection);
                 }
                 else if (terminalWithoutResult is { } terminal)
                 {
@@ -1819,7 +1832,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceRunResult run,
         string? stderrDetail,
-        string? preReviewManifestIdentity)
+        string? preReviewManifestIdentity,
+        AcceptanceSelectedExecutionRecord? gateSelection)
     {
         try
         {
@@ -1829,7 +1843,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var originalFocusedReceipt = CaptureOriginalFocusedReceipt(attempt, run);
             _resultPublishedForTests?.Invoke(attempt);
             var outcome = OutcomeFor(run, attempt.Kind);
-            var claimedTerminal = TryPersistTerminal(attempt, current => WithTerminalTransientFailure(current, current with
+            ConductorParallelAcceptanceAttempt? terminal = null;
+            var claimedTerminal = TryPersistTerminal(attempt, current => terminal = WithTerminalTransientFailure(current, current with
             {
                 BranchHeadSha = run.Candidate.BranchHeadSha,
                 MainHeadSha = run.Candidate.MainHeadSha,
@@ -1842,6 +1857,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 EffectiveManifestIdentity = preReviewManifestIdentity ?? current.EffectiveManifestIdentity,
                 OriginalFocusedReceipt = originalFocusedReceipt
             }, run));
+            // A result observer can persist the same terminal classification before this process claims it.
+            if (gateSelection is not null &&
+                (terminal ?? TryReadAttemptFile(attempt.MetadataPath))?.RecordedGateProvenance(attempt.AttemptId) is { } recorded)
+                AcceptanceGateOutcomeLedger.Publish(attempt.ResultPath[..^".result.json".Length], artifact, gateSelection, recorded);
             WriteTerminalExitReceipt(
                 attempt,
                 claimedTerminal,
@@ -1957,7 +1976,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
-        Action<DotnetBuildEnvironmentLease> leaseAcquired)
+        Action<DotnetBuildEnvironmentLease> leaseAcquired,
+        Action<AcceptanceSelectedExecutionRecord?> captureGateSelection)
     {
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
         DotnetBuildEnvironmentLease? stableSlotLease;
@@ -1996,7 +2016,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers([(candidate.Goal.Id, candidate.Goal.Objective)]),
                 LaneWaitSink: observations => PersistLaneWaits(attempt, observations),
                 PreReviewEvidenceReceipts: attempt.Kind == GateDispatchKind
-                    ? SoloLandingGateExecutionOptions.SnapshotPreReviewEvidence(candidate.Goal) : null));
+                    ? SoloLandingGateExecutionOptions.SnapshotPreReviewEvidence(candidate.Goal) : null)
+            {
+                GateOutcomeSelectionSink = attempt.Kind == GateDispatchKind ? captureGateSelection : null
+            });
     }
 
     internal static void PersistLaneWaits(ConductorParallelAcceptanceAttempt attempt,
@@ -2299,6 +2322,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             Detail = detail,
             SupersessionCause = supersessionCause
         });
+        if (current.RecordedGateProvenance(attempt.AttemptId) is not null)
+            AcceptanceGateOutcomeLedger.Invalidate(current.ResultPath[..^".result.json".Length]);
         return true;
     }
 

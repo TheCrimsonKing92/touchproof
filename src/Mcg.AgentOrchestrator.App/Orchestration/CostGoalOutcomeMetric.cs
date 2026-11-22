@@ -23,7 +23,13 @@ internal sealed record CostGoalOutcomeFiling(DateTimeOffset FiledAt, string? Sou
     IReadOnlyList<OutcomeMetricBaseline> Baselines);
 
 internal sealed record OutcomeGateObservation(string Id, DateTimeOffset RecordedAt, DateTimeOffset StartedAt,
-    string? LaunchMainCommit, AcceptanceSelectedExecutionRecord Selection);
+    string? LaunchMainCommit, string Mode, string? FullGateReason, int? ExecutedClassCount, double SelectionMilliseconds)
+{
+    internal OutcomeGateObservation(string id, DateTimeOffset recordedAt, DateTimeOffset startedAt,
+        string? launchMainCommit, AcceptanceSelectedExecutionRecord selection)
+        : this(id, recordedAt, startedAt, launchMainCommit, selection.Mode, selection.FullGateReason,
+            selection.ExecutedClassCount, selection.SelectionMilliseconds) { }
+}
 
 internal sealed class OutcomeGateWindow(OutcomeMetricLine line)
 {
@@ -83,8 +89,6 @@ internal static class CostGoalOutcomeMetric
     private static readonly Regex Gates = new(@"^([0-9]+)(?:[ \t]+gates?)?$", RegexOptions.CultureInvariant);
     private static readonly Regex Ticks = new(@"^([0-9]+)[ \t]+ticks$", RegexOptions.CultureInvariant);
     private static readonly Regex Sessions = new(@"^([0-9]+)[ \t]+sessions$", RegexOptions.CultureInvariant);
-    private static readonly Regex GateAttemptId = new(@"-(?<time>[0-9]{17})-[0-9a-f]{32}$",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     internal static bool IsCostBacklogItem(BacklogItem item, string? membershipEpicId) =>
@@ -252,17 +256,19 @@ internal static class CostGoalOutcomeMetric
     }
 
     internal static IEnumerable<OutcomeGateObservation> ReadRecordedGates(
-        string orchestratorDirectory, DateTimeOffset recordedBefore, CostGoalOutcomeGateMemo? memo = null)
-    {
-        var plans = DiscoverGatePlans(orchestratorDirectory, recordedBefore);
-        if (memo is null)
-            return plans.Select(ReadGate).OfType<OutcomeGateObservation>();
+        string orchestratorDirectory, DateTimeOffset recordedBefore) =>
+        new CostGoalOutcomeGateLedgerReader(orchestratorDirectory).Read(recordedBefore);
 
-        var discovered = plans.ToArray();
-        memo.Retain(discovered.Select(path => path.Prefix).ToHashSet(StringComparer.Ordinal));
-        return discovered.Select(path => memo.GetOrRead(path.Prefix, path.ResultPath, path.MetadataPath,
-            path.LanePlanPath, () => ReadGate(path))).OfType<OutcomeGateObservation>();
-    }
+    internal static IEnumerable<AcceptanceGateOutcomeObservation> ScanRecordedGateRows(
+        string orchestratorDirectory, DateTimeOffset recordedBefore,
+        Func<string, string, bool>? include = null, Action? readingGate = null) =>
+        DiscoverGatePlans(orchestratorDirectory, recordedBefore)
+            .Where(path => include is null || include(Path.GetFileName(Path.GetDirectoryName(path.Prefix))!, path.AttemptId))
+            .Select(path =>
+            {
+                readingGate?.Invoke();
+                return ReadGate(path);
+            }).OfType<AcceptanceGateOutcomeObservation>();
 
     internal static IReadOnlyList<OutcomeMetricBaseline> BaselinesAt(IReadOnlyList<OutcomeMetricLine> lines,
         IEnumerable<OutcomeGateObservation> gates, DateTimeOffset filedAt, IEnumerable<TickStepObservation>? ticks = null) =>
@@ -325,16 +331,15 @@ internal static class CostGoalOutcomeMetric
 
     internal static double? Sample(string metric, OutcomeGateObservation gate)
     {
-        var selection = gate.Selection;
-        if (metric == "full-gate-rate") return selection.FullGateReason is null ? 0 : 1;
-        if (selection.ExecutedClassCount is null or 0 && selection.FullGateReason is { } reason &&
+        if (metric == "full-gate-rate") return gate.FullGateReason is null ? 0 : 1;
+        if (gate.ExecutedClassCount is null or 0 && gate.FullGateReason is { } reason &&
             (reason.Contains("no changed source", StringComparison.OrdinalIgnoreCase) ||
              reason.Equals("Candidate changes are unavailable.", StringComparison.Ordinal))) return null;
         return metric switch
         {
-            "selection-milliseconds" when selection.Mode != "Off" && double.IsFinite(selection.SelectionMilliseconds)
-                => selection.SelectionMilliseconds,
-            "executed-class-count" => selection.ExecutedClassCount,
+            "selection-milliseconds" when gate.Mode != "Off" && double.IsFinite(gate.SelectionMilliseconds)
+                => gate.SelectionMilliseconds,
+            "executed-class-count" => gate.ExecutedClassCount,
             _ => null
         };
     }
@@ -356,15 +361,13 @@ internal static class CostGoalOutcomeMetric
 
     private static IEnumerable<GatePlanPath> DiscoverGatePlans(string orchestratorDirectory, DateTimeOffset filedAt)
     {
-        var root = Path.Combine(orchestratorDirectory, "acceptance-gate-attempts");
+        var root = Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.AttemptRoot);
         return Entries(root, directories: true).SelectMany(directory => Entries(directory, directories: false))
             .Select(path =>
             {
                 var prefix = path[..^AcceptanceGateLanePlan.ArtifactSuffix.Length];
                 var attemptId = Path.GetFileName(prefix);
-                var match = GateAttemptId.Match(attemptId);
-                return match.Success && DateTimeOffset.TryParseExact(match.Groups["time"].Value, "yyyyMMddHHmmssfff",
-                    CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time) && time < filedAt
+                return AcceptanceGateOutcomeLedger.RecordedAt(attemptId) is { } time && time < filedAt
                     ? new GatePlanPath(prefix, attemptId, time) : null;
             }).OfType<GatePlanPath>().OrderByDescending(path => path.RecordedAt)
             .ThenBy(path => path.Prefix, StringComparer.Ordinal);
@@ -385,27 +388,19 @@ internal static class CostGoalOutcomeMetric
     // The owner-written result carries its launch MainHeadSha. Parallel solo results can carry
     // rewritten heads, so their HolderCandidateKey is the only proof of the launch main.
     // This is repository provenance. The caller supplies adoption and build containment for verdicts.
-    private static OutcomeGateObservation? ReadGate(GatePlanPath path)
+    private static AcceptanceGateOutcomeObservation? ReadGate(GatePlanPath path)
     {
         var result = ReadEvidence<ConductorParallelAcceptanceRunArtifact>(path.ResultPath);
-        if (result is not { Kind: "accepted", DispatchKind: "gate", Acceptance.TestResultPaths.Count: > 0 })
+        if (result is null || !AcceptanceGateOutcomeLedger.IsRecordedGate(result))
             return null;
         var metadataPath = path.MetadataPath;
         var metadata = ReadEvidence<ConductorParallelAcceptanceAttempt>(metadataPath);
         if (metadata is null && File.Exists(metadataPath)) return null;
-        if (metadata is not null && (metadata.AttemptId != path.AttemptId || metadata.Kind != "gate" ||
-            metadata.CompletedAt is null || metadata.Outcome is not
-                (ConductorParallelAcceptanceAttemptOutcome.Passed or ConductorParallelAcceptanceAttemptOutcome.Failed)))
-            return null;
+        var solo = metadata?.RecordedGateProvenance(path.AttemptId);
+        if (metadata is not null && solo is null) return null;
         var plan = new OwnerConsoleGateLanePlanReader().Read(path.LanePlanPath, path.AttemptId);
         if (plan?.SelectedExecution is not { } selection) return null;
-        var launchCommit = metadata?.HolderCandidateKey?.Split(':') switch
-        {
-            [var goalId, _, var main] when goalId == metadata?.GoalId && main != "unknown-main" => main,
-            _ when metadata is null && path.AttemptId.Contains("-gate-", StringComparison.Ordinal) => result.MainHeadSha,
-            _ => null
-        };
-        return new(path.Prefix, path.RecordedAt, metadata?.StartedAt ?? path.RecordedAt, launchCommit, selection);
+        return AcceptanceGateOutcomeLedger.CreateObservation(path.Prefix, path.RecordedAt, result, selection, solo);
     }
 
     private static T? ReadEvidence<T>(string path) where T : class

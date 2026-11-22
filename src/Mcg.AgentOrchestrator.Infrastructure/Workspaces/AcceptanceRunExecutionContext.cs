@@ -83,7 +83,10 @@ public sealed record AcceptanceRunExecutionOptions(
     Action<IReadOnlyList<AcceptanceLaneWaitOccurrence>>? LaneWaitSink = null,
     IReadOnlyList<string>? GateTestObligationSelectors = null,
     IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceReceipts = null,
-    string? PinnedMainCommit = null);
+    string? PinnedMainCommit = null)
+{
+    internal Action<AcceptanceSelectedExecutionRecord?>? GateOutcomeSelectionSink { get; init; }
+}
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -228,7 +231,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     internal void MarkCancelled() =>
         Interlocked.Exchange(ref _releaseOutcome, (int)OwnedRunRootReleaseOutcome.Cancelled);
 
-    public void ReportProgress(AcceptanceGateProgress progress) =>
+    public virtual void ReportProgress(AcceptanceGateProgress progress) =>
         _options.ProgressSink?.Invoke(
             this is AcceptanceFocusedVerificationOwner && FocusedRunBinding is null
                 ? progress
@@ -342,6 +345,8 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
 {
     private readonly AcceptanceAttemptIdentityResolvers _identityResolvers;
     private readonly bool _writesResultRecord;
+    private readonly Action<AcceptanceSelectedExecutionRecord?>? _gateOutcomeSelectionSink;
+    private AcceptanceSelectedExecutionRecord? _gateOutcomeSelection;
 
     internal AcceptanceAttemptExecutionOwner(
         AcceptanceAttemptIdentity identity,
@@ -355,6 +360,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
     {
         Identity = identity;
         _writesResultRecord = writesResultRecord;
+        _gateOutcomeSelectionSink = options?.GateOutcomeSelectionSink;
         _identityResolvers = identityResolvers ?? new AcceptanceAttemptIdentityResolvers(
             _ => identity.CandidateTreeSha,
             _ => identity.MainSha,
@@ -371,6 +377,17 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
     internal AcceptanceAttemptIdentity Identity { get; }
     public override string? TreeRevision => Identity.CandidateTreeSha;
     internal string? ArtifactResultsPrefix { get; }
+
+    public override void ReportProgress(AcceptanceGateProgress progress)
+    {
+        if (progress.Phase == "lane-plan" && (_writesResultRecord || _gateOutcomeSelectionSink is not null))
+        {
+            var selection = AcceptanceGateOutcomeLedger.ReadSelection(progress, Path.GetFileName(Identity.ResultsPrefix));
+            _gateOutcomeSelection = selection;
+            _gateOutcomeSelectionSink?.Invoke(selection);
+        }
+        base.ReportProgress(progress);
+    }
 
     internal async Task<AcceptanceVerificationResult> ExecuteAsync(
         GoalAcceptanceVerifier verifier,
@@ -422,7 +439,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
         }
     }
 
-    private void TryWriteResultRecord(AcceptanceVerificationResult? result = null, Exception? exception = null)
+    internal void TryWriteResultRecord(AcceptanceVerificationResult? result = null, Exception? exception = null)
     {
         if (!_writesResultRecord) return;
         var branch = Identity.VerifyingCommitSha == "unavailable" ? null : Identity.VerifyingCommitSha;
@@ -433,6 +450,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
                 ? AcceptanceAttemptResultRecord.ForFault(exception, exception.Message, branch, main)
                 : AcceptanceAttemptResultRecord.ForVerification(result!, branch, main);
             AcceptanceAttemptResultRecord.Write(Identity.ResultsPrefix + ".result.json", artifact);
+            AcceptanceGateOutcomeLedger.Publish(Identity.ResultsPrefix, artifact, _gateOutcomeSelection);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

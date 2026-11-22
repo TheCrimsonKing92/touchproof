@@ -69,104 +69,6 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
     }
 
     [Fact]
-    public void Run_SecondRunOverUnchangedGatesReadsNoGate()
-    {
-        var goal = RecordFiling();
-        for (var i = 0; i < 200; i++)
-            WriteGate(AdoptedAt.AddSeconds(i + 1), i < 2 ? Adopted : Unrelated, 60);
-
-        Run();
-
-        var firstReads = sweep.GateMemo.ReadCount;
-        Assert.Equal(200, firstReads);
-        var first = store.Read(goal)!;
-        Assert.Empty(first.FinalVerdicts);
-        var pending = Assert.Single(first.PendingResults);
-        Assert.Equal(CostGoalOutcomeState.Pending, pending.State);
-        Assert.Equal(2, pending.AfterSampleSize);
-
-        Run();
-
-        Assert.Equal(0, sweep.GateMemo.ReadCount - firstReads);
-        var second = store.Read(goal)!;
-        Assert.Empty(second.FinalVerdicts);
-        Assert.Equal(pending, Assert.Single(second.PendingResults));
-        Assert.Empty(failures);
-    }
-
-    [Fact]
-    public void Run_RereadsOnlyNewAndRewrittenGates()
-    {
-        var goal = RecordFiling();
-        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
-        var rewritten = WriteGate(AdoptedAt.AddMinutes(2), Unrelated, 70);
-
-        Run();
-
-        var firstReads = sweep.GateMemo.ReadCount;
-        Assert.Equal(2, firstReads);
-        Assert.Equal(1, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
-
-        var resultPath = rewritten + ".result.json";
-        var previousWrite = File.GetLastWriteTimeUtc(resultPath);
-        WriteGateResult(rewritten, Adopted);
-        File.SetLastWriteTimeUtc(resultPath, previousWrite.AddMinutes(-1));
-        WriteGate(AdoptedAt.AddMinutes(3), Adopted, 80);
-
-        Run();
-
-        Assert.Equal(2, sweep.GateMemo.ReadCount - firstReads);
-        Assert.Equal(new(0, Selection, CostGoalOutcomeState.Met, 100, 70, 6, 3, null),
-            Assert.Single(store.Read(goal)!.FinalVerdicts));
-        Assert.Empty(failures);
-    }
-
-    [Fact]
-    public void Run_RereadsAttemptOnceItsResultAppears()
-    {
-        var goal = RecordFiling();
-        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
-        var incomplete = WriteGate(AdoptedAt.AddMinutes(2), Adopted, 70, writeResult: false);
-
-        Run();
-
-        var firstReads = sweep.GateMemo.ReadCount;
-        Assert.Equal(2, firstReads);
-        Assert.True(sweep.GateMemo.Contains(incomplete));
-        Assert.Equal(1, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
-
-        WriteGateResult(incomplete, Adopted);
-        Run();
-
-        Assert.Equal(1, sweep.GateMemo.ReadCount - firstReads);
-        Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
-        Assert.Empty(failures);
-    }
-
-    [Fact]
-    public void Run_ForgetsRemovedAttemptDirectory()
-    {
-        var goal = RecordFiling();
-        var kept = WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
-        var removed = WriteGate(AdoptedAt.AddMinutes(2), Adopted, 70, group: "removed");
-
-        Run();
-
-        Assert.Equal(2, sweep.GateMemo.ReadCount);
-        Assert.True(sweep.GateMemo.Contains(removed));
-        Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
-
-        Directory.Delete(Path.GetDirectoryName(removed)!, recursive: true);
-        Run();
-
-        Assert.False(sweep.GateMemo.Contains(removed));
-        Assert.True(sweep.GateMemo.Contains(kept));
-        Assert.Equal(1, sweep.GateMemo.Count);
-        Assert.Equal(1, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
-        Assert.Empty(failures);
-    }
-
-    [Fact]
     public async Task Run_RepeatedMissDeliversOneVerdictAndBacklogNote()
     {
         var item = await backlog.AddAsync("Reduce gate selection cost");
@@ -377,18 +279,17 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
         WriteGate(AdoptedAt.AddMinutes(3), Adopted, 100);
     }
 
-    private string WriteGate(DateTimeOffset recordedAt, string commit, double milliseconds, DateTimeOffset? startedAt = null,
-        string group = "fixture", bool writeResult = true)
+    private void WriteGate(DateTimeOffset recordedAt, string commit, double milliseconds, DateTimeOffset? startedAt = null)
     {
         var attempt = FormattableString.Invariant($"fixture-gate-{recordedAt:yyyyMMddHHmmssfff}-{++gateNumber:x32}");
-        var directory = Directory.CreateDirectory(Path.Combine(root, "acceptance-gate-attempts", group));
+        var directory = Directory.CreateDirectory(Path.Combine(root, "acceptance-gate-attempts", "fixture"));
         var prefix = Path.Combine(directory.FullName, attempt);
         var plan = new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, attempt, ["test-lane"], [])
         {
             SelectedExecution = CostGoalOutcomeBaselineTests.Selection(milliseconds, 10, null)
         };
         File.WriteAllText(prefix + AcceptanceGateLanePlan.ArtifactSuffix, plan.ToJson());
-        if (writeResult) WriteGateResult(prefix, commit);
+        WriteGateResult(prefix, commit);
         if (startedAt is { } started)
         {
             var gateGoal = GoalId.New().Value;
@@ -400,7 +301,17 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
             };
             File.WriteAllText(metadata.MetadataPath, JsonSerializer.Serialize(metadata, Json));
         }
-        return prefix;
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        if (gateNumber == 1)
+            SharedJsonlFile.AppendLine(ledger, """{"kind":"backfill-complete"}""");
+        var row = new AcceptanceGateOutcomeObservation(attempt, directory.Name, recordedAt, startedAt ?? recordedAt,
+            commit, plan.SelectedExecution!.Mode, plan.SelectedExecution.FullGateReason,
+            plan.SelectedExecution.ExecutedClassCount, milliseconds, "Passed")
+        {
+            HasSoloMetadata = startedAt.HasValue,
+            OwnerFallbackLaunchMainCommit = startedAt.HasValue ? commit : null
+        };
+        SharedJsonlFile.AppendLine(ledger, JsonSerializer.Serialize(row, Json));
     }
 
     private static void WriteGateResult(string prefix, string commit)
