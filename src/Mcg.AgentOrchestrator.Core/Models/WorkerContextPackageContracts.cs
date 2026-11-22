@@ -392,6 +392,9 @@ public sealed record WorkerContextPackageReceipt(
 {
     private static readonly ProviderUsageValue UnrecordedToolCalls = ProviderUsageValue.Unknown("not-recorded");
 
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, long>? WtCalls { get; init; }
+
     public ProviderUsageValue ToolCalls
     {
         get;

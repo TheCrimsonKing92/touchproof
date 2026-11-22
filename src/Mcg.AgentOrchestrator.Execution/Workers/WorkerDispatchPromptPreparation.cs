@@ -24,9 +24,11 @@ internal static class WorkerDispatchPromptPreparation
     internal static WorkerDispatchPreparation Prepare(
         TaskBrief brief, WorkerProfile profile, ProviderKind workerProviderKind,
         string promptRoot, IReadOnlyDictionary<string, string?> dispatchVariables,
-        DateTimeOffset dispatchedAt, TaskDispatchRecord? retainedDispatch)
+        DateTimeOffset dispatchedAt, TaskDispatchRecord? retainedDispatch, bool workerToolsAvailable)
     {
-        var commandTemplate = WorkerProfileDispatcher.BuildDispatchCommandTemplate(profile, workerProviderKind, dispatchVariables);
+        var commandTemplate = WorkerProfileDispatcher.BuildDispatchCommandTemplate(
+            profile, workerProviderKind, dispatchVariables,
+            allowClaudePlannerWorkerTools: brief.Role == AgentRole.Planner && workerToolsAvailable);
         var preparation = retainedDispatch is not null
             ? new WorkerDispatchPreparation(retainedDispatch.PromptPath!, retainedDispatch.Command, brief.Content.Length)
             : WorkerCommandTemplate.Prepare(

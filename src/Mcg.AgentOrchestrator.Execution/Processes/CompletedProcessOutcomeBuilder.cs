@@ -72,6 +72,9 @@ internal sealed class CompletedProcessOutcomeBuilder
             ? null
             : dispatchAttempt.DispatchedAt;
         var providerUsage = _runner.ResolveDispatchProviderUsage(dispatchAttempt, processRecord.StandardOutputPath);
+        var wtCalls = WorkerToolsTelemetry.Read(task.RequiredRole, dispatchAttempt, processRecord.StandardOutputPath, out var telemetryDiagnostic);
+        if (telemetryDiagnostic is not null)
+            standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, telemetryDiagnostic);
         if (task.RequiredRole == AgentRole.Tester && SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task))
         {
             WorkerResultSubmissionIngestion.TryIngest(processRecord.WorkingDirectory, goalId, task,
@@ -752,7 +755,12 @@ internal sealed class CompletedProcessOutcomeBuilder
             // Planner evidence binds its brief through host dispatch provenance as well.
             // Developer write observations carry their own attempt binding without changing shared evidence readers.
             DispatchAttemptAt: requiresTerminalContract || task.RequiredRole == AgentRole.Planner
-                ? dispatchAttempt?.DispatchedAt : null),
+                ? dispatchAttempt?.DispatchedAt : null,
+            PendingPlannerArtifact: task.RequiredRole == AgentRole.Planner && exitCode == 0 &&
+                completionContractSucceeded && orchestratorFailureReason is null && dispatchAttempt is not null
+                ? WorkerArtifactWriter.CapturePendingPlannerArtifact(
+                    goal, dispatchAttempt, humanInputDirective, processRecord, fullStandardOutput.Content)
+                : null),
             hasChildExitRecord ? childExitRecord.WorkerIntegrity : null);
 
         var outcome = new DispatchRefreshOutcome(
@@ -769,7 +777,7 @@ internal sealed class CompletedProcessOutcomeBuilder
             ProviderUsage: providerUsage.Usage,
             ProviderUsageUnavailableReason: providerUsage.UnavailableReason,
             DispatchAttemptAt: contextReceiptAttemptAt, ReceiptlessUsageAttemptAt: ReceiptlessUsageAttemptAt(dispatchAttempt), FailedRoundReceipt: failedRoundReceipt,
-            SkillsReceipt: ResolveSkillsReceipt(goalId, taskId, dispatchAttempt, processRecord.StandardOutputPath, verification));
+            SkillsReceipt: ResolveSkillsReceipt(goalId, taskId, dispatchAttempt, processRecord.StandardOutputPath, verification)) { WtCalls = wtCalls };
         _processLogReader.Evict(processRecord);
         return outcome;
     }
