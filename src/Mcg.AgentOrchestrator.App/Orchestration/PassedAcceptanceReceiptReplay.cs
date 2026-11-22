@@ -157,15 +157,18 @@ internal static class PassedAcceptanceReceiptReplay
 
     internal static void RecordRepeatGateHold(ConductorAdvanceResult repeatHold,
         Dictionary<string, ParallelLandingOutcome> results, int tick, List<string> changedGoalLines,
-        Action<string, List<string>> recordProgress)
+        Action<string, List<string>> recordProgress) =>
+        RecordRepeatGateHold(repeatHold, results, tick, line => recordProgress(line, changedGoalLines));
+
+    internal static void RecordRepeatGateHold(ConductorAdvanceResult repeatHold,
+        Dictionary<string, ParallelLandingOutcome> results, int tick, Action<string> recordProgress)
     {
         results[repeatHold.GoalId] = new ParallelLandingOutcome(repeatHold, SlotIndex: null);
         var held = (ConductorAdvanceOutcome.Held)repeatHold.Outcome;
         var reason = held.Decision!.DiscriminatingEvidence;
         var detail = reason == AcceptanceCriterionEvidence.RefusedCarryAdmissionReason
             ? $" detail={ConductorDiagnosticText.SanitizeReason(held.Reason)}" : string.Empty;
-        recordProgress($"ADMISSION tick={tick} result=held reason={reason} goal={repeatHold.GoalId[..8]} gatesLaunched=0{detail}",
-            changedGoalLines);
+        recordProgress($"ADMISSION tick={tick} result=held reason={reason} goal={repeatHold.GoalId[..8]} gatesLaunched=0{detail}");
     }
 
     internal static Goal[] ExcludeRefusedCarryHolds(IReadOnlyList<Goal> goals,
@@ -174,8 +177,10 @@ internal static class PassedAcceptanceReceiptReplay
 
     internal static bool HasRefusedCarryHold(GoalId goalId,
         IReadOnlyDictionary<string, ParallelLandingOutcome> outcomes) =>
-        outcomes.TryGetValue(goalId.Value, out var outcome) &&
-        outcome.Result.Outcome is ConductorAdvanceOutcome.Held
+        outcomes.TryGetValue(goalId.Value, out var outcome) && IsRefusedCarryHold(outcome.Result);
+
+    internal static bool IsRefusedCarryHold(ConductorAdvanceResult result) =>
+        result.Outcome is ConductorAdvanceOutcome.Held
             { Decision.DiscriminatingEvidence: AcceptanceCriterionEvidence.RefusedCarryAdmissionReason };
 
     internal static ConductorAdvanceResult? CircuitHold(

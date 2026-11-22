@@ -172,7 +172,7 @@ internal static partial class AcceptanceCriterionEvidence
         Func<GoalId, string?> resolveCandidateSha,
         AgentOrchestratorKernel? kernel,
         string evidenceSource,
-        string integrationBranch, string? executionDirectory)
+        string integrationBranch, string? executionDirectory, Action<GoalId>? onOutstanding = null)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(resolveCandidateSha);
@@ -187,6 +187,7 @@ internal static partial class AcceptanceCriterionEvidence
                 integrationBranch, executionDirectory);
             if (diagnostic is not null)
             {
+                onOutstanding?.Invoke(goal.Id);
                 diagnostics.Add($"goal {goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}: {diagnostic}");
             }
         }

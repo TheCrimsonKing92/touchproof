@@ -7,8 +7,16 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWorkflowTests
 {
     [Fact]
-    public void CompletedPassedCohortReceipt_LandsPairBeforeMergeTrainSelection()
+    public void CompletedPassedCohortReceipt_LandsPairBeforeMergeTrainSelection() =>
+        RunPassedReceiptPrelanding(refuseCarry: false);
+
+    [Fact]
+    public void LateCohortBindingRefusal_ReservesTrainForPeerAndThirdGoal() =>
+        RunPassedReceiptPrelanding(refuseCarry: true);
+
+    private static void RunPassedReceiptPrelanding(bool refuseCarry)
     {
+        const string firstPath = "src/Mcg.AgentOrchestrator.Infrastructure/PrelandFirst.cs";
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanup = CreateIsolatedCleanupContext(repo);
         using var gateStarted = new ManualResetEventSlim();
@@ -19,11 +27,13 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             var kernel = new AgentOrchestratorKernel();
             var first = CreateCompletedGoal(kernel, "First passed cohort member", repo);
             var second = CreateCompletedGoal(kernel, "Second passed cohort member", repo);
-            var firstCandidate = CreateWorktreeCandidate(repo, first.Id,
-                "src/Mcg.AgentOrchestrator.Infrastructure/PrelandFirst.cs", "first");
+            var firstBound = CreateWorktreeCandidate(repo, first.Id, firstPath, "first");
+            var firstCandidate = refuseCarry
+                ? CreateWorktreeCandidate(repo, first.Id, firstPath, "changed after binding")
+                : firstBound;
             var secondCandidate = CreateWorktreeCandidate(repo, second.Id,
                 "tests/PrelandSecond.cs", "second");
-            foreach (var (goal, candidate) in new[] { (first, firstCandidate), (second, secondCandidate) })
+            foreach (var (goal, bound) in new[] { (first, firstBound), (second, secondCandidate) })
             {
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
@@ -32,7 +42,7 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 });
                 kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1,
                     CriterionEvidenceOwner.Acceptance, "test",
-                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
+                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: bound);
             }
             var trx = WritePassingTrx(repo, "preland-green.trx");
             var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
@@ -83,6 +93,16 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 "The completed pair was discarded before the pre-landing pass despite its current passed receipt.");
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
+            var reservations = new List<ConductorAcceptanceCapacitySnapshot>();
+            using var emptyCensus = refuseCarry ? GateLoadContextProbe.PushLiveGateOccupantProbe(() => []) : null;
+            if (refuseCarry)
+            {
+                Assert.True(passedReceipt.HasAuthoritativeLandingEvidence);
+                Assert.Equal(firstCandidate, passedReceipt.Identity.Members.Single(member => member.GoalId == first.Id).CandidateRevision);
+                Assert.Empty(GoalOperationJournal.ReadRefusedCarryHolds(repo, first.Id));
+                // The runner has reserved capacity by this point. Observe it without launching the gate.
+                driver.SetCohortGateBackgroundStartForTests(_ => reservations.Add(driver.GetActiveAcceptanceCohortCapacity()));
+            }
             var logPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "preland.jsonl");
             BatchTickSummary? observedTick = null;
             AdmissionFactsTestData.Warm(driver, kernel);
@@ -92,6 +112,24 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 onTick: summary => observedTick = summary);
 
             var progress = string.Join(" | ", observedTick?.ProgressLines ?? []);
+            if (refuseCarry)
+            {
+                var refusal = Assert.Single(GoalOperationJournal.ReadRefusedCarryHolds(repo, first.Id));
+                var binding = Assert.Single(refusal.Bindings);
+                Assert.Equal(firstCandidate, refusal.BranchSha);
+                Assert.Equal(firstBound, binding.BoundSha);
+                var reservation = Assert.Single(Assert.Single(reservations).ActiveRoots);
+                Assert.True(reservation.MemberGoalIds.SetEquals([second.Id.Value, third.Id.Value]));
+                Assert.Contains(observedTick!.ProgressLines!, line =>
+                    line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
+                    line.Contains($"goal={first.Id.Value[..8]} gatesLaunched=0", StringComparison.Ordinal) &&
+                    line.Contains(binding.ObligationId, StringComparison.Ordinal));
+                Assert.Null(driver.ParallelAcceptanceAttemptCoordinator.TryReadLatest(first.Id.Value));
+                Assert.Equal(1, verifier.RunCount);
+                Assert.Empty(landings);
+                return;
+            }
+
             Assert.Contains($"prelanded=true outcome=passed receipt={passedReceipt.ReceiptId}", progress);
             Assert.True(first.Status == GoalStatus.Completed,
                 $"Expected first cohort member to land; status={first.Status}; progress={progress}");
