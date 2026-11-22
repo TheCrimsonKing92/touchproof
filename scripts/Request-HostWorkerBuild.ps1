@@ -63,7 +63,7 @@ try {
     $null = $errorCopy.GetAwaiter().GetResult()
     $exitCode = $process.ExitCode
 } catch {
-    [Console]::Error.WriteLine('worker_build_channel_unavailable app="' + $appDll + '"')
+    [Console]::Error.WriteLine('worker_build_client_launch_failed app="' + $appDll + '"')
     $exitCode = 1
 } finally {
     if ($null -ne $process) { $process.Dispose() }

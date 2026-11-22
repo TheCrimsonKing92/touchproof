@@ -94,40 +94,132 @@ public sealed class HostBuildPipeClientTests : IDisposable
         var exit = new WorkerBuildRequestClient(output, error, time, opener).Run(_root, Request(), 3);
         Assert.Equal(1, exit);
         Assert.Empty(output.ToString());
-        Assert.Equal(new[]
+        var expected = new[]
         {
             $"worker_build_channel_wait pipe=\"\\\\.\\pipe\\{name}\" busy_timeout_seconds=3",
             $"worker_build_channel_busy pipe=\"\\\\.\\pipe\\{name}\" waited_seconds=3"
-        }, error.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        };
+        Assert.Equal(string.Join(Environment.NewLine, expected) + Environment.NewLine, error.ToString());
+        Assert.DoesNotContain("worker_build_channel_unavailable", error.ToString());
         Assert.Equal(1, opener.Opens);
         Assert.Equal(1, opener.Waits);
+    }
+
+    [Fact]
+    public void MissingDescriptor_ReportsDescriptorUnavailable()
+    {
+        WriteDescriptor();
+        var path = Path.Combine(_root, WorkerBuildRequestChannel.DescriptorRelativePath);
+        File.Delete(path);
+
+        AssertUnavailable(RunBeforePipeOpen(), "descriptor", path);
+    }
+
+    [Fact]
+    public void UnreadableDescriptor_ReportsDescriptorUnavailable()
+    {
+        WriteDescriptor();
+        var path = Path.Combine(_root, WorkerBuildRequestChannel.DescriptorRelativePath);
+        using var exclusive = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        AssertUnavailable(RunBeforePipeOpen(), "descriptor", path);
     }
 
     [Theory]
     [InlineData("version")]
     [InlineData("pipe")]
-    [InlineData("missing")]
     public void UnsupportedDescriptor_RejectsBeforeOpeningPipe(string scenario)
     {
         WriteDescriptor(scenario == "version" ? 2 : 1, scenario == "pipe" ? "untrusted-pipe" : null);
-        if (scenario == "missing") File.Delete(Path.Combine(_root, WorkerBuildRequestChannel.DescriptorRelativePath));
-        var opener = new BusyOpener(new ManualTime());
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-        Assert.Equal(1, new WorkerBuildRequestClient(output, error, pipeOpener: opener).Run(_root, Request(), 1));
-        Assert.Equal(0, opener.Opens);
-        Assert.Empty(output.ToString());
-        Assert.False(string.IsNullOrWhiteSpace(error.ToString()));
-        if (scenario != "missing") Assert.Equal("Unsupported managed worker build endpoint descriptor." + Environment.NewLine, error.ToString());
+        var result = RunBeforePipeOpen();
+
+        Assert.Equal(1, result.Exit);
+        Assert.Empty(result.Output);
+        Assert.Equal("Unsupported managed worker build endpoint descriptor." + Environment.NewLine, result.Error);
     }
 
     [Fact]
-    public async Task HostEof_FailsWithoutClaimingAnInvocation()
+    public void MalformedJsonDescriptor_KeepsParserDiagnostic()
     {
-        var result = await ExchangeAsync(null);
+        WriteDescriptor();
+        const string malformed = "{";
+        File.WriteAllText(Path.Combine(_root, WorkerBuildRequestChannel.DescriptorRelativePath), malformed);
+        var expected = Record.Exception(() => { using var document = JsonDocument.Parse(malformed); });
+
+        var result = RunBeforePipeOpen();
+
         Assert.Equal(1, result.Exit);
         Assert.Empty(result.Output);
-        Assert.Equal("Managed worker build host closed without a terminal response." + Environment.NewLine, result.Error);
+        Assert.Equal(Assert.IsAssignableFrom<JsonException>(expected).Message + Environment.NewLine, result.Error);
+    }
+
+    [Fact]
+    public void NonBusyOpenFailure_ReportsPipeUnavailable()
+    {
+        var path = @"\\.\pipe\" + WriteDescriptor();
+        var opener = new StubPipeOpener(path, nativeError: 2);
+
+        AssertUnavailable(Run(opener), "pipe", path);
+        Assert.Equal(1, opener.Opens);
+    }
+
+    [Fact]
+    public async Task HostEof_ReportsPipeUnavailable()
+    {
+        var result = await ExchangeAsync(null);
+
+        var cause = AssertUnavailable((result.Exit, result.Output, result.Error), "pipe", result.PipePath);
+        Assert.Equal("Managed worker build host closed without a terminal response.", cause);
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0x8007006D), true)]
+    [InlineData(unchecked((int)0x800700E8), true)]
+    [InlineData(unchecked((int)0x800700E9), true)]
+    [InlineData(unchecked((int)0x80070057), false)]
+    public void WriteFailure_ReportsUnavailableOnlyForDisconnects(int hresult, bool unavailable)
+    {
+        var path = @"\\.\pipe\" + WriteDescriptor();
+        const string cause = "Injected write failure.\r\nPipe write did not complete.";
+        using var stream = new FailingWriteStream(new IOException(cause, hresult));
+        var opener = new StubPipeOpener(path, connection: stream);
+
+        var result = Run(opener);
+
+        Assert.Equal(1, opener.Opens);
+        if (unavailable)
+            Assert.Equal("Injected write failure. Pipe write did not complete.", AssertUnavailable(result, "pipe", path));
+        else Assert.Equal((1, "", cause + Environment.NewLine), result);
+    }
+
+    private (int Exit, string Output, string Error) RunBeforePipeOpen()
+    {
+        var opener = new BusyOpener(new ManualTime());
+        var result = Run(opener);
+        Assert.Equal(0, opener.Opens);
+        return result;
+    }
+
+    private (int Exit, string Output, string Error) Run(WorkerBuildRequestClient.IPipeOpener opener)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var exit = new WorkerBuildRequestClient(output, error, pipeOpener: opener).Run(_root, Request(), 0);
+        return (exit, output.ToString(), error.ToString());
+    }
+
+    private static string AssertUnavailable((int Exit, string Output, string Error) result, string pathKind, string path)
+    {
+        Assert.Equal(1, result.Exit);
+        Assert.Empty(result.Output);
+        using var lines = new StringReader(result.Error);
+        var line = Assert.IsType<string>(lines.ReadLine());
+        Assert.Null(lines.ReadLine());
+        var prefix = $"worker_build_channel_unavailable {pathKind}=\"{path}\" cause=";
+        Assert.StartsWith(prefix, line, StringComparison.Ordinal);
+        var cause = line[prefix.Length..];
+        Assert.False(string.IsNullOrWhiteSpace(cause));
+        return cause;
     }
 
     internal static WorkerBuildResponse Response(WorkerBuildStructuralStatus status) =>
@@ -146,7 +238,7 @@ public sealed class HostBuildPipeClientTests : IDisposable
         return name;
     }
 
-    private async Task<(int Exit, string Output, string Error, WorkerBuildRequest Request)> ExchangeAsync(string? response)
+    private async Task<(int Exit, string Output, string Error, WorkerBuildRequest Request, string PipePath)> ExchangeAsync(string? response)
     {
         var name = WriteDescriptor();
         using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1,
@@ -169,7 +261,7 @@ public sealed class HostBuildPipeClientTests : IDisposable
             }
             else server.Disconnect();
             var exit = await client.WaitAsync(guard.Token);
-            return (exit, output.ToString(), error.ToString(), request);
+            return (exit, output.ToString(), error.ToString(), request, @"\\.\pipe\" + name);
         }
         finally
         {
@@ -196,6 +288,28 @@ public sealed class HostBuildPipeClientTests : IDisposable
             error = 121;
             return false;
         }
+    }
+
+    private sealed class StubPipeOpener(string expectedPath, int nativeError = 0, Stream? connection = null)
+        : WorkerBuildRequestClient.IPipeOpener
+    {
+        internal int Opens;
+
+        public Stream? TryOpen(string path, out int error)
+        {
+            Assert.Equal(expectedPath, path);
+            Opens++;
+            error = nativeError;
+            return connection;
+        }
+
+        public bool WaitForAvailability(string path, uint milliseconds, out int error) =>
+            throw new InvalidOperationException("Only a busy pipe should wait for availability.");
+    }
+
+    private sealed class FailingWriteStream(IOException failure) : MemoryStream
+    {
+        public override void Write(ReadOnlySpan<byte> buffer) => throw failure;
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
