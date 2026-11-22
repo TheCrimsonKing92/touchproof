@@ -115,7 +115,23 @@ internal sealed class WorkerGitContext
                 mainResult.Error);
         }
 
-        var mergeBaseResult = GitCli.Run(workingDirectory, "merge-base", integrationBranch, "HEAD");
+        var integrationCommit = mainResult.Output.Trim();
+        var candidateCommit = (resolveRevision ?? ResolveRevision)(workingDirectory, "HEAD^{commit}");
+        if (candidateCommit is null)
+        {
+            var headResult = GitCli.Run(workingDirectory, "rev-parse", "--verify", "HEAD^{commit}");
+            if (!headResult.Succeeded || string.IsNullOrWhiteSpace(headResult.Output))
+            {
+                throw new ReviewerChangedFileScopeException(
+                    ReviewerMergeBaseUnavailableErrorCode,
+                    $"Reviewer changed-file scope unavailable because git merge-base {integrationBranch} HEAD could not be computed.",
+                    headResult.Error);
+            }
+
+            candidateCommit = headResult.Output.Trim();
+        }
+
+        var mergeBaseResult = GitCli.Run(workingDirectory, "merge-base", integrationCommit, candidateCommit);
         if (!mergeBaseResult.Succeeded || string.IsNullOrWhiteSpace(mergeBaseResult.Output))
         {
             throw new ReviewerChangedFileScopeException(
@@ -124,8 +140,10 @@ internal sealed class WorkerGitContext
                 mergeBaseResult.Error);
         }
 
-        var diffResult = GitCli.Run(workingDirectory, "diff", "--name-only", $"{integrationBranch}...HEAD", "--");
-        if (!diffResult.Succeeded)
+        var mergeBase = mergeBaseResult.Output.Trim();
+        var diffResult = GitCli.Run(workingDirectory, "--no-lazy-fetch", "diff", "--raw", "-z", "--no-abbrev",
+            "--no-ext-diff", "--no-textconv", "--no-relative", mergeBase, candidateCommit, "--");
+        if (!diffResult.Succeeded || diffResult.DrainTimedOut)
         {
             throw new ReviewerChangedFileScopeException(
                 ReviewerScopeUnavailableErrorCode,
@@ -133,14 +151,47 @@ internal sealed class WorkerGitContext
                 diffResult.Error);
         }
 
-        var changedFiles = SplitGitOutput(diffResult.Output)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return new ReviewerChangedFileScope(
-            mergeBaseResult.Output.Trim(),
-            changedFiles,
-            changedFiles.Length);
+        var fields = diffResult.Output.Split('\0');
+        if (fields[^1].Length != 0)
+            throw InvalidScopeMetadata();
+        var changes = new List<ReviewerScopedChange>();
+        for (var index = 0; index < fields.Length - 1;)
+        {
+            var metadata = fields[index++].Split(' ');
+            if (metadata.Length != 5 || metadata[4].Length == 0 || index >= fields.Length - 1)
+                throw InvalidScopeMetadata();
+
+            var status = metadata[4][0];
+            var path = fields[index++];
+            string? previousPath = null;
+            if (status is 'R' or 'C')
+            {
+                if (index >= fields.Length - 1)
+                    throw InvalidScopeMetadata();
+                previousPath = path;
+                path = fields[index++];
+            }
+
+            var oldBlob = ExcerptableBlob(metadata[0].AsSpan(1), metadata[2]);
+            var newBlob = ExcerptableBlob(metadata[1], metadata[3]);
+            var canHaveTextHunks = oldBlob != newBlob;
+            changes.Add(new ReviewerScopedChange(path, previousPath, status, canHaveTextHunks));
+        }
+
+        return new ReviewerChangedFileScope(mergeBase, integrationCommit, candidateCommit,
+            changes.OrderBy(change => change.Path, StringComparer.OrdinalIgnoreCase).ToArray());
+
+        ReviewerChangedFileScopeException InvalidScopeMetadata() => new(ReviewerScopeUnavailableErrorCode,
+            $"Reviewer changed-file scope unavailable because git diff --name-only {integrationBranch}...HEAD failed.",
+            "Git returned incomplete changed-file metadata.");
     }
+
+    // Git's SHA-1 and SHA-256 object IDs for the empty blob.
+    private static string? ExcerptableBlob(ReadOnlySpan<char> mode, string objectId) =>
+        mode is "000000" or "160000" || objectId is
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391" or
+            "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
+            ? null : objectId;
 
     internal IReadOnlyList<ReviewFindingLocation> ReadReviewerRoundTouchedAnchors(
         string workingDirectory,
@@ -761,14 +812,6 @@ internal sealed record SourceLineRange(int Start, int End)
         var changedEnd = changedStart + changedCount - 1;
         return changedStart <= End && changedEnd >= Start;
     }
-}
-
-internal sealed record ReviewerChangedFileScope(
-    string MergeBase,
-    IReadOnlyList<string> ChangedFiles,
-    int TotalChangedFileCount)
-{
-    public bool Truncated => ChangedFiles.Count < TotalChangedFileCount;
 }
 
 internal sealed record ReviewerMergeTreeStatus(

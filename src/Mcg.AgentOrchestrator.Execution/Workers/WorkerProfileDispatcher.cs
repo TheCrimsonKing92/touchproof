@@ -52,7 +52,8 @@ public sealed record WorkerSubscriptionPreflightResult(
     // The Claude credential source this preflight selected and reported in its auth finding. It is
     // recorded on the dispatch so the dispatch start boundary transports THIS decision to the worker
     // sandbox; null whenever no Claude login was inspected (other providers, sandbox disabled, blocked).
-    ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null);
+    ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null,
+    ReviewerChangedFileScope? ReviewerScope = null);
 
 public sealed class WorkerSubscriptionPreflightException : InvalidOperationException
 {
@@ -158,7 +159,8 @@ public static partial class WorkerProfileDispatcher
         // the dispatch so the start boundary transports that one decision instead of selecting again.
         ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
         Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null,
-        bool restorePreparedContext = false, WorkerToolsInstaller? workerTools = null)
+        bool restorePreparedContext = false, WorkerToolsInstaller? workerTools = null,
+        ReviewerChangedFileScope? reviewerScope = null, Action<string>? observeReviewerPromptBeforeExcerpts = null)
     {
         integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
@@ -183,10 +185,19 @@ public static partial class WorkerProfileDispatcher
                 durableArtifactFindings);
         }
 
+        if (task.RequiredRole == AgentRole.Reviewer && retainedDispatch?.ReviewerScope is { } retainedScope)
+        {
+            reviewerScope = retainedScope.Scope;
+            reviewerMergeTreeClean = retainedScope.MergeTreeClean;
+            reviewerMergeTreeConflictPaths = retainedScope.MergeTreeConflictPaths;
+            reviewerMergeTreeTotalConflictPathCount = retainedScope.MergeTreeTotalConflictPathCount;
+        }
+
         EnsureReviewerScopeForPreparation(
             task,
             workingDirectory, integrationBranch,
             ref preflightFindings,
+            ref reviewerScope,
             ref reviewerScopeChangedFiles,
             ref reviewerScopeMergeBase,
             ref reviewerScopeTotalChangedFileCount,
@@ -194,7 +205,12 @@ public static partial class WorkerProfileDispatcher
             ref reviewerMergeTreeConflictPaths,
             ref reviewerMergeTreeTotalConflictPathCount);
 
-        var targetContext = TryReadCurrentTargetContext(workingDirectory);
+        var excerptScope = task.RequiredRole == AgentRole.Reviewer &&
+            (retainedDispatch is null || retainedDispatch.ReviewerScope is not null) ? reviewerScope : null;
+        var pinnedHead = excerptScope?.CandidateCommit;
+        if (task.RequiredRole == AgentRole.Reviewer && retainedDispatch is not null)
+            pinnedHead ??= retainedDispatch.WorktreeHeadSha ?? retainedDispatch.BaseCommit;
+        var targetContext = TryReadCurrentTargetContext(workingDirectory, pinnedHead: pinnedHead);
         IReadOnlyList<string> preparationFindings = [];
         if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer && preparationFindingsResolver is not null)
         {
@@ -204,7 +220,8 @@ public static partial class WorkerProfileDispatcher
         var generatedHandoff = WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var (contextDirectory, linkedBacklogPointer) = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
             preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory, targetHome, backlogStorePath, integrationBranch);
-        var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch);
+        var currentMainIdentity = excerptScope?.IntegrationCommit ??
+            ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
             task,
@@ -251,7 +268,19 @@ public static partial class WorkerProfileDispatcher
             brief = brief with { Content = brief.Content + "\n\n" + SubscriptionPreflightPromptProjection.ReadLegacyPromptSection(contextDirectory) };
         WorkerContextPackageReceipt? contextPackageReceipt = null;
         WorkerContextPackage? contextPackage = null;
-        var packagedBrief = usesTypedContextPackage ? brief : brief with { Content = BriefSourceContextSection.Append(brief.Content, goal.Objective, workingDirectory, targetContext?.HeadCommit, task.RequiredRole) };
+        var candidateDiff = task.RequiredRole == AgentRole.Reviewer
+            ? ReviewerCandidateDiffSection.Render(workingDirectory, excerptScope, reviewerScopeTotalChangedFileCount)
+            : string.Empty;
+        string FinalizePrompt(string prompt)
+        {
+            var baseline = BriefSourceContextSection.Append(prompt, goal.Objective, workingDirectory,
+                targetContext?.HeadCommit, task.RequiredRole);
+            if (task.RequiredRole == AgentRole.Reviewer)
+                observeReviewerPromptBeforeExcerpts?.Invoke(baseline);
+            return baseline + candidateDiff;
+        }
+
+        var packagedBrief = usesTypedContextPackage ? brief : brief with { Content = FinalizePrompt(brief.Content) };
         if (usesTypedContextPackage)
         {
             contextPackage = BuildContextPackage(
@@ -285,11 +314,11 @@ public static partial class WorkerProfileDispatcher
                 : task.CriterionRetryFeedback.Count > 0
                     ? WorkerContextDeliveryPolicy.RetryFeedback
                     : WorkerContextDeliveryPolicy.Initial;
-            var renderedPrompt = BriefSourceContextSection.Append(WorkerContextRenderer.Render(
+            var renderedPrompt = FinalizePrompt(WorkerContextRenderer.Render(
                 briefSource,
                 contextPackage,
                 workingDirectory,
-                deliveryPolicy), goal.Objective, workingDirectory, targetContext?.HeadCommit, task.RequiredRole);
+                deliveryPolicy));
             packagedBrief = briefSource.ToTaskBrief(renderedPrompt);
             contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(contextPackage, renderedPrompt);
         }
@@ -356,7 +385,9 @@ public static partial class WorkerProfileDispatcher
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
             FindingEvidenceReviewContext: reviewEvidenceContext,
             FindingEvidenceReviewContinuation: FindingEvidenceDispatchContext.Continuation(task),
-            ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort), WorkerToolsDirectory: workerToolsDirectory),
+            ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort), WorkerToolsDirectory: workerToolsDirectory,
+            ReviewerScope: excerptScope is null ? null : new ReviewerDispatchScope(excerptScope,
+                reviewerMergeTreeClean!.Value, reviewerMergeTreeConflictPaths!, reviewerMergeTreeTotalConflictPathCount!.Value)),
             allowPendingRecordedDispatchRefresh);
         ReviewerChangedExistingTestScope.RecordConductEvent(goal, task, changedExistingTests, promptRoot, dispatchedAt, allowPendingRecordedDispatchRefresh);
         PrerequisiteEvidenceTrimNote.RecordIfTrimmed(kernel, goal.Id, task.Id, brief);
@@ -387,82 +418,6 @@ public static partial class WorkerProfileDispatcher
             carriedRound?.ReviewedCommit,
             currentHeadCommit,
             anchors);
-    }
-
-    private static void EnsureReviewerScopeForPreparation(
-        TaskSpec task,
-        string workingDirectory, string integrationBranch,
-        ref IReadOnlyList<string>? preflightFindings,
-        ref IReadOnlyList<string>? reviewerScopeChangedFiles,
-        ref string? reviewerScopeMergeBase,
-        ref int? reviewerScopeTotalChangedFileCount,
-        ref bool? reviewerMergeTreeClean,
-        ref IReadOnlyList<string>? reviewerMergeTreeConflictPaths,
-        ref int? reviewerMergeTreeTotalConflictPathCount)
-    {
-        if (task.RequiredRole != AgentRole.Reviewer)
-        {
-            return;
-        }
-
-        if (reviewerScopeChangedFiles is not null &&
-            !string.IsNullOrWhiteSpace(reviewerScopeMergeBase) &&
-            reviewerScopeTotalChangedFileCount.HasValue &&
-            reviewerMergeTreeClean.HasValue &&
-            reviewerMergeTreeConflictPaths is not null &&
-            reviewerMergeTreeTotalConflictPathCount.HasValue)
-        {
-            return;
-        }
-
-        var findings = preflightFindings is null
-            ? []
-            : preflightFindings.ToList();
-        var hasScope = reviewerScopeChangedFiles is not null &&
-            !string.IsNullOrWhiteSpace(reviewerScopeMergeBase) &&
-            reviewerScopeTotalChangedFileCount.HasValue;
-        if (!hasScope)
-        {
-            var scope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory, integrationBranch);
-            if (scope is null)
-            {
-                var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerScopeUnavailableErrorCode;
-                var codePrefix = string.IsNullOrWhiteSpace(errorCode) ? string.Empty : $"{errorCode}: ";
-                throw new WorkerSubscriptionPreflightException(
-                    "Reviewer changed-file scope preflight failed: " + codePrefix + string.Join("; ", findings),
-                    errorCode,
-                    findings);
-            }
-
-            reviewerScopeChangedFiles = scope.ChangedFiles;
-            reviewerScopeMergeBase = scope.MergeBase;
-            reviewerScopeTotalChangedFileCount = scope.TotalChangedFileCount;
-        }
-
-        var hasMergeTree = reviewerMergeTreeClean.HasValue &&
-            reviewerMergeTreeConflictPaths is not null &&
-            reviewerMergeTreeTotalConflictPathCount.HasValue;
-        if (hasMergeTree)
-        {
-            preflightFindings = findings;
-            return;
-        }
-
-        var mergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory, integrationBranch);
-        if (mergeTree is null)
-        {
-            var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerMergeTreeUnavailableErrorCode;
-            var codePrefix = string.IsNullOrWhiteSpace(errorCode) ? string.Empty : $"{errorCode}: ";
-            throw new WorkerSubscriptionPreflightException(
-                "Reviewer merge-tree status preflight failed: " + codePrefix + string.Join("; ", findings),
-                errorCode,
-                findings);
-        }
-
-        preflightFindings = findings;
-        reviewerMergeTreeClean = mergeTree.IsClean;
-        reviewerMergeTreeConflictPaths = mergeTree.ConflictPaths;
-        reviewerMergeTreeTotalConflictPathCount = mergeTree.TotalConflictPathCount;
     }
 
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareReadyTasks(
@@ -573,6 +528,7 @@ public static partial class WorkerProfileDispatcher
             reviewerScopeChangedFiles: preflight.ReviewerScopeChangedFiles,
             reviewerScopeMergeBase: preflight.ReviewerScopeMergeBase,
             reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount,
+            reviewerScope: preflight.ReviewerScope,
             reviewerMergeTreeClean: preflight.ReviewerMergeTreeClean,
             reviewerMergeTreeConflictPaths: preflight.ReviewerMergeTreeConflictPaths,
             reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount,
@@ -691,7 +647,7 @@ public static partial class WorkerProfileDispatcher
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
             AddGitMetadataAccessFinding(findings, task, workingDirectory, sandbox);
             reviewerScope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory, integrationBranch);
-            reviewerMergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory, integrationBranch);
+            reviewerMergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory, integrationBranch, reviewerScope);
 
             if (IsTaskRetryDeferred(task, now, out var retryAfter))
             {
@@ -736,7 +692,7 @@ public static partial class WorkerProfileDispatcher
                 reviewerMergeTree?.IsClean,
                 reviewerMergeTree?.ConflictPaths,
                 reviewerMergeTree?.TotalConflictPathCount,
-                claudeCredentialSelection);
+                claudeCredentialSelection, reviewerScope);
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {
@@ -882,81 +838,6 @@ public static partial class WorkerProfileDispatcher
         var researcherIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Researcher);
         var taskIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == task.Id);
         return researcherIndex >= 0 && plannerIndex > researcherIndex && taskIndex > researcherIndex;
-    }
-
-    private static ReviewerChangedFileScope? AddReviewerChangedFileScopeFindings(
-        List<string> findings,
-        TaskSpec task,
-        string workingDirectory, string integrationBranch)
-    {
-        if (task.RequiredRole != AgentRole.Reviewer)
-        {
-            findings.Add("reviewer-scope: changed-file contract not required for non-Reviewer role");
-            return null;
-        }
-
-        try
-        {
-            var scope = new WorkerGitContext().ReadReviewerChangedFileScope(workingDirectory, integrationBranch);
-            findings.Add(
-                $"reviewer-scope: git diff --name-only {integrationBranch}...HEAD found {scope.TotalChangedFileCount} changed file(s) from merge-base {ShortSha(scope.MergeBase)}");
-            if (scope.Truncated)
-            {
-                findings.Add(
-                    $"reviewer-scope: changed-file prompt list truncated to {scope.ChangedFiles.Count} file(s) from {scope.TotalChangedFileCount}");
-            }
-
-            return scope;
-        }
-        catch (ReviewerChangedFileScopeException ex)
-        {
-            findings.Add($"blocked: {ex.ErrorCode}: {ex.Message}");
-            return null;
-        }
-    }
-
-    private static string ShortSha(string value)
-    {
-        var trimmed = value.Trim();
-        return trimmed.Length <= 12 ? trimmed : trimmed[..12];
-    }
-
-    private static ReviewerMergeTreeStatus? AddReviewerMergeTreeStatusFindings(
-        List<string> findings,
-        TaskSpec task,
-        string workingDirectory, string integrationBranch)
-    {
-        if (task.RequiredRole != AgentRole.Reviewer)
-        {
-            findings.Add("reviewer-merge-tree: merge-tree contract not required for non-Reviewer role");
-            return null;
-        }
-
-        try
-        {
-            var status = new WorkerGitContext().ReadReviewerMergeTreeStatus(workingDirectory, integrationBranch);
-            if (status.IsClean)
-            {
-                findings.Add($"reviewer-merge-tree: git merge-tree --write-tree --name-only {integrationBranch} HEAD is clean against current {integrationBranch}");
-            }
-            else
-            {
-                findings.Add(
-                    $"reviewer-merge-tree: git merge-tree --write-tree --name-only {integrationBranch} HEAD found {status.TotalConflictPathCount} conflict path(s) against current {integrationBranch}");
-                if (status.Truncated)
-                {
-                    findings.Add(
-                        $"reviewer-merge-tree: conflict path prompt list truncated to {status.ConflictPaths.Count} path(s) from {status.TotalConflictPathCount}");
-                }
-            }
-
-            return status;
-        }
-        catch (ReviewerMergeTreeStatusException ex)
-        {
-            findings.Add($"blocked: {ex.ErrorCode}: {ex.Message}");
-            return null;
-        }
     }
 
     private static void AddGitMetadataAccessFinding(
@@ -1235,6 +1116,7 @@ public static partial class WorkerProfileDispatcher
                 reviewerScopeChangedFiles: preflight.ReviewerScopeChangedFiles,
                 reviewerScopeMergeBase: preflight.ReviewerScopeMergeBase,
                 reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount,
+                reviewerScope: preflight.ReviewerScope,
                 reviewerMergeTreeClean: preflight.ReviewerMergeTreeClean,
                 reviewerMergeTreeConflictPaths: preflight.ReviewerMergeTreeConflictPaths,
                 reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount,

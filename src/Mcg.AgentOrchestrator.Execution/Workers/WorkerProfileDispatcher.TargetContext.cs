@@ -3,7 +3,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static partial class WorkerProfileDispatcher
 {
     internal static TargetContext? TryReadCurrentTargetContext(string workingDirectory,
-        Func<string, string, string?>? resolveRevision = null)
+        Func<string, string, string?>? resolveRevision = null, string? pinnedHead = null)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
         {
@@ -14,11 +14,11 @@ public static partial class WorkerProfileDispatcher
             (currentBranch is null || currentBranch.All(char.IsAscii))
             ? new GitCli.GitResult(0, currentBranch ?? "", "")
             : GitCli.Run(workingDirectory, "branch", "--show-current");
-        var resolved = resolveRevision is not null ? resolveRevision(workingDirectory, "HEAD") :
-            GitRevisionReader.Shared.TryResolve(workingDirectory, "HEAD", out var id) ? id : null;
+        var resolved = pinnedHead ?? (resolveRevision is not null ? resolveRevision(workingDirectory, "HEAD") :
+            GitRevisionReader.Shared.TryResolve(workingDirectory, "HEAD", out var id) ? id : null);
         var head = resolved is not null ? new GitCli.GitResult(0, resolved + "\n", "") :
             GitCli.Run(workingDirectory, "rev-parse", "HEAD");
-        if (branch.ExitCode != 0 || head.ExitCode != 0)
+        if ((pinnedHead is null && branch.ExitCode != 0) || head.ExitCode != 0)
         {
             return null;
         }
