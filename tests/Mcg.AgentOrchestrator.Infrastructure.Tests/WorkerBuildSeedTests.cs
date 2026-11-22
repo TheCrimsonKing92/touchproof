@@ -19,7 +19,6 @@ public sealed class WorkerBuildSeedTests
             new WorkerBuildRequestFixture(extraProject: customSeed, linkedWorktree: true,
                 seedRepository: root => Customize(root, customSeed)));
         using var fixture = measured.Value;
-        Assert.True(fixture.SeedFallbackReason is null, fixture.SeedFallbackReason);
         AssertSetupLaunches(measured.Counts, 0);
         Assert.Equal(1, measured.Counts.Count("worktree"));
 
@@ -116,7 +115,6 @@ public sealed class WorkerBuildSeedTests
                 File.WriteAllBytes(Path.Combine(root, "converted.txt"), workingBytes);
             }));
         using var fixture = measured.Value;
-        Assert.False(string.IsNullOrWhiteSpace(fixture.SeedFallbackReason));
         AssertSetupLaunches(measured.Counts, 1);
         Assert.Equal(1, callbacks);
         Assert.Equal(workingBytes, File.ReadAllBytes(Path.Combine(fixture.RepositoryRoot, "converted.txt")));
@@ -183,10 +181,11 @@ public sealed class WorkerBuildSeedTests
 
     private static void AssertSetupLaunches(FixtureGitLaunchBudget.Launches counts, int constructions)
     {
-        Assert.Equal(constructions, counts.Count("init"));
-        Assert.Equal(2 * constructions, counts.Count("config"));
-        Assert.Equal(constructions, counts.Count("add"));
-        Assert.Equal(constructions, counts.Count("commit"));
+        var expected = (Init: constructions, Config: 2 * constructions, Add: constructions, Commit: constructions);
+        var actual = (Init: counts.Count("init"), Config: counts.Count("config"), Add: counts.Count("add"), Commit: counts.Count("commit"));
+        if (actual != expected)
+            Assert.Fail($"Git seed launches (init, config, add, commit): expected {expected}, observed {actual}.\n" +
+                TestContext.Current.TestOutputHelper?.Output);
     }
 
     private static string[] SortedConfig(string root) =>

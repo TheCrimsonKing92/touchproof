@@ -14,7 +14,6 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
 
     internal readonly string Root = Path.Combine(Path.GetTempPath(), "mcg-worker-build-request-" + Guid.NewGuid().ToString("N"));
     internal readonly string RepositoryRoot;
-    internal readonly string? SeedFallbackReason;
     internal readonly string StatePath;
     internal readonly AgentOrchestratorKernel Kernel = new();
     internal readonly GoalId GoalId;
@@ -83,10 +82,10 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
                 File.WriteAllText(Path.Combine(RepositoryRoot, OtherSource), "public sealed class Other { }");
             }
             seedRepository?.Invoke(RepositoryRoot);
-            SeedFallbackReason = WorkerBuildRepositorySeed.WriteOrDescribeFallback(RepositoryRoot);
-            if (SeedFallbackReason is not null)
+            var seedFallbackReason = WorkerBuildRepositorySeed.WriteOrDescribeFallback(RepositoryRoot);
+            if (seedFallbackReason is not null)
             {
-                TestContext.Current.TestOutputHelper?.WriteLine($"Worker-build seed fell back to Git. {SeedFallbackReason}");
+                TestContext.Current.TestOutputHelper?.WriteLine($"Worker-build seed fell back to Git. {seedFallbackReason}");
                 SeedWithGit();
             }
             var task = new TaskSpec(TaskId.New(), "Implement fixture", AgentRole.Developer);
