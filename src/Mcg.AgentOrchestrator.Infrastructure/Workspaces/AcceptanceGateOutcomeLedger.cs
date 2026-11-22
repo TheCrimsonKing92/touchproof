@@ -31,6 +31,7 @@ internal static class AcceptanceGateOutcomeLedger
     internal const string PendingFileName = "cost-goal-outcome-gates.pending.jsonl";
     internal const string PendingDirectoryName = "cost-goal-outcome-gate-publications";
     internal const string FallbackDirectoryName = "cost-goal-outcome-gate-publications-fallback";
+    internal const string IndependentPendingDirectoryName = "cost-goal-outcome-gate-publications-independent";
     internal const string AttemptRoot = "acceptance-gate-attempts";
     internal const string GateKind = "gate";
     internal const string InvalidationKind = "invalidation";
@@ -95,34 +96,26 @@ internal static class AcceptanceGateOutcomeLedger
         var offset = file.Exists ? file.Length : 0;
         var pending = new PendingPublication(offset, row, RequiresResult: true);
         var line = JsonSerializer.Serialize(pending, Json);
-        try
+        (string Path, bool Shared)[] intentTargets =
+        [
+            (PendingDirectoryPath(path, PendingDirectoryName), false),
+            (LegacyPendingPath(path), true),
+            (PendingDirectoryPath(path, FallbackDirectoryName), false),
+            (AttemptRootPendingPath(path), true),
+            (PendingDirectoryPath(path, IndependentPendingDirectoryName), false)
+        ];
+        Exception? lastError = null;
+        foreach (var (target, shared) in intentTargets)
         {
-            return WriteSeparateIntent(PendingDirectoryName);
+            try { return shared ? WriteSharedIntent(target) : WriteSeparateIntent(target); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { lastError = ex; }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            try
-            {
-                return WriteSharedIntent(LegacyPendingPath(path));
-            }
-            catch (Exception fallbackError) when (fallbackError is IOException or UnauthorizedAccessException)
-            {
-                try { return WriteSeparateIntent(FallbackDirectoryName); }
-                catch (Exception sharedError) when (sharedError is IOException or UnauthorizedAccessException)
-                {
-                    try { return WriteSharedIntent(AttemptRootPendingPath(path)); }
-                    catch (Exception intentError) when (intentError is IOException or UnauthorizedAccessException)
-                    {
-                        System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome intent unavailable for {prefix}: {intentError.Message}");
-                        return new(path, null, pending);
-                    }
-                }
-            }
-        }
+        System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome intent unavailable for {prefix}: {lastError?.Message}");
+        return new(path, null, pending);
 
-        PreparedPublication WriteSeparateIntent(string directoryName)
+        PreparedPublication WriteSeparateIntent(string directoryPath)
         {
-            var directory = Directory.CreateDirectory(PendingDirectoryPath(path, directoryName)).FullName;
+            var directory = Directory.CreateDirectory(directoryPath).FullName;
             var pendingPath = Path.Combine(directory, $"{Guid.NewGuid():N}.jsonl");
             WritePending(pendingPath, [line]);
             return new(path, pendingPath, pending);
@@ -178,6 +171,7 @@ internal static class AcceptanceGateOutcomeLedger
         var (pendingPaths, primaryError) = ListPending(PendingDirectoryName);
         var legacyPath = LegacyPendingPath(path);
         var (fallbackPaths, fallbackError) = ListPending(FallbackDirectoryName);
+        var (independentPaths, independentError) = ListPending(IndependentPendingDirectoryName);
         if (EvidenceExists(legacyPath)) fallbackPaths = [.. fallbackPaths, legacyPath];
         var attemptRootPendingPath = AttemptRootPendingPath(path);
         Exception? attemptRootPendingError = null;
@@ -190,11 +184,11 @@ internal static class AcceptanceGateOutcomeLedger
             attemptRootPendingError = ex;
         }
 
-        if (pendingPaths.Length != 0 || fallbackPaths.Length != 0)
-            WithBackfillLock(path, () => ReplayPending(pendingPaths.Concat(fallbackPaths)));
+        if (pendingPaths.Length != 0 || fallbackPaths.Length != 0 || independentPaths.Length != 0)
+            WithBackfillLock(path, () => ReplayPending(pendingPaths.Concat(independentPaths).Concat(fallbackPaths)));
 
         // Replay reachable intents, then fail the read if any recovery path could still hide observations.
-        if ((primaryError ?? fallbackError ?? attemptRootPendingError) is { } error)
+        if ((primaryError ?? fallbackError ?? attemptRootPendingError ?? independentError) is { } error)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error);
 
         (string[] Paths, Exception? Error) ListPending(string directoryName)
@@ -324,7 +318,7 @@ internal static class AcceptanceGateOutcomeLedger
 
     private static string LegacyPendingPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
 
-    // Keep the last-resort journal in the attempt root so replay can find it without listing attempt directories.
+    // Replay can find the shared journal without listing any historical attempt directories.
     private static string AttemptRootPendingPath(string path) =>
         Path.Combine(Path.GetDirectoryName(path)!, AttemptRoot, PendingFileName);
 

@@ -195,10 +195,14 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         Assert.Empty(reader.Read(evaluatedAt));
         File.WriteAllText(sharedPending, "");
 
+        var attemptRoot = Directory.CreateDirectory(Path.Combine(root, AcceptanceGateOutcomeLedger.AttemptRoot)).FullName;
+        var pendingPath = Path.Combine(attemptRoot, AcceptanceGateOutcomeLedger.PendingFileName);
+        var pendingDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.IndependentPendingDirectoryName);
+        File.WriteAllText(pendingPath, "");
         string prefix;
-        var pendingPath = Path.Combine(root, AcceptanceGateOutcomeLedger.AttemptRoot, AcceptanceGateOutcomeLedger.PendingFileName);
         using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (File.Open(sharedPending, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (File.Open(pendingPath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             if (solo)
             {
@@ -215,7 +219,8 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.True(File.Exists(prefix + ".result.json"));
             Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
             Assert.Empty(File.ReadAllLines(sharedPending));
-            Assert.Single(File.ReadAllLines(pendingPath));
+            Assert.Empty(File.ReadAllLines(pendingPath));
+            Assert.Single(Directory.GetFiles(pendingDirectory, "*.jsonl"));
         }
 
         var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
@@ -231,6 +236,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.Equal(0, reader.GateFileReads);
         }
         Assert.False(File.Exists(pendingPath));
+        Assert.Empty(Directory.GetFiles(pendingDirectory, "*.jsonl"));
         var line = Assert.Single(File.ReadAllLines(ledger).Skip(1));
         Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(line, AcceptanceGateOutcomeLedger.Json));
     }

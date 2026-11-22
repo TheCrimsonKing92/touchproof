@@ -49,6 +49,8 @@ internal static class OrchestratorArtifactRegistry
             note: "Per-publication recovery files are removed after the observation is in the ledger."),
         Source("cost-goal-outcome-gate-publications-fallback", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
             note: "Independent publication intents are used when both primary and shared recovery paths are unavailable."),
+        Source("cost-goal-outcome-gate-publications-independent", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
+            note: "Per-publication recovery files used when the attempt-root journal is unavailable are removed after replay."),
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs",
