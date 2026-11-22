@@ -91,14 +91,15 @@ internal static class ReviewerCandidateDiffSection
             "diff", "--patch", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative",
             "--output-indicator-new=+", "--output-indicator-old=-", "--output-indicator-context= ",
         };
-        // Path filtering can shrink the rename search below Git's rename limit. Keep
-        // the captured one-path classification even if a descendant matches this pathspec.
+        // Pathspecs change the pool of rename and copy candidates. For paired changes,
+        // keep that pool intact and let ReadPatch select the captured source and target.
         if (change.PreviousPath is null)
             args.Add("--no-renames");
-        args.AddRange([$"--diff-filter={change.Status}", scope.MergeBase, scope.CandidateCommit, "--",
-            $":(top,literal){change.Path}"]);
-        if (change.PreviousPath is not null)
-            args.Add($":(top,literal){change.PreviousPath}");
+        args.AddRange([$"--diff-filter={change.Status}", scope.MergeBase, scope.CandidateCommit, "--"]);
+        // Disabling renames above preserves the captured one-path classification
+        // even when path filtering would bring the search below Git's rename limit.
+        if (change.PreviousPath is null)
+            args.Add($":(top,literal){change.Path}");
         return args.ToArray();
     }
 
@@ -229,7 +230,7 @@ internal static class ReviewerCandidateDiffSection
                 matchingSource = false;
                 return true;
             }
-            // A literal pathspec can also select descendants of an old or new rename path.
+            // The paired-change stream can contain unrelated renames or copies.
             if (!matchingPaths)
             {
                 if (bytes.StartsWith(sourcePrefix))

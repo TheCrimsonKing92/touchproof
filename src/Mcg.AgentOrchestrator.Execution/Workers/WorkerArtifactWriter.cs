@@ -549,7 +549,14 @@ internal sealed partial class WorkerArtifactWriter
                 if (reviewerScope is not null)
                     lines.Add($"Scope checks: git diff {reviewerScope.ThreeDotRange}");
                 lines.Add($"Committed branch-diff files: {changedFiles.Count}");
-                lines.AddRange(changedFiles.Take(120).Select(file => $"- `{file}`"));
+                foreach (var file in changedFiles.Take(120))
+                {
+                    var path = ReviewerChangedFileScopeBriefSection.DisplayPath(file);
+                    // Markdown code spans close on backticks and strip a space from both ends.
+                    if (path.Contains('`') || (path.StartsWith(' ') && path.EndsWith(' ')))
+                        path = JsonSerializer.Serialize(file);
+                    lines.Add($"- `{path}`");
+                }
                 if (changedFiles.Count > 120)
                     lines.Add($"- {changedFiles.Count - 120} additional files omitted from this display; all files inform test impact.");
             }

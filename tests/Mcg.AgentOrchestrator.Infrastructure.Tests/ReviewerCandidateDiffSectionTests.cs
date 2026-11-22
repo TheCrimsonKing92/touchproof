@@ -245,8 +245,8 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
     public void DisplayEscapesControlPathInScopeAndExcerpts(bool typed)
     {
         using var repo = new InProcessGitFixture(commit: false);
-        const string path = "one\nname.txt";
-        const string escapedPath = "\"one\\nname.txt\"";
+        const string path = "one\n- decoy.txt";
+        const string escapedPath = "\"one\\n- decoy.txt\"";
         const string literalPath = escapedPath;
         var escapedLiteralPath = JsonSerializer.Serialize(literalPath);
         repo.Git("commit", "--allow-empty", "-m", "Base");
@@ -265,7 +265,8 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         var scope = Capture(repo);
         Assert.Equal(new[] { literalPath, path }, scope.ChangedFiles);
 
-        var dispatch = Prepare(repo, NewWork(AgentRole.Reviewer), typed, scope);
+        var work = NewWork(AgentRole.Reviewer);
+        var dispatch = Prepare(repo, work, typed, scope);
         var prompt = File.ReadAllText(dispatch.PromptPath);
         var preview = prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)];
         Assert.Contains($"- {escapedPath}{Environment.NewLine}", preview);
@@ -274,6 +275,14 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         var section = CandidateSection(prompt);
         Assert.Contains($"### {escapedPath}\n@@ -0,0 +1 @@\n+control-path-sentinel", section);
         Assert.Contains($"### {escapedLiteralPath}\n@@ -0,0 +1 @@\n+literal-path-sentinel", section);
+
+        var checklistPath = typed ? DeliveredChecklistPath(repo, work) :
+            Path.Combine(repo.Worktree, ".orchestrator-context", work.Goal.Id.Value, "deterministic-verification.md");
+        var checklistRows = File.ReadAllLines(checklistPath);
+        var countIndex = Array.IndexOf(checklistRows, "Committed branch-diff files: 2");
+        Assert.True(countIndex >= 0, "Committed branch-diff file count missing from checklist");
+        Assert.Equal(new[] { $"- `{escapedLiteralPath}`", $"- `{escapedPath}`", string.Empty },
+            checklistRows.Skip(countIndex + 1).Take(3).ToArray());
     }
 
     [Fact]
@@ -377,6 +386,45 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
                 Assert.Contains("+alpha-only-edit", block);
                 Assert.DoesNotContain("+nested-only-edit", block);
             });
+    }
+
+    [Fact]
+    public void DeliversCapturedRenameHunksWhenPathFilteringWouldRePairTheSources()
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        repo.Git("config", "diff.renames", "true");
+        repo.Git("config", "diff.renameLimit", "100");
+        repo.Git("config", "core.autocrlf", "false");
+        const string entry = "entry";
+        const string other = "other";
+        const string target = "target";
+        const string nested = "entry/renamed.txt";
+        var common = Enumerable.Range(0, 28).Select(i => $"common context line {i:D2}\n").ToArray();
+        var entryLines = Enumerable.Range(0, 12).Select(i => $"entry specific line {i:D2}\n").ToArray();
+        var otherLines = Enumerable.Range(0, 12).Select(i => $"other specific line {i:D2}\n").ToArray();
+        Write(repo, entry, string.Concat(entryLines.Concat(common)));
+        Write(repo, other, string.Concat(otherLines.Concat(common)));
+        Commit(repo, "Base with competing rename sources");
+        repo.Git("switch", "-c", "candidate");
+        File.Delete(Path.Combine(repo.Worktree, entry));
+        File.Delete(Path.Combine(repo.Worktree, other));
+        Directory.CreateDirectory(Path.Combine(repo.Worktree, entry));
+        Write(repo, target, string.Concat(entryLines.Concat(common.Take(12))) + "target-only-edit\n");
+        Write(repo, nested, string.Concat(otherLines[..^1]) + "nested-only-edit\n" + string.Concat(common));
+        Commit(repo, "Rename competing sources");
+
+        var scope = Capture(repo);
+        Assert.Equal(new[] { new ReviewerScopedChange(nested, other, 'R', true),
+            new ReviewerScopedChange(target, entry, 'R', true) }, scope.Changes);
+        var oracle = repo.Git("diff", "--no-ext-diff", "--no-textconv", "--no-color", Range(scope), "--");
+        var filtered = repo.Git("--no-literal-pathspecs", "diff", "--diff-filter=R", scope.MergeBase,
+            scope.CandidateCommit, "--", $":(top,literal){target}", $":(top,literal){entry}");
+        Assert.Contains($"rename from {entry}\nrename to {nested}\n", filtered);
+        Assert.DoesNotContain($"rename to {target}\n", filtered);
+
+        var section = CandidateSection(File.ReadAllText(Prepare(repo, NewWork(AgentRole.Reviewer), true, scope).PromptPath));
+        Assert.Contains($"### {other} → {nested}\n{Hunks(oracle, nested, other)}\n", section);
+        Assert.Contains($"### {entry} → {target}\n{Hunks(oracle, target, entry)}\n", section);
     }
 
     [Theory]
@@ -553,9 +601,9 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
 
     private static string Range(ReviewerChangedFileScope scope) => $"{scope.IntegrationCommit}...{scope.CandidateCommit}";
 
-    private static string Hunks(string diff, string path)
+    private static string Hunks(string diff, string path, string? previousPath = null)
     {
-        var prefix = $"diff --git a/{path} b/{path}";
+        var prefix = $"diff --git a/{previousPath ?? path} b/{path}\n";
         var fileStart = diff.IndexOf(prefix, StringComparison.Ordinal);
         Assert.True(fileStart >= 0, $"No Git patch for {path}");
         var bodyStart = diff.IndexOf("\n@@ ", fileStart, StringComparison.Ordinal) + 1;
