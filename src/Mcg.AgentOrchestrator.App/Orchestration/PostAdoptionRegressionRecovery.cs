@@ -9,7 +9,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class PostAdoptionRegressionRecovery(
     string? root, string? branch, string orchestratorDirectory, Action<string> appendConductEvent,
     Func<HomeBuildAdoptionRecord?> resolveTarget, Func<ConductorSelfRelaunchRequest, bool> requestRelaunch,
-    Func<string, string, string, bool>? push = null, Action<string?, string, string>? raiseOperatorHold = null)
+    Func<string, string, string, bool>? push = null, Action<string?, string, string>? raiseOperatorHold = null,
+    Func<string, string, BacklogItem>? addBacklogItem = null)
 {
     private int _incidentClaimed;
 
@@ -44,7 +45,26 @@ internal sealed class PostAdoptionRegressionRecovery(
         AdoptedBuildPublicationReporting.Try(() => appendConductEvent(
             $"REVERT_PUSH_{pushResult.Status.ToString().ToUpperInvariant()} source=post-adoption-regression " +
             $"commit={revertCommit} branch={branch}{reason} {context}"), "revert-push-event");
+        FileReland(incident, revertCommit, pushResult, context);
         Relaunch(revertCommit, context, tick, goalId);
+    }
+
+    private void FileReland(IncidentEvent incident, string revertCommit, RevertPushPolicyGate.Result pushResult,
+        string context)
+    {
+        BacklogItem item;
+        try
+        {
+            item = PostAdoptionRegressionBacklogFiler.File(orchestratorDirectory, incident, revertCommit, pushResult,
+                addBacklogItem);
+        }
+        catch (Exception ex)
+        {
+            Report($"BACKLOG_FILING_FAILED reason={ex.GetType().Name} {context} revertCommit={revertCommit}");
+            return;
+        }
+
+        Report($"BACKLOG_FILED item={item.Id} {context} revertCommit={revertCommit}");
     }
 
     private void Relaunch(string revertCommit, string context, int tick, string? goalId)

@@ -259,7 +259,8 @@ public sealed class ContextSectionOutcomeReportTests
             "cached=median=0,p90=0 uncached=median=20000,p90=20000 output=median=0,p90=0 " +
             "turns=median=unknown,p90=unknown " +
             "tool-calls=median=unknown,p90=unknown " +
-            "harness-overhead=median=unknown,p90=unknown | missing-usage=0 reasons=none" + Environment.NewLine +
+            "harness-overhead=median=unknown,p90=unknown | missing-usage=0 reasons=none" +
+            " | wt-calls=median=unknown,p90=unknown reported=0 subcommands=unknown" + Environment.NewLine +
             "Coverage: live=1 archived=0 unknown-usage=0 conflicting=0" + Environment.NewLine,
             output.ToString());
         output.GetStringBuilder().Clear();
@@ -270,7 +271,8 @@ public sealed class ContextSectionOutcomeReportTests
             "\"output\":{\"median\":0,\"p90\":0},\"turns\":{\"median\":null,\"p90\":null}," +
             "\"toolCalls\":{\"median\":null,\"p90\":null}," +
             "\"harnessOverhead\":{\"median\":null,\"p90\":null}," +
-            "\"missingUsageCount\":0,\"missingUsageReasons\":{}}]," +
+            "\"missingUsageCount\":0,\"missingUsageReasons\":{}," +
+            "\"wtCalls\":{\"reportedDispatchCount\":0,\"bySubcommand\":{},\"total\":{\"median\":null,\"p90\":null}}}]," +
             "\"coverage\":{\"live\":1,\"archived\":0,\"unknownUsage\":0,\"conflicting\":0,\"conflictIds\":[]}}" +
             Environment.NewLine, output.ToString());
         Assert.Empty(error.ToString());

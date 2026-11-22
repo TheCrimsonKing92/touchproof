@@ -175,7 +175,7 @@ public sealed partial class AgentOrchestratorKernel
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
-        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null)
+        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null, bool workerToolsAvailable = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -300,7 +300,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(WorkerReadProcedure.ForRole(task.RequiredRole).Concat(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory, roleRequirementStack, testCheckCommands)));
+        instructionLines.AddRange(WorkerReadProcedure.ForRole(task.RequiredRole).Concat(WorkerToolsPromptSection.ForRole(task.RequiredRole, workerToolsAvailable)).Concat(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory, roleRequirementStack, testCheckCommands)));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(instructionLines, task.RequiredRole, includeReference: true);
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
@@ -339,7 +339,8 @@ public sealed partial class AgentOrchestratorKernel
                 contextDirectory!,
                 "research-notes.md",
                 "Durable Research Notes",
-                collapsePriority: 10);
+                collapsePriority: 10,
+                referenceOnly: task.RequiredRole == AgentRole.Planner);
         }
 
         if (usesFileAccessContext &&
@@ -753,7 +754,8 @@ public sealed partial class AgentOrchestratorKernel
         string contextDirectory,
         string fileName,
         string heading,
-        int collapsePriority)
+        int collapsePriority,
+        bool referenceOnly = false)
     {
         var path = Path.Combine(contextDirectory, fileName);
         if (!File.Exists(path))
@@ -768,20 +770,15 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
-        segments.Add(TaskBriefSegment.Projected(
-            $"context/{fileName}",
-            [
-                $"## {heading}",
-                $"Artifact identity: {fileName}; sha256:{hash}",
-                text,
-                string.Empty
-            ],
-            [
-                $"## {heading}",
-                $"Read {fileName} in the context directory for the complete artifact; sha256:{hash}. Inline copy collapsed to stay under the role file-access prompt budget.",
-                string.Empty
-            ],
-            collapsePriority));
+        var identity = $"context/{fileName}";
+        var sectionHeading = $"## {heading}";
+        var reference = $"Read {fileName} in the context directory for the complete artifact; sha256:{hash}.";
+        segments.Add(referenceOnly
+            ? TaskBriefSegment.Projected(identity, [sectionHeading, reference, string.Empty])
+            : TaskBriefSegment.Projected(identity,
+                [sectionHeading, $"Artifact identity: {fileName}; sha256:{hash}", text, string.Empty],
+                [sectionHeading, reference + " Inline copy collapsed to stay under the role file-access prompt budget.", string.Empty],
+                collapsePriority));
     }
 
     private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)

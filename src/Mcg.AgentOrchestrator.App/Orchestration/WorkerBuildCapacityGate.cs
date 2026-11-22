@@ -3,7 +3,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record WorkerBuildCapacitySnapshot(int UnheldPermits, int TotalPermits, int WaitingTickets, bool Readable)
+internal sealed record WorkerBuildCapacitySnapshot(
+    int UnheldPermits, int TotalPermits, int WaitingTickets, bool Readable, int WaitingGateTickets = 0)
 {
     internal static WorkerBuildCapacitySnapshot Unreadable { get; } = new(0, 0, 0, false);
 }
@@ -39,8 +40,10 @@ internal static class WorkerBuildCapacityGate
             var unheld = Enumerable.Range(0, total).Count(index => !isExecutionLockHeld(
                 DotnetBuildEnvironmentManager.BuildSlotExecutionLockPath(index, storageRoot)));
             // A retained claimant waits only for tickets ahead of its existing queue position.
-            var waiting = claimantKey is null ? tickets.Count : tickets.TakeWhile(ticket => ticket.Key != claimantKey).Count();
-            return new(unheld, total, waiting, true);
+            // For retained focused evidence, that includes every waiting gate.
+            var waiting = claimantKey is null ? tickets : tickets.TakeWhile(ticket => ticket.Key != claimantKey).ToList();
+            var waitingGates = waiting.Count(ticket => ticket.Kind == BuildPermitClaimantKind.Gate);
+            return new(unheld, total, waiting.Count, true, waitingGates);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {

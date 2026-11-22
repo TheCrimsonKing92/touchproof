@@ -28,9 +28,13 @@ public sealed class AuthorBriefDraftPromptTestsExactForms
             "Operator owns; Operator executes. REAL-WORLD-DEPENDENT."
         ];
         Assert.Equal(ownerLines, lines.Skip(ownerIndex + 1).Take(ownerLines.Length));
+        var ruleIndex = ownerIndex + 1 + ownerLines.Length;
+        Assert.Equal(
+            "A criterion that requires a committed test, file or other artifact always uses \"Developer owns; Acceptance executes. TEST-VERIFIABLE.\" Use the Tester line only for evidence the Tester produces by running existing tests or requesting focused evidence.",
+            lines[ruleIndex]);
         var lintLine = "Brief lint blocks a draft that contains any of these words anywhere, including code spans, quoted evidence and file paths, so never write them: " +
             string.Join(", ", GoalReadinessPreflight.HighRiskSignalWords) + ".";
-        Assert.Equal(lintLine, lines[ownerIndex + 1 + ownerLines.Length]);
+        Assert.Equal(lintLine, lines[ruleIndex + 1]);
         Assert.Equal(15, GoalReadinessPreflight.HighRiskSignalWords.Count);
         foreach (var word in GoalReadinessPreflight.HighRiskSignalWords) Assert.Contains(word, lintLine);
         string[] guidance =
@@ -39,7 +43,7 @@ public sealed class AuthorBriefDraftPromptTestsExactForms
             "Cite every file by its full repository-relative path on every mention, never by bare file name, and cite a line range as path:start-end.",
             "In the Measured premise section put only repository files in code spans; name runtime files and stores in plain text."
         ];
-        Assert.Equal(guidance, lines.Skip(ownerIndex + 2 + ownerLines.Length).Take(guidance.Length));
+        Assert.Equal(guidance, lines.Skip(ruleIndex + 2).Take(guidance.Length));
         foreach (var line in ownerLines.Concat([lintLine]).Concat(guidance)) Assert.Contains(line, lines);
     }
 }

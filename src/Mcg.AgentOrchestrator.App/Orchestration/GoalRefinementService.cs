@@ -135,7 +135,8 @@ internal sealed partial class GoalRefinementService
 
         if (!output.IsValid)
         {
-            var fallback = BuildFallbackSpec(goal.Objective) with
+            var fallbackDiagnostics = new List<string>();
+            var fallback = BuildFallbackSpec(goal.Objective, fallbackDiagnostics) with
             {
                 ClarificationAnswerHistory = clarificationAnswerHistory
             };
@@ -158,7 +159,9 @@ internal sealed partial class GoalRefinementService
                 kernel.RecordGoalClarificationRound(goalId);
             kernel.RecordGoalPolicyDecision(goalId, FallbackVerificationClassPolicy.BuildOwnershipReceipt(fallback));
             if (intakeDiagnostic is not null)
-                kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner parse diagnostic: {intakeDiagnostic.Message}");
+                fallbackDiagnostics.Add(intakeDiagnostic.Message);
+            foreach (var diagnostic in fallbackDiagnostics)
+                kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner parse diagnostic: {diagnostic}");
             return RefinementResult.Fallback(
                 fallback,
                 attempt.Invocation,
@@ -181,7 +184,7 @@ internal sealed partial class GoalRefinementService
 
         var removalSet = DeclaredTestRemovalSet.FromObjective(goal.Objective);
         var rawDeclaredCriteria = removalSet.Ordinary;
-        var criterionOwnerships = RemapOrdinaryCriterionOwnerships(removalSet, output.CriterionOwnerships);
+        var originalCriterionOwnerships = RemapOrdinaryCriterionOwnerships(removalSet, output.CriterionOwnerships);
         var declaredCriteria = rawDeclaredCriteria
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -194,9 +197,17 @@ internal sealed partial class GoalRefinementService
         if (intakeDiagnostic is not null)
             parseDiagnostics.Add(intakeDiagnostic.Message);
         AddDuplicateDeclaredCriterionDiagnostics(rawDeclaredCriteria, parseDiagnostics);
+        var ownerRewrites = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string RewriteCriterionReference(string text) => ownerRewrites.GetValueOrDefault(text.Trim(), text);
+        var criterionOwnerships = originalCriterionOwnerships;
         List<string> acceptanceGateOwnedCriteria;
         if (declaredCriteria.Count > 0)
         {
+            ownerRewrites = RewriteCommittedArtifactOwners(acceptanceCriteria, parseDiagnostics);
+            criterionOwnerships = originalCriterionOwnerships
+                .Select(item => item with { Text = RewriteCriterionReference(item.Text) })
+                .ToArray();
+            operatorOwnedCriteria = operatorOwnedCriteria.Select(RewriteCriterionReference).ToList();
             acceptanceGateOwnedCriteria = ResolveDeclaredOwnedCriteria(
                 acceptanceCriteria,
                 criterionOwnerships,
@@ -218,7 +229,8 @@ internal sealed partial class GoalRefinementService
         var scenarioBackedCriteria = ApplyFeasibilityResolutions(
             acceptanceCriteria,
             operatorOwnedCriteria,
-            resolvedClarifications);
+            resolvedClarifications,
+            RewriteCriterionReference);
         var ownershipIssues = FindDeclaredOwnershipIssues(
             goal, rawDeclaredCriteria, acceptanceCriteria, criterionOwnerships,
             operatorOwnedCriteria, acceptanceGateOwnedCriteria);
@@ -433,13 +445,13 @@ internal sealed partial class GoalRefinementService
             AcceptanceGateOwnedAcceptanceCriteria = acceptanceGateOwnedCriteria,
             ClarificationAnswerHistory = clarificationAnswerHistory,
             CriterionEvidenceDeclarations = output.CriterionEvidenceDeclarations
-                .Where(declaration => criterionOwnerships.Any(item => item.Text == declaration.Criterion))
+                .Where(declaration => originalCriterionOwnerships.Any(item => item.Text == declaration.Criterion))
                 .Select(declaration =>
             {
-                var matches = criterionOwnerships.Where(item => item.Text == declaration.Criterion).ToArray();
+                var matches = originalCriterionOwnerships.Where(item => item.Text == declaration.Criterion).ToArray();
                 var criterion = matches.Length == 1 && matches[0].DeclaredIndex is { } number &&
                     number > 0 && number <= acceptanceCriteria.Count
-                    ? acceptanceCriteria[number - 1] : declaration.Criterion;
+                    ? acceptanceCriteria[number - 1] : RewriteCriterionReference(declaration.Criterion);
                 return declaration with { Criterion = criterion };
             }).ToArray()
         };
@@ -1096,7 +1108,7 @@ internal sealed partial class GoalRefinementService
         }
     }
 
-    private static RefinedSpec BuildFallbackSpec(string objective)
+    private static RefinedSpec BuildFallbackSpec(string objective, List<string> diagnostics)
     {
         var declaredCriteria = ParseDeclaredAcceptanceCriteria(objective);
         if (declaredCriteria.Count == 0)
@@ -1119,12 +1131,12 @@ internal sealed partial class GoalRefinementService
             };
         }
 
-        IReadOnlyList<string> criteria = declaredCriteria;
-        var ownership = CriterionOwnershipDerivation.DeriveForRevision(criteria, [], []);
+        RewriteCommittedArtifactOwners(declaredCriteria, diagnostics);
+        var ownership = CriterionOwnershipDerivation.DeriveForRevision(declaredCriteria, [], []);
         return new RefinedSpec(
             $"Implement: {objective}",
-            criteria,
-            FallbackVerificationClassPolicy.Classify(criteria),
+            declaredCriteria,
+            FallbackVerificationClassPolicy.Classify(declaredCriteria),
             [],
             [])
         {
@@ -1602,7 +1614,8 @@ internal sealed partial class GoalRefinementService
     private static HashSet<string> ApplyFeasibilityResolutions(
         List<string> workerCriteria,
         List<string> operatorOwnedCriteria,
-        IReadOnlyList<ResolvedSpecClarification> resolvedClarifications)
+        IReadOnlyList<ResolvedSpecClarification> resolvedClarifications,
+        Func<string, string> rewriteCriterionReference)
     {
         var scenarioBacked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var resolved in resolvedClarifications.Where(item =>
@@ -1611,8 +1624,8 @@ internal sealed partial class GoalRefinementService
                      AcceptanceCriterionFeasibility.TryParseDisposition(item.Resolution, out _)))
         {
             AcceptanceCriterionFeasibility.TryParseDisposition(resolved.Resolution, out var disposition);
-            var criterionIndex = workerCriteria.FindIndex(criterion =>
-                string.Equals(criterion.Trim(), resolved.Criterion!.Trim(), StringComparison.OrdinalIgnoreCase));
+            var resolvedCriterion = rewriteCriterionReference(resolved.Criterion!);
+            var criterionIndex = FindCriterionIndex(workerCriteria, resolvedCriterion);
             switch (disposition.Kind)
             {
                 case FeasibilityDisposition.ReScope when criterionIndex >= 0:
@@ -1624,7 +1637,7 @@ internal sealed partial class GoalRefinementService
                         operatorOwnedCriteria.Add(operatorCriterion);
                     break;
                 case FeasibilityDisposition.ReproducingScenario:
-                    scenarioBacked.Add(resolved.Criterion!);
+                    scenarioBacked.Add(resolvedCriterion);
                     break;
             }
         }

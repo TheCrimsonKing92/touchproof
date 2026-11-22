@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class PreReviewEvidenceLaunchCapacity
 {
     internal static bool MayStart(WorkerBuildCapacitySnapshot snapshot) =>
+        snapshot.WaitingGateTickets == 0 &&
         WorkerBuildCapacityGate.Decide(snapshot, capacityDispatchCount: 0) == WorkerBuildCapacityVerdict.Retry;
 
     internal static Func<GoalId, WorkerBuildCapacitySnapshot> CreateHostReader(DotnetBuildStorageRoot? storageRoot)

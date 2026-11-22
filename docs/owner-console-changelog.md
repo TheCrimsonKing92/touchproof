@@ -40,3 +40,9 @@ Surface fingerprint: sha256:608e69855daebe49a1f879db3b61695c76e05ad8ff6591d3ab22
 - Press `s` in any pane or type `:settings`, then use Left/Right to open Provider connections.
 - Use Up/Down to select a provider. Press `c` to check its connection or `r` to reload the list.
 - When offered, press `s` to sign in or `d` for device-code sign-in. After signing in, press `t` to report your return, or press `x` to stop waiting.
+
+## 4 - Open Provider connections from a fleet hold.
+
+Surface fingerprint: sha256:0dcbeca515d05e7e75367b043dddfcb436467e7e95a803424cc2892b4c3897c7
+
+- Type `:fleet`, then press `s` when a hold offers sign-in to open Provider connections with that provider selected.

@@ -10,7 +10,8 @@ internal static class OwnerFleetDiagram
 
     // Slots describe configured capacity, not live occupancy; peak is historical.
     internal static string Render(OwnerFleetViewModel model, int width = DefaultWidth,
-        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null, bool expanded = false)
+        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null, bool expanded = false,
+        (int HoldIndex, string Provider)? signInOffer = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, MinimumWidth);
         var lines = new List<string>();
@@ -32,11 +33,13 @@ internal static class OwnerFleetDiagram
             content.Add($"unreadable ledger lines: probes {host.UnreadableProbeLines}");
         }
         Box(content, false, wrapRow: skipRow);
-        foreach (var hold in model.ProviderHolds ?? [])
+        var holds = model.ProviderHolds ?? [];
+        for (var index = 0; index < holds.Count; index++)
         {
+            var hold = holds[index];
             owner = hold.Fields();
             lines.Add("│" + new string(' ', width - 1));
-            Box([
+            content = [
                 $"Provider {hold.Name}: {(hold.OverdueSince is null ? "HELD !" : "probe-overdue")}",
                 $"binding: {hold.BindingKey}",
                 hold.NextProbeAt is { } nextProbe
@@ -47,7 +50,10 @@ internal static class OwnerFleetDiagram
                 $"held since: {Stamp(hold.PlacedAt)}",
                 $"source: {hold.Source}",
                 ..(hold.Diagnosis is { } diagnosis ? new[] { diagnosis } : [])
-            ], true, wrapRow: hold.Diagnosis is null ? -1 : 6);
+            ];
+            if (signInOffer is { } offer && offer.HoldIndex == index)
+                content.Add($"Press {OwnerConsoleDialogBindings.FleetSignIn.Key} to open sign-in for {offer.Provider}");
+            Box(content, true, wrapRow: hold.Diagnosis is null ? -1 : 6);
         }
         foreach (var executor in model.Executors)
         {
@@ -104,6 +110,18 @@ internal static class OwnerFleetDiagram
             lines.Add((unreachable ? "╚" : "└") + new string(edge, width - 2) + (unreachable ? "╝" : "┘"));
             if (fields is not null) for (var i = start; i < lines.Count; i++) fields[i] = owner;
         }
+    }
+
+    internal static (int HoldIndex, string Provider)? SignInOffer(OwnerFleetViewModel model)
+    {
+        var holds = model.ProviderHolds ?? [];
+        for (var index = 0; index < holds.Count; index++)
+        {
+            var hold = holds[index];
+            if (OwnerProviderSignIn.Provider(hold.BindingKey, hold.Diagnosis) is { } provider)
+                return (index, provider);
+        }
+        return null;
     }
 
     private static string Stamp(DateTimeOffset? at) => at?.ToString("yyyy-MM-dd HH:mm zzz", CultureInfo.InvariantCulture) ?? "-";
