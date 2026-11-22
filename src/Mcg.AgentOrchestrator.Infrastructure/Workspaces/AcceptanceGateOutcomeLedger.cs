@@ -34,6 +34,7 @@ internal static class AcceptanceGateOutcomeLedger
     internal const string IndependentPendingDirectoryName = "cost-goal-outcome-gate-publications-independent";
     private const string PendingFilePrefix = "cost-goal-outcome-gates.pending-";
     internal const string PendingFilePattern = PendingFilePrefix + "*.jsonl";
+    internal const string AttemptRootFallbackPendingFileName = PendingFilePrefix + "fallback.jsonl";
     internal const string AttemptRoot = "acceptance-gate-attempts";
     internal const string GateKind = "gate";
     internal const string InvalidationKind = "invalidation";
@@ -115,9 +116,15 @@ internal static class AcceptanceGateOutcomeLedger
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
 
-        // Use the existing project directory when every named destination is blocked.
-        // A failed write here must surface before the result becomes visible.
-        return WriteSeparateIntent(Path.GetDirectoryName(path)!, PendingFilePrefix);
+        try
+        {
+            return WriteSeparateIntent(Path.GetDirectoryName(path)!, PendingFilePrefix);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The project directory can deny file creation independently of its existing attempts root.
+            return WriteSharedIntent(AttemptRootPendingPath(path, AttemptRootFallbackPendingFileName));
+        }
 
         PreparedPublication WriteSeparateIntent(string directory, string filePrefix = "")
         {
@@ -179,15 +186,18 @@ internal static class AcceptanceGateOutcomeLedger
         var (independentPaths, independentError) = ListPending(PendingDirectoryPath(path, IndependentPendingDirectoryName));
         var (projectPaths, projectError) = ListPending(Path.GetDirectoryName(path)!, PendingFilePattern);
         if (EvidenceExists(legacyPath)) fallbackPaths = [.. fallbackPaths, legacyPath];
-        var attemptRootPendingPath = AttemptRootPendingPath(path);
         Exception? attemptRootPendingError = null;
-        try
+        foreach (var name in new[] { PendingFileName, AttemptRootFallbackPendingFileName })
         {
-            if (EvidenceExists(attemptRootPendingPath)) fallbackPaths = [.. fallbackPaths, attemptRootPendingPath];
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            attemptRootPendingError = ex;
+            var attemptRootPendingPath = AttemptRootPendingPath(path, name);
+            try
+            {
+                if (EvidenceExists(attemptRootPendingPath)) fallbackPaths = [.. fallbackPaths, attemptRootPendingPath];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                attemptRootPendingError ??= ex;
+            }
         }
 
         var pendingPaths = primaryPaths.Concat(independentPaths).Concat(projectPaths).Concat(fallbackPaths);
@@ -324,9 +334,9 @@ internal static class AcceptanceGateOutcomeLedger
 
     private static string LegacyPendingPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
 
-    // Replay can find the shared journal without listing any historical attempt directories.
-    private static string AttemptRootPendingPath(string path) =>
-        Path.Combine(Path.GetDirectoryName(path)!, AttemptRoot, PendingFileName);
+    // Replay can find both journals without listing any historical attempt directories.
+    private static string AttemptRootPendingPath(string path, string fileName = PendingFileName) =>
+        Path.Combine(Path.GetDirectoryName(path)!, AttemptRoot, fileName);
 
     private static void AppendObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
     {

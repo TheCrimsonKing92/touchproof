@@ -179,12 +179,16 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task Publication_RecoversAttemptIntentWhenAllSharedDestinationsAreBlocked(bool solo, bool blockIndependentDirectory)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task Publication_RecoversAttemptIntentWhenAllSharedDestinationsAreBlocked(
+        bool solo, bool blockIndependentDirectory, bool denyProjectFileCreation)
     {
+        Assert.SkipUnless(!denyProjectFileCreation || OperatingSystem.IsWindows(), "Requires Windows directory ACLs.");
         var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
         var sharedPending = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
         const string marker = """{"kind":"backfill-complete"}""";
@@ -204,32 +208,58 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         if (blockIndependentDirectory) File.WriteAllText(pendingDirectory, "Blocks independent directory creation.");
         var recoveryDirectory = blockIndependentDirectory ? root : pendingDirectory;
         var recoveryPattern = blockIndependentDirectory ? AcceptanceGateOutcomeLedger.PendingFilePattern : "*.jsonl";
+        var fallbackJournal = Path.Combine(attemptRoot, AcceptanceGateOutcomeLedger.AttemptRootFallbackPendingFileName);
+        var projectDirectory = new DirectoryInfo(root);
+        DirectorySecurity? projectAccess = null;
+        byte[]? originalProjectAccess = null;
         string prefix;
         using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (File.Open(sharedPending, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (File.Open(pendingPath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            if (solo)
+            try
             {
-                var (coordinator, attempt) = PublishSolo(root, StartedAt);
-                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
-                    coordinator.TryReadLatest(attempt.GoalId)!.Outcome);
-                prefix = attempt.ResultPath[..^".result.json".Length];
-            }
-            else
-            {
-                prefix = await PublishOwnedTrain();
-            }
+                if (denyProjectFileCreation && OperatingSystem.IsWindows())
+                {
+                    projectAccess = projectDirectory.GetAccessControl(AccessControlSections.Access);
+                    originalProjectAccess = projectAccess.GetSecurityDescriptorBinaryForm();
+                    using var identity = WindowsIdentity.GetCurrent();
+                    projectAccess.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.CreateFiles,
+                        AccessControlType.Deny));
+                    projectDirectory.SetAccessControl(projectAccess);
+                    Assert.Throws<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(root, "denied-probe"), ""));
+                }
 
-            Assert.True(File.Exists(prefix + ".result.json"));
-            Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
-            Assert.Empty(File.ReadAllLines(sharedPending));
-            Assert.Empty(File.ReadAllLines(pendingPath));
-            var intent = Assert.Single(Directory.GetFiles(recoveryDirectory, recoveryPattern));
-            var pending = JsonSerializer.Deserialize<AcceptanceGateOutcomeLedger.PendingPublication>(
-                Assert.Single(File.ReadAllLines(intent)), AcceptanceGateOutcomeLedger.Json);
-            Assert.NotNull(pending);
-            Assert.Equal(prefix, Path.Combine(attemptRoot, pending.Observation.Directory, pending.Observation.AttemptId));
+                if (solo)
+                {
+                    var (coordinator, attempt) = PublishSolo(root, StartedAt);
+                    Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
+                        coordinator.TryReadLatest(attempt.GoalId)!.Outcome);
+                    prefix = attempt.ResultPath[..^".result.json".Length];
+                }
+                else
+                {
+                    prefix = await PublishOwnedTrain();
+                }
+
+                Assert.True(File.Exists(prefix + ".result.json"));
+                Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
+                Assert.Empty(File.ReadAllLines(sharedPending));
+                Assert.Empty(File.ReadAllLines(pendingPath));
+                var intent = denyProjectFileCreation ? fallbackJournal : Assert.Single(Directory.GetFiles(recoveryDirectory, recoveryPattern));
+                var pending = JsonSerializer.Deserialize<AcceptanceGateOutcomeLedger.PendingPublication>(
+                    Assert.Single(File.ReadAllLines(intent)), AcceptanceGateOutcomeLedger.Json);
+                Assert.NotNull(pending);
+                Assert.Equal(prefix, Path.Combine(attemptRoot, pending.Observation.Directory, pending.Observation.AttemptId));
+            }
+            finally
+            {
+                if (OperatingSystem.IsWindows() && projectAccess is not null && originalProjectAccess is not null)
+                {
+                    projectAccess.SetSecurityDescriptorBinaryForm(originalProjectAccess, AccessControlSections.Access);
+                    projectDirectory.SetAccessControl(projectAccess);
+                }
+            }
         }
 
         var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
@@ -245,6 +275,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.Equal(0, reader.GateFileReads);
         }
         Assert.False(File.Exists(pendingPath));
+        Assert.False(File.Exists(fallbackJournal));
         Assert.Empty(Directory.GetFiles(recoveryDirectory, recoveryPattern));
         var line = Assert.Single(File.ReadAllLines(ledger).Skip(1));
         Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(line, AcceptanceGateOutcomeLedger.Json));

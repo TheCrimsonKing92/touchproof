@@ -40,7 +40,7 @@ internal static class OrchestratorArtifactRegistry
         Source("workers.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("spec-refiner-precedents.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("acceptance-gate-attempts", "Infrastructure/Workspaces/GoalAcceptanceVerifier.cs",
-            note: "The root-level outcome recovery journal is removed after its observations are in the ledger."),
+            note: "The root-level outcome recovery journals are removed after their observations are in the ledger."),
         Source("cost-goal-outcomes", "App/Orchestration/CostGoalOutcomeMetric.cs"),
         Source("cost-goal-outcome-gates.jsonl", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs"),
         Source("cost-goal-outcome-gates.pending.jsonl", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
