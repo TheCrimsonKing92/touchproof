@@ -47,42 +47,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return false;
 
         case "worker-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 4, "worker-dispatch <task-number> <worker-name> <command-template>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var workerTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var workerExecutionDirectory = CliGoalWorkerDirectory.Resolve(context);
-            if (workerTask.RequiredRole != AgentRole.Researcher || context.CurrentGoal.RefinedSpec is not null)
-            {
-                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
-                    context.Kernel, context.Workspace, context.Providers, context.CurrentGoal);
-            }
-            var briefSource = context.Kernel.BuildTaskBriefSource(
-                context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
-            var brief = briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
-            var preparation = WorkerCommandTemplate.Prepare(
-                brief,
-                parts[2],
-                parts[3],
-                context.Workspace.PromptDirectory,
-                WorkerProfileDispatcher.BuildDispatchVariables(workerTask.RequiredRole, workerExecutionDirectory, null));
-            context.Kernel.RecordTaskDispatch(
-                context.CurrentGoal.Id,
-                workerTask.Id,
-                new TaskDispatchRecord(
-                    parts[2],
-                    preparation.Command,
-                    workerExecutionDirectory,
-                    DateTimeOffset.UtcNow,
-                    PromptCharacterCount: preparation.PromptCharacterCount,
-                    FindingContractVersion: AgentOutputDirectives.GetFindingContractVersion(briefSource, brief)));
-            PrerequisiteEvidenceTrimNote.RecordIfTrimmed(
-                context.Kernel,
-                context.CurrentGoal.Id,
-                workerTask.Id,
-                brief);
-            Console.WriteLine($"Prompt: {preparation.PromptPath}");
-            TaskTextView.PrintTask(context.CurrentGoal, workerTask);
-            return true;
+            return CliWorkerDispatchPreparation.Prepare(parts, context);
 
         case "profile-dispatch":
             {

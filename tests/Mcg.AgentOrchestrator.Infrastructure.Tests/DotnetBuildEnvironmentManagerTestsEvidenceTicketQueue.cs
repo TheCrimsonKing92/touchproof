@@ -7,7 +7,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsEvidenceTicketQueue : Dotn
         int pid = 123, bool ownerBound = false) => new(key, kind, pid, ownerBound);
 
     [Fact]
-    public void EarlierEvidenceStaysAheadOfPromotedGate()
+    public void LaterGateGoesAheadOfEarlierPromotedEvidence()
     {
         var clock = new RecordingTimeProvider();
         var queue = new BuildPermitWaitQueue(StorageRoot, clock, _ => true);
@@ -24,15 +24,15 @@ public sealed class DotnetBuildEnvironmentManagerTestsEvidenceTicketQueue : Dotn
             clock.Advance(TimeSpan.FromMinutes(minute == 6 ? 1 : 2));
         }
 
-        Assert.Equal(new[] { evidence.Key, gate.Key }, queue.Snapshot().Select(t => t.Key));
-        Assert.False(queue.Admit(gate, 1));
-        Assert.True(queue.Admit(evidence, 1));
+        Assert.Equal(new[] { gate.Key, evidence.Key }, queue.Snapshot().Select(t => t.Key));
+        Assert.True(queue.Admit(gate, 1));
+        Assert.False(queue.Admit(evidence, 1));
     }
 
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void EvidenceAndGateSharePromotionWhileWorkerStaysInLowerTier(bool includeEvidence)
+    public void GateTakesEvidencePositionWhileWorkerKeepsItsPosition(bool includeEvidence)
     {
         var clock = new RecordingTimeProvider();
         var start = clock.GetUtcNow();
@@ -51,17 +51,17 @@ public sealed class DotnetBuildEnvironmentManagerTestsEvidenceTicketQueue : Dotn
             if (minute == 5)
             {
                 clock.Advance(TimeSpan.FromSeconds(30));
-                Assert.Equal(includeEvidence ? new[] { worker.Key, evidence.Key, gate.Key } : new[] { worker.Key, gate.Key },
+                Assert.Equal(includeEvidence ? new[] { worker.Key, gate.Key, evidence.Key } : new[] { worker.Key, gate.Key },
                     queue.Snapshot().Select(t => t.Key));
             }
             if (minute == 6)
             {
-                Assert.Equal(includeEvidence ? new[] { evidence.Key, worker.Key, gate.Key } : new[] { worker.Key, gate.Key },
+                Assert.Equal(includeEvidence ? new[] { gate.Key, worker.Key, evidence.Key } : new[] { worker.Key, gate.Key },
                     queue.Snapshot().Select(t => t.Key));
             }
         }
         clock.Advance(TimeSpan.FromSeconds(30));
-        Assert.Equal(includeEvidence ? new[] { evidence.Key, gate.Key, worker.Key } : new[] { gate.Key, worker.Key },
+        Assert.Equal(includeEvidence ? new[] { gate.Key, evidence.Key, worker.Key } : new[] { gate.Key, worker.Key },
             queue.Snapshot().Select(t => t.Key));
     }
 
@@ -106,7 +106,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsEvidenceTicketQueue : Dotn
         clock.Advance(TimeSpan.FromTicks(1));
         var gate = Claim("gate", BuildPermitClaimantKind.Gate);
         queue.Register(gate);
-        Assert.False(queue.Admit(gate, 1));
+        Assert.True(queue.Admit(gate, 1));
+        Assert.False(queue.Admit(evidence, 1));
         alive = false;
         clock.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(gate.Key, Assert.Single(queue.Snapshot()).Key);

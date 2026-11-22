@@ -246,10 +246,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         try
         {
             if (await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, cancellationToken))
-            {
-                await CreateAttentionArchiveMarkerSchemaAsync(connection, cancellationToken);
-                await WriteMissingAttentionMarkersAsync(connection, cancellationToken);
-            }
+                await WriteAttentionArchiveMarkersInTransactionAsync(connection, goalIds: null, cancellationToken);
             await RunNonQueryAsync(connection, "COMMIT", cancellationToken);
             write.Telemetry.Emit("commit");
         }
@@ -261,19 +258,30 @@ public sealed partial class SqliteOrchestratorStateRepository
         }
     }
 
-    private static async Task WriteMissingAttentionMarkersAsync(SqliteConnection connection, CancellationToken token)
+    private static async Task WriteAttentionArchiveMarkersInTransactionAsync(
+        SqliteConnection connection, IReadOnlyCollection<string>? goalIds, CancellationToken token)
+    {
+        await CreateAttentionArchiveMarkerSchemaAsync(connection, token);
+        await WriteMissingAttentionMarkersAsync(connection, goalIds, token);
+    }
+
+    private static async Task WriteMissingAttentionMarkersAsync(
+        SqliteConnection connection, IReadOnlyCollection<string>? goalIds, CancellationToken token)
     {
         var markers = new List<(string Key, bool GateRows, bool OtherRows, AttentionArchiveFacts Facts)>();
         var keySql = ProviderHoldSeedEvidenceStore.MarkerSql(hasArchive: true);
+        var goalFilter = goalIds is null ? "" : "AND g.id IN (SELECT value FROM json_each($ids))";
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT g.id, g.snapshot_json, a.snapshot_json, {keySql}
             FROM goal_snapshot_archive a JOIN goals g ON g.id = a.goal_id
             LEFT JOIN attention_archive_evidence e
                 ON e.goal_id = g.id AND e.format_version = $format AND e.marker = {keySql}
-            WHERE e.goal_id IS NULL
+            WHERE e.goal_id IS NULL {goalFilter}
             """;
         command.Parameters.AddWithValue("$format", AttentionArchiveMarkerVersion);
+        if (goalIds is not null)
+            command.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(goalIds, SerializerOptions));
         var options = new AttentionProjectionReadOptions(IncludeGateEvidence: true);
         await using (var reader = await command.ExecuteReaderAsync(token))
         {
@@ -303,6 +311,8 @@ public sealed partial class SqliteOrchestratorStateRepository
             }
         }
 
+        if (goalIds is not null)
+            command.Parameters.RemoveAt("$ids");
         command.CommandText = """
             INSERT INTO attention_archive_evidence (goal_id, marker, format_version, gate_rows, other_rows, facts_json)
             VALUES ($id, $marker, $format, $gate, $other, $facts)
