@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -19,18 +18,38 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
     internal OutcomeGateObservation[] Read(DateTimeOffset recordedBefore)
     {
         LinesReadLastRun = 0;
-        AcceptanceGateOutcomeLedger.RecoverPublications(path);
+        if (!backfilled)
+        {
+            ReadTail();
+            if (!backfilled) Backfill();
+        }
+        AcceptanceGateOutcomeLedger.RecoverPublications(path, ReadReadySoloObservation);
         ReadTail();
         if (!backfilled) Backfill();
-        ConfirmInvalidations();
+        var unreadableInvalidations = ConfirmInvalidations();
 
-        return observations.Values
+        return observations.Where(pair => !unreadableInvalidations.Contains(pair.Key))
+            .Select(pair => pair.Value)
             .Where(entry => entry.Gate.RecordedAt < recordedBefore && HasRetainedEvidence(entry.Gate.Id))
             .Select(entry => entry.WithoutMetadata is { } fallback && !File.Exists(entry.Gate.Id + ".attempt.json")
                 ? fallback : entry.Gate)
             .OrderByDescending(observation => observation.RecordedAt)
             .ThenBy(observation => observation.Id, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static (bool Ready, AcceptanceGateOutcomeObservation? Observation) ReadReadySoloObservation(
+        string metadataPath, AcceptanceGateOutcomeObservation row)
+    {
+        // The wrapper or PersistResultCandidate can complete the attempt after the result becomes visible.
+        try
+        {
+            var attempt = ReadMetadata(metadataPath) ?? throw new JsonException("Invalid solo gate metadata for pending observation.");
+            if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running) return (false, null);
+            return attempt.RecordedGateProvenance(row.AttemptId) is { } solo
+                ? (true, AcceptanceGateOutcomeLedger.WithSoloProvenance(row, solo)) : (true, null);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return (true, row); }
     }
 
     // Retention can remove one attempt's files while leaving other attempts in its directory.
@@ -45,35 +64,44 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         var lines = CostGoalOutcomeMetric.ScanRecordedGateRows(orchestratorDirectory, DateTimeOffset.MaxValue,
             (directory, attemptId) => !observations.ContainsKey((directory, attemptId)) &&
                 !invalidated.Contains((directory, attemptId)),
-            () => GateFileReads++)
+            () => GateFileReads++, requireReadable: true)
             .Select(row => JsonSerializer.Serialize(row, AcceptanceGateOutcomeLedger.Json)).ToList();
         lines.Add(JsonSerializer.Serialize(new { Kind = AcceptanceGateOutcomeLedger.BackfillKind }, AcceptanceGateOutcomeLedger.Json));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        SharedJsonlFile.AppendLines(path, lines);
+        AcceptanceGateOutcomeLedger.AppendCompleteLines(path, lines);
         ReadTail();
     });
 
-    private void ConfirmInvalidations()
+    private HashSet<(string Directory, string AttemptId)> ConfirmInvalidations()
     {
+        var unreadable = new HashSet<(string, string)>();
         foreach (var key in pendingInvalidations.ToArray())
         {
             var metadataPath = Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.AttemptRoot,
                 key.Directory, key.AttemptId + ".attempt.json");
-            if (HasStaleMetadata(metadataPath, key.AttemptId)) Invalidate(key);
+            var stale = HasStaleMetadata(metadataPath, key.AttemptId);
+            if (stale is true) Invalidate(key);
+            else if (stale is null) unreadable.Add(key);
         }
+        return unreadable;
     }
 
     // The ledger row is written first. If publishing stale metadata failed, keep the old observation until retry.
-    private static bool HasStaleMetadata(string path, string attemptId)
+    private static bool? HasStaleMetadata(string path, string attemptId)
     {
         try
         {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            return JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(stream, AcceptanceGateOutcomeLedger.Json) is
+            return ReadMetadata(path) is
                 { Outcome: ConductorParallelAcceptanceAttemptOutcome.StaleCandidate } attempt && attempt.AttemptId == attemptId;
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return true; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return false; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    private static ConductorParallelAcceptanceAttempt? ReadMetadata(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(stream, AcceptanceGateOutcomeLedger.Json);
     }
 
     private void Invalidate((string Directory, string AttemptId) key)

@@ -269,14 +269,17 @@ internal sealed record ConductorParallelAcceptanceAttempt(
 {
     public int? BriefVersion { get; init; }
 
-    internal SoloGateOutcomeProvenance? RecordedGateProvenance(string attemptId)
+    internal SoloGateOutcomeProvenance? RecordedGateProvenance(string attemptId) =>
+        AttemptId == attemptId && CompletedAt is not null ? GateProvenanceFor(Outcome) : null;
+
+    internal SoloGateOutcomeProvenance? GateProvenanceFor(ConductorParallelAcceptanceAttemptOutcome outcome)
     {
-        if (AttemptId != attemptId || Kind != AcceptanceGateOutcomeLedger.GateKind || CompletedAt is null ||
-            Outcome is not (ConductorParallelAcceptanceAttemptOutcome.Passed or ConductorParallelAcceptanceAttemptOutcome.Failed))
+        if (Kind != AcceptanceGateOutcomeLedger.GateKind ||
+            outcome is not (ConductorParallelAcceptanceAttemptOutcome.Passed or ConductorParallelAcceptanceAttemptOutcome.Failed))
             return null;
         var launchMain = HolderCandidateKey?.Split(':') is [var goalId, _, var main] &&
             goalId == GoalId && main != "unknown-main" ? main : null;
-        return new(StartedAt, launchMain, Outcome.ToString());
+        return new(StartedAt, launchMain, outcome.ToString());
     }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -1839,12 +1842,13 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         {
             var artifact = ToArtifact(run);
             var prefix = attempt.ResultPath[..^".result.json".Length];
-            var publicationOffset = AcceptanceGateOutcomeLedger.CapturePublicationOffset(prefix, gateSelection);
+            var outcome = OutcomeFor(run, attempt.Kind);
+            var publication = attempt.GateProvenanceFor(outcome) is { } planned
+                ? AcceptanceGateOutcomeLedger.PreparePublication(prefix, artifact, gateSelection, planned) : null;
             WriteResult(attempt.ResultPath, artifact);
             var resultFingerprint = HashReplayResult(JsonSerializer.Serialize(artifact, JsonOptions));
             var originalFocusedReceipt = CaptureOriginalFocusedReceipt(attempt, run);
             _resultPublishedForTests?.Invoke(attempt);
-            var outcome = OutcomeFor(run, attempt.Kind);
             ConductorParallelAcceptanceAttempt? terminal = null;
             var claimedTerminal = TryPersistTerminal(attempt, current => terminal = WithTerminalTransientFailure(current, current with
             {
@@ -1860,9 +1864,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 OriginalFocusedReceipt = originalFocusedReceipt
             }, run));
             // A result observer can persist the same terminal classification before this process claims it.
-            if (gateSelection is not null &&
+            if (publication is not null &&
                 (terminal ?? TryReadAttemptFile(attempt.MetadataPath))?.RecordedGateProvenance(attempt.AttemptId) is { } recorded)
-                AcceptanceGateOutcomeLedger.Publish(prefix, artifact, gateSelection, publicationOffset, recorded);
+                AcceptanceGateOutcomeLedger.Publish(publication, recorded);
             WriteTerminalExitReceipt(
                 attempt,
                 claimedTerminal,

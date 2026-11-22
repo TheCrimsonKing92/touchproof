@@ -450,10 +450,10 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
             var artifact = exception is not null
                 ? AcceptanceAttemptResultRecord.ForFault(exception, exception.Message, branch, main)
                 : AcceptanceAttemptResultRecord.ForVerification(result!, branch, main);
-            var publicationOffset = AcceptanceGateOutcomeLedger.CapturePublicationOffset(Identity.ResultsPrefix, _gateOutcomeSelection);
+            var publication = AcceptanceGateOutcomeLedger.PreparePublication(Identity.ResultsPrefix, artifact, _gateOutcomeSelection);
             AcceptanceAttemptResultRecord.Write(Identity.ResultsPrefix + ".result.json", artifact);
             resultWrittenForTests?.Invoke();
-            AcceptanceGateOutcomeLedger.Publish(Identity.ResultsPrefix, artifact, _gateOutcomeSelection, publicationOffset);
+            AcceptanceGateOutcomeLedger.Publish(publication);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

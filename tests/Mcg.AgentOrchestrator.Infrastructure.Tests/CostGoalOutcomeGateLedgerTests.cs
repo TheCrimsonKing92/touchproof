@@ -45,6 +45,53 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
         Assert.Equal(allRows.Select(Project).ToArray(), sweep.GateLedger.Read(EvaluatedAt));
     }
 
+    [Theory]
+    [InlineData(".result.json")]
+    [InlineData(".lane-plan.json")]
+    public void Read_RetriesBackfillAfterHistoricalEvidenceBecomesReadable(string suffix)
+    {
+        var prefix = WriteGate(1, Main);
+        var expected = Project(Assert.Single(Scan()));
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        using (File.Open(prefix + suffix, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.ThrowsAny<IOException>(() => reader.Read(EvaluatedAt));
+            Assert.False(File.Exists(LedgerPath));
+        }
+
+        Assert.Equal(expected, Assert.Single(reader.Read(EvaluatedAt)));
+        var lines = File.ReadAllLines(LedgerPath);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("""{"kind":"backfill-complete"}""", lines[1]);
+    }
+
+    [Fact]
+    public void Run_DoesNotFinalizeFromLaterGatesWhileAnEarlierPublicationCannotReplay()
+    {
+        var goal = FileGoal(window: 2);
+        var initial = Store.Read(goal)!;
+        WriteGate(125, Main);
+        WriteGate(126, Main);
+        var later = Scan();
+        var incompleteVerdict = Assert.Single(ScanVerdicts(initial, later));
+        Assert.NotEqual(CostGoalOutcomeState.Pending, incompleteVerdict.State);
+        SharedJsonlFile.AppendLines(LedgerPath, later.Select(Serialize).Append("""{"kind":"backfill-complete"}"""));
+        var sweep = CreateSweep();
+
+        using (File.Open(LedgerPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            AcceptanceGateOutcomeLedgerPublicationTests.PublishSolo(root, AdoptedAt.AddMinutes(1));
+            Assert.Single(Directory.GetFiles(Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName), "*.jsonl"));
+            Run(sweep);
+            Assert.Empty(Store.Read(goal)!.FinalVerdicts);
+        }
+
+        var expected = Assert.Single(ScanVerdicts(initial, Scan()));
+        Assert.NotEqual(incompleteVerdict.After, expected.After);
+        Run(sweep);
+        Assert.Equal(expected, Assert.Single(Store.Read(goal)!.FinalVerdicts));
+    }
+
     [Fact]
     public void Run_BackfillsTwentyGatesOnceAcrossSweepInstances()
     {
@@ -173,6 +220,26 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
         Assert.True(coordinator.InvalidateCurrent(attempt.GoalId, "candidate changed"));
         Assert.Empty(Scan());
         Assert.Empty(reader.Read(EvaluatedAt));
+    }
+
+    [Fact]
+    public void Read_LockedStaleMetadataExcludesObservationUntilInvalidationIsConfirmed()
+    {
+        var (coordinator, attempt) = AcceptanceGateOutcomeLedgerPublicationTests.PublishSolo(root, AdoptedAt.AddMinutes(1));
+        SharedJsonlFile.AppendLine(LedgerPath, """{"kind":"backfill-complete"}""");
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Single(reader.Read(EvaluatedAt));
+
+        Assert.True(coordinator.InvalidateCurrent(attempt.GoalId, "candidate changed"));
+        using (File.Open(attempt.MetadataPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Empty(Scan());
+            Assert.Empty(reader.Read(EvaluatedAt));
+        }
+
+        Assert.Empty(reader.Read(EvaluatedAt));
+        Assert.Empty(Scan());
+        Assert.Equal(0, reader.GateFileReads);
     }
 
     private GoalId FileGoal(int window)

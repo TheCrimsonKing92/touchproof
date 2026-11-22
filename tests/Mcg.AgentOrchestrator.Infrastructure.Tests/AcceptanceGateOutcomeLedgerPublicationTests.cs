@@ -76,7 +76,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.Empty(File.ReadAllLines(legacyPending));
             pending = Assert.Single(Directory.GetFiles(pendingDirectory, "*.jsonl"));
             Assert.Single(File.ReadAllLines(pending));
-            Assert.Empty(reader.Read(evaluatedAt));
+            Assert.ThrowsAny<IOException>(() => reader.Read(evaluatedAt));
         }
 
         var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
@@ -104,6 +104,74 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(lines[1], AcceptanceGateOutcomeLedger.Json));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Publication_RecoversAfterInterruptionAtResultVisibility(bool solo)
+    {
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        SharedJsonlFile.AppendLine(ledger, """{"kind":"backfill-complete"}""");
+        var pendingDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName);
+        var interrupted = false;
+
+        void Interrupt()
+        {
+            Assert.Single(Directory.GetFiles(pendingDirectory, "*.jsonl"));
+            Assert.Single(File.ReadAllLines(ledger));
+            interrupted = true;
+            throw new IOException("Interrupted after result publication.");
+        }
+
+        if (solo)
+        {
+            PublishSolo(root, StartedAt, (coordinator, attempt, candidate) =>
+            {
+                // Result adoption can complete terminal metadata after the wrapper exposes the result.
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
+                    coordinator.ObserveExistingAttempt(attempt, candidate).Attempt.Outcome);
+                Interrupt();
+            });
+        }
+        else
+        {
+            await PublishOwnedTrain(Interrupt);
+        }
+
+        Assert.True(interrupted);
+        Assert.Single(File.ReadAllLines(ledger));
+        var evaluatedAt = StartedAt.AddMinutes(1);
+        var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Equal(expected.AttemptId, Path.GetFileName(Assert.Single(reader.Read(evaluatedAt)).Id));
+        Assert.Empty(Directory.GetFiles(pendingDirectory, "*.jsonl"));
+        Assert.Single(reader.Read(evaluatedAt));
+        var lines = File.ReadAllLines(ledger);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(lines[1], AcceptanceGateOutcomeLedger.Json));
+    }
+
+    [Fact]
+    public async Task Publication_PreservesNextCompleteRowAfterInterruptedTail()
+    {
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        SharedJsonlFile.AppendLine(ledger, """{"kind":"backfill-complete"}""");
+        var evaluatedAt = StartedAt.AddMinutes(1);
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Empty(reader.Read(evaluatedAt));
+        File.AppendAllText(ledger, "{\"kind\":\"gate\"");
+        Assert.Empty(reader.Read(evaluatedAt));
+
+        var prefix = await PublishOwnedTrain();
+
+        Assert.Equal(prefix, Assert.Single(reader.Read(evaluatedAt)).Id);
+        Assert.Equal(prefix, Assert.Single(new CostGoalOutcomeGateLedgerReader(root).Read(evaluatedAt)).Id);
+        var lines = File.ReadAllLines(ledger);
+        Assert.Equal(3, lines.Length);
+        Assert.Equal(Path.GetFileName(prefix), JsonSerializer
+            .Deserialize<AcceptanceGateOutcomeObservation>(lines[2], AcceptanceGateOutcomeLedger.Json)!.AttemptId);
+        Assert.Empty(Directory.GetFiles(Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName), "*.jsonl"));
+    }
+
     private async Task<string> PublishOwnedTrain(Action? resultWritten = null)
     {
         var group = GoalId.New().Value;
@@ -119,13 +187,17 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     }
 
     internal static (ConductorParallelAcceptanceAttemptCoordinator Coordinator, ConductorParallelAcceptanceAttempt Attempt)
-        PublishSolo(string root, DateTimeOffset startedAt)
+        PublishSolo(string root, DateTimeOffset startedAt,
+            Action<ConductorParallelAcceptanceAttemptCoordinator, ConductorParallelAcceptanceAttempt,
+                ConductorParallelAcceptanceCandidate>? resultWritten = null)
     {
         var goal = new AgentOrchestratorKernel().CreateGoal("Record a selected gate");
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", LaunchMain);
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+        ConductorParallelAcceptanceAttemptCoordinator? coordinator = null;
+        coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(root, "acceptance-gate-attempts"), "main", utcNow: () => startedAt,
-            acquireStableSlotLease: (_, _) => null);
+            runInline: true, acquireStableSlotLease: (_, _) => null,
+            resultPublishedForTests: published => resultWritten?.Invoke(coordinator!, published, candidate));
         var attempt = coordinator.CreateAttemptForTests(candidate);
         coordinator.RunAttemptForTests(attempt, candidate, ConductorAutonomyPolicy.Permissive,
             (current, _, _, _, options) =>

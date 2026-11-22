@@ -55,18 +55,22 @@ internal static class AcceptanceGateOutcomeLedger
             !File.Exists(progress.HeartbeatPath)) return null;
         try
         {
-            var plan = JsonSerializer.Deserialize<AcceptanceGateLanePlan>(
-                progress.CurrentTarget.AsSpan(PlanTargetPrefix.Length), AcceptanceGateLanePlan.JsonOptions);
-            // Match OwnerConsoleGateLanePlanReader, which validates the historical lane plans.
-            if (plan is null || plan.SchemaVersion != AcceptanceGateLanePlan.CurrentSchemaVersion ||
-                plan.AttemptId != attemptId || plan.Scheduled is null || plan.Skipped is null ||
-                plan.Scheduled.Any(string.IsNullOrWhiteSpace) ||
-                plan.Skipped.Any(row => row is null || string.IsNullOrWhiteSpace(row.Name) ||
-                    string.IsNullOrWhiteSpace(row.Reason))) return null;
-            var names = plan.Scheduled.Concat(plan.Skipped.Select(row => row.Name)).ToArray();
-            return names.Distinct(StringComparer.Ordinal).Count() == names.Length ? plan.SelectedExecution : null;
+            return ParseSelection(progress.CurrentTarget.AsSpan(PlanTargetPrefix.Length), attemptId);
         }
         catch (JsonException) { return null; }
+    }
+
+    internal static AcceptanceSelectedExecutionRecord? ParseSelection(ReadOnlySpan<char> json, string attemptId)
+    {
+        var plan = JsonSerializer.Deserialize<AcceptanceGateLanePlan>(json, AcceptanceGateLanePlan.JsonOptions);
+        // Match OwnerConsoleGateLanePlanReader, which validates the historical lane plans.
+        if (plan is null || plan.SchemaVersion != AcceptanceGateLanePlan.CurrentSchemaVersion ||
+            plan.AttemptId != attemptId || plan.Scheduled is null || plan.Skipped is null ||
+            plan.Scheduled.Any(string.IsNullOrWhiteSpace) ||
+            plan.Skipped.Any(row => row is null || string.IsNullOrWhiteSpace(row.Name) ||
+                string.IsNullOrWhiteSpace(row.Reason))) return null;
+        var names = plan.Scheduled.Concat(plan.Skipped.Select(row => row.Name)).ToArray();
+        return names.Distinct(StringComparer.Ordinal).Count() == names.Length ? plan.SelectedExecution : null;
     }
 
     internal static bool IsRecordedGate(ConductorParallelAcceptanceRunArtifact result) =>
@@ -89,50 +93,51 @@ internal static class AcceptanceGateOutcomeLedger
         };
     }
 
-    // Take this before exposing the result. Backfill can only see this publication after this offset.
-    internal static long CapturePublicationOffset(string prefix, AcceptanceSelectedExecutionRecord? selection)
-    {
-        if (selection is null || LedgerPath(prefix) is not { } path) return 0;
-        var file = new FileInfo(path);
-        return file.Exists ? file.Length : 0;
-    }
-
-    internal static void Publish(string prefix, ConductorParallelAcceptanceRunArtifact result,
-        AcceptanceSelectedExecutionRecord? selection, long publicationOffset, SoloGateOutcomeProvenance? solo = null)
+    // Record recovery intent before the result is visible. This offset includes every row backfill could add for it.
+    internal static PreparedPublication? PreparePublication(string prefix, ConductorParallelAcceptanceRunArtifact result,
+        AcceptanceSelectedExecutionRecord? selection, SoloGateOutcomeProvenance? solo = null)
     {
         if (selection is null || !IsRecordedGate(result) || RecordedAt(Path.GetFileName(prefix)) is not { } recordedAt ||
-            LedgerPath(prefix) is not { } path) return;
+            LedgerPath(prefix) is not { } path) return null;
         var row = CreateObservation(prefix, recordedAt, result, selection, solo);
+        var file = new FileInfo(path);
+        var offset = file.Exists ? file.Length : 0;
+        var pending = new PendingPublication(offset, row, RequiresResult: true);
+        return new(path, WritePending(path, pending), pending);
+    }
+
+    internal static void Publish(PreparedPublication? publication, SoloGateOutcomeProvenance? solo = null)
+    {
+        if (publication is null) return;
+        var (path, pendingPath, pending) = publication;
         try
         {
             WithBackfillLock(path, () =>
             {
-                try
-                {
-                    AppendObservation(path, publicationOffset, row);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    DeferPublication(path, new PendingPublication(publicationOffset, row));
-                }
+                AppendObservation(path, pending.Offset, WithSoloProvenance(pending.Observation, solo));
+                RemovePending(pendingPath);
             });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome ledger unavailable for {prefix}: {ex.Message}");
+            System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome ledger unavailable for {pendingPath}: {ex.Message}");
         }
     }
 
-    private static void DeferPublication(string path, PendingPublication publication)
+    private static string WritePending(string path, PendingPublication publication)
     {
-        // Give each visible gate result a recovery file independent of the shared ledger handles.
         var directory = Directory.CreateDirectory(PendingDirectoryPath(path)).FullName;
         var pendingPath = Path.Combine(directory, $"{Guid.NewGuid():N}.jsonl");
         var temporaryPath = pendingPath + ".tmp";
         try
         {
-            SharedJsonlFile.AppendLine(temporaryPath, JsonSerializer.Serialize(publication, Json));
+            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(publication, Json) + Environment.NewLine));
+                stream.Flush(flushToDisk: true);
+            }
             File.Move(temporaryPath, pendingPath);
+            return pendingPath;
         }
         finally
         {
@@ -140,38 +145,73 @@ internal static class AcceptanceGateOutcomeLedger
         }
     }
 
-    internal static void RecoverPublications(string path)
+    internal static void RecoverPublications(string path,
+        Func<string, AcceptanceGateOutcomeObservation, (bool Ready, AcceptanceGateOutcomeObservation? Observation)> readSoloObservation)
     {
-        try
+        string[] pendingPaths;
+        try { pendingPaths = Directory.GetFiles(PendingDirectoryPath(path), "*.jsonl"); }
+        catch (DirectoryNotFoundException) { pendingPaths = []; }
+        var legacyPath = Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
+        if (EvidenceExists(legacyPath)) pendingPaths = [.. pendingPaths, legacyPath];
+        if (pendingPaths.Length == 0) return;
+
+        WithBackfillLock(path, () =>
         {
-            var directory = PendingDirectoryPath(path);
-            string[] pendingPaths = Directory.Exists(directory) ? Directory.GetFiles(directory, "*.jsonl") : [];
-            var legacyPath = Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
-            if (File.Exists(legacyPath)) pendingPaths = [.. pendingPaths, legacyPath];
-            if (pendingPaths.Length == 0) return;
-
-            WithBackfillLock(path, () =>
+            foreach (var pendingPath in pendingPaths)
             {
-                foreach (var pendingPath in pendingPaths)
+                var allReady = true;
+                foreach (var line in ReadPending(pendingPath))
                 {
-                    foreach (var line in SharedJsonlFile.ReadLines(pendingPath))
-                    {
-                        if (JsonSerializer.Deserialize<PendingPublication>(line, Json) is not
-                            { Offset: >= 0, Observation: not null } pending)
-                            throw new JsonException("Invalid pending gate observation.");
-                        AppendObservation(path, pending.Offset, pending.Observation);
-                    }
-
-                    // A retry after an interrupted drain checks for each row before appending it again.
-                    try { File.Delete(pendingPath); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome publication recovery deferred for {pendingPath}: {ex.Message}");
-                    }
+                    if (JsonSerializer.Deserialize<PendingPublication>(line, Json) is not
+                        { Offset: >= 0, Observation: not null } pending)
+                        throw new JsonException("Invalid pending gate observation.");
+                    var (ready, observation) = ReadReadyObservation(path, pending, readSoloObservation);
+                    if (observation is not null) AppendObservation(path, pending.Offset, observation);
+                    allReady &= ready;
                 }
-            });
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+                if (allReady) RemovePending(pendingPath);
+            }
+        });
+    }
+
+    private static IEnumerable<string> ReadPending(string path)
+    {
+        FileStream stream;
+        try { stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); }
+        catch (FileNotFoundException) { yield break; }
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line) yield return line;
+    }
+
+    private static (bool Ready, AcceptanceGateOutcomeObservation? Observation) ReadReadyObservation(
+        string path, PendingPublication pending,
+        Func<string, AcceptanceGateOutcomeObservation, (bool Ready, AcceptanceGateOutcomeObservation? Observation)> readSoloObservation)
+    {
+        var row = pending.Observation;
+        if (!pending.RequiresResult) return (true, row);
+
+        var prefix = Path.Combine(Path.GetDirectoryName(path)!, AttemptRoot, row.Directory, row.AttemptId);
+        if (!EvidenceExists(prefix + ".result.json")) return (false, null);
+        return row.HasSoloMetadata ? readSoloObservation(prefix + ".attempt.json", row) : (true, row);
+    }
+
+    internal static AcceptanceGateOutcomeObservation WithSoloProvenance(AcceptanceGateOutcomeObservation row,
+        SoloGateOutcomeProvenance? solo) => solo is null ? row : row with
+        {
+            StartedAt = solo.StartedAt, LaunchMainCommit = solo.LaunchMainCommit, Outcome = solo.Outcome
+        };
+
+    private static bool EvidenceExists(string path)
+    {
+        try { return (File.GetAttributes(path) & FileAttributes.Directory) == 0; }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
+    }
+
+    private static void RemovePending(string path)
+    {
+        // A retry after an interrupted drain checks for each row before appending it again.
+        try { File.Delete(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome publication recovery deferred for {path}: {ex.Message}");
         }
@@ -180,13 +220,34 @@ internal static class AcceptanceGateOutcomeLedger
     internal static void Invalidate(string prefix)
     {
         if (LedgerPath(prefix) is not { } path) return;
-        SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(new
+        var line = JsonSerializer.Serialize(new
         {
             Kind = InvalidationKind,
             AttemptId = Path.GetFileName(prefix),
             Directory = Path.GetFileName(Path.GetDirectoryName(prefix)),
             RequiresStaleMetadata = true
-        }, Json));
+        }, Json);
+        WithBackfillLock(path, () => AppendCompleteLines(path, [line]));
+    }
+
+    // Call under WithBackfillLock. Close an interrupted record as malformed, keeping all prior byte offsets valid.
+    internal static void AppendCompleteLines(string path, IEnumerable<string> lines)
+    {
+        bool interrupted;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            interrupted = !EndsAtLineBoundary(stream);
+        }
+        catch (FileNotFoundException) { interrupted = false; }
+        SharedJsonlFile.AppendLines(path, interrupted ? lines.Prepend("!") : lines);
+    }
+
+    private static bool EndsAtLineBoundary(FileStream stream)
+    {
+        if (stream.Length == 0) return true;
+        stream.Position = stream.Length - 1;
+        return stream.ReadByte() == '\n';
     }
 
     internal static void WithBackfillLock(string path, Action action)
@@ -212,10 +273,11 @@ internal static class AcceptanceGateOutcomeLedger
     private static void AppendObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
     {
         if (!HasPublishedObservation(path, offset, row))
-            SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(row, Json));
+            AppendCompleteLines(path, [JsonSerializer.Serialize(row, Json)]);
     }
 
-    private sealed record PendingPublication(long Offset, AcceptanceGateOutcomeObservation Observation);
+    internal sealed record PreparedPublication(string LedgerPath, string PendingPath, PendingPublication Pending);
+    internal sealed record PendingPublication(long Offset, AcceptanceGateOutcomeObservation Observation, bool RequiresResult = false);
 
     private static bool HasPublishedObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
     {
@@ -228,8 +290,13 @@ internal static class AcceptanceGateOutcomeLedger
             if (offset == stream.Length) return false;
             stream.Position = offset;
             using var reader = new StreamReader(stream);
-            while (reader.ReadLine() is { } line)
+            var tail = reader.ReadToEnd();
+            var start = 0;
+            int end;
+            while ((end = tail.IndexOf('\n', start)) >= 0)
             {
+                var line = tail.AsSpan(start, end - start);
+                start = end + 1;
                 try
                 {
                     var json = JsonSerializer.Deserialize<JsonElement>(line);

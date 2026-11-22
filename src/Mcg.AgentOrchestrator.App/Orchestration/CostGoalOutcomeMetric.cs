@@ -256,18 +256,21 @@ internal static class CostGoalOutcomeMetric
     }
 
     internal static IEnumerable<OutcomeGateObservation> ReadRecordedGates(
-        string orchestratorDirectory, DateTimeOffset recordedBefore) =>
-        new CostGoalOutcomeGateLedgerReader(orchestratorDirectory).Read(recordedBefore);
+        string orchestratorDirectory, DateTimeOffset recordedBefore)
+    {
+        foreach (var gate in new CostGoalOutcomeGateLedgerReader(orchestratorDirectory).Read(recordedBefore))
+            yield return gate;
+    }
 
     internal static IEnumerable<AcceptanceGateOutcomeObservation> ScanRecordedGateRows(
         string orchestratorDirectory, DateTimeOffset recordedBefore,
-        Func<string, string, bool>? include = null, Action? readingGate = null) =>
-        DiscoverGatePlans(orchestratorDirectory, recordedBefore)
+        Func<string, string, bool>? include = null, Action? readingGate = null, bool requireReadable = false) =>
+        DiscoverGatePlans(orchestratorDirectory, recordedBefore, requireReadable)
             .Where(path => include is null || include(Path.GetFileName(Path.GetDirectoryName(path.Prefix))!, path.AttemptId))
             .Select(path =>
             {
                 readingGate?.Invoke();
-                return ReadGate(path);
+                return ReadGate(path, requireReadable);
             }).OfType<AcceptanceGateOutcomeObservation>();
 
     internal static IReadOnlyList<OutcomeMetricBaseline> BaselinesAt(IReadOnlyList<OutcomeMetricLine> lines,
@@ -359,10 +362,12 @@ internal static class CostGoalOutcomeMetric
         internal string LanePlanPath => Prefix + AcceptanceGateLanePlan.ArtifactSuffix;
     }
 
-    private static IEnumerable<GatePlanPath> DiscoverGatePlans(string orchestratorDirectory, DateTimeOffset filedAt)
+    private static IEnumerable<GatePlanPath> DiscoverGatePlans(string orchestratorDirectory, DateTimeOffset filedAt,
+        bool requireReadable)
     {
         var root = Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.AttemptRoot);
-        return Entries(root, directories: true).SelectMany(directory => Entries(directory, directories: false))
+        return Entries(root, directories: true, requireReadable)
+            .SelectMany(directory => Entries(directory, directories: false, requireReadable))
             .Select(path =>
             {
                 var prefix = path[..^AcceptanceGateLanePlan.ArtifactSuffix.Length];
@@ -373,14 +378,14 @@ internal static class CostGoalOutcomeMetric
             .ThenBy(path => path.Prefix, StringComparer.Ordinal);
     }
 
-    private static string[] Entries(string path, bool directories)
+    private static string[] Entries(string path, bool directories, bool requireReadable)
     {
         try
         {
             return directories ? Directory.GetDirectories(path) :
                 Directory.GetFiles(path, "*" + AcceptanceGateLanePlan.ArtifactSuffix);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+        catch (Exception ex) when (IsAbsentOrSkippable(ex, requireReadable)) { return []; }
     }
 
     // GateStatsReader uses this same timestamped results prefix. Both solo and train gate owners
@@ -388,26 +393,37 @@ internal static class CostGoalOutcomeMetric
     // The owner-written result carries its launch MainHeadSha. Parallel solo results can carry
     // rewritten heads, so their HolderCandidateKey is the only proof of the launch main.
     // This is repository provenance. The caller supplies adoption and build containment for verdicts.
-    private static AcceptanceGateOutcomeObservation? ReadGate(GatePlanPath path)
+    private static AcceptanceGateOutcomeObservation? ReadGate(GatePlanPath path, bool requireReadable)
     {
-        var result = ReadEvidence<ConductorParallelAcceptanceRunArtifact>(path.ResultPath);
+        var result = ReadEvidence<ConductorParallelAcceptanceRunArtifact>(path.ResultPath, requireReadable);
         if (result is null || !AcceptanceGateOutcomeLedger.IsRecordedGate(result))
             return null;
         var metadataPath = path.MetadataPath;
-        var metadata = ReadEvidence<ConductorParallelAcceptanceAttempt>(metadataPath);
+        var metadata = ReadEvidence<ConductorParallelAcceptanceAttempt>(metadataPath, requireReadable);
         if (metadata is null && File.Exists(metadataPath)) return null;
         var solo = metadata?.RecordedGateProvenance(path.AttemptId);
         if (metadata is not null && solo is null) return null;
-        var plan = new OwnerConsoleGateLanePlanReader().Read(path.LanePlanPath, path.AttemptId);
-        if (plan?.SelectedExecution is not { } selection) return null;
+        var selection = requireReadable ? ReadLaneSelection(path) :
+            new OwnerConsoleGateLanePlanReader().Read(path.LanePlanPath, path.AttemptId)?.SelectedExecution;
+        if (selection is null) return null;
         return AcceptanceGateOutcomeLedger.CreateObservation(path.Prefix, path.RecordedAt, result, selection, solo);
     }
 
-    private static T? ReadEvidence<T>(string path) where T : class
+    private static AcceptanceSelectedExecutionRecord? ReadLaneSelection(GatePlanPath path)
+    {
+        try { return AcceptanceGateOutcomeLedger.ParseSelection(File.ReadAllText(path.LanePlanPath), path.AttemptId); }
+        catch (Exception ex) when (IsAbsentOrSkippable(ex, requireReadable: true)) { return null; }
+    }
+
+    private static T? ReadEvidence<T>(string path, bool requireReadable) where T : class
     {
         try { return JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
+        catch (Exception ex) when (IsAbsentOrSkippable(ex, requireReadable)) { return null; }
     }
+
+    private static bool IsAbsentOrSkippable(Exception ex, bool requireReadable) =>
+        ex is FileNotFoundException or DirectoryNotFoundException or JsonException ||
+        (!requireReadable && ex is IOException or UnauthorizedAccessException);
 }
 internal sealed class CostGoalOutcomeStore(string orchestratorDirectory)
 {
