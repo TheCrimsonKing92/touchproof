@@ -10,16 +10,29 @@ internal static class PassedAcceptanceReceiptReplay
     internal static ConductorAdvanceResult? TryHoldRepeatSoloAcceptance(
         Goal goal, ConductorAutonomyPolicy policy, AcceptanceEngineHealthSnapshot? health,
         ConductorParallelAcceptanceAttemptCoordinator coordinator,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> resolveHeads,
         Func<Goal, ConductorParallelAcceptanceCandidate> readCandidate,
         Func<Goal, string, IDisposable?> tryAcquireMutationLease,
         Func<Goal, ConductorAdvanceResult> leaseHeld,
-        string? executionDirectory, bool isConductorTick)
+        string? executionDirectory, bool isConductorTick, bool bindingOnly)
     {
         if (goal.Status is not (GoalStatus.Verified or GoalStatus.Verifying) ||
             MultiRepositoryGoal.Applies(goal) ||
             policy.GetTransitionDecision(GoalLifecycleState.Verified) == ConductorTransitionDecision.Escalate ||
-            ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(goal.Status, health) ||
-            AcceptanceCriterionEvidence.OperatorPreLandingBlockers(goal, null).Length == 0 ||
+            ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(goal.Status, health))
+            return null;
+
+        if (AcceptanceCriterionEvidence.StaleFullGateBindings(goal, null).Length > 0)
+        {
+            var heads = resolveHeads(goal);
+            if (AcceptanceCriterionEvidence.StaleFullGateBindings(goal, heads.BranchHeadSha).Length > 0 &&
+                coordinator.GetUnreconciledAttempts([goal.Id.Value]).Count == 0 &&
+                coordinator.EvaluateRefusedCarryAdmission(
+                    goal, heads.BranchHeadSha, heads.MainHeadSha, policy, executionDirectory) is { } bindingHold)
+                return bindingHold;
+        }
+
+        if (bindingOnly || AcceptanceCriterionEvidence.OperatorPreLandingBlockers(goal, null).Length == 0 ||
             !coordinator.HasPassedReconciledReceipt(goal.Id.Value) ||
             coordinator.GetUnreconciledAttempts([goal.Id.Value]).Count != 0)
             return null;
@@ -132,7 +145,9 @@ internal static class PassedAcceptanceReceiptReplay
         {
             results[goal.Id.Value] = new ParallelLandingOutcome(repeatHold, null);
             var held = (ConductorAdvanceOutcome.Held)repeatHold.Outcome;
-            recordProgress($"ADMISSION tick={tick} result=held reason={held.Decision!.DiscriminatingEvidence} goal={goal.Id.Value[..8]} gatesLaunched=0",
+            var detail = held.Decision!.DiscriminatingEvidence == AcceptanceCriterionEvidence.RefusedCarryAdmissionReason
+                ? $" detail={ConductorDiagnosticText.SanitizeReason(held.Reason)}" : string.Empty;
+            recordProgress($"ADMISSION tick={tick} result=held reason={held.Decision.DiscriminatingEvidence} goal={goal.Id.Value[..8]} gatesLaunched=0{detail}",
                 changedGoalLines);
             return true;
         }

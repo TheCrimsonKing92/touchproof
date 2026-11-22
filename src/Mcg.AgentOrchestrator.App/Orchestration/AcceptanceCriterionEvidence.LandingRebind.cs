@@ -34,8 +34,11 @@ internal static partial class AcceptanceCriterionEvidence
                     evidenceByHead.Add(oldHead, drift);
                     continue;
                 }
-                return FormatStaleBindingsDiagnostic(
+                var diagnostic = FormatStaleBindingsDiagnostic(
                     candidateSha, obligation, boundElsewhere, CarryForwardRefusalText.Format(reason, oldHead, evaluatedHead));
+                GoalOperationJournal.RecordRefusedCarryHold(executionDirectory, goal, candidateSha, null, boundElsewhere,
+                    FormatOperatorRebind(goal, candidateSha, boundElsewhere, diagnostic));
+                return diagnostic;
             }
             evidenceByHead.Add(oldHead, evidence);
         }

@@ -3,6 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+using static LandingExecutorTests;
+
 // Parallel-safe: all admission state is in memory and the live census override is scoped to this async context.
 public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
 {
@@ -96,6 +98,60 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
         Assert.Equal(0, scenario.CohortCalls);
     }
 
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
+    public void RefusedCarryOldestLeavesBothTrainSlotsForEligiblePeers()
+    {
+        var repository = CreateGitRepository();
+        var attemptRoot = CreateTempDirectory("mcg-refused-carry-train");
+        try
+        {
+            var main = ReadGit(repository, "rev-parse", "main");
+            ReadGit(repository, "checkout", "-b", "bound");
+            AppendCommit(repository, "src/goal.txt", "reviewed goal change");
+            var bound = ReadGit(repository, "rev-parse", "HEAD");
+            ReadGit(repository, "checkout", "-b", "current", main);
+            AppendCommit(repository, "src/goal.txt", "different goal change");
+            var branch = ReadGit(repository, "rev-parse", "HEAD");
+            ReadGit(repository, "checkout", "main");
+
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default, repository, runInline: true);
+            using var scenario = new Scenario(3, repository: repository, coordinator: coordinator,
+                readHeads: goal => (branch, ReadGit(repository, "rev-parse", "main")));
+            var oldest = scenario.Goals[0];
+            var obligation = scenario.Kernel.MapCriterionEvidenceOwner(oldest.Id, 0, 1,
+                CriterionEvidenceOwner.Acceptance, "reviewer", CriterionEvidenceScopes.FullAcceptanceGate,
+                expectedCandidateSha: bound);
+            var worktree = GoalWorktrees.WorktreePath(repository, oldest.Id);
+            Directory.CreateDirectory(Path.GetDirectoryName(worktree)!);
+            ReadGit(repository, "worktree", "add", "-b", GoalWorktrees.BranchName(oldest.Id), worktree, branch);
+
+            Assert.Equal(1, scenario.Tick(oldest.Id.Value).Held);
+            Assert.Equal(oldest.Id, Assert.Single(scenario.SoloGoals));
+            var passed = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(oldest.Id.Value));
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passed.Outcome);
+            AppendCommit(repository, "src/main.txt", "advanced main");
+
+            var summary = scenario.Tick();
+
+            Assert.Equal(2, summary.Advanced);
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(scenario.Goals.Skip(1).Select(goal => goal.Id), Assert.Single(scenario.Trains));
+            Assert.Equal(oldest.Id, Assert.Single(scenario.SoloGoals));
+            Assert.Equal(passed.AttemptId, coordinator.TryReadLatest(oldest.Id.Value)!.AttemptId);
+            Assert.Empty(coordinator.GetUnreconciledAttempts([oldest.Id.Value]));
+            Assert.Contains(scenario.TickResult!.ProgressLines!, line =>
+                line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
+                line.Contains(obligation.Id, StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(repository);
+        }
+    }
+
     private sealed class Scenario : IDisposable
     {
         internal AgentOrchestratorKernel Kernel { get; } = new();
@@ -108,7 +164,9 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
         private readonly IDisposable _census = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
 
         internal Scenario(int count, bool fallback = false, bool trainsEnabled = true, bool overlapping = false,
-            bool refined = true)
+            bool refined = true, string? repository = null,
+            ConductorParallelAcceptanceAttemptCoordinator? coordinator = null,
+            Func<Goal, (string BranchHeadSha, string MainHeadSha)>? readHeads = null)
         {
             Goals = Enumerable.Range(0, count).Select(index =>
             {
@@ -130,8 +188,13 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
                 runAcceptanceWithSlot: (goal, _) =>
                 {
                     SoloGoals.Add(goal.Id);
-                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                    var heads = readHeads?.Invoke(goal);
+                    return new AcceptanceVerificationSummary(true, [],
+                        BranchHeadSha: heads?.BranchHeadSha, MainHeadSha: heads?.MainHeadSha);
                 },
+                resolveAcceptanceHeads: readHeads is null ? null : goal => readHeads(goal),
+                executionDirectory: repository,
+                parallelAcceptanceAttemptCoordinator: coordinator,
                 classifyRisk: _ => ChangeRiskTier.DocsOnly,
                 getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
@@ -155,9 +218,9 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
                 });
         }
 
-        internal BatchLoopSummary Tick() => new ConductorBatchLoop().Run(
+        internal BatchLoopSummary Tick(string? onlyGoalId = null) => new ConductorBatchLoop().Run(
             Kernel, _driver, ConductorAutonomyPolicy.Permissive, NoStopPath(), maxIterations: 1,
-            onTick: tick => TickResult = tick);
+            onTick: tick => TickResult = tick, onlyGoalId: onlyGoalId);
 
         public void Dispose() => _census.Dispose();
     }

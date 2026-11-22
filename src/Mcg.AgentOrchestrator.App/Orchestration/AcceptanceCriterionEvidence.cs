@@ -86,9 +86,27 @@ internal static partial class AcceptanceCriterionEvidence
         return true;
     }
 
-    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null, string? currentHeadSha = null)
+    internal static ConductorAdvanceOutcome.Held? RecordAndCreateHold(
+        Goal goal, AcceptanceVerificationSummary acceptance, AgentOrchestratorKernel? kernel, string integrationBranch,
+        string? executionDirectory, Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> resolveHeads)
+    {
+        var currentHead = resolveHeads(goal).BranchHeadSha;
+        return RecordAndCreateHold(goal, acceptance.BranchHeadSha ?? currentHead, kernel, integrationBranch, executionDirectory,
+            acceptance.BranchHeadSha is null ? null : currentHead, acceptance.MainHeadSha, acceptance.AttemptId);
+    }
+
+    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(
+        Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch,
+        string? executionDirectory = null, string? currentHeadSha = null,
+        string? passedMainSha = null, string? attemptId = null)
     {
         var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, integrationBranch, executionDirectory, currentHeadSha);
+        if (kernel is not null && diagnostic is not null && candidateSha is not null &&
+            StaleFullGateBindings(goal, candidateSha) is { Length: > 0 } stale)
+        {
+            GoalOperationJournal.RecordRefusedCarryHold(executionDirectory, goal, candidateSha, passedMainSha, stale,
+                FormatOperatorRebind(goal, candidateSha, stale, diagnostic), attemptId);
+        }
         return diagnostic is null ? null : new ConductorAdvanceOutcome.Held(
             GoalLifecycleState.Verified, diagnostic, StableIdentity: HoldIdentity(goal, candidateSha));
     }

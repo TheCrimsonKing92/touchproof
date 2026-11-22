@@ -254,7 +254,7 @@ internal sealed partial class ConductorBatchLoop
         HashSet<GoalId> changedGoalIds,
         Func<bool> suppressNewAcceptanceAdmission)
     {
-        state.OrderedEligible = ConductorTickStepLedger.Measure("prep-cohort-receipts", () => ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines));
+        state.OrderedEligible = ConductorTickStepLedger.Measure("prep-cohort-receipts", () => ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines, state.Results));
         state.OrderedEligible = ConductorTickStepLedger.Measure("prep-train-reconcile", () => MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines));
         var speculativeCandidates = ConductorTickStepLedger.Measure("prep-projection", () => GroupedAdmissionCandidateProjection.ProjectAll(
             driver.ProjectionCache.Retain(eligible, state.OrderedEligible), driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines), scopedGoals.Where(goal => preWalkIntentChangedGoalIds.Contains(goal.Id))));
