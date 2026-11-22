@@ -481,7 +481,8 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var dispatchTarget = ResolveCommandTaskTarget(parts, context, "dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <worker-name> <command>");
             RequireRemainingArgument(parts, dispatchTarget.NextIndex + 1, "dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <worker-name> <command>");
             var dispatchTask = dispatchTarget.Task;
-            var dispatch = new TaskDispatchRecord(parts[dispatchTarget.NextIndex], parts[dispatchTarget.NextIndex + 1], CliGoalWorkerDirectory.Resolve(context), DateTimeOffset.UtcNow);
+            var dispatch = new TaskDispatchRecord(parts[dispatchTarget.NextIndex], parts[dispatchTarget.NextIndex + 1],
+                CliGoalWorkerDirectory.Resolve(context), DateTimeOffset.UtcNow, WorkerToolsDirectory: CliWorkerDispatchPreparation.ResolveWorkerTools(context, dispatchTask));
             context.Kernel.RecordTaskDispatch(context.CurrentGoal!.Id, dispatchTask.Id, dispatch);
             TaskTextView.PrintTask(context.CurrentGoal!, dispatchTask);
             return true;
