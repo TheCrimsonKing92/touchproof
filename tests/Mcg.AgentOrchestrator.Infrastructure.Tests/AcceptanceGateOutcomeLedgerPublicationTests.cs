@@ -195,7 +195,7 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         File.WriteAllText(sharedPending, "");
 
         string prefix;
-        string pendingPath;
+        var pendingPath = Path.Combine(root, AcceptanceGateOutcomeLedger.AttemptRoot, AcceptanceGateOutcomeLedger.PendingFileName);
         using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (File.Open(sharedPending, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
@@ -214,7 +214,6 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
             Assert.True(File.Exists(prefix + ".result.json"));
             Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
             Assert.Empty(File.ReadAllLines(sharedPending));
-            pendingPath = prefix + AcceptanceGateOutcomeLedger.AttemptPendingSuffix;
             Assert.Single(File.ReadAllLines(pendingPath));
         }
 
@@ -233,6 +232,42 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         Assert.False(File.Exists(pendingPath));
         var line = Assert.Single(File.ReadAllLines(ledger).Skip(1));
         Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(line, AcceptanceGateOutcomeLedger.Json));
+    }
+
+    [Fact]
+    public async Task Read_AfterBackfillDoesNotListHistoricalAttemptDirectories()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Requires Windows directory ACLs.");
+        if (!OperatingSystem.IsWindows()) return;
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        SharedJsonlFile.AppendLine(ledger, """{"kind":"backfill-complete"}""");
+        var historical = Directory.CreateDirectory(Path.Combine(root, AcceptanceGateOutcomeLedger.AttemptRoot, GoalId.New().Value));
+        var access = historical.GetAccessControl(AccessControlSections.Access);
+        var original = access.GetSecurityDescriptorBinaryForm();
+        using var identity = WindowsIdentity.GetCurrent();
+        access.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.ListDirectory, AccessControlType.Deny));
+
+        try
+        {
+            historical.SetAccessControl(access);
+            Assert.Throws<UnauthorizedAccessException>(() => historical.GetFiles());
+            var reader = new CostGoalOutcomeGateLedgerReader(root);
+            var evaluatedAt = StartedAt.AddMinutes(1);
+            Assert.Empty(reader.Read(evaluatedAt));
+            Assert.Empty(reader.Read(evaluatedAt));
+            Assert.Equal(0, reader.LinesReadLastRun);
+
+            var prefix = await PublishOwnedTrain();
+
+            Assert.Equal(prefix, Assert.Single(reader.Read(evaluatedAt)).Id);
+            Assert.Equal(1, reader.LinesReadLastRun);
+            Assert.Equal(0, reader.GateFileReads);
+        }
+        finally
+        {
+            access.SetSecurityDescriptorBinaryForm(original, AccessControlSections.Access);
+            historical.SetAccessControl(access);
+        }
     }
 
     [Fact]

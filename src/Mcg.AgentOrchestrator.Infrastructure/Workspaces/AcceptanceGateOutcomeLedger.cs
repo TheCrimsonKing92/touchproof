@@ -32,7 +32,6 @@ internal static class AcceptanceGateOutcomeLedger
     internal const string PendingDirectoryName = "cost-goal-outcome-gate-publications";
     internal const string FallbackDirectoryName = "cost-goal-outcome-gate-publications-fallback";
     internal const string AttemptRoot = "acceptance-gate-attempts";
-    internal const string AttemptPendingSuffix = ".outcome-pending.jsonl";
     internal const string GateKind = "gate";
     internal const string InvalidationKind = "invalidation";
     internal const string BackfillKind = "backfill-complete";
@@ -114,21 +113,14 @@ internal static class AcceptanceGateOutcomeLedger
         {
             try
             {
-                var fallbackPath = LegacyPendingPath(path);
-                WithBackfillLock(path, () => WritePending(fallbackPath, ReadPending(fallbackPath).Append(line)));
-                return new(path, fallbackPath, pending, SharedPending: true);
+                return WriteSharedIntent(LegacyPendingPath(path));
             }
             catch (Exception fallbackError) when (fallbackError is IOException or UnauthorizedAccessException)
             {
                 try { return WriteSeparateIntent(FallbackDirectoryName); }
                 catch (Exception sharedError) when (sharedError is IOException or UnauthorizedAccessException)
                 {
-                    var attemptPendingPath = prefix + AttemptPendingSuffix;
-                    try
-                    {
-                        WritePending(attemptPendingPath, [line]);
-                        return new(path, attemptPendingPath, pending);
-                    }
+                    try { return WriteSharedIntent(AttemptRootPendingPath(path)); }
                     catch (Exception intentError) when (intentError is IOException or UnauthorizedAccessException)
                     {
                         System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome intent unavailable for {prefix}: {intentError.Message}");
@@ -144,6 +136,12 @@ internal static class AcceptanceGateOutcomeLedger
             var pendingPath = Path.Combine(directory, $"{Guid.NewGuid():N}.jsonl");
             WritePending(pendingPath, [line]);
             return new(path, pendingPath, pending);
+        }
+
+        PreparedPublication WriteSharedIntent(string pendingPath)
+        {
+            WithBackfillLock(path, () => WritePending(pendingPath, ReadPending(pendingPath).Append(line)));
+            return new(path, pendingPath, pending, SharedPending: true);
         }
     }
 
@@ -191,13 +189,22 @@ internal static class AcceptanceGateOutcomeLedger
         var legacyPath = LegacyPendingPath(path);
         var (fallbackPaths, fallbackError) = ListPending(FallbackDirectoryName);
         if (EvidenceExists(legacyPath)) fallbackPaths = [.. fallbackPaths, legacyPath];
-        var (attemptPaths, attemptError) = ListAttemptPending(path);
+        var attemptRootPendingPath = AttemptRootPendingPath(path);
+        Exception? attemptRootPendingError = null;
+        try
+        {
+            if (EvidenceExists(attemptRootPendingPath)) fallbackPaths = [.. fallbackPaths, attemptRootPendingPath];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            attemptRootPendingError = ex;
+        }
 
-        if (pendingPaths.Length != 0 || fallbackPaths.Length != 0 || attemptPaths.Length != 0)
-            WithBackfillLock(path, () => ReplayPending(pendingPaths.Concat(fallbackPaths).Concat(attemptPaths)));
+        if (pendingPaths.Length != 0 || fallbackPaths.Length != 0)
+            WithBackfillLock(path, () => ReplayPending(pendingPaths.Concat(fallbackPaths)));
 
-        // Replay reachable intents, then fail the read if any directory could still hide observations.
-        if ((primaryError ?? fallbackError ?? attemptError) is { } error)
+        // Replay reachable intents, then fail the read if any recovery path could still hide observations.
+        if ((primaryError ?? fallbackError ?? attemptRootPendingError) is { } error)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error);
 
         (string[] Paths, Exception? Error) ListPending(string directoryName)
@@ -226,26 +233,6 @@ internal static class AcceptanceGateOutcomeLedger
                 }
                 if (allReady) RemovePending(pendingPath);
             }
-        }
-    }
-
-    private static (string[] Paths, Exception? Error) ListAttemptPending(string ledgerPath)
-    {
-        var attemptRoot = Path.Combine(Path.GetDirectoryName(ledgerPath)!, AttemptRoot);
-        try
-        {
-            // Intent sidecars share the attempt's directory and can outlive a shared write outage.
-            return (Directory.GetFiles(attemptRoot, "*" + AttemptPendingSuffix, new EnumerationOptions
-            {
-                RecurseSubdirectories = true,
-                MaxRecursionDepth = 1,
-                IgnoreInaccessible = false,
-                AttributesToSkip = FileAttributes.ReparsePoint
-            }), null);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return ([], ex is DirectoryNotFoundException ? null : ex);
         }
     }
 
@@ -346,6 +333,10 @@ internal static class AcceptanceGateOutcomeLedger
     private static string PendingDirectoryPath(string path, string directoryName) => Path.Combine(Path.GetDirectoryName(path)!, directoryName);
 
     private static string LegacyPendingPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
+
+    // Keep the last-resort journal in the attempt root so replay can find it without listing attempt directories.
+    private static string AttemptRootPendingPath(string path) =>
+        Path.Combine(Path.GetDirectoryName(path)!, AttemptRoot, PendingFileName);
 
     private static void AppendObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
     {
