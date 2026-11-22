@@ -53,6 +53,7 @@ public sealed class ConductorBatchLoopTestsMergeTrainLandingBlockerClear : Accep
         Assert.Empty(GoalOperationJournal.ReadRefusedCarryHolds(fixture.Repo, blocked.Id));
         var newTrainGates = new BackgroundGateStartHarness();
         newTrainGates.Capture(fixture.Driver);
+        var verifierRunsBeforeTick = fixture.Verifier.RunCount;
 
         var tick = RunTick(fixture);
 
@@ -66,7 +67,7 @@ public sealed class ConductorBatchLoopTestsMergeTrainLandingBlockerClear : Accep
             line.Contains(obligation.Id, StringComparison.Ordinal));
         Assert.Equal(candidate, Assert.Single(GoalOperationJournal.ReadRefusedCarryHolds(fixture.Repo, blocked.Id)).BranchSha);
         Assert.Null(coordinator.TryReadLatest(blocked.Id.Value));
-        Assert.DoesNotContain((GoalId?)blocked.Id, fixture.Verifier.GoalIds);
+        Assert.Equal<GoalId?>([fixture.Goals[1].Id], fixture.Verifier.GoalIds.Skip(verifierRunsBeforeTick));
         Assert.Equal(0, newTrainGates.StartCount);
         Assert.DoesNotContain(blocked.Id.Value, fixture.Driver.GetActiveCohortGateMemberGoalIds());
     }
