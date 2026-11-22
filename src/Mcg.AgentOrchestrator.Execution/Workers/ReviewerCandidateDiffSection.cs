@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
-using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -37,8 +36,8 @@ internal static class ReviewerCandidateDiffSection
         foreach (var change in scope.Changes.OrderBy(change => change.Path, StringComparer.Ordinal))
         {
             var label = change.PreviousPath is null
-                ? $"\n### {DisplayPath(change.Path)}\n"
-                : $"\n### {DisplayPath(change.PreviousPath)} → {DisplayPath(change.Path)}\n";
+                ? $"\n### {ReviewerChangedFileScopeBriefSection.DisplayPath(change.Path)}\n"
+                : $"\n### {ReviewerChangedFileScopeBriefSection.DisplayPath(change.PreviousPath)} → {ReviewerChangedFileScopeBriefSection.DisplayPath(change.Path)}\n";
             var allowance = Math.Min(PerFileBytes, remaining) - ByteCount(label);
             if (allowance < Math.Max(ByteCount(Truncation), ByteCount("Omitted: diff unavailable.\n")))
                 break;
@@ -70,9 +69,6 @@ internal static class ReviewerCandidateDiffSection
 
     private static string Omitted(int count) =>
         $"\nAll {count} remaining paths in the authoritative changed-file scope are omitted by the excerpt budget.\n";
-
-    private static string DisplayPath(string path) =>
-        path.Any(char.IsControl) ? JsonSerializer.Serialize(path) : path;
 
     private static bool RevisionsAvailable(string root, ReviewerChangedFileScope scope)
     {

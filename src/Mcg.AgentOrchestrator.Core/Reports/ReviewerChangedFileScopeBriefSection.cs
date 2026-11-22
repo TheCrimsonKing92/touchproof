@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 // Owns the reviewer changed-file and conflict previews together with their typed line coordinates.
@@ -15,9 +17,25 @@ internal static class ReviewerChangedFileScopeBriefSection
         bool? mergeTreeClean,
         IReadOnlyList<string>? mergeTreeConflictPaths,
         int? totalMergeTreeConflictPathCount,
-        ReviewerChangedFileScope? pinnedScope)
+        ReviewerChangedFileScope? pinnedScope,
+        bool scopeMissingFromDispatch)
     {
-        if (task.RequiredRole != AgentRole.Reviewer || (changedFiles is null && !mergeTreeClean.HasValue))
+        if (task.RequiredRole != AgentRole.Reviewer)
+        {
+            return;
+        }
+
+        if (scopeMissingFromDispatch)
+        {
+            segments.Add(TaskBriefSegment.Fixed([
+                "## Reviewer Changed-File Scope",
+                "The recorded dispatch has no captured changed-file scope or comparison revisions. Scope and candidate diff excerpts are unavailable.",
+                string.Empty
+            ]));
+            return;
+        }
+
+        if (changedFiles is null && !mergeTreeClean.HasValue)
         {
             return;
         }
@@ -57,7 +75,7 @@ internal static class ReviewerChangedFileScopeBriefSection
             firstConflictLineIndex = lines.Count;
             foreach (var path in boundedConflictPaths)
             {
-                lines.Add($"- conflict: {path}");
+                lines.Add($"- conflict: {DisplayPath(path)}");
             }
 
             if (boundedConflictPaths.Length < conflictTotal)
@@ -78,7 +96,7 @@ internal static class ReviewerChangedFileScopeBriefSection
         {
             foreach (var path in boundedChangedFiles)
             {
-                lines.Add($"- {path}");
+                lines.Add($"- {DisplayPath(path)}");
             }
         }
 
@@ -90,7 +108,9 @@ internal static class ReviewerChangedFileScopeBriefSection
         var changedLineCount = lines.Count - firstChangedLineIndex;
         lines.Add(pinnedScope is null
             ? "Independent scope checks must use git diff main...HEAD. Do not use two-dot diffs such as main..HEAD, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence."
-            : $"Scope checks: git diff {pinnedScope.ThreeDotRange}. Use committed changes only.");
+            : pinnedScope.TotalChangedFileCount > 0
+                ? $"All paths omitted if no excerpts follow. git diff {pinnedScope.ThreeDotRange}"
+                : $"Scope checks: git diff {pinnedScope.ThreeDotRange}. Use committed changes only.");
         lines.Add(string.Empty);
         // Substitution preserves line order and the scope's typed coordinates.
         segments.Add(new TaskBriefSegment(RoleRequirementIntegrationBranch.Apply(lines, integrationBranch),
@@ -103,4 +123,7 @@ internal static class ReviewerChangedFileScopeBriefSection
                     firstConflictLineIndex, conflictLineCount, lines.Count, conflictCountLineIndex, "Conflicting paths")
                 : null));
     }
+
+    internal static string DisplayPath(string path) =>
+        path.Any(char.IsControl) ? JsonSerializer.Serialize(path) : path;
 }

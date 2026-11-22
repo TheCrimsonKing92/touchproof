@@ -20,7 +20,15 @@ public sealed record ReviewerChangedFileScope(
     internal string ThreeDotRange => $"{IntegrationCommit}...{CandidateCommit}";
 }
 
-public sealed record ReviewerScopedChange(string Path, string? PreviousPath, char Status, bool CanHaveTextHunks);
+public sealed record ReviewerScopedChange(string Path, string? PreviousPath, char Status, bool CanHaveTextHunks)
+{
+    public bool CanHaveTextHunks
+    {
+        // Git can emit deletion and addition hunks for a type change with identical blob IDs.
+        get => Status == 'T' || field;
+        init;
+    } = CanHaveTextHunks;
+}
 
 /// <summary>Reviewer preflight inputs retained with the dispatch for prompt restoration.</summary>
 public sealed record ReviewerDispatchScope(

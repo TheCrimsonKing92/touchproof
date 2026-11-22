@@ -176,7 +176,7 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
         string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null, bool workerToolsAvailable = false,
-        ReviewerChangedFileScope? pinnedReviewerScope = null)
+        ReviewerChangedFileScope? pinnedReviewerScope = null, bool reviewerScopeMissingFromDispatch = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -384,7 +384,7 @@ public sealed partial class AgentOrchestratorKernel
             segments, task, integrationBranchPromptName,
             reviewerScopeChangedFiles, reviewerScopeMergeBase, reviewerScopeTotalChangedFileCount,
             reviewerMergeTreeClean, reviewerMergeTreeConflictPaths, reviewerMergeTreeTotalConflictPathCount,
-            pinnedReviewerScope);
+            pinnedReviewerScope, reviewerScopeMissingFromDispatch);
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {

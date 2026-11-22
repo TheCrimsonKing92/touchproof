@@ -123,7 +123,11 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Equal(delivered.Length, receipt.RenderedPromptCharacters);
         Assert.Equal(WorkerPromptInputBudget.CountTokens(delivered), receipt.ModelInputTokenEstimate);
         if (spareCharacters == 0)
+        {
             Assert.Equal(baseline, delivered);
+            Assert.DoesNotContain(Heading, delivered);
+            Assert.Contains($"All paths omitted if no excerpts follow. git diff {Range(scope)}", delivered);
+        }
         else
             Assert.Contains("omitted by the excerpt budget", CandidateSection(delivered));
     }
@@ -212,6 +216,56 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Contains("### only-rename.txt → renamed.txt\nNo textual hunks.", section);
         Assert.Contains("### empty.txt\nNo textual hunks.", section);
         Assert.Contains($"git diff {Range(scope)}", section);
+    }
+
+    [Fact]
+    public void DeliversBothHunksForTypeChangeWithIdenticalBlobIds()
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        const string path = "link.txt";
+        Write(repo, path, "same-blob");
+        Commit(repo, "Regular file");
+        var blob = repo.Git("rev-parse", $"HEAD:{path}");
+        repo.Git("switch", "-c", "candidate");
+        repo.Git("update-index", "--cacheinfo", $"120000,{blob},{path}");
+        repo.Git("commit", "-m", "Symlink with the same blob");
+        var scope = Capture(repo);
+        Assert.Contains($":100644 120000 {blob} {blob} T\t{path}",
+            repo.Git("diff", "--raw", "--no-abbrev", Range(scope)));
+
+        var dispatch = Prepare(repo, NewWork(AgentRole.Reviewer), true, scope);
+        var section = CandidateSection(File.ReadAllText(dispatch.PromptPath));
+        Assert.Contains($"### {path}\n@@ -1 +0,0 @@\n-same-blob", section);
+        Assert.Contains("@@ -0,0 +1 @@\n+same-blob", section);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DisplayEscapesControlPathInScopeAndExcerpts(bool typed)
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        const string path = "one\nname.txt";
+        const string escapedPath = "\"one\\nname.txt\"";
+        repo.Git("commit", "--allow-empty", "-m", "Base");
+        Write(repo, "blob.txt", "control-path-sentinel\n");
+        var blob = repo.Git("hash-object", "-w", "blob.txt");
+        // Construct the commit without checking out a name Windows cannot represent.
+        var tree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds,
+            $"100644 blob {blob}\t{path}\0", "mktree", "-z");
+        Assert.True(tree.Succeeded && !tree.DrainTimedOut, tree.Error);
+        var candidate = repo.Git("commit-tree", tree.Output.Trim(), "-p", "HEAD", "-m", "Control path");
+        repo.Git("update-ref", "refs/heads/candidate", candidate);
+        repo.Git("symbolic-ref", "HEAD", "refs/heads/candidate");
+        var scope = Capture(repo);
+        Assert.Equal(path, Assert.Single(scope.ChangedFiles));
+
+        var dispatch = Prepare(repo, NewWork(AgentRole.Reviewer), typed, scope);
+        var prompt = File.ReadAllText(dispatch.PromptPath);
+        var preview = prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)];
+        Assert.Contains($"- {escapedPath}{Environment.NewLine}", preview);
+        Assert.DoesNotContain(path, preview);
+        Assert.Contains($"### {escapedPath}\n@@ -0,0 +1 @@\n+control-path-sentinel", CandidateSection(prompt));
     }
 
     [Fact]
@@ -349,6 +403,43 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Contains(Alpha, prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)]);
         Assert.Contains(Beta, prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)]);
         Assert.Equal(originalSection, CandidateSection(prompt));
+    }
+
+    [Fact]
+    public void LegacyRestoreReportsMissingScopeAfterBothRefsMove()
+    {
+        using var repo = DivergentCandidate();
+        var scope = Capture(repo);
+        var work = NewWork(AgentRole.Reviewer);
+        var dispatch = Prepare(repo, work, true, scope);
+        var snapshot = work.Kernel.ExportSnapshot();
+        var goal = Assert.Single(snapshot.Goals);
+        var task = Assert.Single(goal.Tasks);
+        var legacy = Assert.IsType<TaskDispatchSnapshot>(task.LastDispatch) with
+        {
+            ReviewerScope = null,
+            BaseCommit = scope.CandidateCommit
+        };
+        var reloaded = Restore(work, snapshot with
+        {
+            Goals = [goal with { Tasks = [task with { LastDispatch = legacy, DispatchHistory = [legacy] }] }]
+        });
+        Assert.Null(reloaded.Task.LastDispatch?.ReviewerScope);
+
+        File.Delete(dispatch.PromptPath);
+        Write(repo, Alpha, "later-restore-sentinel\n");
+        Commit(repo, "Move candidate before legacy restoration");
+        repo.Git("update-ref", "refs/heads/trunk", "HEAD");
+        Assert.Empty(Capture(repo).Changes);
+
+        WorkerProfileDispatcher.RestorePreparedContextIfMissing(reloaded.Kernel, reloaded.Goal, reloaded.Task, "trunk",
+            backlogStorePath: Path.Combine(repo.Repository, "backlog.db"));
+        var prompt = File.ReadAllText(dispatch.PromptPath);
+        Assert.Contains($"HEAD commit: {scope.CandidateCommit}", prompt);
+        Assert.Contains("Scope and candidate diff excerpts are unavailable.", prompt);
+        Assert.DoesNotContain("Changed files: 0", prompt);
+        Assert.DoesNotContain("later-restore-sentinel", prompt);
+        Assert.DoesNotContain(Heading, prompt);
     }
 
     private static InProcessGitFixture DivergentCandidate()

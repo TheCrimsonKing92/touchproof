@@ -185,6 +185,8 @@ public static partial class WorkerProfileDispatcher
                 durableArtifactFindings);
         }
 
+        var reviewerScopeMissingFromDispatch = task.RequiredRole == AgentRole.Reviewer &&
+            retainedDispatch is { ReviewerScope: null };
         if (task.RequiredRole == AgentRole.Reviewer && retainedDispatch?.ReviewerScope is { } retainedScope)
         {
             reviewerScope = retainedScope.Scope;
@@ -193,24 +195,38 @@ public static partial class WorkerProfileDispatcher
             reviewerMergeTreeTotalConflictPathCount = retainedScope.MergeTreeTotalConflictPathCount;
         }
 
-        EnsureReviewerScopeForPreparation(
-            task,
-            workingDirectory, integrationBranch,
-            ref preflightFindings,
-            ref reviewerScope,
-            ref reviewerScopeChangedFiles,
-            ref reviewerScopeMergeBase,
-            ref reviewerScopeTotalChangedFileCount,
-            ref reviewerMergeTreeClean,
-            ref reviewerMergeTreeConflictPaths,
-            ref reviewerMergeTreeTotalConflictPathCount);
+        if (reviewerScopeMissingFromDispatch)
+        {
+            reviewerScope = null;
+            reviewerScopeChangedFiles = null;
+            reviewerScopeMergeBase = null;
+            reviewerScopeTotalChangedFileCount = null;
+            reviewerMergeTreeClean = null;
+            reviewerMergeTreeConflictPaths = null;
+            reviewerMergeTreeTotalConflictPathCount = null;
+        }
+        else
+        {
+            EnsureReviewerScopeForPreparation(
+                task,
+                workingDirectory, integrationBranch,
+                ref preflightFindings,
+                ref reviewerScope,
+                ref reviewerScopeChangedFiles,
+                ref reviewerScopeMergeBase,
+                ref reviewerScopeTotalChangedFileCount,
+                ref reviewerMergeTreeClean,
+                ref reviewerMergeTreeConflictPaths,
+                ref reviewerMergeTreeTotalConflictPathCount);
+        }
 
-        var excerptScope = task.RequiredRole == AgentRole.Reviewer &&
-            (retainedDispatch is null || retainedDispatch.ReviewerScope is not null) ? reviewerScope : null;
+        var excerptScope = task.RequiredRole == AgentRole.Reviewer ? reviewerScope : null;
         var pinnedHead = excerptScope?.CandidateCommit;
         if (task.RequiredRole == AgentRole.Reviewer && retainedDispatch is not null)
-            pinnedHead ??= retainedDispatch.WorktreeHeadSha ?? retainedDispatch.BaseCommit;
-        var targetContext = TryReadCurrentTargetContext(workingDirectory, pinnedHead: pinnedHead);
+            pinnedHead ??= retainedDispatch.WorktreeHeadSha ?? retainedDispatch.BaseCommit ??
+                retainedDispatch.FindingEvidenceReviewContext?.CandidateSha;
+        var targetContext = reviewerScopeMissingFromDispatch && pinnedHead is null
+            ? null : TryReadCurrentTargetContext(workingDirectory, pinnedHead: pinnedHead);
         IReadOnlyList<string> preparationFindings = [];
         if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer && preparationFindingsResolver is not null)
         {
@@ -221,7 +237,7 @@ public static partial class WorkerProfileDispatcher
         var (contextDirectory, linkedBacklogPointer) = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
             preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory, targetHome, backlogStorePath, integrationBranch);
         var currentMainIdentity = excerptScope?.IntegrationCommit ??
-            ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch);
+            (reviewerScopeMissingFromDispatch ? null : ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch));
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
             task,
@@ -259,7 +275,7 @@ public static partial class WorkerProfileDispatcher
             changedExistingTestsDiagnostic: changedExistingTests.Diagnostic,
             acceptanceManifestPromptPath: WorkerAcceptanceManifestDisplayPath.ForPrompt(targetHome, workingDirectory),
             integrationBranchPromptName: integrationBranch, roleRequirementStack: ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome), repositoryWorktrees: GoalRepositoryBriefEntries.For(goal, workingDirectory), testCheckCommands: task.RequiredRole == AgentRole.Planner ? ProjectStackResolver.TestCheckCommandsFor(workingDirectory, targetHome) : null, workerToolsAvailable: workerToolsDirectory is not null,
-            pinnedReviewerScope: excerptScope);
+            pinnedReviewerScope: excerptScope, reviewerScopeMissingFromDispatch: reviewerScopeMissingFromDispatch);
         var brief = usesTypedContextPackage
             ? briefSource.ToTaskBrief(string.Empty)
             : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
