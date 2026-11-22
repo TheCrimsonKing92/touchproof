@@ -264,8 +264,9 @@ internal static class CliShadowStartCommand
 
                 if (stopRequested is null && evidence.Started && evidence.FirstTick is not null && evidence.Advanced)
                 {
-                    stopRequested = DateTimeOffset.UtcNow;
-                    using var stop = new FileStream(stopFile, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                    using var stop = new FileStream(stopFile, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+                    // A candidate using a coarser clock can journal the stop at the file's creation time.
+                    stopRequested = File.GetCreationTimeUtc(stop.SafeFileHandle);
                 }
 
                 var deadline = evidence.FirstTick is null ? options.StartupCeiling : options.Budget;

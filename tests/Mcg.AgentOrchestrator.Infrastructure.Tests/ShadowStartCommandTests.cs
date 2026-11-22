@@ -23,7 +23,7 @@ public sealed class ShadowStartCommandTests
         Assert.Contains($"stderr: Legacy grouped attempt has no lease in {fixture.Scratch("failed")}", failure.Error);
         Assert.Contains("wall_ms=", failure.Error);
         Assert.Contains("peak_working_set_bytes=", failure.Error);
-        Assert.Equal(0, success.Exit);
+        Assert.True(success.Exit == 0, $"Expected exit code 0, got {success.Exit}.{Environment.NewLine}{success.Error}");
         Assert.Contains("result=pass", success.Output);
         Assert.Contains("wall_ms=", success.Output);
         Assert.Contains("peak_working_set_bytes=", success.Output);
