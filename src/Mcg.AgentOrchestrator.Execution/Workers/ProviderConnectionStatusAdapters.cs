@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
@@ -65,18 +66,41 @@ public sealed class ProviderConnectionStatusAdapters(
         }
     }
 
-    internal static bool MatchesHostLauncher(string template, string executable, string cli, StringComparison comparison)
+    internal static bool MatchesHostLauncher(string template, string executable, string cli, StringComparison comparison) =>
+        MatchesNativeLauncher(template, executable, cli, comparison, allowGrokTurnLimit: false);
+
+    internal static bool MatchesNativeSignInLauncher(string template, string executable, string cli, StringComparison comparison) =>
+        MatchesNativeLauncher(template, executable, cli, comparison, allowGrokTurnLimit: cli == "grok");
+
+    private static bool MatchesNativeLauncher(string template, string executable, string cli, StringComparison comparison,
+        bool allowGrokTurnLimit)
     {
-        // Executable extraction skips shell setup. Only probe native commands whose full
+        // Executable extraction skips shell setup. Only accept native commands whose full
         // template establishes the same launcher and credential environment as the host.
         var command = template.AsSpan().Trim();
         if (!command.StartsWith(executable, comparison)) return false;
         var arguments = command[executable.Length..].TrimStart(" \t");
         var defaultTemplate = WorkerProfileCatalog.Default().GetRequired(cli + "-cli").CommandTemplate;
+        var defaultArguments = defaultTemplate.AsSpan(cli.Length + 1);
         return arguments.IsEmpty ||
             (cli == "codex" && arguments.SequenceEqual("exec")) ||
             (cli == "claude" && arguments.SequenceEqual("-p")) ||
-            arguments.SequenceEqual(defaultTemplate.AsSpan(cli.Length + 1));
+            arguments.SequenceEqual(defaultArguments) ||
+            (allowGrokTurnLimit && MatchesGrokTurnLimit(arguments, defaultArguments));
+    }
+
+    private static bool MatchesGrokTurnLimit(ReadOnlySpan<char> arguments, ReadOnlySpan<char> defaultArguments)
+    {
+        // The catalog ends with the turn limit. Every character before its value must match.
+        var limitStart = defaultArguments.LastIndexOf(' ') + 1;
+        var prefix = defaultArguments[..limitStart];
+        if (!prefix.EndsWith(" --max-turns ", StringComparison.Ordinal) ||
+            !arguments.StartsWith(prefix, StringComparison.Ordinal)) return false;
+
+        var limit = arguments[limitStart..];
+        // Grok accepts positive unsigned 32-bit turn counts.
+        return !limit.IsEmpty && !limit.ContainsAnyExceptInRange('0', '9') &&
+            uint.TryParse(limit, NumberStyles.None, CultureInfo.InvariantCulture, out var maxTurns) && maxTurns > 0;
     }
 
     private static Task<WorkerProcessRunResult> RunAsync(WorkerProcessDirectRunRequest request,
