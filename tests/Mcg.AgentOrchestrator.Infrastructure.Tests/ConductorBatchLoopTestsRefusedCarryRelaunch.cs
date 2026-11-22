@@ -70,15 +70,21 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 parallelAcceptanceAttemptCoordinator: coordinator);
 
             BatchTickSummary? heldTick = null;
-            new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+            var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
                 NoStopPath(), maxIterations: 1, onTick: result => heldTick = result);
+            Assert.Equal(1, summary.Held);
             Assert.Empty(runs);
             Assert.Equal(failed.AttemptId, coordinator.TryReadLatest(goal.Id.Value)!.AttemptId);
             Assert.Contains(heldTick!.ProgressLines!, line =>
                 line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
                 line.Contains(obligation.Id, StringComparison.Ordinal) &&
-                line.Contains(originalMain, StringComparison.Ordinal) &&
+                line.Contains(branch, StringComparison.Ordinal) &&
                 line.Contains(liveMain, StringComparison.Ordinal));
+            var held = driver.TryHoldRepeatSoloAcceptance(goal, ConductorAutonomyPolicy.Conservative);
+            var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(held?.Outcome);
+            var holdDecision = Assert.IsType<PolicyDecisionRecord>(hold.Decision);
+            Assert.Contains(new PolicyDecisionFact("historicalCandidateSha", branch), holdDecision.Facts);
+            Assert.Contains(new PolicyDecisionFact("historicalMainSha", originalMain), holdDecision.Facts);
 
             kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
                 "operator rebind", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: branch);

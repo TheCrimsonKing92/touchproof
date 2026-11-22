@@ -23,7 +23,7 @@ internal static partial class GoalOperationJournal
         [JsonIgnore] public bool IsLegacy { get; init; }
     }
 
-    [GeneratedRegex(@"\Aobligations=(?<ids>[^;]+); candidate=(?<branch>[0-9a-f]+); main=(?<main>[0-9a-f]+); Acceptance passed for \k<branch>, but obligation '(?<id>[^']+)' is bound to (?<bound>[0-9a-f]+)\.", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\Aobligations=(?<ids>[^;]+); candidate=(?<branch>[0-9a-f]+); main=(?<integrationSha>[0-9a-f]+); Acceptance passed for \k<branch>, but obligation '(?<id>[^']+)' is bound to (?<bound>[0-9a-f]+)\.", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex LegacyRefusedCarryDetail();
 
     internal static void RecordRefusedCarryHold(string? executionDirectory, Goal goal,
@@ -66,7 +66,7 @@ internal static partial class GoalOperationJournal
         var match = LegacyRefusedCarryDetail().Match(detail);
         if (!match.Success) return null;
         var branch = match.Groups["branch"].Value;
-        var main = match.Groups["main"].Value;
+        var main = match.Groups["integrationSha"].Value;
         if (entry.OperationInstanceId != RefusedCarryPairKey(branch, main) ||
             !string.Equals(entry.MainHeadSha, main, StringComparison.OrdinalIgnoreCase))
             return null;
