@@ -10,6 +10,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
     private readonly Func<IReadOnlyList<AgentDefinition>> _loadRoster;
     private readonly OwnerConsoleProviderSignInFlow _signIn;
     private readonly Action<Action> _invoke;
+    private readonly Action<Func<Task>> _scheduleWork;
     private readonly TimeProvider _clock;
     private readonly CancellationToken _lifetime;
     private List<OwnerConsoleProviderConnectionState> _profiles = [];
@@ -27,14 +28,15 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
 
     internal OwnerConsoleProviderConnectionsTab(IProviderConnectionsConsoleGateway connections,
         IProviderSignInLauncher launcher, Func<IReadOnlyList<AgentDefinition>> loadRoster, Action<Action> invoke,
-        TimeProvider clock, CancellationToken lifetime)
+        TimeProvider clock, CancellationToken lifetime, Action<Func<Task>>? scheduleWork = null)
     {
         _connections = connections;
         _loadRoster = loadRoster;
         _invoke = invoke;
+        _scheduleWork = scheduleWork ?? (work => { _ = Task.Run(work); });
         _clock = clock;
         _lifetime = lifetime;
-        _signIn = new(connections, launcher, FindProfile, Check, apply => Post(apply), lifetime);
+        _signIn = new(connections, launcher, FindProfile, Check, apply => Post(apply), _scheduleWork, lifetime);
         _target = new(() => _rows, index => { _selected = index; ProbeSelectedDeviceCode(); });
     }
 
@@ -72,7 +74,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
         _listing = true;
         _loadError = null;
         var revision = _revision;
-        _ = Task.Run(() => LoadAsync(revision));
+        _scheduleWork(() => LoadAsync(revision));
     }
 
     public void HandleKey(Key key)
@@ -102,8 +104,10 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
                 Check(profile);
                 if (row is null) _signIn.ProbeDeviceCode(profile);
                 break;
-            case 's': _signIn.BeginSignIn(profile, deviceCode: false); break;
-            case 'd' when _signIn.DeviceCodeAvailable(profile): _signIn.BeginSignIn(profile, deviceCode: true); break;
+            case 's': _signIn.BeginSignIn(profile, deviceCode: false, selectedFromUnused: row is null); break;
+            case 'd' when _signIn.DeviceCodeAvailable(profile):
+                _signIn.BeginSignIn(profile, deviceCode: true, selectedFromUnused: row is null);
+                break;
             case 't': _signIn.ReportReturn(row is null ? profile : SignInProfile(row), stoppedWaiting: false); break;
             case 'x': _signIn.ReportReturn(row is null ? profile : SignInProfile(row), stoppedWaiting: true); break;
         }
@@ -138,7 +142,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
     {
         var listRevision = ++_revision;
         var previous = _profiles.ToDictionary(profile => profile.Id, StringComparer.OrdinalIgnoreCase);
-        _profiles = items.Select(item =>
+        var profiles = items.Select(item =>
         {
             if (!previous.TryGetValue(item.Report.ProfileId, out var existing)) return new OwnerConsoleProviderConnectionState(item);
             if (existing.LastRefresh <= revision)
@@ -149,6 +153,8 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
             }
             return existing;
         }).ToList();
+        _signIn.RevokeRemovedUnusedLaunches(id => profiles.Exists(profile => StringComparer.OrdinalIgnoreCase.Equals(profile.Id, id)));
+        _profiles = profiles;
         _roster = roster;
         _listed = true;
         _listing = false;
@@ -194,7 +200,7 @@ internal sealed partial class OwnerConsoleProviderConnectionsTab : IOwnerConsole
         var revision = ++_revision;
         profile.CheckRevision = revision;
         profile.Checking = true;
-        _ = Task.Run(() => CheckAsync(profile, revision));
+        _scheduleWork(() => CheckAsync(profile, revision));
     }
 
     private async Task CheckAsync(OwnerConsoleProviderConnectionState profile, long revision)

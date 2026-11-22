@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.Input;
 using Fixture = OwnerConsoleProviderConnectionsTabTests.Fixture;
 
@@ -187,12 +188,15 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
         Assert.DoesNotContain("d device code", fixture.Tab.KeyHint);
         Assert.Contains(fixture.Tab.Lines, line => line.Contains(explanation, StringComparison.Ordinal));
+        Assert.Equal(1, fixture.ScheduledProviderWork); // Only the initial list.
         fixture.Press('s');
         fixture.Press('d');
+        Assert.Equal(1, fixture.ScheduledProviderWork);
         fixture.Press('c');
         var check = await fixture.TakeCheckAsync();
         Assert.Equal("grok-cli", check.ProfileId);
         await fixture.FinishCheckAsync(check);
+        Assert.Equal(2, fixture.ScheduledProviderWork);
         Assert.Empty(fixture.SignInLookups);
         Assert.Empty(DrainLaunches(fixture));
         Assert.Equal(0, fixture.DeviceCodeProbes);
@@ -241,6 +245,62 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         Assert.Equal(1, fixture.CheckCalls);
         Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
         Assert.Empty(DrainLaunches(fixture));
+    }
+
+    [Fact]
+    public async Task RemovingUnusedProfileDuringExecutableResolutionRevokesNativeLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var selected = Fixture.Connection("grok-cli");
+        var sibling = selected with { Report = selected.Report with { ProfileId = "grok-secondary" } };
+        var resolving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolution = new TaskCompletionSource<WorkerProcessRunResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolved = new WorkerProcessRunResult(0, @"C:\tools\grok.exe" + "\r\n", "");
+        var starts = 0;
+        var session = new Session();
+        var launcher = new ProviderSignInLauncher(@"C:\workspace", (_, token) =>
+        {
+            if (!resolving.TrySetResult()) return Task.FromResult(resolved);
+            return resolution.Task.WaitAsync(token);
+        }, _ =>
+        {
+            Interlocked.Increment(ref starts);
+            return session;
+        });
+        using var fixture = new Fixture(launcher) { Initial = [selected, sibling], Roster = [] };
+        await fixture.LoadAsync(initialChecks: 0);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+
+        fixture.Press('s');
+        await TestHangGuard.WaitAsync(resolving.Task, "native executable resolution started");
+        Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
+        fixture.Initial = [sibling];
+        fixture.Press('r');
+        await fixture.ApplyAsync();
+        Assert.Equal("Not in use (1) [-]", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        foreach (var action in "csdtx") fixture.Press(action);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-secondary |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.StartsWith("s sign in", fixture.Tab.KeyHint);
+        Assert.Equal(3, fixture.ScheduledProviderWork); // Initial list, original action, and reload.
+
+        resolution.SetResult(resolved);
+        await fixture.ApplyAsync(); // The launch result settles after the resolver is released.
+        Assert.Equal(0, Volatile.Read(ref starts));
+        Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
+
+        fixture.Press('s');
+        await fixture.ApplyAsync();
+        Assert.Equal(1, Volatile.Read(ref starts));
+        Assert.Equal(new[] { "grok-cli", "grok-secondary" }, fixture.SignInLookups);
+        session.Exit.SetResult(new(ProviderSignInOutcome.Unknown, 0));
+        await fixture.ApplyAsync();
+        var recheck = await fixture.TakeCheckAsync();
+        Assert.Equal("grok-secondary", recheck.ProfileId);
+        await fixture.FinishCheckAsync(recheck);
     }
 
     private static List<(ProviderSignInTarget Target, bool DeviceCode)> DrainLaunches(Fixture fixture)

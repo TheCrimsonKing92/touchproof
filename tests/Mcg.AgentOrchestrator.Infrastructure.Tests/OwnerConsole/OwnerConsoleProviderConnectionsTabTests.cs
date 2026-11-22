@@ -95,6 +95,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         Assert.StartsWith("OpenAI | signed in: no | used by: Researcher, Developer", Highlighted());
         Assert.Contains("  Profiles: codex-cli, codex-luna", view.Lines);
         Assert.DoesNotContain(view.Lines, line => line.Contains("grok-cli", StringComparison.Ordinal));
+        Assert.Equal(3, fixture.ScheduledProviderWork); // One list and two initial checks.
 
         view.HandleKey(Key.CursorDown);
         view.HandleKey(Key.CursorDown);
@@ -121,6 +122,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         Assert.True(view.HandleKey(Key.Esc));
         view.Open(OwnerConsolePane.Board);
         Assert.Equal("Not in use (1) [+]", Highlighted());
+        Assert.Equal(3, fixture.ScheduledProviderWork);
         Assert.Equal(2, fixture.CheckCalls);
         Assert.Equal(0, fixture.DeviceCodeProbes);
         Assert.Empty(fixture.SignInLookups);
@@ -441,6 +443,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         private readonly CancellationTokenSource _stop = new();
         private int _checkCalls;
         private int _deviceCodeProbes;
+        private int _scheduledProviderWork;
         internal OwnerConsoleTestClock Clock { get; } = new();
         internal OwnerConsoleProviderConnectionsTab Tab { get; }
         internal IReadOnlyList<OwnerConsoleProviderConnection> Initial { get; set; } =
@@ -450,6 +453,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         internal bool RosterUnavailable { get; set; }
         internal int CheckCalls => Volatile.Read(ref _checkCalls);
         internal int DeviceCodeProbes => Volatile.Read(ref _deviceCodeProbes);
+        internal int ScheduledProviderWork => Volatile.Read(ref _scheduledProviderWork);
         internal Task<IReadOnlyList<OwnerConsoleProviderConnection>>? PendingList { get; set; }
         internal TaskCompletionSource<bool> ListStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -459,9 +463,13 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         internal System.Collections.Concurrent.ConcurrentQueue<string> SignInLookups { get; } = new();
         internal TaskCompletionSource<bool>? DeviceCodeProbe { get; set; }
 
-        internal Fixture() => Tab = new(this, this,
+        internal Fixture(IProviderSignInLauncher? launcher = null) => Tab = new(this, launcher ?? this,
             () => RosterUnavailable ? throw new InvalidOperationException("fixture roster unavailable") : Roster,
-            action => _callbacks.Writer.TryWrite(action), Clock, _stop.Token);
+            action => _callbacks.Writer.TryWrite(action), Clock, _stop.Token, work =>
+            {
+                Interlocked.Increment(ref _scheduledProviderWork);
+                _ = Task.Run(work);
+            });
 
         internal static AgentDefinition Agent(string? profile, AgentRole role, AgentStatus status = AgentStatus.Available,
             string provider = "OpenAI") => new(new AgentId($"{role}-{profile}"), role.ToString(), role,
@@ -540,8 +548,11 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
             return DeviceCodeProbe?.Task.WaitAsync(token) ?? Task.FromResult(false);
         }
 
-        public Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token)
+        public Task<ProviderSignInLaunch> LaunchAsync(ProviderSignInTarget target, bool deviceCode, CancellationToken token,
+            Func<bool>? tryCommitLaunch = null)
         {
+            if (tryCommitLaunch?.Invoke() == false)
+                return Task.FromResult(new ProviderSignInLaunch(null, ProviderSignInOutcome.Cancelled));
             Launches.Writer.TryWrite((target, deviceCode));
             return Task.FromResult(Launch);
         }
