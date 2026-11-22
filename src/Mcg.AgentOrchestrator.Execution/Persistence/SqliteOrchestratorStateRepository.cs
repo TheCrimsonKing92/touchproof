@@ -2380,17 +2380,54 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(
         CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(ProviderHoldHistory.HoldOutcomeRules, cancellationToken);
 
-    public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldSeedRowsAsync(
-        CancellationToken cancellationToken = default) =>
-        ReadModelFitHistoryAsync(ProviderHoldHistory.HoldOutcomeRules, cancellationToken, recoveryOnly: true);
+    public async Task<ProviderHoldSeedHistory> ReadProviderHoldSeedHistoryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var (failureGoals, markerGoals) = await ProviderHoldSeedEvidenceReader.FindCandidatesAsync(
+            connection, SerializerOptions, cancellationToken);
+        IReadOnlyList<ProviderUsageGoalEvidence> evidence = [];
+        Goal[] goals = [];
+        if (failureGoals.Count != 0)
+        {
+            try
+            {
+                evidence = await ReadProviderHoldSeedEvidenceAsync(failureGoals, cancellationToken) ?? [];
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Fall back to the same canonical load used when sparse seed evidence is unavailable.
+            }
+            var missing = failureGoals.Except(evidence.Select(row => new GoalId(row.GoalId))).ToHashSet();
+            if (missing.Count != 0)
+            {
+                var loaded = await LoadGoalsAsync(missing, cancellationToken);
+                goals = loaded.Goals.Where(goal => missing.Contains(goal.Id) && !goal.IsMetadataOnly).ToArray();
+                if (goals.Length != missing.Count)
+                    throw new InvalidDataException("Required provider hold attempt history is unavailable.");
+            }
+        }
+        var attempts = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals)
+            .SelectMany(ProviderHoldHistory.SeedAttempts).Distinct().ToArray();
+        var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
+            cancellationToken, attempts);
+        return new(rows, attempts, markerGoals, evidence);
+    }
 
     private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(IReadOnlyList<string>? providerHoldRule,
-        CancellationToken cancellationToken, bool recoveryOnly = false)
+        CancellationToken cancellationToken)
     {
-        await using var conn = OpenConnection();
+        await using var connection = OpenConnection();
+        return await ReadModelFitHistoryAsync(connection, providerHoldRule, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(SqliteConnection connection,
+        IReadOnlyList<string>? providerHoldRule, CancellationToken cancellationToken,
+        IReadOnlyCollection<ProviderHoldSeedAttempt>? seedAttempts = null)
+    {
         var results = new List<ModelFitHistoryRow>();
 
-        await using var cmd = conn.CreateCommand();
+        await using var cmd = connection.CreateCommand();
         // SQLite NOCASE only folds ASCII. For a non-ASCII provider retain the full read,
         // leaving canonical OrdinalIgnoreCase matching to SeedCandidates. For ASCII names
         // the SQL is a conservative superset (julianday rounds sub-millisecond instants).
@@ -2401,18 +2438,31 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             return name;
         }).ToArray();
         var rules = ruleParameters is null ? "" : string.Join(", ", ruleParameters);
+        var attempts = seedAttempts is { Count: > 0 } ? """
+            UNION ALL
+            SELECT json_extract(value, '$.ProviderName'), json_extract(value, '$.Timestamp')
+            FROM json_each($seedAttempts)
+            """ : "";
+        if (attempts.Length != 0)
+            cmd.Parameters.AddWithValue("$seedAttempts", JsonSerializer.Serialize(seedAttempts!
+                .GroupBy(attempt => attempt.ProviderName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.MinBy(attempt => attempt.Timestamp)!), SerializerOptions));
         var prefix = providerHoldRule is not null ? $"""
-            WITH exhausted AS MATERIALIZED (
+            WITH hold_events AS (
+                SELECT provider_name, timestamp FROM model_fit_history WHERE outcome_rule IN ({rules})
+                {attempts}
+            ), exhausted AS MATERIALIZED (
                 SELECT provider_name, CASE WHEN count(*) != count(julianday(timestamp)) THEN NULL
                     ELSE min(julianday(timestamp)) END AS first_at
-                FROM model_fit_history WHERE outcome_rule IN ({rules})
+                FROM hold_events
                 GROUP BY provider_name COLLATE NOCASE)
             """ : string.Empty;
-        var recovery = recoveryOnly ? "(outcome = 'Completed' OR outcome_class = 'success') AND" : "";
+        var recovery = seedAttempts is not null ? "(outcome = 'Completed' OR outcome_class = 'success') AND" : "";
         var restriction = providerHoldRule is not null ? $"""
             WHERE outcome_rule IN ({rules}) OR ({recovery} (EXISTS (
                 SELECT 1 FROM model_fit_history e
                 WHERE e.provider_name GLOB '*[^ -~]*') OR EXISTS (
+                SELECT 1 FROM exhausted e WHERE e.provider_name GLOB '*[^ -~]*') OR EXISTS (
                 SELECT 1 FROM exhausted e
                 WHERE e.provider_name = model_fit_history.provider_name COLLATE NOCASE
                     AND (e.first_at IS NULL OR julianday(model_fit_history.timestamp) IS NULL
@@ -2438,31 +2488,6 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         _readObserver?.Invoke(new("model-fit-history", null, characters));
         return results;
-    }
-
-    public async Task<IReadOnlyList<GoalId>> ListProviderHoldSeedMarkerGoalsAsync(CancellationToken cancellationToken = default)
-    {
-        await using var connection = OpenConnection();
-        var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, cancellationToken);
-        await using var command = connection.CreateCommand();
-        // Current archives keep their timeline in the sidecar. Inline snapshots can also
-        // carry markers. Core validates the complete notes and their exact binding.
-        var sidecar = hasTimeline ? """
-            UNION SELECT t.goal_id FROM goal_timeline t JOIN goals g ON g.id = t.goal_id
-            WHERE instr(t.entry_json, 'PROVIDER_BUDGET_') > 0
-                AND json_extract(t.entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*'
-            """ : "";
-        command.CommandText = $"""
-            SELECT g.id FROM goals g WHERE instr(g.snapshot_json, 'PROVIDER_BUDGET_') > 0 AND EXISTS (
-                SELECT 1 FROM json_each(g.snapshot_json, '$.Timeline') evt
-                WHERE json_extract(evt.value, '$.Message') GLOB 'PROVIDER_BUDGET_*')
-            {sidecar}
-            """;
-        var result = new List<GoalId>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-            result.Add(new(reader.GetString(0)));
-        return result;
     }
 
     public async Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(

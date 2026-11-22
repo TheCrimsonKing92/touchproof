@@ -71,44 +71,14 @@ public static class ProviderBudgetHoldSchedules
     {
         var note = history.DispatchMarker(task, dispatch);
         if (!MatchesGeneration(history, note, dispatch, asOf)) return false;
-        if (ParseMarker(note)?.HoldPlacedAt is not { } placed) return true;
-
-        // Validate observations in time order. Rejected old-generation results cannot
-        // create a hold that poisons later probes. Equal timestamps share one generation.
-        DateTimeOffset? latestHold = null;
-        DateTimeOffset? latestQuota = null;
-        var quotaPlacements = new HashSet<DateTimeOffset>();
-        var observations = history.HoldObservations()
-            .Where(item => asOf is null || item.Verification.CompletedAt <= asOf)
-            .GroupBy(item => item.Verification.CompletedAt).OrderBy(group => group.Key);
-        foreach (var group in observations)
-        {
-            var applicable = group.Where(item =>
-            {
-                var marker = history.DispatchMarker(item.Task, item.Dispatch);
-                if (!MatchesGeneration(history, marker, item.Dispatch, group.Key)) return false;
-                if (ParseMarker(marker)?.HoldPlacedAt is not { } original) return true;
-                var competing = quotaPlacements.Contains(original) ? latestQuota : latestHold;
-                return !(competing > original);
-            }).ToArray();
-            if (applicable.Length == 0) continue;
-            if (group.Key > placed && applicable.Any(item => (item.Task != task || item.Dispatch != dispatch) &&
-                    (!quotaPlacements.Contains(placed) || item.Evidence.Kind == ProviderFailureKind.BudgetExhausted)))
-                return false;
-            latestHold = group.Key;
-            if (applicable.Any(item => item.Evidence.Kind == ProviderFailureKind.BudgetExhausted))
-            {
-                latestQuota = group.Key;
-                quotaPlacements.Add(group.Key);
-            }
-        }
-        return true;
+        return ParseMarker(note)?.HoldPlacedAt is not { } placed ||
+            !history.HasCompetingPlacement(task, dispatch, placed, asOf);
     }
 
-    private static ProbeMarker? ParseMarker(ProviderHoldBindingHistory.Note? note) =>
+    internal static ProbeMarker? ParseMarker(ProviderHoldBindingHistory.Note? note) =>
         note is not null && TryParseProbe(note.Event, out var marker) ? marker : null;
 
-    private static bool MatchesGeneration(ProviderHoldBindingHistory history, ProviderHoldBindingHistory.Note? note,
+    internal static bool MatchesGeneration(ProviderHoldBindingHistory history, ProviderHoldBindingHistory.Note? note,
         TaskDispatchRecord dispatch, DateTimeOffset? asOf)
     {
         var reset = history.LatestReset(asOf);

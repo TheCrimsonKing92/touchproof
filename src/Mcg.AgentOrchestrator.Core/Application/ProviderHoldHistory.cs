@@ -1,5 +1,7 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+public sealed record ProviderHoldSeedAttempt(string GoalId, string ProviderName, DateTimeOffset Timestamp);
+
 /// <summary>Read-only goal history retained while it changes a hold, diagnosis or probe schedule.</summary>
 public sealed class ProviderHoldHistory
 {
@@ -88,24 +90,39 @@ public sealed class ProviderHoldHistory
     internal sealed record SeedSelection(IReadOnlySet<string> Sources, IReadOnlySet<string> Dependencies, int RowsRead);
 
     internal static SeedSelection SelectSeedEvidence(
-        IReadOnlyList<ModelFitHistoryRow> rows, IReadOnlySet<string> workingGoalIds)
+        IReadOnlyList<ModelFitHistoryRow> rows, IReadOnlyList<ProviderHoldSeedAttempt> attempts,
+        IReadOnlySet<string> workingGoalIds)
     {
         var lowerBounds = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         var sources = new HashSet<string>(StringComparer.Ordinal);
         foreach (var row in rows)
         {
             if (!HoldOutcomeRules.Contains(row.OutcomeRule, StringComparer.Ordinal)) continue;
-            if (!lowerBounds.TryGetValue(row.ProviderName, out var first) || row.Timestamp < first)
-                lowerBounds[row.ProviderName] = row.Timestamp;
-            if (!workingGoalIds.Contains(row.GoalId)) sources.Add(row.GoalId);
+            AddSource(row.GoalId, row.ProviderName, row.Timestamp);
         }
+        foreach (var attempt in attempts) AddSource(attempt.GoalId, attempt.ProviderName, attempt.Timestamp);
 
         var dependencies = rows.Where(row => (row.IsCompleted || row.OutcomeClass == TaskOutcomeClass.Success) &&
                 lowerBounds.TryGetValue(row.ProviderName, out var first) && row.Timestamp >= first &&
                 !sources.Contains(row.GoalId) && !workingGoalIds.Contains(row.GoalId))
             .Select(row => row.GoalId).ToHashSet(StringComparer.Ordinal);
         return new(sources, dependencies, rows.Count);
+
+        void AddSource(string goalId, string provider, DateTimeOffset at)
+        {
+            if (!lowerBounds.TryGetValue(provider, out var first) || at < first) lowerBounds[provider] = at;
+            if (!workingGoalIds.Contains(goalId)) sources.Add(goalId);
+        }
     }
+
+    internal static IEnumerable<ProviderHoldSeedAttempt> SeedAttempts(Goal goal) =>
+        from task in goal.Tasks
+        from verification in task.VerificationHistory
+        where ProviderHoldEvidence.Read(verification).Confirmed
+        let dispatch = ProviderHoldBinding.FindDispatch(task, verification)
+        where dispatch is not null
+        select new ProviderHoldSeedAttempt(goal.Id.Value, dispatch.ProviderName ?? dispatch.WorkerName,
+            verification.CompletedAt);
 
     public static IReadOnlyList<string> SeedCandidates(
         IEnumerable<ModelFitHistoryRow> rows, IReadOnlySet<string> workingGoalIds)

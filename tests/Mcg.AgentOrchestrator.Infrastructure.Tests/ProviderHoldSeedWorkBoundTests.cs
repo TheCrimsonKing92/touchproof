@@ -2,6 +2,8 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 // Parallel-safe. Each case owns its SQLite store and kernel.
 public sealed class ProviderHoldSeedWorkBoundTests
@@ -92,11 +94,14 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(before.Index.Evaluations.OrderBy(entry => entry.Key), after.Index.Evaluations.OrderBy(entry => entry.Key));
     }
 
-    [Fact]
-    public async Task Seed_CrossGoalReset_KeepsMarkerWithoutPromotingItsGoalToSource()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Seed_CrossGoalReset_KeepsMarkerWithoutPromotingItsGoalToSource(bool? legacyArchive)
     {
         using var fixture = new ProviderHoldSeedFixture();
-        await fixture.PopulateResetCaseAsync();
+        await fixture.PopulateResetCaseAsync(legacyArchive);
         var kernel = new AgentOrchestratorKernel();
         var seeded = Seed(fixture, kernel);
         Assert.Equal(new[] { ProviderHoldSeedFixture.Id(799) }, seeded.Selection.Sources);
@@ -110,10 +115,71 @@ public sealed class ProviderHoldSeedWorkBoundTests
             kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id.Value));
     }
 
-    private static ProviderHoldHistoryStartupSeed.Result Seed(ProviderHoldSeedFixture fixture, AgentOrchestratorKernel kernel)
+    [Fact]
+    public async Task Seed_PersistedProbesAndReplayedResets_HaveBoundedHistoryVisits()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateProbeCaseAsync();
+        Assert.Equal(129, fixture.CountDispatchGoals());
+
+        var seeded = Seed(fixture, new());
+        var evaluation = Assert.Single(seeded.Index.Evaluations).Value;
+        Assert.Equal(129, seeded.Index.IndexedGoals);
+        Assert.Equal(1, evaluation.Count);
+        Assert.InRange(evaluation.ObservationVisits, 129, 775);
+        Assert.Equal(384, evaluation.ResetVisits);
+        var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Schedule);
+        Assert.Equal(ProviderHoldSeedFixture.Id(0), schedule.Hold.SourceGoalId.Value);
+        Assert.Equal("fixture-probe-reset", schedule.ResetIntentId);
+        Assert.Equal(129, schedule.Attempt);
+        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(744), schedule.NextProbeAt);
+    }
+
+    [Fact]
+    public async Task Seed_RefusedAttemptSurvivesRequeueAndAlternateProviderSuccess()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        var id = ProviderHoldSeedFixture.Id(0);
+        var token = TestContext.Current.CancellationToken;
+        await fixture.RequeueRefusedAttemptAsync();
+        var repository = new SqliteOrchestratorStateRepository(fixture.Database);
+        Assert.DoesNotContain(await repository.ListModelFitHistoryAsync(token), row => row.GoalId == id);
+        AssertOriginalHold(Seed(repository, new()));
+
+        await fixture.CompleteOnAlternateProviderAsync();
+        repository = new(fixture.Database);
+        var row = Assert.Single(await repository.ListModelFitHistoryAsync(token));
+        Assert.Equal(id, row.GoalId);
+        Assert.Equal("OpenAI", row.ProviderName);
+        Assert.True(row.IsCompleted);
+        AssertOriginalHold(Seed(repository, new()));
+
+        await fixture.CompleteOnOriginalBindingAsync();
+        var recovered = Seed(new SqliteOrchestratorStateRepository(fixture.Database), new());
+        Assert.Equal(new[] { id }, recovered.Selection.Sources);
+        Assert.Equal(new[] { ProviderHoldSeedFixture.Id(806) }, recovered.Selection.Dependencies);
+        Assert.Null(Assert.Single(recovered.Index.Evaluations).Value.Schedule);
+
+        void AssertOriginalHold(ProviderHoldHistoryStartupSeed.Result result)
+        {
+            Assert.Equal(new[] { id }, result.Selection.Sources);
+            Assert.Empty(result.Selection.Dependencies);
+            var evaluation = Assert.Single(result.Index.Evaluations);
+            Assert.Equal("anthropic::c:/profiles/old", evaluation.Key);
+            var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Value.Schedule);
+            Assert.Equal(id, schedule.Hold.SourceGoalId.Value);
+            Assert.Equal(ProviderHoldSeedFixture.At, schedule.Hold.PlacedAt);
+            Assert.Equal("receipt-0", schedule.Hold.EvidenceReceipt);
+        }
+    }
+
+    private static ProviderHoldHistoryStartupSeed.Result Seed(ProviderHoldSeedFixture fixture, AgentOrchestratorKernel kernel) =>
+        Seed(fixture.Repository, kernel);
+
+    private static ProviderHoldHistoryStartupSeed.Result Seed(SqliteOrchestratorStateRepository repository, AgentOrchestratorKernel kernel)
     {
         var diagnostics = new List<string>();
-        var result = ProviderHoldHistoryStartupSeed.Apply(kernel, fixture.Repository, diagnostics.Add);
+        var result = ProviderHoldHistoryStartupSeed.Apply(kernel, repository, diagnostics.Add);
         Assert.True(result is not null, string.Join(Environment.NewLine, diagnostics));
         return result!;
     }
@@ -159,14 +225,103 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
 
     internal Task AddUnrelatedAsync(int count) => SaveAsync(Enumerable.Range(3200, count).Select(MakeUnrelated));
 
-    internal Task PopulateResetCaseAsync()
+    internal async Task PopulateResetCaseAsync(bool? legacyArchive)
     {
         var goal = MakeUnrelated(805);
         var marker = ProviderBudgetHoldSchedules.FormatReset(new(
             "anthropic::c:/profiles/held", At.AddDays(2), "fixture-reset"));
         goal = goal with { Timeline = [new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, marker, At.AddDays(1))] };
-        return SaveAsync([MakeHold(799), goal]);
+        await SaveAsync([MakeHold(799), goal]);
+        if (legacyArchive is not { } compressed) return;
+
+        // Replace the marker owner's sidecar timeline with a legacy inline archive.
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new JsonStringEnumConverter());
+        var json = JsonSerializer.Serialize(goal, options);
+        using var connection = new SqliteConnection($"Data Source={Database};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO goal_snapshot_archive(goal_id, snapshot_json, archived_at) VALUES ($id, $archive, $at);
+            DELETE FROM goal_timeline WHERE goal_id = $id;
+            UPDATE goals SET snapshot_json = $stub WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", goal.Id);
+        command.Parameters.AddWithValue("$archive", compressed ? GoalSnapshotArchiveCodec.Encode(json) : (object)json);
+        command.Parameters.AddWithValue("$stub",
+            JsonSerializer.Serialize(goal with { Tasks = [], Timeline = [], IsMetadataOnly = true }, options));
+        command.Parameters.AddWithValue("$at", At.AddDays(2).ToString("O"));
+        Assert.Equal(3, command.ExecuteNonQuery());
     }
+
+    internal Task PopulateProbeCaseAsync()
+    {
+        const string binding = "anthropic::c:/profiles/old";
+        const string intent = "fixture-probe-reset";
+        var firstReset = At.AddMinutes(1);
+        var reset = ProviderBudgetHoldSchedules.FormatReset(new(binding, firstReset, intent));
+        return SaveAsync(Enumerable.Range(0, 128).Select(index =>
+        {
+            var resetAt = firstReset.AddMinutes(3 * index);
+            var probeAt = resetAt.AddMinutes(1);
+            var goal = Make(1000 + index, resetAt.AddMinutes(2), Credentials[0], stderr: "fixture configuration failed");
+            var probe = ProviderBudgetHoldSchedules.FormatProbe(new(binding, probeAt, index + 1, "operator")
+            {
+                HoldPlacedAt = At,
+                ResetIntentId = intent
+            });
+            return goal with
+            {
+                Timeline =
+                [
+                    new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, reset, resetAt),
+                    new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, probe, probeAt)
+                ]
+            };
+        }).Prepend(MakeHold(0)));
+    }
+
+    internal async Task RequeueRefusedAttemptAsync()
+    {
+        var goal = MakeHold(0) with { Status = GoalStatus.Active };
+        await SaveAsync([goal with
+        {
+            Tasks = [goal.Tasks[0] with
+            {
+                Status = WorkTaskStatus.Running, LastVerification = null, VerificationHistory = []
+            }],
+            Timeline = []
+        }]);
+        await SaveAsync([goal with
+        {
+            Tasks = [goal.Tasks[0] with { Status = WorkTaskStatus.Assigned }]
+        }]);
+    }
+
+    internal Task CompleteOnAlternateProviderAsync()
+    {
+        var goal = MakeHold(0);
+        var retry = Make(0, At.AddMinutes(2), Credentials[0], success: true);
+        var refused = goal.Tasks[0];
+        var completed = retry.Tasks[0];
+        var alternate = completed.LastDispatch! with
+        {
+            ProviderName = "OpenAI", ModelName = "fixture-alternate", ClaudeCredentialSourceDirectory = null
+        };
+        return SaveAsync([goal with
+        {
+            Tasks = [completed with
+            {
+                VerificationHistory = [refused.LastVerification!, completed.LastVerification!],
+                DispatchHistory = [refused.LastDispatch!, alternate],
+                LastDispatch = alternate
+            }],
+            Timeline = [.. goal.Timeline, .. retry.Timeline]
+        }]);
+    }
+
+    internal Task CompleteOnOriginalBindingAsync() =>
+        SaveAsync([Make(806, At.AddMinutes(3), Credentials[0], success: true)]);
 
     internal int CountDispatchGoals()
     {

@@ -181,14 +181,15 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 
     Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldSeedRowsAsync(CancellationToken cancellationToken = default) =>
-        ListModelFitHistoryAsync(cancellationToken);
-
-    Task<IReadOnlyList<GoalId>> ListProviderHoldSeedMarkerGoalsAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<GoalId>>([]);
+    async Task<ProviderHoldSeedHistory> ReadProviderHoldSeedHistoryAsync(CancellationToken cancellationToken = default) =>
+        new(await ListModelFitHistoryAsync(cancellationToken), [], new HashSet<GoalId>(), []);
 
     Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default);
 }
+
+public sealed record ProviderHoldSeedHistory(IReadOnlyList<ModelFitHistoryRow> Rows,
+    IReadOnlyList<ProviderHoldSeedAttempt> Attempts, IReadOnlySet<GoalId> MarkerGoals,
+    IReadOnlyList<ProviderUsageGoalEvidence> Evidence);
 
 internal static class ConductLoopGoalStatus
 {

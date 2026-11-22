@@ -32,29 +32,29 @@ internal static class ProviderHoldHistoryStartupSeed
         try
         {
             var historyStarted = time.GetTimestamp();
-            var rows = repository.ListProviderHoldSeedRowsAsync().GetAwaiter().GetResult();
+            var history = repository.ReadProviderHoldSeedHistoryAsync().GetAwaiter().GetResult();
             var working = kernel.Goals;
             var existing = kernel.ProviderHoldHistory.Retained;
             var workingIds = working.Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal);
-            var selection = ProviderHoldHistory.SelectSeedEvidence(rows, workingIds);
+            var selection = ProviderHoldHistory.SelectSeedEvidence(history.Rows, history.Attempts, workingIds);
             var ids = selection.Sources.Concat(selection.Dependencies).Select(id => new GoalId(id)).ToHashSet();
-            var markerGoals = selection.Sources.Count > 0 || rows.Count > 0 || working.Count > 0 || existing.Count > 0
-                ? repository.ListProviderHoldSeedMarkerGoalsAsync().GetAwaiter().GetResult().ToHashSet()
-                : [];
+            var markerGoals = history.MarkerGoals;
             ids.UnionWith(markerGoals.Where(id => !workingIds.Contains(id.Value)));
             var candidates = ids.OrderBy(id => id.Value, StringComparer.Ordinal).ToArray();
             var historyMs = Elapsed(historyStarted);
             var evidenceStarted = time.GetTimestamp();
-            var evidence = candidates.Length == 0 ? [] : ProviderHoldSeedEvidenceRead.TryRead(repository, candidates);
+            var discovered = history.Evidence.Select(row => row.GoalId).ToHashSet(StringComparer.Ordinal);
+            var remaining = candidates.Where(id => !discovered.Contains(id.Value)).ToArray();
+            var evidence = remaining.Length == 0 ? [] : ProviderHoldSeedEvidenceRead.TryRead(repository, remaining);
             var evidenceMs = Elapsed(evidenceStarted);
 
             // Missing sparse evidence only grants permission to read the canonical snapshots.
             var requestedIds = candidates.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
             bool RequiresDispatchHistory(string id) => selection.Sources.Contains(id) || selection.Dependencies.Contains(id);
-            var projected = evidence?.Where(row => requestedIds.Contains(row.GoalId) &&
+            var projected = history.Evidence.Concat(evidence ?? []).Where(row => requestedIds.Contains(row.GoalId) &&
                     (row.Tasks.Count != 0 || !RequiresDispatchHistory(row.GoalId)))
                 .GroupBy(row => row.GoalId, StringComparer.Ordinal).Where(group => group.Count() == 1)
-                .ToDictionary(group => group.Key, group => ProviderHoldSeedPruning.Adapt(group.Single()), StringComparer.Ordinal) ?? [];
+                .ToDictionary(group => group.Key, group => ProviderHoldSeedPruning.Adapt(group.Single()), StringComparer.Ordinal);
             var canonical = Load(candidates.Where(id => !projected.ContainsKey(id.Value)).ToArray());
             var inputs = projected.Values.Concat(canonical.Values).ToArray();
             var pruneStarted = time.GetTimestamp();
