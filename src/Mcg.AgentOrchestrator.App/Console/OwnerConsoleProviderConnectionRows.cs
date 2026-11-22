@@ -13,12 +13,17 @@ internal static class OwnerConsoleProviderConnectionRows
     internal const string ReturnKey = "t return";
     internal const string StopWaitingKey = "x stop waiting";
     internal const string ReloadKey = "r reload";
+    internal const string ExpandUnusedKey = "Enter expand Not in use";
+    internal const string CollapseUnusedKey = "Enter collapse Not in use";
     private const string TabNavigation = "Left/Right tab  Esc/q back";
 
     internal static IReadOnlyList<string?> HintActions { get; } =
         Array.AsReadOnly<string?>([null, CheckKey, SignInKey, ReturnKey]);
 
-    internal static string FormatKeyHint(string? action, bool deviceCodeAvailable)
+    internal static string FormatUnusedHeaderHint(bool expanded) =>
+        $"{(expanded ? CollapseUnusedKey : ExpandUnusedKey)}  {ReloadKey}  {BrowseKey}  {TabNavigation}";
+
+    internal static string FormatKeyHint(string? action, bool deviceCodeAvailable, bool unused = false)
     {
         if (action is null) return $"{ReloadKey}  {TabNavigation}";
         var related = action switch
@@ -28,7 +33,8 @@ internal static class OwnerConsoleProviderConnectionRows
             _ => ""
         };
         var check = action == CheckKey ? "" : "  " + CheckKey;
-        return $"{action}{related}{check}  {ReloadKey}  {BrowseKey}  {TabNavigation}";
+        var collapse = unused ? "  " + CollapseUnusedKey : "";
+        return $"{action}{related}{check}{collapse}  {ReloadKey}  {BrowseKey}  {TabNavigation}";
     }
 
     internal static string ProfileId(string id) => JsonEncodedText.Encode(id).ToString();
@@ -49,17 +55,26 @@ internal static class OwnerConsoleProviderConnectionRows
         var report = row.Representative.Report;
         var provider = report.Provider.Equals("unknown", StringComparison.OrdinalIgnoreCase)
             ? ProfileId(report.ProfileId) : report.Provider;
-        var signedIn = row.SignInEvidence?.Result switch
+        return Summary(provider, row.SignInEvidence, $" | used by: {string.Join(", ", row.Roles)}", clock, action);
+    }
+
+    internal static string UnusedSummary(OwnerConsoleProviderConnection connection,
+        ProviderConnectionObservation? evidence, TimeProvider clock, string action) =>
+        Summary($"  {ProfileId(connection.Report.ProfileId)}", evidence, "", clock, action);
+
+    private static string Summary(string label, ProviderConnectionObservation? evidence, string usage, TimeProvider clock, string action)
+    {
+        var signedIn = evidence?.Result switch
         {
             ProviderConnectionResult.SignedIn => "yes",
             ProviderConnectionResult.SignedOut => "no",
             ProviderConnectionResult.Expired => "expired",
             _ => "not checked"
         };
-        var confirmed = row.SignInEvidence?.ObservedAt is { } at
+        var confirmed = evidence?.ObservedAt is { } at
             ? $"{TimeZoneInfo.ConvertTime(at, clock.LocalTimeZone).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} ({Age(clock.GetUtcNow() - at)})"
             : "not checked";
-        return $"{provider} | signed in: {signedIn} | used by: {string.Join(", ", row.Roles)} | confirmed: {confirmed} | {action}";
+        return $"{label} | signed in: {signedIn}{usage} | confirmed: {confirmed} | {action}";
     }
 
     private static string Age(TimeSpan age) => age.TotalMinutes switch
@@ -77,33 +92,46 @@ internal static class OwnerConsoleProviderConnectionRows
         if (row.Members.Count > 1)
             yield return $"  Actions use {ProfileId(row.Representative.Report.ProfileId)}.";
 
-        foreach (var sentence in row.Members.SelectMany(member => member.Report.Observations).Select(Describe).Distinct())
+        foreach (var line in Details(row.Representative, row.Members.SelectMany(member => member.Report.Observations),
+            row.Key.Kind, row.SignInEvidence, canSignIn, canReturn)) yield return line;
+    }
+
+    internal static IEnumerable<string> UnusedDetails(OwnerConsoleProviderConnection connection,
+        ProviderConnectionObservation? evidence, bool canSignIn, bool canReturn) =>
+        Details(connection, connection.Report.Observations, ProviderKind.Unknown, evidence, canSignIn, canReturn);
+
+    private static IEnumerable<string> Details(OwnerConsoleProviderConnection connection,
+        IEnumerable<ProviderConnectionObservation> observations, ProviderKind kind,
+        ProviderConnectionObservation? evidence, bool canSignIn, bool canReturn)
+    {
+        foreach (var sentence in observations.Select(Describe).Distinct())
             yield return $"  {sentence}";
 
-        var hostKey = row.Members.Any(member => HasHostApiKey(member.Report)) &&
-            (row.Representative.SignIn is null || HasHostApiKey(row.Representative.Report));
+        var hostKey = observations.Any(o => o.ExecutionContext == ProviderConnectionContext.Host &&
+            o.AuthenticationMode == ProviderConnectionAuthMode.ApiKey) &&
+            (connection.SignIn is null || HasHostApiKey(connection.Report));
         if (hostKey)
             yield return "  Using API key from the host; sign-in would not change what workers use";
-        else if (row.Representative.SignIn is null)
-            yield return $"  {LaunchCommandExplanation(row)}";
+        else if (connection.SignIn is null)
+            yield return $"  {LaunchCommandExplanation(kind, connection.Report.ProfileId)}";
 
         var next = canReturn ? "Press t after returning from sign-in." :
             hostKey ? "Review the API key in provider configuration, then press c to check." :
-            canSignIn && row.SignInEvidence?.Result is not ProviderConnectionResult.SignedIn
+            canSignIn && evidence?.Result is not ProviderConnectionResult.SignedIn
                 ? "Press s to open the provider's sign-in." : "Press c to check the connection.";
         yield return $"  Next: {next}";
     }
 
-    private static string LaunchCommandExplanation(OwnerConsoleProviderRowModel row)
+    private static string LaunchCommandExplanation(ProviderKind kind, string profileId)
     {
-        var cli = row.Key.Kind switch
+        var cli = kind switch
         {
             ProviderKind.OpenAICodexCli => "codex",
             ProviderKind.AnthropicClaudeCli => "claude",
             ProviderKind.XaiGrokCli => "grok",
             _ => null
         };
-        var profile = ProfileId(row.Representative.Report.ProfileId);
+        var profile = ProfileId(profileId);
         return cli is null
             ? $"The {profile} profile has no native sign-in command. Review its launch command in the worker profile settings."
             : $"The {profile} profile does not launch the provider's own command line. Set its launch command to start with {cli}.";
