@@ -41,7 +41,7 @@ internal static class ReviewerChangedFileScopeBriefSection
         }
 
         var boundedChangedFiles = (changedFiles ?? [])
-            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Where(path => !string.IsNullOrEmpty(path))
             .Take(ReviewerChangedFileScopeMaxLines)
             .ToArray();
         var total = Math.Max(totalChangedFileCount ?? boundedChangedFiles.Length, boundedChangedFiles.Length);
@@ -125,8 +125,9 @@ internal static class ReviewerChangedFileScopeBriefSection
     }
 
     internal static string DisplayPath(string path) =>
-        path.Any(character => char.IsControl(character) || character == '"') ||
-        path.Contains(" → ", StringComparison.Ordinal)
+        ReviewerScopedChange.GetNonUtf8PathQuote(path)?.Replace("`", "\\140", StringComparison.Ordinal) ??
+        (path.Any(character => char.IsControl(character) || character == '"') ||
+         path.Contains(" → ", StringComparison.Ordinal)
             ? JsonSerializer.Serialize(path)
-            : path;
+            : path);
 }

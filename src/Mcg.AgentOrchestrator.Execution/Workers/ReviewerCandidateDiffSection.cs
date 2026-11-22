@@ -93,12 +93,17 @@ internal static class ReviewerCandidateDiffSection
         };
         // Pathspecs change the pool of rename and copy candidates. For paired changes,
         // keep that pool intact and let ReadPatch select the captured source and target.
-        if (change.PreviousPath is null)
+        var singlePath = change.PreviousPath is null;
+        var quotedPath = singlePath ? ReviewerScopedChange.GetNonUtf8PathQuote(change.Path) : null;
+        if (singlePath)
             args.Add("--no-renames");
+        // Process arguments cannot carry non-UTF-8 bytes. Match Git's quoted header in the stream.
+        if (quotedPath is not null)
+            args.AddRange(["--src-prefix=a/", "--dst-prefix=b/"]);
         args.AddRange([$"--diff-filter={change.Status}", scope.MergeBase, scope.CandidateCommit, "--"]);
         // Disabling renames above preserves the captured one-path classification
         // even when path filtering would bring the search below Git's rename limit.
-        if (change.PreviousPath is null)
+        if (singlePath && quotedPath is null)
             args.Add($":(top,literal){change.Path}");
         return args.ToArray();
     }
@@ -173,8 +178,11 @@ internal static class ReviewerCandidateDiffSection
         var path = change?.Path;
         var sourcePrefix = change?.Status == 'C' ? "copy from "u8.ToArray() : "rename from "u8.ToArray();
         var targetPrefix = change?.Status == 'C' ? "copy to "u8.ToArray() : "rename to "u8.ToArray();
-        // Git can quote each UTF-8 path byte as a four-byte octal escape.
-        var pathLineCapacity = previousPath is null ? 0 :
+        var quotedPath = previousPath is null && path is not null ? ReviewerScopedChange.GetNonUtf8PathQuote(path) : null;
+        var exactHeader = quotedPath is null ? null :
+            Encoding.ASCII.GetBytes($"diff --git \"a/{quotedPath[1..]} \"b/{quotedPath[1..]}\n");
+        // Git can quote each path byte as a four-byte octal escape.
+        var pathLineCapacity = previousPath is null ? exactHeader?.Length ?? 0 :
             Math.Max(Encoding.UTF8.GetByteCount(previousPath), Encoding.UTF8.GetByteCount(path!)) * 4 + sourcePrefix.Length + 3;
         var line = new byte[Math.Max(allowance + 1, pathLineCapacity)];
         var length = 0;
@@ -222,10 +230,10 @@ internal static class ReviewerCandidateDiffSection
             if (bytes.StartsWith("diff --git "u8))
             {
                 inHunk = skipHunks = false;
+                matchingPaths = previousPath is null && (exactHeader is null || bytes.SequenceEqual(exactHeader));
                 // Type changes can emit distinct deletion and addition patches for one path.
-                if (previousPath is null && ++fileHeaders > 2)
+                if (matchingPaths && ++fileHeaders > 2)
                     throw new InvalidDataException("Unexpected number of patches for a scoped path.");
-                matchingPaths = previousPath is null;
                 foundMatch |= matchingPaths;
                 matchingSource = false;
                 return true;
@@ -233,7 +241,7 @@ internal static class ReviewerCandidateDiffSection
             // The paired-change stream can contain unrelated renames or copies.
             if (!matchingPaths)
             {
-                if (bytes.StartsWith(sourcePrefix))
+                if (previousPath is not null && bytes.StartsWith(sourcePrefix))
                     matchingSource = IsPath(bytes[sourcePrefix.Length..], previousPath!);
                 else if (matchingSource && bytes.StartsWith(targetPrefix) && IsPath(bytes[targetPrefix.Length..], path!))
                 {
@@ -275,7 +283,7 @@ internal static class ReviewerCandidateDiffSection
 
         static bool IsPath(ReadOnlySpan<byte> bytes, string expected) =>
             bytes.Length > 0 && bytes[^1] == (byte)'\n' &&
-            GitCli.UnquotePath(Encoding.UTF8.GetString(bytes[..^1])).Equals(expected, StringComparison.Ordinal);
+            WorkerGitContext.DecodeReviewerPath(Encoding.UTF8.GetString(bytes[..^1])).Equals(expected, StringComparison.Ordinal);
 
         void AppendPrefix(ReadOnlySpan<byte> bytes)
         {

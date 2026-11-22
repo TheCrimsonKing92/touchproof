@@ -305,6 +305,98 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Contains($"### {path}\n@@ -0,0 +1 @@\n+unicode-path-sentinel", CandidateSection(prompt));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DeliversDistinctHunksForNonUtf8GitPaths(bool typed)
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        const string first = "\"raw-\\200.txt\"";
+        const string second = "\"raw-\\201.txt\"";
+        const string quotedLiteral = "\"\\\"raw-\\\\200.txt\\\"\"";
+        var entries = new[] { (first, "byte-80"), (second, "byte-81"), (quotedLiteral, "literal") };
+        repo.Git("commit", "--allow-empty", "-m", "Base");
+        repo.Git("switch", "-c", "candidate");
+        var records = new StringBuilder();
+        foreach (var (quotedPath, body) in entries)
+        {
+            Write(repo, "blob.txt", body + "\n");
+            var blob = repo.Git("hash-object", "-w", "blob.txt");
+            records.Append($"100644 blob {blob}\t{quotedPath}\n");
+        }
+        var tree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds, records.ToString(), "mktree");
+        Assert.True(tree.Succeeded, tree.Error);
+        var candidate = repo.Git("commit-tree", tree.Output.Trim(), "-p", "HEAD", "-m", "Byte-distinct paths");
+        repo.Git("update-ref", "HEAD", candidate);
+
+        var scope = Capture(repo);
+        var oracle = repo.Git("-c", "core.quotePath=true", "diff", "--name-only", Range(scope))
+            .Split('\n', StringSplitOptions.TrimEntries);
+        Assert.Equal(new[] { quotedLiteral, first, second }, oracle);
+        Assert.Equal(oracle.Length, scope.ChangedFiles.Distinct(StringComparer.Ordinal).Count());
+        var restored = Assert.IsType<ReviewerChangedFileScope>(
+            JsonSerializer.Deserialize<ReviewerChangedFileScope>(JsonSerializer.Serialize(scope)));
+        Assert.Equal(scope.ChangedFiles.ToArray(), restored.ChangedFiles.ToArray());
+
+        repo.Git("config", "diff.noprefix", "true");
+        var prompt = File.ReadAllText(Prepare(repo, NewWork(AgentRole.Reviewer), typed, restored).PromptPath);
+        var section = CandidateSection(prompt);
+        var preview = prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)];
+        var labels = new[] { first, second, JsonSerializer.Serialize(first) };
+        for (var index = 0; index < entries.Length; index++)
+        {
+            Assert.Contains($"- {labels[index]}{Environment.NewLine}", preview);
+            Assert.Contains($"### {labels[index]}\n@@ -0,0 +1 @@\n+{entries[index].Item2}\n", section);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TypedPreparationPreservesLiteralGitPathsAcrossPreviewCap(bool capped)
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        var literalPaths = new[] { "caf\u00e9.txt", "cafe\u0301.txt", " leading.txt", "leading.txt", "dir\\file.txt", "dir/file.txt" };
+        var extraPaths = capped
+            ? Enumerable.Range(0, WorkerGitContext.ReviewerChangedFilePromptMaxFiles).Select(index => $"z-{index:D3}.txt").ToArray()
+            : [];
+        repo.Git("commit", "--allow-empty", "-m", "Base");
+        repo.Git("switch", "-c", "candidate");
+        Write(repo, "blob.txt", "literal-path-sentinel\n");
+        var blob = repo.Git("hash-object", "-w", "blob.txt");
+        // mktree takes path components. Build the dir/file.txt tree separately from the
+        // root path containing a literal backslash. ASCII quotes keep stdin code-page independent.
+        var subtree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds,
+            $"100644 blob {blob}\tfile.txt\n", "mktree");
+        Assert.True(subtree.Succeeded, subtree.Error);
+        var rootPaths = new[] { "\"caf\\303\\251.txt\"", "\"cafe\\314\\201.txt\"", " leading.txt", "leading.txt", "\"dir\\\\file.txt\"" };
+        var treeInput = string.Concat(rootPaths.Concat(extraPaths).Select(path => $"100644 blob {blob}\t{path}\n")) +
+            $"040000 tree {subtree.Output.Trim()}\tdir\n";
+        var tree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds, treeInput, "mktree");
+        Assert.True(tree.Succeeded, tree.Error);
+        var candidate = repo.Git("commit-tree", tree.Output.Trim(), "-p", "HEAD", "-m", "Literal path identities");
+        repo.Git("update-ref", "HEAD", candidate);
+
+        var scope = Capture(repo);
+        var expected = literalPaths.Concat(extraPaths).Order(StringComparer.Ordinal);
+        Assert.Equal(expected, scope.ChangedFiles.Order(StringComparer.Ordinal));
+        var work = NewWork(AgentRole.Reviewer);
+        var dispatch = Prepare(repo, work, typed: true, scope);
+        var prompt = File.ReadAllText(dispatch.PromptPath);
+        var section = CandidateSection(prompt);
+        foreach (var path in literalPaths)
+            Assert.Contains($"### {path}\n@@ -0,0 +1 @@\n+literal-path-sentinel", section);
+
+        if (capped)
+        {
+            var receipt = Assert.IsType<WorkerContextPackageReceipt>(work.Task.LastDispatch?.ContextPackageReceipt);
+            var artifact = Assert.Single(receipt.Sections, row => row.LogicalIdentity == "reviewer/changed-files.v1.json");
+            Assert.NotNull(artifact.MandatoryRelativePath);
+            using var complete = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(repo.Worktree, artifact.MandatoryRelativePath)));
+            Assert.Equal(expected, complete.RootElement.GetProperty("Paths").EnumerateArray().Select(path => path.GetString()));
+        }
+    }
+
     [Fact]
     public void DeliversCapturedDeletionWhenPathFilteringWouldReclassifyItAsARename()
     {

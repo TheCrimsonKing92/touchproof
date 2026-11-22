@@ -2088,20 +2088,24 @@ public static partial class WorkerProfileDispatcher
         int? totalPathCount,
         Action<WorkerContextSemanticSource, string, ContextArtifactKind, byte[], IReadOnlyList<AgentRole>?, ContextDeliveryMode?> addSource)
     {
-        var normalizedPaths = (paths ?? [])
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => path.Trim().Replace('\\', '/').Normalize(NormalizationForm.FormC))
+        // Changed-file paths are literal Git identities. The merge-conflict input keeps
+        // its existing normalization contract.
+        var scopePaths = source == WorkerContextSemanticSource.ReviewerChangedFileScope
+            ? (paths ?? []).Where(path => !string.IsNullOrEmpty(path))
+            : (paths ?? []).Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => path.Trim().Replace('\\', '/').Normalize(NormalizationForm.FormC));
+        var orderedPaths = scopePaths
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        var total = totalPathCount ?? normalizedPaths.Length;
+        var total = totalPathCount ?? orderedPaths.Length;
         var identity = new LogicalArtifactIdentity(logicalIdentity);
-        if (normalizedPaths.Length != total)
+        if (orderedPaths.Length != total)
         {
             throw new WorkerContextPreparationException(
                 identity,
                 "reviewer-scope-incomplete",
-                $"Expected {total} complete path entries but received {normalizedPaths.Length}; a capped preview cannot be used as authoritative scope.");
+                $"Expected {total} complete path entries but received {orderedPaths.Length}; a capped preview cannot be used as authoritative scope.");
         }
         if (total <= WorkerGitContext.ReviewerChangedFilePromptMaxFiles)
         {
@@ -2113,7 +2117,7 @@ public static partial class WorkerProfileDispatcher
             sourceCommand,
             string.IsNullOrWhiteSpace(baseline) ? null : baseline.Trim(),
             total,
-            normalizedPaths));
+            orderedPaths));
         addSource(
             source,
             identity.Value,

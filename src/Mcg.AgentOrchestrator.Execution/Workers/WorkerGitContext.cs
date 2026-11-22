@@ -1,3 +1,4 @@
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -141,7 +142,8 @@ internal sealed class WorkerGitContext
         }
 
         var mergeBase = mergeBaseResult.Output.Trim();
-        var diffResult = GitCli.RunWithUtf8Output(workingDirectory, "--no-lazy-fetch", "diff", "--raw", "-z", "--no-abbrev",
+        // Git quotes non-ASCII bytes and separator characters before the pipe decodes them.
+        var diffResult = GitCli.RunWithUtf8Output(workingDirectory, "--no-lazy-fetch", "-c", "core.quotePath=true", "diff", "--raw", "--no-abbrev",
             "--no-ext-diff", "--no-textconv", "--no-relative", mergeBase, candidateCommit, "--");
         if (!diffResult.Succeeded || diffResult.DrainTimedOut)
         {
@@ -151,27 +153,24 @@ internal sealed class WorkerGitContext
                 diffResult.Error);
         }
 
-        var fields = diffResult.Output.Split('\0');
-        if (fields[^1].Length != 0)
+        var records = diffResult.Output.Split('\n');
+        if (records[^1].Length != 0)
             throw InvalidScopeMetadata();
         var changes = new List<ReviewerScopedChange>();
-        for (var index = 0; index < fields.Length - 1;)
+        foreach (var record in records.AsSpan(0, records.Length - 1))
         {
-            var metadata = fields[index++].Split(' ');
-            if (metadata.Length != 5 || metadata[4].Length == 0 || index >= fields.Length - 1)
+            var fields = record.Split('\t');
+            var metadata = fields[0].Split(' ');
+            if (metadata.Length != 5 || metadata[4].Length == 0)
                 throw InvalidScopeMetadata();
 
             var status = metadata[4][0];
-            var path = fields[index++];
-            string? previousPath = null;
-            if (status is 'R' or 'C')
-            {
-                if (index >= fields.Length - 1)
-                    throw InvalidScopeMetadata();
-                previousPath = path;
-                path = fields[index++];
-            }
+            var paired = status is 'R' or 'C';
+            if (fields.Length != (paired ? 3 : 2) || fields[1].Length == 0 || fields[^1].Length == 0)
+                throw InvalidScopeMetadata();
 
+            var path = DecodeReviewerPath(fields[^1]);
+            var previousPath = paired ? DecodeReviewerPath(fields[1]) : null;
             var oldBlob = ExcerptableBlob(metadata[0].AsSpan(1), metadata[2]);
             var newBlob = ExcerptableBlob(metadata[1], metadata[3]);
             var canHaveTextHunks = oldBlob != newBlob;
@@ -184,6 +183,12 @@ internal sealed class WorkerGitContext
         ReviewerChangedFileScopeException InvalidScopeMetadata() => new(ReviewerScopeUnavailableErrorCode,
             $"Reviewer changed-file scope unavailable because git diff --name-only {integrationBranch}...HEAD failed.",
             "Git returned incomplete changed-file metadata.");
+    }
+
+    internal static string DecodeReviewerPath(string gitPath)
+    {
+        try { return GitCli.UnquotePath(gitPath); }
+        catch (DecoderFallbackException) { return ReviewerScopedChange.EncodeNonUtf8Path(gitPath); }
     }
 
     // Git's SHA-1 and SHA-256 object IDs for the empty blob.

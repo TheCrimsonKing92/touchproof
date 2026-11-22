@@ -22,6 +22,12 @@ public sealed record ReviewerChangedFileScope(
 
 public sealed record ReviewerScopedChange(string Path, string? PreviousPath, char Status, bool CanHaveTextHunks)
 {
+    // Git forbids NUL in a pathname. Reserve it to tag Git's lossless quoted spelling
+    // when a pathname cannot be represented as UTF-8, including in dispatch snapshots.
+    internal static string EncodeNonUtf8Path(string gitQuotedPath) => "\0" + gitQuotedPath;
+
+    internal static string? GetNonUtf8PathQuote(string path) => path.StartsWith('\0') ? path[1..] : null;
+
     public bool CanHaveTextHunks
     {
         // Git can emit deletion and addition hunks for a type change with identical blob IDs.
