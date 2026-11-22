@@ -93,6 +93,99 @@ public sealed class CostGoalOutcomeGateLedgerTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_RechecksRecoveryBeforeFinalizingWithAConcurrentTail()
+    {
+        var goal = FileGoal(window: 2);
+        var initial = Store.Read(goal)!;
+        WriteGate(126, Main);
+        SharedJsonlFile.AppendLines(LedgerPath, Scan().Select(Serialize).Append("""{"kind":"backfill-complete"}"""));
+        var sweep = CreateSweep();
+        Run(sweep);
+        Assert.Empty(Store.Read(goal)!.FinalVerdicts);
+
+        using var recoveryCaptured = new ManualResetEventSlim();
+        using var resumeSweep = new ManualResetEventSlim();
+        var timeout = TimeSpan.FromSeconds(30);
+        sweep.GateLedger.AfterPublicationRecoveryForTests = () =>
+        {
+            recoveryCaptured.Set();
+            Assert.True(resumeSweep.Wait(timeout));
+        };
+        var running = Task.Run(() => Run(sweep));
+        CostGoalOutcomeResult expected;
+        try
+        {
+            Assert.True(recoveryCaptured.Wait(timeout));
+            using (File.Open(LedgerPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                AcceptanceGateOutcomeLedgerPublicationTests.PublishSolo(root, AdoptedAt.AddMinutes(1));
+            Assert.Single(Directory.GetFiles(Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName), "*.jsonl"));
+
+            var later = WriteGate(125, Main);
+            var rows = Scan();
+            Assert.Equal(3, rows.Length);
+            var laterRow = rows.Single(row => row.AttemptId == Path.GetFileName(later));
+            SharedJsonlFile.AppendLine(LedgerPath, Serialize(laterRow));
+            expected = Assert.Single(ScanVerdicts(initial, rows));
+            var wrong = Assert.Single(ScanVerdicts(initial, rows.Where(row => row.RecordedAt > AdoptedAt.AddMinutes(1))));
+            Assert.NotEqual(CostGoalOutcomeState.Pending, wrong.State);
+            Assert.NotEqual(expected.After, wrong.After);
+        }
+        finally
+        {
+            resumeSweep.Set();
+            await running;
+        }
+        Assert.Equal(expected, Assert.Single(Store.Read(goal)!.FinalVerdicts));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Read_RecoversDetachedSoloAfterBackfill(bool resultBeforeMarker)
+    {
+        var goal = new AgentOrchestratorKernel().CreateGoal("Observe a detached solo gate");
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", Main);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(root, AcceptanceGateOutcomeLedger.AttemptRoot), "main",
+            utcNow: () => AdoptedAt.AddMinutes(1), runInline: true);
+        var attempt = coordinator.CreateAttemptForTests(candidate);
+        var prefix = attempt.ResultPath[..^".result.json".Length];
+
+        void WriteLegacyResult()
+        {
+            var plan = new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, attempt.AttemptId, ["lane"], [])
+            {
+                SelectedExecution = CostGoalOutcomeBaselineTests.Selection(12, 17, null)
+            };
+            File.WriteAllText(prefix + AcceptanceGateLanePlan.ArtifactSuffix, plan.ToJson());
+            var result = new AcceptanceVerificationResult(true, false, 0, null, TestResultPaths: [prefix + ".trx"]);
+            AcceptanceAttemptResultRecord.Write(attempt.ResultPath,
+                AcceptanceAttemptResultRecord.ForVerification(result, "branch", Main));
+        }
+
+        if (resultBeforeMarker) WriteLegacyResult();
+        var first = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Empty(first.Read(EvaluatedAt));
+        Assert.Equal("""{"kind":"backfill-complete"}""", File.ReadLines(LedgerPath).Last());
+        Assert.Empty(Scan());
+
+        if (!resultBeforeMarker) WriteLegacyResult();
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
+            coordinator.ObserveExistingAttempt(attempt, candidate).Attempt.Outcome);
+        var expected = Project(Assert.Single(Scan()));
+
+        var successor = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Equal(expected, Assert.Single(successor.Read(EvaluatedAt)));
+        Assert.Equal(1, successor.GateFileReads);
+        WithLockedGateFiles([prefix], () =>
+        {
+            Assert.Equal(expected, Assert.Single(first.Read(EvaluatedAt)));
+            Assert.Equal(0, first.GateFileReads);
+        });
+        Assert.Equal(3, File.ReadAllLines(LedgerPath).Length);
+    }
+
+    [Fact]
     public void Run_BackfillsTwentyGatesOnceAcrossSweepInstances()
     {
         var goal = FileGoal(window: 20);

@@ -355,35 +355,42 @@ internal static class CostGoalOutcomeMetric
         return values.Count % 2 == 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
     }
 
-    private sealed record GatePlanPath(string Prefix, string AttemptId, DateTimeOffset RecordedAt)
+    internal sealed record GatePlanPath(string Prefix, string AttemptId, DateTimeOffset RecordedAt)
     {
         internal string ResultPath => Prefix + ".result.json";
         internal string MetadataPath => Prefix + ".attempt.json";
         internal string LanePlanPath => Prefix + AcceptanceGateLanePlan.ArtifactSuffix;
     }
 
-    private static IEnumerable<GatePlanPath> DiscoverGatePlans(string orchestratorDirectory, DateTimeOffset filedAt,
-        bool requireReadable)
+    internal static IEnumerable<GatePlanPath> DiscoverGatePlans(string orchestratorDirectory, DateTimeOffset filedAt,
+        bool requireReadable, bool includeRunningSolo = false)
     {
         var root = Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.AttemptRoot);
-        return Entries(root, directories: true, requireReadable)
-            .SelectMany(directory => Entries(directory, directories: false, requireReadable))
-            .Select(path =>
+        return Entries(root, suffix: null, requireReadable)
+            .SelectMany(directory =>
             {
-                var prefix = path[..^AcceptanceGateLanePlan.ArtifactSuffix.Length];
+                var plans = Prefixes(directory, AcceptanceGateLanePlan.ArtifactSuffix);
+                return includeRunningSolo
+                    ? plans.Concat(Prefixes(directory, ".attempt.json")).Distinct(StringComparer.Ordinal)
+                    : plans;
+            })
+            .Select(prefix =>
+            {
                 var attemptId = Path.GetFileName(prefix);
                 return AcceptanceGateOutcomeLedger.RecordedAt(attemptId) is { } time && time < filedAt
                     ? new GatePlanPath(prefix, attemptId, time) : null;
             }).OfType<GatePlanPath>().OrderByDescending(path => path.RecordedAt)
             .ThenBy(path => path.Prefix, StringComparer.Ordinal);
+
+        IEnumerable<string> Prefixes(string directory, string suffix) =>
+            Entries(directory, suffix, requireReadable).Select(path => path[..^suffix.Length]);
     }
 
-    private static string[] Entries(string path, bool directories, bool requireReadable)
+    private static string[] Entries(string path, string? suffix, bool requireReadable)
     {
         try
         {
-            return directories ? Directory.GetDirectories(path) :
-                Directory.GetFiles(path, "*" + AcceptanceGateLanePlan.ArtifactSuffix);
+            return suffix is null ? Directory.GetDirectories(path) : Directory.GetFiles(path, "*" + suffix);
         }
         catch (Exception ex) when (IsAbsentOrSkippable(ex, requireReadable)) { return []; }
     }
@@ -403,6 +410,34 @@ internal static class CostGoalOutcomeMetric
         if (metadata is null && File.Exists(metadataPath)) return null;
         var solo = metadata?.RecordedGateProvenance(path.AttemptId);
         if (metadata is not null && solo is null) return null;
+        return ReadSelectedGate(path, result, solo, requireReadable);
+    }
+
+    internal static (bool Waiting, AcceptanceGateOutcomeObservation? Observation) ReadLegacyGate(
+        GatePlanPath path, Action readingGate)
+    {
+        // A detached wrapper can still be running or its result can be awaiting adoption.
+        var metadata = ReadEvidence<ConductorParallelAcceptanceAttempt>(path.MetadataPath, requireReadable: true);
+        if (metadata is { Kind: AcceptanceGateOutcomeLedger.GateKind, Outcome: ConductorParallelAcceptanceAttemptOutcome.Running }
+            && metadata.AttemptId == path.AttemptId)
+            return (true, null);
+
+        var solo = metadata?.RecordedGateProvenance(path.AttemptId);
+        if (solo is null && (metadata is not null || AcceptanceGateOutcomeLedger.EvidenceExists(path.MetadataPath)))
+            return (false, null);
+        if (!AcceptanceGateOutcomeLedger.EvidenceExists(path.LanePlanPath)) return (false, null);
+        // For an owner-written gate, the lane plan can precede the result without any solo metadata.
+        if (!AcceptanceGateOutcomeLedger.EvidenceExists(path.ResultPath)) return (solo is null, null);
+
+        readingGate();
+        var result = ReadEvidence<ConductorParallelAcceptanceRunArtifact>(path.ResultPath, requireReadable: true);
+        return (false, result is not null && AcceptanceGateOutcomeLedger.IsRecordedGate(result)
+            ? ReadSelectedGate(path, result, solo, requireReadable: true) : null);
+    }
+
+    private static AcceptanceGateOutcomeObservation? ReadSelectedGate(GatePlanPath path,
+        ConductorParallelAcceptanceRunArtifact result, SoloGateOutcomeProvenance? solo, bool requireReadable)
+    {
         var selection = requireReadable ? ReadLaneSelection(path) :
             new OwnerConsoleGateLanePlanReader().Read(path.LanePlanPath, path.AttemptId)?.SelectedExecution;
         if (selection is null) return null;

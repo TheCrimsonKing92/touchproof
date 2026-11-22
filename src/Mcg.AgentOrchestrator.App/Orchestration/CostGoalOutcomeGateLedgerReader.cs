@@ -5,15 +5,19 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirectory)
 {
+    private const string LegacyPendingKind = "legacy-pending";
+    private const string LegacyClosedKind = "legacy-closed";
     private readonly string path = Path.GetFullPath(Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.FileName));
     private readonly Dictionary<(string Directory, string AttemptId), RetainedObservation> observations = new();
     private readonly HashSet<(string Directory, string AttemptId)> invalidated = [];
     private readonly HashSet<(string Directory, string AttemptId)> pendingInvalidations = [];
+    private readonly Dictionary<(string Directory, string AttemptId), CostGoalOutcomeMetric.GatePlanPath> legacyGates = new();
     private long offset;
     private bool backfilled;
 
     internal int GateFileReads { get; private set; }
     internal int LinesReadLastRun { get; private set; }
+    internal Action? AfterPublicationRecoveryForTests { get; set; }
 
     internal OutcomeGateObservation[] Read(DateTimeOffset recordedBefore)
     {
@@ -23,8 +27,21 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
             ReadTail();
             if (!backfilled) Backfill();
         }
+        var recoveredThrough = offset;
         AcceptanceGateOutcomeLedger.RecoverPublications(path, ReadReadySoloObservation);
+        AfterPublicationRecoveryForTests?.Invoke();
         ReadTail();
+        if (offset != recoveredThrough || legacyGates.Count != 0)
+        {
+            // A later append can follow a deferred publication made visible after the recovery snapshot.
+            // Reconcile that tail with recovery while subsequent appends are blocked.
+            AcceptanceGateOutcomeLedger.WithBackfillLock(path, () =>
+            {
+                AcceptanceGateOutcomeLedger.RecoverPublications(path, ReadReadySoloObservation);
+                ReadTail();
+                RecoverLegacyGates();
+            });
+        }
         if (!backfilled) Backfill();
         var unreadableInvalidations = ConfirmInvalidations();
 
@@ -61,16 +78,42 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         ReadTail();
         if (backfilled) return;
 
-        var lines = CostGoalOutcomeMetric.ScanRecordedGateRows(orchestratorDirectory, DateTimeOffset.MaxValue,
-            (directory, attemptId) => !observations.ContainsKey((directory, attemptId)) &&
-                !invalidated.Contains((directory, attemptId)),
-            () => GateFileReads++, requireReadable: true)
-            .Select(row => JsonSerializer.Serialize(row, AcceptanceGateOutcomeLedger.Json)).ToList();
+        var lines = new List<string>();
+        foreach (var gate in CostGoalOutcomeMetric.DiscoverGatePlans(orchestratorDirectory, DateTimeOffset.MaxValue,
+            requireReadable: true, includeRunningSolo: true))
+        {
+            var directory = Path.GetFileName(Path.GetDirectoryName(gate.Prefix))!;
+            var key = (directory, gate.AttemptId);
+            if (observations.ContainsKey(key) || invalidated.Contains(key) || legacyGates.ContainsKey(key)) continue;
+            var (waiting, row) = CostGoalOutcomeMetric.ReadLegacyGate(gate, () => GateFileReads++);
+            if (waiting) lines.Add(SerializeLegacyState(LegacyPendingKind, key));
+            else if (row is not null) lines.Add(JsonSerializer.Serialize(row, AcceptanceGateOutcomeLedger.Json));
+        }
         lines.Add(JsonSerializer.Serialize(new { Kind = AcceptanceGateOutcomeLedger.BackfillKind }, AcceptanceGateOutcomeLedger.Json));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         AcceptanceGateOutcomeLedger.AppendCompleteLines(path, lines);
         ReadTail();
     });
+
+    // Only the specific unfinished attempts seen at backfill can require migration reads after the marker.
+    private void RecoverLegacyGates()
+    {
+        if (legacyGates.Count == 0) return;
+        var lines = new List<string>();
+        foreach (var (key, gate) in legacyGates)
+        {
+            var (waiting, row) = CostGoalOutcomeMetric.ReadLegacyGate(gate, () => GateFileReads++);
+            if (!waiting)
+                lines.Add(row is not null ? JsonSerializer.Serialize(row, AcceptanceGateOutcomeLedger.Json)
+                    : SerializeLegacyState(LegacyClosedKind, key));
+        }
+        if (lines.Count == 0) return;
+        AcceptanceGateOutcomeLedger.AppendCompleteLines(path, lines);
+        ReadTail();
+    }
+
+    private static string SerializeLegacyState(string kind, (string Directory, string AttemptId) key) =>
+        JsonSerializer.Serialize(new { Kind = kind, key.Directory, key.AttemptId }, AcceptanceGateOutcomeLedger.Json);
 
     private HashSet<(string Directory, string AttemptId)> ConfirmInvalidations()
     {
@@ -109,6 +152,7 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         pendingInvalidations.Remove(key);
         invalidated.Add(key);
         observations.Remove(key);
+        legacyGates.Remove(key);
     }
 
     private void ReadTail()
@@ -159,6 +203,18 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
             }
             if (!ReadName(json, "directory", out var directory) || !ReadName(json, "attemptId", out var attemptId)) return;
             var key = (directory, attemptId);
+            if (kind.ValueEquals(LegacyPendingKind) && !observations.ContainsKey(key) && !invalidated.Contains(key) &&
+                AcceptanceGateOutcomeLedger.RecordedAt(attemptId) is { } recordedAt)
+            {
+                var prefix = Path.Combine(orchestratorDirectory, AcceptanceGateOutcomeLedger.AttemptRoot, directory, attemptId);
+                legacyGates.TryAdd(key, new(prefix, attemptId, recordedAt));
+                return;
+            }
+            if (kind.ValueEquals(LegacyClosedKind))
+            {
+                legacyGates.Remove(key);
+                return;
+            }
             if (kind.ValueEquals(AcceptanceGateOutcomeLedger.InvalidationKind))
             {
                 if (json.TryGetProperty("requiresStaleMetadata", out var required) && required.ValueKind == JsonValueKind.True)
@@ -174,6 +230,7 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
                 var withoutMetadata = row.HasSoloMetadata
                     ? gate with { StartedAt = gate.RecordedAt, LaunchMainCommit = row.OwnerFallbackLaunchMainCommit } : null;
                 observations.TryAdd(key, new(gate, withoutMetadata));
+                legacyGates.Remove(key);
             }
         }
         catch (JsonException) { /* Ignore malformed complete rows and continue from the next line. */ }
@@ -200,5 +257,6 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
         observations.Clear();
         invalidated.Clear();
         pendingInvalidations.Clear();
+        legacyGates.Clear();
     }
 }

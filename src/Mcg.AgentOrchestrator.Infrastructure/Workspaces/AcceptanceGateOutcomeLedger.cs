@@ -103,19 +103,33 @@ internal static class AcceptanceGateOutcomeLedger
         var file = new FileInfo(path);
         var offset = file.Exists ? file.Length : 0;
         var pending = new PendingPublication(offset, row, RequiresResult: true);
-        return new(path, WritePending(path, pending), pending);
+        try
+        {
+            var directory = Directory.CreateDirectory(PendingDirectoryPath(path)).FullName;
+            var pendingPath = Path.Combine(directory, $"{Guid.NewGuid():N}.jsonl");
+            WritePending(pendingPath, [JsonSerializer.Serialize(pending, Json)]);
+            return new(path, pendingPath, pending);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Keep the intent durable before either writer makes its result visible.
+            var fallbackPath = LegacyPendingPath(path);
+            WithBackfillLock(path, () => WritePending(fallbackPath,
+                ReadPending(fallbackPath).Append(JsonSerializer.Serialize(pending, Json))));
+            return new(path, fallbackPath, pending, SharedPending: true);
+        }
     }
 
     internal static void Publish(PreparedPublication? publication, SoloGateOutcomeProvenance? solo = null)
     {
         if (publication is null) return;
-        var (path, pendingPath, pending) = publication;
+        var (path, pendingPath, pending, sharedPending) = publication;
         try
         {
             WithBackfillLock(path, () =>
             {
                 AppendObservation(path, pending.Offset, WithSoloProvenance(pending.Observation, solo));
-                RemovePending(pendingPath);
+                if (!sharedPending) RemovePending(pendingPath);
             });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -124,20 +138,18 @@ internal static class AcceptanceGateOutcomeLedger
         }
     }
 
-    private static string WritePending(string path, PendingPublication publication)
+    private static void WritePending(string pendingPath, IEnumerable<string> lines)
     {
-        var directory = Directory.CreateDirectory(PendingDirectoryPath(path)).FullName;
-        var pendingPath = Path.Combine(directory, $"{Guid.NewGuid():N}.jsonl");
-        var temporaryPath = pendingPath + ".tmp";
+        var temporaryPath = $"{pendingPath}.{Guid.NewGuid():N}.tmp";
         try
         {
             using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                stream.Write(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(publication, Json) + Environment.NewLine));
+                foreach (var line in lines)
+                    stream.Write(Encoding.UTF8.GetBytes(line + Environment.NewLine));
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temporaryPath, pendingPath);
-            return pendingPath;
+            File.Move(temporaryPath, pendingPath, overwrite: true);
         }
         finally
         {
@@ -149,9 +161,13 @@ internal static class AcceptanceGateOutcomeLedger
         Func<string, AcceptanceGateOutcomeObservation, (bool Ready, AcceptanceGateOutcomeObservation? Observation)> readSoloObservation)
     {
         string[] pendingPaths;
-        try { pendingPaths = Directory.GetFiles(PendingDirectoryPath(path), "*.jsonl"); }
-        catch (DirectoryNotFoundException) { pendingPaths = []; }
-        var legacyPath = Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
+        var pendingDirectory = PendingDirectoryPath(path);
+        try { pendingPaths = Directory.GetFiles(pendingDirectory, "*.jsonl"); }
+        catch (IOException ex) when (ex is DirectoryNotFoundException || File.Exists(pendingDirectory))
+        {
+            pendingPaths = [];
+        }
+        var legacyPath = LegacyPendingPath(path);
         if (EvidenceExists(legacyPath)) pendingPaths = [.. pendingPaths, legacyPath];
         if (pendingPaths.Length == 0) return;
 
@@ -201,7 +217,7 @@ internal static class AcceptanceGateOutcomeLedger
             StartedAt = solo.StartedAt, LaunchMainCommit = solo.LaunchMainCommit, Outcome = solo.Outcome
         };
 
-    private static bool EvidenceExists(string path)
+    internal static bool EvidenceExists(string path)
     {
         try { return (File.GetAttributes(path) & FileAttributes.Directory) == 0; }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
@@ -270,13 +286,16 @@ internal static class AcceptanceGateOutcomeLedger
 
     private static string PendingDirectoryPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingDirectoryName);
 
+    private static string LegacyPendingPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
+
     private static void AppendObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
     {
         if (!HasPublishedObservation(path, offset, row))
             AppendCompleteLines(path, [JsonSerializer.Serialize(row, Json)]);
     }
 
-    internal sealed record PreparedPublication(string LedgerPath, string PendingPath, PendingPublication Pending);
+    internal sealed record PreparedPublication(string LedgerPath, string PendingPath, PendingPublication Pending,
+        bool SharedPending = false);
     internal sealed record PendingPublication(long Offset, AcceptanceGateOutcomeObservation Observation, bool RequiresResult = false);
 
     private static bool HasPublishedObservation(string path, long offset, AcceptanceGateOutcomeObservation row)

@@ -107,6 +107,50 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Publication_PreservesTerminalResultWhenRecoveryDirectoryIsBlocked(bool solo)
+    {
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        var pendingDirectory = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingDirectoryName);
+        var fallback = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
+        const string marker = """{"kind":"backfill-complete"}""";
+        SharedJsonlFile.AppendLine(ledger, marker);
+        File.WriteAllText(pendingDirectory, "Blocks recovery directory creation.");
+
+        string prefix;
+        using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            if (solo)
+            {
+                var (coordinator, attempt) = PublishSolo(root, StartedAt);
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
+                    coordinator.TryReadLatest(attempt.GoalId)!.Outcome);
+                prefix = attempt.ResultPath[..^".result.json".Length];
+            }
+            else
+            {
+                prefix = await PublishOwnedTrain();
+            }
+
+            Assert.True(File.Exists(prefix + ".result.json"));
+            Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
+            Assert.Single(File.ReadAllLines(fallback));
+        }
+
+        var evaluatedAt = StartedAt.AddMinutes(1);
+        var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
+        Assert.Equal(solo ? "Passed" : "Failed", expected.Outcome);
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Equal(prefix, Assert.Single(reader.Read(evaluatedAt)).Id);
+        Assert.Equal(0, reader.GateFileReads);
+        Assert.False(File.Exists(fallback));
+        var lines = File.ReadAllLines(ledger);
+        Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(Assert.Single(lines.Skip(1)),
+            AcceptanceGateOutcomeLedger.Json));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Publication_RecoversAfterInterruptionAtResultVisibility(bool solo)
     {
         var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);

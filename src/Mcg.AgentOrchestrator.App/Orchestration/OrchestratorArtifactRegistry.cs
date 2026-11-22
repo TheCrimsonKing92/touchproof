@@ -43,7 +43,7 @@ internal static class OrchestratorArtifactRegistry
         Source("cost-goal-outcomes", "App/Orchestration/CostGoalOutcomeMetric.cs"),
         Source("cost-goal-outcome-gates.jsonl", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs"),
         Source("cost-goal-outcome-gates.pending.jsonl", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
-            note: "Legacy pending observations are removed after recovery appends them to the ledger."),
+            note: "Legacy and fallback publication intents are removed after recovery."),
         Source("cost-goal-outcome-gate-publications", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
             note: "Per-publication recovery files are removed after the observation is in the ledger."),
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
