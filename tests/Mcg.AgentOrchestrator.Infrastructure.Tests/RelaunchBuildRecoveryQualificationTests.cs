@@ -79,6 +79,33 @@ public sealed class RelaunchBuildRecoveryQualificationTests
             [f.Task.LastDispatch!.DispatchedAt.AddSeconds(1)], f.Clock.UtcNow));
     }
 
+    [Theory]
+    [InlineData(AgentRole.Developer, "worker_build_channel_unavailable", true)]
+    [InlineData(AgentRole.Developer, "worker_build_client_launch_failed", false)]
+    [InlineData(AgentRole.Tester, "worker_build_channel_unavailable", true)]
+    [InlineData(AgentRole.Tester, "worker_build_client_launch_failed", false)]
+    public void BuildDiagnosticAfterHandoff_QualifiesOnlyForChannelUnavailable(
+        AgentRole role, string diagnostic, bool qualifies)
+    {
+        var f = FailedFixture(role);
+        var snapshot = f.Kernel.ExportSnapshot();
+        f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Tasks = goal.Tasks.Select(task => task with
+                {
+                    CompletionBuildEvidence = task.CompletionBuildEvidence! with { Diagnostic = diagnostic },
+                    LastVerification = task.LastVerification! with { StandardOutput = "", StandardError = "" },
+                    VerificationHistory = []
+                }).ToArray()
+            }).ToArray()
+        }, f.Clock);
+
+        Assert.Equal(qualifies, CompletionBuildRelaunchRecoveryQualification.Qualifies(f.Task,
+            [f.Task.LastDispatch!.DispatchedAt.AddSeconds(1)], f.Clock.UtcNow));
+    }
+
     [Fact]
     public void FailedRequestRetainsExistingOperatorHold()
     {
