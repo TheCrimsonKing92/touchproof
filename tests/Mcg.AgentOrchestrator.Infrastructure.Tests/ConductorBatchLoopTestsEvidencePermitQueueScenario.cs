@@ -9,7 +9,7 @@ public sealed class ConductorBatchLoopTestsEvidencePermitQueueScenario : Conduct
     public ConductorBatchLoopTestsEvidencePermitQueueScenario(ITestOutputHelper output) : base(output) { }
 
     [Fact]
-    public void RefusedEvidenceKeepsConductorOwnedPlaceAheadOfLaterGate()
+    public void RefusedEvidenceKeepsConductorOwnedTicketBehindLaterGate()
     {
         var (_, evidenceGoal) = SimpleGoal("Update src/EvidenceQueue.cs");
         var (_, gateGoal) = SimpleGoal("Update src/GateQueue.cs");
@@ -43,18 +43,26 @@ public sealed class ConductorBatchLoopTestsEvidencePermitQueueScenario : Conduct
         scenario.ReconcileEvidence(refusedAgain.Decision);
         scenario.AtMinute(7);
         Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, scenario.Gate().Outcome);
+        var gateKey = $"gate:goal-{gateGoal.Id.Value}";
+        Assert.Equal(new[] { gateKey, scenario.EvidenceKey }, scenario.Queue.Snapshot().Select(ticket => ticket.Key));
 
         scenario.AtMinute(8);
         gateA.Dispose();
         Assert.True(scenario.IsFree(0));
-        var deferredGate = scenario.Gate();
-        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, deferredGate.Outcome);
-        var deferrals = deferredGate.Output.Split('\n').Where(line => line.StartsWith("PERMIT_QUEUE_DEFER ", StringComparison.Ordinal)).ToArray();
+        var deferredEvidence = scenario.Evidence();
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, deferredEvidence.Decision.Attempt.Outcome);
+        var deferrals = deferredEvidence.Output.Split('\n').Where(line => line.StartsWith("PERMIT_QUEUE_DEFER ", StringComparison.Ordinal)).ToArray();
         Assert.NotEmpty(deferrals);
-        Assert.All(deferrals, line => Assert.Contains("head=" + scenario.EvidenceKey, line));
+        Assert.All(deferrals, line => Assert.Contains("head=" + gateKey, line));
         Assert.Equal(0, scenario.GateRunCount);
         Assert.True(scenario.IsFree(0));
         Assert.Equal(0, scenario.EvidenceRunCount);
+        scenario.ReconcileEvidence(deferredEvidence.Decision);
+
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, scenario.Gate().Outcome);
+        Assert.Equal(1, scenario.GateRunCount);
+        Assert.Equal(0, scenario.GateRunPermit);
+        Assert.True(scenario.IsFree(0));
 
         scenario.AtMinute(8.5);
         var passed = scenario.Evidence();
@@ -70,8 +78,8 @@ public sealed class ConductorBatchLoopTestsEvidencePermitQueueScenario : Conduct
         Assert.True(File.Exists(scenario.Queue.TicketPath(scenario.EvidenceKey)));
         scenario.ReconcileEvidence(passed.Decision);
         Assert.False(File.Exists(scenario.Queue.TicketPath(scenario.EvidenceKey)));
-        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, scenario.Gate().Outcome);
-        Assert.Equal(1, scenario.GateRunCount);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, scenario.Gate(branchHeadSha: "branch-2").Outcome);
+        Assert.Equal(2, scenario.GateRunCount);
         Assert.Equal(0, scenario.GateRunPermit);
     }
 
@@ -187,16 +195,17 @@ public sealed class ConductorBatchLoopTestsEvidencePermitQueueScenario : Conduct
         public void ReconcileEvidence(ConductorParallelAcceptanceAttemptDecision decision) =>
             _evidenceCoordinator.MarkReconciled(decision.Attempt);
 
-        public (ConductorParallelAcceptanceAttemptOutcome Outcome, string Output) Gate()
+        public (ConductorParallelAcceptanceAttemptOutcome Outcome, string Output) Gate(string? branchHeadSha = null)
         {
+            var candidate = branchHeadSha is null ? _gateCandidate : _gateCandidate with { BranchHeadSha = branchHeadSha };
             ConductorParallelAcceptanceAttemptDecision? decision = null;
             var output = AsyncLocalConsoleRouter.Capture(() => decision = _gateCoordinator.Evaluate(
-                _gateCandidate, ConductorAutonomyPolicy.Conservative, (candidate, policy, lease, _, _) =>
+                candidate, ConductorAutonomyPolicy.Conservative, (evaluatedCandidate, policy, lease, _, _) =>
                 {
                     Assert.NotNull(lease);
                     GateRunCount++;
                     GateRunPermit = lease.Environment.BuildPermitIndex;
-                    return PassingRun(candidate, policy);
+                    return PassingRun(evaluatedCandidate, policy);
                 }));
             Assert.NotNull(decision);
             _gateCoordinator.MarkReconciled(decision.Attempt);
