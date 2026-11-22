@@ -17,6 +17,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     private OwnerConsoleProviderRowModel[] _rows = [];
     private string[] _notInUse = [];
     private int _selected;
+    private bool _unusedExpanded;
     private long _revision;
     private bool _listed;
     private bool _listing;
@@ -38,16 +39,23 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     }
 
     internal Action? Invalidate { get; set; }
-    private OwnerConsoleProviderRowModel? Selected => _rows.Length == 0 ? null : _rows[_selected];
+    private OwnerConsoleProviderRowModel? SelectedActiveRow => _selected < _rows.Length ? _rows[_selected] : null;
+    private bool UnusedHeaderSelected => _notInUse.Length > 0 && _selected == _rows.Length;
+    private string? SelectedUnusedId => _unusedExpanded && _selected > _rows.Length
+        ? _notInUse[_selected - _rows.Length - 1] : null;
+    private OwnerConsoleProviderConnectionState? SelectedUnusedProfile => SelectedUnusedId is { } id ? FindProfile(id) : null;
+    private int SelectionCount => _rows.Length + (_notInUse.Length == 0 ? 0 : 1) +
+        (_unusedExpanded ? _notInUse.Length : 0);
     internal const string TabTitle = "Provider connections";
     internal const string HelpKeys = BrowseKey + "  " + CheckKey + "  " + SignInKey + "  " + DeviceCodeKey + "  " +
-        ReturnKey + "  " + StopWaitingKey + "  " + ReloadKey;
+        ReturnKey + "  " + StopWaitingKey + "  " + ReloadKey + "  " + ExpandUnusedKey + "  " + CollapseUnusedKey;
     public string Title => TabTitle;
     public bool Editing => false;
-    public int SelectedLine => _selected;
+    public int SelectedLine => _selected + (_rows.Length == 0 && _notInUse.Length > 0 ? 1 : 0);
     public IReadOnlyList<string> Lines => RenderLines().ToArray();
     public string StatusText => _listing ? "Reading provider connections…" :
-        _loadError ?? _target.Notice ?? (Selected is { } row ? RowStatus(row) ?? "" : "");
+        _loadError ?? _target.Notice ?? (SelectedActiveRow is { } row ? RowStatus(row) :
+            SelectedUnusedProfile is { } profile ? CheckStatus(profile) ?? _signIn.StatusText(profile) : null) ?? "";
 
     internal void Target(string? provider) => _target.Set(provider, _listed && !_listing);
 
@@ -55,13 +63,26 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     {
         get
         {
-            if (Selected is not { } row) return FormatKeyHint(null, deviceCodeAvailable: false);
-            var action = PrimaryAction(row);
-            return FormatKeyHint(action, action == SignInKey && _signIn.DeviceCodeAvailable(Representative(row)));
+            if (UnusedHeaderSelected) return FormatUnusedHeaderHint(_unusedExpanded);
+            if (SelectedUnusedProfile is { } unused)
+                return FormatKeyHint(PrimaryAction(unused, unused), _signIn.DeviceCodeAvailable(unused), unused: true);
+            if (SelectedActiveRow is not { } row) return FormatKeyHint(null, deviceCodeAvailable: false);
+            return FormatKeyHint(PrimaryAction(Representative(row), SignInProfile(row)),
+                _signIn.DeviceCodeAvailable(Representative(row)));
         }
     }
 
-    public void Activate() { if (!_listed && _loadError is null) Refresh(); }
+    public void Activate()
+    {
+        if (_unusedExpanded) CollapseUnused();
+        if (!_listed && _loadError is null) Refresh();
+    }
+
+    private void CollapseUnused()
+    {
+        _unusedExpanded = false;
+        _selected = Math.Min(_selected, _rows.Length);
+    }
 
     public void Refresh()
     {
@@ -78,21 +99,31 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         if (_lifetime.IsCancellationRequested || key.IsAlt || key.IsCtrl) return;
         if (key == Key.CursorUp || key == Key.CursorDown)
         {
-            _selected = Math.Clamp(_selected + (key == Key.CursorUp ? -1 : 1), 0, Math.Max(0, _rows.Length - 1));
+            _selected = Math.Clamp(_selected + (key == Key.CursorUp ? -1 : 1), 0, Math.Max(0, SelectionCount - 1));
             ProbeSelectedDeviceCode();
+            return;
+        }
+        if (key == Key.Enter && (UnusedHeaderSelected || SelectedUnusedId is not null))
+        {
+            if (_unusedExpanded) CollapseUnused();
+            else _unusedExpanded = true;
             return;
         }
         var action = char.ToLowerInvariant((char)key.AsRune.Value);
         if (action == 'r') { Refresh(); return; }
-        if (Selected is not { } row) return;
-        var profile = Representative(row);
+        var row = SelectedActiveRow;
+        var profile = row is null ? SelectedUnusedProfile : Representative(row);
+        if (profile is null) return;
         switch (action)
         {
-            case 'c': Check(profile); break;
+            case 'c':
+                Check(profile);
+                if (row is null) _signIn.ProbeDeviceCode(profile);
+                break;
             case 's': _signIn.BeginSignIn(profile, deviceCode: false); break;
             case 'd' when _signIn.DeviceCodeAvailable(profile): _signIn.BeginSignIn(profile, deviceCode: true); break;
-            case 't': _signIn.ReportReturn(SignInProfile(row), stoppedWaiting: false); break;
-            case 'x': _signIn.ReportReturn(SignInProfile(row), stoppedWaiting: true); break;
+            case 't': _signIn.ReportReturn(row is null ? profile : SignInProfile(row), stoppedWaiting: false); break;
+            case 'x': _signIn.ReportReturn(row is null ? profile : SignInProfile(row), stoppedWaiting: true); break;
         }
     }
 
@@ -106,21 +137,39 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
         for (var index = 0; index < _rows.Length; index++)
         {
             var row = _rows[index];
-            var action = PrimaryAction(row);
+            var profile = Representative(row);
+            var signIn = SignInProfile(row);
+            var action = PrimaryAction(profile, signIn);
             yield return Summary(row, _clock, action);
             if (index != _selected) continue;
             foreach (var line in Details(row, action == SignInKey, action == ReturnKey))
                 yield return line;
-            if (_signIn.StatusText(SignInProfile(row)) is { } interaction) yield return $"  Sign-in: {interaction}";
-            if (CheckStatus(Representative(row)) is { } check) yield return $"  {check}";
+            foreach (var line in OperationDetails(profile, signIn)) yield return line;
         }
-        if (_notInUse.Length > 0)
-            yield return $"Not in use ({_notInUse.Length}): {string.Join(", ", _notInUse.Select(ProfileId))}";
+        if (_notInUse.Length == 0) yield break;
+        yield return $"Not in use ({_notInUse.Length}) {(_unusedExpanded ? "[-]" : "[+]")}";
+        if (!_unusedExpanded) yield break;
+        for (var index = 0; index < _notInUse.Length; index++)
+        {
+            var profile = FindProfile(_notInUse[index])!;
+            var action = PrimaryAction(profile, profile);
+            var evidence = OwnerConsoleProviderRowModel.SelectSignInEvidence(profile.Connection.Report.Observations);
+            yield return UnusedSummary(profile.Connection, evidence, _clock, action);
+            if (_rows.Length + 1 + index != _selected) continue;
+            foreach (var line in UnusedDetails(profile.Connection, evidence, action == SignInKey, action == ReturnKey))
+                yield return line;
+            foreach (var line in OperationDetails(profile, profile)) yield return line;
+        }
     }
 
-    private string PrimaryAction(OwnerConsoleProviderRowModel row) =>
-        _signIn.CanReportReturn(SignInProfile(row)) ? ReturnKey :
-        _signIn.CanSignIn(Representative(row)) ? SignInKey : CheckKey;
+    private IEnumerable<string> OperationDetails(OwnerConsoleProviderConnectionState profile, OwnerConsoleProviderConnectionState signIn)
+    {
+        if (_signIn.StatusText(signIn) is { } interaction) yield return $"  Sign-in: {interaction}";
+        if (CheckStatus(profile) is { } check) yield return $"  {check}";
+    }
+
+    private string PrimaryAction(OwnerConsoleProviderConnectionState profile, OwnerConsoleProviderConnectionState signIn) =>
+        _signIn.CanReportReturn(signIn) ? ReturnKey : _signIn.CanSignIn(profile) ? SignInKey : CheckKey;
 
     private OwnerConsoleProviderConnectionState Representative(OwnerConsoleProviderRowModel row) =>
         FindProfile(row.Representative.Report.ProfileId)!;
@@ -132,7 +181,7 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
     private string? RowStatus(OwnerConsoleProviderRowModel row) =>
         CheckStatus(Representative(row)) ?? _signIn.StatusText(SignInProfile(row));
 
-    private void ProbeSelectedDeviceCode() => _signIn.ProbeDeviceCode(Selected is { } row ? Representative(row) : null);
+    private void ProbeSelectedDeviceCode() => _signIn.ProbeDeviceCode(SelectedActiveRow is { } row ? Representative(row) : null);
 
     private async Task LoadAsync(long revision)
     {
@@ -174,13 +223,24 @@ internal sealed class OwnerConsoleProviderConnectionsTab : IOwnerConsoleSettings
 
     private void RebuildRows()
     {
-        var selected = Selected?.Key;
+        var selected = SelectedActiveRow?.Key;
+        var unusedId = SelectedUnusedId;
+        var unusedSelected = UnusedHeaderSelected || unusedId is not null;
         (_rows, _notInUse) = OwnerConsoleProviderRowModel.Build(_profiles.Select(profile => profile.Connection).ToArray(), _roster);
-        _selected = selected is { } key
-            ? Math.Max(0, Array.FindIndex(_rows, row => row.Key.Kind == key.Kind &&
-                StringComparer.OrdinalIgnoreCase.Equals(row.Key.ProfileId, key.ProfileId)))
-            : 0;
-        ProbeSelectedDeviceCode();
+        if (_notInUse.Length == 0) _unusedExpanded = false;
+        if (unusedSelected && _notInUse.Length > 0)
+        {
+            var index = Array.FindIndex(_notInUse, id => StringComparer.OrdinalIgnoreCase.Equals(id, unusedId));
+            _selected = _rows.Length + 1 + index; // A missing child selects the surviving header.
+        }
+        else
+        {
+            _selected = selected is { } key
+                ? Math.Max(0, Array.FindIndex(_rows, row => row.Key.Kind == key.Kind &&
+                    StringComparer.OrdinalIgnoreCase.Equals(row.Key.ProfileId, key.ProfileId)))
+                : 0;
+        }
+        if (!unusedSelected) ProbeSelectedDeviceCode();
     }
 
     private void StartInitialChecks()
