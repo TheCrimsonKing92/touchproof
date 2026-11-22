@@ -448,9 +448,9 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         {
             SelectedExecution = CostGoalOutcomeBaselineTests.Selection(12.345678901, 17, "fixture full gate")
         };
-        AcceptanceGateLanePlanPublisher.Publish(plan, owner.ResultsPrefix, new GoalId(owner.Identity.GoalId),
-            progress => AcceptanceGateProgressReporter.Emit(progress, null, owner, progressOutput ?? TextWriter.Null),
-            TimeProvider.System);
+        AsyncLocalConsoleRouter.CaptureTo(() => AcceptanceGateLanePlanPublisher.Publish(plan, owner.ResultsPrefix,
+            new GoalId(owner.Identity.GoalId), progress => AcceptanceGateProgressReporter.Emit(progress, null, owner),
+            TimeProvider.System), progressOutput ?? TextWriter.Null);
     }
 
     private sealed class FailingProgressOutput : StringWriter
