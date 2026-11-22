@@ -6,27 +6,20 @@ internal static class ReviewerChangedFileScopeBriefSection
     private const int ReviewerChangedFileScopeMaxLines = 120;
 
     internal static void AppendTo(
-        ICollection<TaskBriefSegment> segments, TaskBriefSegment? scope, string? integrationBranch)
-    {
-        if (scope is null)
-            return;
-
-        // Substitution preserves line order/count, so the scope's typed coordinates remain valid.
-        segments.Add(scope with { Lines = RoleRequirementIntegrationBranch.Apply(scope.Lines, integrationBranch) });
-    }
-
-    internal static TaskBriefSegment? Build(
+        ICollection<TaskBriefSegment> segments,
         TaskSpec task,
+        string? integrationBranch,
         IReadOnlyList<string>? changedFiles,
         string? mergeBase,
         int? totalChangedFileCount,
         bool? mergeTreeClean,
         IReadOnlyList<string>? mergeTreeConflictPaths,
-        int? totalMergeTreeConflictPathCount)
+        int? totalMergeTreeConflictPathCount,
+        ReviewerChangedFileScope? pinnedScope)
     {
         if (task.RequiredRole != AgentRole.Reviewer || (changedFiles is null && !mergeTreeClean.HasValue))
         {
-            return null;
+            return;
         }
 
         var boundedChangedFiles = (changedFiles ?? [])
@@ -95,9 +88,12 @@ internal static class ReviewerChangedFileScopeBriefSection
         }
 
         var changedLineCount = lines.Count - firstChangedLineIndex;
-        lines.Add("Independent scope checks must use git diff main...HEAD. Do not use two-dot diffs such as main..HEAD, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence.");
+        lines.Add(pinnedScope is null
+            ? "Independent scope checks must use git diff main...HEAD. Do not use two-dot diffs such as main..HEAD, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence."
+            : $"Scope checks: git diff {pinnedScope.ThreeDotRange}. Use committed changes only.");
         lines.Add(string.Empty);
-        return new TaskBriefSegment(lines,
+        // Substitution preserves line order and the scope's typed coordinates.
+        segments.Add(new TaskBriefSegment(RoleRequirementIntegrationBranch.Apply(lines, integrationBranch),
             ReviewerChangedFiles: new TaskBriefPathList(
                 changedFiles ?? [], total, ReviewerChangedFileScopeMaxLines,
                 firstChangedLineIndex, changedLineCount, lines.Count, 3, "Changed files"),
@@ -105,6 +101,6 @@ internal static class ReviewerChangedFileScopeBriefSection
                 ? new TaskBriefPathList(
                     mergeTreeConflictPaths ?? [], conflictTotal, ReviewerChangedFileScopeMaxLines,
                     firstConflictLineIndex, conflictLineCount, lines.Count, conflictCountLineIndex, "Conflicting paths")
-                : null);
+                : null));
     }
 }

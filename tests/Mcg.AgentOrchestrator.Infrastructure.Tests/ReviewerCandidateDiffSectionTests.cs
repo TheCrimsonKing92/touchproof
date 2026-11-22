@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -92,6 +93,41 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Contains("### z.txt\n@@ -0,0 +1 @@\n+beyond-preview-sentinel", CandidateSection(File.ReadAllText(dispatch.PromptPath)));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(300)]
+    public void TypedReviewerExcerptsUseOnlySpareProviderCapacity(int spareCharacters)
+    {
+        using var repo = DivergentCandidate();
+        var scope = Capture(repo);
+        const int probePadding = 700_000;
+        string? probeBaseline = null;
+        var probe = Prepare(repo, NewWork(AgentRole.Reviewer, probePadding), true, scope, text => probeBaseline = text);
+        Assert.NotNull(probeBaseline);
+        Assert.True(CandidateSection(File.ReadAllText(probe.PromptPath)).Length > spareCharacters);
+
+        var tokenBudget = WorkerPromptInputBudget.InputTokenBudget(
+            "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias, "codex-cli");
+        var baselineLength = tokenBudget * 4 - spareCharacters;
+        var padding = probePadding + baselineLength - probeBaseline.Length;
+        string? baseline = null;
+        var dispatch = Prepare(repo, NewWork(AgentRole.Reviewer, padding), true, scope, text => baseline = text);
+        Assert.NotNull(baseline);
+        Assert.Equal(baselineLength, baseline.Length);
+        var delivered = File.ReadAllText(dispatch.PromptPath);
+        Assert.StartsWith(baseline, delivered);
+        Assert.Contains("## Reviewer Changed-File Scope", delivered);
+        Assert.Contains($"git diff {Range(scope)}", baseline);
+        Assert.InRange(WorkerPromptInputBudget.CountTokens(delivered), 1, tokenBudget);
+        var receipt = Assert.IsType<WorkerContextPackageReceipt>(dispatch.Task.LastDispatch?.ContextPackageReceipt);
+        Assert.Equal(delivered.Length, receipt.RenderedPromptCharacters);
+        Assert.Equal(WorkerPromptInputBudget.CountTokens(delivered), receipt.ModelInputTokenEstimate);
+        if (spareCharacters == 0)
+            Assert.Equal(baseline, delivered);
+        else
+            Assert.Contains("omitted by the excerpt budget", CandidateSection(delivered));
+    }
+
     [Fact]
     public void BoundsEveryFileAndEntireSectionInUtf8AndIdentifiesOmittedPaths()
     {
@@ -178,6 +214,52 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Contains($"git diff {Range(scope)}", section);
     }
 
+    [Fact]
+    public void DeliveredRenamesUseOnlyHunksForTheirExactPathPair()
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        const string oldAlpha = "alpha";
+        const string oldNested = "target/nest ed.txt";
+        const string newAlpha = "target";
+        const string newNested = "alpha/renamed [nested].txt";
+        Directory.CreateDirectory(Path.Combine(repo.Worktree, "target"));
+        var alpha = string.Concat(Enumerable.Range(1, 32).Select(i => $"alpha original line {i:D2}\n"));
+        var nested = string.Concat(Enumerable.Range(1, 32).Select(i => $"nested original line {i:D2}\n"));
+        Write(repo, oldAlpha, alpha);
+        Write(repo, oldNested, nested);
+        Commit(repo, "Base files and directories");
+        repo.Git("switch", "-c", "candidate");
+        File.Delete(Path.Combine(repo.Worktree, oldAlpha));
+        File.Delete(Path.Combine(repo.Worktree, oldNested));
+        Directory.Delete(Path.Combine(repo.Worktree, "target"));
+        Directory.CreateDirectory(Path.Combine(repo.Worktree, "alpha"));
+        Write(repo, newAlpha, alpha + "alpha-only-edit\n");
+        Write(repo, newNested, nested + "nested-only-edit\n");
+        Commit(repo, "Rename across file and directory swaps");
+        var scope = Capture(repo);
+        Assert.Contains(new ReviewerScopedChange(newAlpha, oldAlpha, 'R', true), scope.Changes);
+        Assert.Contains(new ReviewerScopedChange(newNested, oldNested, 'R', true), scope.Changes);
+        var overlappingPatch = repo.Git("--literal-pathspecs", "diff", "--diff-filter=R", Range(scope), "--", newAlpha, oldAlpha);
+        Assert.Contains("+alpha-only-edit", overlappingPatch);
+        Assert.Contains("+nested-only-edit", overlappingPatch);
+
+        var section = CandidateSection(File.ReadAllText(Prepare(repo, NewWork(AgentRole.Reviewer), true, scope).PromptPath));
+        var blocks = section.Split("\n### ", StringSplitOptions.None).Skip(1).ToArray();
+        Assert.Collection(blocks,
+            block =>
+            {
+                Assert.StartsWith($"{oldNested} → {newNested}\n@@ ", block);
+                Assert.Contains("+nested-only-edit", block);
+                Assert.DoesNotContain("+alpha-only-edit", block);
+            },
+            block =>
+            {
+                Assert.StartsWith($"{oldAlpha} → {newAlpha}\n@@ ", block);
+                Assert.Contains("+alpha-only-edit", block);
+                Assert.DoesNotContain("+nested-only-edit", block);
+            });
+    }
+
     [Theory]
     [InlineData("integration")]
     [InlineData("merge-base")]
@@ -234,24 +316,39 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void RestoredPromptKeepsTheRecordedCandidateAndScope()
+    public void RestoredPromptKeepsTheRecordedCandidateAndScopeAfterSnapshotReload()
     {
         using var repo = DivergentCandidate();
         var scope = Capture(repo);
         var work = NewWork(AgentRole.Reviewer);
         var dispatch = Prepare(repo, work, true, scope);
-        Assert.NotNull(dispatch.Task.LastDispatch?.ReviewerScope);
+        var originalSection = CandidateSection(File.ReadAllText(dispatch.PromptPath));
+        var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(JsonSerializer.Serialize(work.Kernel.ExportSnapshot()))!;
         File.Delete(dispatch.PromptPath);
         Write(repo, Alpha, "later-restore-sentinel\n");
-        repo.Git("commit", "-am", "Move candidate before restoration");
+        Write(repo, "later-only.txt", "later-path-sentinel\n");
+        repo.Git("add", "--", Alpha, "later-only.txt");
+        repo.Git("commit", "-m", "Move candidate before restoration");
         repo.Git("update-ref", "refs/heads/trunk", "HEAD");
+        Assert.Empty(Capture(repo).Changes);
 
-        WorkerProfileDispatcher.RestorePreparedContextIfMissing(work.Kernel, work.Goal, work.Task, "trunk",
+        var reloaded = Restore(work, snapshot);
+        var retained = Assert.IsType<ReviewerDispatchScope>(reloaded.Task.LastDispatch?.ReviewerScope);
+        Assert.Equal(scope.IntegrationCommit, retained.Scope.IntegrationCommit);
+        Assert.Equal(scope.MergeBase, retained.Scope.MergeBase);
+        Assert.Equal(scope.CandidateCommit, retained.Scope.CandidateCommit);
+        Assert.Equal(scope.Changes.ToArray(), retained.Scope.Changes.ToArray());
+        Assert.True(retained.MergeTreeClean);
+        Assert.Empty(retained.MergeTreeConflictPaths);
+        Assert.Equal(0, retained.MergeTreeTotalConflictPathCount);
+        WorkerProfileDispatcher.RestorePreparedContextIfMissing(reloaded.Kernel, reloaded.Goal, reloaded.Task, "trunk",
             backlogStorePath: Path.Combine(repo.Repository, "backlog.db"));
         var prompt = File.ReadAllText(dispatch.PromptPath);
         Assert.Contains($"HEAD commit: {scope.CandidateCommit}", prompt);
-        Assert.Contains("+candidate-first", CandidateSection(prompt));
-        Assert.DoesNotContain("later-restore-sentinel", CandidateSection(prompt));
+        Assert.Contains($"git diff {Range(scope)}", prompt);
+        Assert.Contains(Alpha, prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)]);
+        Assert.Contains(Beta, prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)]);
+        Assert.Equal(originalSection, CandidateSection(prompt));
     }
 
     private static InProcessGitFixture DivergentCandidate()
@@ -306,11 +403,11 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         repo.Git("commit", "-m", message);
     }
 
-    private static Work NewWork(AgentRole role)
+    private static Work NewWork(AgentRole role, int objectivePadding = 0)
     {
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Compare the candidate to its integration branch.", role);
-        var goal = kernel.CreateGoal("Review a fixture with candidate changes.", [task]);
+        var goal = kernel.CreateGoal("Review a fixture with candidate changes. " + new string('x', objectivePadding), [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         return new Work(kernel, goal, task);
     }

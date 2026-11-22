@@ -16,6 +16,8 @@ public sealed record ReviewerChangedFileScope(
 
     [JsonIgnore]
     public int TotalChangedFileCount => Changes.Count;
+
+    internal string ThreeDotRange => $"{IntegrationCommit}...{CandidateCommit}";
 }
 
 public sealed record ReviewerScopedChange(string Path, string? PreviousPath, char Status, bool CanHaveTextHunks);

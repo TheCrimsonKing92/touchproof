@@ -13,21 +13,25 @@ internal static class ReviewerCandidateDiffSection
     internal const string Heading = "\n\n## Candidate diff excerpts\n";
     private const string Truncation = "\n[Excerpt truncated]\n";
 
-    internal static string Render(string root, ReviewerChangedFileScope? scope, int? scopedFileCount)
+    internal static string Render(string root, ReviewerChangedFileScope? scope, int? scopedFileCount,
+        int sectionBytes = SectionBytes)
     {
         if ((scope?.TotalChangedFileCount ?? scopedFileCount) is null or 0)
             return string.Empty;
+        sectionBytes = Math.Min(sectionBytes, SectionBytes);
         if (scope is null)
-            return Heading + "Excerpts unavailable because the scope has no captured candidate revisions.\n";
-
-        var inspection = $"Inspect the full candidate diff with `git diff {scope.IntegrationCommit}...{scope.CandidateCommit}`.\n";
-        if (!RevisionsAvailable(root, scope))
-            return Heading + "Excerpts unavailable because a captured commit or merge base is unavailable.\n" + inspection;
+            return Fit(Heading + "Excerpts unavailable because the scope has no captured candidate revisions.\n");
 
         var count = scope.TotalChangedFileCount;
+        var inspection = $"Inspect the full candidate diff with `git diff {scope.ThreeDotRange}`.\n";
         var reservedFooter = ByteCount(Omitted(count)) + ByteCount(inspection);
+        var remaining = sectionBytes - ByteCount(Heading) - reservedFooter;
+        if (remaining < 0)
+            return string.Empty;
+        if (!RevisionsAvailable(root, scope))
+            return Fit(Heading + "Excerpts unavailable because a captured commit or merge base is unavailable.\n" + inspection);
+
         var output = new StringBuilder(Heading);
-        var remaining = SectionBytes - ByteCount(Heading) - reservedFooter;
         var shown = 0;
         var incomplete = false;
         foreach (var change in scope.Changes.OrderBy(change => change.Path, StringComparer.Ordinal))
@@ -40,7 +44,7 @@ internal static class ReviewerCandidateDiffSection
                 break;
 
             var patch = change.CanHaveTextHunks
-                ? ReadGitPatch(root, PatchArguments(scope, change), allowance)
+                ? ReadGitPatch(root, PatchArguments(scope, change), allowance, change)
                 : new Patch(PatchKind.NoHunks);
             var content = patch.Kind switch
             {
@@ -60,6 +64,8 @@ internal static class ReviewerCandidateDiffSection
         if (incomplete || shown < count)
             output.Append(inspection);
         return output.ToString();
+
+        string Fit(string text) => ByteCount(text) <= sectionBytes ? text : string.Empty;
     }
 
     private static string Omitted(int count) =>
@@ -87,7 +93,7 @@ internal static class ReviewerCandidateDiffSection
         // can also match descendants, but these have the opposite added/deleted status.
         var args = new List<string>
         {
-            "--no-lazy-fetch", "--literal-pathspecs", $"--attr-source={scope.CandidateCommit}",
+            "--no-lazy-fetch", "--literal-pathspecs", $"--attr-source={scope.CandidateCommit}", "-c", "core.quotePath=true",
             "diff", "--patch", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative",
             "--output-indicator-new=+", "--output-indicator-old=-", "--output-indicator-context= ",
             $"--diff-filter={change.Status}", scope.MergeBase, scope.CandidateCommit, "--", change.Path,
@@ -97,7 +103,7 @@ internal static class ReviewerCandidateDiffSection
         return args.ToArray();
     }
 
-    internal static Patch ReadGitPatch(string root, string[] args, int allowance)
+    internal static Patch ReadGitPatch(string root, string[] args, int allowance, ReviewerScopedChange? change = null)
     {
         var start = new ProcessStartInfo("git")
         {
@@ -120,7 +126,7 @@ internal static class ReviewerCandidateDiffSection
 
             var stdout = process.StandardOutput.BaseStream;
             var stderr = process.StandardError.BaseStream;
-            var patchRead = StartDrain(() => ReadPatch(stdout, allowance));
+            var patchRead = StartDrain(() => ReadPatch(stdout, allowance, change));
             var errorDrain = StartDrain(() => { stderr.CopyTo(Stream.Null, 4096); return true; });
             var deadline = Environment.TickCount64 + GitCli.DefaultTimeoutMilliseconds;
             try
@@ -160,10 +166,17 @@ internal static class ReviewerCandidateDiffSection
 
     private static int Remaining(long deadline) => (int)Math.Max(0, deadline - Environment.TickCount64);
 
-    internal static Patch ReadPatch(Stream input, int allowance)
+    internal static Patch ReadPatch(Stream input, int allowance, ReviewerScopedChange? change = null)
     {
         var buffer = new byte[4096];
-        var line = new byte[allowance + 1];
+        var previousPath = change?.PreviousPath;
+        var path = change?.Path;
+        var sourcePrefix = change?.Status == 'C' ? "copy from "u8.ToArray() : "rename from "u8.ToArray();
+        var targetPrefix = change?.Status == 'C' ? "copy to "u8.ToArray() : "rename to "u8.ToArray();
+        // Git can quote each UTF-8 path byte as a four-byte octal escape.
+        var pathLineCapacity = previousPath is null ? 0 :
+            Math.Max(Encoding.UTF8.GetByteCount(previousPath), Encoding.UTF8.GetByteCount(path!)) * 4 + sourcePrefix.Length + 3;
+        var line = new byte[Math.Max(allowance + 1, pathLineCapacity)];
         var length = 0;
         var output = new StringBuilder();
         var remaining = allowance - ByteCount(Truncation);
@@ -171,6 +184,9 @@ internal static class ReviewerCandidateDiffSection
         var fileHeaders = 0;
         var inHunk = false;
         var skipHunks = false;
+        var matchingPaths = previousPath is null;
+        var matchingSource = false;
+        var foundMatch = matchingPaths;
         while (true)
         {
             var read = input.Read(buffer);
@@ -178,7 +194,7 @@ internal static class ReviewerCandidateDiffSection
             {
                 if (length != 0 && !ConsumeLine())
                     return new(PatchKind.Truncated, output.Append(Truncation).ToString());
-                return new(patchKind, output.ToString());
+                return foundMatch ? new(patchKind, output.ToString()) : new(PatchKind.Failed);
             }
 
             foreach (var value in buffer.AsSpan(0, read))
@@ -207,8 +223,23 @@ internal static class ReviewerCandidateDiffSection
             {
                 inHunk = skipHunks = false;
                 // Type changes can emit distinct deletion and addition patches for one path.
-                if (++fileHeaders > 2)
+                if (previousPath is null && ++fileHeaders > 2)
                     throw new InvalidDataException("Unexpected number of patches for a scoped path.");
+                matchingPaths = previousPath is null;
+                matchingSource = false;
+                return true;
+            }
+            // A literal pathspec can also select descendants of an old or new rename path.
+            if (!matchingPaths)
+            {
+                if (bytes.StartsWith(sourcePrefix))
+                    matchingSource = IsPath(bytes[sourcePrefix.Length..], previousPath!);
+                else if (matchingSource && bytes.StartsWith(targetPrefix) && IsPath(bytes[targetPrefix.Length..], path!))
+                {
+                    if (foundMatch)
+                        throw new InvalidDataException("Duplicate patch for the scoped path pair.");
+                    foundMatch = matchingPaths = true;
+                }
                 return true;
             }
             if (bytes.StartsWith("Binary files "u8))
@@ -240,6 +271,10 @@ internal static class ReviewerCandidateDiffSection
             remaining -= size;
             return true;
         }
+
+        static bool IsPath(ReadOnlySpan<byte> bytes, string expected) =>
+            bytes.Length > 0 && bytes[^1] == (byte)'\n' &&
+            GitCli.UnquotePath(Encoding.UTF8.GetString(bytes[..^1])).Equals(expected, StringComparison.Ordinal);
 
         void AppendPrefix(ReadOnlySpan<byte> bytes)
         {

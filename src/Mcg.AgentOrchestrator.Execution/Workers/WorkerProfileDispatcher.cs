@@ -258,7 +258,8 @@ public static partial class WorkerProfileDispatcher
             changedExistingTests: changedExistingTests.Entries,
             changedExistingTestsDiagnostic: changedExistingTests.Diagnostic,
             acceptanceManifestPromptPath: WorkerAcceptanceManifestDisplayPath.ForPrompt(targetHome, workingDirectory),
-            integrationBranchPromptName: integrationBranch, roleRequirementStack: ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome), repositoryWorktrees: GoalRepositoryBriefEntries.For(goal, workingDirectory), testCheckCommands: task.RequiredRole == AgentRole.Planner ? ProjectStackResolver.TestCheckCommandsFor(workingDirectory, targetHome) : null, workerToolsAvailable: workerToolsDirectory is not null);
+            integrationBranchPromptName: integrationBranch, roleRequirementStack: ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome), repositoryWorktrees: GoalRepositoryBriefEntries.For(goal, workingDirectory), testCheckCommands: task.RequiredRole == AgentRole.Planner ? ProjectStackResolver.TestCheckCommandsFor(workingDirectory, targetHome) : null, workerToolsAvailable: workerToolsDirectory is not null,
+            pinnedReviewerScope: excerptScope);
         var brief = usesTypedContextPackage
             ? briefSource.ToTaskBrief(string.Empty)
             : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
@@ -266,21 +267,8 @@ public static partial class WorkerProfileDispatcher
             brief = brief with { Content = brief.Content + "\n\n" + linkedBacklogPointer };
         if (!usesTypedContextPackage && preparationFindings.Count > 0)
             brief = brief with { Content = brief.Content + "\n\n" + SubscriptionPreflightPromptProjection.ReadLegacyPromptSection(contextDirectory) };
-        WorkerContextPackageReceipt? contextPackageReceipt = null;
         WorkerContextPackage? contextPackage = null;
-        var candidateDiff = task.RequiredRole == AgentRole.Reviewer
-            ? ReviewerCandidateDiffSection.Render(workingDirectory, excerptScope, reviewerScopeTotalChangedFileCount)
-            : string.Empty;
-        string FinalizePrompt(string prompt)
-        {
-            var baseline = BriefSourceContextSection.Append(prompt, goal.Objective, workingDirectory,
-                targetContext?.HeadCommit, task.RequiredRole);
-            if (task.RequiredRole == AgentRole.Reviewer)
-                observeReviewerPromptBeforeExcerpts?.Invoke(baseline);
-            return baseline + candidateDiff;
-        }
-
-        var packagedBrief = usesTypedContextPackage ? brief : brief with { Content = FinalizePrompt(brief.Content) };
+        var packagedBrief = brief;
         if (usesTypedContextPackage)
         {
             contextPackage = BuildContextPackage(
@@ -314,19 +302,20 @@ public static partial class WorkerProfileDispatcher
                 : task.CriterionRetryFeedback.Count > 0
                     ? WorkerContextDeliveryPolicy.RetryFeedback
                     : WorkerContextDeliveryPolicy.Initial;
-            var renderedPrompt = FinalizePrompt(WorkerContextRenderer.Render(
+            var renderedPrompt = WorkerContextRenderer.Render(
                 briefSource,
                 contextPackage,
                 workingDirectory,
-                deliveryPolicy));
+                deliveryPolicy);
             packagedBrief = briefSource.ToTaskBrief(renderedPrompt);
-            contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(contextPackage, renderedPrompt);
         }
-        TaskBrief budgetedBrief;
+        packagedBrief = packagedBrief with { Content = BriefSourceContextSection.Append(
+            packagedBrief.Content, goal.Objective, workingDirectory, targetContext?.HeadCommit, task.RequiredRole) };
+        WorkerPromptInputBudgetResult budget;
         try
         {
-            budgetedBrief = WorkerPromptInputBudget.Apply(
-                packagedBrief, providerName, modelName, workerProfileName: profile.Name).Brief;
+            budget = WorkerPromptInputBudget.Apply(
+                packagedBrief, providerName, modelName, workerProfileName: profile.Name);
         }
         catch (WorkerPromptInputBudgetExceededException error)
             when (UsesResearchFirstArtifactHandoff(goal, task))
@@ -340,6 +329,17 @@ public static partial class WorkerProfileDispatcher
                 ArtifactTooLargeErrorCode,
                 findings);
         }
+        var budgetedBrief = budget.Brief;
+        if (task.RequiredRole == AgentRole.Reviewer)
+        {
+            observeReviewerPromptBeforeExcerpts?.Invoke(budgetedBrief.Content);
+            // UTF-8 bytes also bound UTF-16 characters, the provider estimator's input unit.
+            var available = WorkerPromptInputBudget.RemainingCharacterCapacity(budget.TokenBudget, budgetedBrief.Content);
+            budgetedBrief = budgetedBrief with { Content = budgetedBrief.Content + ReviewerCandidateDiffSection.Render(
+                workingDirectory, excerptScope, reviewerScopeTotalChangedFileCount, available) };
+        }
+        var contextPackageReceipt = contextPackage is null ? null :
+            WorkerContextPackageBuilder.CreateReceipt(contextPackage, budgetedBrief.Content);
         var findingContractVersion = AgentOutputDirectives.GetFindingContractVersion(briefSource, budgetedBrief);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         var preparation = WorkerDispatchPromptPreparation.Prepare(
