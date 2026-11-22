@@ -153,7 +153,7 @@ public sealed class PostLandingObservationAttributionTests
             (Kernel, Goal) = CreateCompletedGoal();
             Duty = Goal.CriterionEvidenceObligations[0];
             var workspace = OrchestratorWorkspace.ForDirectory(_root);
-            _repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            _repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
             Store = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
             Coordinator = new OperatorIntentCoordinator(Store, utcNow: () => Clock.UtcNow);
         }
