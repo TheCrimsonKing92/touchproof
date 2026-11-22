@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 // A receipt is an immutable observation for one candidate and scope. Rebinding
@@ -12,13 +14,17 @@ public sealed record CriterionEvidenceReceipt(
     string Provenance,
     DateTimeOffset RecordedAt,
     CriterionPostLandingObservation? Observation = null,
-    string? Actor = null)
+    string? Actor = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    OperatorActorKind? ObservationActorKind = null)
 {
     internal bool IsWellFormed =>
         Owner is CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Acceptance &&
         !string.IsNullOrWhiteSpace(CandidateSha) && !string.IsNullOrWhiteSpace(ReceiptId) &&
         !string.IsNullOrWhiteSpace(Scope) && !string.IsNullOrWhiteSpace(Detail) &&
         !string.IsNullOrWhiteSpace(Provenance) &&
+        (ObservationActorKind is null ||
+         Observation is not null && ObservationActorKind is (OperatorActorKind.Human or OperatorActorKind.Agent)) &&
         (Owner != CriterionEvidenceOwner.Acceptance || Scope == CriterionEvidenceScopes.FullAcceptanceGate);
 
     internal bool HasSamePayload(CriterionEvidenceReceipt other) =>
@@ -27,5 +33,8 @@ public sealed record CriterionEvidenceReceipt(
         string.Equals(ReceiptId, other.ReceiptId, StringComparison.Ordinal) &&
         string.Equals(Scope, other.Scope, StringComparison.Ordinal) &&
         string.Equals(Detail, other.Detail, StringComparison.Ordinal) &&
-        Observation == other.Observation && Actor == other.Actor;
+        Observation == other.Observation && Actor == other.Actor &&
+        (ObservationActorKind == other.ObservationActorKind ||
+         Observation is not null &&
+         (ObservationActorKind ?? OperatorActorKind.Human) == (other.ObservationActorKind ?? OperatorActorKind.Human));
 }

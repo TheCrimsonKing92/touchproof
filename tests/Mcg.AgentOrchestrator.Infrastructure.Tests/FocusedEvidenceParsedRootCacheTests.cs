@@ -19,7 +19,7 @@ public sealed class FocusedEvidenceParsedRootCacheTests
         var root = FocusedEvidenceRequestResolver.ParseCSharpRoot(alpha);
         Assert.Same(root, FocusedEvidenceRequestResolver.ParseCSharpRoot(alpha));
         var alias = Path.Combine(Path.GetDirectoryName(alpha)!, ".", Path.GetFileName(alpha));
-        Assert.Same(root, FocusedEvidenceRequestResolver.ParseCSharpRoot(alias));
+        Assert.Equal(alias, FocusedEvidenceRequestResolver.ParseCSharpRoot(alias).SyntaxTree.FilePath);
         Assert.Equal(3, parses.Total);
         foreach (var path in new[] { alpha, beta, empty }) Assert.Equal(1, parses.CountFor(path));
     }
@@ -68,8 +68,8 @@ public sealed class FocusedEvidenceParsedRootCacheTests
         Assert.NotSame(original, refreshed);
         Assert.Equal(original.ToFullString(), refreshed.ToFullString());
         Assert.Equal(1, parses.CountFor(alpha));
-        Assert.Equal(2, parses.CountFor(beta));
-        Assert.Equal(3, parses.Total);
+        Assert.Equal(1, parses.CountFor(beta));
+        Assert.Equal(2, parses.Total);
     }
 
     [Fact]
@@ -291,6 +291,7 @@ public sealed class FocusedEvidenceParsedRootCacheTests
 
     private sealed class SourceTree : IDisposable
     {
+        private readonly string _marker = "\n// fixture " + Guid.NewGuid().ToString("N");
         internal const string Project = "tests/P/P.csproj";
         internal string Root { get; } = InfrastructureTestSupport.CreateTempDirectory();
 
@@ -298,7 +299,7 @@ public sealed class FocusedEvidenceParsedRootCacheTests
         {
             var path = Path.Combine(Root, "tests", "P", relative.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, source);
+            File.WriteAllText(path, source + _marker);
             return path;
         }
 
