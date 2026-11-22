@@ -348,9 +348,25 @@ public sealed class CliExecutorScreenCommandTests
 
         Assert.Equal("SCREEN idle reason=slot-busy slot=1 attempt=external class=FocusedEvidence" + Environment.NewLine,
             output.ToString());
-        Assert.Empty(occupancy.ClaimAttempts);
+        Assert.Equal((1, (int?)1, false), Assert.Single(occupancy.ClaimAttempts));
         Assert.Empty(fixture.Executor.Requests);
         Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Fact]
+    public async Task NamedExecutorRunsWhenOnlyALiveMarkerRemains()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        RemoteExecutorOccupancy.Claim(fixture.Root, fixture.Entry.Id, "previous", 1, RemoteExecutorClaimClass.FocusedEvidence);
+
+        Assert.Equal(0, await Run(fixture, WriteConfiguration(fixture, "shadow"), [fixture.Candidate], output, error,
+            ["executor-screen", "--executor", "laptop"]));
+
+        Assert.StartsWith("SCREEN goal=", output.ToString());
+        Assert.Single(fixture.Executor.Requests);
+        Assert.Equal("previous.slot-1", Assert.Single(RemoteExecutorOccupancy.LiveMarkers(fixture.Root, fixture.Entry.Id)).Attempt);
     }
 
     [Theory]

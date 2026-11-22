@@ -140,7 +140,8 @@ internal static class ExecutorScreeningRunner
         RemoteLaneExecutorEntry entry, ExecutorScreeningLaneSelection selection,
         RemoteLaneExecutorConfiguration configuration, IRemoteLaneExecutor transport,
         string occupancyRoot, string receiptPath, string receiptId, TimeSpan laneTimeout,
-        TimeProvider clock, TimeSpan pollInterval, CancellationToken token = default, IExecutorSlotOccupancy? occupancy = null)
+        TimeProvider clock, TimeSpan pollInterval, CancellationToken token = default, IExecutorSlotOccupancy? occupancy = null,
+        Func<ExecutorScreeningRefusal?>? retryExpiry = null)
     {
         if (!entry.AdmissionEnabled) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
         token.ThrowIfCancellationRequested();
@@ -153,7 +154,7 @@ internal static class ExecutorScreeningRunner
         var running = new List<(AcceptanceTestLane Lane, Task<ExecutorScreeningLaneOutcome> Work)>();
         try
         {
-            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token) is { } refusal)
+            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, retryExpiry) is { } refusal)
                 return new(refusal);
             var unreachable = false;
             while (pending.Count > 0 || running.Count > 0)
@@ -258,7 +259,8 @@ internal static class ExecutorScreeningRunner
         IRemoteLaneExecutor transport, string occupancyRoot, string receiptPath, string receiptId,
         TimeProvider clock, TimeSpan pollInterval, IExecutorWholeGateTrialSampler? sampler,
         Func<DateTimeOffset, ExecutorWholeGateTrialLocalAttempt?>? readLocalAttempt, CancellationToken token = default,
-        Func<CancellationToken, Task<bool>>? probe = null, int? maxLanes = null, IExecutorSlotOccupancy? occupancy = null)
+        Func<CancellationToken, Task<bool>>? probe = null, int? maxLanes = null, IExecutorSlotOccupancy? occupancy = null,
+        Func<ExecutorScreeningRefusal?>? retryExpiry = null)
     {
         if (!entry.AdmissionEnabled) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.AdmissionDisabled));
         if (plan.Lanes.Count == 0) return new(new ExecutorScreeningRefusal(ExecutorScreeningRefusalCause.NoLanes));
@@ -268,7 +270,7 @@ internal static class ExecutorScreeningRunner
         var claims = new List<(int Slot, IDisposable Handle)>();
         try
         {
-            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token) is { } refusal)
+            if (TryClaimSlots(entry, occupancyRoot, attempt, claims, occupancy, token, retryExpiry) is { } refusal)
                 return new(refusal);
             return new(await RunClaimedAsync().ConfigureAwait(false));
         }
@@ -507,25 +509,24 @@ internal static class ExecutorScreeningRunner
         AcceptanceCheckResult? Check = null);
 
     private static ExecutorScreeningRefusal? TryClaimSlots(RemoteLaneExecutorEntry entry, string root, string attempt,
-        List<(int Slot, IDisposable Handle)> claims, IExecutorSlotOccupancy occupancy, CancellationToken token)
+        List<(int Slot, IDisposable Handle)> claims, IExecutorSlotOccupancy occupancy, CancellationToken token,
+        Func<ExecutorScreeningRefusal?>? retryExpiry)
     {
-        // Check live owners before taking any locks, then take higher slots before slot zero.
-        var live = ReadHolders();
-        for (var slot = entry.Slots - 1; slot >= 0; slot--)
-        {
-            if (live.Contains(slot)) return Busy(slot, live[slot]);
-        }
+        // Take higher slots before slot zero so a busy slot 1 never leaves slot 0 held.
         for (var slot = entry.Slots - 1; slot >= 0; slot--)
         {
             token.ThrowIfCancellationRequested();
+            if (retryExpiry?.Invoke() is { } expired) return expired;
             var claim = occupancy.TryClaimExclusive(root, entry.Id, slot);
             if (claim is null) return Busy(slot, ReadHolders()[slot]);
             claims.Add((slot, claim));
         }
         token.ThrowIfCancellationRequested();
+        if (retryExpiry?.Invoke() is { } expiredAfterLocking) return expiredAfterLocking;
         foreach (var (slot, _) in claims)
             occupancy.Claim(root, entry.Id, attempt, slot, RemoteExecutorClaimClass.Screening);
-        return null;
+        token.ThrowIfCancellationRequested();
+        return retryExpiry?.Invoke();
 
         ILookup<int, (string Attempt, string? Class)> ReadHolders() =>
             occupancy.LiveMarkers(root, entry.Id)

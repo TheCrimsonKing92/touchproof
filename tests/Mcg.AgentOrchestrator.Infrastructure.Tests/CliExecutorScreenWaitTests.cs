@@ -7,12 +7,14 @@ public sealed class CliExecutorScreenWaitTests
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
 
-    [Fact]
-    public async Task WholeGateWaitsTwoPollsWithoutEverTakingSlotZeroWhileSlotOneIsBusy()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WholeGateWaitsTwoPollsWithoutEverTakingSlotZeroWhileSlotOneIsBusy(bool busyMarkerVisible)
     {
         using var fixture = new Fixture();
         using var output = new StringWriter();
-        var occupancy = new SlotOccupancy { BusySlot = 1 };
+        var occupancy = new SlotOccupancy { BusySlot = 1, BusyMarkerVisible = busyMarkerVisible };
         var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
         var delays = new List<TimeSpan>();
         int[] heldOnSubmit = [];
@@ -48,6 +50,128 @@ public sealed class CliExecutorScreenWaitTests
         Assert.StartsWith("TRIAL ", output.ToString());
         Assert.Empty(occupancy.HeldSlots);
         Assert.Empty(occupancy.Markers);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeadlineDuringFinalRetryLockReleasesAllSlotsWithoutExecuting(bool wholeGate)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+        var occupancy = new SlotOccupancy
+        {
+            BusySlot = 1,
+            BusyMarkerVisible = true,
+            AfterLockAcquired = slot =>
+            {
+                if (slot == 0) clock.Advance(TimeSpan.FromMilliseconds(500));
+            }
+        };
+        var delays = new List<TimeSpan>();
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(wholeGate, "0.025"), (interval, _) =>
+        {
+            delays.Add(interval);
+            clock.Advance(interval);
+            occupancy.BusySlot = null;
+            return Task.CompletedTask;
+        });
+
+        Assert.Equal(0, exit);
+        Assert.Equal(PollInterval, Assert.Single(delays));
+        Assert.Equal(new[] { (1, (int?)1, false), (1, (int?)null, true), (0, (int?)null, true) }, occupancy.ClaimAttempts);
+        Assert.Equal("SCREEN idle reason=slot-busy slot=1 attempt=external class=FocusedEvidence waited=0.025" +
+            Environment.NewLine, output.ToString());
+        Assert.Empty(occupancy.HeldSlots);
+        Assert.Empty(occupancy.Markers);
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecutorDisabledDuringPollStopsBeforeAnyRetryClaim(bool wholeGate)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        var config = CliExecutorScreenCommandTests.WriteConfiguration(fixture, "shadow");
+        var occupancy = new SlotOccupancy { BusySlot = 1 };
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+        var polls = 0;
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(wholeGate, "1"), (interval, _) =>
+        {
+            Assert.Equal(1, ++polls);
+            clock.Advance(interval);
+            occupancy.BusySlot = null;
+            File.WriteAllText(config, File.ReadAllText(config).Replace("\"slots\":2", "\"slots\":2,\"enabled\":false", StringComparison.Ordinal));
+            return Task.CompletedTask;
+        }, configurationPath: config);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(1, polls);
+        Assert.Equal((1, (int?)1, false), Assert.Single(occupancy.ClaimAttempts));
+        Assert.Equal("SCREEN idle reason=admission-disabled" + Environment.NewLine, output.ToString());
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Fact]
+    public async Task WholeGatePlanBecomingEmptyDuringPollStopsBeforeAnyRetryClaim()
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        var occupancy = new SlotOccupancy { BusySlot = 1 };
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+        var plan = TrialPlan();
+        var reads = 0;
+
+        var exit = await Run(fixture, occupancy, clock, output, WaitArgs(true, "1"), (interval, _) =>
+        {
+            clock.Advance(interval);
+            occupancy.BusySlot = null;
+            plan = plan with { Lanes = [] };
+            return Task.CompletedTask;
+        }, trialPlanSource: _ =>
+        {
+            reads++;
+            return plan;
+        });
+
+        Assert.Equal(0, exit);
+        Assert.Equal(2, reads);
+        Assert.Equal((1, (int?)1, false), Assert.Single(occupancy.ClaimAttempts));
+        Assert.Equal("SCREEN idle reason=no-lanes" + Environment.NewLine, output.ToString());
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+    }
+
+    [Theory]
+    [InlineData(false, "SCREEN")]
+    [InlineData(true, "TRIAL")]
+    public async Task LockPathFaultReportsErrorWithoutPollingOrLeavingClaims(bool wholeGate, string prefix)
+    {
+        using var fixture = new Fixture();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var folder = RemoteExecutorOccupancy.Folder(fixture.Root, fixture.Entry.Id);
+        Directory.CreateDirectory(Path.Combine(folder, "claim.lock"));
+        var clock = new MonotonicClock(fixture.Clock.GetUtcNow());
+
+        var exit = await Run(fixture, null, clock, output, WaitArgs(wholeGate, "1"),
+            (_, _) => throw new InvalidOperationException("A lock fault must never poll."), error: error);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(output.ToString());
+        Assert.StartsWith(prefix + " error=", error.ToString());
+        using var released = RemoteExecutorOccupancy.TryClaimExclusive(fixture.Root, fixture.Entry.Id, 1);
+        Assert.NotNull(released);
+        Assert.Empty(RemoteExecutorOccupancy.LiveMarkers(fixture.Root, fixture.Entry.Id));
+        Assert.Empty(fixture.Executor.Requests);
+        Assert.False(File.Exists(fixture.ReceiptPath));
     }
 
     [Theory]
@@ -104,21 +228,30 @@ public sealed class CliExecutorScreenWaitTests
 
         Assert.Equal(0, exit);
         Assert.Equal(1, delays);
-        Assert.Empty(occupancy.ClaimAttempts);
+        Assert.Equal((1, (int?)1, false), Assert.Single(occupancy.ClaimAttempts));
         Assert.Empty(occupancy.HeldSlots);
         Assert.Empty(fixture.Executor.Requests);
         Assert.Equal("", output.ToString());
         Assert.False(File.Exists(fixture.ReceiptPath));
     }
 
-    private static Task<int> Run(Fixture fixture, SlotOccupancy occupancy, TimeProvider clock, TextWriter output,
-        string[] args, Func<TimeSpan, CancellationToken, Task> delay, CancellationToken token = default) =>
+    private static string[] WaitArgs(bool wholeGate, string minutes) => wholeGate
+        ? ["--whole-gate", "--executor", "laptop", "--wait", minutes]
+        : ["--executor", "laptop", "--wait", minutes];
+
+    private static ExecutorWholeGateTrialPlan TrialPlan() => new(
+        [new("A", ExecutorScreeningPlanner.Project, "A", [], 1, TimeSpan.FromMinutes(1))],
+        [], AcceptanceDeclaredTestSettings.Empty);
+
+    private static Task<int> Run(Fixture fixture, IExecutorSlotOccupancy? occupancy, TimeProvider clock, TextWriter output,
+        string[] args, Func<TimeSpan, CancellationToken, Task> delay, CancellationToken token = default,
+        string? configurationPath = null, Func<string, ExecutorWholeGateTrialPlan>? trialPlanSource = null,
+        TextWriter? error = null) =>
         CliExecutorScreenCommand.RunAsync(["executor-screen", ..args],
-            CliExecutorScreenCommandTests.WriteConfiguration(fixture, "shadow"), () => [fixture.Candidate],
+            configurationPath ?? CliExecutorScreenCommandTests.WriteConfiguration(fixture, "shadow"), () => [fixture.Candidate],
             _ => (new[] { new AcceptanceTestLane("A", "A") }, TimeSpan.FromMinutes(1)),
-            (_, _, _) => fixture.Executor, clock, PollInterval, fixture.Root, fixture.ReceiptPath, output, TextWriter.Null,
-            trialPlanSource: _ => new([new("A", ExecutorScreeningPlanner.Project, "A", [], 1, TimeSpan.FromMinutes(1))],
-                [], AcceptanceDeclaredTestSettings.Empty),
+            (_, _, _) => fixture.Executor, clock, PollInterval, fixture.Root, fixture.ReceiptPath, output, error ?? TextWriter.Null,
+            trialPlanSource: trialPlanSource ?? (_ => TrialPlan()),
             token: token, passedGateSource: _ => [new(fixture.Candidate.GoalId, "passed", fixture.Candidate.Commit,
                 fixture.Candidate.MainSha, fixture.Clock.GetUtcNow())],
             trialCheckout: _ => (fixture.Candidate, null), occupancy: occupancy, delay: delay);
@@ -138,6 +271,7 @@ public sealed class CliExecutorScreenWaitTests
         internal int? BusySlot { get; set; }
         internal bool BusyMarkerVisible { get; init; }
         internal bool RevealBusyMarkerOnFailedClaim { get; init; }
+        internal Action<int>? AfterLockAcquired { get; init; }
         internal List<(int Slot, int? BusySlot, bool Acquired)> ClaimAttempts { get; } = [];
         internal HashSet<int> HeldSlots { get; } = [];
         internal Dictionary<int, (string Attempt, string? Class)> Markers { get; } = [];
@@ -147,6 +281,7 @@ public sealed class CliExecutorScreenWaitTests
             var acquired = slot != BusySlot && HeldSlots.Add(slot);
             ClaimAttempts.Add((slot, BusySlot, acquired));
             if (slot == BusySlot) _includeMarkerOnNextRead = RevealBusyMarkerOnFailedClaim;
+            if (acquired) AfterLockAcquired?.Invoke(slot);
             return acquired ? new ClaimHandle(HeldSlots, slot) : null;
         }
 
