@@ -10,6 +10,8 @@ public sealed class GoalLeanTickReloadTests
     {
         using var fixture = new GoalTaskHistoryTestFixture();
         var seed = GoalTaskHistoryTestFixture.Snapshot(entries: 2);
+        // Match the domain export for terminal tasks with no build invocations.
+        seed = seed with { Tasks = seed.Tasks.Select(task => task with { WorkerBuildInvocations = [] }).ToArray() };
         await fixture.Repository.SaveGoalSnapshotsAsync([seed]);
         var archiveJson = " \r\n" + fixture.RawGoal(seed.Id).Replace(
             "History fixture", "café \\u2603", StringComparison.Ordinal) + "\n";
