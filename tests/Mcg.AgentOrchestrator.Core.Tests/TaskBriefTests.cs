@@ -2160,6 +2160,47 @@ public sealed class TaskBriefTests
     Assert.True(apiBrief.Length > fileAccessBrief.Length);
 }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Planner)]
+    public void BuildTaskBrief_WithWorkerTools_KeepsFileAccessBudget(AgentRole role)
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Update the documentation.", role);
+        var research = new TaskSpec(TaskId.New(), "Inspect the existing behavior.", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Document the existing behavior.", [research, task]);
+        for (var index = 0; index < 6; index++)
+        {
+            kernel.RecordTaskNote(goal.Id, task.Id, $"budget-note-{index} {new string('n', 110)}");
+        }
+
+        var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(role, usesFileAccessContext: true);
+        const string branch = "goal/prompt-budget";
+        const int headroom = 20;
+        // Give each role the same small amount of space before enabling the fixed wt section.
+        var baselineLength = Render(branch, workerToolsAvailable: false).Length;
+        var padding = budget - headroom - baselineLength;
+        Assert.True(padding >= 0, $"{role} fixture has {baselineLength} characters before padding and needs {headroom} free within {budget}.");
+        var paddedBranch = branch + new string('x', padding);
+        var withoutTools = Render(paddedBranch, workerToolsAvailable: false);
+        Assert.Equal(budget - headroom, withoutTools.Length);
+        Assert.Contains("budget-note-0", withoutTools, StringComparison.Ordinal);
+
+        var withTools = Render(paddedBranch, workerToolsAvailable: true);
+        Assert.Contains("### Worker tools", withTools, StringComparison.Ordinal);
+        Assert.True(withTools.Length <= budget, $"{role} file-access brief has {withTools.Length} characters, ceiling is {budget}.");
+        Assert.DoesNotContain("budget-note-0", withTools, StringComparison.Ordinal);
+
+        string Render(string branchName, bool workerToolsAvailable) => kernel.BuildTaskBriefSource(
+            goal.Id,
+            task.Id,
+            workingDirectory: "C:\\repo",
+            contextDirectory: "C:\\repo\\.orchestrator-context\\goal",
+            targetBranchName: branchName,
+            measureWithTypedSourceBoundaries: true,
+            workerToolsAvailable: workerToolsAvailable).ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: true).Content;
+    }
+
     [Xunit.Fact(DisplayName = "SdlcRoleRequirements_researcher_brief_includes_no_modify_repository_line")]
     public void SdlcRoleRequirementsResearcherBriefIncludesNoModifyRepositoryLine()
 {

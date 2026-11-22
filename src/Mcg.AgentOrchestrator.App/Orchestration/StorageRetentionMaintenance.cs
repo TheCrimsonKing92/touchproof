@@ -65,7 +65,7 @@ internal static partial class StorageRetentionMaintenance
     internal const int MtpResultMaxRetainedDirectories = 100;
     internal const int MtpUnattributedReclaimsPerSweep = 400;
 
-    [GeneratedRegex("^(?<dispatch>(?<goal>[0-9a-f]{8})-(?<task>[0-9a-f]{8})-[0-9]{14})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^(?<dispatch>(?<goal>[0-9a-f]{8})-(?<task>[0-9a-f]{8})-[0-9]{14}(?:-[0-9a-f]{32}(?=\\.))?)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DispatchArtifactNameRegex();
 
     [GeneratedRegex("^p[0-9A-Fa-f]+$", RegexOptions.CultureInvariant)]
