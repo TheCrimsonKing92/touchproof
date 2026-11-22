@@ -46,9 +46,9 @@ public sealed class RemoteExecutorOccupancyCensusTests : IDisposable
         var start = RemoteExecutorOccupancy.DefaultStartTime(Environment.ProcessId)!.Value;
         File.WriteAllText(Path.Combine(Folder("one"), "abc.json"), JsonSerializer.Serialize(new { OwnerPid = Environment.ProcessId, OwnerStartUtc = start }));
         Assert.True(RemoteExecutorOccupancy.IsOccupied(_root, "one"));
+        Assert.Equal(1, Assert.Single(RemoteExecutorOccupancyCensus.Take(_root, [("one", "full")])).Unclassified);
         Assert.False(RemoteExecutorOccupancy.IsOccupied(_root, "one", _ => null));
         Assert.False(RemoteExecutorOccupancy.IsOccupied(_root, "one", _ => start.AddSeconds(1)));
-        Assert.Equal(1, Assert.Single(RemoteExecutorOccupancyCensus.Take(_root, [("one", "full")])).Unclassified);
         File.WriteAllText(Path.Combine(Folder("one"), "screening-old.slot-1.json"), JsonSerializer.Serialize(new { OwnerPid = Environment.ProcessId, OwnerStartUtc = start, Class = "unknown" }));
         Assert.Equal(1, Assert.Single(RemoteExecutorOccupancyCensus.Take(_root, [("one", "full")])).Screening);
     }
