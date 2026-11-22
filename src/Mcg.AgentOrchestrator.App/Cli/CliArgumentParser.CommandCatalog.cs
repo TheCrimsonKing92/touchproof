@@ -210,6 +210,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "config",
     "land",
     "conduct",
+    CliShadowStartCommand.Name,
     "backlog-list",
     "backlog-triage",
     "backlog-premise-check",

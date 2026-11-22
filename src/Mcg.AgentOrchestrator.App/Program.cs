@@ -140,6 +140,8 @@ try
     {
         return 0;
     }
+    if (CliShadowStartCommand.IsCommand(startupArgs))
+        return CliShadowStartCommand.Run(startupArgs, Console.Out, Console.Error);
     if (CliArgumentParser.IsAskGoal(startupArgs))
         _ = CliArgumentParser.ParseAskGoalArgs(startupArgs);
 }
@@ -434,7 +436,7 @@ if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(startupArgs))
     return ExitCompletedStartupCommand(0);
 }
 
-if (ConductorContinuitySupervisor.ShouldSupervise(
+if (!CliShadowStartCommand.IsNoDispatch(startupArgs) && ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
 {
@@ -674,6 +676,7 @@ try
     if (!isConductLoop && !defersStateUpgrade) ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
     if (!defersStateUpgrade && commandCapability == CliCommandCapability.Execution &&
+        !CliShadowStartCommand.IsNoDispatch(startupArgs) &&
         !CliArgumentParser.IsAskGoal(startupArgs) &&
         !CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs))
     {
