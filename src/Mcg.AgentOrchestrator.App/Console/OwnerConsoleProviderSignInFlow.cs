@@ -113,6 +113,11 @@ internal sealed class OwnerConsoleProviderSignInFlow(
             if (findProfile(profileId) is { } profile)
                 profile.InteractionText = "Native sign-in is open. Press t after returning, or x to stop waiting.";
         });
+        await ObserveNativeExitAsync(profileId, operation, session);
+    }
+
+    private async Task ObserveNativeExitAsync(string profileId, SignInOperation operation, IProviderSignInSession session)
+    {
         try
         {
             var exit = await session.WaitAsync(lifetime);
