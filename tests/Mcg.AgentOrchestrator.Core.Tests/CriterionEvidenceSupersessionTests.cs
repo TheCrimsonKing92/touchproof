@@ -28,7 +28,8 @@ public sealed class CriterionEvidenceSupersessionTests
         clock.Advance(TimeSpan.FromMinutes(5));
         Assert.True(CriterionEvidenceLifecycle.MatchesObservation(duty, observation, clock.UtcNow));
 
-        var retired = kernel.SupersedeCriterionEvidenceObligation(goal.Id, duty.Id, "operator", "Duty was overtaken");
+        var retired = goal.SupersedeCriterionEvidenceObligation(
+            duty.Id, "operator", "Duty was overtaken", clock.UtcNow, lifecycleState: null);
         var error = Assert.Throws<InvalidOperationException>(() => kernel.RecordCriterionEvidence(goal.Id, duty.Id,
             duty.Owner, publication.CandidateRevision, "would-reopen", duty.RequiredScope, true, "Observed", observation, "operator"));
 

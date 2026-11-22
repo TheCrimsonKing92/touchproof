@@ -12,8 +12,10 @@ public sealed class CriterionEvidenceSupersedeIntentTests
     private const string Actor = "miles";
     private static readonly DateTimeOffset At = DateTimeOffset.UnixEpoch.AddDays(1);
 
-    [Fact]
-    public async Task QueuedDuty_AppliesCapturedReasonAndLeavesAttentionAfterReload()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueuedDuty_AppliesCapturedReasonAndLeavesAttentionAfterReload(bool interactive)
     {
         using var scenario = new Scenario();
         await scenario.Repository.SaveAsync(scenario.Kernel);
@@ -23,21 +25,22 @@ public sealed class CriterionEvidenceSupersedeIntentTests
             PostLandingDutiesTextView.Print([scenario.Goal])), StringComparison.Ordinal);
 
         File.WriteAllText(scenario.ReasonPath, $"  {Reason}\r\n");
-        AsyncLocalConsoleRouter.Capture(() => scenario.Submit());
+        var parsed = scenario.ParseSubmission(interactive);
+        File.Delete(scenario.ReasonPath);
+        AsyncLocalConsoleRouter.Capture(() => scenario.Submit(parsed));
         var intent = Assert.Single(await scenario.Store.ListForGoalAsync(scenario.Goal.Id.Value));
         Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
         Assert.Equal(CriterionEvidenceState.Pending, scenario.Obligation.State);
         Assert.Empty(intent.PayloadFileReferences);
-        File.Delete(scenario.ReasonPath);
-
-        var coordinator = new OperatorIntentCoordinator(scenario.Store);
-        Assert.True(coordinator.ExecutePending(scenario.Kernel, scenario.Goal).MutatedGoalState);
+        var coordinator = new OperatorIntentCoordinator(scenario.Store, utcNow: () => At);
+        Assert.Contains(scenario.Goal.Id, scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
         await scenario.Repository.SaveAsync(scenario.Kernel);
         coordinator.CompletePersisted([scenario.Goal.Id]);
         Assert.Equal(OperatorIntentStatus.Applied, (await scenario.Store.GetAsync(intent.Id))!.Status);
-        AssertRetired(scenario.Goal, scenario.Obligation.Id);
+        var appliedGoal = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        AssertRetired(appliedGoal, scenario.Obligation.Id);
         Assert.DoesNotContain(scenario.Obligation.Id, AsyncLocalConsoleRouter.Capture(() =>
-            PostLandingDutiesTextView.Print([scenario.Goal])), StringComparison.Ordinal);
+            PostLandingDutiesTextView.Print([appliedGoal])), StringComparison.Ordinal);
 
         var snapshot = await scenario.Repository.LoadGoalAsync(scenario.Goal.Id);
         var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot!], [])).GetGoal(scenario.Goal.Id);
@@ -57,9 +60,10 @@ public sealed class CriterionEvidenceSupersedeIntentTests
         GoalStatus status, string target, string reason, string rule)
     {
         using var scenario = new Scenario(status, target);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
         var before = JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(scenario.Goal.Id));
         var intent = await scenario.Enqueue(reason);
-        Assert.False(new OperatorIntentCoordinator(scenario.Store).ExecutePending(scenario.Kernel, scenario.Goal).MutatedGoalState);
+        Assert.Empty(scenario.ApplyTickBoundary(new OperatorIntentCoordinator(scenario.Store)).ChangedGoalIds);
         var after = (await scenario.Store.GetAsync(intent.Id))!;
         Assert.Equal(OperatorIntentStatus.Rejected, after.Status);
         Assert.Contains(rule, after.Outcome, StringComparison.Ordinal);
@@ -70,6 +74,7 @@ public sealed class CriterionEvidenceSupersedeIntentTests
     public async Task CleanedUpVerifiedGoal_AllowsSupersession()
     {
         using var scenario = new Scenario(GoalStatus.Verified);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
         var directory = scenario.Workspace.ExecutionDirectory;
         GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:land", "Landed.");
         GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:record", "Recorded.");
@@ -77,11 +82,97 @@ public sealed class CriterionEvidenceSupersedeIntentTests
         var coordinator = OperatorIntentCoordinator.CreateDefault(scenario.Workspace);
         var intent = await scenario.Enqueue(Reason);
 
-        Assert.True(coordinator.ExecutePending(scenario.Kernel, scenario.Goal).MutatedGoalState);
+        var tick = scenario.ApplyTickBoundary(coordinator);
+        Assert.Contains(scenario.Goal.Id, tick.ChangedGoalIds);
+        Assert.Empty(tick.AppliedGoalIds);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
         coordinator.CompletePersisted([scenario.Goal.Id]);
         Assert.Equal(OperatorIntentStatus.Applied, (await scenario.Store.GetAsync(intent.Id))!.Status);
-        Assert.Equal(GoalStatus.Verified, scenario.Goal.Status);
-        Assert.Equal(CriterionEvidenceState.Superseded, scenario.Obligation.State);
+        var appliedGoal = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Assert.Equal(GoalStatus.Verified, appliedGoal.Status);
+        Assert.Equal(CriterionEvidenceState.Superseded, Assert.Single(appliedGoal.CriterionEvidenceObligations).State);
+    }
+
+    [Theory]
+    [InlineData(GoalLifecycleState.CleanedUp)]
+    [InlineData(GoalLifecycleState.Verified)]
+    public async Task UnreadableLifecycle_KeepsClaimUntilAuthoritativeRetry(GoalLifecycleState recoveredState)
+    {
+        using var scenario = new Scenario(GoalStatus.Verified);
+        var intent = await scenario.Enqueue(Reason);
+        var before = JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(scenario.Goal.Id));
+        var reads = 0;
+        var coordinator = new OperatorIntentCoordinator(scenario.Store)
+        {
+            ResolveLifecycleState = _ => ++reads == 1 ? throw new IOException("Cannot read lifecycle.") : recoveredState
+        };
+
+        var failed = coordinator.ExecutePending(scenario.Kernel, scenario.Goal);
+        Assert.False(failed.MutatedGoalState);
+        Assert.Contains("result=retryable reason=lifecycle-read-failed", Assert.Single(failed.ProgressLines), StringComparison.Ordinal);
+        Assert.Equal(OperatorIntentStatus.Claimed, (await scenario.Store.GetAsync(intent.Id))!.Status);
+        Assert.Equal(before, JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(scenario.Goal.Id)));
+
+        var recovered = coordinator.ExecutePending(scenario.Kernel, scenario.Goal);
+        if (recoveredState == GoalLifecycleState.CleanedUp)
+        {
+            Assert.True(recovered.MutatedGoalState);
+            await scenario.Repository.SaveAsync(scenario.Kernel);
+            coordinator.CompletePersisted([scenario.Goal.Id]);
+            Assert.Equal(OperatorIntentStatus.Applied, (await scenario.Store.GetAsync(intent.Id))!.Status);
+            Assert.Equal(CriterionEvidenceState.Superseded, scenario.Obligation.State);
+        }
+        else
+        {
+            Assert.False(recovered.MutatedGoalState);
+            var rejected = (await scenario.Store.GetAsync(intent.Id))!;
+            Assert.Equal(OperatorIntentStatus.Rejected, rejected.Status);
+            Assert.Contains("must be Completed or CleanedUp", rejected.Outcome, StringComparison.Ordinal);
+            Assert.Equal(before, JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(scenario.Goal.Id)));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Preparation_LeavesSiblingUnboundEvenWithStoredPromotionFact(bool offline)
+    {
+        using var scenario = new Scenario(sibling: true);
+        var sibling = scenario.Goal.CriterionEvidenceObligations[1];
+        Assert.Null(sibling.Publication);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
+        scenario.Repository.RecordPromotionFacts([new GoalPromotionFact(scenario.Goal.Id.Value,
+            new string('b', 40), new string('a', 40), new string('c', 40), At.AddMinutes(1), GoalPromotionFact.CohortProvenance)]);
+        var intent = await scenario.Enqueue(Reason);
+        var receiptId = Guid.NewGuid().ToString("N");
+        await scenario.Store.EnqueueAsync(new OperatorIntentRecord(receiptId, receiptId, OperatorIntentVerbs.CriterionEvidenceRecord,
+            scenario.Goal.Id.Value, null, JsonSerializer.Serialize(
+                new CriterionEvidenceReceiptOperatorIntentPayload(sibling.Id, CriterionEvidenceOwner.Operator,
+                    new string('b', 40), "receipt", sibling.RequiredScope, true, "Observed sibling"), OperatorIntentJson.Options),
+            [], Actor, "cli", "local-process", At.AddMinutes(2)));
+        var coordinator = new OperatorIntentCoordinator(scenario.Store, utcNow: () => At);
+
+        if (offline)
+        {
+            Assert.IsType<OperatorIntentOfflineOutcome.Applied>(await OperatorIntentGoalApplication.ApplyOffline(
+                scenario.Workspace, scenario.Repository, coordinator,
+                new ConductorParallelAcceptanceAttemptCoordinator(Path.Combine(scenario.Workspace.OrchestratorDirectory, "attempts"),
+                    TrunkBranchName.Default, scenario.Workspace.ExecutionDirectory), scenario.Goal.Id));
+        }
+        else
+        {
+            Assert.Contains(scenario.Goal.Id, scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
+            await scenario.Repository.SaveAsync(scenario.Kernel);
+            coordinator.CompletePersisted([scenario.Goal.Id]);
+        }
+
+        Assert.Equal(OperatorIntentStatus.Applied, (await scenario.Store.GetAsync(intent.Id))!.Status);
+        Assert.Equal(OperatorIntentStatus.Pending, (await scenario.Store.GetAsync(receiptId))!.Status);
+        var restored = (await scenario.Repository.LoadGoalsAsync([scenario.Goal.Id])).GetGoal(scenario.Goal.Id);
+        Assert.Equal(sibling, restored.CriterionEvidenceObligations.Single(item => item.Id == sibling.Id));
+        var retired = restored.CriterionEvidenceObligations.Single(item => item.Id == scenario.Obligation.Id);
+        Assert.Equal(CriterionEvidenceState.Superseded, retired.State);
+        Assert.Null(retired.Publication);
     }
 
     [Fact]
@@ -111,9 +202,18 @@ public sealed class CriterionEvidenceSupersedeIntentTests
         await scenario.Repository.SaveAsync(scenario.Kernel);
         File.WriteAllText(scenario.ReasonPath, contents);
 
-        var error = Assert.Throws<ArgumentException>(() => scenario.Submit());
+        var error = Assert.Throws<ArgumentException>(() => scenario.ParseSubmission());
         Assert.Contains("nonempty supersede reason", error.Message, StringComparison.Ordinal);
         Assert.Empty(await scenario.Store.ListForGoalAsync(scenario.Goal.Id.Value));
+    }
+
+    [Fact]
+    public void MissingReasonFile_UsesFileDiagnosticDuringParsing()
+    {
+        using var scenario = new Scenario();
+
+        var error = Assert.Throws<InvalidOperationException>(() => scenario.ParseSubmission());
+        Assert.Contains("--reason-file not found", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -190,16 +290,35 @@ public sealed class CriterionEvidenceSupersedeIntentTests
             Goal = Kernel.GetGoal(goal.Id);
         }
 
-        public bool Submit()
-        {
-            var args = CliArgumentParser.NormalizeArgs(["criterion-evidence-supersede", "--goal", Goal.Id.Value[..8],
+        public IReadOnlyList<string> ParseSubmission(bool interactive = false) => interactive
+            ? CliArgumentParser.SplitCommand(
+                $"criterion-evidence-supersede --goal {Goal.Id.Value[..8]} {Obligation.Id} --reason-file \"{ReasonPath}\" --operator-actor {Actor}")
+            : CliArgumentParser.NormalizeArgs(["criterion-evidence-supersede", "--goal", Goal.Id.Value[..8],
                 Obligation.Id, "--reason-file", ReasonPath, "--operator-actor", Actor]);
+
+        public bool Submit(IReadOnlyList<string> args)
+        {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             IReadOnlyList<AgentDefinition> agents = [];
             var profiles = WorkerProfileCatalog.Default();
             Goal? current = null;
             return CliPersistentStateRunner.ExecuteCommand(args, Repository, Workspace, ref agents,
                 new InMemoryModelProviderRegistry([]), ref profiles, ref current);
+        }
+
+        public ConductorOperatorIntentBoundary.Result ApplyTickBoundary(OperatorIntentCoordinator coordinator)
+        {
+            var context = new CliExecutionContext(Kernel, Workspace, new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), currentGoal: null,
+                loadOperatorIntentTargets: ids => Repository.LoadGoalsAsync(ids).GetAwaiter().GetResult());
+            var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+            var observations = new Dictionary<string, ConductorGoalReloadObservation>();
+            return ConductorOperatorIntentBoundary.Apply(Kernel, ConductorBatchLoopTestsStepLedger.FixtureDriver(),
+                onlyGoalId: Goal.Id.Value, new Dictionary<string, GoalSnapshotCheckpointResult>(), coordinator,
+                (kernel, goalId, supersessionOnly) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(context,
+                    kernel, goalId, runner, observations, gitRunner: (_, _) => throw new InvalidOperationException("Unexpected git probe."),
+                    supersessionOnly: supersessionOnly),
+                goalId => observations[goalId]);
         }
 
         public Task<OperatorIntentRecord> Enqueue(string reason, string actor = Actor)

@@ -71,7 +71,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly GoalDispatchRefresh _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly OperatorIntentCoordinator? _operatorIntents;
-    private readonly Func<AgentOrchestratorKernel, GoalId, bool>? _prepareOperatorIntentTarget;
+    private readonly Func<AgentOrchestratorKernel, GoalId, bool, bool>? _prepareOperatorIntentTarget;
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
     private readonly ProgressiveReviewSteeringCoordinator? _progressiveReviewSteering;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
@@ -143,7 +143,7 @@ internal sealed partial class ConductorBatchLoop
         Func<TimeSpan>? processCpuTime = null,
         Action<string>? loadTrxCoherenceVerdicts = null,
         Func<int>? countLiveGroupedGates = null,
-        Func<AgentOrchestratorKernel, GoalId, bool>? prepareOperatorIntentTarget = null,
+        Func<AgentOrchestratorKernel, GoalId, bool, bool>? prepareOperatorIntentTarget = null,
         HomeBuildAdoptionDetector? homeBuildAdoption = null,
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? homeBuildRelaunch = null,
         Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null,

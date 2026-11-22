@@ -312,6 +312,18 @@ internal sealed partial class OperatorIntentCoordinator
                 break;
             }
 
+            GoalLifecycleState? lifecycleState = null;
+            if (intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede && goal.Status == GoalStatus.Verified)
+            {
+                try { lifecycleState = ResolveLifecycleState?.Invoke(goal); }
+                catch (Exception ex)
+                {
+                    // Keep the claim retryable. An unreadable lifecycle cannot prove a rule violation.
+                    lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=retryable reason=lifecycle-read-failed detail={Sanitize(ex.Message)}");
+                    break;
+                }
+            }
+
             try
             {
                 ValidateCompletedDutyIntent(goal, intent);
@@ -335,7 +347,7 @@ internal sealed partial class OperatorIntentCoordinator
 
                 if (retryClarification != RetryClarificationHandling.Resumed)
                 {
-                    Apply(kernel, goal, intent, () => mutated = true);
+                    Apply(kernel, goal, intent, () => mutated = true, lifecycleState);
                 }
                 kernel.RecordOperatorIntentApplied(
                     goal.Id,
@@ -510,7 +522,8 @@ internal sealed partial class OperatorIntentCoordinator
         AgentOrchestratorKernel kernel,
         Goal goal,
         OperatorIntentRecord intent,
-        Action markGoalMutated)
+        Action markGoalMutated,
+        GoalLifecycleState? lifecycleState)
     {
         ValidateCompletedDutyIntent(goal, intent);
         switch (intent.Verb)
@@ -608,8 +621,7 @@ internal sealed partial class OperatorIntentCoordinator
                 return;
             case OperatorIntentVerbs.CriterionEvidenceSupersede:
                 var supersede = Deserialize<CriterionEvidenceSupersedeOperatorIntentPayload>(intent);
-                var lifecycleState = goal.Status == GoalStatus.Verified ? ResolveLifecycleState?.Invoke(goal) : null;
-                kernel.SupersedeCriterionEvidenceObligation(goal.Id, supersede.ObligationId, intent.Actor, supersede.Reason, lifecycleState);
+                goal.SupersedeCriterionEvidenceObligation(supersede.ObligationId, intent.Actor, supersede.Reason, _utcNow(), lifecycleState);
                 return;
             case OperatorIntentVerbs.CriterionEvidenceRephase:
                 var rephase = Deserialize<CriterionEvidenceRephaseOperatorIntentPayload>(intent);

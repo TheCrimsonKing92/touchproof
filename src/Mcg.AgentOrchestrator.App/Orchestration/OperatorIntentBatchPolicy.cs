@@ -32,6 +32,20 @@ public static class OperatorIntentBatchPolicy
         (CanShareTick(intent.Verb) && appliedVerbs.All(CanShareTick)) ||
         (IsClarificationAnswer(intent) && appliedVerbs.All(verb => verb == OperatorIntentVerbs.Answer));
 
+    internal static IReadOnlyList<OperatorIntentRecord> SelectPreparationBatch(IEnumerable<OperatorIntentRecord> target)
+    {
+        var intents = target.ToArray();
+        if (!intents.Any(IsSupersession)) return intents;
+
+        // Match claim priority and stop when the next intent needs different preparation.
+        var inClaimOrder = intents.OrderBy(intent => intent.Status != OperatorIntentStatus.Claimed).ToArray();
+        var supersessionOnly = IsSupersession(inClaimOrder[0]);
+        return inClaimOrder.TakeWhile(intent => IsSupersession(intent) == supersessionOnly).ToArray();
+    }
+
+    internal static bool IsSupersession(OperatorIntentRecord intent) =>
+        intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede;
+
     // Clarification answers may share a pass because each writes rows keyed by its own item or intent.
     // retry reads retry-cause clarification and task lifecycle state changed by sibling intents.
     // adjudicate checks preconditions against the persisted goal version and writes decisions.

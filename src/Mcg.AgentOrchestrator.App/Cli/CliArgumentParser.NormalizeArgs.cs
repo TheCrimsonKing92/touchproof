@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 
@@ -9,6 +10,11 @@ internal sealed record GoalScopedTaskTargetArgs(
     IReadOnlyList<string> Parts,
     string? ExplicitGoalSelector);
 
+internal sealed class CriterionEvidenceSupersedeArgs(string[] args, string reason) : ReadOnlyCollection<string>(args)
+{
+    internal string Reason { get; } = reason;
+}
+
 public static IReadOnlyList<string> NormalizeArgs(string[] args)
 {
     var command = args[0];
@@ -17,6 +23,9 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
     {
         return [command];
     }
+
+    if (command.Equals(OperatorIntentVerbs.CriterionEvidenceSupersede, StringComparison.OrdinalIgnoreCase))
+        return NormalizeCriterionEvidenceSupersedeArgs(args);
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
@@ -425,6 +434,20 @@ private static IReadOnlyList<string> NormalizeAgentArgs(string[] args)
 
     parts.AddRange(args.Skip(flagIndex));
     return parts;
+}
+
+private static IReadOnlyList<string> NormalizeCriterionEvidenceSupersedeArgs(string[] args)
+{
+    if (args.Skip(1).Any(CliCommandHelp.IsHelpFlag))
+        return args;
+
+    var path = CliCriterionEvidenceIntents.ResolveFlagValue(args, "--reason-file")
+        ?? throw new ArgumentException(CliCommandHelp.CriterionEvidenceSupersedeUsage);
+    var reason = CliTextArgumentFile.Read("--reason-file", path).Trim();
+    if (reason.Length == 0)
+        throw new ArgumentException("--reason-file must contain a nonempty supersede reason.");
+
+    return new CriterionEvidenceSupersedeArgs(args, reason);
 }
 
 private static IReadOnlyList<string> NormalizeTargetTextCommandWithFileFlags(string[] args, int targetIndex, params string[] fileFlags)

@@ -108,7 +108,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             }
 
             new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
-                prepareOperatorIntentTarget: (_, _) => { if (!duringSweep) Inject(); return true; },
+                prepareOperatorIntentTarget: (_, _, _) => { if (!duringSweep) Inject(); return true; },
                 sweep: _ =>
                 {
                     try
@@ -150,7 +150,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             var prepared = false;
             var swept = false;
             new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
-                prepareOperatorIntentTarget: (_, _) => { prepared = true; return false; },
+                prepareOperatorIntentTarget: (_, _, _) => { prepared = true; return false; },
                 goalReloadObservation: _ => new ConductorGoalReloadObservation.NotObserved(),
                 sweep: _ =>
                 {
@@ -190,7 +190,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             Exception? sweepFailure = null;
 
             new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
-                prepareOperatorIntentTarget: (_, _) =>
+                prepareOperatorIntentTarget: (_, _, _) =>
                 {
                     events.Add("prepare");
                     // Landing/evidence preparation keeps deferring this Verified aggregate,
@@ -279,7 +279,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             var preparations = 0;
             var completedTicks = 0;
             new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
-                prepareOperatorIntentTarget: (_, _) => { preparations++; return true; },
+                prepareOperatorIntentTarget: (_, _, _) => { preparations++; return true; },
                 measuredSweepWithCheckpointHolds: (_, held, _) =>
                 {
                     var row = store.GetAsync(intent.Id).GetAwaiter().GetResult()!;
@@ -326,7 +326,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             });
 
             var result = new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
-                prepareOperatorIntentTarget: (_, _) => { preparations++; return true; },
+                prepareOperatorIntentTarget: (_, _, _) => { preparations++; return true; },
                 sweep: _ => sweeps++, recoverInterruptedDispatches: _ => recoveries++)
                 .Run(kernel, MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                         getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
@@ -357,7 +357,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             File.WriteAllText(stop, "stop");
             var calls = new List<string>();
             new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
-                prepareOperatorIntentTarget: (_, _) => { calls.Add("prepare"); return true; },
+                prepareOperatorIntentTarget: (_, _, _) => { calls.Add("prepare"); return true; },
                 sweep: _ => calls.Add("sweep")).Run(kernel, MakeDriver(),
                 ConductorAutonomyPolicy.Conservative, stop, maxIterations: 1);
             Assert.Empty(calls);

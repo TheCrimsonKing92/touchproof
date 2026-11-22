@@ -2514,10 +2514,6 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId, string obligationId, CriterionObservationScope? scope, string actor, string reason) =>
         GetGoal(goalId).RephaseCriterionEvidenceObligation(obligationId, scope, actor, reason, _clock.UtcNow);
 
-    public CriterionEvidenceObligation SupersedeCriterionEvidenceObligation(
-        GoalId goalId, string obligationId, string actor, string reason, GoalLifecycleState? lifecycleState = null) =>
-        GetGoal(goalId).SupersedeCriterionEvidenceObligation(obligationId, actor, reason, _clock.UtcNow, lifecycleState);
-
     public CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
         GoalId goalId,
         string malformedObligationId,

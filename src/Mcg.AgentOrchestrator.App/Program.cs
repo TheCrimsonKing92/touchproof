@@ -129,11 +129,12 @@ catch (Exception ex)
     return 1;
 }
 
-var startupArgs = tenantSelection.CommandArgs.Count == 0
-    ? []
-    : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
+IReadOnlyList<string> startupArgs;
 try
 {
+    startupArgs = tenantSelection.CommandArgs.Count == 0
+        ? []
+        : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
     if (!(startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcommand) &&
         CliCommandHandlers.TryPrintStartupHelp(startupArgs))
     {
@@ -142,7 +143,7 @@ try
     if (CliArgumentParser.IsAskGoal(startupArgs))
         _ = CliArgumentParser.ParseAskGoalArgs(startupArgs);
 }
-catch (ArgumentException ex)
+catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
 {
     Console.Error.WriteLine($"Error: {ex.Message}");
     return 1;

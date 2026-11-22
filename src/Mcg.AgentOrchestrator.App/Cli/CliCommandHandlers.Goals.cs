@@ -1698,8 +1698,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         homeBuildRelaunch: supervisorSetup.HomeBuildAdoption is null ? null : SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace),
                         postLandingCanary: postLandingCanary,
                         goalReloadObservation: resolveGoalReloadObservation,
-                        prepareOperatorIntentTarget: (loopKernel, goalId) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
-                            context, loopKernel, goalId, loopReaper, intentGoalReloadObservations),
+                        prepareOperatorIntentTarget: (loopKernel, goalId, supersessionOnly) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
+                            context, loopKernel, goalId, loopReaper, intentGoalReloadObservations, supersessionOnly: supersessionOnly),
                         lifecycleRecorder: new ConductorLifecycleRecorder(
                             new SqliteRunEventStore(context.Workspace.RunEventStorePath),
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
@@ -1839,7 +1839,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         context.WorkerProfiles, new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                         () => conductDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: false) > 0).ObserveTick,
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace, new(context.Workspace, new CliGoalIntentConstruction())),
-                    prepareOperatorIntentTarget: (wk, goalId) => OperatorIntentTargetPreparation.PrepareLoadedOperatorIntentTarget(
+                    prepareOperatorIntentTarget: (wk, goalId, supersessionOnly) => supersessionOnly || OperatorIntentTargetPreparation.PrepareLoadedOperatorIntentTarget(
                         context, wk, wk.GetGoal(goalId), watchReaper),
                     goalReloadObservation: _ => new ConductorGoalReloadObservation.NotObserved(),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),

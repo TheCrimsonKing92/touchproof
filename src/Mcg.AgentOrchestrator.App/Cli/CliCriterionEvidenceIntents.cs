@@ -14,6 +14,7 @@ internal static partial class CliCriterionEvidenceIntents
     public static void Submit(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         Goal goal, CliPersistentStateRunner.OperatorIntentAttribution attribution)
     {
+        var capturedReason = (args as CliArgumentParser.CriterionEvidenceSupersedeArgs)?.Reason;
         args = OperatorIntentSubmissionOutput.StripJsonFlag(args, out var emitAgentReadEnvelope);
         if (CliCriterionNumberList.TrySubmit(args, workspace, goal, attribution, emitAgentReadEnvelope)) return;
         var verb = args[0].ToLowerInvariant();
@@ -32,7 +33,7 @@ internal static partial class CliCriterionEvidenceIntents
             },
             OperatorIntentVerbs.CriterionEvidenceRepair => BuildCriterionEvidenceRepairPayload(values, target!.Value.Index, target.Value.Version),
             OperatorIntentVerbs.CriterionEvidenceRephase => BuildCriterionEvidenceRephasePayload(values),
-            OperatorIntentVerbs.CriterionEvidenceSupersede => BuildCriterionEvidenceSupersedePayload(args, values),
+            OperatorIntentVerbs.CriterionEvidenceSupersede => BuildCriterionEvidenceSupersedePayload(values, capturedReason),
             _ => throw new ArgumentException($"Unsupported criterion evidence command '{args[0]}'.")
         };
         var intentId = Guid.NewGuid().ToString("N");
@@ -205,17 +206,12 @@ internal static partial class CliCriterionEvidenceIntents
     }
 
     private static CriterionEvidenceSupersedeOperatorIntentPayload BuildCriterionEvidenceSupersedePayload(
-        IReadOnlyList<string> args, IReadOnlyList<string> values)
+        IReadOnlyList<string> values, string? capturedReason)
     {
-        var path = ResolveFlagValue(args, "--reason-file");
-        if (values.Count != 1 || path is null)
+        if (values.Count != 1 || capturedReason is null)
             throw new ArgumentException(CliCommandHelp.CriterionEvidenceSupersedeUsage);
 
-        var reason = CliTextArgumentFile.Read("--reason-file", path).Trim();
-        if (reason.Length == 0)
-            throw new ArgumentException("--reason-file must contain a nonempty supersede reason.");
-
-        return new CriterionEvidenceSupersedeOperatorIntentPayload(values[0], reason);
+        return new CriterionEvidenceSupersedeOperatorIntentPayload(values[0], capturedReason);
     }
 
     public static void PrintStatus(
