@@ -16,6 +16,34 @@ public sealed class ConductorBatchLoopTestsConductEvents : ConductorBatchLoopTes
     {
     }
 
+    [Fact]
+    public void TickLoadCountersDoNotDrainPendingEvents()
+    {
+        var root = CreateTempDirectory("mcg-tick-counters");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var drainCalls = 0;
+        var writer = new ConductEventLogWriter(logPath, beforeRequiredEventDrain: () => drainCalls++);
+        var previousWriter = ConductorBatchLoop.CurrentConductEventLogWriter.Value;
+        const string line = "TICK_LOAD_COUNTERS tick=1 goal_snapshot_deserialized_utf8_bytes=0 goal_snapshot_serialized_utf8_bytes=0";
+        try
+        {
+            ConductorBatchLoop.CurrentConductEventLogWriter.Value = writer;
+            _ = AsyncLocalConsoleRouter.Capture(() => ConductorBatchLoop.EmitProgress(line));
+        }
+        finally
+        {
+            ConductorBatchLoop.CurrentConductEventLogWriter.Value = previousWriter;
+        }
+
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var record = JsonSerializer.Deserialize<ConductEventRecord>(Assert.Single(File.ReadLines(logPath)), options);
+        Assert.Equal("tick-load-counters", record!.EventKind);
+        Assert.Equal(line, record.Detail);
+        Assert.Equal(0, drainCalls);
+        writer.Append("phase-timing", goalId: null, "regular progress");
+        Assert.Equal(1, drainCalls);
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_shared_stream_receives_events_from_sequential_loop_instances")]
     public void ConductEventsSharedStreamReceivesEventsFromSequentialLoopInstances()
     {

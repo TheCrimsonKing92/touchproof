@@ -66,6 +66,12 @@ internal sealed class GoalSnapshotByteAccounting : IDisposable
         return JsonSerializer.Serialize(snapshot, options);
     }
 
+    internal static JsonElement SerializeToElement<T>(T snapshot, JsonSerializerOptions options)
+    {
+        Current.Value?.Record(write: true, null);
+        return JsonSerializer.SerializeToElement(snapshot, options);
+    }
+
     internal static Measurement? PrepareWriteMeasurement() => Current.Value?.NewMeasurement(write: true);
 
     private static Measurement? BeginStreamRead()

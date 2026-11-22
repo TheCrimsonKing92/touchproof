@@ -2817,7 +2817,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         // These collections merge by element and do not have a field-level winner.
         static JsonElement SerializeMergeFields(GoalSnapshot goal) =>
-            JsonSerializer.SerializeToElement(goal with
+            GoalSnapshotByteAccounting.SerializeToElement(goal with
             {
                 Tasks = [],
                 Timeline = [],
@@ -3177,6 +3177,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         IReadOnlyList<T>? stored,
         IReadOnlyList<T>? current) =>
         PickStoreOwned(baseline, stored, current);
+
+    private static bool SnapshotEquals(GoalSnapshot left, GoalSnapshot right) =>
+        GoalSnapshotByteAccounting.Serialize(left, SerializerOptions) ==
+        GoalSnapshotByteAccounting.Serialize(right, SerializerOptions);
 
     private static bool SnapshotEquals<T>(T? left, T? right) =>
         JsonSerializer.Serialize(left, SerializerOptions) == JsonSerializer.Serialize(right, SerializerOptions);

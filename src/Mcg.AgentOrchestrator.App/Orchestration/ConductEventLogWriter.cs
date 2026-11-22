@@ -11,6 +11,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductEventLogWriter
 {
     public const string CurrentFileName = "conduct-events.log";
+    internal const string TickLoadCountersKind = "tick-load-counters";
     internal const string PendingEventsDirectoryName = "pending-events";
     internal const long DefaultMaxBytes = 1_048_576;
     internal const int DefaultRotatedGenerationCount = 8;
@@ -70,7 +71,21 @@ internal sealed class ConductEventLogWriter
     }
 
     public void Append(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp = null)
-        => AppendGoalProgress(eventKind, goalId, detail, null, timestamp);
+    {
+        if (eventKind != TickLoadCountersKind)
+        {
+            AppendGoalProgress(eventKind, goalId, detail, null, timestamp);
+            return;
+        }
+
+        lock (_lock)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
+            // Regular progress appends handle draining and rotation. This advisory line has no goal change.
+            WithRequiredEventGate(() => File.AppendAllText(
+                _path, Serialize(eventKind, goalId, detail, timestamp)));
+        }
+    }
 
     internal void AppendGoalProgress(string eventKind, string? goalId, string detail,
         GoalProgressEventFields? fields, DateTimeOffset? timestamp = null)

@@ -48,8 +48,11 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
         try
         {
             var workspace = CreateRefinedWorkspace(root);
-            var (repository, _, _) = Seed(workspace);
+            var (repository, openIds, _) = Seed(workspace);
             var kernel = CliPersistentStateRunner.LoadConductLoopKernel(repository, executionDirectory: root);
+            var baselines = openIds.ToDictionary(id => id, id =>
+                Assert.IsType<GoalSnapshot>(repository.LoadGoalAsync(new GoalId(id)).GetAwaiter().GetResult()));
+            var checkpoints = new List<GoalSnapshotCheckpointResult>();
             var reloadCalls = 0;
             var context = new CliExecutionContext(kernel, workspace, new InMemoryModelProviderRegistry([]),
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), currentGoal: null,
@@ -57,6 +60,20 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
                 {
                     reloadCalls++;
                     return CliPersistentStateRunner.LoadConductLoopKernel(repository, ids, root);
+                },
+                checkpointGoalKernel: (current, ids) =>
+                {
+                    var snapshots = OrchestratorSnapshot.Capture(current, includeDeferredRows: false)
+                        .Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+                    var requested = ids.Select(id => new GoalSnapshotSaveRequest(baselines[id.Value], snapshots[id.Value])).ToArray();
+                    var results = repository.CheckpointGoalSnapshotsAsync(requested).GetAwaiter().GetResult();
+                    checkpoints.AddRange(results);
+                    foreach (var result in results)
+                    {
+                        if (result.SaveResult?.PersistedSnapshot is { } persisted)
+                            baselines[result.GoalId] = persisted;
+                    }
+                    return results;
                 }) { CleanupContext = CreateIsolatedCleanupContext(workspace) };
 
             // Manual policy keeps all dispatch/model boundaries closed in this store fixture.
@@ -72,18 +89,28 @@ public sealed class CliCommandTestsPersistentRunnerLoadCountersAcceptance : CliC
             Assert.Matches(@"owned-root-reap:\d+:[12](?:,| )", sweep);
             Assert.Matches(@" cpu_ms=\d+ ts=\S+\s*$", sweep);
             Assert.Equal(3, context.Kernel.Goals.Count);
+            Assert.Contains(checkpoints, checkpoint =>
+                checkpoint.SaveResult?.Disposition == GoalSnapshotSaveDisposition.Saved &&
+                checkpoint.SaveResult.PersistedSnapshot!.Timeline.Any(entry =>
+                    entry.Kind == ProgressKind.GoalPolicyDecision &&
+                    entry.Message.StartsWith("Batch loop tick 1: ", StringComparison.Ordinal)));
 
             var counters = Assert.Single(text.Split('\n'), line =>
                 line.StartsWith("TICK_LOAD_COUNTERS tick=1 ", StringComparison.Ordinal));
+            const string expectedCounters = "TICK_LOAD_COUNTERS tick=1 " +
+                "goal_snapshot_deserialized_utf8_bytes=unknown goal_snapshot_serialized_utf8_bytes=unknown";
+            Assert.StartsWith(expectedCounters + " ts=", counters);
+            var logOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            var logged = Assert.Single(File.ReadLines(workspace.ConductEventsLogPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, logOptions)!),
+                entry => entry.EventKind == "tick-load-counters");
+            Assert.Equal(expectedCounters, logged.Detail);
             var events = new SqliteRunEventStore(workspace.RunEventStorePath).ReadSinceAsync().GetAwaiter().GetResult();
             var tick = Assert.Single(events, entry => entry.EventType == RunEventTypes.ConductorTick);
             using var payload = JsonDocument.Parse(tick.PayloadJson!);
             Assert.Equal(1, payload.RootElement.GetProperty("Tick").GetInt32());
             Assert.Equal(JsonValueKind.Null, payload.RootElement.GetProperty("goal_snapshot_deserialized_utf8_bytes").ValueKind);
-            var writeBytes = payload.RootElement.GetProperty("goal_snapshot_serialized_utf8_bytes");
-            Assert.True(writeBytes.ValueKind is JsonValueKind.Null or JsonValueKind.Number);
-            Assert.Contains("goal_snapshot_deserialized_utf8_bytes=unknown", counters);
-            Assert.Contains($"goal_snapshot_serialized_utf8_bytes={(writeBytes.ValueKind == JsonValueKind.Null ? "unknown" : writeBytes.GetRawText())} ", counters);
+            Assert.Equal(JsonValueKind.Null, payload.RootElement.GetProperty("goal_snapshot_serialized_utf8_bytes").ValueKind);
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }

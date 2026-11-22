@@ -38,20 +38,6 @@ public sealed class GoalLeanTickReloadTests
             Assert.Equal(((long?)archiveBytes, (long?)0), streamed.Seal());
         }
 
-        using (var connection = fixture.Open())
-        {
-            using var update = connection.CreateCommand();
-            update.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = $json WHERE goal_id = $id";
-            update.Parameters.AddWithValue("$json", archiveJson);
-            update.Parameters.AddWithValue("$id", seed.Id);
-            Assert.Equal(1, update.ExecuteNonQuery());
-            using var legacyText = GoalSnapshotByteAccounting.Begin();
-            var snapshot = await new GoalSnapshotArchive(GoalTaskHistoryTestFixture.Options)
-                .HydrateAsync(connection, seed with { IsMetadataOnly = true });
-            Assert.Equal("café ☃", snapshot!.Objective);
-            Assert.Equal(((long?)null, (long?)0), legacyText.Seal());
-        }
-
         var hotId = new GoalId("bbbbbbbb000000000000000000000000");
         var hot = seed with
         {
@@ -62,6 +48,8 @@ public sealed class GoalLeanTickReloadTests
         var memory = new GoalReloadMemory();
         var loaded = await fixture.Repository.LoadGoalsReusingUnchangedAsync([hotId], memory);
         Assert.Equal(1, loaded.Reloaded);
+        var staleBaseline = Assert.Single(OrchestratorSnapshot.Capture(loaded.Kernel, includeDeferredRows: false).Goals);
+        Assert.NotNull(staleBaseline.TickRowVersion);
 
         using (var cached = GoalSnapshotByteAccounting.Begin())
         {
@@ -81,15 +69,43 @@ public sealed class GoalLeanTickReloadTests
         {
             var reused = await fixture.Repository.LoadGoalsReusingUnchangedAsync([hotId], memory);
             Assert.Equal((0, 1), (reused.Reloaded, reused.Reused));
+            Assert.NotEmpty(await fixture.Repository.ReadArchivedDispatchUsageAsync((_, _) => true));
             await fixture.Repository.SaveGoalSnapshotsAsync([changed]);
-            await fixture.Repository.LoadGoalsAsync([hotId]);
+            var materialized = await fixture.Repository.LoadGoalsAsync([hotId]);
+            Assert.Equal("Change café", materialized.GetGoal(hotId).Objective);
             Assert.Equal(((long?)null, (long?)Encoding.UTF8.GetByteCount(fixture.RawGoal(hot.Id))), mixed.Seal());
+        }
+
+        using (var connection = fixture.Open())
+        {
+            using var update = connection.CreateCommand();
+            update.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = $json WHERE goal_id = $id";
+            update.Parameters.AddWithValue("$json", archiveJson);
+            update.Parameters.AddWithValue("$id", seed.Id);
+            Assert.Equal(1, update.ExecuteNonQuery());
+            using var legacyText = GoalSnapshotByteAccounting.Begin();
+            var snapshot = await new GoalSnapshotArchive(GoalTaskHistoryTestFixture.Options)
+                .HydrateAsync(connection, seed with { IsMetadataOnly = true });
+            Assert.Equal("café ☃", snapshot!.Objective);
+            Assert.Equal(((long?)null, (long?)0), legacyText.Seal());
         }
 
         using (var unchanged = GoalSnapshotByteAccounting.Begin())
         {
             await fixture.Repository.SaveGoalSnapshotsAsync([changed]);
             Assert.Equal(((long?)0, (long?)null), unchanged.Seal());
+        }
+
+        using (var conflict = GoalSnapshotByteAccounting.Begin())
+        {
+            // The earlier update advanced the row version, bypassing the matched-baseline comparison.
+            const string priority = nameof(GoalPriority.High);
+            var results = await fixture.Repository.SaveGoalSnapshotsWithMergeAsync(
+                [new(staleBaseline, staleBaseline with { Priority = priority })]);
+            var result = Assert.Single(results);
+            Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+            Assert.Equal(priority, result.PersistedSnapshot!.Priority);
+            Assert.Equal(((long?)null, (long?)null), conflict.Seal());
         }
 
         fixture.Execute("""
