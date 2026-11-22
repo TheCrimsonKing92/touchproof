@@ -76,6 +76,11 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         Run(dialog, key =>
         {
             if (key.IsAlt || !keys.Handle((char)key.AsRune.Value, key.IsCtrl)) return false;
+            if (keys.SignInRequested)
+            {
+                app.RequestStop(dialog);
+                return true;
+            }
             var updated = keys.Render(model, width);
             dialog.Page.Replace(updated.Text);
             dialog.Structured = updated.Fields;
