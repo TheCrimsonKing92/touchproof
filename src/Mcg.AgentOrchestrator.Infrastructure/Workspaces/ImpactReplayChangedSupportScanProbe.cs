@@ -1,8 +1,11 @@
+using Microsoft.CodeAnalysis;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Per-invocation observations; production scans do not allocate a probe.
 internal sealed class ImpactReplayChangedSupportScanProbe
 {
+    internal MetadataReference? CompilationReference { get; set; }
     internal Dictionary<string, int> TreePasses { get; } = new(StringComparer.OrdinalIgnoreCase);
     internal List<(string Owner, string Identifier, bool AttributePosition)> BoundNames { get; } = [];
 
