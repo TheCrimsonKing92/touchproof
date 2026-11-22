@@ -450,7 +450,8 @@ public sealed class OwnerConsoleBindingsTests
             ":scope [<name>[,<name>...]|all]: Show or change the BOARD project scope.",
             ":follow: Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).",
             ":news: Show and acknowledge unseen console changes.",
-            "Fleet view x: Toggle between the top five lanes and all lanes for every executor."
+            "Fleet view x: Toggle between the top five lanes and all lanes for every executor.",
+            "Fleet view s: Open Provider connections for the first hold that offers sign-in."
         ];
         Assert.Equal(string.Join("\n", expected.Concat(unkeyed)), OwnerConsoleBindings.HelpText);
         var lines = OwnerConsoleBindings.HelpText.Split('\n');

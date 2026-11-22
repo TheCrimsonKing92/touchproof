@@ -181,6 +181,11 @@ internal static class GitCli
             Volatile.Read(ref CompletionObserver), TimeProvider.System,
             isolateRepository: true);
 
+    internal static GitResult RunForRepository(string workingDirectory, int timeoutMilliseconds, params string[] args) =>
+        RunExecutableCore("git", workingDirectory, timeoutMilliseconds, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System,
+            isolateRepository: true, allowMetadataLookup: false);
+
     internal static GitResult RunWithEnvironment(
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,

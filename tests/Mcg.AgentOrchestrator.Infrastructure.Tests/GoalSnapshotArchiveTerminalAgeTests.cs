@@ -329,7 +329,7 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
         {
             using var connection = Open();
             using var tables = connection.CreateCommand();
-            tables.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('goals', 'goal_snapshot_archive') ORDER BY name";
+            tables.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('goals', 'goal_snapshot_archive', 'attention_archive_evidence') ORDER BY name";
             var names = new List<string>();
             using (var reader = tables.ExecuteReader())
                 while (reader.Read()) names.Add(reader.GetString(0));
