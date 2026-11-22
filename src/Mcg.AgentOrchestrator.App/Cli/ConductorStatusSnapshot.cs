@@ -17,7 +17,8 @@ internal sealed record ConductorStatusSnapshot(
     IReadOnlyList<ProviderUsageHoldRow>? ProviderHolds = null,
     ProcessJobReading? SupervisorJob = null,
     ConductorStatusSnapshot.LoopBuildObservation? LoopBuild = null,
-    ConductorStatusSnapshot.LateFleetAdoptionObservation? LateFleetAdoption = null)
+    ConductorStatusSnapshot.LateFleetAdoptionObservation? LateFleetAdoption = null,
+    ConductorStatusSnapshot.MainFullVerificationObservation? MainFullVerification = null)
 {
     internal string ConductorState => OwnerPid is null ? "stopped" : Since.Kind == "starting" ? "starting" : "running";
 
@@ -26,6 +27,8 @@ internal sealed record ConductorStatusSnapshot(
     internal sealed record GenerationObservation(string State, string? Build, string? Main);
     internal sealed record LoopBuildObservation(string? Commit, string Source);
     internal sealed record LateFleetAdoptionObservation(string Commit, DateTimeOffset AdoptedAt, TimeSpan Elapsed);
+    internal sealed record MainFullVerificationObservation(string Commit, string Result,
+        DateTimeOffset? StartedAt, DateTimeOffset CompletedAt, double DurationSeconds);
     internal sealed record GoalObservation(string Id, string Status, string Role, GoalLandingBlocker? LandingBlocker = null,
         IReadOnlyList<ConductorStatusClarification>? Clarifications = null,
         PlannerBriefAmendmentRevisionPendingHold? AmendmentRevisionPending = null);

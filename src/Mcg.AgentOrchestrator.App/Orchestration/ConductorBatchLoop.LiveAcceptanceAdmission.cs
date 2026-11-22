@@ -63,7 +63,8 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlyList<ConductorParallelAcceptanceAttempt> activeAttempts,
         IReadOnlySet<string> activeAttemptIds,
         ConductorAcceptanceCapacitySnapshot activeCohorts,
-        IReadOnlyList<GateLoadContextProbe.LiveGateOccupant> liveGates)
+        IReadOnlyList<GateLoadContextProbe.LiveGateOccupant> liveGates,
+        string? mainVerificationRunId = null)
     {
         var occupants = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var claimedProcessIds = new HashSet<int>();
@@ -99,6 +100,12 @@ internal sealed partial class ConductorBatchLoop
                 $"cohort:{root.Key}",
                 memberIds.Length == 0 ? $"root:{ShortIdentity(root.Key)}" : $"goal:{ShortIdentity(memberIds[0])}");
             claimedGoalIds.UnionWith(memberIds);
+        }
+
+        if (mainVerificationRunId is not null)
+        {
+            claimedRunIds.Add(mainVerificationRunId);
+            occupants.Add(mainVerificationRunId, "main-full-verification");
         }
 
         foreach (var gate in liveGates.OrderBy(gate => gate.Identity, StringComparer.OrdinalIgnoreCase))
@@ -159,7 +166,7 @@ internal sealed partial class ConductorBatchLoop
         ConductorAcceptanceCapacitySnapshot activeCohorts,
         int tick,
         List<string> changedGoalLines,
-        bool blockAdmissionOnFailure)
+        bool blockAdmissionOnFailure, string? mainVerificationRunId = null)
     {
         try
         {
@@ -168,7 +175,7 @@ internal sealed partial class ConductorBatchLoop
                 activeAttempts,
                 activeAttemptIds,
                 activeCohorts,
-                liveGates);
+                liveGates, mainVerificationRunId);
             var tally = ActivationAdmissionPreparingAttemptCensus.Evaluate(activeAttempts, liveGates, DateTimeOffset.UtcNow);
             ActivationAdmissionAccumulator.Current.Value?.RecordCensus(census.OccupiedCount, tally);
             return census;
@@ -179,11 +186,20 @@ internal sealed partial class ConductorBatchLoop
             RecordParallelAcceptanceProgress(
                 $"ADMISSION tick={tick} detail=live-census-unavailable error={SanitizeReason(ex.Message)}",
                 changedGoalLines);
-            var lifecycleCensus = BuildLiveAcceptanceCensus(activeAttempts, activeAttemptIds, activeCohorts, []);
+            var lifecycleCensus = BuildLiveAcceptanceCensus(activeAttempts, activeAttemptIds, activeCohorts, [], mainVerificationRunId);
             return blockAdmissionOnFailure
                 ? lifecycleCensus with { CaptureFailure = ex }
                 : lifecycleCensus;
         }
+    }
+
+    private bool CanAdmitIdleMainVerification(ConductorDriver driver, int width, int tick)
+    {
+        var attempts = driver.ParallelAcceptanceAttemptCoordinator.GetAllCapacityReservingAttempts();
+        var ids = attempts.Select(attempt => attempt.AttemptId).ToHashSet(StringComparer.Ordinal);
+        var census = CaptureLiveAcceptanceCensus(attempts, ids, driver.GetActiveAcceptanceCohortCapacity(),
+            tick, [], blockAdmissionOnFailure: true);
+        return DecideLiveAcceptanceAdmission(census, width).IsAdmitted;
     }
 
     private static string ShortIdentity(string value) =>

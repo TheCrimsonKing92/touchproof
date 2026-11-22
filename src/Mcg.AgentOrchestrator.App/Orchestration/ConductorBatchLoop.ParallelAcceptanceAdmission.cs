@@ -262,7 +262,7 @@ internal sealed partial class ConductorBatchLoop
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = ConductorTickStepLedger.Measure("prep-census", () => CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,
-            changedGoalLines, blockAdmissionOnFailure: true));
+            changedGoalLines, blockAdmissionOnFailure: true, _mainFullVerification?.ActiveRunId));
         ConductorTickStepLedger.Measure("prep-plan-receipt", () => EmitSpeculativeCohortPlanReceipt(scopedGoals, verifiedGoalIdsAtTickStart,
             preWalkIntentChangedGoalIds, eligible, state.OrderedEligible, speculativeCandidates,
             state.LiveAttempts, state.ActiveCohortCapacity, state.AcceptanceCensus, driver, policy,
@@ -375,7 +375,7 @@ internal sealed partial class ConductorBatchLoop
             state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
             state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
                 state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick, changedGoalLines,
-                blockAdmissionOnFailure: true);
+                blockAdmissionOnFailure: true, _mainFullVerification?.ActiveRunId);
             state.CohortEligible = state.CohortEligible
                 .Where(goal => !state.Results.ContainsKey(goal.Id.Value))
                 .ToArray();
@@ -646,7 +646,7 @@ internal sealed partial class ConductorBatchLoop
                 state.ActiveCohortCapacity,
                 tick,
                 changedGoalLines,
-                blockAdmissionOnFailure: true);
+                blockAdmissionOnFailure: true, _mainFullVerification?.ActiveRunId);
             }
             catch (AcceptanceArtifactWriterLeaseBusyException ex)
             {
