@@ -581,8 +581,9 @@ internal sealed partial class OperatorIntentCoordinator
             case OperatorIntentVerbs.CriterionEvidenceRecord:
                 var receipt = Deserialize<CriterionEvidenceReceiptOperatorIntentPayload>(intent);
                 var duty = goal.CriterionEvidenceObligations.SingleOrDefault(item => item.Id == receipt.ObligationId);
-                if (duty?.Phase == CriterionEvidencePhase.PostLanding && intent.ActorKind != OperatorActorKind.Human)
-                    throw new InvalidOperationException("Post-landing observations require attributed human operator authority.");
+                var isPostLanding = duty?.Phase == CriterionEvidencePhase.PostLanding;
+                if (isPostLanding && intent.ActorKind is not (OperatorActorKind.Human or OperatorActorKind.Agent))
+                    throw new InvalidOperationException("Post-landing observations require an attributed human or agent actor.");
                 if (receipt.Owner != CriterionEvidenceOwner.Operator)
                 {
                     throw new InvalidOperationException(
@@ -598,7 +599,8 @@ internal sealed partial class OperatorIntentCoordinator
                     receipt.Passed,
                     receipt.Detail,
                     receipt.Observation,
-                    duty?.Phase == CriterionEvidencePhase.PostLanding ? intent.Actor : null);
+                    isPostLanding ? intent.Actor : null,
+                    isPostLanding ? intent.ActorKind : null);
                 return;
             case OperatorIntentVerbs.CriterionEvidenceRephase:
                 var rephase = Deserialize<CriterionEvidenceRephaseOperatorIntentPayload>(intent);
