@@ -73,6 +73,7 @@ internal static class AuthorBriefDraftPrompt
         Tester owns; Acceptance executes. TEST-VERIFIABLE.
         Reviewer owns; Reviewer executes. TEST-VERIFIABLE.
         Operator owns; Operator executes. REAL-WORLD-DEPENDENT.
+        A criterion that requires a committed test, file or other artifact always uses "Developer owns; Acceptance executes. TEST-VERIFIABLE." Use the Tester line only for evidence the Tester produces by running existing tests or requesting focused evidence.
         Brief lint blocks a draft that contains any of these words anywhere, including code spans, quoted evidence and file paths, so never write them: {{string.Join(", ", GoalReadinessPreflight.HighRiskSignalWords)}}.
         Say the same thing in other words, and describe a file in prose instead of citing its path when the path contains one of those words.
         Cite every file by its full repository-relative path on every mention, never by bare file name, and cite a line range as path:start-end.
