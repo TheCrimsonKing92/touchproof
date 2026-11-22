@@ -487,6 +487,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         internal int CheckCalls => Volatile.Read(ref _checkCalls);
         internal int DeviceCodeProbes => Volatile.Read(ref _deviceCodeProbes);
         internal int ScheduledProviderWork => Volatile.Read(ref _scheduledProviderWork);
+        internal IProviderConnectionsConsoleGateway? ProfileGateway { get; init; }
         internal Task<IReadOnlyList<OwnerConsoleProviderConnection>>? PendingList { get; set; }
         internal TaskCompletionSource<bool> ListStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -558,7 +559,7 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         public Task<IReadOnlyList<OwnerConsoleProviderConnection>> ListAsync(CancellationToken token)
         {
             ListStarted.TrySetResult(true);
-            return PendingList?.WaitAsync(token) ?? Task.FromResult(Initial);
+            return PendingList?.WaitAsync(token) ?? ProfileGateway?.ListAsync(token) ?? Task.FromResult(Initial);
         }
 
         public Task<OwnerConsoleProviderConnection> CheckAsync(string profileId, CancellationToken token)
@@ -572,7 +573,8 @@ public sealed class OwnerConsoleProviderConnectionsTabTests
         public ProviderSignInTarget? GetSignInTarget(string profileId)
         {
             SignInLookups.Enqueue(profileId);
-            return Initial.Single(p => StringComparer.OrdinalIgnoreCase.Equals(p.Report.ProfileId, profileId)).SignIn;
+            return ProfileGateway is { } gateway ? gateway.GetSignInTarget(profileId)
+                : Initial.Single(p => StringComparer.OrdinalIgnoreCase.Equals(p.Report.ProfileId, profileId)).SignIn;
         }
 
         public Task<bool> SupportsDeviceCodeAsync(ProviderSignInTarget target, CancellationToken token)
