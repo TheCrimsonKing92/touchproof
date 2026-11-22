@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -22,12 +23,14 @@ internal static class OperatorIntentGoalApplication
         Goal goal,
         OperatorIntentCoordinator intents,
         ConductorParallelAcceptanceAttemptCoordinator attempts,
-        IReadOnlySet<string>? intentIds = null)
+        IReadOnlySet<string>? intentIds = null,
+        bool supersessionOnly = false,
+        IReadOnlySet<string>? retryAnswerIds = null)
     {
-        var result = intents.ExecutePending(kernel, goal, intentIds);
+        var result = intents.ExecutePending(kernel, goal, intentIds, retryAnswerIds);
         goal = kernel.GetGoal(goal.Id);
         var lines = new List<string>();
-        if (result.MutatedGoalState && goal.Status != GoalStatus.Completed)
+        if (result.MutatedGoalState && !supersessionOnly && goal.Status != GoalStatus.Completed)
         {
             var invalidation = AcceptanceAttemptRetryInvalidation.Apply(
                 kernel,
@@ -80,15 +83,19 @@ internal static class OperatorIntentGoalApplication
             if (goal is null)
                 return new OperatorIntentOfflineOutcome.NothingPending();
 
+            var (batch, retryAnswerIds) = OperatorIntentBatchPolicy.SelectPreparationBatch(
+                intents.CaptureGoalBatch().Where(intent => intent.GoalId == goalId.Value));
+            var supersessionOnly = batch.Count > 0 && OperatorIntentBatchPolicy.IsSupersession(batch[0]);
             var publicationBound = false;
-            if (goal.OutstandingPostLandingDuties.Any(item => item.Publication is null) &&
+            if (!supersessionOnly && goal.OutstandingPostLandingDuties.Any(item => item.Publication is null) &&
                 await repository.ReadPromotionFactAsync(goalId) is { } publication)
             {
                 kernel.BindPostLandingPublication(goalId, publication);
                 publicationBound = goal.CriterionEvidenceObligations.Any(item => item.Publication is not null &&
                     baseline.CriterionEvidenceObligations?.Any(prior => prior.Id == item.Id && prior.Publication is null) == true);
             }
-            var application = ApplyPending(kernel, goal, intents, attempts);
+            var ids = batch.Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
+            var application = ApplyPending(kernel, goal, intents, attempts, ids, supersessionOnly, retryAnswerIds);
             if (!application.Result.MutatedGoalState && !publicationBound)
             {
                 return application.Lines.Count == 0

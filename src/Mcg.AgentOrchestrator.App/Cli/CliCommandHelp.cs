@@ -309,6 +309,7 @@ internal static class CliCommandHelp
 
     public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> --criterion <brief-number>[,<brief-number>...] [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
     public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
+    public const string CriterionEvidenceSupersedeUsage = "Usage: criterion-evidence-supersede --goal <goal-prefix> <obligation-id> --reason-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
     public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> --criterion <brief-number> [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
 
     public const string CriterionEvidenceRephaseUsage = "Usage: criterion-evidence-rephase --goal <goal-prefix> <obligation-id> <repositorystate|runtime> <condition> <target> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
@@ -327,6 +328,11 @@ internal static class CliCommandHelp
         CriterionEvidenceRepairUsage,
         "Queue an attributed repair that rebinds one malformed Unknown claim; the replacement remains pending until valid evidence arrives.",
         ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--driver-session", "--help", "-h", "--json"]);
+
+    private static readonly CommandHelpEntry CriterionEvidenceSupersede = new(
+        CriterionEvidenceSupersedeUsage,
+        "Queue an attributed retirement of a pending Operator-owned post-landing duty on a completed or cleaned-up goal.",
+        ["--goal", "--reason-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--driver-session", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRephase = new(
         CriterionEvidenceRephaseUsage,
@@ -1296,6 +1302,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("criterion-evidence-record", StringComparison.OrdinalIgnoreCase))
         {
             entry = CriterionEvidenceRecord;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-supersede", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceSupersede;
             return true;
         }
 

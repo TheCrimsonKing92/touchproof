@@ -80,7 +80,7 @@ internal static class ConductorOperatorIntentBoundary
         AgentOrchestratorKernel kernel, ConductorDriver driver, string? onlyGoalId,
         IReadOnlyDictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoals,
         OperatorIntentCoordinator? operatorIntents,
-        Func<AgentOrchestratorKernel, GoalId, bool>? prepareTarget,
+        Func<AgentOrchestratorKernel, GoalId, bool, bool>? prepareTarget,
         Func<string, ConductorGoalReloadObservation> observeGoal,
         IReadOnlyList<OperatorIntentRecord>? capturedBatch = null)
     {
@@ -105,7 +105,10 @@ internal static class ConductorOperatorIntentBoundary
                 continue;
             }
 
-            var ids = target.Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
+            var (preparedBatch, retryAnswerIds) = OperatorIntentBatchPolicy.SelectPreparationBatch(target);
+            var supersessionOnly = OperatorIntentBatchPolicy.IsSupersession(preparedBatch[0]);
+            var ids = preparedBatch.Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
+            IEnumerable<OperatorIntentRecord> deferredBatch = target;
             var goalId = new GoalId(target.Key);
             var goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId);
             var before = goal is null ? null : GoalKernelChange.Capture(goal);
@@ -114,14 +117,14 @@ internal static class ConductorOperatorIntentBoundary
                 // Uncommitted effects must survive target reload, including a failed completion write.
                 var hasPendingCompletion = operatorIntents.HasPendingCompletion(target.Key);
                 var prepared = hasPendingCompletion ||
-                    (prepareTarget?.Invoke(kernel, goalId) ?? goal is not null);
+                    (prepareTarget?.Invoke(kernel, goalId, supersessionOnly) ?? goal is not null);
                 goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId);
                 if (goal is not null && before != GoalKernelChange.Capture(goal))
                     result.ChangedGoalIds.Add(goalId);
-                if (!hasPendingCompletion && prepareTarget is not null && goal?.Status == GoalStatus.Completed)
+                if (!hasPendingCompletion && !supersessionOnly && prepareTarget is not null && goal?.Status == GoalStatus.Completed)
                 {
                     var answers = CompletedGoalDeferredWaitAnswer.Service(
-                        kernel, goal, operatorIntents, driver.ParallelAcceptanceAttemptCoordinator, target.ToArray());
+                        kernel, goal, operatorIntents, driver.ParallelAcceptanceAttemptCoordinator, preparedBatch);
                     result.Lines.AddRange(answers.Lines);
                     if (answers.Mutated) result.ChangedGoalIds.Add(goalId);
                     // An inspection reload must stay outside goal work both while its
@@ -130,8 +133,10 @@ internal static class ConductorOperatorIntentBoundary
                     {
                         result.CompletedAnswerGoalIds.Add(goalId);
                         result.UnavailableGoalIds.Add(target.Key);
+                        ids = ids.Except(answers.HandledIntentIds).ToFrozenSet(StringComparer.Ordinal);
+                        retryAnswerIds = retryAnswerIds?.Except(answers.HandledIntentIds).ToFrozenSet(StringComparer.Ordinal);
+                        deferredBatch = target.Where(intent => !answers.HandledIntentIds.Contains(intent.Id));
                     }
-                    ids = ids.Except(answers.HandledIntentIds).ToFrozenSet(StringComparer.Ordinal);
                     if (ids.Count == 0) continue;
                 }
                 if (!prepared || goal is null)
@@ -144,9 +149,8 @@ internal static class ConductorOperatorIntentBoundary
                     }
                     else
                     {
-                        // Keep the frozen members for the ordinary post-maintenance application
-                        // path. Deferral alone must not exclude a loaded target from the walk.
-                        result.DeferredIntents.AddRange(target.Where(intent => ids.Contains(intent.Id)));
+                        // Reselect from the same capture after maintenance, including retry answers.
+                        result.DeferredIntents.AddRange(deferredBatch);
                         result.AwaitingReload++;
                         EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(target.Key)} result=deferred reason=awaiting-goal-reload");
                     }
@@ -154,12 +158,12 @@ internal static class ConductorOperatorIntentBoundary
                 }
 
                 var application = OperatorIntentGoalApplication.ApplyPending(
-                    kernel, goal, operatorIntents, driver.ParallelAcceptanceAttemptCoordinator, ids);
+                    kernel, goal, operatorIntents, driver.ParallelAcceptanceAttemptCoordinator, ids, supersessionOnly, retryAnswerIds);
                 goal = kernel.GetGoal(goalId);
                 result.Lines.AddRange(application.Lines);
                 if (application.Result.MutatedGoalState || application.Result.RejectedAdjudication)
                     result.ChangedGoalIds.Add(goalId);
-                if (application.Result.MutatedGoalState && goal.Status != GoalStatus.Completed)
+                if (application.Result.MutatedGoalState && !supersessionOnly && goal.Status != GoalStatus.Completed)
                     result.AppliedGoalIds.Add(goalId);
             }
             catch (Exception ex)
