@@ -16,14 +16,9 @@ internal static class OwnerProviderHoldNarration
     internal static string? SignInProvider(OwnerConductEvent evt)
     {
         if (evt.EventKind is not ("provider-hold-placed" or "provider-hold-check" or "provider-hold-overdue") ||
-            OwnerEventFields.Field(evt, "diagnosis") is not { Length: > 0 } diagnosis ||
-            !RequiresSignIn(Uri.UnescapeDataString(diagnosis)) || Binding(evt) is not { } binding) return null;
-        var separator = binding.IndexOf("::", StringComparison.Ordinal);
-        return separator > 0 && binding[..separator].Trim() is { Length: > 0 } provider ? provider : null;
+            OwnerEventFields.Field(evt, "diagnosis") is not { Length: > 0 } diagnosis) return null;
+        return OwnerProviderSignIn.Provider(Binding(evt), Uri.UnescapeDataString(diagnosis));
     }
-
-    private static bool RequiresSignIn(string diagnosis) =>
-        diagnosis.Contains("last confirmed: authentication-required", StringComparison.Ordinal);
 
     internal static bool TryNarrate(OwnerConductEvent evt, out string sentence, out string reason,
         out string nextStep, out string ownerAction)
@@ -86,7 +81,7 @@ internal static class OwnerProviderHoldNarration
             OwnerEventFields.Field(evt, "diagnosis") is not { Length: > 0 } diagnosis) return false;
         var overdue = evt.EventKind == "provider-hold-overdue" || OwnerEventFields.Field(evt, "state") == "probe-overdue";
         reason = (overdue ? $"The probe became due {OwnerEventFields.Field(evt, "due")}; " : "") + Uri.UnescapeDataString(diagnosis);
-        var auth = RequiresSignIn(reason);
+        var auth = OwnerProviderSignIn.RequiresSignIn(reason);
         sentence = auth ? $"Provider sign-in required: {name}" : overdue
             ? $"Provider check overdue: {name} balance unverified" : $"Provider availability unverified: {name}";
         nextStep = "Protective admission remains until a successful current same-binding availability check.";
