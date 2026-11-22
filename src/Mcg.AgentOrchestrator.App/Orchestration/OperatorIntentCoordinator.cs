@@ -314,20 +314,24 @@ internal sealed partial class OperatorIntentCoordinator
                 break;
             }
 
-            GoalLifecycleState? lifecycleState = null;
-            if (intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede && goal.Status == GoalStatus.Verified)
-            {
-                try { lifecycleState = ResolveLifecycleState?.Invoke(goal); }
-                catch (Exception ex)
-                {
-                    // Keep the claim retryable. An unreadable lifecycle cannot prove a rule violation.
-                    lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=retryable reason=lifecycle-read-failed detail={Sanitize(ex.Message)}");
-                    break;
-                }
-            }
-
             try
             {
+                GoalLifecycleState? lifecycleState = null;
+                if (intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede && goal.Status == GoalStatus.Verified)
+                {
+                    var request = Deserialize<CriterionEvidenceSupersedeOperatorIntentPayload>(intent);
+                    var obligation = goal.CriterionEvidenceObligations.FirstOrDefault(item => item.Id == request.ObligationId)
+                        ?? throw new KeyNotFoundException($"Criterion evidence obligation '{request.ObligationId}' was not found.");
+                    CriterionEvidenceSupersession.ValidateRequest(obligation, intent.Actor, request.Reason);
+                    try { lifecycleState = ResolveLifecycleState?.Invoke(goal); }
+                    catch (Exception ex)
+                    {
+                        // Keep the claim retryable when only the lifecycle rule is unresolved.
+                        lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=retryable reason=lifecycle-read-failed detail={Sanitize(ex.Message)}");
+                        break;
+                    }
+                }
+
                 ValidateCompletedDutyIntent(goal, intent);
                 var retryClarification = HandleRetryClarification(kernel, goal, intent, out var blockers);
                 if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or

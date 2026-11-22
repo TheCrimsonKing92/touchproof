@@ -216,6 +216,32 @@ public sealed class CriterionEvidenceSupersedeIntentTests
     }
 
     [Theory]
+    [InlineData("pre", Reason, "must be PostLanding")]
+    [InlineData("satisfied", Reason, "must be Pending")]
+    [InlineData("acceptance", Reason, "must be Operator-owned")]
+    [InlineData("post", " \r\n ", "nonempty supersede reason")]
+    public async Task MalformedCleanupJournal_RejectsIneligibleIntentWithoutChangingGoal(
+        string target, string reason, string rule)
+    {
+        using var scenario = new Scenario(GoalStatus.Verified, target);
+        await scenario.Repository.SaveAsync(scenario.Kernel);
+        var goalId = scenario.Goal.Id;
+        var directory = scenario.Workspace.ExecutionDirectory;
+        GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:land", "Landed.");
+        GoalOperationJournal.Completed(directory, scenario.Goal, "conductor:record", "Recorded.");
+        File.AppendAllText(GoalOperationJournal.PathFor(directory, goalId), "{\"operation\":\"conductor:cleanup\"");
+        var intent = await scenario.Enqueue(reason);
+        var before = JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(goalId));
+        var coordinator = OperatorIntentCoordinator.CreateDefault(scenario.Workspace);
+
+        Assert.Empty(scenario.ApplyTickBoundary(coordinator).ChangedGoalIds);
+        var rejected = (await scenario.Store.GetAsync(intent.Id))!;
+        Assert.Equal(OperatorIntentStatus.Rejected, rejected.Status);
+        Assert.Contains(rule, rejected.Outcome, StringComparison.Ordinal);
+        Assert.Equal(before, JsonSerializer.Serialize(scenario.Kernel.ExportGoalSnapshot(goalId)));
+    }
+
+    [Theory]
     [InlineData(GoalLifecycleState.CleanedUp)]
     [InlineData(GoalLifecycleState.Verified)]
     public async Task UnreadableLifecycle_KeepsClaimUntilAuthoritativeRetry(GoalLifecycleState recoveredState)
