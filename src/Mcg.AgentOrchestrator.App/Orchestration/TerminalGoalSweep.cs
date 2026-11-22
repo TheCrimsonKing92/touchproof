@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Globalization;
 using System.Text.Json;
@@ -420,7 +421,9 @@ internal static partial class TerminalGoalSweep
         CohortAcceptanceStore? cohortAcceptanceStore = null,
         bool reclaimGoalRoots = false,
         BackgroundDispatchRunner? dispatchRunner = null,
-        OrchestratorWorkspace? workspace = null)
+        OrchestratorWorkspace? workspace = null,
+        int buildRootReapIntervalSeconds = ConductorAutonomyPolicy.DefaultBuildRootReapIntervalSeconds,
+        IEnumerable<(GoalId Id, bool IsTerminal)>? buildRootGoalObservation = null)
     {
         var runTiming = System.Diagnostics.Stopwatch.StartNew();
         var setupTiming = System.Diagnostics.Stopwatch.StartNew();
@@ -456,7 +459,9 @@ internal static partial class TerminalGoalSweep
         };
         setupTiming.Stop();
         var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
-        var ownedRoots = ConductorTickStepLedger.Measure("owned-root-reap", () => ReapOwnedBuildRoots(workspace.SqliteStatePath, reclaimGoalRoots));
+        var ownedRoots = ConductorTickStepLedger.Measure("owned-root-reap", () => ReapOwnedBuildRoots(
+            workspace.SqliteStatePath, reclaimGoalRoots, goals: buildRootGoalObservation ?? ObserveBuildRootGoals(kernel),
+            buildRootReapIntervalSeconds: buildRootReapIntervalSeconds));
         ownedRootTiming.Stop();
         var gitIndexTiming = System.Diagnostics.Stopwatch.StartNew();
         var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, integrationBranch, gitRunner, cache?.BranchContentStates, cache?.GitFactSnapshots);
