@@ -110,7 +110,7 @@ internal static class CliCommandHelp
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
-    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>] [--whole-gate [--goal <prefix>] [--max-lanes <n>]]";
+    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>] [--wait <minutes>] [--whole-gate [--goal <prefix>] [--max-lanes <n>]]";
     public const string ImpactReplayStatusUsage = "Usage: impact-replay --status --checkpoint-file <path>";
     public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] [--attempts-file <path>] --out <directory> [--floor <name> ...]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -742,8 +742,8 @@ internal static class CliCommandHelp
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
     private static readonly CommandHelpEntry ExecutorScreen = new(
-        ExecutorScreenUsage, "Screen a candidate on an idle executor. --whole-gate requires --executor and selects passed local gates. Use --goal for a specific goal and --max-lanes to cap lane submissions.",
-        ["--max-candidates", "--executor", "--whole-gate", "--goal", "--max-lanes", "--help", "-h"]);
+        ExecutorScreenUsage, "Screen a candidate on an idle executor. Use --wait to retry when a slot is busy. --whole-gate requires --executor and selects passed local gates. Use --goal for a specific goal and --max-lanes to cap lane submissions.",
+        ["--max-candidates", "--executor", "--wait", "--whole-gate", "--goal", "--max-lanes", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
         ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor. Use --attempts-file to select listed attempt ids. It cannot be combined with --since or --limit.",
         ["--since", "--limit", "--attempts-file", "--out", "--floor", "--status", "--checkpoint-file", "--help", "-h"]);

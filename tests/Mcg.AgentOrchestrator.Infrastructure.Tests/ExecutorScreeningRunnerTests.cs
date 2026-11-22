@@ -186,7 +186,7 @@ public sealed class ExecutorScreeningRunnerTests
                 }
                 return new GoalAcceptanceVerifier.CommandResult(1, "");
             }, TimeSpan.Zero, null);
-        Task<ExecutorScreeningReceipt?>? work = null;
+        Task<ExecutorScreeningReceipt>? work = null;
         try
         {
             await pollEntered.Task.WaitAsync(TimeSpan.FromSeconds(30)); // Hang-only event bound.
@@ -241,7 +241,11 @@ public sealed class ExecutorScreeningRunnerTests
         using (var held = RemoteExecutorOccupancy.TryClaimExclusive(fixture.Root, fixture.Entry.Id, 1))
         {
             Assert.NotNull(held);
-            Assert.Null(await fixture.Run(Lanes("A")));
+            var outcome = await fixture.RunAttempt(Lanes("A"));
+            var refusal = Assert.IsType<ExecutorScreeningRefusal>(outcome.Refusal);
+            Assert.Equal(ExecutorScreeningRefusalCause.SlotBusy, refusal.Cause);
+            Assert.Equal(1, refusal.Slot);
+            Assert.Empty(refusal.Holders);
             Assert.Empty(fixture.Executor.Requests);
             Assert.False(File.Exists(fixture.ReceiptPath));
             Assert.False(RemoteExecutorOccupancy.IsOccupied(fixture.Root, fixture.Entry.Id));
@@ -294,7 +298,11 @@ public sealed class ExecutorScreeningRunnerTests
             Executor.Submit = (request, _) => Task.FromResult(PassingSubmission(request));
         }
 
-        internal Task<ExecutorScreeningReceipt?> Run(IReadOnlyList<AcceptanceTestLane> lanes, TimeSpan? timeout = null) =>
+        internal async Task<ExecutorScreeningReceipt> Run(IReadOnlyList<AcceptanceTestLane> lanes, TimeSpan? timeout = null) =>
+            (await RunAttempt(lanes, timeout)).Receipt;
+
+        internal Task<ExecutorScreeningOutcome<ExecutorScreeningReceipt>> RunAttempt(
+            IReadOnlyList<AcceptanceTestLane> lanes, TimeSpan? timeout = null) =>
             ExecutorScreeningRunner.RunAsync(Candidate, Entry, new(lanes, []), Configuration, Executor, Root,
                 ReceiptPath, Guid.NewGuid().ToString("N"), timeout ?? TimeSpan.FromHours(1), Clock, TimeSpan.FromMilliseconds(1));
 

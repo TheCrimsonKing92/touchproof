@@ -73,7 +73,7 @@ public sealed class ExecutorWholeGateTrialTests
             fixture.Clock.Advance(TimeSpan.FromSeconds(7));
             Publish("local-b");
             Publish("keyless-a");
-            Assert.NotNull(await work.WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.Null((await work.WaitAsync(TimeSpan.FromSeconds(30))).Refusal);
         }
         finally
         {
@@ -144,7 +144,7 @@ public sealed class ExecutorWholeGateTrialTests
             await firstTwo.Task.WaitAsync(TimeSpan.FromSeconds(30));
             Assert.Equal(new[] { "A", "C" }, fixture.Executor.Requests.Select(request => request.Filter));
             first.Publish(fixture.Result(fixture.Executor.Requests.First()));
-            Assert.Equal(ExecutorWholeGateTrialStatus.Complete, (await work.WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
+            Assert.Equal(ExecutorWholeGateTrialStatus.Complete, (await work.WaitAsync(TimeSpan.FromSeconds(30))).Receipt.Status);
             Assert.Equal(new[] { "A", "C", "B" }, fixture.Executor.Requests.Select(request => request.Filter));
         }
         finally
@@ -393,12 +393,13 @@ public sealed class ExecutorWholeGateTrialTests
             };
             return Task.FromResult(new RemoteLaneSubmission(handle));
         };
-        var receipt = await ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry,
+        var outcome = await ExecutorScreeningRunner.RunWholeGateAsync(fixture.Candidate, fixture.Entry,
             Plan([Lane("A", 2, "a"), Lane("B", 1, "b")]), configuration, fixture.Executor, fixture.Root,
             fixture.ReceiptPath, "partial", fixture.Clock, TimeSpan.Zero, null, null);
         Assert.Equal("A", Assert.Single(fixture.Executor.Requests).Filter);
         Assert.True(handle!.IsAbandoned);
-        Assert.Equal(ExecutorWholeGateTrialStatus.Incomplete, receipt!.Status);
+        var receipt = outcome.Receipt;
+        Assert.Equal(ExecutorWholeGateTrialStatus.Incomplete, receipt.Status);
         Assert.Equal(new[] { "lease-expired", "executor-completion-unconfirmed" },
             receipt.Lanes.Select(lane => lane.ExecutionFailure));
         Assert.All(receipt.Lanes, lane => { Assert.Null(lane.Passed); Assert.Null(lane.Failed); });
