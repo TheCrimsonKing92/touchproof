@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -9,11 +10,18 @@ internal static class CSharpSourceFileRootReader
         ReadFile(path, onParse).Root;
 
     internal static FocusedEvidenceParsedRootCache.ParsedFile ReadFile(string path, Action? onParse = null) =>
-        FocusedEvidenceParsedRootCache.Get(path, sourcePath =>
+        ReadFile(FocusedEvidenceParsedRootCache.Shared, path, onParse);
+
+    internal static FocusedEvidenceParsedRootCache.ParsedFile ReadFile(
+        FocusedEvidenceParsedRootCache.Store store, string path, Action? onParse = null) =>
+        store.Get(path, (sourcePath, bytes) =>
         {
-            var text = File.ReadAllText(sourcePath);
+            using var stream = new MemoryStream(bytes, writable: false);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var text = reader.ReadToEnd();
+            var tree = CSharpSyntaxTree.ParseText(text);
             FocusedEvidenceParsedRootCache.RecordParse(sourcePath);
             onParse?.Invoke();
-            return CSharpSyntaxTree.ParseText(text, path: sourcePath).GetCompilationUnitRoot();
+            return tree.GetCompilationUnitRoot();
         });
 }
