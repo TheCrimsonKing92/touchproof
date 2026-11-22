@@ -78,12 +78,20 @@ internal sealed class ConductEventLogWriter
             return;
         }
 
-        lock (_lock)
+        // The path mutex serializes this advisory append with regular writes and rotation.
+        // Stdout and the tick receipt carry the counters even when the shared stream is busy.
+        using var crossProcessGate = new Mutex(initiallyOwned: false, _requiredEventMutexName);
+        if (!AcquireRequiredEventMutex(crossProcessGate, millisecondsTimeout: 0))
+            return;
+
+        try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
-            // Regular progress appends handle draining and rotation. This advisory line has no goal change.
-            WithRequiredEventGate(() => File.AppendAllText(
-                _path, Serialize(eventKind, goalId, detail, timestamp)));
+            File.AppendAllText(_path, Serialize(eventKind, goalId, detail, timestamp));
+        }
+        finally
+        {
+            crossProcessGate.ReleaseMutex();
         }
     }
 
@@ -231,27 +239,27 @@ internal sealed class ConductEventLogWriter
         lock (RequiredEventDrainGate)
         {
             using var crossProcessGate = new Mutex(initiallyOwned: false, _requiredEventMutexName);
-            var ownsGate = false;
+            AcquireRequiredEventMutex(crossProcessGate, Timeout.Infinite);
             try
             {
-                try
-                {
-                    ownsGate = crossProcessGate.WaitOne();
-                }
-                catch (AbandonedMutexException)
-                {
-                    ownsGate = true;
-                }
-
                 return action();
             }
             finally
             {
-                if (ownsGate)
-                {
-                    crossProcessGate.ReleaseMutex();
-                }
+                crossProcessGate.ReleaseMutex();
             }
+        }
+    }
+
+    private static bool AcquireRequiredEventMutex(Mutex gate, int millisecondsTimeout)
+    {
+        try
+        {
+            return gate.WaitOne(millisecondsTimeout);
+        }
+        catch (AbandonedMutexException)
+        {
+            return true;
         }
     }
 
