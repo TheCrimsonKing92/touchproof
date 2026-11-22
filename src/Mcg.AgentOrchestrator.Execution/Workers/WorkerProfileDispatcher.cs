@@ -235,7 +235,8 @@ public static partial class WorkerProfileDispatcher
         }
         var generatedHandoff = WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var (contextDirectory, linkedBacklogPointer) = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
-            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory, targetHome, backlogStorePath, integrationBranch);
+            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory,
+            targetHome, backlogStorePath, excerptScope);
         var currentMainIdentity = excerptScope?.IntegrationCommit ??
             (reviewerScopeMissingFromDispatch ? null : ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch));
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(

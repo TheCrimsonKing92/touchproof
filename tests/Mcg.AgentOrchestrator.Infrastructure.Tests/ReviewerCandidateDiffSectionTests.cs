@@ -247,25 +247,90 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         using var repo = new InProcessGitFixture(commit: false);
         const string path = "one\nname.txt";
         const string escapedPath = "\"one\\nname.txt\"";
+        const string literalPath = escapedPath;
+        var escapedLiteralPath = JsonSerializer.Serialize(literalPath);
         repo.Git("commit", "--allow-empty", "-m", "Base");
         Write(repo, "blob.txt", "control-path-sentinel\n");
+        Write(repo, "literal.txt", "literal-path-sentinel\n");
         var blob = repo.Git("hash-object", "-w", "blob.txt");
+        var literalBlob = repo.Git("hash-object", "-w", "literal.txt");
         // Construct the commit without checking out a name Windows cannot represent.
         var tree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds,
-            $"100644 blob {blob}\t{path}\0", "mktree", "-z");
+            $"100644 blob {blob}\t{path}\0" +
+            $"100644 blob {literalBlob}\t{literalPath}\0", "mktree", "-z");
         Assert.True(tree.Succeeded && !tree.DrainTimedOut, tree.Error);
         var candidate = repo.Git("commit-tree", tree.Output.Trim(), "-p", "HEAD", "-m", "Control path");
         repo.Git("update-ref", "refs/heads/candidate", candidate);
         repo.Git("symbolic-ref", "HEAD", "refs/heads/candidate");
         var scope = Capture(repo);
-        Assert.Equal(path, Assert.Single(scope.ChangedFiles));
+        Assert.Equal(new[] { literalPath, path }, scope.ChangedFiles);
 
         var dispatch = Prepare(repo, NewWork(AgentRole.Reviewer), typed, scope);
         var prompt = File.ReadAllText(dispatch.PromptPath);
         var preview = prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)];
         Assert.Contains($"- {escapedPath}{Environment.NewLine}", preview);
+        Assert.Contains($"- {escapedLiteralPath}{Environment.NewLine}", preview);
         Assert.DoesNotContain(path, preview);
-        Assert.Contains($"### {escapedPath}\n@@ -0,0 +1 @@\n+control-path-sentinel", CandidateSection(prompt));
+        var section = CandidateSection(prompt);
+        Assert.Contains($"### {escapedPath}\n@@ -0,0 +1 @@\n+control-path-sentinel", section);
+        Assert.Contains($"### {escapedLiteralPath}\n@@ -0,0 +1 @@\n+literal-path-sentinel", section);
+    }
+
+    [Fact]
+    public void UnicodePathSurvivesRawScopeCaptureAndExcerptRendering()
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        const string path = "review-\u65E5\u672C\u8A9E.txt";
+        repo.Git("commit", "--allow-empty", "-m", "Base");
+        repo.Git("switch", "-c", "candidate");
+        Write(repo, path, "unicode-path-sentinel\n");
+        Commit(repo, "Unicode filename");
+        // Git's quoted output is ASCII even when the host console code page is legacy.
+        Assert.Equal("\"review-\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt\"",
+            repo.Git("-c", "core.quotePath=true", "diff", "--name-only", "trunk...HEAD"));
+
+        var scope = Capture(repo);
+        Assert.Equal(path, Assert.Single(scope.ChangedFiles));
+        var prompt = File.ReadAllText(Prepare(repo, NewWork(AgentRole.Reviewer), true, scope).PromptPath);
+        Assert.Contains($"- {path}{Environment.NewLine}", prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)]);
+        Assert.Contains($"### {path}\n@@ -0,0 +1 @@\n+unicode-path-sentinel", CandidateSection(prompt));
+    }
+
+    [Fact]
+    public void DeliversCapturedDeletionWhenPathFilteringWouldReclassifyItAsARename()
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        repo.Git("config", "diff.renames", "true");
+        repo.Git("config", "diff.renameLimit", "1");
+        string[] paths = ["entry", "other"];
+        foreach (var path in paths)
+            Write(repo, path, string.Concat(Enumerable.Range(1, 32).Select(i => $"{path} original line {i:D2}\n")));
+        Commit(repo, "Base files");
+        repo.Git("switch", "-c", "candidate");
+        foreach (var path in paths)
+        {
+            var fullPath = Path.Combine(repo.Worktree, path);
+            var original = File.ReadAllText(fullPath);
+            File.Delete(fullPath);
+            Directory.CreateDirectory(fullPath);
+            Write(repo, $"{path}/nested.txt", original + $"{path} extra line\n");
+        }
+        Commit(repo, "Replace files with similar descendants");
+        var scope = Capture(repo);
+        foreach (var path in paths)
+        {
+            Assert.Contains(new ReviewerScopedChange(path, null, 'D', true), scope.Changes);
+            Assert.Empty(repo.Git("--literal-pathspecs", "diff", "--diff-filter=D", Range(scope), "--", path));
+        }
+        var oracle = repo.Git("diff", "--no-ext-diff", "--no-textconv", "--no-color", Range(scope), "--");
+
+        var prompt = File.ReadAllText(Prepare(repo, NewWork(AgentRole.Reviewer), true, scope).PromptPath);
+        var section = CandidateSection(prompt);
+        foreach (var path in paths)
+        {
+            Assert.Contains($"### {path}\n{Hunks(oracle, path)}", section);
+            Assert.Contains($"### {path}/nested.txt\n{Hunks(oracle, $"{path}/nested.txt")}", section);
+        }
     }
 
     [Fact]
@@ -354,6 +419,15 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Empty(patch.Text);
     }
 
+    [Fact]
+    public void EmptyPatchForExpectedScopedContentIsUnavailable()
+    {
+        var change = new ReviewerScopedChange(Alpha, null, 'D', true);
+        using var stream = new MemoryStream();
+        var patch = ReviewerCandidateDiffSection.ReadPatch(stream, 512, change);
+        Assert.Equal(ReviewerCandidateDiffSection.PatchKind.Failed, patch.Kind);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -378,6 +452,7 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         var dispatch = Prepare(repo, work, true, scope);
         var originalSection = CandidateSection(File.ReadAllText(dispatch.PromptPath));
         var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(JsonSerializer.Serialize(work.Kernel.ExportSnapshot()))!;
+        File.Delete(DeliveredChecklistPath(repo, work));
         File.Delete(dispatch.PromptPath);
         Write(repo, Alpha, "later-restore-sentinel\n");
         Write(repo, "later-only.txt", "later-path-sentinel\n");
@@ -403,6 +478,12 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.Contains(Alpha, prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)]);
         Assert.Contains(Beta, prompt[..prompt.IndexOf(Heading, StringComparison.Ordinal)]);
         Assert.Equal(originalSection, CandidateSection(prompt));
+        var checklist = File.ReadAllText(DeliveredChecklistPath(repo, reloaded));
+        Assert.Contains($"Scope checks: git diff {Range(scope)}", checklist);
+        Assert.Contains("Committed branch-diff files: 2", checklist);
+        Assert.Contains($"- `{Alpha}`", checklist);
+        Assert.Contains($"- `{Beta}`", checklist);
+        Assert.DoesNotContain("later-only.txt", checklist);
     }
 
     [Fact]
@@ -426,6 +507,7 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         });
         Assert.Null(reloaded.Task.LastDispatch?.ReviewerScope);
 
+        File.Delete(DeliveredChecklistPath(repo, reloaded));
         File.Delete(dispatch.PromptPath);
         Write(repo, Alpha, "later-restore-sentinel\n");
         Commit(repo, "Move candidate before legacy restoration");
@@ -440,6 +522,10 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
         Assert.DoesNotContain("Changed files: 0", prompt);
         Assert.DoesNotContain("later-restore-sentinel", prompt);
         Assert.DoesNotContain(Heading, prompt);
+        var checklist = File.ReadAllText(DeliveredChecklistPath(repo, reloaded));
+        Assert.Contains("Committed branch diff unavailable:", checklist);
+        Assert.Contains("Requires tests: unknown", checklist);
+        Assert.DoesNotContain("Committed branch-diff files: 0", checklist);
     }
 
     private static InProcessGitFixture DivergentCandidate()
@@ -507,6 +593,15 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
     {
         var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot);
         return new Work(kernel, kernel.GetGoal(work.Goal.Id), kernel.GetTask(work.Goal.Id, work.Task.Id));
+    }
+
+    private static string DeliveredChecklistPath(InProcessGitFixture repo, Work work)
+    {
+        var receipt = Assert.IsType<WorkerContextPackageReceipt>(work.Task.LastDispatch?.ContextPackageReceipt);
+        var section = Assert.Single(receipt.Sections,
+            candidate => candidate.LogicalIdentity == "context/deterministic-verification.md");
+        Assert.NotNull(section.MandatoryRelativePath);
+        return Path.Combine(repo.Worktree, section.MandatoryRelativePath);
     }
 
     private static WorkerProfileDispatchResult Prepare(InProcessGitFixture repo, Work work, bool typed,

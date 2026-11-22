@@ -125,5 +125,8 @@ internal static class ReviewerChangedFileScopeBriefSection
     }
 
     internal static string DisplayPath(string path) =>
-        path.Any(char.IsControl) ? JsonSerializer.Serialize(path) : path;
+        path.Any(character => char.IsControl(character) || character == '"') ||
+        path.Contains(" → ", StringComparison.Ordinal)
+            ? JsonSerializer.Serialize(path)
+            : path;
 }

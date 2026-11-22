@@ -85,17 +85,20 @@ internal static class ReviewerCandidateDiffSection
 
     private static string[] PatchArguments(ReviewerChangedFileScope scope, ReviewerScopedChange change)
     {
-        // Match the captured classification. In a file/directory transition a literal pathspec
-        // can also match descendants, but these have the opposite added/deleted status.
         var args = new List<string>
         {
-            "--no-lazy-fetch", "--literal-pathspecs", $"--attr-source={scope.CandidateCommit}", "-c", "core.quotePath=true",
+            "--no-lazy-fetch", "--no-literal-pathspecs", $"--attr-source={scope.CandidateCommit}", "-c", "core.quotePath=true",
             "diff", "--patch", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative",
             "--output-indicator-new=+", "--output-indicator-old=-", "--output-indicator-context= ",
-            $"--diff-filter={change.Status}", scope.MergeBase, scope.CandidateCommit, "--", change.Path,
         };
+        // Path filtering can shrink the rename search below Git's rename limit. Keep
+        // the captured one-path classification even if a descendant matches this pathspec.
+        if (change.PreviousPath is null)
+            args.Add("--no-renames");
+        args.AddRange([$"--diff-filter={change.Status}", scope.MergeBase, scope.CandidateCommit, "--",
+            $":(top,literal){change.Path}"]);
         if (change.PreviousPath is not null)
-            args.Add(change.PreviousPath);
+            args.Add($":(top,literal){change.PreviousPath}");
         return args.ToArray();
     }
 
@@ -180,7 +183,7 @@ internal static class ReviewerCandidateDiffSection
         var fileHeaders = 0;
         var inHunk = false;
         var skipHunks = false;
-        var matchingPaths = previousPath is null;
+        var matchingPaths = change is null;
         var matchingSource = false;
         var foundMatch = matchingPaths;
         while (true)
@@ -222,6 +225,7 @@ internal static class ReviewerCandidateDiffSection
                 if (previousPath is null && ++fileHeaders > 2)
                     throw new InvalidDataException("Unexpected number of patches for a scoped path.");
                 matchingPaths = previousPath is null;
+                foundMatch |= matchingPaths;
                 matchingSource = false;
                 return true;
             }

@@ -141,7 +141,7 @@ internal sealed class WorkerGitContext
         }
 
         var mergeBase = mergeBaseResult.Output.Trim();
-        var diffResult = GitCli.Run(workingDirectory, "--no-lazy-fetch", "diff", "--raw", "-z", "--no-abbrev",
+        var diffResult = GitCli.RunWithUtf8Output(workingDirectory, "--no-lazy-fetch", "diff", "--raw", "-z", "--no-abbrev",
             "--no-ext-diff", "--no-textconv", "--no-relative", mergeBase, candidateCommit, "--");
         if (!diffResult.Succeeded || diffResult.DrainTimedOut)
         {

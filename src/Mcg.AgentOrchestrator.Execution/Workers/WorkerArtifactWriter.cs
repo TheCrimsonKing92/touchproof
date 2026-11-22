@@ -43,7 +43,9 @@ internal sealed partial class WorkerArtifactWriter
         IReadOnlyList<string>? answeredEvidenceTexts = null,
         IClock? clock = null,
         string? linkedBacklogRecord = null,
-        string? integrationBranch = null)
+        string? integrationBranch = null,
+        ReviewerChangedFileScope? reviewerScope = null,
+        bool reviewerScopePrepared = false)
     {
         var preserveCompleteArtifacts = WorkerContextHelpers.UsesTypedContextPackage(
             task.RequiredRole,
@@ -123,15 +125,25 @@ internal sealed partial class WorkerArtifactWriter
         IReadOnlyList<string> changedFiles;
         if (task.RequiredRole == AgentRole.Reviewer)
         {
-            try
+            if (reviewerScopePrepared)
             {
-                changedFiles = _gitContext.ReadReviewerChangedFileScope(
-                    workingDirectory, TrunkBranchName.Resolve(integrationBranch)).ChangedFiles;
+                changedFiles = reviewerScope?.ChangedFiles ?? [];
+                if (reviewerScope is null)
+                    reviewerScopeError = new ReviewerChangedFileScopeException(WorkerGitContext.ReviewerScopeUnavailableErrorCode,
+                        "The Reviewer dispatch has no captured candidate scope.");
             }
-            catch (ReviewerChangedFileScopeException exception)
+            else
             {
-                changedFiles = [];
-                reviewerScopeError = exception;
+                try
+                {
+                    changedFiles = _gitContext.ReadReviewerChangedFileScope(
+                        workingDirectory, TrunkBranchName.Resolve(integrationBranch)).ChangedFiles;
+                }
+                catch (ReviewerChangedFileScopeException exception)
+                {
+                    changedFiles = [];
+                    reviewerScopeError = exception;
+                }
             }
         }
         else
@@ -151,7 +163,7 @@ internal sealed partial class WorkerArtifactWriter
             goal, contextDirectory, _gitContext, PriorVerificationMaxChars, preserveCompleteArtifacts);
         WriteText(
             Path.Combine(contextDirectory, "deterministic-verification.md"),
-            BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan, reviewerScopeError));
+            BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan, reviewerScopeError, reviewerScope));
         WriteText(
             Path.Combine(contextDirectory, "workflow-brokers.md"),
             BuildWorkflowBrokers(
@@ -501,7 +513,8 @@ internal sealed partial class WorkerArtifactWriter
         string workingDirectory,
         IReadOnlyList<string> changedFiles,
         RepositoryTestImpactPlan testImpactPlan,
-        ReviewerChangedFileScopeException? reviewerScopeError = null)
+        ReviewerChangedFileScopeException? reviewerScopeError,
+        ReviewerChangedFileScope? reviewerScope)
     {
         var priorTasks = goal.Tasks.TakeWhile(t => t.Id != task.Id).ToList();
         var completedPriorTasks = priorTasks.Where(t => t.Status == WorkTaskStatus.Completed).ToList();
@@ -533,6 +546,8 @@ internal sealed partial class WorkerArtifactWriter
             }
             else
             {
+                if (reviewerScope is not null)
+                    lines.Add($"Scope checks: git diff {reviewerScope.ThreeDotRange}");
                 lines.Add($"Committed branch-diff files: {changedFiles.Count}");
                 lines.AddRange(changedFiles.Take(120).Select(file => $"- `{file}`"));
                 if (changedFiles.Count > 120)
