@@ -2504,9 +2504,9 @@ public sealed partial class AgentOrchestratorKernel
         bool passed,
         string detail,
         CriterionPostLandingObservation? observation = null,
-        string? actor = null) =>
+        string? actor = null, OperatorActorKind? observationActorKind = null) =>
         GetGoal(goalId).RecordCriterionEvidence(
-            obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow, observation, actor);
+            obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow, observation, actor, observationActorKind);
 
     public void BindPostLandingPublication(GoalId goalId, GoalPromotionFact publication) =>
         GetGoal(goalId).BindPostLandingPublication(publication);

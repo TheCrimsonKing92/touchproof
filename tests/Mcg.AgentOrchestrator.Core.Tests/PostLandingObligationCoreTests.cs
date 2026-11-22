@@ -201,6 +201,46 @@ public sealed class PostLandingObligationCoreTests
         Assert.Equal(Observation(publication), original.Observation);
     }
 
+    [Theory]
+    [InlineData(OperatorActorKind.Agent, OperatorActorKind.Agent, OperatorActorKind.Human)]
+    [InlineData(null, OperatorActorKind.Human, OperatorActorKind.Agent)]
+    public void Receipt_ReplayPreservesCurrentAndArchivedObserverKind(
+        OperatorActorKind? storedKind, OperatorActorKind sameKind, OperatorActorKind conflictingKind)
+    {
+        var (kernel, goal, clock) = Create();
+        var publication = Publication(goal.Id, clock.UtcNow);
+        kernel.BindPostLandingPublication(goal.Id, publication);
+        clock.Advance(TimeSpan.FromHours(1));
+        var duty = Assert.Single(goal.OutstandingPostLandingDuties);
+        var observation = Observation(publication);
+
+        Record(kernel, false, storedKind);
+        Record(kernel, true, storedKind);
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            JsonSerializer.Deserialize<OrchestratorSnapshot>(JsonSerializer.Serialize(kernel.ExportSnapshot()))!, clock);
+        var current = Assert.Single(restored.GetGoal(goal.Id).CriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidenceState.Satisfied, current.State);
+        Assert.Equal(storedKind, current.ObservationActorKind);
+        var archived = Assert.Single(current.PriorReceipts!);
+        Assert.Equal("failed-observation", archived.ReceiptId);
+        Assert.Equal(storedKind, archived.ObservationActorKind);
+
+        Assert.Same(current, Record(restored, false, sameKind));
+        Assert.Same(current, Record(restored, true, sameKind));
+        Assert.Contains("already identifies different evidence",
+            Assert.Throws<InvalidOperationException>(() => Record(restored, false, conflictingKind)).Message,
+            StringComparison.Ordinal);
+        Assert.Contains("already identifies different evidence",
+            Assert.Throws<InvalidOperationException>(() => Record(restored, true, conflictingKind)).Message,
+            StringComparison.Ordinal);
+        Assert.Same(current, Assert.Single(restored.GetGoal(goal.Id).CriterionEvidenceObligations));
+
+        CriterionEvidenceObligation Record(AgentOrchestratorKernel target, bool passed, OperatorActorKind? kind) =>
+            target.RecordCriterionEvidence(goal.Id, duty.Id, duty.Owner, Candidate,
+                passed ? "passed-observation" : "failed-observation", duty.RequiredScope, passed,
+                "Observed the same activated runtime", observation, "same-observer", kind);
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal, FakeClock Clock) Create()
     {
         var clock = new FakeClock();
