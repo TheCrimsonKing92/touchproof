@@ -15,7 +15,7 @@ internal sealed record ProviderSignInTarget(ProviderKind Kind, string Executable
         var cli = CliName(kind);
         var executable = WorkerProfileDiagnostics.ExtractExecutable(profile.CommandTemplate);
         return cli is not null && IsNativeName(executable, cli) &&
-            ProviderConnectionStatusAdapters.MatchesHostLauncher(profile.CommandTemplate, executable, cli, StringComparison.OrdinalIgnoreCase)
+            ProviderConnectionStatusAdapters.MatchesNativeSignInLauncher(profile.CommandTemplate, executable, cli, StringComparison.OrdinalIgnoreCase)
             ? new(kind, executable.ToLowerInvariant())
             : null;
     }
