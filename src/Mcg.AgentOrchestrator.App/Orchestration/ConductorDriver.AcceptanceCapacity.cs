@@ -13,16 +13,9 @@ internal sealed record ConductorAcceptanceCapacitySnapshot(
 
 internal sealed partial class ConductorDriver
 {
-    internal ConductorAcceptanceCapacitySnapshot GetActiveAcceptanceCohortCapacity()
-    {
-        var activeRoots = _cohortGateRuns
-            .Where(pair => !pair.Value.Completion.Task.IsCompleted)
-            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => new ConductorAcceptanceCapacityRoot(
-                pair.Key,
-                pair.Value.MemberGoalIds,
-                pair.Value.StartedAt))
-            .ToArray();
-        return new ConductorAcceptanceCapacitySnapshot(activeRoots);
-    }
+    internal ConductorAcceptanceCapacitySnapshot GetActiveAcceptanceCohortCapacity() =>
+        ConductorAcceptanceCapacity.CaptureActive(_cohortGateRuns);
+
+    internal IEnumerable<string> GetUnsettledGroupedGateIdentities(string? onlyGoalId) =>
+        ConductorAcceptanceCapacity.GetUnsettledGroupedGateIdentities(_cohortGateRuns, _groupedGateAttempts, onlyGoalId);
 }

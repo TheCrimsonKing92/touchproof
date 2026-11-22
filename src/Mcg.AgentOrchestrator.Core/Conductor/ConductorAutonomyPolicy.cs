@@ -64,10 +64,12 @@ public sealed record ConductorAutonomyPolicy(
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
     public const int DefaultAutomaticRetryOperatorRoutingHoldSeconds = 180;
     public const int DefaultAuthorRecommendationWaitSeconds = 300;
+    public const int DefaultBuildRootReapIntervalSeconds = 300;
     public const int MinimumAcceptanceWidth = 1;
     public const int MaximumAcceptanceWidth = 4;
 
     public ConductorFeatureSwitches Features { get; init; } = ConductorFeatureSwitches.Default;
+    public int BuildRootReapIntervalSeconds { get; init; } = DefaultBuildRootReapIntervalSeconds;
 
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
@@ -221,6 +223,8 @@ public sealed record ConductorAutonomyPolicy(
             errors.Add($"buildRootRetentionDays must be between 0 and 365 (got {BuildRootRetentionDays}).");
         if (TerminalBuildRootMaxBytes is < 0)
             errors.Add($"terminalBuildRootMaxBytes must be zero or greater (got {TerminalBuildRootMaxBytes}).");
+        if (BuildRootReapIntervalSeconds <= 0)
+            errors.Add($"buildRootReapIntervalSeconds must be greater than zero (got {BuildRootReapIntervalSeconds}).");
 
         foreach (var state in AllStates)
         {
@@ -259,6 +263,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"buildGcConserveMemoryLevel\": {BuildGcConserveMemoryLevel},");
         sb.AppendLine($"  \"buildGcHeapCount\": {BuildGcHeapCount},");
         sb.AppendLine($"  \"buildRootRetentionDays\": {BuildRootRetentionDays},");
+        sb.AppendLine($"  \"buildRootReapIntervalSeconds\": {BuildRootReapIntervalSeconds},");
         sb.AppendLine($"  \"terminalBuildRootMaxBytes\": {TerminalBuildRootMaxBytes?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null"},");
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
@@ -547,7 +552,10 @@ public sealed record ConductorAutonomyPolicy(
                 authorRecommendationWaitSeconds,
                 terminalBuildRootMaxBytes)
             {
-                Features = ParseFeatures(root, src)
+                Features = ParseFeatures(root, src),
+                BuildRootReapIntervalSeconds = root.TryGetProperty("buildRootReapIntervalSeconds", out _)
+                    ? RequireInt(root, "buildRootReapIntervalSeconds", src)
+                    : DefaultBuildRootReapIntervalSeconds
             };
 
             var errors = policy.Validate();

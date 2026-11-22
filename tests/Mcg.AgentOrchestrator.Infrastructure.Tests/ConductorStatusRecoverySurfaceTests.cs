@@ -241,7 +241,8 @@ public sealed class ConductorStatusRecoverySurfaceTests
         var landing = Array.FindIndex(lines, line => line.StartsWith("Most recent landing:", StringComparison.Ordinal));
         Assert.True(landing >= 0);
         Assert.StartsWith("Worker adoption:", lines[landing + 1]);
-        Assert.StartsWith("Pending operator intents:", lines[landing + 2]);
+        Assert.StartsWith("Main full verification:", lines[landing + 2]);
+        Assert.StartsWith("Pending operator intents:", lines[landing + 3]);
     }
 
     private static string[] IntentLines(string[] lines) =>

@@ -326,6 +326,82 @@ public sealed class ReconcileSweepRemediationTests
     }
 
     [Xunit.Fact]
+    public void Process_DrainObserved_ReportsBlockerWithoutClaimingRemedyOrLease()
+    {
+        var blocker = NewAcceptanceBlocker("verified goal still has an unmerged branch");
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(NewDatabasePath()));
+        var executorCalls = 0;
+        var coordinator = new ReconcileSweepRemediationCoordinator(
+            store, ReconcileSweepOptions.Default,
+            _ =>
+            {
+                executorCalls++;
+                return TerminalGoalRemedyExecutionResult.Pending("started", "gate-1");
+            },
+            _ => blocker.Remedy.GateArtifact!.CandidateBranchSha);
+        var sweep = Sweep(blocker);
+        var goalId = blocker.Remedy.GoalId.Value;
+        var stateKey = ReconcileSweepRemediationCoordinator.BuildStateKey(
+            goalId, blocker.Kind, blocker.Evidence, blocker.Remedy);
+
+        var draining = coordinator.Process(sweep, admitRemedies: false);
+
+        Xunit.Assert.StartsWith("SWEEP_BLOCKER", Xunit.Assert.Single(draining.Events));
+        Xunit.Assert.Equal(0, executorCalls);
+        var state = store.Observe(stateKey, goalId, blocker.Kind, blocker.Evidence, blocker.Remedy.RenderCommand());
+        Xunit.Assert.Equal(0, state.AttemptCount);
+        Xunit.Assert.Null(state.InFlightOwner);
+        Xunit.Assert.Null(store.TryGetAcceptanceLeaseOwner(goalId));
+
+        var open = coordinator.Process(sweep);
+
+        Xunit.Assert.StartsWith("SWEEP_REMEDY_ATTEMPT", Xunit.Assert.Single(open.Events));
+        Xunit.Assert.Equal(1, executorCalls);
+        Xunit.Assert.NotNull(store.TryGetAcceptanceLeaseOwner(goalId));
+    }
+
+    [Xunit.Fact]
+    public void ReconcileDrainedAttempts_ReleasesLeaseOnlyAfterTheAdmittedGateSettles()
+    {
+        const string attemptId = "admitted-gate";
+        var blocker = NewAcceptanceBlocker("background acceptance in progress");
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(NewDatabasePath()));
+        var calls = 0;
+        var coordinator = new ReconcileSweepRemediationCoordinator(
+            store, ReconcileSweepOptions.Default,
+            _ =>
+            {
+                calls++;
+                return TerminalGoalRemedyExecutionResult.Pending("started", attemptId);
+            },
+            _ => blocker.Remedy.GateArtifact!.CandidateBranchSha);
+        var sweep = Sweep(blocker);
+        var goalId = blocker.Remedy.GoalId;
+
+        coordinator.Process(sweep);
+        var owner = store.TryGetAcceptanceLeaseOwner(goalId.Value);
+        Xunit.Assert.NotNull(owner);
+        Xunit.Assert.Empty(coordinator.Process(sweep, admitRemedies: false).Events);
+        Xunit.Assert.Empty(coordinator.ReconcileDrainedAttempts((goal, attempt) =>
+            goal == goalId && attempt == "a-different-gate"));
+        Xunit.Assert.Equal(owner, store.TryGetAcceptanceLeaseOwner(goalId.Value));
+
+        var result = Xunit.Assert.Single(coordinator.ReconcileDrainedAttempts((goal, attempt) =>
+            goal == goalId && attempt == attemptId));
+
+        Xunit.Assert.Contains($"acceptance attempt {attemptId} reconciled during drain", result);
+        Xunit.Assert.Contains("retryable=true", result);
+        Xunit.Assert.Equal(1, calls);
+        Xunit.Assert.Null(store.TryGetAcceptanceLeaseOwner(goalId.Value));
+        var stateKey = ReconcileSweepRemediationCoordinator.BuildStateKey(
+            goalId.Value, blocker.Kind, blocker.Evidence, blocker.Remedy);
+        var state = store.Observe(stateKey, goalId.Value, blocker.Kind, blocker.Evidence, blocker.Remedy.RenderCommand());
+        Xunit.Assert.Equal(0, state.AttemptCount);
+        Xunit.Assert.Null(state.InFlightOwner);
+        Xunit.Assert.Empty(coordinator.ReconcileDrainedAttempts((_, _) => true));
+    }
+
+    [Xunit.Fact]
     public void PendingRemedyHoldsSharedAcceptanceLeaseUntilItsCurrentAttemptCompletes()
     {
         var dbPath = NewDatabasePath();
