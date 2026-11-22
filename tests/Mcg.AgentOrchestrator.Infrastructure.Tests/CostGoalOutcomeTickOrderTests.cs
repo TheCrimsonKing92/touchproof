@@ -29,11 +29,14 @@ public sealed class CostGoalOutcomeTickOrderTests(ITestOutputHelper output)
                 }, () => [], (_, _) => false, _ => { });
             CostGoalOutcomeSweep.UseForTests(loop, sweep);
             var (kernel, _) = SimpleGoal();
-            var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true), getRunningCount: () => 100);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
 
             var lines = AsyncLocalConsoleRouter.Capture(() =>
                 loop.Run(kernel, driver, ConductorAutonomyPolicy.Conservative, Path.Combine(root, "stop"),
-                    maxIterations: 1, emitActivationHeartbeat: true))
+                    maxIterations: 1, watchInterval: TimeSpan.FromSeconds(1),
+                    sleepFunc: _ => false, emitActivationHeartbeat: true))
                 .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
             var completion = Assert.Single(lines, line => line.StartsWith("TICK_END tick=1 activation=true", StringComparison.Ordinal));
