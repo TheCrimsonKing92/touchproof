@@ -106,6 +106,7 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
         var attemptRoot = CreateTempDirectory("mcg-refused-carry-train");
         try
         {
+            AppendCommit(repository, "config/acceptance-manifest.json", """{"environmentContract":{"version":1,"tools":[]}}""");
             var main = ReadGit(repository, "rev-parse", "main");
             ReadGit(repository, "checkout", "-b", "bound");
             AppendCommit(repository, "src/goal.txt", "reviewed goal change");
@@ -131,17 +132,39 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
             Assert.Equal(oldest.Id, Assert.Single(scenario.SoloGoals));
             var passed = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(oldest.Id.Value));
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passed.Outcome);
+
+            var peers = scenario.Goals.Skip(1).ToArray();
+            AppendCommit(GoalWorktrees.Ensure(repository, peers[0].Id),
+                "tests/Mcg.AgentOrchestrator.Core.Tests/FirstPeer.cs", "first peer");
+            AppendCommit(GoalWorktrees.Ensure(repository, peers[1].Id),
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondPeer.cs", "second peer");
             AppendCommit(repository, "src/main.txt", "advanced main");
 
-            var summary = scenario.Tick();
+            var workspace = OrchestratorWorkspace.ForDirectory(repository);
+            var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
+                new AcceptanceVerificationResult(true, false, 0, null));
+            var driver = new ConductorDriver(scenario.Kernel, workspace, verifier, DefaultAgents(),
+                WorkerProfileCatalog.Default(), parallelAcceptanceAttemptCoordinator: coordinator,
+                cleanupHooks: new GoalWorktreeCleanupHooks
+                {
+                    BuildStorageRoot = new DotnetBuildStorageRoot(Path.Combine(attemptRoot, "dotnet"))
+                });
+            var reservations = new List<ConductorAcceptanceCapacitySnapshot>();
+            // The production train has registered its capacity root before scheduling the verifier.
+            driver.SetCohortGateBackgroundStartForTests(_ => reservations.Add(driver.GetActiveAcceptanceCohortCapacity()));
+            BatchTickSummary? tick = null;
+            AdmissionFactsTestData.Warm(driver, scenario.Kernel);
+            var summary = new ConductorBatchLoop().Run(scenario.Kernel, driver,
+                ConductorAutonomyPolicy.Permissive, NoStopPath(), maxIterations: 1, onTick: result => tick = result);
 
-            Assert.Equal(2, summary.Advanced);
-            Assert.Equal(1, summary.Held);
-            Assert.Equal(scenario.Goals.Skip(1).Select(goal => goal.Id), Assert.Single(scenario.Trains));
-            Assert.Equal(oldest.Id, Assert.Single(scenario.SoloGoals));
+            Assert.Equal(0, summary.Escalated);
+            var reservation = Assert.Single(Assert.Single(reservations).ActiveRoots);
+            Assert.DoesNotContain(oldest.Id.Value, reservation.MemberGoalIds);
+            Assert.True(reservation.MemberGoalIds.SetEquals(peers.Select(goal => goal.Id.Value)));
+            Assert.Equal(0, verifier.RunCount);
             Assert.Equal(passed.AttemptId, coordinator.TryReadLatest(oldest.Id.Value)!.AttemptId);
-            Assert.Empty(coordinator.GetUnreconciledAttempts([oldest.Id.Value]));
-            Assert.Contains(scenario.TickResult!.ProgressLines!, line =>
+            Assert.Empty(coordinator.GetUnreconciledAttempts(scenario.Goals.Select(goal => goal.Id.Value).ToArray()));
+            Assert.Contains(tick!.ProgressLines!, line =>
                 line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
                 line.Contains(obligation.Id, StringComparison.Ordinal));
         }

@@ -45,10 +45,16 @@ internal static partial class AcceptanceCriterionEvidence
         {
             Decision = new PolicyDecisionRecord("criterion-evidence-admission", "Hold", 2,
                 RefusedCarryAdmissionReason, reason,
-                [new("goalId", goal.Id.Value), new("candidateSha", candidateSha), new("mainSha", mainSha),
-                    new("historicalCandidateSha", passedBranchSha), new("historicalMainSha", passedMainSha ?? string.Empty),
-                    new("obligationIds", string.Join(",", stale.Select(item => item.Id))),
-                    new("nextActor", "Operator"), new("nextAction", "criterion-evidence-map")])
+                [
+                    new PolicyDecisionFact("goalId", goal.Id.Value),
+                    new PolicyDecisionFact("candidateSha", candidateSha),
+                    new PolicyDecisionFact("mainSha", mainSha),
+                    new PolicyDecisionFact("historicalCandidateSha", passedBranchSha),
+                    new PolicyDecisionFact("historicalMainSha", passedMainSha ?? string.Empty),
+                    new PolicyDecisionFact("obligationIds", string.Join(",", stale.Select(item => item.Id))),
+                    new PolicyDecisionFact("nextActor", "Operator"),
+                    new PolicyDecisionFact("nextAction", "criterion-evidence-map")
+                ])
         };
     }
 
