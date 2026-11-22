@@ -1340,6 +1340,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "land":
             return CliLandCommand.Execute(parts, context);
 
+        case CliShadowStartCommand.Name:
+            return CliShadowStartCommand.Execute(parts);
+
         case "goals-prune":
             return HandleGoalsPrune(context, parts);
 
@@ -1350,6 +1353,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return false;
             }
 
+            var noDispatch = CliShadowStartCommand.IsNoDispatch(parts);
             if (HasCliConfirmation(parts, "--loop"))
             {
                 using var loopSetup = ConductorStartupHeartbeat.Shipped.Begin(ConductorStartupHeartbeat.Phases.LoopSetup);
@@ -1360,11 +1364,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 if (loopPolicyResolution is null)
                     return false;
 
-                ConductorTargetGitExclude.Apply(context.Workspace, Console.WriteLine);
+                if (!noDispatch) ConductorTargetGitExclude.Apply(context.Workspace, Console.WriteLine);
                 var supervisedChild = HasCliConfirmation(parts, ConductorContinuitySupervisor.ChildFlag);
                 var continuityExitArtifactPath = GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag);
                 CliConductLoopStartup.PrintConductorPolicyWarnings(loopPolicyResolution);
                 var loopPolicy = loopPolicyResolution.Policy;
+                if (noDispatch)
+                    loopPolicy = loopPolicy with { MaxConcurrentPaidWorkers = 0, AcceptanceWidth = 0,
+                        AutoPromoteRiskThreshold = null, TransitionMap = ConductorAutonomyPolicy.Manual.TransitionMap };
+                var buildRootReapIntervalSeconds = loopPolicy.BuildRootReapIntervalSeconds;
                 int? loopMaxIter = null;
                 if (GetFlagValue(parts, "--max-iterations") is { } miStr)
                     loopMaxIter = int.Parse(miStr, System.Globalization.CultureInfo.InvariantCulture);
@@ -1422,10 +1430,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 {
                     MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains
                 };
-                loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
+                if (!noDispatch) loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
                 if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
                     loopDriver.EnableOwnedGroupedGateAttempts();
-                var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
+                if (noDispatch) loopDriver.LandingMutationBlocker = () => "conduct --no-dispatch";
+                var postLandingCanary = noDispatch ? null : PostLandingCanaryFactory.CreateDefault(
                     context.Workspace,
                     line =>
                     {
@@ -1447,7 +1456,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ReacquireCurrentLease: context.ReacquireConductLoopLease,
                     StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
                 var handoff = ConductorLoopHandoff.Create(handoffOptions);
-                var selfRelaunch = ConductorSelfRelaunch.CreateForHome(
+                var selfRelaunch = noDispatch ? null : ConductorSelfRelaunch.CreateForHome(
                     OrchestratorHome.ResolveForProcess(), context.Workspace, handoffOptions,
                     line =>
                     {
@@ -1462,18 +1471,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
                 var conductEventLogWriter = new ConductEventLogWriter(context.Workspace.ConductEventsLogPath);
+                if (noDispatch)
+                    onTick = summary => conductEventLogWriter.Append("tick", null, $"TICK tick={summary.Tick} shadow=no-dispatch");
                 using var processErrorModeObserver = new ProcessErrorModeEventObserver(conductEventLogWriter);
                 var reconcileSweepOptions = ReconcileSweepConfiguration.Load(AppContext.BaseDirectory);
-                var reconcileSweepCoordinator = new ReconcileSweepRemediationCoordinator(
-                    new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath),
-                    reconcileSweepOptions,
-                    remedy => ConductorBatchLoop.ExecuteReconcileSweepAcceptanceRemedy(
-                        context.Kernel,
-                        loopDriver,
-                        remedy,
-                        loopPolicy),
-                    remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch)
-                        .TryGetGoalBranchTip(remedy.GoalId));
+                var reconcileSweepCoordinator = ConductorAcceptanceSweepRemedy.CreateCoordinator(
+                    context.Workspace, context.Kernel, loopDriver, loopPolicy, reconcileSweepOptions);
                 var loopReaper = OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace);
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
                 var consoleCodePageWatch = new ConductorConsoleCodePageWatch();
@@ -1501,7 +1504,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var maxDurationDeferralCeiling = AcceptanceGateEngineSettings.Load(context.Workspace.ExecutionDirectory).ResolveCheckTimeout(null);
                 TerminalGoalSweepResult reconcileSweep(
                     AgentOrchestratorKernel loopKernel,
-                    IReadOnlySet<string> checkpointHeldGoalIds)
+                    IReadOnlySet<string> checkpointHeldGoalIds,
+                    bool admitRemedies)
                 {
                     firstTickEvent.Observe();
                     agentRoster.Refresh();
@@ -1620,23 +1624,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         catch { /* per-goal isolation */ }
                     }
 
-                    var terminalSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
-                        loopKernel,
-                        context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
-                        cache: terminalSweepCache,
-                        cleanupHooks: context.CleanupContext.Hooks,
-                        workspace: context.Workspace));
-                    var remediation = ConductorTickStepLedger.Measure("reconcile-remediation", () => reconcileSweepCoordinator.Process(terminalSweep));
-                    if (remediation.RemedySucceeded)
-                    {
-                        var remediatedSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
-                            loopKernel,
-                            context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
-                            cache: terminalSweepCache,
-                            cleanupHooks: context.CleanupContext.Hooks,
-                            workspace: context.Workspace));
-                        terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
-                    }
+                    var (terminalSweep, remediation) = TerminalGoalSweep.RunForConductor(loopKernel, context.Workspace,
+                        terminalSweepCache, context.CleanupContext.Hooks, reconcileSweepCoordinator, admitRemedies,
+                        buildRootReapIntervalSeconds, intentGoalReloadObservations, evictedGoalStatuses, checkpointHeldGoalIds);
                     // Concatenate, never overwrite: the unapplied-exit records are surfaced through the same
                     // progress-event channel as remediation, and an assignment here would silently drop them.
                     terminalSweep = terminalSweep with
@@ -1684,9 +1674,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 {
                     ProcessErrorModeRepairLog.Observer = processErrorModeObserver.Observe;
                     using var gitCensus = GitLaunchWindowCensus.Install();
-                    var loopSummary = new ConductorBatchLoop(
+                    var batchLoop = new ConductorBatchLoop(
                         loadTrxCoherenceVerdicts: directory => { TrxCoherenceVerdictStore.Load(directory); TrxCoherenceVerdictStore.EnableAppend(directory); loopSetup.Dispose(); },
                         measuredSweepWithCheckpointHolds: reconcileSweep,
+                        reconcileDrainedSweepRemedies: () => reconcileSweepCoordinator.ReconcileDrainedAttempts(
+                            (goalId, attemptId) => loopDriver.ParallelAcceptanceAttemptCoordinator
+                                .GetUnreconciledAttempts([goalId.Value]).All(attempt => attempt.AttemptId != attemptId)),
                         reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                         detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                         recoverInterruptedDispatches: loopKernel => new SupersededBriefRoundCanceller(loopReaper).CancelAndRequeueInterruptedDispatches(
@@ -1699,38 +1692,40 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         {
                             return new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, loopReaper);
                         },
-                        handoffOnMaxDuration: supervisedChild ? null : handoff,
+                        handoffOnMaxDuration: noDispatch || supervisedChild ? null : handoff,
                         conductEventLogWriter: conductEventLogWriter,
-                        providerHoldProbe: ProviderHoldStandaloneProbe.CreateDefault(context.Workspace, context.Agents,
+                        providerHoldProbe: noDispatch ? null : ProviderHoldStandaloneProbe.CreateDefault(context.Workspace, context.Agents,
                             context.WorkerProfiles, conductEventLogWriter,
                             () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: false) > 0).ObserveTick,
-                        operatorIntents: operatorIntents,
-                        progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
-                        progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
+                        operatorIntents: noDispatch ? null : operatorIntents,
+                        progressiveReviewGlances: noDispatch ? null : ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
+                        progressiveReviewSteering: noDispatch ? null : ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                         selfRelaunch: selfRelaunch is null ? null : supervisorSetup.DelegateSelfRelaunchToSupervisor
                                 ? SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace)
                                 : selfRelaunch,
-                        selfRelaunchEnabled: loopPolicy.Features.SelfRelaunch,
-                        homeBuildAdoption: supervisorSetup.HomeBuildAdoption,
-                        homeBuildRelaunch: supervisorSetup.HomeBuildAdoption is null ? null : SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace),
+                        selfRelaunchEnabled: !noDispatch && loopPolicy.Features.SelfRelaunch,
+                        homeBuildAdoption: noDispatch ? null : supervisorSetup.HomeBuildAdoption,
+                        homeBuildRelaunch: noDispatch || supervisorSetup.HomeBuildAdoption is null ? null : SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace),
                         postLandingCanary: postLandingCanary,
                         goalReloadObservation: resolveGoalReloadObservation,
                         prepareOperatorIntentTarget: (loopKernel, goalId) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
                             context, loopKernel, goalId, loopReaper, intentGoalReloadObservations),
                         lifecycleRecorder: new ConductorLifecycleRecorder(
                             new SqliteRunEventStore(context.Workspace.RunEventStorePath),
-                            readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
-                            adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
+                            readAdoptionCensus: noDispatch ? null : WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
+                            adoptInheritedWorkers: noDispatch ? null : WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
                         blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: supervisorSetup.HomeBuildAdoption is null),
-                        workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, loopPolicy.Features.Steward, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
-                        .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
+                        workspace: context.Workspace).WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath);
+                    if (!noDispatch)
+                        batchLoop.WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, loopPolicy.Features.Steward, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                         .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace,
                             () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy,
                             () => terminalSweepCache.ObservedMainSha))
                         .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace, loopPolicy.Features.Author))
-                        .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).WithGitCensus(gitCensus).Run(
+                        .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace));
+                    var loopSummary = batchLoop.WithGitCensus(gitCensus).Run(
                         context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                         watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                         persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1741,14 +1736,23 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         unscopedStallTickThreshold: unscopedStallTickThreshold,
                         journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
                         policySource: loopPolicyResolution.Source,
-                        reloadPolicy: loopPolicyName is null
-                            ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
-                            : null,
+                        reloadPolicy: !noDispatch && loopPolicyName is null ? () =>
+                        {
+                            var resolution = ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory);
+                            buildRootReapIntervalSeconds = resolution.Policy.BuildRootReapIntervalSeconds;
+                            return resolution;
+                        } : null,
                         checkpointGoalTick: context.CheckpointGoals,
                         hasTransientLoadHold: () => scheduledLoadHold is not null,
                         maxDurationDeferralCeiling: maxDurationDeferralCeiling,
                         onMaxDurationDeferralStateChanged: active => suppressGoalRefinementForMaxDurationDeferral = active,
-                        emitActivationHeartbeat: supervisedChild);
+                        emitActivationHeartbeat: !noDispatch && supervisedChild,
+                        observeTickWithoutDispatch: noDispatch ? () =>
+                        {
+                            firstTickEvent.Observe();
+                            _ = context.ReloadKernel(context.Kernel.Goals.Select(goal => goal.Id.Value).ToArray());
+                            _ = loopDriver.CountLiveGroupedGateAttempts();
+                        } : null);
                     if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                     {
                         ConductorContinuityExitArtifact.Write(
@@ -1767,6 +1771,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         conductEventLogWriter).GetAwaiter().GetResult();
                 }
             }
+            if (noDispatch) throw new ArgumentException("--no-dispatch requires conduct --loop.");
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
             var conductPolicyName = GetFlagValue(parts, "--policy");

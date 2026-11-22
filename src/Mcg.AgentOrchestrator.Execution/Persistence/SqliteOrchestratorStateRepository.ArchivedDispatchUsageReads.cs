@@ -90,7 +90,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         var fields = GoalTaskHistoryStore.MetadataSql(expression, ["DispatchedAt", "ModelName", "ProviderUsage"]);
         var receipt = $"(({expression}) -> '$.ContextPackageReceipt')";
         var receiptFields = GoalTaskHistoryStore.MetadataSql(receipt,
-            ["InputTokens", "CachedInputTokens", "OutputTokens", "Turns", "ToolCalls", "ModelInputTokenEstimate"]);
+            ["InputTokens", "CachedInputTokens", "OutputTokens", "Turns", "ToolCalls", "ModelInputTokenEstimate", "WtCalls"]);
         return $"""
             json_set({fields}, '$.ContextPackageReceipt',
                 json(CASE WHEN json_type({receipt}) = 'object' THEN {receiptFields} ELSE {receipt} END))
@@ -110,12 +110,16 @@ public sealed partial class SqliteOrchestratorStateRepository
     }
 
     private sealed record ArchivedUsageReceipt(ProviderUsageValue InputTokens, ProviderUsageValue CachedInputTokens,
-        ProviderUsageValue OutputTokens, ProviderUsageValue? Turns, ProviderUsageValue? ToolCalls, int? ModelInputTokenEstimate)
+        ProviderUsageValue OutputTokens, ProviderUsageValue? Turns, ProviderUsageValue? ToolCalls, int? ModelInputTokenEstimate,
+        IReadOnlyDictionary<string, long>? WtCalls)
     {
         internal WorkerContextPackageReceipt ToReceipt()
         {
             var receipt = new WorkerContextPackageReceipt("", [], InputTokens, CachedInputTokens, OutputTokens,
-                ModelInputTokenEstimate: ModelInputTokenEstimate ?? 0, Turns: Turns);
+                ModelInputTokenEstimate: ModelInputTokenEstimate ?? 0, Turns: Turns)
+            {
+                WtCalls = WtCalls
+            };
             return ToolCalls is { } toolCalls ? receipt with { ToolCalls = toolCalls } : receipt;
         }
     }

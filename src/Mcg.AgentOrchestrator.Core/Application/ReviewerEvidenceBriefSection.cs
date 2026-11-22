@@ -15,10 +15,20 @@ internal static class ReviewerEvidenceBriefSection
             segments.Add(TaskBriefSegment.Fixed(reviewerExecutedTestEvidence));
         }
 
-        var developerResult = DeveloperWorkerResultContextSection.Build(goal, task, candidateCommit);
+        var selection = task.RequiredRole == AgentRole.Reviewer
+            ? DeveloperWorkerResultContextSection.SelectCandidateReport(goal, candidateCommit)
+            : null;
+        var developerResult = DeveloperWorkerResultContextSection.Build(goal, task, candidateCommit, selection);
         if (developerResult.Count > 0)
         {
             segments.Add(TaskBriefSegment.Fixed(developerResult));
+        }
+
+        if (selection?.Selected is { } report)
+        {
+            var reachCheck = DeveloperReachCheckBriefSection.Build(report);
+            if (reachCheck.Count > 0)
+                segments.Add(TaskBriefSegment.Fixed(reachCheck));
         }
 
         return segments;

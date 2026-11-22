@@ -6,7 +6,7 @@ internal static class DispatchUsageValues
 {
     internal static DispatchProviderUsage? RecordedUsage(TaskDispatchRecord dispatch) =>
         dispatch.ContextPackageReceipt is { } receipt
-            ? new(receipt.InputTokens, receipt.CachedInputTokens, receipt.OutputTokens)
+            ? new(receipt.InputTokens, receipt.CachedInputTokens, receipt.OutputTokens) { WtCalls = receipt.WtCalls }
             : dispatch.ProviderUsage;
 
     internal static long? RecordedTurns(TaskDispatchRecord dispatch) =>

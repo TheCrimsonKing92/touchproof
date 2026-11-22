@@ -30,7 +30,10 @@ public sealed partial class BackgroundDispatchRunner
             // Telemetry must not prevent reconciliation when its attempt is missing or ambiguous.
             if (matches.Length == 1 && matches[0].ContextPackageReceipt is null)
                 kernel.RecordDispatchProviderUsage(goalId, taskId, attemptAt,
-                    DispatchProviderUsage.From(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason));
+                    DispatchProviderUsage.From(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason) with
+                    {
+                        WtCalls = outcome.WtCalls ?? matches[0].ProviderUsage?.WtCalls
+                    });
         }
         return kernel.GetTask(goalId, taskId);
     }

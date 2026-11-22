@@ -20,6 +20,7 @@ internal sealed class PostAdoptionRegressionGuard : IPostAdoptionRegressionTickO
     private readonly PostAdoptionRegressionEvaluator _evaluator = new();
     private readonly PostAdoptionRegressionReverter _reverter;
     private readonly Action<string> _reportInactive;
+    private readonly PostAdoptionRegressionRecovery? _recovery;
     private string? _landingCommit;
     private GoalDecision[]? _baseline;
     private DateTimeOffset _adoptedAt;
@@ -31,10 +32,12 @@ internal sealed class PostAdoptionRegressionGuard : IPostAdoptionRegressionTickO
         bool GateRunning, bool GateSlotFree, int VerifiedGoalCount);
 
     internal PostAdoptionRegressionGuard(string? landingCommit, IReadOnlyList<GoalDecision>? baseline,
-        DateTimeOffset adoptedAt, PostAdoptionRegressionReverter reverter, Action<string> reportInactive)
+        DateTimeOffset adoptedAt, PostAdoptionRegressionReverter reverter, Action<string> reportInactive,
+        PostAdoptionRegressionRecovery? recovery = null)
     {
         _reverter = reverter;
         _reportInactive = reportInactive;
+        _recovery = recovery;
         Adopt(landingCommit, baseline, adoptedAt);
     }
 
@@ -53,10 +56,10 @@ internal sealed class PostAdoptionRegressionGuard : IPostAdoptionRegressionTickO
     }
 
     internal HandleStatus? ObserveTick(IReadOnlyList<GoalDecision> decisions, bool gateRunning,
-        bool gateSlotFree, int verifiedGoalCount, DateTimeOffset now)
+        bool gateSlotFree, int verifiedGoalCount, DateTimeOffset now, int tick = 0, string? goalId = null)
     {
         lock (_sync)
-            return EvaluateTick(decisions, gateRunning, gateSlotFree, verifiedGoalCount, now);
+            return EvaluateTick(decisions, gateRunning, gateSlotFree, verifiedGoalCount, now, tick, goalId);
     }
 
     public void ObserveGoalResult(int tick, DateTimeOffset now, string goalId, PolicyDecisionRecord? decision,
@@ -80,7 +83,7 @@ internal sealed class PostAdoptionRegressionGuard : IPostAdoptionRegressionTickO
                 {
                     // A gate may have started since the buffered results were recorded.
                     EvaluateTick(pending.Decisions, pending.GateRunning || gateRunning, pending.GateSlotFree,
-                        pending.VerifiedGoalCount, now);
+                        pending.VerifiedGoalCount, now, pending.Number, goalId);
                 }
                 else
                 {
@@ -97,13 +100,15 @@ internal sealed class PostAdoptionRegressionGuard : IPostAdoptionRegressionTickO
     }
 
     private HandleStatus? EvaluateTick(IReadOnlyList<GoalDecision> decisions, bool gateRunning,
-        bool gateSlotFree, int verifiedGoalCount, DateTimeOffset now)
+        bool gateSlotFree, int verifiedGoalCount, DateTimeOffset now, int tick, string? goalId)
     {
         if (!IsActive()) return null;
 
         var observation = new PostAdoptionRegressionEvaluator.Observation(_landingCommit!, _baseline!,
             decisions, ++_ticksSinceAdoption, now - _adoptedAt, gateRunning, gateSlotFree, verifiedGoalCount);
-        return _reverter.Handle(_evaluator.Evaluate(observation)).Status;
+        var (status, incident) = _reverter.Handle(_evaluator.Evaluate(observation));
+        _recovery?.Recover(status, incident, tick, goalId, gateRunning);
+        return status;
     }
 
     private bool IsActive()

@@ -308,7 +308,7 @@ public sealed partial class TaskSpec
                     LastVerification.EvidenceSource,
                     LastVerification.DispatchAttemptAt,
                     LastVerification.FindingEvidenceRequestDispositions, LastVerification.PlannerEvidenceBatch, LastVerification.OrchestratorFailureReason,
-                    LastVerification.FindingContractVersion),
+                    LastVerification.FindingContractVersion, LastVerification.PendingPlannerArtifact),
             (exportHistory ? _verificationHistory : Enumerable.Empty<TaskVerificationRecord>())
                 .Select(verification =>
                 {
@@ -360,7 +360,7 @@ public sealed partial class TaskSpec
                         verification.EvidenceSource,
                         verification.DispatchAttemptAt,
                         verification.FindingEvidenceRequestDispositions, verification.PlannerEvidenceBatch, verification.OrchestratorFailureReason,
-                        verification.FindingContractVersion);
+                        verification.FindingContractVersion, verification.PendingPlannerArtifact);
                 })
                 .ToList(),
             LastDispatch is null
@@ -634,7 +634,8 @@ public sealed partial class TaskSpec
                     EvidenceSource: verification.EvidenceSource,
                     DispatchAttemptAt: verification.DispatchAttemptAt,
                     FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: verification.PlannerEvidenceBatch, OrchestratorFailureReason: verification.OrchestratorFailureReason,
-                    FindingContractVersion: verification.FindingContractVersion)
+                    FindingContractVersion: verification.FindingContractVersion,
+                    PendingPlannerArtifact: verification.PendingPlannerArtifact)
                 {
                     AuthoritativeStandardOutput = output.Text,
                     AuthoritativeStandardError = error.Text
@@ -690,7 +691,8 @@ public sealed partial class TaskSpec
                 EvidenceSource: snapshot.LastVerification.EvidenceSource,
                 DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt,
                 FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: snapshot.LastVerification.PlannerEvidenceBatch, OrchestratorFailureReason: snapshot.LastVerification.OrchestratorFailureReason,
-                FindingContractVersion: snapshot.LastVerification.FindingContractVersion)
+                FindingContractVersion: snapshot.LastVerification.FindingContractVersion,
+                PendingPlannerArtifact: snapshot.LastVerification.PendingPlannerArtifact)
             {
                 AuthoritativeStandardOutput = output.Text,
                 AuthoritativeStandardError = error.Text
@@ -712,7 +714,9 @@ public sealed partial class TaskSpec
                 _verificationHistory[historyIndex] = mergedVerification with
                 {
                     FullStandardOutput = latestVerification.FullStandardOutput ?? _verificationHistory[historyIndex].FullStandardOutput,
-                    FullStandardError = latestVerification.FullStandardError ?? _verificationHistory[historyIndex].FullStandardError
+                    FullStandardError = latestVerification.FullStandardError ?? _verificationHistory[historyIndex].FullStandardError,
+                    PendingPlannerArtifact = PendingPlannerArtifact.Merge(
+                        latestVerification.PendingPlannerArtifact, _verificationHistory[historyIndex].PendingPlannerArtifact)
                 };
             }
 
@@ -864,8 +868,11 @@ public sealed partial class TaskSpec
             // Merge monotonically so a stale plain copy cannot erase a receipt or verdict from
             // an earlier copy. When both copies carry a later non-null enrichment, the incoming
             // history occurrence is the causal authority.
-            _verificationHistory[historyIndex] =
-                _verificationHistory[historyIndex].MergeSameRoundEnrichment(verification);
+            var prior = _verificationHistory[historyIndex];
+            _verificationHistory[historyIndex] = prior.MergeSameRoundEnrichment(verification) with
+            {
+                PendingPlannerArtifact = PendingPlannerArtifact.Merge(prior.PendingPlannerArtifact, verification.PendingPlannerArtifact)
+            };
             return;
         }
 
@@ -873,6 +880,15 @@ public sealed partial class TaskSpec
     }
 
     internal void ClearLatestVerification() => LastVerification = null;
+
+    internal void RecordPlannerArtifact(TaskVerificationRecord verification, PendingPlannerArtifact artifact)
+    {
+        EnsureTaskHistory();
+        var index = _verificationHistory.FindLastIndex(item => item.HasSameRoundIdentity(verification));
+        if (LastVerification is not { } latest || !latest.HasSameRoundIdentity(verification) || index < 0)
+            throw new InvalidOperationException("Planner artifact must enrich the current recorded verification round.");
+        LastVerification = _verificationHistory[index] = latest with { PendingPlannerArtifact = artifact };
+    }
 
     internal void RestoreFindingEvidenceVerification(TaskVerificationRecord verification)
     {
@@ -1442,6 +1458,20 @@ public sealed partial class TaskSpec
             LastDispatch = updated;
     }
 
+    internal bool TrySetDispatchReachCheck(DateTimeOffset dispatchedAt, IReadOnlyList<DeveloperReachCheckEntry> entries)
+    {
+        var index = _dispatchHistory.FindLastIndex(dispatch => dispatch.DispatchedAt == dispatchedAt);
+        if (index < 0)
+            return false;
+
+        var updated = _dispatchHistory[index] with { ReachCheck = entries };
+        _dispatchHistory[index] = updated;
+        if (index == _dispatchHistory.Count - 1)
+            LastDispatch = updated;
+
+        return true;
+    }
+
     internal void RecordProcess(TaskProcessRecord process)
     {
         LastProcess = process;
@@ -1497,7 +1527,10 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion);
+        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion, WorkerToolsDirectory: dispatch.WorkerToolsDirectory)
+    {
+        ReachCheck = dispatch.ReachCheck
+    };
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1542,7 +1575,10 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion);
+        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion, dispatch.WorkerToolsDirectory)
+    {
+        ReachCheck = dispatch.ReachCheck
+    };
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

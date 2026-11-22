@@ -15,6 +15,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class WorkerBuildRequestClient(TextWriter output, TextWriter error,
     TimeProvider? timeProvider = null, WorkerBuildRequestClient.IPipeOpener? pipeOpener = null)
 {
+    private const int BrokenPipeHResult = unchecked((int)0x8007006D);
+    private const int PipeClosingHResult = unchecked((int)0x800700E8);
+    private const int PipeNotConnectedHResult = unchecked((int)0x800700E9);
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly IPipeOpener _pipes = pipeOpener ?? new WindowsPipeOpener();
     private static readonly JsonSerializerOptions WireOptions = new()
@@ -26,25 +29,53 @@ internal sealed class WorkerBuildRequestClient(TextWriter output, TextWriter err
     {
         try
         {
-            using var descriptorStream = new FileStream(Path.Combine(directory, WorkerBuildRequestChannel.DescriptorRelativePath),
-                FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var descriptor = JsonDocument.Parse(descriptorStream);
+            var descriptorPath = Path.Combine(directory, WorkerBuildRequestChannel.DescriptorRelativePath);
+            JsonDocument endpoint;
+            try
+            {
+                using var descriptorStream = new FileStream(descriptorPath,
+                    FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                endpoint = JsonDocument.Parse(descriptorStream);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return ReportUnavailable("descriptor", descriptorPath, exception.Message);
+            }
+
+            using var descriptor = endpoint;
             var root = descriptor.RootElement;
             if (!root.TryGetProperty("version", out var version) || !version.TryGetInt32(out var number) || number != 1 ||
                 !root.TryGetProperty("pipe", out var pipe) || pipe.ValueKind != JsonValueKind.String ||
                 !Regex.IsMatch(pipe.GetString()!, @"\Amcg-worker-build-[a-f0-9]{32}\z", RegexOptions.IgnoreCase))
                 throw new InvalidDataException("Unsupported managed worker build endpoint descriptor.");
 
-            using var stream = Open(pipe.GetString()!, busyTimeoutSeconds);
+            var pipePath = @"\\.\pipe\" + pipe.GetString();
+            Stream? connection;
+            try { connection = Open(pipePath, busyTimeoutSeconds); }
+            catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException)
+            {
+                return ReportUnavailable("pipe", pipePath, exception.Message);
+            }
+
+            using var stream = connection;
             if (stream is null) return 1;
             var encoding = new UTF8Encoding(false);
             using var reader = new StreamReader(stream, encoding, false, 4096, leaveOpen: true);
-            // Pipes are unbuffered here. A StreamWriter's disposal flush after host EOF
-            // can throw and replace the terminal-response diagnostic below.
-            stream.Write(encoding.GetBytes(JsonSerializer.Serialize(request) + "\n"));
-            var line = reader.ReadLine();
+            var requestBytes = encoding.GetBytes(JsonSerializer.Serialize(request) + "\n");
+            string? line;
+            try
+            {
+                // A StreamWriter's disposal flush after host EOF can obscure the terminal-response diagnostic.
+                stream.Write(requestBytes);
+                line = reader.ReadLine();
+            }
+            catch (IOException exception) when (exception is EndOfStreamException ||
+                exception.HResult is BrokenPipeHResult or PipeClosingHResult or PipeNotConnectedHResult)
+            {
+                return ReportUnavailable("pipe", pipePath, exception.Message);
+            }
             if (string.IsNullOrWhiteSpace(line))
-                throw new IOException("Managed worker build host closed without a terminal response.");
+                return ReportUnavailable("pipe", pipePath, "Managed worker build host closed without a terminal response.");
             using var document = JsonDocument.Parse(line);
             var wire = document.RootElement;
             var response = ReadResponse(wire);
@@ -62,9 +93,14 @@ internal sealed class WorkerBuildRequestClient(TextWriter output, TextWriter err
         }
     }
 
-    private Stream? Open(string name, int timeoutSeconds)
+    private int ReportUnavailable(string pathKind, string path, string cause)
     {
-        var path = @"\\.\pipe\" + name;
+        error.WriteLine($"worker_build_channel_unavailable {pathKind}=\"{path.ReplaceLineEndings(" ")}\" cause={cause.ReplaceLineEndings(" ")}");
+        return 1;
+    }
+
+    private Stream? Open(string path, int timeoutSeconds)
+    {
         var budget = TimeSpan.FromSeconds(timeoutSeconds);
         var started = _time.GetTimestamp();
         var busy = false;

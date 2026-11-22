@@ -1,6 +1,10 @@
+using System.Collections.ObjectModel;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
+using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+using Attribute = Terminal.Gui.Drawing.Attribute;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -29,14 +33,23 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         Structured?.FieldKeys?.GetValueOrDefault(Page.SourceLines[Page.Selected]);
     private readonly string _baseTitle;
     private readonly OwnerConsoleListRenderer _source = new();
+    private readonly OwnerConsoleMarkedText? _markedText;
     internal string? TitleStatus { get; set; }
     private bool _formatting;
     private bool _disposed;
 
     internal OwnerConsoleTextDialog(string title, string text, IReadOnlyList<int>? choiceLines = null,
         OwnerConsoleTextPage? page = null)
+        : this(title, text, choiceLines, page, null) { }
+
+    internal OwnerConsoleTextDialog(string title, OwnerConsoleMarkedText text)
+        : this(title, text.PlainText, null, null, text) { }
+
+    private OwnerConsoleTextDialog(string title, string text, IReadOnlyList<int>? choiceLines,
+        OwnerConsoleTextPage? page, OwnerConsoleMarkedText? markedText)
     {
         _baseTitle = title;
+        _markedText = markedText;
         Title = title; Width = Dim.Percent(OwnerConsoleDialogWidth.Percent); Height = Dim.Percent(80);
         Page = page ?? new(text, 60, 15, choiceLines);
         Add(Body, _fieldsHint);
@@ -94,7 +107,7 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         _formatting = true;
         try
         {
-            var changed = _source.Apply(Body, Page.Visible);
+            var changed = _markedText is null ? _source.Apply(Body, Page.Visible) : ApplyMarkedSource(_markedText);
             var selected = Page.Selected - Page.Offset;
             if (changed || Body.SelectedItem != selected) Body.SelectedItem = selected;
             var title = OwnerConsoleOverflow.Title(_baseTitle + (TitleStatus is null ? "" : $" ({TitleStatus})"),
@@ -102,5 +115,60 @@ internal sealed class OwnerConsoleTextDialog : Dialog
             if (Title != title) Title = title;
         }
         finally { _formatting = wasFormatting; }
+    }
+
+    private bool ApplyMarkedSource(OwnerConsoleMarkedText text)
+    {
+        if (Body.Source is MarkedListSource source && source.Matches(Page)) return false;
+        Body.Source = new MarkedListSource(Page, text);
+        return true;
+    }
+
+    private sealed class MarkedListSource(OwnerConsoleTextPage page, OwnerConsoleMarkedText text)
+        : ListWrapper<string>(new ObservableCollection<string>(page.Visible)), IListDataSource
+    {
+        private readonly IReadOnlyList<string> _lines = page.Lines;
+        private readonly IReadOnlyList<int> _sourceLines = page.SourceLines;
+        private readonly IReadOnlyList<int> _sourceOffsets = page.SourceOffsets;
+        private readonly int _offset = page.Offset;
+
+        internal bool Matches(OwnerConsoleTextPage current) =>
+            ReferenceEquals(_lines, current.Lines) && _offset == current.Offset;
+
+        void IListDataSource.Render(ListView list, bool selected, int item, int col, int row, int width, int viewportX)
+        {
+            var wrappedRow = _offset + item;
+            var keys = text.KeysAt(_sourceLines[wrappedRow]);
+            if (keys.Count == 0)
+            {
+                base.Render(list, selected, item, col, row, width, viewportX);
+                return;
+            }
+
+            var normal = list.GetCurrentAttribute();
+            var bold = new Attribute(normal.Foreground, normal.Background, normal.Style | TextStyle.Bold);
+            var sourceOffset = _sourceOffsets[wrappedRow];
+            var column = 0;
+            list.Move(Math.Max(0, col - viewportX), row);
+            foreach (var grapheme in GraphemeHelper.GetGraphemes(_lines[wrappedRow]))
+            {
+                var start = sourceOffset;
+                sourceOffset += grapheme.Length;
+                // Match the standard list renderer's zero-width tabs.
+                if (grapheme == "\t") continue;
+                var columns = grapheme.GetColumns();
+                if (column >= viewportX)
+                {
+                    if (columns > width) break;
+                    var isKey = keys.Any(key => key.Start.Value <= start && start < key.End.Value);
+                    list.SetAttribute(isKey ? bold : normal);
+                    list.AddStr(grapheme);
+                    width -= columns;
+                }
+                column += columns;
+            }
+            list.SetAttribute(normal);
+            if (width > 0) list.AddStr(new string(' ', width));
+        }
     }
 }

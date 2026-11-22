@@ -161,6 +161,7 @@ public sealed class ConductorStatusRaisedClarificationTests
             "Pending clarifications: 0; human waits: 0",
             "Most recent landing: unavailable",
             "Worker adoption: unavailable",
+            "Main full verification: none recorded",
             "Pending operator intents: unavailable (intent database missing)",
             "Owner directives: 0 active", ""), human);
         using var json = JsonDocument.Parse(Status(fixture.Workspace, json: true));

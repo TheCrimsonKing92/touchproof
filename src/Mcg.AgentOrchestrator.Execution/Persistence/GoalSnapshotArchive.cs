@@ -9,9 +9,14 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
 {
     // The caller initializes the schema and owns the connection and transaction covering the entire eligible set.
-    public async Task<int> ArchiveAsync(
+    public Task<int> ArchiveAsync(
         SqliteConnection connection, DateTimeOffset cutoff, long maxSnapshotBytes = 134_217_728,
-        CancellationToken cancellationToken = default, bool compress = false)
+        CancellationToken cancellationToken = default, bool compress = false) =>
+        ArchiveAsync(connection, cutoff, maxSnapshotBytes, cancellationToken, compress, archivedGoalIds: null);
+
+    internal async Task<int> ArchiveAsync(
+        SqliteConnection connection, DateTimeOffset cutoff, long maxSnapshotBytes,
+        CancellationToken cancellationToken, bool compress, ICollection<string>? archivedGoalIds)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxSnapshotBytes, 1L);
         var hasTimelineTable = await GoalTimelineStore.HasTableAsync(connection, cancellationToken);
@@ -99,7 +104,10 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             var updated = await update.ExecuteNonQueryAsync(cancellationToken);
             archived += updated;
             if (updated > 0)
+            {
                 archivedBytes += bytes;
+                archivedGoalIds?.Add(id);
+            }
         }
         return archived;
     }

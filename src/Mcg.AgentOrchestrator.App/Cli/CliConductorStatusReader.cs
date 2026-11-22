@@ -80,6 +80,9 @@ internal static class CliConductorStatusReader
         output.WriteLine(snapshot.WorkerAdoption is { } adoption
             ? $"Worker adoption: {adoption.Summary} deferred-identity-unproven={adoption.DeferredIdentityUnproven}"
             : "Worker adoption: unavailable");
+        output.WriteLine(snapshot.MainFullVerification is { } verification
+            ? FormattableString.Invariant($"Main full verification: {verification.Commit} result={verification.Result} completed={verification.CompletedAt:O} duration={verification.DurationSeconds:0.###}s")
+            : "Main full verification: none recorded");
         var intents = snapshot.PendingIntents;
         output.WriteLine(intents.State switch
         {

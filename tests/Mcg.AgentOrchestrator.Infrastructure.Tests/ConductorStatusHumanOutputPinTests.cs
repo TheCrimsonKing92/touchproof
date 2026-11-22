@@ -30,6 +30,7 @@ public sealed class ConductorStatusHumanOutputPinTests
             "Pending clarifications: 1; human waits: 1",
             "Most recent landing: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb at 2026-09-26T08:30:00.0000000+00:00",
             "Worker adoption: results=1 adopted=0 deferred-identity-unproven=1",
+            "Main full verification: none recorded",
             "Pending operator intents: 1 goal(s)",
             "  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | intents=1 | latest=2026-09-26T08:15:00.0000000+00:00 | apply with: conductor apply-intents aaaaaaaa",
             "Owner directives: 0 active"),
@@ -54,6 +55,7 @@ public sealed class ConductorStatusHumanOutputPinTests
             "Pending clarifications: unavailable; human waits: unavailable",
             "Most recent landing: unavailable",
             "Worker adoption: unavailable",
+            "Main full verification: none recorded",
             "Pending operator intents: unavailable (intent database missing)",
             "Owner directives: 0 active"),
             Status(fixture.Workspace, 1234));
@@ -74,6 +76,7 @@ public sealed class ConductorStatusHumanOutputPinTests
             "Pending clarifications: unavailable; human waits: unavailable",
             "Most recent landing: unavailable",
             "Worker adoption: unavailable",
+            "Main full verification: none recorded",
             "Pending operator intents: unavailable (intent database missing)",
             "Owner directives: 0 active"),
             Status(fixture.Workspace, null));
