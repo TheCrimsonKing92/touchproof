@@ -20,11 +20,22 @@ param(
     [System.Collections.IDictionary]$TestSettings = @{}
 )
 $ErrorActionPreference = 'Stop'
-$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$registeredPath = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 # tools\bin wins over winget's links: pwsh 7.6 fails to launch the winget-package sqlite3.exe from a
 # console-less session ("StandardOutputEncoding is only supported when standard output is redirected"),
 # while an unblocked copy here runs (2026-10-07).
-$env:Path = (Join-Path $RunRoot 'tools\bin') + ';' + $env:Path
+$toolDirectory = Join-Path $RunRoot 'tools\bin'
+$candidatePath = "$toolDirectory;$registeredPath"
+# Windows child launch can fail with ERROR_NOT_ENOUGH_MEMORY when a single environment
+# variable exceeds 32,767 characters including its terminator. Preserve the SSH host's
+# working search path if refreshing it from the registry would exceed that bound.
+if ($IsWindows -and $candidatePath.Length -ge 32767) {
+    $candidatePath = "$toolDirectory;$env:Path"
+    if ($candidatePath.Length -ge 32767) {
+        throw "Executor PATH exceeds the Windows child-process limit with both registered and inherited paths."
+    }
+}
+$env:Path = $candidatePath
 $short = $Sha.Substring(0, 9)
 $laneKey = ($Lane -replace '[^A-Za-z0-9]+', '-').Trim('-').ToLowerInvariant()
 # One shared worktree per candidate. Its test project is built once, under a per-candidate mutex, by a
