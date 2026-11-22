@@ -201,6 +201,7 @@ public sealed class OperatorIntentCoordinatorBatchApplyTests
     [Theory]
     [InlineData(OperatorIntentVerbs.CriterionEvidenceMap, true)]
     [InlineData(OperatorIntentVerbs.CriterionEvidenceRecord, true)]
+    [InlineData(OperatorIntentVerbs.CriterionEvidenceSupersede, true)]
     [InlineData(OperatorIntentVerbs.CriterionEvidenceRepair, true)]
     [InlineData(OperatorIntentVerbs.CriterionEvidenceRephase, true)]
     [InlineData(OperatorIntentVerbs.Answer, false)]

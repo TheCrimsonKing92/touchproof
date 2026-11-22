@@ -177,8 +177,8 @@ public sealed class ConductorBatchLoopTestsCompletedGoalWaitAnswerApplied(ITestO
                 });
             var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
             return new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(Store),
-                prepareOperatorIntentTarget: (current, id) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
-                    context, current, id, runner, observations),
+                prepareOperatorIntentTarget: (current, id, supersessionOnly) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
+                    context, current, id, runner, observations, supersessionOnly: supersessionOnly),
                 goalReloadObservation: id => observations.GetValueOrDefault(id) ?? new ConductorGoalReloadObservation.NotObserved())
                 .Run(Kernel, driver, ConductorAutonomyPolicy.Conservative, Path.Combine(_root, "stop"),
                     // Application and durable confirmation each consume one tick; no daemon idle polling.

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -23,6 +24,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal OperatorGateCancellation? GateCancellation { get; init; }
     internal MultiRepositoryLandingRepair? LandingRepair { get; init; }
     internal CohortMemberReopenedGateAbandonment? ReopenedMemberGateAbandonment { get; init; }
+    internal Func<Goal, GoalLifecycleState>? ResolveLifecycleState { get; init; }
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<GoalId, string?>? _goalHeadResolver;
     private readonly Func<GoalId, string, string?>? _policyChangeFingerprintResolver;
@@ -141,6 +143,8 @@ internal sealed partial class OperatorIntentCoordinator
             GateCancellation = new(solo, grouped, events),
             LandingRepair = new(workspace, OrchestratorProjectRegistry.CreateDefault()),
             ReopenedMemberGateAbandonment = new(grouped, events),
+            ResolveLifecycleState = goal => GoalLifecycle.ResolveState(goal,
+                GoalLifecycleFactsReader.Read(workspace, goal, rejectMalformedJournalEntries: true)),
             CancelLatestProcess = (kernel, goalId, taskId) =>
                 OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goalId, taskId),
             CancelCompletionBuild = (kernel, goalId, taskId, target) =>
@@ -202,7 +206,8 @@ internal sealed partial class OperatorIntentCoordinator
         _pendingCompletions.TryGetValue(goalId, out var pending) && pending.Count > 0;
 
     public OperatorIntentExecutionResult ExecutePending(
-        AgentOrchestratorKernel kernel, Goal goal, IReadOnlySet<string>? intentIds = null)
+        AgentOrchestratorKernel kernel, Goal goal, IReadOnlySet<string>? intentIds = null,
+        IReadOnlySet<string>? retryAnswerIds = null)
     {
         if (_pendingCompletions.TryGetValue(goal.Id.Value, out var uncommitted) && uncommitted.Count > 0)
         {
@@ -223,7 +228,8 @@ internal sealed partial class OperatorIntentCoordinator
                     return false;
                 }
 
-                if (stored is not null && OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, stored))
+                if (stored is not null && (stored.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede ||
+                    OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, stored)))
                     preserveGoalHold = true;
 
                 if (stored?.Verb != OperatorIntentVerbs.TaskGraphRepair)
@@ -243,7 +249,7 @@ internal sealed partial class OperatorIntentCoordinator
         }
 
         var mutated = false;
-        var preserveOwnerQuestionHold = false;
+        var preserveHold = false;
         var rejectedAdjudication = false;
         var lines = new List<string>();
         var appliedVerbs = new List<string>();
@@ -310,13 +316,29 @@ internal sealed partial class OperatorIntentCoordinator
 
             try
             {
+                GoalLifecycleState? lifecycleState = null;
+                if (intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede && goal.Status == GoalStatus.Verified)
+                {
+                    var request = Deserialize<CriterionEvidenceSupersedeOperatorIntentPayload>(intent);
+                    var obligation = goal.CriterionEvidenceObligations.FirstOrDefault(item => item.Id == request.ObligationId)
+                        ?? throw new KeyNotFoundException($"Criterion evidence obligation '{request.ObligationId}' was not found.");
+                    CriterionEvidenceSupersession.ValidateRequest(obligation, intent.Actor, request.Reason);
+                    try { lifecycleState = ResolveLifecycleState?.Invoke(goal); }
+                    catch (Exception ex)
+                    {
+                        // Keep the claim retryable when only the lifecycle rule is unresolved.
+                        lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=retryable reason=lifecycle-read-failed detail={Sanitize(ex.Message)}");
+                        break;
+                    }
+                }
+
                 ValidateCompletedDutyIntent(goal, intent);
                 var retryClarification = HandleRetryClarification(kernel, goal, intent, out var blockers);
                 if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or
                     RetryClarificationHandling.AwaitingNewAnswer or RetryClarificationHandling.AwaitingOtherHumanInput)
                 {
                     pendingWait = (intent.Id, BuildRetryWaitNote(retryClarification, blockers));
-                    if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated, intentIds))
+                    if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated, retryAnswerIds ?? intentIds))
                     {
                         mutated |= answerMutated || retryClarification == RetryClarificationHandling.AwaitingNewAnswer;
                         break;
@@ -331,7 +353,7 @@ internal sealed partial class OperatorIntentCoordinator
 
                 if (retryClarification != RetryClarificationHandling.Resumed)
                 {
-                    Apply(kernel, goal, intent, () => mutated = true);
+                    Apply(kernel, goal, intent, () => mutated = true, lifecycleState);
                 }
                 kernel.RecordOperatorIntentApplied(
                     goal.Id,
@@ -360,8 +382,9 @@ internal sealed partial class OperatorIntentCoordinator
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
-                preserveOwnerQuestionHold = (appliedVerbs.Count == 0 || preserveOwnerQuestionHold) &&
-                    OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
+                preserveHold = (appliedVerbs.Count == 0 || preserveHold) &&
+                    (intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede ||
+                     OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent));
                 appliedVerbs.Add(intent.Verb);
                 if (!OperatorIntentBatchPolicy.CanShareTick(intent.Verb) &&
                     !OperatorIntentBatchPolicy.IsClarificationAnswer(intent))
@@ -372,7 +395,7 @@ internal sealed partial class OperatorIntentCoordinator
             catch (AnswerApplicationRetryException ex) when (intent.Verb == OperatorIntentVerbs.Answer)
             {
                 mutated = true;
-                preserveOwnerQuestionHold = (appliedVerbs.Count == 0 || preserveOwnerQuestionHold) &&
+                preserveHold = (appliedVerbs.Count == 0 || preserveHold) &&
                     OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb=answer goal={goal.Id.Value[..8]} result=retryable reason={Sanitize(ex.Message)}");
                 break;
@@ -404,7 +427,7 @@ internal sealed partial class OperatorIntentCoordinator
         return new OperatorIntentExecutionResult(mutated, lines)
         {
             RejectedAdjudication = rejectedAdjudication,
-            PreserveGoalHold = appliedVerbs.Contains(OperatorIntentVerbs.TaskGraphRepair) || preserveOwnerQuestionHold
+            PreserveGoalHold = appliedVerbs.Contains(OperatorIntentVerbs.TaskGraphRepair) || preserveHold
         };
     }
 
@@ -494,6 +517,7 @@ internal sealed partial class OperatorIntentCoordinator
     private static void ValidateCompletedDutyIntent(Goal goal, OperatorIntentRecord intent)
     {
         if (goal.Status == GoalStatus.Completed &&
+            intent.Verb != OperatorIntentVerbs.CriterionEvidenceSupersede &&
             (intent.Verb != OperatorIntentVerbs.CriterionEvidenceRecord ||
              !goal.CriterionEvidenceObligations.Any(item => item.Id ==
                  Deserialize<CriterionEvidenceReceiptOperatorIntentPayload>(intent).ObligationId && item.IsValidatedPostLanding)))
@@ -504,7 +528,8 @@ internal sealed partial class OperatorIntentCoordinator
         AgentOrchestratorKernel kernel,
         Goal goal,
         OperatorIntentRecord intent,
-        Action markGoalMutated)
+        Action markGoalMutated,
+        GoalLifecycleState? lifecycleState)
     {
         ValidateCompletedDutyIntent(goal, intent);
         switch (intent.Verb)
@@ -601,6 +626,10 @@ internal sealed partial class OperatorIntentCoordinator
                     receipt.Observation,
                     isPostLanding ? intent.Actor : null,
                     isPostLanding ? intent.ActorKind : null);
+                return;
+            case OperatorIntentVerbs.CriterionEvidenceSupersede:
+                var supersede = Deserialize<CriterionEvidenceSupersedeOperatorIntentPayload>(intent);
+                goal.SupersedeCriterionEvidenceObligation(supersede.ObligationId, intent.Actor, supersede.Reason, _utcNow(), lifecycleState);
                 return;
             case OperatorIntentVerbs.CriterionEvidenceRephase:
                 var rephase = Deserialize<CriterionEvidenceRephaseOperatorIntentPayload>(intent);

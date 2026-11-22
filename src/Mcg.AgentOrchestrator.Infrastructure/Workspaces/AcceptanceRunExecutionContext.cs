@@ -83,7 +83,10 @@ public sealed record AcceptanceRunExecutionOptions(
     Action<IReadOnlyList<AcceptanceLaneWaitOccurrence>>? LaneWaitSink = null,
     IReadOnlyList<string>? GateTestObligationSelectors = null,
     IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceReceipts = null,
-    string? PinnedMainCommit = null);
+    string? PinnedMainCommit = null)
+{
+    internal Action<AcceptanceSelectedExecutionRecord?>? GateOutcomeSelectionSink { get; init; }
+}
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -342,6 +345,8 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
 {
     private readonly AcceptanceAttemptIdentityResolvers _identityResolvers;
     private readonly bool _writesResultRecord;
+    private readonly Action<AcceptanceSelectedExecutionRecord?>? _gateOutcomeSelectionSink;
+    private AcceptanceSelectedExecutionRecord? _gateOutcomeSelection;
 
     internal AcceptanceAttemptExecutionOwner(
         AcceptanceAttemptIdentity identity,
@@ -355,6 +360,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
     {
         Identity = identity;
         _writesResultRecord = writesResultRecord;
+        _gateOutcomeSelectionSink = options?.GateOutcomeSelectionSink;
         _identityResolvers = identityResolvers ?? new AcceptanceAttemptIdentityResolvers(
             _ => identity.CandidateTreeSha,
             _ => identity.MainSha,
@@ -371,6 +377,21 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
     internal AcceptanceAttemptIdentity Identity { get; }
     public override string? TreeRevision => Identity.CandidateTreeSha;
     internal string? ArtifactResultsPrefix { get; }
+
+    internal AcceptanceBalancedLanePlanWriter PublishGateLanePlan(
+        FocusedReverseDependentLaneSplitter.Expansion? expansion, AcceptanceGateLanePlan plan,
+        IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> dispatchedChecks, GoalId? goalId,
+        Action<AcceptanceGateProgress> emit, TimeProvider clock, string worktreePath, AcceptanceBalancedLaneLayout? layout)
+    {
+        var writer = FocusedReverseDependentLaneSplitter.PublishLanePlan(expansion, plan, dispatchedChecks,
+            ArtifactResultsPrefix, goalId, emit, clock, worktreePath, layout);
+        if (ArtifactResultsPrefix is not null && (_writesResultRecord || _gateOutcomeSelectionSink is not null))
+        {
+            _gateOutcomeSelection = AcceptanceGateOutcomeLedger.GetValidatedSelection(writer.Snapshot, Path.GetFileName(ArtifactResultsPrefix));
+            _gateOutcomeSelectionSink?.Invoke(_gateOutcomeSelection);
+        }
+        return writer;
+    }
 
     internal async Task<AcceptanceVerificationResult> ExecuteAsync(
         GoalAcceptanceVerifier verifier,
@@ -422,7 +443,8 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
         }
     }
 
-    private void TryWriteResultRecord(AcceptanceVerificationResult? result = null, Exception? exception = null)
+    internal void TryWriteResultRecord(AcceptanceVerificationResult? result = null, Exception? exception = null,
+        Action? resultWrittenForTests = null)
     {
         if (!_writesResultRecord) return;
         var branch = Identity.VerifyingCommitSha == "unavailable" ? null : Identity.VerifyingCommitSha;
@@ -432,7 +454,10 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
             var artifact = exception is not null
                 ? AcceptanceAttemptResultRecord.ForFault(exception, exception.Message, branch, main)
                 : AcceptanceAttemptResultRecord.ForVerification(result!, branch, main);
+            var publication = AcceptanceGateOutcomeLedger.PreparePublication(Identity.ResultsPrefix, artifact, _gateOutcomeSelection);
             AcceptanceAttemptResultRecord.Write(Identity.ResultsPrefix + ".result.json", artifact);
+            resultWrittenForTests?.Invoke();
+            AcceptanceGateOutcomeLedger.Publish(publication);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

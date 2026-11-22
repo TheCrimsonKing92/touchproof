@@ -11,7 +11,8 @@ internal static class OperatorIntentTargetPreparation
         CliExecutionContext context, AgentOrchestratorKernel kernel, GoalId goalId,
         BackgroundDispatchRunner runner,
         IDictionary<string, ConductorGoalReloadObservation> observations,
-        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
+        bool supersessionOnly = false)
     {
         observations[goalId.Value] = new ConductorGoalReloadObservation.NotObserved();
         var loaded = context.LoadOperatorIntentTargets([goalId]);
@@ -22,10 +23,12 @@ internal static class OperatorIntentTargetPreparation
             observations[goalId.Value] = new ConductorGoalReloadObservation.Missing();
             return false;
         }
+        kernel.ReplaceGoalStateWithSnapshot(stored,
+            snapshot.HumanInputRequests.Where(request => request.GoalId == goalId.Value).ToArray());
+        if (supersessionOnly) return true;
+
         if (stored.Status == GoalStatus.Completed)
         {
-            kernel.ReplaceGoalStateWithSnapshot(stored,
-                snapshot.HumanInputRequests.Where(request => request.GoalId == goalId.Value).ToArray());
             var target = kernel.GetGoal(goalId);
             if (target.CriterionEvidenceObligations.Any(item => item.IsValidatedPostLanding))
             {
@@ -39,14 +42,10 @@ internal static class OperatorIntentTargetPreparation
         }
         if (GoalStatusSemantics.ExcludesFromConductorWorkingSet(stored.Status))
         {
-            kernel.ReplaceGoalStateWithSnapshot(stored,
-                snapshot.HumanInputRequests.Where(request => request.GoalId == goalId.Value).ToArray());
             observations[goalId.Value] = new ConductorGoalReloadObservation.Terminal(stored.Status);
             return false;
         }
 
-        kernel.ReplaceGoalStateWithSnapshot(stored,
-            snapshot.HumanInputRequests.Where(request => request.GoalId == goalId.Value).ToArray());
         return PrepareLoadedOperatorIntentTarget(context, kernel, kernel.GetGoal(goalId), runner, gitRunner);
     }
 
