@@ -73,6 +73,8 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         Assert.DoesNotContain("s sign in", fixture.Tab.KeyHint);
         fixture.Press('s');
         Assert.DoesNotContain(fixture.Tab.Lines, line => line.Contains("Opening the provider's native sign-in"));
+        Assert.Contains("Another native sign-in for this credential scope blocked this attempt.", fixture.Tab.Lines
+            .Single(line => line.StartsWith("  Sign-in: ", StringComparison.Ordinal)));
         Assert.Single(DrainLaunches(fixture));
         fixture.Initial = profiles;
         fixture.Press('r');
@@ -171,14 +173,55 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         Assert.Empty(DrainLaunches(fixture));
     }
 
-    [Theory]
-    [InlineData(true, "Using API key from the host")]
-    [InlineData(false, "has no native sign-in command")]
-    public async Task UnsupportedUnusedProfileOffersCheckAndNeverLaunches(bool apiKey, string explanation)
+    [Fact]
+    public async Task ConfiguredUnusedGrokResolvesAtListAndLaunchForSelectedProfile()
     {
+        var defaults = WorkerProfileCatalog.Default();
+        var stock = defaults.GetRequired("grok-cli");
+        var configured = stock with
+        {
+            CommandTemplate = stock.CommandTemplate.Replace("--max-turns 32", "--max-turns 64", StringComparison.Ordinal)
+        };
+        Assert.EndsWith("--max-turns 64", configured.CommandTemplate);
+        var catalog = new WorkerProfileCatalog([configured, defaults.GetRequired("codex-cli")]);
+        var gateway = new ProviderConnectionsConsoleGateway(() => catalog, new EmptyEvidence(),
+            () => throw new InvalidOperationException("Sign-in must not open a readiness store."),
+            new ProviderConnectionStatusAdapters("fixture"), TimeProvider.System);
+        using var fixture = new Fixture { ProfileGateway = gateway, Roster = [], Launch = new(new Session()) };
+        await fixture.LoadAsync(initialChecks: 0);
+        Assert.StartsWith("Not in use (2)", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        fixture.Tab.HandleKey(Key.Enter);
+        fixture.Tab.HandleKey(Key.CursorDown);
+        Assert.StartsWith("  grok-cli |", fixture.Tab.Lines[fixture.Tab.SelectedLine]);
+        Assert.StartsWith("s sign in", fixture.Tab.KeyHint);
+
+        fixture.Press('s');
+        await fixture.ApplyAsync();
+        Assert.Equal("grok-cli", Assert.Single(fixture.SignInLookups));
+        var launch = Assert.Single(DrainLaunches(fixture));
+        Assert.Equal(new ProviderSignInTarget(ProviderKind.XaiGrokCli, "grok"), launch.Target);
+        Assert.False(launch.DeviceCode);
+        Assert.StartsWith("t return", fixture.Tab.KeyHint);
+        Assert.Equal(2, fixture.ScheduledProviderWork);
+        Assert.Equal(0, fixture.DeviceCodeProbes);
+    }
+
+    [Theory]
+    [InlineData(true, "Using API key from the host", "Sign-in is unavailable while using an API key from the host.")]
+    [InlineData(false, "has no native sign-in command",
+        "Native sign-in is unavailable for this launch command. Review the worker profile settings.")]
+    public async Task UnsupportedUnusedProfileOffersCheckAndNeverLaunches(bool apiKey, string explanation, string feedback)
+    {
+        const string fixtureSecret = "fixture-secret-do-not-display";
+        var stock = WorkerProfileCatalog.Default().GetRequired("grok-cli");
+        var unsafeTemplate = $"$env:XAI_API_KEY='{fixtureSecret}'; " +
+            stock.CommandTemplate.Replace("--max-turns 32", "--max-turns 64", StringComparison.Ordinal);
         var unsupported = apiKey
             ? Fixture.Connection("grok-cli", mode: ProviderConnectionAuthMode.ApiKey)
-            : Fixture.Connection("grok-cli") with { SignIn = null };
+            : Fixture.Connection("grok-cli") with
+            {
+                SignIn = ProviderSignInTarget.ForProfile(stock with { CommandTemplate = unsafeTemplate })
+            };
         using var fixture = new Fixture { Initial = [unsupported], Roster = [] };
         await fixture.LoadAsync(initialChecks: 0);
         fixture.Tab.HandleKey(Key.Enter);
@@ -189,7 +232,13 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         Assert.DoesNotContain("d device code", fixture.Tab.KeyHint);
         Assert.Contains(fixture.Tab.Lines, line => line.Contains(explanation, StringComparison.Ordinal));
         Assert.Equal(1, fixture.ScheduledProviderWork); // Only the initial list.
+        Assert.Empty(fixture.Tab.StatusText);
         fixture.Press('s');
+        Assert.Equal(feedback, fixture.Tab.StatusText);
+        Assert.Contains($"  Sign-in: {feedback}", fixture.Tab.Lines);
+        Assert.DoesNotContain(fixture.Tab.Lines, line => line.Contains(fixtureSecret, StringComparison.Ordinal) ||
+            line.Contains(unsafeTemplate, StringComparison.Ordinal));
+        Assert.StartsWith("c check", fixture.Tab.KeyHint);
         fixture.Press('d');
         Assert.Equal(1, fixture.ScheduledProviderWork);
         fixture.Press('c');
@@ -308,6 +357,13 @@ public sealed class OwnerConsoleProviderSignInFlowTests
         var launches = new List<(ProviderSignInTarget, bool)>();
         while (fixture.Launches.Reader.TryRead(out var launch)) launches.Add(launch);
         return launches;
+    }
+
+    private sealed class EmptyEvidence : IProviderConnectionEvidenceQueries
+    {
+        public Task<IReadOnlyList<ProviderConnectionObservation>> ReadProviderConnectionEvidenceAsync(string profileId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ProviderConnectionObservation>>([]);
     }
 
     private sealed class Session : IProviderSignInSession
