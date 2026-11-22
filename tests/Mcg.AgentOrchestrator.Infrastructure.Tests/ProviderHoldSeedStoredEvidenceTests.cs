@@ -118,22 +118,42 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
     public async Task Read_BackfillAdvancesWithinByteLimitAndReturnsEveryProjection()
     {
         using var fixture = new Fixture();
-        var output = new string('x', 1_500_000);
+        const int backfillByteLimit = 4 * 1024 * 1024;
         var snapshots = Enumerable.Range(0, 3).Select(index =>
         {
             var goal = Snapshot(index, false);
             var task = Assert.Single(goal.Tasks);
-            var verification = task.LastVerification! with { StandardOutput = output };
-            return goal with { Tasks = [task with { LastVerification = verification, VerificationHistory = [verification] }] };
+            // Spread the byte pressure across valid verification previews that survive replay.
+            var tasks = Enumerable.Range(0, 72).Select(taskIndex =>
+            {
+                var output = new string((char)('a' + taskIndex % 26), 16 * 1024);
+                var verification = task.LastVerification! with { StandardOutput = output };
+                return task with
+                {
+                    Id = $"{goal.Id}-{taskIndex}",
+                    LastVerification = verification,
+                    VerificationHistory = [verification]
+                };
+            }).ToArray();
+            return goal with { Tasks = tasks };
         }).ToArray();
         await fixture.Insert(snapshots);
         var ids = snapshots.Select(snapshot => new GoalId(snapshot.Id)).ToArray();
+        var expected = snapshots.Select(snapshot => JsonSerializer.SerializeToUtf8Bytes(
+            new ProviderUsageGoalEvidence(snapshot.Id, snapshot.Status, snapshot.Tasks.Select(task =>
+                new ProviderUsageTaskEvidence(task.Id, task.RequiredRole, task.Status, task.AssignedAgentId,
+                    task.LastDispatch, task.DispatchHistory!, task.LastVerification, task.VerificationHistory,
+                    task.LatestProviderBudgetRecoveryAt)).ToArray(), []), Options)).ToArray();
+        Assert.All(expected, json => Assert.InRange(json.Length, backfillByteLimit / 2 + 1, backfillByteLimit));
 
         for (var backfilled = 1; backfilled <= ids.Length; backfilled++)
         {
+            fixture.Decoded.Clear();
             var evidence = await fixture.ReadProviderHoldSeedEvidenceAsync(ids);
             Assert.Equal(ids.Select(id => id.Value), evidence!.Select(row => row.GoalId));
-            Assert.All(evidence!, row => Assert.Equal(output, Assert.Single(row.Tasks).LastVerification!.StandardOutput));
+            Assert.Equal(ids.Skip(backfilled - 1).Select(id => id.Value), fixture.Decoded);
+            foreach (var (row, json) in evidence!.Zip(expected))
+                Assert.Equal(json, JsonSerializer.SerializeToUtf8Bytes(row, Options));
             Assert.Equal((long)backfilled, fixture.Scalar("SELECT count(*) FROM provider_hold_seed_evidence"));
         }
     }
