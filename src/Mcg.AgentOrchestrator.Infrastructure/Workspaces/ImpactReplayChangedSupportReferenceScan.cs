@@ -9,6 +9,14 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
 {
     internal const int DefaultClosureThreshold = 100;
 
+    internal static class CoreLib
+    {
+        internal static readonly MetadataReference Reference;
+
+        // Initialize on first use so parsing failures can return before loading metadata.
+        static CoreLib() => Reference = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+    }
+
     private sealed record TestClass(string Name, string Project, bool Infrastructure, string Source);
 
     private sealed record ChangedFile(string Path, string FullPath, IReadOnlySet<INamedTypeSymbol> Declared,
@@ -53,8 +61,9 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
         }
 
         var compilation = CSharpCompilation.Create("ReplayTestSources", trees.Values,
-            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            [CoreLib.Reference],
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        probe?.CompilationReference = compilation.References.Single();
         var files = new List<ChangedFile>();
         foreach (var relativePath in changedFiles)
         {
