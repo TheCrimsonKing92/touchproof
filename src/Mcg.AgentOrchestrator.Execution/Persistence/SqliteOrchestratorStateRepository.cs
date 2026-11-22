@@ -2375,10 +2375,17 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         ReadModelFitHistoryAsync(providerHoldRule: null, cancellationToken);
 
     public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(string exhaustionRule,
-        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(exhaustionRule, cancellationToken);
+        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync([exhaustionRule], cancellationToken);
 
-    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(string? providerHoldRule,
-        CancellationToken cancellationToken)
+    public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(
+        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(ProviderHoldHistory.HoldOutcomeRules, cancellationToken);
+
+    public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldSeedRowsAsync(
+        CancellationToken cancellationToken = default) =>
+        ReadModelFitHistoryAsync(ProviderHoldHistory.HoldOutcomeRules, cancellationToken, recoveryOnly: true);
+
+    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(IReadOnlyList<string>? providerHoldRule,
+        CancellationToken cancellationToken, bool recoveryOnly = false)
     {
         await using var conn = OpenConnection();
         var results = new List<ModelFitHistoryRow>();
@@ -2387,21 +2394,29 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         // SQLite NOCASE only folds ASCII. For a non-ASCII provider retain the full read,
         // leaving canonical OrdinalIgnoreCase matching to SeedCandidates. For ASCII names
         // the SQL is a conservative superset (julianday rounds sub-millisecond instants).
-        var prefix = providerHoldRule is not null ? """
+        var ruleParameters = providerHoldRule?.Select((rule, index) =>
+        {
+            var name = $"$holdRule{index}";
+            cmd.Parameters.AddWithValue(name, rule);
+            return name;
+        }).ToArray();
+        var rules = ruleParameters is null ? "" : string.Join(", ", ruleParameters);
+        var prefix = providerHoldRule is not null ? $"""
             WITH exhausted AS MATERIALIZED (
                 SELECT provider_name, CASE WHEN count(*) != count(julianday(timestamp)) THEN NULL
                     ELSE min(julianday(timestamp)) END AS first_at
-                FROM model_fit_history WHERE outcome_rule = $exhausted
+                FROM model_fit_history WHERE outcome_rule IN ({rules})
                 GROUP BY provider_name COLLATE NOCASE)
             """ : string.Empty;
-        var restriction = providerHoldRule is not null ? """
-            WHERE outcome_rule = $exhausted OR EXISTS (
+        var recovery = recoveryOnly ? "(outcome = 'Completed' OR outcome_class = 'success') AND" : "";
+        var restriction = providerHoldRule is not null ? $"""
+            WHERE outcome_rule IN ({rules}) OR ({recovery} (EXISTS (
                 SELECT 1 FROM model_fit_history e
                 WHERE e.provider_name GLOB '*[^ -~]*') OR EXISTS (
                 SELECT 1 FROM exhausted e
                 WHERE e.provider_name = model_fit_history.provider_name COLLATE NOCASE
                     AND (e.first_at IS NULL OR julianday(model_fit_history.timestamp) IS NULL
-                        OR julianday(model_fit_history.timestamp) >= e.first_at))
+                        OR julianday(model_fit_history.timestamp) >= e.first_at))))
             """ : string.Empty;
         cmd.CommandText = $"""
             {prefix}
@@ -2410,7 +2425,6 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             {restriction}
             ORDER BY timestamp DESC
             """;
-        if (providerHoldRule is not null) cmd.Parameters.AddWithValue("$exhausted", providerHoldRule);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         long characters = 0;
@@ -2424,6 +2438,31 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         _readObserver?.Invoke(new("model-fit-history", null, characters));
         return results;
+    }
+
+    public async Task<IReadOnlyList<GoalId>> ListProviderHoldSeedMarkerGoalsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        // Current archives keep their timeline in the sidecar. Inline snapshots can also
+        // carry markers. Core validates the complete notes and their exact binding.
+        var sidecar = hasTimeline ? """
+            UNION SELECT t.goal_id FROM goal_timeline t JOIN goals g ON g.id = t.goal_id
+            WHERE instr(t.entry_json, 'PROVIDER_BUDGET_') > 0
+                AND json_extract(t.entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*'
+            """ : "";
+        command.CommandText = $"""
+            SELECT g.id FROM goals g WHERE instr(g.snapshot_json, 'PROVIDER_BUDGET_') > 0 AND EXISTS (
+                SELECT 1 FROM json_each(g.snapshot_json, '$.Timeline') evt
+                WHERE json_extract(evt.value, '$.Message') GLOB 'PROVIDER_BUDGET_*')
+            {sidecar}
+            """;
+        var result = new List<GoalId>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            result.Add(new(reader.GetString(0)));
+        return result;
     }
 
     public async Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(

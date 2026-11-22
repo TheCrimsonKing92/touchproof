@@ -16,7 +16,7 @@ internal static class ProviderUsageHoldReader
             var workingIds = loaded.Select(goal => goal.Id.Value).Concat(failed.Select(id => id.Value))
                 .ToHashSet(StringComparer.Ordinal);
             var candidates = ProviderHoldHistory.SeedCandidates(
-                repository.ListProviderHoldHistoryAsync(TaskOutcomeRules.ProviderBudgetExhausted.Token).GetAwaiter().GetResult(), workingIds);
+                repository.ListProviderHoldHistoryAsync().GetAwaiter().GetResult(), workingIds);
             var ids = failed.Concat(candidates.Select(id => new GoalId(id))).Distinct().ToArray();
             var evidence = repository.ReadProviderHoldSeedEvidenceAsync(ids).GetAwaiter().GetResult();
             if (evidence is null) throw new InvalidOperationException("Provider evidence unavailable.");

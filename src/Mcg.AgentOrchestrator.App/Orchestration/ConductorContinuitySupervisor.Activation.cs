@@ -74,13 +74,15 @@ internal sealed partial class ConductorContinuitySupervisor
         private DateTimeOffset? _lastDrainAt;
         private DateTimeOffset _lastLineAt;
         private DateTimeOffset? _loopReadyAt;
+        private readonly DateTimeOffset _launchedAt;
+        private DateTimeOffset? _lastStartupProgressAt;
         private TaskCompletionSource _changed = NewSignal();
 
         internal ActivationMonitor(Func<DateTimeOffset> utcNow, ActivationAdmissionProbeTracker? probe = null)
         {
             _utcNow = utcNow;
             _probe = probe;
-            _lastLineAt = utcNow();
+            _launchedAt = _lastLineAt = utcNow();
         }
 
         internal void OnLine(string line)
@@ -89,6 +91,8 @@ internal sealed partial class ConductorContinuitySupervisor
             {
                 var nonBlank = !string.IsNullOrWhiteSpace(line);
                 if (nonBlank) _lastLineAt = _utcNow();
+                var startupProgress = !_started && line.StartsWith("STARTUP_PROGRESS phase=", StringComparison.Ordinal);
+                if (startupProgress) _lastStartupProgressAt = _lastLineAt;
                 var probeChanged = false;
                 if (_started && _probe is not null)
                 {
@@ -127,7 +131,7 @@ internal sealed partial class ConductorContinuitySupervisor
                     var verdict = _admissionHealth.Observe(sample, _utcNow());
                     if ((wasTripped || verdict.State != ActivationAdmissionHealthState.Tripped) && !probeChanged) return;
                 }
-                else if ((_started || _loopReadyAt is null || !nonBlank) && !probeChanged)
+                else if ((_started || _loopReadyAt is null || !nonBlank) && !probeChanged && !startupProgress)
                 {
                     return;
                 }
@@ -172,11 +176,13 @@ internal sealed partial class ConductorContinuitySupervisor
             }
         }
 
-        internal DateTimeOffset? LoopReadyAt()
+        internal (DateTimeOffset? Anchor, DateTimeOffset LastProgress, Task Changed) StartupProgress()
         {
             lock (_gate)
             {
-                return _loopReadyAt;
+                if (_lastStartupProgressAt is { } progress)
+                    return (_launchedAt, _loopReadyAt is null ? progress : _lastLineAt, _changed.Task);
+                return (_loopReadyAt, _lastLineAt, _changed.Task);
             }
         }
 
@@ -255,12 +261,13 @@ internal sealed partial class ConductorContinuitySupervisor
 
             var timeout = !snapshot.Started ? _readinessTimeout :
                 snapshot.Ticks == 0 ? _activationStallTimeout : drainWait ?? tickGapTimeout;
-            var loopReadyAt = !snapshot.Started ? monitor.LoopReadyAt() : null;
+            var startupProgress = monitor.StartupProgress();
+            var startupAnchor = !snapshot.Started ? startupProgress.Anchor : null;
             var ceilingReached = false;
-            if (loopReadyAt is { } readyAt)
+            if (startupAnchor is { } anchor)
             {
                 var startup = ConductorStartupProgressDeadline.Compute(
-                    readyAt, monitor.LastLineAt(), _timeProvider.GetUtcNow(), _readinessTimeout);
+                    anchor, startupProgress.LastProgress, _timeProvider.GetUtcNow(), _readinessTimeout);
                 timeout = startup.Delay;
                 ceilingReached = startup.CeilingReached;
             }
@@ -302,10 +309,10 @@ internal sealed partial class ConductorContinuitySupervisor
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            if (loopReadyAt is { } deadlineReadyAt)
+            if (startupAnchor is { } deadlineAnchor)
             {
                 ceilingReached = ConductorStartupProgressDeadline.Compute(
-                    deadlineReadyAt, monitor.LastLineAt(), _timeProvider.GetUtcNow(), _readinessTimeout)
+                    deadlineAnchor, monitor.StartupProgress().LastProgress, _timeProvider.GetUtcNow(), _readinessTimeout)
                     .CeilingReached;
             }
             if (snapshot.Started && snapshot.Ticks > 0)
@@ -326,6 +333,28 @@ internal sealed partial class ConductorContinuitySupervisor
                     ? $"LOOP_START missing ceiling={(int)ConductorStartupProgressDeadline.Ceiling.TotalSeconds}"
                     : "LOOP_START missing",
                 stopped, stopped?.TerminationConfirmed == true);
+        }
+    }
+
+    private async Task<Task> WaitForSuccessorReadinessAsync(Task runTask, Task readiness, ActivationMonitor monitor,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var progress = monitor.StartupProgress();
+            var deadline = progress.Anchor is { } anchor
+                ? ConductorStartupProgressDeadline.Compute(anchor, progress.LastProgress,
+                    _timeProvider.GetUtcNow(), _readinessTimeout)
+                : new ConductorStartupProgressDeadline.Result(_readinessTimeout, CeilingReached: false);
+            if (runTask.IsCompleted) return runTask;
+            if (readiness.IsCompleted) return readiness;
+            if (deadline.CeilingReached) return Task.CompletedTask;
+            using var timer = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var timeout = _delay(deadline.Delay, timer.Token);
+            var winner = await Task.WhenAny(runTask, readiness, timeout, progress.Changed).ConfigureAwait(false);
+            timer.Cancel();
+            if (winner != progress.Changed && (winner != timeout || !progress.Changed.IsCompleted)) return winner;
         }
     }
 

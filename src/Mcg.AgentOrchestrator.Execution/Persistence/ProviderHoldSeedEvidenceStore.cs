@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Disposable acceleration data: every miss uses the canonical snapshot projection.
 internal static class ProviderHoldSeedEvidenceStore
 {
-    internal const int FormatVersion = 1;
+    internal const int FormatVersion = 2;
 
     // Snapshot writers advance version/updated_at; archiving and recompression change archive metadata.
     // Keep this expression identical for cache validation and the atomic snapshot/marker read.

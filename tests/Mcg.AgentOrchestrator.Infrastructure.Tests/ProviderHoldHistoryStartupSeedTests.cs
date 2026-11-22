@@ -214,7 +214,7 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         oracle.Retain(repository.Stored.Goals, []);
         var kernel = new AgentOrchestratorKernel();
         ProviderHoldHistorySeed.Apply(kernel, repository, _ => { });
-        Assert.Equal(2, repository.RequestedIds.Count);
+        Assert.Equal(new[] { Repository.SourceId }, repository.RequestedIds);
         Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
         Assert.Equal(ProviderUsageHoldView.Read(oracle.Scope([]), DateTimeOffset.UnixEpoch),
             ProviderUsageHoldView.Read(kernel.ProviderHoldScope, DateTimeOffset.UnixEpoch));
@@ -230,7 +230,7 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         oracle.Retain(repository.Stored.Goals, []);
         var kernel = new AgentOrchestratorKernel();
         ProviderHoldHistorySeed.Apply(kernel, repository, _ => { });
-        Assert.Equal(3, repository.RequestedIds.Count);
+        Assert.Equal(new[] { "cccccccc000000000000000000000000" }, repository.RequestedIds);
         Assert.Single(oracle.Retained);
         Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
         Assert.Equal(ProviderUsageHoldView.Read(oracle.Scope([]), DateTimeOffset.UnixEpoch),
@@ -261,6 +261,26 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         long Milliseconds(string key) => long.Parse(fields[key], System.Globalization.CultureInfo.InvariantCulture);
         Assert.True(Milliseconds("historyMs") + Milliseconds("evidenceMs") + Milliseconds("pruneMs") <= Milliseconds("elapsedMs"));
         Assert.Single(repository.RequestedIds);
+    }
+
+    [Fact]
+    public void PreLoopStartup_MissingRequiredHistory_LeavesPriorStateAndWithholdsReady()
+    {
+        var repository = new Repository();
+        var kernel = new AgentOrchestratorKernel();
+        kernel.ProviderHoldHistory.Retain(repository.Stored.Goals, []);
+        var prior = Assert.Single(kernel.ProviderHoldHistory.Retained);
+        repository.BeforeLoad = () => throw new InvalidDataException("required archive unavailable");
+        var lines = new List<string>();
+        var heartbeat = new Script().Heartbeat;
+
+        Assert.Throws<InvalidOperationException>(() => CliPersistentStateRunner.RunConductPreLoopStartup(
+            () => true, () => kernel, _ => "LOOP_READY fixture", lines.Add,
+            state => ProviderHoldHistoryStartupSeed.ApplyRequired(state, repository, lines.Add, heartbeat)));
+
+        Assert.Same(prior, Assert.Single(kernel.ProviderHoldHistory.Retained));
+        Assert.Equal("PROVIDER_HOLD_HISTORY seed-failed: InvalidDataException: required archive unavailable",
+            Assert.Single(lines));
     }
 
     private static async Task WaitFor(Task task, string eventName)

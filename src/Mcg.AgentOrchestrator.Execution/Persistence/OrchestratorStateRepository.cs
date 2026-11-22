@@ -181,6 +181,12 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 
     Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldSeedRowsAsync(CancellationToken cancellationToken = default) =>
+        ListModelFitHistoryAsync(cancellationToken);
+
+    Task<IReadOnlyList<GoalId>> ListProviderHoldSeedMarkerGoalsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<GoalId>>([]);
+
     Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default);
 }
 

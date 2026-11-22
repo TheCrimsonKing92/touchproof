@@ -5,10 +5,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: scripted processes, per-test signals and a unique artifact directory.
 public sealed class ConductorStartupHeartbeatSupervisorTests
 {
-    [Xunit.Fact]
-    public async Task HeartbeatAfterReady_RearmsSilenceWindow_AdoptsWithoutRestore()
+    [Xunit.Theory]
+    [Xunit.InlineData("LOOP_READY lock=acquired")]
+    [Xunit.InlineData("STARTUP_PROGRESS phase=state-load elapsed_ms=0")]
+    public async Task StartupHeartbeat_RearmsSilenceWindow_AdoptsWithoutRestore(string firstLine)
     {
-        await using var scenario = new Scenario(restoring: false, "LOOP_READY lock=acquired");
+        await using var scenario = new Scenario(restoring: false, firstLine);
         var firstDeadline = await scenario.NextDeadlineAsync();
         var heartbeat = ConductorStartupHeartbeat.Format(ConductorStartupHeartbeat.Phases.TerminalSweep,
             TimeSpan.FromSeconds(15));
@@ -32,10 +34,12 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
             evt.Operation == "activation" && (evt.Status == "reverted" || evt.Status == "failed-both"));
     }
 
-    [Xunit.Fact]
-    public async Task ReadyWithoutHeartbeat_SilenceDeadline_RevertsAndLaunchesRestore()
+    [Xunit.Theory]
+    [Xunit.InlineData("LOOP_READY lock=acquired")]
+    [Xunit.InlineData("STARTUP_PROGRESS phase=state-load elapsed_ms=0")]
+    public async Task SilentStartup_SilenceDeadline_RevertsAndLaunchesRestore(string firstLine)
     {
-        await using var scenario = new Scenario(restoring: false, "LOOP_READY lock=acquired");
+        await using var scenario = new Scenario(restoring: false, firstLine);
         var deadline = await scenario.NextDeadlineAsync();
         deadline.Release.TrySetResult();
 

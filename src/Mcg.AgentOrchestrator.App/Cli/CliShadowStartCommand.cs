@@ -196,10 +196,13 @@ internal static class CliShadowStartCommand
             "--repository-root", scratch, "--expected-state-directory", state, "--disposable-fixture" })
             info.ArgumentList.Add(arg);
 
-        foreach (var key in info.Environment.Keys.Where(key =>
-            key.StartsWith("MCG_", StringComparison.OrdinalIgnoreCase) ||
-            key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase)).ToArray())
-            info.Environment.Remove(key);
+        var systemEnvironment = new[] { "PATH", "SystemRoot", "SystemDrive", "WINDIR", "ComSpec",
+            "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "PATHEXT", "DOTNET_ROOT", "DOTNET_ROOT_X64",
+            "LD_LIBRARY_PATH", "LANG", "LC_ALL" };
+        var inherited = systemEnvironment.Select(key => (Key: key, Value: Environment.GetEnvironmentVariable(key))).ToArray();
+        info.Environment.Clear();
+        foreach (var (key, value) in inherited)
+            if (value is not null) info.Environment[key] = value;
         info.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = scratch;
         info.Environment[OrchestratorDataRoot.EnvironmentVariable] = Path.Combine(scratch, "data");
         info.Environment[OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = Path.Combine(scratch, "projects");
@@ -219,6 +222,7 @@ internal static class CliShadowStartCommand
         var logs = Path.Combine(state, "logs");
         var stopFile = Path.Combine(scratch, ConductorBatchLoop.StopFileName);
         var tail = new Queue<string>();
+        var startupLines = new List<string>();
         var evidence = new JournalEvidence();
         DateTimeOffset? stopRequested = null;
         long? peak = null;
@@ -304,6 +308,8 @@ internal static class CliShadowStartCommand
         var resultWriter = failure is null ? stdout : stderr;
         Report(resultWriter, failure, detail, scratch, elapsed.ElapsedMilliseconds, peak,
             evidence.FirstTick is { } observed ? (long)(observed - launchedAt).TotalMilliseconds : null);
+        lock (tail)
+            foreach (var line in startupLines) resultWriter.WriteLine(line);
         if (failure is not null)
         {
             lock (tail)
@@ -318,6 +324,11 @@ internal static class CliShadowStartCommand
             {
                 lock (tail)
                 {
+                    if (channel == "stdout" && startupLines.Count < 12 &&
+                        (line.StartsWith(ProviderHoldHistoryStartupSeed.CompletedLinePrefix, StringComparison.Ordinal) ||
+                         line.StartsWith(ConductorContinuitySupervisor.LoopReadyLinePrefix, StringComparison.Ordinal) ||
+                         line.StartsWith("LOOP_START ", StringComparison.Ordinal)))
+                        startupLines.Add(line);
                     if (tail.Count == 40) tail.Dequeue();
                     tail.Enqueue($"{channel}: {(line.Length <= 2048 ? line : line[..2048])}");
                 }

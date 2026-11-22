@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.Core;
 using Terminal.Gui.Text;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -49,11 +50,13 @@ internal static class OwnerFleetDiagram
                     : $"balance unverified since {Stamp(hold.LastObservedAt ?? hold.PlacedAt)}",
                 $"held since: {Stamp(hold.PlacedAt)}",
                 $"source: {hold.Source}",
+                hold.HoldReason == ProviderFailureKind.AuthenticationRequired ? "sign-in required"
+                    : $"provider reset: {(hold.ProviderResetAt is { } reset ? Stamp(reset) : "unknown")}",
                 ..(hold.Diagnosis is { } diagnosis ? new[] { diagnosis } : [])
             ];
             if (signInOffer is { } offer && offer.HoldIndex == index)
                 content.Add($"Press {OwnerConsoleDialogBindings.FleetSignIn.Key} to open sign-in for {offer.Provider}");
-            Box(content, true, wrapRow: hold.Diagnosis is null ? -1 : 6);
+            Box(content, true, wrapRow: hold.Diagnosis is null ? -1 : 7);
         }
         foreach (var executor in model.Executors)
         {

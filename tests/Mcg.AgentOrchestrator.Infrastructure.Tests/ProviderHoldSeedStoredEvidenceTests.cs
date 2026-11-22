@@ -163,6 +163,49 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
     }
 
     [Fact]
+    public async Task Seed_LegacyProjection_ReplaysApiAndModelIdentityFromCanonicalHistory()
+    {
+        using var fixture = new Fixture();
+        var snapshot = Snapshot(0, false);
+        var task = snapshot.Tasks.Single();
+        var dispatch = task.LastDispatch! with
+        {
+            ModelName = "claude-sonnet-4-6",
+            ClaudeCredentialSourceDirectory = "C:/fixture",
+            ClaudeApiHoldIdentity = "claude-api:c:/fixture"
+        };
+        var verification = task.LastVerification! with
+        {
+            StandardError = "",
+            StandardOutput = "You've hit your sonnet limit",
+            ProviderFailureKind = ProviderFailureKind.Unknown
+        };
+        snapshot = snapshot with
+        {
+            Tasks = [task with
+            {
+                LastDispatch = dispatch, DispatchHistory = [dispatch],
+                LastVerification = verification, VerificationHistory = [verification]
+            }]
+        };
+        await fixture.Insert(snapshot);
+        fixture.UseRows(snapshot);
+        fixture.Seed();
+        fixture.Execute("""
+            UPDATE provider_hold_seed_evidence SET format_version = 1,
+                evidence_json = json_remove(evidence_json, '$.Tasks[0].LastDispatch.ModelName',
+                    '$.Tasks[0].LastDispatch.ClaudeApiHoldIdentity', '$.Tasks[0].DispatchHistory[0].ModelName',
+                    '$.Tasks[0].DispatchHistory[0].ClaudeApiHoldIdentity')
+            """);
+
+        var kernel = fixture.Seed();
+        Assert.Equal(new[] { snapshot.Id }, fixture.Decoded);
+        var hold = Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, At)).Hold;
+        Assert.Equal("xai::claude-api:c:/fixture|model=claude-sonnet-4-6", hold.BindingKey);
+        Assert.Equal("claude-sonnet-4-6", hold.ModelName);
+    }
+
+    [Fact]
     public async Task Read_SnapshotFailure_PersistsOnlyEarlierSuccessfulProjections()
     {
         using var fixture = new Fixture();

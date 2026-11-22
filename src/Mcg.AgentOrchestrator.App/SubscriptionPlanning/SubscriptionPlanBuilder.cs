@@ -331,22 +331,24 @@ public static class SubscriptionPlanBuilder
             var recoverableLimitFailures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
             var requiresLimitReview = !retryDeferred && ProviderLimitSignals.RequiresSubscriptionLimitReview(task);
             var dispatchProviderName = ResolveDispatchProviderName(effectiveProviderName, profileName);
+            var providerCredentialBinding = ResolveProviderCredentialBinding(profile, claudeAuthProbe);
             var providerCoolingDown = ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
                 goal,
                 task.Id,
                 dispatchProviderName,
                 subscriptionModelName ?? effectiveModelName,
                 effectiveNow,
-                out var providerCooldown);
-            var providerCredentialBinding = ResolveProviderCredentialBinding(
-                profile,
-                sandboxOptions,
-                claudeAuthProbe);
+                out var providerCooldown, new ProviderHoldBinding(dispatchProviderName, providerCredentialBinding, null));
             var providerBindingHeld = ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
                 providerHoldScope ?? [goal],
                 dispatchProviderName,
-                providerCredentialBinding,
+                providerCredentialBinding, subscriptionModelName ?? effectiveModelName,
                 out var providerHold);
+            if (providerBindingHeld)
+            {
+                var schedule = ProviderBudgetHoldSchedules.Evaluate(providerHoldScope ?? [goal], providerHold, effectiveNow);
+                providerHold = providerHold with { Reason = schedule.Reason, ProviderResetAt = schedule.ProviderResetAt };
+            }
             var retryDelaySeconds = retryDeferred
                 ? Math.Max(0, (int)Math.Ceiling((retryAfter - effectiveNow).TotalSeconds))
                 : providerCoolingDown
@@ -386,12 +388,12 @@ public static class SubscriptionPlanBuilder
                     : "Ready to prepare subscription dispatch."
                 : !AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy)
                     ? $"Agent execution policy is {agent.ExecutionPolicy}; subscription dispatch is disabled."
+                : providerBindingHeld && (!providerCoolingDown || providerHold.Reason == ProviderFailureKind.AuthenticationRequired)
+                    ? DescribeProviderHold(providerHold)
                 : retryDeferred
                     ? $"Recoverable subscription usage limit ({previousLimitFailures}); retry after {retryAfter:u}."
                 : providerCoolingDown
                     ? $"Provider {providerCooldown.ProviderName} is cooling down after a recoverable subscription usage limit on task {TaskDisplayNumber.Resolve(goal, providerCooldown.SourceTaskId)}; retry after {providerCooldown.RetryAfter:u}."
-                : providerBindingHeld
-                    ? $"Provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); blocked by goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}."
                 : requiresLimitReview
                     ? $"Repeated recoverable subscription usage limit ({previousLimitFailures}); inspect model, profile, or timing before redispatch."
                 : !hasProfile
@@ -676,21 +678,15 @@ public static class SubscriptionPlanBuilder
     }
 
     private static string? ResolveProviderCredentialBinding(
-        WorkerProfile? profile,
-        WorkerSandboxOptions? sandboxOptions,
-        Func<ClaudeCliAuthState>? claudeAuthProbe)
-    {
-        if (profile is null ||
-            DefaultWorkerProviders.ResolveProfile(profile.Name).Identity.Kind != ProviderKind.AnthropicClaudeCli ||
-            !(sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled)
-        {
-            return null;
-        }
+        WorkerProfile? profile, Func<ClaudeCliAuthState>? claudeAuthProbe) =>
+        profile is not null && DefaultWorkerProviders.ResolveProfile(profile.Name).Identity.Kind == ProviderKind.AnthropicClaudeCli
+            ? (claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight())().ToTransportedSelection()?.HoldBinding : null;
 
-        return (claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight())()
-            .ToTransportedSelection()
-            ?.DirectoryPath;
-    }
+    private static string DescribeProviderHold(ProviderBudgetExhaustionHold hold) =>
+        (hold.Reason == ProviderFailureKind.AuthenticationRequired ? "Provider sign-in required" : "Provider budget exhausted") +
+        $" for binding {hold.BindingKey} ({hold.BindingScope}); blocked by goal {hold.SourceGoalId.Value[..8]} task {hold.SourceTaskId.Value[..8]} receipt {hold.EvidenceReceipt}." +
+        (hold.Reason == ProviderFailureKind.AuthenticationRequired ? " Sign in and recheck availability." :
+            $" Provider reset {ProviderUsageHoldView.FormatProviderReset(hold.ProviderResetAt)}.");
 
     private static IReadOnlyDictionary<string, ModelOutcomeRecord>? BuildScorecardLookup(
         IReadOnlyList<ModelOutcomeRecord>? scorecard)
