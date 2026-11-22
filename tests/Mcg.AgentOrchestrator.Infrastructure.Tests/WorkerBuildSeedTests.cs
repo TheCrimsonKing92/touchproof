@@ -20,7 +20,7 @@ public sealed class WorkerBuildSeedTests
                 seedRepository: root => Customize(root, customSeed)));
         using var fixture = measured.Fixture;
         AssertSetupLaunches(measured.Counts, 0);
-        Assert.Equal(1, measured.Counts.Subcommands.GetValueOrDefault("worktree"));
+        Assert.Equal(1L, measured.Counts.Count("worktree"));
 
         var main = Path.Combine(fixture.Root, "repository");
         var linked = fixture.RepositoryRoot;
@@ -210,42 +210,15 @@ public sealed class WorkerBuildSeedTests
         foreach (var excluded in ExcludedPaths) Write(root, excluded, "retained only in the seed checkout\n");
     }
 
-    private static (WorkerBuildRequestFixture Fixture, HostCapacitySlotGitCensus.GitLaunchDelta Counts) MeasureFixture(
-        string phase, Func<WorkerBuildRequestFixture> create)
-    {
-        // Opt in to the shared observer and keep the measurement window in memory.
-        // A temporary observer can prevent another test from installing the shared one.
-        HostCapacitySlotGitCensus.EnsureInstalled(phase);
-        var testName = HostCapacitySlotTimingWriter.CurrentTestName();
-        Assert.NotEqual("<unknown>", testName);
-        var window = HostCapacitySlotGitCensus.Shared.Open(testName);
-        Assert.NotNull(window);
+    internal static (WorkerBuildRequestFixture Fixture, FixtureGitLaunchBudget.Launches Counts) MeasureFixture(
+        string phase, Func<WorkerBuildRequestFixture> create) =>
+        FixtureGitLaunchBudget.Measure(phase, create);
 
-        WorkerBuildRequestFixture fixture;
-        HostCapacitySlotGitCensus.GitLaunchDelta? counts;
-        try { fixture = create(); }
-        finally { counts = window.Close(); }
-
-        if (counts is null)
-        {
-            fixture.Dispose();
-            throw new InvalidOperationException($"Git launch counts unavailable for {phase}.");
-        }
-
-        var commands = counts.Subcommands.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => $"{pair.Key}={pair.Value}");
-        TestContext.Current.TestOutputHelper?.WriteLine(
-            $"{phase}: real git={counts.Launches}; launches by command=[{string.Join(", ", commands)}]");
-        return (fixture, counts);
-    }
-
-    private static void AssertSetupLaunches(HostCapacitySlotGitCensus.GitLaunchDelta counts, int constructions)
+    private static void AssertSetupLaunches(FixtureGitLaunchBudget.Launches counts, long constructions)
     {
         var expected = (Init: constructions, Config: 2 * constructions, Add: constructions, Commit: constructions);
-        var actual = (Init: counts.Subcommands.GetValueOrDefault("init"),
-            Config: counts.Subcommands.GetValueOrDefault("config"),
-            Add: counts.Subcommands.GetValueOrDefault("add"),
-            Commit: counts.Subcommands.GetValueOrDefault("commit"));
+        var actual = (Init: counts.Count("init"), Config: counts.Count("config"),
+            Add: counts.Count("add"), Commit: counts.Count("commit"));
         if (actual != expected)
             Assert.Fail($"Git seed launches (init, config, add, commit): expected {expected}, observed {actual}.\n" +
                 TestContext.Current.TestOutputHelper?.Output);
@@ -258,9 +231,18 @@ public sealed class WorkerBuildSeedTests
 
     private static string Git(string root, params string[] arguments) => DirectGit(root, null, arguments);
 
-    private static string DirectGit(string root, IReadOnlyDictionary<string, string>? environment, params string[] arguments)
+    internal static string DirectGit(string root, IReadOnlyDictionary<string, string>? environment, params string[] arguments)
     {
-        var result = GitCli.RunDirect(root, null, environment, arguments);
+        var result = GitCli.RunProgressExecutable("git", root, arguments, new GitIdleGapHistory(),
+            configureStart: start =>
+            {
+                foreach (var name in GitPathQuery.RefusingEnvironmentVariables)
+                    start.Environment.Remove(name);
+                start.Environment["GIT_TERMINAL_PROMPT"] = "0";
+                if (environment is not null)
+                    foreach (var (name, value) in environment)
+                        start.Environment[name] = value;
+            });
         Assert.True(result.Succeeded, result.Error);
         return result.Output.TrimEnd('\r', '\n');
     }
