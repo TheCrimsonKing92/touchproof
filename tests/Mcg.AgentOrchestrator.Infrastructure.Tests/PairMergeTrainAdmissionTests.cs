@@ -100,9 +100,10 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void RefusedCarryOldestLeavesBothTrainSlotsForEligiblePeers(bool groupedOrigin)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void RefusedCarryOldestLeavesBothTrainSlotsForEligiblePeers(bool groupedOrigin, bool satisfiedOnBoundSha)
     {
         const string goalPath = "src/goal.txt";
         var repository = CreateGitRepository();
@@ -158,10 +159,18 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
             if (groupedOrigin)
             {
                 // Enter the member-evidence step used after a passing merge train gate.
+                if (satisfiedOnBoundSha)
+                {
+                    var satisfied = scenario.Kernel.RecordCriterionEvidence(oldest.Id, obligation.Id,
+                        CriterionEvidenceOwner.Acceptance, bound, "previous-full-gate",
+                        obligation.RequiredScope, passed: true, detail: "Passed on the bound candidate.");
+                    Assert.Equal(CriterionEvidenceState.Satisfied, satisfied.State);
+                }
                 Assert.True(PassedHeadCandidateDrift.TryProve(repository, bound, branch, "main", out _));
                 var refusal = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
                     oldest, branch, scenario.Kernel, "merge-train-receipt:initial", "main", repository);
-                Assert.Contains("integration-merge-not-clean", refusal, StringComparison.Ordinal);
+                Assert.Contains(satisfiedOnBoundSha ? "Carry-forward refused" : "integration-merge-not-clean",
+                    refusal, StringComparison.Ordinal);
                 Assert.Contains(obligation.Id, refusal, StringComparison.Ordinal);
                 Assert.Null(coordinator.TryReadLatest(oldest.Id.Value));
             }
@@ -210,6 +219,14 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
             Assert.Contains(tick!.ProgressLines!, line =>
                 line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
                 line.Contains(obligation.Id, StringComparison.Ordinal));
+            if (satisfiedOnBoundSha)
+            {
+                var history = Assert.Single(GoalOperationJournal.ReadRefusedCarryHolds(repository, oldest.Id));
+                Assert.Equal(branch, history.BranchSha);
+                Assert.Equal(new AcceptanceCriterionEvidence.RefusedCarryBinding(obligation.Id, bound),
+                    Assert.Single(history.Bindings));
+                Assert.True(history.RequiresLandingProof);
+            }
         }
         finally
         {

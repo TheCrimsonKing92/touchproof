@@ -10,9 +10,11 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
 {
     public ConductorBatchLoopTestsRefusedCarryRelaunch(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
-    public void LegacyRefusalSurvivesNewerReconciledFailureUntilRebind()
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void LegacyRefusalSurvivesNewerReconciledFailureUntilRebind(bool secondaryBinding)
     {
         var repository = CreateGitRepository();
         var attemptRoot = CreateTempDirectory("mcg-legacy-refused-carry");
@@ -22,7 +24,8 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateVerifiedSimpleGoal(kernel, $"Update {path}");
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
-                goal.Objective, ["Full acceptance passes"], VerificationClass.TestVerifiable, [], []));
+                goal.Objective, secondaryBinding ? ["Full acceptance passes", "Second criterion passes"] : ["Full acceptance passes"],
+                VerificationClass.TestVerifiable, [], []));
             var originalMain = ReadGit(repository, "rev-parse", "main");
             var worktree = GoalWorktrees.Ensure(repository, goal.Id);
             AppendCommit(worktree, path, "reviewed goal line");
@@ -31,6 +34,10 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
             var branch = ReadGit(worktree, "rev-parse", "HEAD");
             var obligation = kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
                 "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: bound);
+            var secondary = secondaryBinding
+                ? kernel.MapCriterionEvidenceOwner(goal.Id, 1, 1, CriterionEvidenceOwner.Acceptance,
+                    "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: originalMain)
+                : null;
 
             // Seed the old attempt history independently of today's journal-writing path.
             var now = DateTimeOffset.UtcNow;
@@ -38,8 +45,10 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 attemptRoot, TrunkBranchName.Default, utcNow: () => now, runInline: true);
             var passed = SeedAttempt(originalMain, passed: true);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passed.Outcome);
+            var ids = secondary is null ? obligation.Id : $"{obligation.Id},{secondary.Id}";
+            var suffix = secondary is null ? string.Empty : $" Also bound to other candidates: '{secondary.Id}' to {originalMain}.";
             GoalOperationJournal.Completed(repository, goal, "conductor:criterion-evidence-refused-carry-hold",
-                $"obligations={obligation.Id}; candidate={branch}; main={originalMain}; Acceptance passed for {branch}, but obligation '{obligation.Id}' is bound to {bound}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=range-diff-not-identical; head={bound}. Operator rebind: criterion-evidence-map --goal {goal.Id.Value} 0 1 acceptance {obligation.RequiredScope} {obligation.Id} {branch}",
+                $"obligations={ids}; candidate={branch}; main={originalMain}; Acceptance passed for {branch}, but obligation '{obligation.Id}' is bound to {bound}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=range-diff-not-identical; head={bound}.{suffix} Operator rebind: criterion-evidence-map --goal {goal.Id.Value} 0 1 acceptance {obligation.RequiredScope} {obligation.Id} {branch}",
                 mainHeadSha: originalMain, operationInstanceId: $"{branch}:{originalMain}");
             Assert.Null(Assert.Single(GoalOperationJournal.ReadActive(repository, goal.Id).Entries
                 .Where(entry => entry.Operation == "conductor:criterion-evidence-refused-carry-hold")).BranchHeadSha);
@@ -88,6 +97,18 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
 
             kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
                 "operator rebind", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: branch);
+            if (secondary is not null)
+            {
+                var secondaryHold = Assert.IsType<ConductorAdvanceOutcome.Held>(
+                    driver.TryHoldRepeatSoloAcceptance(goal, ConductorAutonomyPolicy.Conservative)?.Outcome);
+                Assert.Equal(AcceptanceCriterionEvidence.RefusedCarryAdmissionReason,
+                    secondaryHold.Decision?.DiscriminatingEvidence);
+                Assert.Contains(secondary.Id, secondaryHold.Reason, StringComparison.Ordinal);
+                kernel.MapCriterionEvidenceOwner(goal.Id, 1, 1, CriterionEvidenceOwner.Acceptance,
+                    "operator replaces secondary binding", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: bound);
+                Assert.Contains(AcceptanceCriterionEvidence.StaleFullGateBindings(goal, branch),
+                    item => item.Id == secondary.Id && item.ExpectedCandidateSha == bound);
+            }
             now = now.AddSeconds(1);
             new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
                 NoStopPath(), maxIterations: 1);

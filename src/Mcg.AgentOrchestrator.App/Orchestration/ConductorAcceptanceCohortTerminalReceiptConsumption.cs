@@ -41,13 +41,8 @@ internal static class ConductorAcceptanceCohortTerminalReceiptConsumption
         foreach (var receipt in consumed)
             changedGoalIds.UnionWith(receipt.RecordedGoalIds);
         var remaining = FilterEligible(eligible, consumed, tick, changedGoalLines.Add);
-        return admissionOutcomes is null ? remaining : remaining
-            .Where(goal => !admissionOutcomes.TryGetValue(goal.Id.Value, out var outcome) ||
-                outcome.Result.Outcome is not ConductorAdvanceOutcome.Held
-                {
-                    Decision.DiscriminatingEvidence: AcceptanceCriterionEvidence.RefusedCarryAdmissionReason
-                })
-            .ToArray();
+        return admissionOutcomes is null ? remaining
+            : PassedAcceptanceReceiptReplay.ExcludeRefusedCarryHolds(remaining, admissionOutcomes);
     }
 
     private static IReadOnlyList<Goal> FilterEligible(IReadOnlyList<Goal> eligible,

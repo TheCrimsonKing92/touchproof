@@ -305,6 +305,7 @@ internal sealed partial class ConductorBatchLoop
             goal => IsAcceptanceEngineCircuitHoldRequired(goal.Status, _acceptanceEngineCircuit?.Read()), changedGoalIds, _utcNow()));
         (state.CohortEligible, state.ProductionCandidates) = ConductorTickStepLedger.Measure("prep-train-receipts", () => LandPassedMergeTrainReceiptsBeforeAdmission(
             driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines, kernel));
+        state.OrderedEligible = PassedAcceptanceReceiptReplay.ExcludeRefusedCarryHolds(state.OrderedEligible, state.Results);
         state.OldestWaiterObservation = suppressNewAcceptanceAdmission()
             ? new ParallelAcceptanceOldestWaiterObservation(null, 0)
             : ConductorTickStepLedger.Measure("prep-oldest-waiter", () => ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds));
@@ -366,22 +367,19 @@ internal sealed partial class ConductorBatchLoop
                 onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection),
                 runGateInBackground: true);
             state.GroupedAdmissionOpen = trainRun.MemberResults.Count > 0;
-            foreach (var member in trainRun.MemberResults)
-                state.Results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
-            RecordParallelAcceptanceProgress(
-                $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', trainSelection.Members.Select(member => member.GoalId.Value[..8]))} " +
-                $"ejected={string.Join(',', trainRun.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {trainRun.Detail}",
-                changedGoalLines);
+            PassedMergeTrainReceiptAdmission.RecordMergeTrainResult(
+                trainSelection, state.CohortEligible, policy, trainRun,
+                (goal, autonomy) => driver.TryHoldRepeatSoloAcceptance(goal, autonomy, bindingOnly: true),
+                state.Results, tick, changedGoalLines, RecordParallelAcceptanceProgress);
+            state.OrderedEligible = PassedAcceptanceReceiptReplay.ExcludeRefusedCarryHolds(state.OrderedEligible, state.Results);
+            if (state.OldestWaiterObservation.Waiter is { } oldest && !state.OrderedEligible.Contains(oldest))
+                state.OldestWaiterObservation = ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds);
             state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
             state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
                 state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick, changedGoalLines,
                 blockAdmissionOnFailure: true, _mainFullVerification?.ActiveRunId);
-            state.CohortEligible = state.CohortEligible
-                .Where(goal => !state.Results.ContainsKey(goal.Id.Value))
-                .ToArray();
-            state.ProductionCandidates = state.ProductionCandidates
-                .Where(candidate => !state.Results.ContainsKey(candidate.GoalId.Value))
-                .ToArray();
+            (state.CohortEligible, state.ProductionCandidates) = PassedMergeTrainReceiptAdmission.ExcludeResults(
+                state.CohortEligible, state.ProductionCandidates, state.Results);
         }
     }
 

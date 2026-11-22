@@ -143,12 +143,7 @@ internal static class PassedAcceptanceReceiptReplay
         }
         if (driver.TryHoldRepeatSoloAcceptance(goal, policy, health) is { } repeatHold)
         {
-            results[goal.Id.Value] = new ParallelLandingOutcome(repeatHold, null);
-            var held = (ConductorAdvanceOutcome.Held)repeatHold.Outcome;
-            var detail = held.Decision!.DiscriminatingEvidence == AcceptanceCriterionEvidence.RefusedCarryAdmissionReason
-                ? $" detail={ConductorDiagnosticText.SanitizeReason(held.Reason)}" : string.Empty;
-            recordProgress($"ADMISSION tick={tick} result=held reason={held.Decision.DiscriminatingEvidence} goal={goal.Id.Value[..8]} gatesLaunched=0{detail}",
-                changedGoalLines);
+            RecordRepeatGateHold(repeatHold, results, tick, changedGoalLines, recordProgress);
             return true;
         }
         var replay = driver.TryReplayPassedAcceptance(goal, policy);
@@ -159,6 +154,25 @@ internal static class PassedAcceptanceReceiptReplay
         recordProgress($"ADMISSION tick={tick} result=replayed goal={goal.Id.Value[..8]} gatesLaunched=0", changedGoalLines);
         return true;
     }
+
+    internal static void RecordRepeatGateHold(ConductorAdvanceResult repeatHold,
+        Dictionary<string, ParallelLandingOutcome> results, int tick, List<string> changedGoalLines,
+        Action<string, List<string>> recordProgress)
+    {
+        results[repeatHold.GoalId] = new ParallelLandingOutcome(repeatHold, SlotIndex: null);
+        var held = (ConductorAdvanceOutcome.Held)repeatHold.Outcome;
+        var reason = held.Decision!.DiscriminatingEvidence;
+        var detail = reason == AcceptanceCriterionEvidence.RefusedCarryAdmissionReason
+            ? $" detail={ConductorDiagnosticText.SanitizeReason(held.Reason)}" : string.Empty;
+        recordProgress($"ADMISSION tick={tick} result=held reason={reason} goal={repeatHold.GoalId[..8]} gatesLaunched=0{detail}",
+            changedGoalLines);
+    }
+
+    internal static Goal[] ExcludeRefusedCarryHolds(IReadOnlyList<Goal> goals,
+        IReadOnlyDictionary<string, ParallelLandingOutcome> outcomes) =>
+        goals.Where(goal => !outcomes.TryGetValue(goal.Id.Value, out var outcome) ||
+            outcome.Result.Outcome is not ConductorAdvanceOutcome.Held
+                { Decision.DiscriminatingEvidence: AcceptanceCriterionEvidence.RefusedCarryAdmissionReason }).ToArray();
 
     internal static ConductorAdvanceResult? CircuitHold(
         Goal goal, ConductorAutonomyPolicy policy, AcceptanceEngineHealthSnapshot? health) =>

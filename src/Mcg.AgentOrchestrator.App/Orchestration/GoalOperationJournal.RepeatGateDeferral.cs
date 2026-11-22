@@ -26,6 +26,9 @@ internal static partial class GoalOperationJournal
     [GeneratedRegex(@"\Aobligations=(?<ids>[^;]+); candidate=(?<branch>[0-9a-f]+); main=(?<integrationSha>[0-9a-f]+); Acceptance passed for \k<branch>, but obligation '(?<id>[^']+)' is bound to (?<bound>[0-9a-f]+)\.", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex LegacyRefusedCarryDetail();
 
+    [GeneratedRegex(@"\. Also bound to other candidates: '(?<id>[^']+)' to (?<bound>[0-9a-f]+)(?:; '(?<id>[^']+)' to (?<bound>[0-9a-f]+))*\.", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex LegacySecondaryBindings();
+
     internal static void RecordRefusedCarryHold(string? executionDirectory, Goal goal,
         string branchSha, string? mainSha, IReadOnlyList<CriterionEvidenceObligation> bindings, string diagnostic,
         string? attemptId = null)
@@ -74,9 +77,19 @@ internal static partial class GoalOperationJournal
         var describedId = match.Groups["id"].Value;
         var ids = match.Groups["ids"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries);
         if (!ids.Contains(describedId, StringComparer.Ordinal)) return null;
-        var bound = match.Groups["bound"].Value.ToLowerInvariant();
-        var bindings = ids.Select(id => new AcceptanceCriterionEvidence.RefusedCarryBinding(
-            id, id == describedId ? bound : null)).ToArray();
+        var bindings = new List<AcceptanceCriterionEvidence.RefusedCarryBinding>
+        {
+            new(describedId, match.Groups["bound"].Value.ToLowerInvariant())
+        };
+        var secondary = LegacySecondaryBindings().Match(detail, match.Length);
+        var secondaryIds = secondary.Groups["id"].Captures;
+        var secondaryBounds = secondary.Groups["bound"].Captures;
+        for (var index = 0; index < secondaryIds.Count; index++)
+        {
+            var id = secondaryIds[index].Value;
+            if (ids.Contains(id, StringComparer.Ordinal) && id != describedId)
+                bindings.Add(new(id, secondaryBounds[index].Value.ToLowerInvariant()));
+        }
         return new RefusedCarryHistory(branch, main, bindings, detail, AttemptId: null) { IsLegacy = true };
     }
 

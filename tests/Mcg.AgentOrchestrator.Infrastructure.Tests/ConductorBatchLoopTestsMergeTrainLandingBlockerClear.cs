@@ -38,6 +38,40 @@ public sealed class ConductorBatchLoopTestsMergeTrainLandingBlockerClear : Accep
     }
 
     [Fact]
+    public void PassedTrain_LateBindingRefusalDefersMemberBeforeSameTickGateAdmission()
+    {
+        using var fixture = CreatePassedTrain();
+        var blocked = fixture.Goals[0];
+        var candidate = fixture.Source.Identity.Members.Single(member => member.GoalId == blocked.Id).CandidateRevision;
+        var bound = fixture.Source.Identity.ObservedMainRevision;
+        var obligation = fixture.Kernel.MapCriterionEvidenceOwner(blocked.Id, 0, 1,
+            CriterionEvidenceOwner.Acceptance, "reviewed binding", CriterionEvidenceScopes.FullAcceptanceGate,
+            expectedCandidateSha: bound);
+        var coordinator = fixture.Driver.ParallelAcceptanceAttemptCoordinator;
+        Assert.NotEqual(candidate, bound);
+        Assert.Null(coordinator.TryReadLatest(blocked.Id.Value));
+        Assert.Empty(GoalOperationJournal.ReadRefusedCarryHolds(fixture.Repo, blocked.Id));
+        var newTrainGates = new BackgroundGateStartHarness();
+        newTrainGates.Capture(fixture.Driver);
+
+        var tick = RunTick(fixture);
+
+        Assert.Contains(tick.ProgressLines!, line =>
+            line.Contains("landing evidence gap fallback=ordinary", StringComparison.Ordinal) &&
+            line.Contains(obligation.Id, StringComparison.Ordinal));
+        Assert.Contains(tick.ProgressLines!, line =>
+            line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
+            line.Contains("gatesLaunched=0", StringComparison.Ordinal) &&
+            line.Contains($"goal={blocked.Id.Value[..8]}", StringComparison.Ordinal) &&
+            line.Contains(obligation.Id, StringComparison.Ordinal));
+        Assert.Equal(candidate, Assert.Single(GoalOperationJournal.ReadRefusedCarryHolds(fixture.Repo, blocked.Id)).BranchSha);
+        Assert.Null(coordinator.TryReadLatest(blocked.Id.Value));
+        Assert.DoesNotContain((GoalId?)blocked.Id, fixture.Verifier.GoalIds);
+        Assert.Equal(0, newTrainGates.StartCount);
+        Assert.DoesNotContain(blocked.Id.Value, fixture.Driver.GetActiveCohortGateMemberGoalIds());
+    }
+
+    [Fact]
     public void PassedTrain_MainAdvancedAndAcceptanceOccupied_KeepsLiveBlockers()
     {
         using var fixture = CreatePassedTrain();

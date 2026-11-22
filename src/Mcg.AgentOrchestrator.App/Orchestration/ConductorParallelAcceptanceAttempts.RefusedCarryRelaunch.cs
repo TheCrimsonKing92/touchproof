@@ -82,12 +82,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         bool IsLiveLegacyRefusal(GoalOperationJournal.RefusedCarryHistory note)
         {
-            // The text named every obligation but only identified the first obligation's bound SHA.
             var stillStale = AcceptanceCriterionEvidence.StaleFullGateBindings(goal, note.BranchSha)
                 .Select(AcceptanceCriterionEvidence.BindingOf)
                 .Where(liveBindings.Contains);
-            return stillStale.Any(live => note.Bindings.Any(recorded => recorded.ObligationId == live.ObligationId &&
-                    (recorded.BoundSha is null || recorded.BoundSha == live.BoundSha))) &&
+            return stillStale.Any(note.Bindings.Contains) &&
                 AcceptanceCriterionEvidence.IsFullGateCarryRefused(goal, note.BranchSha, _integrationBranch,
                     executionDirectory, out _);
         }

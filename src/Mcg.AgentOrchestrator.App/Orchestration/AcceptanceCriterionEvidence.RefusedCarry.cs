@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class AcceptanceCriterionEvidence
 {
-    internal sealed record RefusedCarryBinding(string ObligationId, string? BoundSha);
+    internal sealed record RefusedCarryBinding(string ObligationId, string BoundSha);
 
     internal static CriterionEvidenceObligation[] StaleFullGateBindings(Goal goal, string? candidateSha) =>
         goal.GetLandingPrerequisiteObligations(candidateSha)
