@@ -1511,7 +1511,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion)
+        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion, WorkerToolsDirectory: dispatch.WorkerToolsDirectory)
     {
         ReachCheck = dispatch.ReachCheck
     };
@@ -1559,7 +1559,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion)
+        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion, dispatch.WorkerToolsDirectory)
     {
         ReachCheck = dispatch.ReachCheck
     };
