@@ -70,6 +70,14 @@ public static void PrintGoal(
         Console.WriteLine("Criterion evidence obligations:");
         foreach (var obligation in goal.CriterionEvidenceObligations.OrderBy(item => item.CriterionVersion).ThenBy(item => item.CriterionIndex))
         {
+            if (obligation.State == CriterionEvidenceState.Superseded)
+            {
+                var reason = OutputTextPreview.CreateSummary(obligation.Detail!).Text;
+                var actor = OutputTextPreview.CreateSummary(obligation.ObservationActor!).Text;
+                Console.WriteLine($"  - {obligation.DisplayLabel}: owner=operator state=Superseded reason={reason} actor={actor} at={obligation.RecordedAt:u}");
+                continue;
+            }
+
             Console.WriteLine($"  - {obligation.DisplayLabel}: owner={obligation.Owner.ToString().ToLowerInvariant()} state={obligation.State.ToString().ToLowerInvariant()} next_action={obligation.RequiredScope} provenance={obligation.Provenance}");
             Console.WriteLine(
                 $"    mapped_candidate={obligation.ExpectedCandidateSha ?? "unbound"} " +

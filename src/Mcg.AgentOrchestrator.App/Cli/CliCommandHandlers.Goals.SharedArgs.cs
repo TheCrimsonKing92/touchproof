@@ -402,12 +402,7 @@ private static string? ResolveTextArgumentOrDefaultCore(
         return context.StandardInput.ReadToEnd();
     }
 
-    if (!File.Exists(path))
-    {
-        throw new InvalidOperationException($"{flag} not found: {path}");
-    }
-
-    return File.ReadAllText(path, System.Text.Encoding.UTF8);
+    return CliTextArgumentFile.Read(flag, path);
 }
 
 private static string? ResolveFlagTextArgumentOrDefault(IReadOnlyList<string> parts, string valueFlag, params string[] fileFlags)

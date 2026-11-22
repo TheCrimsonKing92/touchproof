@@ -190,12 +190,12 @@ public sealed class Goal
 
     public IReadOnlyList<CriterionEvidenceObligation> OutstandingCriterionEvidenceObligations =>
         _criterionEvidenceObligations.Where(obligation =>
-            obligation.State is not (CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired) &&
+            obligation.State is not (CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired or CriterionEvidenceState.Superseded) &&
             IsCurrentCriterionEvidenceObligation(obligation)).ToArray();
 
     public IReadOnlyList<CriterionEvidenceObligation> GetOutstandingCriterionEvidenceObligations(string? candidateSha) =>
         _criterionEvidenceObligations.Where(obligation =>
-            obligation.State != CriterionEvidenceState.Repaired &&
+            obligation.State is not (CriterionEvidenceState.Repaired or CriterionEvidenceState.Superseded) &&
             IsCurrentCriterionEvidenceObligation(obligation) && !obligation.HasSatisfiedEvidenceFor(candidateSha)).ToArray();
 
     public IReadOnlyList<CriterionEvidenceObligation> LandingPrerequisiteObligations =>
@@ -205,8 +205,7 @@ public sealed class Goal
         GetOutstandingCriterionEvidenceObligations(candidateSha).Where(item => item.IsLandingPrerequisite).ToArray();
 
     public IReadOnlyList<CriterionEvidenceObligation> OutstandingPostLandingDuties =>
-        _criterionEvidenceObligations.Where(item => item.IsValidatedPostLanding &&
-            item.State != CriterionEvidenceState.Satisfied && item.State != CriterionEvidenceState.Repaired).ToArray();
+        _criterionEvidenceObligations.Where(item => item.IsOutstandingPostLandingDuty).ToArray();
 
     public IReadOnlyList<CriterionEvidenceObligation> UnpublishedPostLandingDuties =>
         OutstandingPostLandingDuties.Where(item => item.Publication is null &&
@@ -793,6 +792,8 @@ public sealed class Goal
             throw new KeyNotFoundException($"Criterion evidence obligation '{obligationId}' was not found.");
 
         var existing = _criterionEvidenceObligations[index];
+        if (existing.State == CriterionEvidenceState.Superseded)
+            throw new InvalidOperationException($"Criterion evidence obligation '{obligationId}' is Superseded and cannot record evidence.");
         if (existing.Phase == CriterionEvidencePhase.PostLanding &&
             (existing.Publication is not { } publication || publication.GoalId != Id.Value ||
              !string.Equals(publication.CandidateRevision, candidateSha, StringComparison.OrdinalIgnoreCase) ||
@@ -899,6 +900,18 @@ public sealed class Goal
         return result;
     }
 
+    internal CriterionEvidenceObligation SupersedeCriterionEvidenceObligation(
+        string obligationId, string actor, string reason, DateTimeOffset recordedAt, GoalLifecycleState? lifecycleState)
+    {
+        var index = _criterionEvidenceObligations.FindIndex(item => item.Id == obligationId);
+        if (index < 0)
+            throw new KeyNotFoundException($"Criterion evidence obligation '{obligationId}' was not found.");
+
+        var result = CriterionEvidenceSupersession.Apply(Status, lifecycleState, _criterionEvidenceObligations[index], actor, reason, recordedAt);
+        _criterionEvidenceObligations[index] = result;
+        return result;
+    }
+
     internal CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
         string malformedObligationId,
         int criterionIndex,
@@ -946,7 +959,7 @@ public sealed class Goal
     internal void BindPostLandingPublication(GoalPromotionFact publication)
     {
         if (publication.GoalId != Id.Value) throw new InvalidOperationException("Publication belongs to another goal.");
-        var eligible = _criterionEvidenceObligations.Where(item => item.IsValidatedPostLanding &&
+        var eligible = _criterionEvidenceObligations.Where(item => item.IsValidatedPostLanding && item.State != CriterionEvidenceState.Superseded &&
             item.Publication is null && IsCurrentCriterionEvidenceObligation(item) &&
             _refinedSpecVersions.Any(version => version.Version == item.CriterionVersion &&
                 version.RecordedAt <= publication.PromotedAt)).ToArray();
