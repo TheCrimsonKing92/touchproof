@@ -6,6 +6,7 @@ public sealed class WorkerBuildSeedTests
 {
     private const string ManifestRules = "!.orchestrator/\n.orchestrator/*\n!.orchestrator/acceptance-manifest.json\n";
     private const string SeedExcludes = ".orchestrator/\n.orchestrator-context/\nbin/\nobj/\n";
+    private const string NestedOrchestratorFile = "src/Feature/.orchestrator/nested.txt";
     private static readonly string[] ExcludedPaths =
         [".orchestrator/runtime.txt", ".orchestrator-context/runtime.txt", "src/Feature/bin/output.txt", "src/Feature/obj/output.txt"];
 
@@ -16,7 +17,7 @@ public sealed class WorkerBuildSeedTests
     {
         var measured = FixtureGitLaunchBudget.Measure("worker-build supported seed", () =>
             new WorkerBuildRequestFixture(extraProject: customSeed, linkedWorktree: true,
-                seedRepository: customSeed ? Customize : null));
+                seedRepository: root => Customize(root, customSeed)));
         using var fixture = measured.Value;
         AssertSetupLaunches(measured.Counts, 0);
         Assert.Equal(1, measured.Counts.Count("worktree"));
@@ -39,8 +40,8 @@ public sealed class WorkerBuildSeedTests
         {
             Write(oracle, WorkerBuildRequestFixture.OtherProject, project);
             Write(oracle, WorkerBuildRequestFixture.OtherSource, "public sealed class Other { }");
-            Customize(oracle);
         }
+        Customize(oracle, customSeed);
 
         Git(oracle, "init", "-b", "main");
         Git(oracle, "config", "user.email", "worker-build@fixture.invalid");
@@ -63,15 +64,18 @@ public sealed class WorkerBuildSeedTests
         Assert.Equal(SortedConfig(oracle), SortedConfig(main));
         Assert.Equal(File.ReadAllBytes(Path.Combine(oracle, ".git", "info", "exclude")),
             File.ReadAllBytes(Path.Combine(main, ".git", "info", "exclude")));
-        foreach (var file in Git(oracle, "ls-files").Split('\n'))
+        var oracleFiles = Git(oracle, "ls-files").Split('\n');
+        foreach (var file in oracleFiles)
             Assert.Equal(File.ReadAllBytes(Path.Combine(oracle, file)), File.ReadAllBytes(Path.Combine(main, file)));
         if (customSeed)
         {
+            Assert.Contains(NestedOrchestratorFile, oracleFiles);
             Assert.Contains(".orchestrator/acceptance-manifest.json", Git(main, "ls-files").Split('\n'));
             Assert.Equal(string.Join('\n', ExcludedPaths), Git(main, ["check-ignore", .. ExcludedPaths]));
             foreach (var path in ExcludedPaths)
                 Assert.Equal(File.ReadAllBytes(Path.Combine(oracle, path)), File.ReadAllBytes(Path.Combine(main, path)));
         }
+        else Assert.DoesNotContain(NestedOrchestratorFile, oracleFiles);
         Assert.Empty(Status(oracle));
         // The registered linked checkout lives under main as fixture runtime state.
         Assert.Empty(Git(main, "status", "--porcelain=v1", "--untracked-files=all",
@@ -162,8 +166,11 @@ public sealed class WorkerBuildSeedTests
         Assert.False(Directory.Exists(fixtureRoot));
     }
 
-    private static void Customize(string root)
+    private static void Customize(string root, bool customSeed)
     {
+        Write(root, NestedOrchestratorFile, "nested fixture file\n");
+        if (!customSeed) return;
+
         Write(root, WorkerBuildRequestFixture.Source, "public sealed class Feature { /* replaced */ }");
         Write(root, "src/Feature/data.txt", "additional file\n");
         Write(root, ".gitignore", ManifestRules);

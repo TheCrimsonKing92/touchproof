@@ -54,6 +54,7 @@ internal static class WorkerBuildRepositorySeed
     private static bool TryReadSeedFiles(string root, out Dictionary<string, byte[]> files)
     {
         files = new(StringComparer.Ordinal);
+        var hasRootIgnore = File.Exists(Path.Combine(root, ".gitignore"));
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>();
         pending.Push(root);
@@ -76,7 +77,10 @@ internal static class WorkerBuildRepositorySeed
                 if (isIgnoreFile && (relative != ".gitignore" || isDirectory)) return false;
                 if (isDirectory)
                 {
-                    if (ExcludedDirectories.Contains(name)) continue;
+                    // The supported negation matches .orchestrator at any depth.
+                    var reIncluded = hasRootIgnore && relative.Contains('/') &&
+                        name.Equals(".orchestrator", StringComparison.OrdinalIgnoreCase);
+                    if (ExcludedDirectories.Contains(name) && !reIncluded) continue;
                     pending.Push(entry);
                     continue;
                 }
