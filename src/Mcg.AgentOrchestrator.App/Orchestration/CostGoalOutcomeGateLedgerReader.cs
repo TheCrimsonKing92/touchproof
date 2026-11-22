@@ -19,6 +19,7 @@ internal sealed class CostGoalOutcomeGateLedgerReader(string orchestratorDirecto
     internal OutcomeGateObservation[] Read(DateTimeOffset recordedBefore)
     {
         LinesReadLastRun = 0;
+        AcceptanceGateOutcomeLedger.RecoverPublications(path);
         ReadTail();
         if (!backfilled) Backfill();
         ConfirmInvalidations();

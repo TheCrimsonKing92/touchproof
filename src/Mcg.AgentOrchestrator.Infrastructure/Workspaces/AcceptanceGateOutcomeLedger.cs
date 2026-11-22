@@ -28,6 +28,7 @@ internal sealed record SoloGateOutcomeProvenance(DateTimeOffset StartedAt, strin
 internal static class AcceptanceGateOutcomeLedger
 {
     internal const string FileName = "cost-goal-outcome-gates.jsonl";
+    internal const string PendingFileName = "cost-goal-outcome-gates.pending.jsonl";
     internal const string AttemptRoot = "acceptance-gate-attempts";
     internal const string GateKind = "gate";
     internal const string InvalidationKind = "invalidation";
@@ -105,13 +106,48 @@ internal static class AcceptanceGateOutcomeLedger
         {
             WithBackfillLock(path, () =>
             {
-                if (!HasPublishedObservation(path, publicationOffset, row))
-                    SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(row, Json));
+                try
+                {
+                    AppendObservation(path, publicationOffset, row);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // The gate result is already visible. Keep its observation across process exit.
+                    SharedJsonlFile.AppendLine(PendingPath(path),
+                        JsonSerializer.Serialize(new PendingPublication(publicationOffset, row), Json));
+                }
             });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome ledger unavailable for {prefix}: {ex.Message}");
+        }
+    }
+
+    internal static void RecoverPublications(string path)
+    {
+        var pendingPath = PendingPath(path);
+        if (!File.Exists(pendingPath)) return;
+
+        try
+        {
+            WithBackfillLock(path, () =>
+            {
+                foreach (var line in SharedJsonlFile.ReadLines(pendingPath))
+                {
+                    if (JsonSerializer.Deserialize<PendingPublication>(line, Json) is not
+                        { Offset: >= 0, Observation: not null } pending)
+                        throw new JsonException("Invalid pending gate observation.");
+                    AppendObservation(path, pending.Offset, pending.Observation);
+                }
+
+                // A retry after an interrupted drain checks for each row before appending it again.
+                File.Delete(pendingPath);
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            System.Diagnostics.Trace.TraceWarning($"Acceptance gate outcome publication recovery deferred for {path}: {ex.Message}");
         }
     }
 
@@ -144,6 +180,16 @@ internal static class AcceptanceGateOutcomeLedger
         var root = Path.GetDirectoryName(Path.GetDirectoryName(prefix));
         return Path.GetFileName(root) == AttemptRoot ? Path.Combine(Path.GetDirectoryName(root!)!, FileName) : null;
     }
+
+    private static string PendingPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, PendingFileName);
+
+    private static void AppendObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
+    {
+        if (!HasPublishedObservation(path, offset, row))
+            SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(row, Json));
+    }
+
+    private sealed record PendingPublication(long Offset, AcceptanceGateOutcomeObservation Observation);
 
     private static bool HasPublishedObservation(string path, long offset, AcceptanceGateOutcomeObservation row)
     {

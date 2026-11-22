@@ -48,6 +48,53 @@ public sealed class AcceptanceGateOutcomeLedgerPublicationTests : IDisposable
         Assert.Equal(2, lines.Length);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Publication_RecoversOneObservationAfterLedgerAppendFails(bool solo)
+    {
+        var ledger = Path.Combine(root, AcceptanceGateOutcomeLedger.FileName);
+        var pending = Path.Combine(root, AcceptanceGateOutcomeLedger.PendingFileName);
+        const string marker = """{"kind":"backfill-complete"}""";
+        SharedJsonlFile.AppendLine(ledger, marker);
+        var evaluatedAt = StartedAt.AddMinutes(1);
+        var reader = new CostGoalOutcomeGateLedgerReader(root);
+        Assert.Empty(reader.Read(evaluatedAt));
+
+        using (File.Open(ledger, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            if (solo)
+                PublishSolo(root, StartedAt);
+            else
+                await PublishOwnedTrain();
+
+            Assert.Equal(marker, Assert.Single(File.ReadAllLines(ledger)));
+            Assert.Single(File.ReadAllLines(pending));
+            Assert.Empty(reader.Read(evaluatedAt));
+        }
+
+        var expected = Assert.Single(CostGoalOutcomeMetric.ScanRecordedGateRows(root, evaluatedAt));
+        var freshReader = new CostGoalOutcomeGateLedgerReader(root);
+        var expectedGate = new OutcomeGateObservation(
+            Path.Combine(root, AcceptanceGateOutcomeLedger.AttemptRoot, expected.Directory, expected.AttemptId),
+            expected.RecordedAt, expected.StartedAt, expected.LaunchMainCommit, expected.Mode,
+            expected.FullGateReason, expected.ExecutedClassCount, expected.SelectionMilliseconds);
+        using (File.Open(pending, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            // Interrupt cleanup after replay so the next read must recognize the already published row.
+            Assert.Equal(expectedGate, Assert.Single(freshReader.Read(evaluatedAt)));
+            Assert.True(File.Exists(pending));
+        }
+
+        Assert.Equal(0, freshReader.GateFileReads);
+        Assert.Equal(expectedGate, Assert.Single(reader.Read(evaluatedAt)));
+        Assert.False(File.Exists(pending));
+        Assert.Equal(1, reader.LinesReadLastRun);
+        var lines = File.ReadAllLines(ledger);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal(expected, JsonSerializer.Deserialize<AcceptanceGateOutcomeObservation>(lines[1], AcceptanceGateOutcomeLedger.Json));
+    }
+
     private async Task<string> PublishOwnedTrain(Action? resultWritten = null)
     {
         var group = GoalId.New().Value;

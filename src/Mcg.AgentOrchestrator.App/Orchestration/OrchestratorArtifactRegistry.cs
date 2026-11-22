@@ -42,6 +42,8 @@ internal static class OrchestratorArtifactRegistry
         Source("acceptance-gate-attempts", "Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"),
         Source("cost-goal-outcomes", "App/Orchestration/CostGoalOutcomeMetric.cs"),
         Source("cost-goal-outcome-gates.jsonl", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs"),
+        Source("cost-goal-outcome-gates.pending.jsonl", "Infrastructure/Workspaces/AcceptanceGateOutcomeLedger.cs",
+            note: "Pending observations are removed after recovery appends them to the ledger."),
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs",
