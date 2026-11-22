@@ -271,6 +271,7 @@ internal static class CliExecutorScreenCommand
             if (current.DisabledReason == "invalid")
                 throw new InvalidDataException($"Invalid remote lane executor configuration: {configurationPath}");
             if (HasInvalidScreeningSettings(current)) throw new InvalidScreeningSettingsException();
+            configuration = current;
             var refreshed = current.Enabled && (wholeGate || current.Screening.Mode == "shadow")
                 ? current.Executors.FirstOrDefault(executor => executor.Id == entry.Id && executor.Transport == "ssh")
                 : null;

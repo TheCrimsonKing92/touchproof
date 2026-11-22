@@ -52,6 +52,59 @@ public sealed class CliExecutorScreenWaitTests
         Assert.Empty(occupancy.Markers);
     }
 
+    [Fact]
+    public async Task LaterWholeGateTrialWaitsForSlotAddedDuringFirstTrial()
+    {
+        using var fixture = new Fixture();
+        var config = CliExecutorScreenCommandTests.WriteConfiguration(fixture, "shadow");
+        var first = fixture.Candidate;
+        var second = first with { GoalId = "fedcba9876543210", Commit = new string('d', 40) };
+        var now = fixture.Clock.GetUtcNow();
+        var occupancy = new SlotOccupancy { BusySlot = 1 };
+        var clock = new MonotonicClock(now);
+        var polls = new List<int?>();
+        var slotsOnSubmit = new List<int[]>();
+        fixture.Executor.Submit = (request, _) =>
+        {
+            slotsOnSubmit.Add(occupancy.HeldSlots.Order().ToArray());
+            return Task.FromResult(fixture.PassingSubmission(request));
+        };
+
+        var exit = await CliExecutorScreenCommand.RunAsync(
+            ["executor-screen", "--whole-gate", "--executor", "laptop", "--max-candidates", "2", "--wait", "0.1"],
+            config, () => [], _ => throw new InvalidOperationException("Expected whole-gate mode."),
+            (_, _, _) => fixture.Executor, clock, PollInterval, fixture.Root, fixture.ReceiptPath,
+            TextWriter.Null, TextWriter.Null, trialPlanSource: _ => TrialPlan(),
+            passedGateSource: _ => [new(first.GoalId, "first", first.Commit, first.MainSha, now),
+                new(second.GoalId, "second", second.Commit, second.MainSha, now.AddSeconds(-1))],
+            trialCheckout: gate =>
+            {
+                if (gate.GoalId == first.GoalId) return (first, null);
+                occupancy.BusySlot = 2;
+                return (second, null);
+            }, occupancy: occupancy, delay: (interval, _) =>
+            {
+                polls.Add(occupancy.BusySlot);
+                Assert.InRange(polls.Count, 1, 2);
+                Assert.Empty(occupancy.HeldSlots);
+                Assert.Equal(polls.Count - 1, fixture.Executor.Requests.Count);
+                if (polls.Count == 1)
+                    File.WriteAllText(config, File.ReadAllText(config).Replace("\"slots\":2", "\"slots\":3", StringComparison.Ordinal));
+                occupancy.BusySlot = null;
+                clock.Advance(interval);
+                return Task.CompletedTask;
+            });
+
+        Assert.Equal(0, exit);
+        Assert.Equal(new int?[] { 1, 2 }, polls);
+        Assert.Collection(slotsOnSubmit,
+            slots => Assert.Equal(new[] { 0, 1, 2 }, slots),
+            slots => Assert.Equal(new[] { 0, 1, 2 }, slots));
+        Assert.Equal(2, ExecutorScreeningReceiptLedger.ReadTrials(fixture.ReceiptPath).Count);
+        Assert.Empty(occupancy.HeldSlots);
+        Assert.Empty(occupancy.Markers);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
