@@ -102,6 +102,37 @@ public sealed class WorkerBuildSeedTests
     }
 
     [Fact]
+    public void UnexpandedProgramDataDoesNotMaskTheEffectiveGitSystemConfig()
+    {
+        var (executable, _) = InfrastructureTestSupport.CapturePreparedGitEnvironment();
+        var profile = Directory.CreateTempSubdirectory("mcg-worker-build-git-config-");
+        try
+        {
+            var systemConfig = Path.Combine(profile.FullName, "gitconfig");
+            var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["HOME"] = profile.FullName,
+                ["ProgramData"] = @"%SystemDrive%\ProgramData",
+                ["GIT_CONFIG_GLOBAL"] = "NUL",
+                ["GIT_CONFIG_SYSTEM"] = systemConfig,
+                ["GIT_CONFIG_NOSYSTEM"] = "0",
+                ["GIT_ATTR_NOSYSTEM"] = "1"
+            };
+
+            File.WriteAllText(systemConfig, "[core]\n\tautocrlf = false\n");
+            Assert.Null(WorkerBuildRepositorySeed.ReadGitInputs(executable, environment, out _));
+
+            File.WriteAllText(systemConfig, "[core]\n\tfilemode = true\n");
+            Assert.Equal("Unsupported 'filemode' setting in system Git configuration.",
+                WorkerBuildRepositorySeed.ReadGitInputs(executable, environment, out _));
+        }
+        finally
+        {
+            profile.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public void GitAttributesFallBackToRealStagingAndCommit()
     {
         const string content = "first\nsecond";

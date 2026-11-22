@@ -33,7 +33,8 @@ internal static class WorkerBuildRepositorySeed
         if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             return "The seed root is a reparse point.";
 
-        var rejection = ReadGitInputs(out var templates);
+        var (executable, environment) = InfrastructureTestSupport.CapturePreparedGitEnvironment();
+        var rejection = ReadGitInputs(executable, environment, out var templates);
         if (rejection is not null) return rejection;
         if (!TryReadIdentity("AUTHOR", date, out var author)) return "Unsupported Git author identity.";
         if (!TryReadIdentity("COMMITTER", date, out var committer)) return "Unsupported Git committer identity.";
@@ -129,13 +130,12 @@ internal static class WorkerBuildRepositorySeed
             Regex.IsMatch(email, @"^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\z");
     }
 
-    private static string? ReadGitInputs(out string templates)
+    internal static string? ReadGitInputs(string executable, IDictionary<string, string?> environment, out string templates)
     {
         templates = "";
-        var unsupportedVariable = Environment.GetEnvironmentVariables().Keys.Cast<string>().FirstOrDefault(
+        var unsupportedVariable = environment.Keys.FirstOrDefault(
             key => key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) && !SupportedGitVariables.Contains(key));
         if (unsupportedVariable is not null) return $"Unsupported Git environment variable '{unsupportedVariable}'.";
-        var (executable, environment) = InfrastructureTestSupport.CapturePreparedGitEnvironment();
         string? Get(string name) => environment.TryGetValue(name, out var value) ? value : null;
         var installation = Path.GetDirectoryName(Path.GetDirectoryName(executable));
         var installRoot = Path.GetDirectoryName(installation);
@@ -149,8 +149,6 @@ internal static class WorkerBuildRepositorySeed
         var system = Get("GIT_CONFIG_SYSTEM") ?? Path.Combine(installRoot, "etc", "gitconfig");
         var noSystem = Get("GIT_CONFIG_NOSYSTEM");
         var noSystemAttributes = Get("GIT_ATTR_NOSYSTEM");
-        var programData = Get("PROGRAMDATA") ??
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         try
         {
             if (noSystem is not (null or "0" or "1")) return "Unsupported GIT_CONFIG_NOSYSTEM value.";
@@ -163,8 +161,8 @@ internal static class WorkerBuildRepositorySeed
             if (rejection is not null) return rejection;
             if (noSystem != "1")
             {
-                rejection = ReadConfigRejection(system, "system") ??
-                    ReadConfigRejection(Path.Combine(programData, "Git", "config"), "ProgramData");
+                // Git for Windows 2.24 and later use the installation's system config or GIT_CONFIG_SYSTEM.
+                rejection = ReadConfigRejection(system, "system");
                 if (rejection is not null) return rejection;
             }
             if (File.Exists(Path.Combine(gitHome, "ignore"))) return "The XDG Git ignore file is present.";
