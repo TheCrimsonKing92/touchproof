@@ -158,7 +158,7 @@ public sealed class WorkerHelperForwarderScriptTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Build_LaunchException_RetainsChannelUnavailableReason(bool legacyShell)
+    public async Task Build_LaunchException_ReportsClientLaunchFailed(bool legacyShell)
     {
         var script = CreateFixtureBuildScript();
         var output = Directory.CreateDirectory(Path.Combine(_root, "dummy app")).FullName;
@@ -173,7 +173,8 @@ public sealed class WorkerHelperForwarderScriptTests : IDisposable
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StandardOutput);
-        Assert.Equal($"worker_build_channel_unavailable app=\"{app}\"{Environment.NewLine}", result.StandardError);
+        Assert.Equal($"worker_build_client_launch_failed app=\"{app}\"{Environment.NewLine}", result.StandardError);
+        Assert.DoesNotContain("worker_build_channel_unavailable", result.StandardError);
         Assert.DoesNotContain("worker_build_client_missing", result.StandardError);
     }
 
