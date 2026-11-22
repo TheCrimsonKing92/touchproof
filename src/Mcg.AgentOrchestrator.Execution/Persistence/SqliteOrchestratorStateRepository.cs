@@ -791,7 +791,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             // Already-migrated databases do not replay the core schema migration.
             await RunNonQueryAsync(conn, GoalSnapshotArchiveSchemaSql, cancellationToken);
-            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, maxSnapshotBytes, cancellationToken, compressSnapshots);
+            var archivedGoalIds = new List<string>();
+            var count = await SnapshotArchive.ArchiveAsync(
+                conn, cutoff, maxSnapshotBytes, cancellationToken, compressSnapshots, archivedGoalIds);
+            if (archivedGoalIds.Count > 0)
+                await WriteAttentionArchiveMarkersInTransactionAsync(conn, archivedGoalIds, cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             write.Telemetry.Emit("commit");
             return count;
