@@ -14,6 +14,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     [Xunit.Fact]
     public void Create_MultipleCopies_ProducesIndependentCommittedRepositories()
     {
+        using var gitCensus = HostCapacitySlotGitCensus.ObserveUnslottedTest();
         using var scope = new FactoryScope(directoryAllocator: static (root, attempt) =>
         {
             var path = Path.Combine(root, attempt.ToString("D32"));
