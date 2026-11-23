@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -20,10 +21,11 @@ public sealed class LandingFixtureRefReadTests : IClassFixture<IsolatedDotnetRoo
 
             var (setup, launches) = ObserveGitLaunches(
                 () => LandingExecutorTests.CreateAcceptedCandidate(repo, "src/accepted.txt"));
-            AssertFixtureRefLaunches(launches, expectedLaunches);
-
             var goal = setup.Goal;
             var worktree = GoalWorktrees.WorktreePath(repo, goal.Id);
+            Assert.Empty(MatchingRefReads(launches, worktree, "HEAD"));
+            Assert.Equal(expectedLaunches, MatchingRefReads(launches, repo, "main").Count());
+
             Assert.True(File.Exists(Path.Combine(worktree, ".git")));
             var candidate = ReadFromGit(worktree, "HEAD");
             var main = ReadFromGit(repo, "main");
@@ -46,10 +48,14 @@ public sealed class LandingFixtureRefReadTests : IClassFixture<IsolatedDotnetRoo
     {
         var (delivery, launches) = ObserveGitLaunches(() => new PullRequestLandingTestFixture());
         using var fixture = delivery;
-        AssertFixtureRefLaunches(launches, 0);
+        var branch = GoalWorktrees.BranchName(fixture.Goal.Id);
+        var worktree = GoalWorktrees.WorktreePath(fixture.Repository, fixture.Goal.Id);
+        Assert.Empty(MatchingRefReads(launches, worktree, "HEAD"));
+        Assert.Empty(MatchingRefReads(launches, fixture.Repository, branch));
+        Assert.Empty(MatchingRefReads(launches, fixture.Repository, "main"));
 
         Assert.NotEqual(fixture.Main, fixture.Candidate);
-        Assert.Equal(ReadFromGit(fixture.Repository, GoalWorktrees.BranchName(fixture.Goal.Id)), fixture.Candidate);
+        Assert.Equal(ReadFromGit(fixture.Repository, branch), fixture.Candidate);
         Assert.Equal(ReadFromGit(fixture.Repository, "main"), fixture.Main);
     }
 
@@ -71,14 +77,14 @@ public sealed class LandingFixtureRefReadTests : IClassFixture<IsolatedDotnetRoo
             Assert.True(tag.Succeeded, tag.Error);
             Assert.False(FixtureRefFileReader.TryRead(worktree, revision, out _));
 
-            var expected = GitCli.RunDirect(worktree, "rev-parse", revision);
+            var expected = RunRefReadWithGit(worktree, revision);
             Assert.Equal(succeeds, expected.Succeeded);
             var (actual, launches) = ObserveGitLaunches(() => succeeds
                 ? FixtureRefFileReader.Read(worktree, revision)
                 : Assert.Throws<InvalidOperationException>(() => FixtureRefFileReader.Read(worktree, revision)).Message);
             Assert.Equal(succeeds ? expected.Output.Trim() : $"git rev-parse {revision} failed: {expected.Error}", actual);
-            Assert.Equal(1, launches.Launches);
-            Assert.Equal(1, launches.Subcommands["rev-parse"]);
+            Assert.Single(launches);
+            Assert.Single(MatchingRefReads(launches, worktree, revision));
         }
         finally
         {
@@ -86,35 +92,45 @@ public sealed class LandingFixtureRefReadTests : IClassFixture<IsolatedDotnetRoo
         }
     }
 
-    private static (T Value, HostCapacitySlotGitCensus.GitLaunchDelta Launches) ObserveGitLaunches<T>(Func<T> action)
+    private static (T Value, List<GitLaunch> Launches) ObserveGitLaunches<T>(Func<T> action)
     {
-        var identity = HostCapacitySlotTimingWriter.CurrentTestName();
-        Assert.NotEqual("<unknown>", identity);
-        HostCapacitySlotGitCensus.EnsureInstalled(nameof(LandingFixtureRefReadTests));
-        var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+        var launches = new List<GitLaunch>();
+        var previous = GitCli.StartedInfoObserver;
+        GitCli.StartedInfoObserver = (ProcessStartInfo info) =>
+        {
+            launches.Add(new GitLaunch(info.WorkingDirectory, info.ArgumentList.ToArray()));
+            previous?.Invoke(info);
+        };
         try
         {
-            return (action(), Assert.IsType<HostCapacitySlotGitCensus.GitLaunchDelta>(window.Close()));
+            return (action(), launches);
         }
         finally
         {
-            window.Close();
+            GitCli.StartedInfoObserver = previous;
         }
     }
 
-    private static void AssertFixtureRefLaunches(HostCapacitySlotGitCensus.GitLaunchDelta launches, int expected)
+    private static IEnumerable<GitLaunch> MatchingRefReads(List<GitLaunch> launches, string repo, string revision)
     {
-        Assert.Contains("worktree", launches.Subcommands.Keys);
-        Assert.NotNull(launches.Callers);
-        var fixtureReads = launches.Callers.Where(pair => pair.Key.EndsWith("|rev-parse", StringComparison.Ordinal) &&
-            HostCapacitySlotGitCensus.CallerOf(pair.Key) == "test:LandingExecutorTests.ReadGit");
-        Assert.Equal(expected, fixtureReads.Sum(pair => pair.Value));
+        string[] arguments = [.. GitCli.HardeningArguments, "rev-parse", revision];
+        return launches.Where(launch => launch.WorkingDirectory == repo && launch.Arguments.SequenceEqual(arguments));
     }
 
     private static string ReadFromGit(string repo, string revision)
     {
-        var result = GitCli.RunDirect(repo, "rev-parse", revision);
+        var result = RunRefReadWithGit(repo, revision);
         Assert.True(result.Succeeded, result.Error);
         return result.Output.Trim();
     }
+
+    private static GitCli.GitResult RunRefReadWithGit(string repo, string revision)
+    {
+        var (result, launches) = ObserveGitLaunches(() => GitCli.RunDirect(repo, "rev-parse", revision));
+        Assert.Single(launches);
+        Assert.Single(MatchingRefReads(launches, repo, revision));
+        return result;
+    }
+
+    private sealed record GitLaunch(string WorkingDirectory, string[] Arguments);
 }
