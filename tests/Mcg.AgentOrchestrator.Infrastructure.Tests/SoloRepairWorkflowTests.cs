@@ -332,6 +332,75 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal("unresolved", attribution?.Outcome);
     }
 
+    [Fact]
+    public async Task InvalidEnvelope_KeepsLiveExactSelectionsAcrossRestart()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var kernel = fixture.Kernel;
+        var goal = NewCandidate(fixture, kernel);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        var completion = await ProduceFailure(fixture, goal);
+        var receipt = completion.SoloFailureReceipt!;
+        var invalid = completion with { SoloFailureReceipt = receipt with { ContractVersion = 0 } };
+        var request = $"{Project}: FullyQualifiedName~{First}";
+        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequest = request };
+
+        AssertHold(Complete(Driver(kernel, workspace, verifier), goal, invalid), SoloHoldReasons.RepairEvidenceRequired, "operator");
+        await repository.SaveAsync(kernel);
+        var restarted = await repository.LoadAsync();
+        var dependent = restarted.GetGoal(goal.Id);
+        AssertHold(Driver(restarted, workspace, verifier).AdvanceOnce(dependent, Policy),
+            SoloHoldReasons.RepairEvidenceRequired, "operator");
+
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        var unresolved = Assert.Single(store.ReadFindings(goal.Id.Value).Where(row => row.Identity.Length != 0));
+        Assert.Equal(First, unresolved.Identity);
+        Assert.Equal(request, unresolved.Request);
+        Assert.Equal(Project, unresolved.Project);
+        Assert.Equal(receipt.Evidence, unresolved.Proof);
+        Assert.False(unresolved.Inherited);
+        Assert.Empty(unresolved.CandidateArtifacts);
+        Assert.Equal((request, completion.BranchHeadSha!), Assert.Single(verifier.FocusedRuns));
+        Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+    }
+
+    [Fact]
+    public async Task AcknowledgedRepair_WithItsOwnFailureRequiresRepairOwnerAction()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var kernel = fixture.Kernel;
+        var repair = NewCandidate(fixture, kernel);
+        var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+        var maintenance = await portfolio.AddEpicAsync("baseline-maintenance");
+        await portfolio.AssignGoalToEpicAsync(repair.Id.Value, maintenance.Id);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        var failure = await ProduceFailure(fixture, repair);
+        var proof = fixture.Proof();
+        var check = Assert.Single(proof.Checks).Check;
+        var binding = Assert.Single(proof.Bindings);
+        var finding = new SoloRepairFinding(failure.BranchHeadSha!, failure.MainHeadSha!, proof.Identity.BaselineSha,
+            check.Name, binding.TestIdentity, check.TestProjectPath, $"{Project}: FullyQualifiedName~{First}",
+            binding.BaselineCheckName, true, failure.AttemptId!, failure.SoloFailureReceipt!.Evidence, [], [], null);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        store.ReserveGroup(finding.GroupKey, "already provisioned");
+        store.AcknowledgeRepair(finding.GroupKey, repair.Id.Value);
+        var verifier = new ControlledVerifier(fixture.Root);
+        var driver = Driver(kernel, workspace, verifier);
+
+        AssertHold(Complete(driver, repair, failure), SoloHoldReasons.RepairOwnerActionRequired, "repair owner");
+        AssertHold(driver.AdvanceOnce(repair, Policy), SoloHoldReasons.RepairOwnerActionRequired, "repair owner");
+        Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+        Assert.Equal(finding.GroupKey, Assert.Single(store.ReadFindings(repair.Id.Value)).GroupKey);
+        Assert.Empty(verifier.FocusedRuns);
+    }
+
     internal static OrchestratorWorkspace Workspace(SoloAttributedFailureRouteFixture fixture)
     {
         var workspace = OrchestratorWorkspace.ForProject("solo-repair-test", fixture.Repo, integrationBranch: "main",
@@ -433,6 +502,7 @@ public sealed class SoloRepairWorkflowTests
         internal SoloRepairFinding? Finding { get; set; }
         internal string? UnresolvedAttributionRequest { get; init; }
         internal bool? AttributionBaselinePass { get; init; }
+        internal bool AttributionCandidatePass { get; init; }
         internal List<(string Request, string Sha)> FocusedRuns { get; } = [];
         internal List<(GoalId Goal, string Sha)> NormalRuns { get; } = [];
         internal bool NormalPass { get; set; }
@@ -452,8 +522,9 @@ public sealed class SoloRepairWorkflowTests
             var finding = Assert.IsType<SoloRepairFinding>(Finding);
             Assert.Equal(finding.Request, request);
             var trx = Path.Combine(root, sha + "-candidate.trx");
-            WriteTrx(trx, !runBaselineArm, finding.Identity);
-            var candidate = SoloRepairEvidenceTests.FocusedResult(finding, sha, trx, !runBaselineArm, true, finding.Identity);
+            var candidatePass = !runBaselineArm || AttributionCandidatePass;
+            WriteTrx(trx, candidatePass, finding.Identity);
+            var candidate = SoloRepairEvidenceTests.FocusedResult(finding, sha, trx, candidatePass, true, finding.Identity);
             if (!runBaselineArm) return Task.FromResult(candidate);
             var baselineSha = RunGit(worktreePath, "merge-base", "HEAD", "main");
             var baselineTrx = Path.Combine(root, baselineSha + "-baseline.trx");

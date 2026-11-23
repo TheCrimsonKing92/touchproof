@@ -11,6 +11,7 @@ internal sealed record SoloAcceptanceConsumptionContext(string CandidateSha, str
 internal sealed record SoloAcceptanceFailureRead(AttributedFailure? Failure, string Reason)
 {
     internal IReadOnlyList<string> DroppedFlakeIdentities { get; init; } = [];
+    internal IReadOnlyDictionary<(string Check, string Identity), string>? IntroducedRowFeedback { get; init; }
 }
 
 // This reads retained evidence only. Attribution execution remains in the verifier.
@@ -24,6 +25,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             if (receipt is null || proof is null) return Refuse(reason);
             var summary = goal.LatestAcceptanceFailure!;
             var feedback = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            var rowFeedback = new Dictionary<(string Check, string Identity), string>();
             var checks = proof.Checks.Select(item => item.Check).ToArray();
             var candidateChecks = new List<(SoloAcceptanceCheckEvidence Evidence, SoloAcceptanceFlakePartition Partition)>();
             foreach (var item in proof.Checks)
@@ -115,12 +117,13 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                     var first = message?.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n')[0]
                         ?? "(no message)";
                     feedback[identity] = (first.Length <= 2000 ? first : first[..1997] + "...") + $" (trx: {failed.Path})";
+                    rowFeedback.Add((check.Name, identity), feedback[identity]);
                 }
             }
             return feedback.Count == 0 ? Refuse(SoloHoldReasons.FailingTestsAbsent) : new(
                 new("solo", receipt.AttemptId, receipt.CandidateSha, feedback.Keys.ToArray(),
                     string.Join(Environment.NewLine, feedback.Select(row => $"reproduced {row.Key}: {row.Value}"))), "solo-evidence-validated")
-                { DroppedFlakeIdentities = dropped.ToArray() };
+                { DroppedFlakeIdentities = dropped.ToArray(), IntroducedRowFeedback = rowFeedback };
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or XmlException or
             ArgumentException or InvalidOperationException or NullReferenceException)
@@ -193,14 +196,15 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
     internal sealed record TrxRow(string Key, AcceptanceTrxFailure Value, string Path);
 
-    private static SoloAcceptanceFlakePartition ReadRows(SoloAcceptanceCheckEvidence check, string root, bool allowConfirmedFlakes = false)
+    private static SoloAcceptanceFlakePartition ReadRows(SoloAcceptanceCheckEvidence check, string root,
+        bool allowConfirmedFlakes = false, bool partitionAmbiguousRows = false)
     {
         if (check.Artifacts is not { Count: > 0 }) throw new InvalidDataException("solo-trx-absent");
-        var artifactRows = check.Artifacts.Select(artifact => ReadTrx(artifact, root)).ToArray();
-        return SoloAcceptanceFlakePartition.Classify(check.Check, artifactRows, allowConfirmedFlakes);
+        var artifactRows = check.Artifacts.Select(artifact => ReadTrx(artifact, root, partitionAmbiguousRows)).ToArray();
+        return SoloAcceptanceFlakePartition.Classify(check.Check, artifactRows, allowConfirmedFlakes, partitionAmbiguousRows);
     }
 
-    private static List<TrxRow> ReadTrx(SoloAcceptanceArtifact artifact, string root)
+    private static List<TrxRow> ReadTrx(SoloAcceptanceArtifact artifact, string root, bool partitionAmbiguousRows = false)
     {
         using var stream = new MemoryStream(ReadArtifact(artifact, root), writable: false);
         var doc = XDocument.Load(stream);
@@ -223,10 +227,11 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         }
         if (rows.Count == 0) throw new InvalidDataException("solo-trx-empty: identity=(unavailable); outcomes=(unavailable)");
         // Prove uniqueness before looking up a failure message by identity.
-        RequireUnambiguousFailures(rows, "solo-trx-ambiguous-row");
-        var failures = AcceptanceTrxFailureReader.Read(doc, artifact.Path).Failures;
+        if (!partitionAmbiguousRows) RequireUnambiguousFailures(rows, "solo-trx-ambiguous-row");
+        var failures = AcceptanceTrxFailureReader.Read(doc, artifact.Path).Failures
+            .ToLookup(failure => failure.TestName, StringComparer.Ordinal);
         return rows.Select(row => row.Value.Outcome == "Failed"
-            ? row with { Value = failures.Single(failure => failure.TestName == row.Key) } : row).ToList();
+            ? row with { Value = failures[row.Key].First(failure => failure.Outcome == "Failed") } : row).ToList();
     }
 
     private static void RequireUnambiguousFailures(IEnumerable<TrxRow> rows, string reason)

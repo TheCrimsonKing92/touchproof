@@ -86,6 +86,7 @@ public sealed class SoloRepairReplayTests
     [Theory]
     [InlineData("busy")]
     [InlineData("claimed")]
+    [InlineData("verifier-result")]
     [InlineData("executed")]
     public async Task MissingCandidateTrx_RecoversFocusedEvidenceAcrossDeferralAndRestart(string boundary)
     {
@@ -128,17 +129,19 @@ public sealed class SoloRepairReplayTests
         }
         else
         {
-            ExecuteSql(storePath, """
-                CREATE TRIGGER stop_check_ack BEFORE UPDATE OF result ON solo_repair_check
-                BEGIN SELECT RAISE(ABORT, 'lost check acknowledgement'); END
+            var write = boundary == "verifier-result" ? "INSERT ON solo_repair_check_execution" : "UPDATE OF result ON solo_repair_check";
+            ExecuteSql(storePath, $"""
+                CREATE TRIGGER stop_check_ack BEFORE {write}
+                BEGIN SELECT RAISE(ABORT, 'lost check write'); END
                 """);
             var interrupted = Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier);
-            Assert.Contains("lost check acknowledgement", Assert.Throws<SqliteException>(() => Advance(interrupted, fixture.Goal)).Message);
-            Assert.Equal("inherited", store.ReadCheckExecution(key)?.Outcome);
+            Assert.Contains("lost check write", Assert.Throws<SqliteException>(() => Advance(interrupted, fixture.Goal)).Message);
+            Assert.Equal(boundary == "executed" ? "inherited" : null, store.ReadCheckExecution(key)?.Outcome);
+            Assert.True(File.Exists(Path.Combine(workspace.OrchestratorDirectory, "solo-repair-results", key, "focused-result.json")));
             Assert.Null(store.ReadCheck(key));
             ExecuteSql(storePath, "DROP TRIGGER stop_check_ack");
         }
-        Assert.Equal(boundary == "executed" ? 1 : 0, verifier.FocusedRuns.Count);
+        Assert.Equal(boundary is "executed" or "verifier-result" ? 1 : 0, verifier.FocusedRuns.Count);
 
         var restarted = await repository.LoadAsync();
         var dependent = restarted.GetGoal(fixture.Goal.Id);
@@ -154,10 +157,107 @@ public sealed class SoloRepairReplayTests
         Assert.Equal("inherited", result.Outcome);
         Assert.NotEmpty(result.CandidateArtifacts!);
         Assert.NotEmpty(result.Artifacts);
+        Assert.NotNull(result.Proof);
         Assert.Null(store.ReadCheckExecution(key));
         Assert.Equal(1, Count(storePath, "solo_repair_dependency"));
         Assert.Equal(1, Count(storePath, "solo_repair_check"));
         Assert.Empty(escalations);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CandidateMovement_ReexecutesBothArmsOnUnchangedRedMain(bool candidatePasses)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true, singleRow: true);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with { Artifacts = [] }).ToArray() });
+        fixture.Record(fixture.Summary);
+        var original = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        fixture.Git("commit", "--allow-empty", "-m", "Move only the candidate");
+        var candidate = fixture.Git("rev-parse", "HEAD");
+        fixture.Context = fixture.Context with { CandidateSha = candidate };
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
+        {
+            Finding = original,
+            AttributionCandidatePass = candidatePasses,
+            AttributionBaselinePass = false
+        };
+        var escalations = new List<string>();
+        var coordinator = Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier);
+
+        _ = Advance(coordinator, fixture.Goal);
+        _ = Advance(coordinator, fixture.Goal);
+
+        Assert.Equal((original.Request!, candidate), Assert.Single(verifier.FocusedRuns));
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(storePath);
+        var key = SoloBaselineRepairStore.AttributionKey(fixture.Goal.Id.Value, original, candidate, original.Main);
+        var receipt = Assert.IsType<SoloRepairCheckReceipt>(store.ReadCheck(key));
+        Assert.Equal(candidatePasses ? "passed" : "inherited", receipt.Outcome);
+        Assert.NotEmpty(receipt.CandidateArtifacts!);
+        Assert.NotEmpty(receipt.Artifacts);
+        Assert.Equal(candidatePasses ? 0 : 1, Count(storePath, "solo_repair_dependency"));
+        Assert.Equal(!candidatePasses, coordinator.TryDeclineAdmission(fixture.Goal, candidate, original.Main, out _));
+        if (!candidatePasses)
+        {
+            var current = Assert.Single(store.ReadFindings(fixture.Goal.Id.Value).Where(row => row.Inherited));
+            Assert.Equal(candidate, current.Candidate);
+            Assert.Equal(original.Main, current.Baseline);
+            Assert.Equal(receipt.Proof, current.Proof);
+        }
+        Assert.Empty(escalations);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OppositeSamePairProofs_AreBothRetainedAndCannotRoute(bool inheritedFirst)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var escalations = new List<string>();
+        var coordinator = Coordinator(fixture, workspace, fixture.Kernel, escalations);
+        await fixture.Produce(baselineFails: inheritedFirst, singleRow: true, attemptId: "first");
+        fixture.Record(fixture.Summary);
+        var first = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
+        _ = Advance(coordinator, fixture.Goal);
+        await fixture.Produce(baselineFails: !inheritedFirst, singleRow: true, attemptId: "second");
+        fixture.Record(fixture.Summary);
+        var second = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
+        Assert.NotEqual(first.Inherited, second.Inherited);
+        Assert.Equal(first.Key, second.Key);
+        var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(Advance(coordinator, fixture.Goal)?.Outcome);
+        Assert.Equal(SoloHoldReasons.RepairEvidenceRequired, hold.Decision?.DiscriminatingEvidence);
+
+        var reopened = Coordinator(fixture, workspace, fixture.Kernel, escalations);
+        _ = Advance(reopened, fixture.Goal);
+
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        Assert.Empty(store.ReadFindings(fixture.Goal.Id.Value, introduced: true));
+        var finding = Assert.Single(store.ReadFindings(fixture.Goal.Id.Value));
+        Assert.True(finding.HasConflictingProofs);
+        Assert.Equal(first.Request, finding.Request);
+        using var db = new SqliteConnection($"Data Source={path};Pooling=False");
+        db.Open();
+        using var query = db.CreateCommand();
+        query.CommandText = "SELECT json_extract(proof, '$.Proof.Path') FROM solo_repair_conflicting_proof ORDER BY 1";
+        using var proofs = query.ExecuteReader();
+        Assert.True(proofs.Read());
+        Assert.Equal(first.Proof.Path, proofs.GetString(0));
+        Assert.True(proofs.Read());
+        Assert.Equal(second.Proof.Path, proofs.GetString(0));
+        Assert.False(proofs.Read());
+        Assert.Equal(0, Count(path, "solo_repair_dependency"));
+        Assert.Contains(First, Assert.Single(escalations));
     }
 
     [Theory]

@@ -51,7 +51,8 @@ internal static class AcceptanceExecutionRunner
         string? projectHomeDirectory = null, Action<AcceptanceGateProgress>? progressSink = null,
         SourceRevertedEvidenceContinuation? continuation = null,
         AcceptanceFocusedRunBinding? focusedRunBinding = null,
-        bool retainFocusedBaselineArtifacts = false)
+        bool retainFocusedBaselineArtifacts = false,
+        Action<FocusedEvidenceRunResult>? observeFocusedResult = null)
     {
         ArgumentNullException.ThrowIfNull(verifier);
         var executionOwner = AcceptanceExecutionOwners.CreateFocusedVerification(
@@ -67,16 +68,15 @@ internal static class AcceptanceExecutionRunner
             verifier = new GoalAcceptanceVerifier(concrete, context) { SourceRevertedContinuation = continuation };
         return AcceptanceExecutionOwnerLifetime.Run(
             executionOwner,
-            () => (negativeControl is { } mode
-                ? verifier.RunNegativeControlFocusedEvidenceOwnedAsync(worktreePath, goalId, request,
-                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths, mutation, declaredPaths)
-                : verifier.RunFocusedEvidenceOwnedAsync(
-                worktreePath,
-                goalId,
-                request,
-                executionOwner,
-                stableSlotIndex,
-                stableSlotLease,
-                runBaselineArm)).GetAwaiter().GetResult());
+            () =>
+            {
+                var result = (negativeControl is { } mode
+                    ? verifier.RunNegativeControlFocusedEvidenceOwnedAsync(worktreePath, goalId, request,
+                        executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths, mutation, declaredPaths)
+                    : verifier.RunFocusedEvidenceOwnedAsync(worktreePath, goalId, request, executionOwner,
+                        stableSlotIndex, stableSlotLease, runBaselineArm)).GetAwaiter().GetResult();
+                observeFocusedResult?.Invoke(result);
+                return result;
+            });
     }
 }

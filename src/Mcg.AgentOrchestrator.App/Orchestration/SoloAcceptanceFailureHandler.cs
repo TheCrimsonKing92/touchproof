@@ -15,12 +15,12 @@ internal sealed class SoloAcceptanceFailureHandler(
     Action<Goal, GoalLifecycleState, string> recordEscalation,
     Func<Goal, ConductorParallelAcceptanceAttempt?>? readAttempt = null,
     Func<Goal, AttributedFailureRouteDecision, AttributedFailureRouteDecision>? diagnose = null,
-    Func<Goal, string, ConductorAutonomyPolicy, ConductorAdvanceResult?>? advanceRepair = null)
+    Func<Goal, string, ConductorAutonomyPolicy, AcceptanceVerificationSummary, ConductorAdvanceResult?>? advanceRepair = null)
 {
     internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
         Record(goal, acceptance);
-        if (advanceRepair?.Invoke(goal, prefix, policy) is { } repair) return repair;
+        if (advanceRepair?.Invoke(goal, prefix, policy, acceptance) is { } repair) return repair;
         var current = readContext(goal);
         return SoloFreshGateAdmission.TryConsume(kernelReader(), goal, prefix, policy,
             current is null ? null : new(current.CandidateSha, current.MainSha), recordEscalation)

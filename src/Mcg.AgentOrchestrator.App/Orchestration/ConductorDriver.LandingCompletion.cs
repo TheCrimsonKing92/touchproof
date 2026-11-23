@@ -19,7 +19,7 @@ internal sealed partial class ConductorDriver
         _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation,
         goal => _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value),
         (goal, route) => FailureDiagnosis?.Enrich(goal, route) ?? route,
-        (goal, prefix, policy) => _soloBaselineRepair?.TryAdvance(goal, prefix, policy));
+        (goal, prefix, policy, acceptance) => _soloBaselineRepair?.TryAdvance(goal, prefix, policy, acceptance));
 
     internal LandingEscalationRecheckResult RecheckPreLandingRebaseConflict(Goal goal)
         => _recheckPreLandingRebaseConflict(goal);

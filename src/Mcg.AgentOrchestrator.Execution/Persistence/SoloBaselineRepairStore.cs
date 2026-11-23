@@ -14,15 +14,18 @@ internal sealed record SoloRepairFinding(string Candidate, string Main, string B
         Request, BaselineCheck, Identity);
     internal string Key => SoloBaselineRepairStore.Key(Candidate, Main, Check, Identity);
     internal bool MatchesAttributionPair(string candidate, string main) => Candidate == candidate && Main == main && Baseline == main;
+    internal bool HasConflictingProofs => Reason == SoloBaselineRepairStore.ConflictingProofs;
 }
 
 internal sealed record SoloRepairGroup(string Key, string IntakePayload, string? RepairGoal);
 internal sealed record SoloRepairCheckReceipt(string Outcome, string Detail, IReadOnlyList<SoloAcceptanceArtifact> Artifacts,
-    IReadOnlyList<SoloAcceptanceArtifact>? CandidateArtifacts = null, string? Feedback = null);
+    IReadOnlyList<SoloAcceptanceArtifact>? CandidateArtifacts = null, string? Feedback = null,
+    SoloAcceptanceArtifact? Proof = null);
 
 internal sealed class SoloBaselineRepairStore
 {
     internal const string FileName = "solo-baseline-repair.db";
+    internal const string ConflictingProofs = "Conflicting verifier proofs for the same revision pair and exact test.";
 
     private readonly string _path;
 
@@ -42,6 +45,9 @@ internal sealed class SoloBaselineRepairStore
                 request_key TEXT PRIMARY KEY, result TEXT);
             CREATE TABLE IF NOT EXISTS solo_repair_check_execution (
                 request_key TEXT PRIMARY KEY, result TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS solo_repair_conflicting_proof (
+                goal TEXT NOT NULL, identity_key TEXT NOT NULL, proof TEXT NOT NULL,
+                PRIMARY KEY (goal, identity_key, proof));
             """);
         command.ExecuteNonQuery();
     }
@@ -53,27 +59,92 @@ internal sealed class SoloBaselineRepairStore
     {
         using var db = Open();
         using var transaction = db.BeginTransaction();
-        foreach (var finding in findings)
+        foreach (var incoming in findings)
         {
             // Independently proven rows supersede missing evidence for the same revision pair.
+            var finding = incoming;
             var rank = finding.Inherited ? 3 : finding.Reason is null ? 2 : finding.Request is not null ? 1 : 0;
+            string? disputedGroup = null;
+            var prior = rank is 2 or 3 ? ReadFinding(db, transaction, goal, finding.Key) : null;
+            if (prior is not null && prior.Baseline == finding.Baseline)
+            {
+                if (prior.HasConflictingProofs)
+                {
+                    RecordConflictingProof(db, transaction, goal, finding);
+                    continue;
+                }
+                if (prior.Reason is null && prior.Inherited != finding.Inherited)
+                {
+                    RecordConflictingProof(db, transaction, goal, prior);
+                    RecordConflictingProof(db, transaction, goal, finding);
+                    if (prior.Inherited) disputedGroup = prior.GroupKey;
+                    finding = prior with { Inherited = false, Reason = ConflictingProofs, Feedback = null };
+                    rank = 4;
+                }
+            }
+            var preferExactMain = rank == 2 && prior is { Inherited: false, Reason: null } &&
+                prior.Baseline != finding.Baseline && finding.Baseline == finding.Main;
             using var command = Command(db, """
                 INSERT INTO solo_repair_finding VALUES ($goal, $key, $rank, $finding)
                 ON CONFLICT (goal, identity_key) DO UPDATE SET rank = excluded.rank, finding = excluded.finding
-                WHERE excluded.rank > solo_repair_finding.rank
+                WHERE excluded.rank > solo_repair_finding.rank OR $preferExactMain
                 """, ("$goal", goal), ("$key", finding.Key), ("$rank", rank),
-                ("$finding", JsonSerializer.Serialize(finding)));
+                ("$finding", JsonSerializer.Serialize(finding)), ("$preferExactMain", preferExactMain));
             command.Transaction = transaction;
-            command.ExecuteNonQuery();
+            var changed = command.ExecuteNonQuery() != 0;
+            if (disputedGroup is not null) RemoveConflictingDependency(db, transaction, goal, disputedGroup);
             if (!finding.Inherited) continue;
             // The link is an acceptance obligation. Goal-wide dependencies would
             // also block Developer dispatch for introduced failures in this partition.
-            using var link = Command(db, "INSERT OR IGNORE INTO solo_repair_dependency VALUES ($goal, $group)",
+            using var link = Command(db, """
+                INSERT OR IGNORE INTO solo_repair_dependency SELECT $goal, $group
+                WHERE $goal <> COALESCE((SELECT repair_goal FROM solo_repair_group WHERE group_key = $group), '')
+                """,
                 ("$goal", goal), ("$group", finding.GroupKey));
             link.Transaction = transaction;
-            link.ExecuteNonQuery();
+            if (changed) link.ExecuteNonQuery();
         }
         transaction.Commit();
+    }
+
+    internal bool HasConflictingProofs(string goal, string key)
+    {
+        using var db = Open();
+        return ReadFinding(db, null, goal, key)?.HasConflictingProofs == true;
+    }
+
+    private static SoloRepairFinding? ReadFinding(SqliteConnection db, SqliteTransaction? transaction, string goal, string key)
+    {
+        using var command = Command(db, "SELECT finding FROM solo_repair_finding WHERE goal = $goal AND identity_key = $key",
+            ("$goal", goal), ("$key", key));
+        command.Transaction = transaction;
+        return command.ExecuteScalar() is string json ? JsonSerializer.Deserialize<SoloRepairFinding>(json) : null;
+    }
+
+    private static void RecordConflictingProof(SqliteConnection db, SqliteTransaction transaction, string goal,
+        SoloRepairFinding finding)
+    {
+        using var command = Command(db, "INSERT OR IGNORE INTO solo_repair_conflicting_proof VALUES ($goal, $key, $proof)",
+            ("$goal", goal), ("$key", finding.Key), ("$proof", JsonSerializer.Serialize(finding)));
+        command.Transaction = transaction;
+        command.ExecuteNonQuery();
+    }
+
+    private static void RemoveConflictingDependency(SqliteConnection db, SqliteTransaction transaction, string goal,
+        string group)
+    {
+        using (var remaining = Command(db, "SELECT finding FROM solo_repair_finding WHERE goal = $goal AND rank = 3",
+                   ("$goal", goal)))
+        {
+            remaining.Transaction = transaction;
+            using var rows = remaining.ExecuteReader();
+            while (rows.Read())
+                if (JsonSerializer.Deserialize<SoloRepairFinding>(rows.GetString(0))?.GroupKey == group) return;
+        }
+        using var delete = Command(db, "DELETE FROM solo_repair_dependency WHERE goal = $goal AND group_key = $group",
+            ("$goal", goal), ("$group", group));
+        delete.Transaction = transaction;
+        delete.ExecuteNonQuery();
     }
 
     internal IReadOnlyList<SoloRepairFinding> ReadFindings(string goal, bool introduced = false)
@@ -111,11 +182,18 @@ internal sealed class SoloBaselineRepairStore
     internal void AcknowledgeRepair(string key, string goal)
     {
         using var db = Open();
+        using var transaction = db.BeginTransaction();
         using var command = Command(db, """
             UPDATE solo_repair_group SET repair_goal = $goal
             WHERE group_key = $key AND (repair_goal IS NULL OR repair_goal = $goal)
             """, ("$key", key), ("$goal", goal));
+        command.Transaction = transaction;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException($"Conflicting repair goal for {key}.");
+        using var clear = Command(db, "DELETE FROM solo_repair_dependency WHERE goal = $goal AND group_key = $key",
+            ("$goal", goal), ("$key", key));
+        clear.Transaction = transaction;
+        clear.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     internal bool TryClaimCheck(string key)
@@ -123,6 +201,16 @@ internal sealed class SoloBaselineRepairStore
         using var db = Open();
         using var command = Command(db, "INSERT OR IGNORE INTO solo_repair_check VALUES ($key, NULL)", ("$key", key));
         return command.ExecuteNonQuery() == 1;
+    }
+
+    internal void RemoveSelfDependency(string group, string goal)
+    {
+        using var db = Open();
+        using var command = Command(db, """
+            DELETE FROM solo_repair_dependency WHERE goal = $goal AND group_key = $group
+                AND EXISTS (SELECT 1 FROM solo_repair_group WHERE group_key = $group AND repair_goal = $goal)
+            """, ("$goal", goal), ("$group", group));
+        command.ExecuteNonQuery();
     }
 
     internal void CompleteCheck(string key, SoloRepairCheckReceipt result)
@@ -163,22 +251,35 @@ internal sealed class SoloBaselineRepairStore
     }
 
     internal static string NormalGateKey(string goal, string candidate, string main) => Key("normal-gate", goal, candidate, main);
-    internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main) =>
-        Key("attribution", goal, finding.Check, finding.Identity, candidate, main);
+    internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main,
+        bool verifyCurrentPair = false)
+    {
+        var moved = finding.Candidate != candidate || finding.Main != main;
+        return Key(moved && (verifyCurrentPair || finding.Main == main) ? "attribution-current-pair" : "attribution",
+            goal, finding.Check, finding.Identity, candidate, main);
+    }
     internal static string ValidationKey(SoloRepairFinding finding, string main) => Key("validation", finding.GroupKey, main);
 
-    internal static bool HasExactReplacement(SoloRepairFinding finding, IReadOnlyList<SoloRepairFinding> findings) =>
-        finding.Identity.Length == 0 && findings.Any(other => other.Check == finding.Check && other.Identity.Length > 0 &&
-            other.Candidate == finding.Candidate && other.Main == finding.Main);
+    internal static bool HasExactReplacement(SoloRepairFinding finding, IReadOnlyList<SoloRepairFinding> findings,
+        string candidate, string main) =>
+        findings.Any(other => other.Check == finding.Check &&
+            (finding.Identity.Length == 0 && other.Identity.Length > 0 &&
+                other.Candidate == finding.Candidate && other.Main == finding.Main ||
+             finding.Identity.Length > 0 && other.Key != finding.Key && other.Inherited &&
+                other.Identity == finding.Identity && other.Request == finding.Request &&
+                other.MatchesAttributionPair(candidate, main)));
 
     internal bool IsEvidenceCurrent(string goal, IReadOnlyList<SoloRepairFinding> findings, string? candidate, string? main)
     {
         if (findings.Count == 0) return true;
         if (candidate is null || main is null) return false;
         return findings.All(finding => finding.Inherited
-            ? ReadGroup(finding.GroupKey)?.RepairGoal is not null && ReadCheck(ValidationKey(finding, main))?.Outcome == "passed"
-            : HasExactReplacement(finding, findings) || (!finding.MatchesAttributionPair(candidate, main) &&
-                ReadCheck(AttributionKey(goal, finding, candidate, main))?.Outcome == "passed"));
+            ? ReadGroup(finding.GroupKey)?.RepairGoal is { } repair && repair != goal &&
+                ReadCheck(ValidationKey(finding, main))?.Outcome == "passed"
+            : HasExactReplacement(finding, findings, candidate, main) ||
+                ((finding.Candidate != candidate || finding.Main != main) &&
+                 (ReadCheck(AttributionKey(goal, finding, candidate, main, verifyCurrentPair: true)) ??
+                  ReadCheck(AttributionKey(goal, finding, candidate, main)))?.Outcome == "passed"));
     }
 
     internal void AcknowledgeEffect(string key, string detail)

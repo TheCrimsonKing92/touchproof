@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -177,6 +178,62 @@ public sealed class SoloRepairEvidenceTests
         Assert.Equal(Long, unresolved.Identity);
         Assert.Equal($"{Project}: FullyQualifiedName~{Long}", unresolved.Request);
         Assert.False(unresolved.Inherited);
+    }
+
+    [Fact]
+    public async Task IntroducedOnlyWithUnreadableTrx_RetainsTheExactRequest()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(singleRow: true);
+        var artifact = Assert.Single(Assert.Single(fixture.Proof().Checks).Artifacts);
+        File.Delete(artifact.Path);
+        fixture.Record(fixture.Summary);
+
+        var partition = Read(fixture);
+
+        Assert.Null(partition.Introduced);
+        var unresolved = Assert.Single(partition.Findings);
+        Assert.False(unresolved.Inherited);
+        Assert.NotNull(unresolved.Reason);
+        Assert.Equal(First, unresolved.Identity);
+        Assert.Equal($"{Project}: FullyQualifiedName~{First}", unresolved.Request);
+    }
+
+    [Fact]
+    public async Task ContradictoryCandidateRows_LeaveOnlyTheirIdentityUnresolved()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true);
+        var original = Assert.Single(Assert.Single(fixture.Proof().Checks).Artifacts);
+        var trx = XDocument.Load(original.Path);
+        var results = trx.Root!.Element("Results")!;
+        var contradictory = new XElement(results.Elements().Single(row => (string?)row.Attribute("testName") == First));
+        contradictory.SetAttributeValue("outcome", "Passed");
+        results.Add(contradictory);
+        var artifact = fixture.WriteLiteralTrx("contradictory.trx", trx.ToString());
+        fixture.ReplaceProof(proof => proof with
+        {
+            Checks = proof.Checks.Select(item => item with
+            {
+                Artifacts = [artifact],
+                Check = item.Check with
+                {
+                    ExecutedTestCount = item.Check.ExecutedTestCount + 1,
+                    DiscoveredTestCount = item.Check.DiscoveredTestCount + 1
+                }
+            }).ToArray()
+        });
+        fixture.Record(fixture.Summary);
+
+        var partition = Read(fixture);
+
+        var inherited = Assert.Single(partition.Findings.Where(row => row.Inherited));
+        Assert.Equal(Long, inherited.Identity);
+        Assert.Equal(artifact, Assert.Single(inherited.CandidateArtifacts));
+        var unresolved = Assert.Single(partition.Findings.Where(row => !row.Inherited));
+        Assert.Equal(First, unresolved.Identity);
+        Assert.NotNull(unresolved.Request);
+        Assert.Null(unresolved.Feedback);
     }
 
     [Theory]

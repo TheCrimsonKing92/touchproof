@@ -20,14 +20,15 @@ internal sealed class SoloBaselineRepairCoordinator(
     private readonly SoloBaselineRepairStore _store = new(
         Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
 
-    internal ConductorAdvanceResult? TryAdvance(Goal goal, string prefix, ConductorAutonomyPolicy policy)
+    internal ConductorAdvanceResult? TryAdvance(Goal goal, string prefix, ConductorAutonomyPolicy policy,
+        AcceptanceVerificationSummary? completion = null)
     {
         var context = goal.LatestAcceptanceFailure?.SoloFailureReceipt is not null ? readContext(goal) : null;
-        var partition = RetainSoloRepairPartition(goal, context);
+        RetainSoloRepairPartition(goal, context, completion);
         var findings = SoloRepairFindings(goal);
         if (findings.Count == 0) return null;
         var current = readCurrentRevisions(goal);
-        var introduced = partition is null ? SoloAcceptanceFailureReceiptReader.Read(goal, context).Failure : null;
+        var introduced = ReadIntroduced(goal, current);
         var repair = ReconcileSoloRepairs(goal, prefix, policy, findings, current, allowFreshGate: introduced is null);
         introduced ??= ReadIntroduced(goal, current);
         if (introduced is not null && current is not null && readCurrentRevisions(goal) == current &&
@@ -40,14 +41,14 @@ internal sealed class SoloBaselineRepairCoordinator(
         SoloAcceptanceFailureReceiptReader.RestoreIntroduced(_store.ReadFindings(goal.Id.Value, introduced: true).Where(finding =>
             finding.Candidate == current.BranchRevision && finding.Main == current.MainRevision));
 
-    private SoloRepairPartition? RetainSoloRepairPartition(Goal goal, SoloAcceptanceConsumptionContext? current)
+    private void RetainSoloRepairPartition(Goal goal, SoloAcceptanceConsumptionContext? current,
+        AcceptanceVerificationSummary? completion)
     {
-        var partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, current);
-        if (current is not null && partition?.Findings.Any(finding => finding.Inherited) == true &&
+        var partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, current, completion);
+        if (current is not null && partition?.Findings.Any(finding => finding.Reason is null) == true &&
             readCurrentRevisions(goal) != new GateReadyCandidateRevisionPair(current.CandidateSha, current.MainSha))
-            partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null);
+            partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null, completion);
         if (partition is not null) _store.Retain(goal.Id.Value, partition.Findings);
-        return partition;
     }
 
     private IReadOnlyList<SoloRepairFinding> SoloRepairFindings(Goal goal) =>
@@ -61,24 +62,35 @@ internal sealed class SoloBaselineRepairCoordinator(
 
         string? waiting = null;
         string? missing = null;
+        string? repairOwnerAction = null;
+        var mainIsMergeBase = new Lazy<bool>(() => GitCli.Run(workspace.ExecutionDirectory, "merge-base", candidate, main) is
+            { Succeeded: true, DrainTimedOut: false } mergeBase && mergeBase.Output.Trim() == main);
         foreach (var original in findings)
         {
             var finding = original;
             if (!finding.Inherited)
             {
                 // A later proof for the same row supersedes an earlier check-only placeholder.
-                if (SoloBaselineRepairStore.HasExactReplacement(finding, findings)) continue;
+                if (SoloBaselineRepairStore.HasExactReplacement(finding, findings, candidate, main)) continue;
+                var movedPair = finding.Candidate != candidate || finding.Main != main;
+                if (finding.HasConflictingProofs && !movedPair)
+                {
+                    missing ??= $"Resolve conflicting verifier proofs for check {finding.Check}, test {finding.Identity}, at {candidate} / {main}.";
+                    continue;
+                }
                 if (finding.Request is null)
                 {
                     missing ??= $"Check {finding.Check}, test {finding.Identity}, needs exact verifier evidence ({finding.Reason}, {finding.Proof.Path}).";
                     continue;
                 }
 
-                var samePair = finding.MatchesAttributionPair(candidate, main);
-                var requestKey = SoloBaselineRepairStore.AttributionKey(goal.Id.Value, finding, candidate, main);
-                var result = RunSoloRepairCheck(requestKey, finding, samePair ? candidate : main, main, samePair);
+                var runBaseline = finding.Main == main || mainIsMergeBase.Value;
+                var requestKey = SoloBaselineRepairStore.AttributionKey(goal.Id.Value, finding, candidate, main,
+                    verifyCurrentPair: runBaseline);
+                var result = RunSoloRepairCheck(requestKey, finding, runBaseline ? candidate : main, main, runBaseline,
+                    allowCandidatePass: movedPair);
                 if (result.Outcome == "pending") { waiting ??= finding.Request; continue; }
-                if (!samePair && result.Outcome == "passed") continue;
+                if (movedPair && result.Outcome == "passed") continue;
                 if (result.Outcome is not ("inherited" or "introduced"))
                 {
                     missing ??= $"{finding.Check}, {finding.Identity}, attribution {requestKey}: {result.Detail}";
@@ -91,12 +103,19 @@ internal sealed class SoloBaselineRepairCoordinator(
                 }
                 finding = finding with
                 {
+                    Candidate = candidate, Main = main, Baseline = main,
                     Inherited = result.Outcome == "inherited",
                     BaselineCheck = result.Outcome == "inherited" ? result.Detail : finding.BaselineCheck,
                     CandidateArtifacts = result.CandidateArtifacts!, BaselineArtifacts = result.Artifacts,
-                    Reason = null, Feedback = result.Outcome == "introduced" ? result.Feedback : null
+                    Reason = null, Feedback = result.Outcome == "introduced" ? result.Feedback : null,
+                    Proof = result.Proof ?? finding.Proof
                 };
                 _store.Retain(goal.Id.Value, [finding]);
+                if (_store.HasConflictingProofs(goal.Id.Value, finding.Key))
+                {
+                    missing ??= $"Resolve conflicting verifier proofs for check {finding.Check}, test {finding.Identity}, at {candidate} / {main}.";
+                    continue;
+                }
                 if (!finding.Inherited) continue;
             }
 
@@ -105,6 +124,11 @@ internal sealed class SoloBaselineRepairCoordinator(
             {
                 if (repair.Pending) waiting ??= repair.Detail;
                 else missing ??= repair.Detail;
+                continue;
+            }
+            if (repair.Goal.Id == goal.Id)
+            {
+                repairOwnerAction ??= repair.Detail;
                 continue;
             }
             if (ResolveSoloRepairLanding(workspace, repair.Goal, main) is null)
@@ -121,6 +145,8 @@ internal sealed class SoloBaselineRepairCoordinator(
             else if (validation.Outcome != "passed")
                 missing ??= $"Refreshed baseline {main}, check {finding.Check}, test {finding.Identity}: {validation.Detail}";
         }
+        if (repairOwnerAction is not null)
+            return SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairOwnerActionRequired, repairOwnerAction);
         if (missing is not null)
             return SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairEvidenceRequired, missing);
         if (waiting is not null || readCurrentRevisions(goal) != current)
@@ -163,7 +189,6 @@ internal sealed class SoloBaselineRepairCoordinator(
                 _ = new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction())
                     .Apply(kernel, payload, out _);
                 var created = intake.Get(requestKey)?.GoalId ?? throw new InvalidOperationException("Keyed repair intake returned no goal ID.");
-                if (created == dependent.Id.Value) throw new InvalidOperationException("A repair cannot depend on itself.");
                 // CLI intake retries epic assignment during replay. Confirm it before acknowledging
                 // the group because the CLI can return after recording an assignment failure.
                 var membership = new PortfolioStore(workspace.PortfolioStorePath).GetGoalMembershipAsync(created).GetAwaiter().GetResult();
@@ -173,6 +198,11 @@ internal sealed class SoloBaselineRepairCoordinator(
                 group = group with { RepairGoal = created };
             }
             var id = new GoalId(group.RepairGoal);
+            if (id == dependent.Id)
+            {
+                _store.RemoveSelfDependency(group.Key, id.Value);
+                return (dependent, false, $"The canonical repair {id.Value} still reproduces {finding.Identity}.");
+            }
             var repair = kernel.Goals.FirstOrDefault(goal => goal.Id == id);
             if (repair is null)
             {
@@ -216,7 +246,7 @@ internal sealed class SoloBaselineRepairCoordinator(
     }
 
     private SoloRepairCheckReceipt RunSoloRepairCheck(string key, SoloRepairFinding finding, string checkoutSha,
-        string baselineSha, bool runBaseline)
+        string baselineSha, bool runBaseline, bool allowCandidatePass = false)
     {
         if (_store.ReadCheck(key) is { } prior) return prior;
         if (finding.Request is null)
@@ -232,8 +262,17 @@ internal sealed class SoloBaselineRepairCoordinator(
             if (_store.ReadCheck(key) is { } completed) return completed;
             var checkout = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("solo-repair-worktrees"),
                 SoloBaselineRepairStore.Key(workspace.SqliteStatePath, key));
-            // The mutex owns execution. A durable claim without an execution receipt resumes under the same key.
-            var result = _store.ReadCheckExecution(key);
+            var artifacts = Path.Combine(workspace.OrchestratorDirectory, "solo-repair-results", key);
+            var proofIdentity = SoloBaselineRepairStore.Key("focused-repair-result-v1", key, checkoutSha, baselineSha,
+                runBaseline.ToString(), allowCandidatePass.ToString(), finding.Request, finding.Check, finding.Identity,
+                finding.Project, finding.BaselineCheck);
+            // The mutex owns execution. Recover the verifier's terminal output before
+            // treating a claim with no SQLite execution record as an interrupted run.
+            var staged = _store.ReadCheckExecution(key);
+            var result = staged?.Proof is { } proof
+                ? ReadSoloRepairResult(artifacts, proofIdentity, proof.Sha256) ??
+                    new SoloRepairCheckReceipt("unresolved", "The staged focused verifier result is missing.", [])
+                : staged ?? ReadSoloRepairResult(artifacts, proofIdentity);
             RemoveSoloRepairCheckout(workspace.ExecutionDirectory, checkout);
             if (result is null)
             {
@@ -241,7 +280,8 @@ internal sealed class SoloBaselineRepairCoordinator(
                 {
                     using var lease = acquireStableSlot(key, CancellationToken.None);
                     _store.TryClaimCheck(key);
-                    result = ExecuteSoloRepairCheck(key, finding, checkout, checkoutSha, baselineSha, runBaseline, lease);
+                    result = ExecuteSoloRepairCheck(key, finding, checkout, checkoutSha, baselineSha, runBaseline,
+                        allowCandidatePass, artifacts, proofIdentity, lease);
                 }
                 catch (Exception ex) when (ex is DotnetBuildSlotsBusyException or CohortStableSlotsDeferredException)
                 {
@@ -255,13 +295,14 @@ internal sealed class SoloBaselineRepairCoordinator(
     }
 
     private SoloRepairCheckReceipt ExecuteSoloRepairCheck(string key, SoloRepairFinding finding, string checkout,
-        string checkoutSha, string baselineSha, bool runBaseline, DotnetBuildEnvironmentLease lease)
+        string checkoutSha, string baselineSha, bool runBaseline, bool allowCandidatePass, string artifacts,
+        string proofIdentity, DotnetBuildEnvironmentLease lease)
     {
         var root = workspace.ExecutionDirectory;
-        var artifacts = Path.Combine(workspace.OrchestratorDirectory, "solo-repair-results", key);
         try
         {
-            SoloRepairCheckReceipt receipt;
+            SoloRepairCheckReceipt? receipt = null;
+            var observedResult = false;
             try
             {
                 Directory.CreateDirectory(artifacts);
@@ -269,22 +310,77 @@ internal sealed class SoloBaselineRepairCoordinator(
                 var added = GitCli.Run(root, "worktree", "add", "--detach", "--quiet", checkout, checkoutSha);
                 if (!added.Succeeded || added.DrainTimedOut || GoalWorktrees.ResolveRequiredRef(checkout, "HEAD") != checkoutSha)
                     throw new InvalidOperationException($"Could not prepare exact revision {checkoutSha} for request {key}.");
-                var result = AcceptanceExecutionRunner.RunFocusedVerification(verifier, checkout, goalId: null, finding.Request!,
+                AcceptanceExecutionRunner.RunFocusedVerification(verifier, checkout, goalId: null, finding.Request!,
                     lease.Environment.BuildPermitIndex, lease, runBaseline, CancellationToken.None, workspace.IntegrationBranch,
-                    projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, retainFocusedBaselineArtifacts: runBaseline);
-                receipt = runBaseline
-                    ? SoloAcceptanceFailureReceiptReader.ReadRepairAttribution(result, checkoutSha, baselineSha, finding, artifacts)
-                    : SoloAcceptanceFailureReceiptReader.ReadRepairCheck(result, FindingEvidenceArm.Candidate, checkoutSha, finding, artifacts);
+                    projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, retainFocusedBaselineArtifacts: runBaseline,
+                    observeFocusedResult: result =>
+                    {
+                        observedResult = true;
+                        SoloRepairCheckReceipt interpreted;
+                        try
+                        {
+                            interpreted = runBaseline
+                                ? SoloAcceptanceFailureReceiptReader.ReadRepairAttribution(result, checkoutSha, baselineSha,
+                                    finding, artifacts, allowCandidatePass)
+                                : SoloAcceptanceFailureReceiptReader.ReadRepairCheck(result, FindingEvidenceArm.Candidate,
+                                    checkoutSha, finding, artifacts);
+                        }
+                        catch (Exception ex) when (SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(ex))
+                        {
+                            interpreted = new("unresolved", ex.Message, []);
+                        }
+                        receipt = WriteSoloRepairResult(artifacts, proofIdentity, interpreted);
+                    });
             }
-            catch (Exception ex) when (ex is not DotnetBuildSlotsBusyException && SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(ex))
+            catch (Exception ex) when (!observedResult && ex is not DotnetBuildSlotsBusyException &&
+                SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(ex))
             {
                 receipt = new("unresolved", ex.Message, []);
             }
             // Record verifier evidence before releasing the checkout or acknowledging the check.
-            _store.RecordCheckExecution(key, receipt);
-            return receipt;
+            _store.RecordCheckExecution(key, receipt!);
+            return receipt!;
         }
         finally { RemoveSoloRepairCheckout(root, checkout); }
+    }
+
+    private sealed record SoloRepairVerifierResult(string Identity, SoloRepairCheckReceipt Receipt);
+
+    private static SoloRepairCheckReceipt WriteSoloRepairResult(string resultsRoot, string identity, SoloRepairCheckReceipt result)
+    {
+        var path = Path.Combine(resultsRoot, "focused-result.json");
+        var temporary = path + ".tmp";
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new SoloRepairVerifierResult(identity, result));
+        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+        }
+        File.Move(temporary, path, overwrite: true);
+        return result with { Proof = new(path, SoloAcceptanceFailureEvidenceWriter.Digest(bytes)) };
+    }
+
+    private static SoloRepairCheckReceipt? ReadSoloRepairResult(string resultsRoot, string identity, string? expectedDigest = null)
+    {
+        var path = Path.Combine(resultsRoot, "focused-result.json");
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+            var digest = SoloAcceptanceFailureEvidenceWriter.Digest(bytes);
+            var result = JsonSerializer.Deserialize<SoloRepairVerifierResult>(bytes);
+            if (result?.Identity != identity || (expectedDigest is not null && expectedDigest != digest))
+                throw new InvalidDataException("The focused verifier result does not match its repair request.");
+            SoloAcceptanceFailureReceiptReader.ValidateRepairArtifacts(result.Receipt, resultsRoot);
+            return result.Receipt with { Proof = new(path, digest) };
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException && !File.Exists(path))
+        {
+            return null;
+        }
+        catch (Exception ex) when (SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(ex))
+        {
+            return new("unresolved", ex.Message, []);
+        }
     }
 
     private static void RemoveSoloRepairCheckout(string root, string checkout)

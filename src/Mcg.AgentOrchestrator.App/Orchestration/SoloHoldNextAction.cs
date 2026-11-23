@@ -17,6 +17,8 @@ internal static class SoloHoldNextAction
                 ("solo baseline repair", "conductor", "Wait for the repair or revision-bound check."),
             SoloHoldReasons.RepairEvidenceRequired =>
                 ("solo baseline repair", "operator", "Resolve the evidence or ownership item named in the hold."),
+            SoloHoldReasons.RepairOwnerActionRequired =>
+                ("solo baseline repair", "repair owner", "Resolve the reproduced failure on this repair goal."),
             SoloHoldReasons.RepairValidated =>
                 ("solo baseline repair", "conductor", "Run normal acceptance on the current candidate and validated baseline."),
             SoloHoldReasons.AwaitingConsumption =>

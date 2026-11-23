@@ -5,6 +5,7 @@ internal static class SoloHoldReasons
 {
     internal const string RepairPending = "solo-baseline-repair-pending";
     internal const string RepairEvidenceRequired = "solo-baseline-repair-evidence-required";
+    internal const string RepairOwnerActionRequired = "solo-baseline-repair-owner-action-required";
     internal const string RepairValidated = "solo-baseline-repair-validated";
     internal const string AwaitingConsumption = "solo-evidence-awaiting-consumption";
     internal const string RetryCap = "solo-acceptance-retry-cap";
