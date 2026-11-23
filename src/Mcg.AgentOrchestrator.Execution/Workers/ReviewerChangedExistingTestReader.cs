@@ -1,4 +1,3 @@
-using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -89,7 +88,7 @@ internal static class ReviewerChangedExistingTestReader
                 {
                     var tab = record.IndexOf('\t');
                     var fields = tab < 0 ? [] : record[..tab].Split(' ');
-                    var path = tab < 0 ? string.Empty : UnquotePath(record[(tab + 1)..]);
+                    var path = tab < 0 ? string.Empty : GitCli.UnquotePath(record[(tab + 1)..]);
                     if (fields.Length != 3 || !requested.Contains(path) ||
                         fields[2].Length is not (40 or 64) || !fields[2].All(Uri.IsHexDigit) ||
                         fields[1] is not ("blob" or "tree"))
@@ -105,37 +104,6 @@ internal static class ReviewerChangedExistingTestReader
             // Partial results would falsely present a complete inventory to the Reviewer.
             return new([], "Changed existing tests unavailable: " + exception.Message.ReplaceLineEndings(" "));
         }
-    }
-
-    private static string UnquotePath(string path)
-    {
-        if (!path.StartsWith('"')) return path;
-        if (path.Length < 2 || path[^1] != '"') throw new IOException("git ls-tree returned an invalid quoted path.");
-        var bytes = new List<byte>();
-        for (var index = 1; index < path.Length - 1; index++)
-        {
-            var value = path[index];
-            if (value == '\\')
-            {
-                if (++index >= path.Length - 1) throw new IOException("git ls-tree returned an invalid path escape.");
-                value = path[index];
-                if (value is >= '0' and <= '7')
-                {
-                    if (index + 2 >= path.Length - 1 || path[index + 1] is < '0' or > '7' ||
-                        path[index + 2] is < '0' or > '7') throw new IOException("git ls-tree returned an invalid octal escape.");
-                    bytes.Add(checked((byte)((value - '0') * 64 + (path[++index] - '0') * 8 + path[++index] - '0')));
-                    continue;
-                }
-                value = value switch
-                {
-                    'a' => '\a', 'b' => '\b', 't' => '\t', 'n' => '\n', 'v' => '\v', 'f' => '\f', 'r' => '\r',
-                    '\\' => '\\', '"' => '"', _ => throw new IOException("git ls-tree returned an invalid path escape.")
-                };
-            }
-            if (value > 127) throw new IOException("git ls-tree returned a non-ASCII quoted path.");
-            bytes.Add((byte)value);
-        }
-        return new UTF8Encoding(false, true).GetString(bytes.ToArray());
     }
 
     private static Dictionary<string, MethodDeclarationSyntax> Methods(string text) =>

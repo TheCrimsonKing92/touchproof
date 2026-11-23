@@ -333,6 +333,9 @@ public sealed record TaskDispatchSnapshot(
 {
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<DeveloperReachCheckEntry>? ReachCheck { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ReviewerDispatchScope? ReviewerScope { get; init; }
 }
 
 public sealed record TaskProcessSnapshot(

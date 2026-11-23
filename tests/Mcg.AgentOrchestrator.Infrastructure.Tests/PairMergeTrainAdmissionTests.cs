@@ -3,6 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+using static LandingExecutorTests;
+
 // Parallel-safe: all admission state is in memory and the live census override is scoped to this async context.
 public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
 {
@@ -96,6 +98,166 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
         Assert.Equal(0, scenario.CohortCalls);
     }
 
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void RefusedCarryOldestLeavesBothTrainSlotsForEligiblePeers(bool groupedOrigin, bool satisfiedOnBoundSha,
+        bool retainedReceipt)
+    {
+        const string goalPath = "src/goal.txt";
+        var repository = CreateGitRepository();
+        var attemptRoot = CreateTempDirectory("mcg-refused-carry-train");
+        try
+        {
+            AppendCommit(repository, "config/acceptance-manifest.json", """{"environmentContract":{"version":1,"tools":[]}}""");
+            if (groupedOrigin)
+            {
+                AppendCommit(repository, goalPath, "seed");
+                AppendCommit(repository, SourceSizeRatchet.SourcePath, Ceiling(20));
+            }
+            var main = ReadGit(repository, "rev-parse", "main");
+            ReadGit(repository, "checkout", "-b", "bound");
+            AppendCommit(repository, goalPath, groupedOrigin ? $"seed{Environment.NewLine}reviewed goal change" : "reviewed goal change");
+            if (groupedOrigin) AppendCommit(repository, SourceSizeRatchet.SourcePath, Ceiling(24));
+            var bound = ReadGit(repository, "rev-parse", "HEAD");
+            if (groupedOrigin)
+            {
+                ReadGit(repository, "checkout", "main");
+                AppendCommit(repository, goalPath, $"seed{Environment.NewLine}integration change");
+                AppendCommit(repository, SourceSizeRatchet.SourcePath, Ceiling(18));
+                ReadGit(repository, "checkout", "bound");
+                var merge = GitCli.Run(repository, "merge", "--no-ff", "--no-commit", "main");
+                Assert.Equal(1, merge.ExitCode);
+                Assert.Contains("<<<<<<<", File.ReadAllText(Path.Combine(repository, goalPath)), StringComparison.Ordinal);
+                File.WriteAllLines(Path.Combine(repository, goalPath), ["seed", "integration change", "reviewed goal change"]);
+                File.WriteAllLines(Path.Combine(repository, SourceSizeRatchet.SourcePath), [Ceiling(22)]);
+                ReadGit(repository, "add", goalPath, SourceSizeRatchet.SourcePath);
+                ReadGit(repository, "commit", "-m", "Resolve integration conflicts");
+            }
+            else
+            {
+                ReadGit(repository, "checkout", "-b", "current", main);
+                AppendCommit(repository, goalPath, "different goal change");
+            }
+            var branch = ReadGit(repository, "rev-parse", "HEAD");
+            ReadGit(repository, "checkout", "main");
+
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default, repository, runInline: true);
+            using var scenario = new Scenario(3, repository: repository, coordinator: coordinator,
+                readHeads: goal => (branch, ReadGit(repository, "rev-parse", "main")));
+            var oldest = scenario.Goals[0];
+            var obligation = scenario.Kernel.MapCriterionEvidenceOwner(oldest.Id, 0, 1,
+                CriterionEvidenceOwner.Acceptance, "reviewer", CriterionEvidenceScopes.FullAcceptanceGate,
+                expectedCandidateSha: bound);
+            var worktree = GoalWorktrees.WorktreePath(repository, oldest.Id);
+            Directory.CreateDirectory(Path.GetDirectoryName(worktree)!);
+            ReadGit(repository, "worktree", "add", "-b", GoalWorktrees.BranchName(oldest.Id), worktree, branch);
+
+            string? soloAttemptId = null;
+            if (groupedOrigin)
+            {
+                // Enter the member-evidence step used after a passing merge train gate.
+                if (satisfiedOnBoundSha)
+                {
+                    var satisfied = scenario.Kernel.RecordCriterionEvidence(oldest.Id, obligation.Id,
+                        CriterionEvidenceOwner.Acceptance, bound, "previous-full-gate",
+                        obligation.RequiredScope, passed: true, detail: "Passed on the bound candidate.");
+                    Assert.Equal(CriterionEvidenceState.Satisfied, satisfied.State);
+                }
+                Assert.True(PassedHeadCandidateDrift.TryProve(repository, bound, branch, "main", out _));
+                var refusal = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+                    oldest, branch, scenario.Kernel, "merge-train-receipt:initial", "main", repository);
+                Assert.Contains(satisfiedOnBoundSha ? "Carry-forward refused" : "integration-merge-not-clean",
+                    refusal, StringComparison.Ordinal);
+                Assert.Contains(obligation.Id, refusal, StringComparison.Ordinal);
+                Assert.Null(coordinator.TryReadLatest(oldest.Id.Value));
+            }
+            else
+            {
+                Assert.Equal(1, scenario.Tick(oldest.Id.Value).Held);
+                Assert.Equal(oldest.Id, Assert.Single(scenario.SoloGoals));
+                var passed = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(oldest.Id.Value));
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passed.Outcome);
+                soloAttemptId = passed.AttemptId;
+            }
+
+            var peers = scenario.Goals.Skip(1).ToArray();
+            const string firstPeerPath = "tests/Mcg.AgentOrchestrator.Core.Tests/FirstPeer.cs";
+            var firstPeerWorktree = GoalWorktrees.Ensure(repository, peers[0].Id);
+            AppendCommit(firstPeerWorktree, firstPeerPath, "first peer");
+            AppendCommit(GoalWorktrees.Ensure(repository, peers[1].Id),
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondPeer.cs", "second peer");
+            AppendCommit(repository, "src/main.txt", "advanced main");
+            if (groupedOrigin)
+                Assert.True(PassedHeadCandidateDrift.TryProve(repository, bound, branch, "main", out _));
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repository);
+            if (retainedReceipt)
+            {
+                var firstPeerHead = ReadGit(firstPeerWorktree, "rev-parse", "HEAD");
+                var identity = MergeTrainIdentity.Create(
+                    [Bind(oldest, branch, goalPath), Bind(peers[0], firstPeerHead, firstPeerPath)],
+                    ReadGit(repository, "rev-parse", "main"), ReadGit(repository, "rev-parse", "main^{tree}"),
+                    "retained-binding-hold-test");
+                var store = new MergeTrainAcceptanceStore(
+                    Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
+                var trx = MergeTrainFocusedRecheckTests.WriteTrx(attemptRoot, "retained-train.trx", [("Train.Passes", "Passed")]);
+                store.SaveGateReceipt(new MergeTrainReceipt("retained-binding-hold-receipt", identity,
+                    MergeTrainGateOutcome.Passed, DateTimeOffset.UnixEpoch, 0, [], 0, [trx], ValidForLanding: true));
+                Assert.Equal(identity.Value, Assert.Single(store.ReadPassedReceiptsForGoal(peers[0].Id)).Identity.Value);
+
+                MergeTrainMemberBinding Bind(Goal goal, string head, string path) => new(goal.Id, head, head, [path], [],
+                    ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto, nameof(GateReadyMergeStatus.Clean),
+                    nameof(GateReadyMergeReason.NoConflictsDetected), head, scenario.Kernel.GetGoal(goal.Id).AuthoritativeBrief.Version);
+            }
+            var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
+                new AcceptanceVerificationResult(true, false, 0, null));
+            var driver = new ConductorDriver(scenario.Kernel, workspace, verifier, DefaultAgents(),
+                WorkerProfileCatalog.Default(), parallelAcceptanceAttemptCoordinator: coordinator,
+                cleanupHooks: new GoalWorktreeCleanupHooks
+                {
+                    BuildStorageRoot = new DotnetBuildStorageRoot(Path.Combine(attemptRoot, "dotnet"))
+                });
+            var reservations = new List<ConductorAcceptanceCapacitySnapshot>();
+            // The production train has registered its capacity root before scheduling the verifier.
+            driver.SetCohortGateBackgroundStartForTests(_ => reservations.Add(driver.GetActiveAcceptanceCohortCapacity()));
+            BatchTickSummary? tick = null;
+            AdmissionFactsTestData.Warm(driver, scenario.Kernel);
+            var summary = new ConductorBatchLoop().Run(scenario.Kernel, driver,
+                ConductorAutonomyPolicy.Permissive, NoStopPath(), maxIterations: 1, onTick: result => tick = result);
+
+            Assert.Equal(0, summary.Escalated);
+            var reservation = Assert.Single(Assert.Single(reservations).ActiveRoots);
+            Assert.DoesNotContain(oldest.Id.Value, reservation.MemberGoalIds);
+            Assert.True(reservation.MemberGoalIds.SetEquals(peers.Select(goal => goal.Id.Value)));
+            Assert.Equal(0, verifier.RunCount);
+            Assert.Equal(soloAttemptId, coordinator.TryReadLatest(oldest.Id.Value)?.AttemptId);
+            Assert.Empty(coordinator.GetUnreconciledAttempts(scenario.Goals.Select(goal => goal.Id.Value).ToArray()));
+            Assert.Contains(tick!.ProgressLines!, line =>
+                line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
+                line.Contains(obligation.Id, StringComparison.Ordinal));
+            if (satisfiedOnBoundSha)
+            {
+                var history = Assert.Single(GoalOperationJournal.ReadRefusedCarryHolds(repository, oldest.Id));
+                Assert.Equal(branch, history.BranchSha);
+                Assert.Equal(new AcceptanceCriterionEvidence.RefusedCarryBinding(obligation.Id, bound),
+                    Assert.Single(history.Bindings));
+                Assert.True(history.RequiresLandingProof);
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(repository);
+        }
+
+        static string Ceiling(int ceiling) => $"new SourceSizeCeiling(\"src/goal.txt\", {ceiling}),";
+    }
+
     private sealed class Scenario : IDisposable
     {
         internal AgentOrchestratorKernel Kernel { get; } = new();
@@ -108,7 +270,9 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
         private readonly IDisposable _census = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
 
         internal Scenario(int count, bool fallback = false, bool trainsEnabled = true, bool overlapping = false,
-            bool refined = true)
+            bool refined = true, string? repository = null,
+            ConductorParallelAcceptanceAttemptCoordinator? coordinator = null,
+            Func<Goal, (string BranchHeadSha, string MainHeadSha)>? readHeads = null)
         {
             Goals = Enumerable.Range(0, count).Select(index =>
             {
@@ -130,8 +294,13 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
                 runAcceptanceWithSlot: (goal, _) =>
                 {
                     SoloGoals.Add(goal.Id);
-                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                    var heads = readHeads?.Invoke(goal);
+                    return new AcceptanceVerificationSummary(true, [],
+                        BranchHeadSha: heads?.BranchHeadSha, MainHeadSha: heads?.MainHeadSha);
                 },
+                resolveAcceptanceHeads: readHeads is null ? null : goal => readHeads(goal),
+                executionDirectory: repository,
+                parallelAcceptanceAttemptCoordinator: coordinator,
                 classifyRisk: _ => ChangeRiskTier.DocsOnly,
                 getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
@@ -155,9 +324,9 @@ public sealed class PairMergeTrainAdmissionTests : ConductorBatchLoopTests
                 });
         }
 
-        internal BatchLoopSummary Tick() => new ConductorBatchLoop().Run(
+        internal BatchLoopSummary Tick(string? onlyGoalId = null) => new ConductorBatchLoop().Run(
             Kernel, _driver, ConductorAutonomyPolicy.Permissive, NoStopPath(), maxIterations: 1,
-            onTick: tick => TickResult = tick);
+            onTick: tick => TickResult = tick, onlyGoalId: onlyGoalId);
 
         public void Dispose() => _census.Dispose();
     }

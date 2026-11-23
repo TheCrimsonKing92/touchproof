@@ -7,7 +7,7 @@ public static partial class WorkerProfileDispatcher
     private static (string Directory, string? Pointer) WriteDispatchContextArtifacts(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task,
         string workingDirectory, IReadOnlyList<string>? preflightFindings, string? providerName, string? modelName,
         CitedPriorEvidenceResolver? resolver, DateTimeOffset dispatchedAt, string? orchestratorSkillDirectory, WorkerTargetHome? targetHome = null,
-        string? backlogStorePath = null, string? integrationBranch = null)
+        string? backlogStorePath = null, ReviewerChangedFileScope? reviewerScope = null)
     {
         var prerequisiteAnswers = kernel.HumanInputRequests
             .Where(request => request.GoalId == goal.Id && request.Kind == HumanWaitKind.PlannerPrerequisiteEvidence
@@ -27,12 +27,12 @@ public static partial class WorkerProfileDispatcher
             .ThenBy(request => request.Id.Value, StringComparer.Ordinal)
             .Select(request => request.AuthoritativeAnswer!.Text);
         var linkedBacklog = LinkedBacklogRecordEvidence.Read(backlogStorePath, goal, task.RequiredRole);
-        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings,
+        var contextDirectory = new WorkerArtifactWriter(orchestratorSkillDirectory, targetHome).Write(
+            goal, task, workingDirectory, preflightFindings,
             resolver?.Resolve(goal, task), providerName, modelName,
             orchestratorStoreRoot: resolver?.OrchestratorDirectory,
             answeredEvidenceTexts: prerequisiteAnswers.Concat(clarificationAnswers).ToArray(), clock: new DispatchContextClock(dispatchedAt),
-            orchestratorSkillDirectory: orchestratorSkillDirectory, targetHome: targetHome,
-            linkedBacklogRecord: linkedBacklog?.Record, integrationBranch: integrationBranch);
+            linkedBacklogRecord: linkedBacklog?.Record, reviewerScope: reviewerScope, reviewerScopePrepared: true);
         try
         {
             var path = Path.Combine(contextDirectory, LinkedBacklogRecordEvidence.FileName);

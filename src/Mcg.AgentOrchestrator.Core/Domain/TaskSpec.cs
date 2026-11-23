@@ -1483,7 +1483,8 @@ public sealed partial class TaskSpec
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
         dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion, WorkerToolsDirectory: dispatch.WorkerToolsDirectory, ClaudeApiHoldIdentity: dispatch.ClaudeApiHoldIdentity)
     {
-        ReachCheck = dispatch.ReachCheck
+        ReachCheck = dispatch.ReachCheck,
+        ReviewerScope = dispatch.ReviewerScope
     };
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
@@ -1531,7 +1532,8 @@ public sealed partial class TaskSpec
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
         dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion, dispatch.WorkerToolsDirectory, ClaudeApiHoldIdentity: dispatch.ClaudeApiHoldIdentity)
     {
-        ReachCheck = dispatch.ReachCheck
+        ReachCheck = dispatch.ReachCheck,
+        ReviewerScope = dispatch.ReviewerScope
     };
 
     private static string? NormalizeOptional(string? value) =>

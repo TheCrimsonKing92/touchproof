@@ -34,8 +34,10 @@ internal static partial class AcceptanceCriterionEvidence
                     evidenceByHead.Add(oldHead, drift);
                     continue;
                 }
-                return FormatStaleBindingsDiagnostic(
+                var diagnostic = FormatStaleBindingsDiagnostic(
                     candidateSha, obligation, boundElsewhere, CarryForwardRefusalText.Format(reason, oldHead, evaluatedHead));
+                RecordLandingCarryRefusal(executionDirectory, goal, candidateSha, boundElsewhere, diagnostic);
+                return diagnostic;
             }
             evidenceByHead.Add(oldHead, evidence);
         }
@@ -71,4 +73,9 @@ internal static partial class AcceptanceCriterionEvidence
         }
         return null;
     }
+
+    private static void RecordLandingCarryRefusal(string? executionDirectory, Goal goal, string candidateSha,
+        IReadOnlyList<CriterionEvidenceObligation> stale, string diagnostic) =>
+        GoalOperationJournal.RecordRefusedCarryHold(executionDirectory, goal, candidateSha, null, stale,
+            FormatOperatorRebind(goal, candidateSha, stale, diagnostic));
 }

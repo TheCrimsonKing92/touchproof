@@ -216,6 +216,42 @@ public sealed class MtpNoBuildReceiptIdentityTests
         Xunit.Assert.True(File.Exists(sandbox.ArgumentLog), "The verified evaluated standard output must reach the runner.");
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void MtpNoBuildPublishesVerifiedClosureAndOwnedEvidenceAtBothCheckoutDepths(bool deepCheckout)
+    {
+        const int deepCheckoutParentLength = 130;
+        var suffix = Guid.NewGuid().ToString("n")[..8];
+        var profileTempRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp");
+        var testRoot = Path.Combine(profileTempRoot, $".mtp-depth-{suffix}");
+        Xunit.Assert.True(testRoot.Length < deepCheckoutParentLength - 1, $"Expected a shallow checkout parent at '{testRoot}'.");
+        var checkoutParent = deepCheckout
+            ? Path.Combine(testRoot, new string('d', deepCheckoutParentLength - testRoot.Length - 1))
+            : testRoot;
+
+        try
+        {
+            using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success", checkoutParent: checkoutParent);
+            Xunit.Assert.Equal(checkoutParent, Path.GetDirectoryName(sandbox.Root));
+            Xunit.Assert.Equal(profileTempRoot, Path.GetDirectoryName(sandbox.LocalApplicationDataRoot));
+            sandbox.CreateManagedAssemblyPlaceholder();
+
+            var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+            Xunit.Assert.True(result.ExitCode == 0, result.Stdout + Environment.NewLine + result.Stderr);
+            Xunit.Assert.Contains("NO-BUILD BUILD RECEIPT SELECTED - declared artifact output", result.Stdout, StringComparison.Ordinal);
+            Xunit.Assert.True(File.Exists(sandbox.ArgumentLog), "The verified closure must reach the runner.");
+            var evidenceDirectory = TerminalSummary(result).GetProperty("retainedEvidenceDirectory").GetString();
+            Xunit.Assert.Equal(sandbox.ResultsRoot, Path.GetDirectoryName(evidenceDirectory));
+            Xunit.Assert.True(File.Exists(Path.Combine(evidenceDirectory!, ".mtp-run-ownership.json")));
+        }
+        finally
+        {
+            ScriptSandboxCleanup.DeleteOrThrow([testRoot]);
+        }
+    }
+
     // RunPartitionWithRejectedEvidenceOwnership pipes the terminal result object to stdout as its
     // last line; the hosting pwsh exit code is 0 regardless, so only this carries the run's verdict.
     private static JsonElement TerminalRun(MtpTestRunnerScriptTests.ProcessResult result)

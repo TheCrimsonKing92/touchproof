@@ -17,11 +17,11 @@ internal sealed partial class ConductorDriver
     private static readonly TimeSpan NoTickAcceptancePollInterval = TimeSpan.FromMilliseconds(100);
 
     internal ConductorAdvanceResult? TryHoldRepeatSoloAcceptance(Goal goal, ConductorAutonomyPolicy policy,
-        AcceptanceEngineHealthSnapshot? health = null) =>
+        AcceptanceEngineHealthSnapshot? health = null, bool bindingOnly = false) =>
         PassedAcceptanceReceiptReplay.TryHoldRepeatSoloAcceptance(GetCurrentGoal(goal), policy, health,
-            _parallelAcceptanceAttemptCoordinator, ReadAcceptanceCandidate, _tryAcquireEvidenceMutationLease,
+            _parallelAcceptanceAttemptCoordinator, _resolveAcceptanceHeads, ReadAcceptanceCandidate, _tryAcquireEvidenceMutationLease,
             current => ReplacementEvidenceMutationHeld(current, current.Id.Value[..8], policy),
-            _executionDirectory, _isConductorTick);
+            _executionDirectory, _isConductorTick, bindingOnly);
 
     internal ConductorParallelAcceptanceCandidate ReadAcceptanceCandidate(Goal goal)
     {
@@ -77,7 +77,7 @@ internal sealed partial class ConductorDriver
                         $"greenToLandingMs={(_utcNow() - (attempt.CompletedAt ?? attempt.StartedAt)).TotalMilliseconds:F0}", mainSha);
             },
             attempt => _executionDirectory is not null &&
-                GoalOperationJournal.HasRepeatGateDeferral(_executionDirectory, goal, attempt));
+                GoalOperationJournal.HasFullGateDeferral(_executionDirectory, goal, attempt));
         return _parallelAcceptanceAttemptCoordinator.ReplayPassedReconciledReceipt(candidate,
             decision =>
             {
@@ -177,8 +177,8 @@ internal sealed partial class ConductorDriver
 
             var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
             if (early is not null) return early;
+            if (TryHoldRepeatSoloAcceptance(goal, policy, bindingOnly: true) is { } bindingHold) return bindingHold;
 
-            // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
             if (EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Verified, forGate: true) is { } environmentHold) return environmentHold;
             var gateStart = VerifiedGateStartExecutor.Execute(
                 () => RunInlineLandingSourceSizePreflight(goal),
@@ -295,7 +295,7 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, hold.Reason) { Owner = owner, Decision = hold.ToRecord() });
         }
 
-        if (_isConductorTick && this.TryHoldRepeatSoloAcceptance(GetCurrentGoal(goal), policy, _readAcceptanceEngineHealth()) is { } repeatHold)
+        if (TryHoldRepeatSoloAcceptance(goal, policy, _readAcceptanceEngineHealth(), bindingOnly: !_isConductorTick) is { } repeatHold)
             return repeatHold;
 
         if (!_parallelAcceptanceEnabled)

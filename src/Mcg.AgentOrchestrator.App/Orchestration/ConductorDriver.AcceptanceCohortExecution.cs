@@ -303,7 +303,7 @@ internal sealed partial class ConductorDriver
                         landing.Message);
                     return CohortReprojection(receipt, $"{landing.Message} fresh Ready projection required");
                 }
-                return CohortHeld(goals, policy, receipt, landing.Message);
+                return CohortHeld(goals, policy, receipt, landing.Message) with { CriterionEvidenceBlockedGoalIds = landing.CriterionEvidenceBlockedGoalIds };
             }
 
             foreach (var goal in goals)
