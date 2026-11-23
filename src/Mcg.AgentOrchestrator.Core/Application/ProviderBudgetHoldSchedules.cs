@@ -277,7 +277,7 @@ public static class ProviderBudgetHoldSchedules
     }
 
     public static ProviderBudgetHoldSchedule Evaluate(IEnumerable<Goal> goals, ProviderBudgetExhaustionHold hold, DateTimeOffset now) =>
-        Evaluate(ProviderHoldBindingHistory.Read(goals, hold.BindingKey), hold, out _);
+        Evaluate(ProviderHoldBindingHistory.Read(goals, hold.BindingKey, hold.BindingScope), hold, out _);
 
     internal static ProviderBudgetHoldSchedule Evaluate(ProviderHoldBindingHistory history, ProviderBudgetExhaustionHold hold,
         out IReadOnlyList<ProviderHoldBindingHistory.Observation> currentHolds)

@@ -185,7 +185,8 @@ public static class ProviderLimitSignals
         out ProviderBudgetExhaustionHold hold)
     {
         ArgumentNullException.ThrowIfNull(goals);
-        return TryGetExactHold(ProviderHoldBindingHistory.Read(goals, requestedBinding.Key), requestedBinding, out hold);
+        var history = ProviderHoldBindingHistory.Read(goals, requestedBinding.Key, requestedBinding.Base.Scope);
+        return TryGetExactHold(history, requestedBinding, out hold);
     }
 
     internal static bool TryGetExactHold(ProviderHoldBindingHistory history,

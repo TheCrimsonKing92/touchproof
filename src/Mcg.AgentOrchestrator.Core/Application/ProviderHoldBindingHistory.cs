@@ -335,15 +335,17 @@ internal sealed class ProviderHoldBindingHistory(string key)
         return low == 0 ? default : values.Values[low - 1];
     }
 
-    internal static ProviderHoldBindingHistory Read(IEnumerable<Goal> goals, string key)
+    internal static ProviderHoldBindingHistory Read(IEnumerable<Goal> goals, string key, string? bindingScope = null)
     {
         var history = new ProviderHoldBindingHistory(key);
-        Populate(goals, candidate => candidate.Equals(key, StringComparison.OrdinalIgnoreCase) ? history : null);
+        Populate(goals, candidate => candidate.Equals(key, StringComparison.OrdinalIgnoreCase) ? history : null,
+            bindingScope: bindingScope);
         return history;
     }
 
     internal static void Populate(IEnumerable<Goal> goals, Func<string, ProviderHoldBindingHistory?> getHistory,
-        Action<Goal>? visit = null, Action<Observation>? observe = null, Action<int>? recordDispatchVisits = null)
+        Action<Goal>? visit = null, Action<Observation>? observe = null, Action<int>? recordDispatchVisits = null,
+        string? bindingScope = null)
     {
         foreach (var goal in goals)
         {
@@ -384,6 +386,7 @@ internal sealed class ProviderHoldBindingHistory(string key)
         IEnumerable<ProviderHoldBindingHistory> Histories(TaskDispatchRecord dispatch)
         {
             var binding = ProviderHoldBinding.From(dispatch);
+            if (bindingScope is not null && binding.Base.Scope != bindingScope) yield break;
             if (getHistory(binding.Key) is { } provider) yield return provider;
             if (dispatch.ModelName is { } model && getHistory((binding with { Model = model }).Key) is { } scoped)
                 yield return scoped;
