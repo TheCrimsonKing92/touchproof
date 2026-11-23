@@ -24,6 +24,38 @@ public sealed class ConductorContinuitySupervisorHandoffTests
     }
 
     [Xunit.Fact]
+    public async Task CleanCheckpointCrossesSupervisorTransferAndReachesNextChild()
+    {
+        const string checkpoint = "window:token:digest";
+        var incumbent = new SupervisorHandoffFixture();
+        incumbent.Host.AdoptedChildCheckpoint = checkpoint;
+
+        Assert.Equal(0, await incumbent.RunAsync());
+        Assert.Equal(2, incumbent.Host.Requests.Count);
+        var record = incumbent.Seam.ReadRecord("record.json");
+        Assert.Null(record.ActiveChild);
+        Assert.Equal(checkpoint, record.ResolverObservationHandoff);
+
+        using var directory = new PreTesterReverseDependencySelectionFixture();
+        var own = new ConductorSupervisorBuildIdentity(record.AdoptedBuild.CommitSha, record.AdoptedBuild.RunDirectory);
+        var successor = new SupervisorHandoffFixture.FakeHandoffSeam(own) { IncomingRecordPath = "record.json" };
+        successor.WriteRecord(record with { Incumbent = incumbent.Seam.Successor });
+        var host = new SupervisorHandoffFixture.ScriptedHost(0, false);
+        var supervisor = new ConductorContinuitySupervisor(host, new SupervisorHandoffFixture.RecordingEvents(),
+            delay: (_, _) =>
+            {
+                successor.Acquire(own);
+                return Task.CompletedTask;
+            },
+            supervisorHandoff: new(successor, own, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
+
+        Assert.Equal(0, await supervisor.RunAsync(["conduct", "--loop"], directory.Root, directory.Root, "default", "default"));
+        Assert.Contains(ConductorContinuitySupervisor.ResolverObservationHandoffPrefix + checkpoint,
+            Assert.Single(host.Requests).Arguments);
+    }
+
+    [Xunit.Fact]
     public async Task SameRunDirectoryDoesNotLaunchAnotherSupervisor()
     {
         var fixture = new SupervisorHandoffFixture(ownRunDirectory: "C:\\run-b");
@@ -116,6 +148,7 @@ internal sealed class SupervisorHandoffFixture
         private readonly TaskCompletionSource _adoptedChildStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _releaseAdoptedChild = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Task AdoptedChildStarted => _adoptedChildStarted.Task;
+        internal string? AdoptedChildCheckpoint { get; set; }
         internal void ReleaseAdoptedChild() => _releaseAdoptedChild.TrySetResult();
 
         public async Task<ConductorSupervisorProcessResult> RunAsync(
@@ -139,7 +172,8 @@ internal sealed class SupervisorHandoffFixture
             }
             ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
                 new ConductorContinuityExitArtifact(index == stopAtIndex ? "stop-file" : "max-duration",
-                    3, 1, RestartRequested: index != stopAtIndex));
+                    3, 1, RestartRequested: index != stopAtIndex,
+                    ResolverObservationHandoff: index == 1 ? AdoptedChildCheckpoint : null));
             return new ConductorSupervisorProcessResult(0, 500 + index);
         }
     }

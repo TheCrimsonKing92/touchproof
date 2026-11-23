@@ -1078,7 +1078,6 @@ internal sealed partial class ConductorBatchLoop
                         ProgressLines = intentTickLines,
                         OperatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? []
                     }, tickSnapshotBytes, activationSweepFollows: true);
-                    resolverTick?.Complete();
                     if (watchSleep.IsStopRequested())
                     {
                         stopRequested = true;
@@ -1100,6 +1099,7 @@ internal sealed partial class ConductorBatchLoop
 
                     ObserveDrain();
                     CompleteActivationTick(totalTicks);
+                    resolverTick?.Complete();
                     if (drain.IsDraining)
                         continue;
                     if (!(keepAliveWhenIdle && watchInterval is not null))
@@ -1174,13 +1174,13 @@ internal sealed partial class ConductorBatchLoop
                         Math.Max(recheckableBlockedGoals, transientLoadRecheckPending ? 1 : 0));
                     if (totalTicks < nextTick)
                         CompleteActivationTick(nextTick);
-                    resolverTick?.Complete();
                     EmitProgress(
                         recheckableBlockedGoals > 0 || transientLoadRecheckPending
                             ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals}" +
                               (transientLoadRecheckPending ? " loadHeld=true" : string.Empty) +
                               $" seconds={(int)idleInterval.TotalSeconds}"
                             : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
+                    resolverTick?.Complete();
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                         : watchSleep.Wait(idleInterval, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId), ObserveDrain);
@@ -1786,11 +1786,11 @@ internal sealed partial class ConductorBatchLoop
                 ProgressLines = tickLines,
                 OperatorDispositions = operatorDispositions
             };
-            resolverTick?.Complete();
             if (drain.IsDraining && !watchSleep.IsStopRequested() && TryFinishDrain())
             {
                 PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
                 CompleteActivationTick(totalTicks);
+                resolverTick?.Complete();
                 break;
             }
             if (drain.IsDraining || (tickAdvanced == 0 && tickDone == 0))
@@ -1805,6 +1805,7 @@ internal sealed partial class ConductorBatchLoop
                     {
                         PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
                         CompleteActivationTick(totalTicks);
+                        resolverTick?.Complete();
                         continue;
                     }
 
@@ -1815,6 +1816,7 @@ internal sealed partial class ConductorBatchLoop
                         persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay,
                         checkpointGoalTick, checkpointHeldGoals);
                     PublishTick(tickSummary, tickSnapshotBytes);
+                    resolverTick?.Complete();
                     break;
                 }
 
@@ -1849,6 +1851,7 @@ internal sealed partial class ConductorBatchLoop
                     Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {sleepSeconds}s for workers to complete.");
                 }
                 PublishTick(tickSummary with { WatchSleeping = true }, tickSnapshotBytes);
+                resolverTick?.Complete();
 
                 var sleepResult = sleepFunc is not null
                     ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
@@ -1879,6 +1882,7 @@ internal sealed partial class ConductorBatchLoop
 
             PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
             CompleteActivationTick(totalTicks);
+            resolverTick?.Complete();
         }
 
         canaryDrain.Wait();
@@ -1901,6 +1905,8 @@ internal sealed partial class ConductorBatchLoop
         }
         if (stopReason == ConductorDrainSignal.DrainedReason)
             EmitProgress(drain.FormatDrained(totalTicks));
+        if (!maxDurationReached)
+            resolverObservation?.CloseOrderly(_utcNow);
         return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds))
         {
             HomeBuildTarget = handedOffHomeBuild,

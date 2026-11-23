@@ -4,14 +4,36 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 public sealed class ConductorContinuitySupervisorInheritedChildTests
 {
+    [Xunit.Fact]
+    public async Task ArtifactForRecycledPidCannotSupplyObservedExitCode()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var departed = new ConductorSupervisorProcessIdentity(process.Id,
+            new DateTimeOffset(process.StartTime.ToUniversalTime()).AddMinutes(-1));
+        var artifactPath = Path.Combine(fixture.Root, "inherited-exit.json");
+        ConductorContinuityExitArtifact.Write(artifactPath,
+            new("max-duration", 1, 1, RestartRequested: true, ResolverObservationHandoff: "window:token:digest"));
+        var child = new ConductorSupervisorActiveChild(departed, artifactPath,
+            Path.Combine(fixture.Root, "inherited.out.log"), Path.Combine(fixture.Root, "inherited.err.log"), 1);
+
+        var seam = new SystemConductorSupervisorHandoffSeam(fixture.Root);
+        var outcome = await seam.ObserveChildAsync(child, CancellationToken.None);
+
+        Assert.True(outcome.TerminationConfirmed);
+        Assert.False(outcome.ExitCodeObserved);
+        Assert.NotEqual(0, outcome.ExitCode);
+    }
+
     [Xunit.Theory]
-    [Xunit.InlineData(false, false, false, false)]
-    [Xunit.InlineData(true, false, false, false)]
-    [Xunit.InlineData(false, true, false, false)]
-    [Xunit.InlineData(false, false, true, false)]
-    [Xunit.InlineData(false, false, false, true)]
+    [Xunit.InlineData(false, false, false, false, true)]
+    [Xunit.InlineData(true, false, false, false, true)]
+    [Xunit.InlineData(true, false, false, false, false)]
+    [Xunit.InlineData(false, true, false, false, true)]
+    [Xunit.InlineData(false, false, true, false, true)]
+    [Xunit.InlineData(false, false, false, true, true)]
     public async Task InheritedChildUsesNormalExitHandling(
-        bool plannedRestart, bool missingBeforeAttach, bool deliberateStop, bool tickStall)
+        bool plannedRestart, bool missingBeforeAttach, bool deliberateStop, bool tickStall, bool exitCodeObserved)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"mcg-inherited-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
@@ -26,12 +48,14 @@ public sealed class ConductorContinuitySupervisorInheritedChildTests
                 Path.Combine(directory, "inherited-exit.json"),
                 Path.Combine(directory, "inherited.out.log"),
                 Path.Combine(directory, "inherited.err.log"), 2);
+            const string checkpoint = "window:token:digest";
             if (plannedRestart || deliberateStop)
                 ConductorContinuityExitArtifact.Write(child.ExitArtifactPath,
                     new ConductorContinuityExitArtifact(deliberateStop ? "stop-file" : "max-duration",
-                        1, 3, plannedRestart));
+                        1, 3, plannedRestart, ResolverObservationHandoff: checkpoint));
             seam.InheritedChildResult = new ConductorSupervisorProcessResult(
-                plannedRestart || deliberateStop ? 0 : 1, child.Process.ProcessId);
+                exitCodeObserved ? plannedRestart || deliberateStop ? 0 : 1 : -1,
+                child.Process.ProcessId, ExitCodeObserved: exitCodeObserved);
             seam.InheritedChildMissingBeforeAttach = missingBeforeAttach;
             seam.InheritedChildWaitForCancellation = tickStall;
             seam.WriteRecord(new ConductorSupervisorHandoffRecord(
@@ -64,6 +88,8 @@ public sealed class ConductorContinuitySupervisorInheritedChildTests
             Assert.Equal(0, exit);
             Assert.Equal(1, seam.InheritedChildObservations);
             Assert.Equal(deliberateStop ? 0 : 1, host.Launches);
+            Assert.Equal(plannedRestart && exitCodeObserved,
+                host.Arguments.Contains(ConductorContinuitySupervisor.ResolverObservationHandoffPrefix + checkpoint));
             Assert.Contains(events.Events, evt => evt.Operation == (deliberateStop ? "stopped" : "restart") &&
                 evt.Status == (deliberateStop ? "completed" : plannedRestart ? "planned" : "unexpected"));
             if (tickStall)
@@ -86,11 +112,13 @@ public sealed class ConductorContinuitySupervisorInheritedChildTests
     private sealed class StopHost : IConductorSupervisorProcessHost
     {
         internal int Launches { get; private set; }
+        internal IReadOnlyList<string> Arguments { get; private set; } = [];
 
         public Task<ConductorSupervisorProcessResult> RunAsync(
             ConductorSupervisorProcessRequest request, CancellationToken cancellationToken)
         {
             Launches++;
+            Arguments = request.Arguments;
             ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
                 new ConductorContinuityExitArtifact("stop-file", 0, 0, false));
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 902));

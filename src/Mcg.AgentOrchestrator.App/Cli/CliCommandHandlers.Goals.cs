@@ -1429,10 +1429,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     cleanupHooks: context.CleanupHooks)
                 {
                     MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains,
-                    PreTesterResolverObservation = PreTesterResolverObservationWindow.ForConductLoop(
-                        supervisedChild, noDispatch, context.Workspace,
-                        parts.FirstOrDefault(part => part.StartsWith(ConductorContinuitySupervisor.ResolverObservationHandoffPrefix,
-                            StringComparison.OrdinalIgnoreCase))?[ConductorContinuitySupervisor.ResolverObservationHandoffPrefix.Length..])
+                    PreTesterResolverObservation = CliConductLoopStartup.CreateResolverObservation(parts, noDispatch, context.Workspace)
                 };
                 if (!noDispatch) loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
                 if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)

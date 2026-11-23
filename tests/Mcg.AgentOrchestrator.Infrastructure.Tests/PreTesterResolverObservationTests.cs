@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.App.Orchestration.PreTesterReverseDependencyObservation;
 
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
 {
     internal static readonly DateTimeOffset Start = new(2026, 11, 23, 0, 0, 0, TimeSpan.Zero);
@@ -114,6 +115,55 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
         Assert.Null(window.BeginTick(id, () => now));
     }
 
+    [Fact]
+    public void RepeatedOnlyMultiInputWorkloadsQualify()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var id = Guid.NewGuid();
+        var now = Start;
+        using var window = Window(fixture.Root);
+        using (var tick = Assert.IsType<Tick>(window.BeginTick(id, () => now)))
+        {
+            Record(tick, tick.Enter()!.Value, ["A", "A"]);
+            Record(tick, tick.Enter()!.Value, ["B", "B"]);
+            tick.Complete();
+        }
+        now += Duration;
+        Assert.Null(window.BeginTick(id, () => now));
+        var path = CorpusPath(fixture.Root, id);
+        var seal = Receipt(path);
+        Assert.Equal("complete", seal.Status);
+        var corpus = PreTesterResolverCorpus.Read(path, seal.Sha256!);
+        Assert.Equal(now, corpus.Manifest.SealedAt);
+        Assert.Equal(2, corpus.Manifest.InvocationCount);
+        Assert.All(corpus.Manifest.Workloads, workload => Assert.Equal(workload.Names[0], workload.Names[1]));
+    }
+
+    [Fact]
+    public void OrderlyIdleStopAtDeadlineSealsCompletedTick()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var id = Guid.NewGuid();
+        var now = Start;
+        var driver = ConductorDriverTests.MakeDriver(executionDirectory: fixture.Root);
+        driver.PreTesterResolverObservation = Window(fixture.Root);
+        var policy = ConductorAutonomyPolicy.Conservative with { PreTesterResolverObservationWindowId = id };
+
+        var result = new ConductorBatchLoop(utcNow: () => now).Run(
+            new AgentOrchestratorKernel(), driver, policy, Path.Combine(fixture.Root, ".conduct-stop"),
+            watchInterval: TimeSpan.FromMinutes(1), keepAliveWhenIdle: true, sleepFunc: _ =>
+            {
+                now += Duration;
+                return true;
+            });
+
+        Assert.Equal("stop-while-idle", result.StopReason);
+        var path = CorpusPath(fixture.Root, id);
+        var seal = Receipt(path);
+        Assert.Equal("insufficient-coverage", seal.Status);
+        Assert.Equal(1, PreTesterResolverCorpus.Read(path, seal.Sha256!).Manifest.CompleteTickCount);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -158,6 +208,9 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
     {
         using var fixture = new PreTesterReverseDependencySelectionFixture();
         fixture.Test("SecondTests", "AppContract");
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        using var appRevision = new StagedProducerRevision();
+        using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
         var orderedWorkloads = new[]
         {
             new[] { "ConsumerTests", "SecondTests" },
@@ -180,7 +233,7 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
         {
             var id = Guid.NewGuid();
             var now = Start;
-            using var window = Window(fixture.Root);
+            using var window = PreTesterResolverObservationWindow.ForConductLoop(true, false, workspace)!;
             var started = Environment.CpuUsage.TotalTime;
             using var tick = window.BeginTick(enabled ? id : null, () => now);
             for (var repeat = 0; repeat < repetitions; repeat++)
@@ -197,13 +250,17 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
             now += Duration;
             window.BeginTick(enabled ? id : null, () => now);
             var elapsed = Environment.CpuUsage.TotalTime - started;
-            var path = CorpusPath(fixture.Root, id);
+            var path = CorpusPath(Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"), id);
             if (enabled)
             {
                 var seal = Receipt(path);
                 Assert.Equal("complete", seal.Status);
-                Assert.Equal(orderedWorkloads.Length * repetitions,
-                    PreTesterResolverCorpus.Read(path, seal.Sha256!).Cases.Length);
+                var corpus = PreTesterResolverCorpus.Read(path, seal.Sha256!);
+                Assert.Equal(orderedWorkloads.Length * repetitions, corpus.Cases.Length);
+                Assert.Equal(Environment.ProcessId, corpus.Header.Producer.ProcessId);
+                Assert.Equal(appRevision.Revision, corpus.Header.Producer.Revision);
+                Assert.Equal(appRevision.AppSha256, corpus.Header.Producer.AppSha256);
+                Assert.NotNull(corpus.Header.Producer.LeaseAcquiredAt);
             }
             else
             {
@@ -273,4 +330,28 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
 
     internal static Seal Receipt(string path) =>
         JsonSerializer.Deserialize<Seal>(File.ReadAllText(path + ".receipt.json"))!;
+
+    internal sealed class StagedProducerRevision : IDisposable
+    {
+        private readonly string _marker;
+        private readonly bool _created;
+        internal string Revision { get; }
+        internal string AppSha256 { get; }
+
+        internal StagedProducerRevision()
+        {
+            var app = typeof(PreTesterReverseDependencyObservation).Assembly.Location;
+            _marker = app + ".git-head";
+            _created = !File.Exists(_marker);
+            if (_created)
+                File.WriteAllText(_marker, new string('1', 40));
+            Revision = File.ReadAllText(_marker).Trim();
+            AppSha256 = Sha256(app);
+        }
+
+        public void Dispose()
+        {
+            if (_created) File.Delete(_marker);
+        }
+    }
 }

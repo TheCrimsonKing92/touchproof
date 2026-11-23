@@ -8,6 +8,14 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliConductLoopStartup
 {
+    internal static PreTesterResolverObservationWindow? CreateResolverObservation(
+        IReadOnlyList<string> parts, bool noDispatch, OrchestratorWorkspace workspace) =>
+        PreTesterResolverObservationWindow.ForConductLoop(
+            parts.Contains(ConductorContinuitySupervisor.ChildFlag, StringComparer.OrdinalIgnoreCase),
+            noDispatch, workspace,
+            parts.FirstOrDefault(part => part.StartsWith(ConductorContinuitySupervisor.ResolverObservationHandoffPrefix,
+                StringComparison.OrdinalIgnoreCase))?[ConductorContinuitySupervisor.ResolverObservationHandoffPrefix.Length..]);
+
     internal static ConductLoopHandoffOptions CreateHandoffOptions(CliExecutionContext context,
         IReadOnlyList<string> parts, string stopFilePath) => new(
         Args: parts.ToArray(),

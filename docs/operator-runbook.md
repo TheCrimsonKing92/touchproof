@@ -299,11 +299,19 @@ The default Windows host holds one in-memory entry. It validates the SQLite main
 
 ### Collect an ordinary pre-Tester resolver window
 
-After normal acceptance and a healthy `ACTIVATION_ADOPTED` receipt, verify the workspace and the supervisor and child lease identities. Set `preTesterResolverObservationWindowId` in the resolved project's `conductor-policy.json` to a fresh UUID. The ordinary supervised child reads the policy on its next tick. An absent or null value disables recording.
+After normal acceptance, verify the workspace and both live lease holders. Match the child to the healthy `ACTIVATION_ADOPTED` build and the supervisor to the same observer-capable build using `SUPERVISOR_HANDOFF` and the live owner's `SUPERVISOR_BUILD` event. Check the PIDs, process start times, and staged build identities. If supervision did not transfer, use the [manual bounce fallback](#manual-bounce-fallback-after-loop-affecting-code-lands) and check both new lease holders before starting collection.
+
+Check that the child's `LOOP_START` reports `policySource=file:<resolved policy path>` for the intended project. An explicit `--policy` preset disables file reload. If a preset is active, restart under the same supervisor workflow with the file-backed policy and verify its source. Then set `preTesterResolverObservationWindowId` in that file to a fresh UUID. Confirm `POLICY_RELOAD` and the matching `PRE_TESTER_RESOLVER_WINDOW` recording event. An absent or null value disables recording.
 
 The state directory holds `pretester-resolver-observation/<window-id>.jsonl` and its `.receipt.json` sidecar. The deadline is 24 hours after the first captured tick starts. A clean scheduled renewal checkpoints the corpus and carries its digest to the next child. An unexpected exit, unfinished tick, or failed capture leaves the window incomplete. Reusing a UUID preserves the existing window and its deadline.
 
-Package both files with the digest from a `complete` receipt, the healthy adoption identity, and the pinned optimization candidate and original resolver build identities. An `insufficient-coverage` receipt records the captured mix for inspection. Only `complete` qualifies for the parent goal's CPU claim. Use the parent replay harness with the expected digest and a fresh result path. Associate the package with goal `85288928` before applying its current authoritative resume transition.
+Package both files with the digest from a `complete` receipt, the healthy adoption identity, and the pinned optimization candidate and original resolver build identities. An `insufficient-coverage` receipt records the captured mix for inspection. Only `complete` qualifies for the parent goal's CPU claim. The offline command compares selections, provenance, and diagnostics against the same sealed inputs in both builds:
+
+```powershell
+dotnet <observer-App.dll> pretester-resolver-replay <corpus.jsonl> <expected-sha256> <new-receipt.json> <candidate-build.json> <oracle-build.json>
+```
+
+Each build JSON supplies `StartingRevision`, `Revision`, `AppPath` (absolute path to a staged App with its dependencies and `.git-head`), `AppSha256`, and `Amendments` (an array). Use optimization candidate `e0042d3f51c90944ec03ff5f0055850762505ea7` and original starting revision `08f295076eae4d1c14660a846e3c917de32d7a9d`. For the oracle use an identified descendant exposing the original matching loop and selection operation, such as the adopted observer App. Record its actual revision, App hash, and amendments. The command exits 0 for equivalent results, 1 for mismatches, and 2 for invalid inputs or failed execution. The parent acceptance still owns the paired optimization CPU evidence. Associate the package with goal `85288928` before applying its current authoritative resume transition.
 
 ### Manual bounce fallback after loop-affecting code lands
 

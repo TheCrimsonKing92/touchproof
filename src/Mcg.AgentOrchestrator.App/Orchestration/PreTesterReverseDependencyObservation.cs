@@ -115,7 +115,7 @@ internal sealed class PreTesterReverseDependencyObservation : IDisposable
         if (_completedTicks == 0 || sealedAt < Header.Deadline)
             throw new InvalidDataException("Resolver observation has not completed its window.");
         var mix = _mix.Values.ToArray();
-        var coverage = mix.Count(workload => workload.Names.Distinct(StringComparer.Ordinal).Take(2).Count() == 2) >= 2;
+        var coverage = HasCpuCoverage(mix);
         var manifest = new Manifest(_completedTicks, _written, mix, coverage, sealedAt);
         Write(manifest);
         _writer.Dispose();
@@ -161,6 +161,9 @@ internal sealed class PreTesterReverseDependencyObservation : IDisposable
 
     internal static string WorkloadKey(string project, string[] names) =>
         JsonSerializer.Serialize(new { Project = project, Names = names });
+
+    internal static bool HasCpuCoverage(IEnumerable<Workload> workloads) =>
+        workloads.Count(workload => workload.Names.Length >= 2) >= 2;
 
     internal static bool IsObservationFailure(Exception error) =>
         error is IOException or UnauthorizedAccessException or InvalidDataException or System.Security.SecurityException

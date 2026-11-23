@@ -68,7 +68,7 @@ internal sealed partial class ConductorContinuitySupervisor
         IReadOnlyList<string> args, string workingDirectory, string outputDirectory,
         ConductorPreparedSuccessor? pendingSuccessor, int renewalsWithoutProgress,
         string? blockedActivationCommit, CancellationToken cancellationToken,
-        ConductorSupervisorActiveChild? activeChild = null)
+        ConductorSupervisorActiveChild? activeChild = null, string? resolverObservationHandoff = null)
     {
         var target = _adoptedSupervisorTarget;
         _adoptedSupervisorTarget = null;
@@ -93,7 +93,7 @@ internal sealed partial class ConductorContinuitySupervisor
             var record = new ConductorSupervisorHandoffRecord(token, seam.Self, supervisorHandoff.OwnBuild,
                 new ConductorSupervisorBuildSnapshot(target.CommitSha, target.StagedBuildId, appDll),
                 pendingSnapshot, renewalsWithoutProgress, blockedActivationCommit,
-                0, readyPath, activeChild);
+                0, readyPath, activeChild, resolverObservationHandoff);
             var recordPath = seam.WriteRecord(record);
             var stamp = _timeProvider.GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
             var request = new ConductLoopLaunchRequest("supervisor", args,

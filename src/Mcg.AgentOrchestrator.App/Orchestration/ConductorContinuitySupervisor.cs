@@ -32,7 +32,8 @@ internal sealed record ConductorSupervisorProcessResult(
     string StderrPath = "",
     bool TerminationConfirmed = true,
     DateTimeOffset? ProcessStartedAt = null,
-    bool ForcedStop = false);
+    bool ForcedStop = false,
+    bool ExitCodeObserved = true);
 
 internal sealed record ConductorContinuityExitArtifact(
     string StopReason,
@@ -237,7 +238,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             if (inheritedActiveChild is not null)
                 attempt = inheritedActiveChild.Attempt - 1;
         }
-        string? resolverObservationHandoff = null;
+        var resolverObservationHandoff = inherited?.ResolverObservationHandoff;
         while (true)
         {
             attempt++;
@@ -710,14 +711,22 @@ internal sealed partial class ConductorContinuitySupervisor(
             var artifact = ConductorContinuityExitArtifact.TryRead(artifactPath);
             TryDeleteArtifact(artifactPath);
 
-            if (stallFailure is null && result.ExitCode == 0 && artifact is { RestartRequested: false })
+            var observedCleanExit = result is
+                { ExitCodeObserved: true, ExitCode: 0, TerminationConfirmed: true, ForcedStop: false };
+            var inheritedArtifactOnly = activeChild is not null &&
+                result is { ExitCodeObserved: false, TerminationConfirmed: true, ForcedStop: false } &&
+                artifact is not null;
+            if (inheritedArtifactOnly)
+                TryAppendConductEvent($"SUPERVISOR_INHERITED_EXIT_UNOBSERVED attempt={attempt} pid={result.ProcessId}");
+
+            if (stallFailure is null && (observedCleanExit || inheritedArtifactOnly) && artifact is { RestartRequested: false })
             {
                 Record("stopped", "completed", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
                 return 0;
             }
 
             if (artifact is { RestartRequested: true } &&
-                ((stallFailure is null && result.ExitCode == 0) || stallFailure is not null))
+                (observedCleanExit || inheritedArtifactOnly || stallFailure is not null))
             {
                 if (stallFailure is not null)
                     TryAppendConductEvent($"SUPERVISOR_STALL_RESTART_HONORED attempt={attempt} pid={result.ProcessId} stall={stallFailure}");
@@ -735,7 +744,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
 
                 Record("restart", "planned", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
-                if (stallFailure is null && result is { ExitCode: 0, TerminationConfirmed: true, ForcedStop: false } &&
+                if (stallFailure is null && observedCleanExit &&
                     artifact.StopReason == "max-duration")
                     resolverObservationHandoff = artifact.ResolverObservationHandoff;
                 Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor?>? prepareWithHook = followingHome
@@ -860,7 +869,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
                 if (appliedUpgrade is null && await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
                     pendingSuccessor, renewalsWithoutProgress, blockedActivationCommit,
-                    cancellationToken).ConfigureAwait(false))
+                    cancellationToken, resolverObservationHandoff: resolverObservationHandoff).ConfigureAwait(false))
                     return 0;
                 continue;
             }
@@ -1244,7 +1253,8 @@ internal sealed class SystemConductorSupervisorProcessHost(
                 request.StderrPath,
                 terminationConfirmed,
                 processStartedAt,
-                forcedStop);
+                forcedStop,
+                ExitCodeObserved: false);
         }
         process.WaitForExit();
         return new ConductorSupervisorProcessResult(

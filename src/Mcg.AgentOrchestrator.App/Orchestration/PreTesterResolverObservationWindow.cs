@@ -106,6 +106,11 @@ internal sealed class PreTesterResolverObservationWindow(
     internal string? CloseForRenewal(Func<DateTimeOffset> utcNow)
     {
         if (_writer is not { } writer) return null;
+        if (ActiveTick is not null)
+        {
+            Interrupt("unfinished-tick");
+            return null;
+        }
         try
         {
             var now = utcNow();
@@ -124,6 +129,14 @@ internal sealed class PreTesterResolverObservationWindow(
             Interrupt("checkpoint-failed: " + error.Message);
             return null;
         }
+    }
+
+    internal void CloseOrderly(Func<DateTimeOffset> utcNow)
+    {
+        if (_writer is not { } writer) return;
+        var now = utcNow();
+        if (ActiveTick is null && now >= writer.Header.Deadline)
+            SealWindow(now);
     }
 
     private void SealWindow(DateTimeOffset sealedAt)

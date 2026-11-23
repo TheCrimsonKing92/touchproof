@@ -74,8 +74,7 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
                     manifest.InvocationCount == cases.Count && manifest.SealedAt >= header.Deadline && manifest.SealedAt >= end &&
                     producers[^1].SessionId == seal!.SessionId && WorkloadsMatch(manifest.Workloads, observed) && input.EndOfStream,
                     "Corpus manifest counts do not match the ordered records.");
-                var coverage = manifest.Workloads.Count(workload =>
-                    workload.Names.Distinct(StringComparer.Ordinal).Take(2).Count() == 2) >= 2;
+                var coverage = HasCpuCoverage(manifest.Workloads);
                 Require(manifest.HasCpuCoverage == coverage &&
                     coverage == (seal!.Status == "complete"), "Corpus workload coverage does not match its receipt.");
                 return new(digest, header, manifest, producers.ToArray(), cases.ToArray());
@@ -107,8 +106,8 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
         throw new InvalidDataException("Corpus manifest is missing.");
     }
 
-    internal static void Replay(string corpusPath, string expectedSha256, string receiptPath,
-        ReplayBuild candidate, ReplayBuild oracle, Func<ReplayBuild, ReplayCase, ReplayDecision> evaluate)
+    internal static bool Replay(string corpusPath, string expectedSha256, string receiptPath,
+        ReplayBuild candidate, ReplayBuild oracle)
     {
         var corpus = Read(corpusPath, expectedSha256);
         using var candidateBytes = File.OpenRead(candidate.AppPath);
@@ -119,20 +118,25 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
             !candidate.AppSha256.Equals(oracle.AppSha256, StringComparison.OrdinalIgnoreCase),
             "Candidate and oracle identities must be distinct.");
 
-        // Reserve a separate destination before running either arm. CreateNew also protects the corpus itself.
+        using var candidateArm = new PreTesterResolverReplayArm(candidate.AppPath, candidateBytes);
+        using var oracleArm = new PreTesterResolverReplayArm(oracle.AppPath, oracleBytes);
+        // Reserve a separate destination before invoking either resolver. CreateNew also protects the corpus itself.
         using var output = new FileStream(receiptPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         var comparisons = corpus.Cases.Select(row =>
         {
-            var expected = evaluate(oracle, row);
-            var actual = evaluate(candidate, row);
+            var expected = oracleArm.Evaluate(row);
+            var actual = candidateArm.Evaluate(row);
             return new Comparison(row.SessionId, row.Invocation.Ordinal, expected, actual,
+                expected.UnresolvedName == row.Invocation.UnresolvedName &&
                 expected.UnresolvedName == actual.UnresolvedName &&
                 expected.Selections.SequenceEqual(actual.Selections) &&
-                expected.Provenance.SequenceEqual(actual.Provenance));
+                expected.Provenance.SequenceEqual(actual.Provenance) &&
+                expected.Diagnostics.SequenceEqual(actual.Diagnostics, StringComparer.Ordinal));
         }).ToArray();
         JsonSerializer.Serialize(output, new ReplayReceipt(corpus.Sha256, corpus.Header.WindowId,
             corpus.Producers, candidate, oracle, OracleResolverBlob, comparisons));
         output.Flush(flushToDisk: true);
+        return comparisons.All(comparison => comparison.Equivalent);
     }
 
     private static void VerifyBuild(ReplayBuild build, string startingRevision, Stream bytes)
@@ -143,6 +147,7 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
             File.ReadAllText(build.AppPath + ".git-head").Trim().Equals(build.Revision, StringComparison.OrdinalIgnoreCase) &&
             Convert.ToHexString(SHA256.HashData(bytes)).Equals(build.AppSha256, StringComparison.OrdinalIgnoreCase),
             "Replay build revision or executable identity does not match.");
+        bytes.Position = 0;
     }
 
     private static bool WorkloadsMatch(Workload[]? rows, Dictionary<string, int> counts)
@@ -178,7 +183,8 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
     internal sealed record ReplayBuild(string StartingRevision, string Revision, string AppPath, string AppSha256,
         string[] Amendments);
 
-    internal sealed record ReplayDecision(string? UnresolvedName, FindingEvidenceSelection[] Selections, Provenance[] Provenance);
+    internal sealed record ReplayDecision(string? UnresolvedName, FindingEvidenceSelection[] Selections,
+        Provenance[] Provenance, string[] Diagnostics);
 
     internal sealed record Comparison(Guid SessionId, int Ordinal, ReplayDecision Oracle, ReplayDecision Candidate, bool Equivalent);
 

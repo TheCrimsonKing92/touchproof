@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -394,16 +395,16 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
     }
 
     [Fact]
-    public void WorktreeResolverObservationPreservesEvidenceAndTesterTransitions()
+    public async Task WorktreeResolverObservationPreservesEvidenceAndTesterTransitions()
     {
-        var baseline = Run(observe: false);
-        var observed = Run(observe: true);
+        var baseline = await Run(observe: false);
+        var observed = await Run(observe: true);
         Assert.Equal(["focused", "Tester"], baseline.Order);
         Assert.Equal(baseline.Order, observed.Order);
         Assert.Equal(baseline.Outcomes, observed.Outcomes);
         Assert.Contains("green", observed.Outcomes);
 
-        static (string[] Order, string[] Outcomes) Run(bool observe)
+        static async Task<(string[] Order, string[] Outcomes)> Run(bool observe)
         {
             using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
             var worktree = GoalWorktrees.WorktreePath(scenario.Root, scenario.Goal.Id);
@@ -430,17 +431,45 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                     scenario.Root, request, CandidateSha);
             }, role => order.Add(role.ToString()), changedPaths: [source]);
             var id = Guid.NewGuid();
-            driver.PreTesterResolverObservation = observe ? PreTesterResolverObservationTests.Window(scenario.Root) : null;
+            var workspace = OrchestratorWorkspace.ForDirectory(scenario.Root);
+            using var staged = new PreTesterResolverObservationTests.StagedProducerRevision();
             var policy = ConductorAutonomyPolicy.Conservative with { PreTesterResolverObservationWindowId = observe ? id : null };
-
-            new ConductorBatchLoop(utcNow: () => PreTesterResolverObservationTests.Start).Run(
-                scenario.Kernel, driver, policy, Path.Combine(scenario.Root, ".conduct-stop"), maxIterations: 1, quiet: true);
-
-            var path = PreTesterResolverObservationTests.CorpusPath(scenario.Root, id);
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            var policyPath = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+            File.WriteAllText(policyPath, ConductorAutonomyPolicy.Conservative.ToJson());
+            var path = PreTesterResolverObservationTests.CorpusPath(
+                Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"), id);
+            var child = new ResolverChildHost(request =>
+            {
+                using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+                var preset = CliCommandHandlers.GetFlagValue(request.Arguments, "--policy");
+                var initial = CliConductLoopStartup.PrepareConductLoopPolicy(workspace.OrchestratorDirectory, preset, TextWriter.Null)!;
+                Assert.Equal($"file:{policyPath}", initial.Source);
+                driver.PreTesterResolverObservation = CliConductLoopStartup.CreateResolverObservation(request.Arguments, noDispatch: false, workspace);
+                File.WriteAllText(policyPath, policy.ToJson());
+                var summary = new ConductorBatchLoop(utcNow: () => PreTesterResolverObservationTests.Start).Run(
+                    scenario.Kernel, driver, initial.Policy, Path.Combine(scenario.Root, ".conduct-stop"), maxIterations: 1, quiet: true,
+                    policySource: initial.Source, reloadPolicy: () => CliConductLoopStartup.ResolveConductorPolicy(preset, workspace.OrchestratorDirectory),
+                    onTick: _ =>
+                    {
+                        if (observe)
+                            Assert.Single(File.ReadLines(path)); // The tick has not finished publishing yet.
+                    });
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    ConductorContinuityExitArtifactFactory.FromLoopSummary(summary, delegateSelfRelaunchToSupervisor: true));
+            });
+            var supervisor = new ConductorContinuitySupervisor(child,
+                new Mcg.AgentOrchestrator.Infrastructure.Tests.SupervisorHandoffFixture.RecordingEvents(), maxUnexpectedRestarts: 0);
+            Assert.Equal(0, await supervisor.RunAsync(["conduct", "--loop", "--watch"],
+                scenario.Root, workspace.OrchestratorDirectory, "default", "default"));
+            Assert.Equal(1, child.Launches);
             if (observe)
             {
-                var tick = System.Text.Json.JsonSerializer.Deserialize<PreTesterReverseDependencyObservation.CompletedTick>(
-                    File.ReadLines(path).Skip(1).Single())!;
+                var lines = File.ReadAllLines(path);
+                var producer = System.Text.Json.JsonSerializer.Deserialize<PreTesterReverseDependencyObservation.WindowHeader>(lines[0])!.Producer;
+                var tick = System.Text.Json.JsonSerializer.Deserialize<PreTesterReverseDependencyObservation.CompletedTick>(lines[1])!;
+                Assert.Equal(2, lines.Length);
+                Assert.Equal(staged.AppSha256, producer.AppSha256);
                 var invocation = Assert.Single(tick.Rows);
                 Assert.Equal(scenario.Goal.Id.Value, invocation.Boundary.GoalId);
                 Assert.Equal(scenario.Tester.Id.Value, invocation.Boundary.TesterTaskId);
@@ -449,10 +478,24 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             }
             else
             {
-                Assert.False(File.Exists(path));
+                Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
             }
             return (order.ToArray(), scenario.Goal.Timeline.Select(evt => PreTesterEvidenceIndexLines.Parse(evt.Message))
                 .OfType<PreTesterEvidenceEntry>().Select(entry => entry.Outcome).ToArray());
+        }
+    }
+
+    private sealed class ResolverChildHost(Action<ConductorSupervisorProcessRequest> run) : IConductorSupervisorProcessHost
+    {
+        internal int Launches { get; private set; }
+
+        public Task<ConductorSupervisorProcessResult> RunAsync(
+            ConductorSupervisorProcessRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Launches++;
+            run(request);
+            return Task.FromResult(new ConductorSupervisorProcessResult(0, Environment.ProcessId));
         }
     }
 
