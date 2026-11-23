@@ -7,22 +7,94 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 // Owns CLI workspace publication and applying its result to the acceptance transaction.
 internal static class CliWorkspaceMerge
 {
+    internal static (AcceptanceMergeCommitResult Result, GoalWorktreeMergeResult? Merge) FinalizeAcceptance(
+        CliExecutionContext context, Goal goal, string? worktreePath, string? testedWorktreeHead,
+        AcceptanceMergeGuardSnapshot? expectedMergeGuard, bool passingGateReceiptRecorded,
+        GateReadyCandidateRevisionPair? preparedPair, CliFastForwardReceipt? recovery)
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var root = context.Workspace.ExecutionDirectory;
+        GoalWorktreeMergeResult? merge = null;
+        var result = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
+            goal.Id,
+            expectedMergeGuard ?? AcceptanceMergeGuard.Capture(context.Kernel, goal.Id),
+            testedWorktreeHead,
+            passingGateReceiptRecorded,
+            Merge,
+            "Acceptance completed goal after merge; cleanup deferred to conductor sweep."));
+        timer.Stop();
+        context.PhaseTimings.Record("workspace-merge", timer.Elapsed,
+            ("goal", goal.Id.Value[..8]), ("fastForwarded", result.FastForwarded),
+            ("guardAborted", result.GuardAborted), ("message", result.Message));
+        return (result, merge);
+
+        AcceptanceMergeCommitResult Merge()
+        {
+            if (recovery is not null && !MatchesFastForwardCandidate(context, goal, worktreePath, recovery))
+            {
+                const string reason = "The candidate changed while CLI checkout synchronization was pending.";
+                return new(false, reason, new(AcceptanceMergeGuardMismatchKind.BaselineRepair,
+                    "CLI fast-forward recovery", recovery.PromotedRevision, reason));
+            }
+
+            var pendingRollback = recovery is null
+                ? GoalRollbackPlanner.CapturePendingAcceptance(root, goal.Id, context.Workspace.IntegrationBranch)
+                : new GoalRollbackAcceptanceRange(goal.Id.Value, goal.Id.Value[..8], context.Worktrees.BranchName(goal.Id),
+                    recovery.PriorRevision, recovery.PromotedRevision, recovery.PriorRevision, recovery.PublishedAt);
+            string? repairBlockReason = null;
+            GoalPromotionFact? publication;
+            merge = recovery is not null
+                ? FinishFastForward(context, goal, recovery, null, out publication)
+                : MergeWithPublication(context, goal, out publication,
+                    () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace),
+                    out repairBlockReason, preparedPair, fromAcceptance: true);
+            if (repairBlockReason is not null)
+                return new(false, repairBlockReason, new(AcceptanceMergeGuardMismatchKind.BaselineRepair,
+                    "Baseline repair admission", "current validation and normal acceptance", repairBlockReason));
+            if (merge is null) return new(true, null);
+            if (merge.FastForwarded && pendingRollback is not null)
+                GoalRollbackPlanner.RecordAcceptance(root, pendingRollback);
+            return new(merge.FastForwarded, FormatResult(merge), Publication: publication,
+                CheckoutPending: !merge.FastForwarded && merge.FastForwardReceipt is not null);
+        }
+    }
+
+    internal static bool MatchesFastForwardCandidate(
+        CliExecutionContext context, Goal goal, string? worktreePath, CliFastForwardReceipt receipt) =>
+        CliCommandHandlers.TryResolveGitHead(context, worktreePath) == receipt.PromotedRevision &&
+        ReadRef(context.Workspace.ExecutionDirectory, $"refs/heads/{context.Worktrees.BranchName(goal.Id)}") ==
+            receipt.PromotedRevision;
+
+    internal static string FormatResult(GoalWorktreeMergeResult merge) =>
+        merge.FastForwarded || merge.FastForwardReceipt is not null
+            ? merge.Message
+            : $"{merge.Message} command: {merge.SuggestedCommand}";
+
     // Capture publication at the successful CLI merge boundary. A later HEAD or
     // recovery clock cannot establish when the original duty became due.
     internal static GoalWorktreeMergeResult? MergeWithPublication(
         CliExecutionContext context, Goal goal, out GoalPromotionFact? publication,
         Func<string?> mutationBlocker, out string? repairBlockReason,
-        GateReadyCandidateRevisionPair? testedPair = null)
+        GateReadyCandidateRevisionPair? testedPair = null, bool fromAcceptance = false)
     {
         publication = null;
         repairBlockReason = null;
-        var duties = goal.OutstandingPostLandingDuties;
         var root = context.Workspace.ExecutionDirectory;
+        if (GoalWorktrees.ReadCliFastForward(root, goal.Id) is { } pending)
+        {
+            if (fromAcceptance || pending.FromAcceptance)
+            {
+                repairBlockReason = "An earlier CLI fast-forward requires reconciliation. Rerun acceptance.";
+                return new(false, context.Worktrees.BranchName(goal.Id), repairBlockReason, null);
+            }
+            return FinishFastForward(context, goal, pending, null, out publication);
+        }
+
+        var duties = goal.OutstandingPostLandingDuties;
         var branch = context.Worktrees.BranchName(goal.Id);
         var mainRef = $"refs/heads/{context.Workspace.IntegrationBranch}";
         var target = RootCheckoutLandingGuard.ReadSymbolicHead(static (dir, args) => GitCli.Run(dir, args), root);
         var canonicalRepair = OpenRepairStore(context.Workspace)?.IsCanonicalRepair(goal.Id.Value) == true;
-        var needsPublication = canonicalRepair || duties.Any(item => item.Publication is null);
         var requiresIntegrationTarget = canonicalRepair || duties.Count > 0;
         if ((requiresIntegrationTarget && target != mainRef) ||
             (target is null && ReadRef(root, "HEAD") is not null))
@@ -40,22 +112,20 @@ internal static class CliWorkspaceMerge
         }
         string? repairBlock = null;
         var merge = target is not null && pair is { BranchRevision: { } candidate, MainRevision: { } priorMain }
-            ? GoalWorktrees.TryFastForwardMergeExact(root, goal.Id, target, priorMain, candidate, CheckMutation)
+            ? GoalWorktrees.TryAdvanceFastForwardRefs(root, goal.Id, target, priorMain, candidate, CheckMutation,
+                context.DiagnosticsClock ?? new SystemClock(), fromAcceptance)
             : context.Worktrees.TryFastForwardMerge(root, goal.Id, CheckMutation);
         repairBlockReason = merge?.RevisionPairChanged == true ? merge.Message : repairBlock;
-        if (merge?.FastForwarded != true || !needsPublication) return merge;
-
-        var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
-        publication = repository.ReadPromotionFactAsync(goal.Id).GetAwaiter().GetResult();
-        if (merge.AdvancedTarget && publication is null)
+        if (merge?.FastForwardReceipt is { } receipt)
+            return FinishFastForward(context, goal, receipt, merge.ChangedFiles, out publication);
+        if (merge?.FastForwarded == true && requiresIntegrationTarget)
         {
-            var at = (context.DiagnosticsClock ?? new SystemClock()).UtcNow;
-            publication = new GoalPromotionFact(goal.Id.Value, pair.BranchRevision!, pair.MainRevision!,
-                pair.BranchRevision!, at, GoalPromotionFact.CliFastForwardProvenance);
-            repository.RecordPromotionFacts([publication]);
+            // An already-merged branch may recover a known fact, but never invent one.
+            publication = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath)
+                .ReadPromotionFactAsync(goal.Id).GetAwaiter().GetResult();
+            if (publication is not null && duties.Count > 0)
+                context.Kernel.BindPostLandingPublication(goal.Id, publication);
         }
-        // An already-merged branch may recover a known fact, but never invent one.
-        if (publication is not null && duties.Count > 0) context.Kernel.BindPostLandingPublication(goal.Id, publication);
         return merge;
 
         string? CheckMutation()
@@ -64,6 +134,31 @@ internal static class CliWorkspaceMerge
             if (!string.IsNullOrWhiteSpace(blocked)) return blocked;
             return repairBlock = CheckRepairAdmission(context, goal, pair, requireNormalAcceptance: true, out _);
         }
+    }
+
+    internal static GoalWorktreeMergeResult FinishFastForward(
+        CliExecutionContext context, Goal goal, CliFastForwardReceipt receipt,
+        IReadOnlyList<string>? changedFiles, out GoalPromotionFact? publication)
+    {
+        var workspace = context.Workspace;
+        var duties = goal.OutstandingPostLandingDuties;
+        publication = null;
+        if (receipt.TargetRef == $"refs/heads/{workspace.IntegrationBranch}" &&
+            (duties.Count > 0 || OpenRepairStore(workspace)?.IsCanonicalRepair(goal.Id.Value) == true))
+        {
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            publication = repository.ReadPromotionFactAsync(goal.Id).GetAwaiter().GetResult();
+            if (publication is null)
+            {
+                publication = new GoalPromotionFact(goal.Id.Value, receipt.PromotedRevision, receipt.PriorRevision,
+                    receipt.PromotedRevision, receipt.PublishedAt, GoalPromotionFact.CliFastForwardProvenance);
+                repository.RecordPromotionFacts([publication]);
+            }
+        }
+        var merge = GoalWorktrees.SynchronizeCliFastForward(workspace.ExecutionDirectory, goal.Id, receipt, changedFiles);
+        if (merge.FastForwarded && publication is not null && duties.Count > 0)
+            context.Kernel.BindPostLandingPublication(goal.Id, publication);
+        return merge;
     }
 
     private static SoloBaselineRepairStore? OpenRepairStore(OrchestratorWorkspace workspace, bool retain = false)
@@ -81,6 +176,21 @@ internal static class CliWorkspaceMerge
             ReadRef(root, $"refs/heads/{workspace.IntegrationBranch}"));
         SoloBaselineRepairCoordinator.RetainSoloRepairPartition(OpenRepairStore(workspace, retain: true)!, goal,
             () => SoloAcceptanceFailureHandler.ReadContext(goal, root, ReadCurrent()), ReadCurrent);
+    }
+
+    internal static void RetainVerificationFailure(
+        CliExecutionContext context, Goal goal, IReadOnlyList<string> failedChecks,
+        string? testedWorktreeHead, string? testedMainHead, AcceptanceVerificationResult? verification)
+    {
+        var baseline = CleanTestBaseline.Unattested(testedMainHead);
+        var attributions = verification is { Passed: false }
+            ? CleanTestBaseline.Attribute(baseline, failedChecks, [], goal.Id, testedMainHead ?? "", verification.Checks)
+            : null;
+        var attestation = attributions is null ? null : CleanTestBaseline.FormatFailureAttestation(
+            CleanTestBaseline.WithExecutedBaselineAttestation(baseline, failedChecks, goal.Id, verification?.Checks));
+        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead,
+            attributions, attestation, verification?.AttemptId, verification?.SoloFailureReceipt);
+        RetainRepairEvidence(context, goal);
     }
 
     internal static bool ReportRepairHold(CliExecutionContext context, Goal goal, GateReadyCandidateRevisionPair? pair,
@@ -186,7 +296,7 @@ internal static class CliWorkspaceMerge
             kernel.ClearAcceptanceFailure(request.GoalId);
             kernel.CompleteGoal(request.GoalId, request.CompletionReason);
         }
-        else if (result.Message is not null)
+        else if (result.Message is not null && !result.CheckoutPending)
         {
             kernel.RecordAcceptanceFailure(request.GoalId, ["merge"]);
         }

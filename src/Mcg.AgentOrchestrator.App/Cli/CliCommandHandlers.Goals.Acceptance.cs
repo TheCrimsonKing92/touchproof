@@ -68,8 +68,17 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         }
     }
 
+    var root = context.Workspace.ExecutionDirectory;
+    var pendingFastForward = GoalWorktrees.ReadCliFastForward(root, goal.Id);
     if (goal.Status != GoalStatus.Verified)
     {
+        // The goal transaction may have committed before Git receipt acknowledgement.
+        if (goal.Status == GoalStatus.Completed && pendingFastForward is { FromAcceptance: true })
+        {
+            var pending = CliWorkspaceMerge.FinishFastForward(context, goal, pendingFastForward, null, out _);
+            if (!pending.FastForwarded) return ReportCheckoutPending(pending.Message);
+            GoalWorktrees.AcknowledgeCliFastForward(root, goal.Id, pendingFastForward);
+        }
         return false;
     }
 
@@ -95,6 +104,21 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     AcceptanceMergeGuardSnapshot? expectedMergeGuard = null;
     var reuseNormalGate = false;
     var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
+    if (pendingFastForward is not null)
+    {
+        if (pendingFastForward.FromAcceptance &&
+            CliWorkspaceMerge.MatchesFastForwardCandidate(context, goal, worktreePath, pendingFastForward))
+        {
+            testedWorktreeHead = pendingFastForward.PromotedRevision;
+            testedMainHead = pendingFastForward.PriorRevision;
+            return FinalizeMerge(pendingFastForward);
+        }
+
+        // Recover the old publication and checkout before evaluating any new pair.
+        var pending = CliWorkspaceMerge.FinishFastForward(context, goal, pendingFastForward, null, out _);
+        if (!pending.FastForwarded) return ReportCheckoutPending(pending.Message);
+        GoalWorktrees.AcknowledgeCliFastForward(root, goal.Id, pendingFastForward);
+    }
     if (worktreePath is not null)
     {
         var rebaseCheckStarted = System.Diagnostics.Stopwatch.StartNew();
@@ -431,6 +455,17 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
 
     if (!evidence.Passed)
     {
+        var failedChecks = verification?.Checks?
+            .Where(c => !c.Passed && !c.Advisory)
+            .Select(c => c.Name)
+            .ToList();
+        if (failedChecks is null or { Count: 0 })
+        {
+            failedChecks = ["acceptance evidence blocked"];
+        }
+        if (verification?.SoloFailureReceipt is not null)
+            CliWorkspaceMerge.RetainVerificationFailure(context, goal, failedChecks, testedWorktreeHead, testedMainHead, verification);
+
         if (verification is { Passed: false })
         {
             Console.WriteLine($"Verification: failed (exit {verification.ExitCode}); merge blocked");
@@ -472,15 +507,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             Console.WriteLine("Acceptance evidence: blocked; merge blocked");
         }
 
-        var failedChecks = verification?.Checks?
-            .Where(c => !c.Passed && !c.Advisory)
-            .Select(c => c.Name)
-            .ToList();
-        if (failedChecks is null or { Count: 0 })
-        {
-            failedChecks = ["acceptance evidence blocked"];
-        }
-        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
+        if (verification?.SoloFailureReceipt is null)
+            CliWorkspaceMerge.RetainVerificationFailure(context, goal, failedChecks, testedWorktreeHead, testedMainHead, verification);
         GoalOperationJournal.AcceptanceFailed(
             context.Workspace.ExecutionDirectory,
             goal,
@@ -541,51 +569,19 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         return false;
     }
 
-    var mergeStarted = System.Diagnostics.Stopwatch.StartNew();
-    var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
-            goal.Id,
-            expectedMergeGuard ?? AcceptanceMergeGuard.Capture(context.Kernel, goal.Id),
-            testedWorktreeHead,
-            PassingGateReceiptRecorded: verification is { Passed: true } || reuseNormalGate,
-            Merge: () =>
-            {
-                var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id, context.Workspace.IntegrationBranch);
-                var merge = CliWorkspaceMerge.MergeWithPublication(context, goal, out var publication,
-                    mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace),
-                    out var repairBlockReason, preparedPair);
+    return FinalizeMerge();
 
-                if (repairBlockReason is not null)
-                    return new AcceptanceMergeCommitResult(false, repairBlockReason,
-                        new(AcceptanceMergeGuardMismatchKind.BaselineRepair, "Baseline repair admission",
-                            "current validation and normal acceptance", repairBlockReason));
+bool ReportCheckoutPending(string message)
+{
+    Console.WriteLine($"BLOCKER step=checkout-sync reason=\"{EscapeBlockerDetail(message)}\" action=\"Resolve the checkout issue in the repository root, then rerun acceptance.\"");
+    return false;
+}
 
-                if (merge is null)
-                {
-                    return new AcceptanceMergeCommitResult(true, null);
-                }
-
-                if (merge.FastForwarded && pendingRollback is not null)
-                {
-                    GoalRollbackPlanner.RecordAcceptance(context.Workspace.ExecutionDirectory, pendingRollback);
-                }
-
-                if (merge.FastForwarded && merge.ChangedFiles is not null)
-                {
-                    landingChangedFiles = merge.ChangedFiles;
-                }
-
-                return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge),
-                    Publication: publication);
-            },
-            "Acceptance completed goal after merge; cleanup deferred to conductor sweep."));
-    mergeStarted.Stop();
-    context.PhaseTimings.Record(
-        "workspace-merge",
-        mergeStarted.Elapsed,
-        ("goal", goal.Id.Value[..8]),
-        ("fastForwarded", mergeCommit.FastForwarded),
-        ("guardAborted", mergeCommit.GuardAborted),
-        ("message", mergeCommit.Message));
+bool FinalizeMerge(CliFastForwardReceipt? recovery = null)
+{
+    var (mergeCommit, merge) = CliWorkspaceMerge.FinalizeAcceptance(context, goal, worktreePath, testedWorktreeHead,
+        expectedMergeGuard, verification is { Passed: true } || reuseNormalGate, preparedPair, recovery);
+    landingChangedFiles = merge?.ChangedFiles ?? landingChangedFiles;
 
     if (mergeCommit.GuardAborted)
     {
@@ -601,6 +597,9 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         return false;
     }
 
+    if (mergeCommit.CheckoutPending)
+        return ReportCheckoutPending(mergeCommit.Message!);
+
     if (mergeCommit.Message is not null)
     {
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
@@ -608,6 +607,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         {
             RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
             RunPostLandingCanary(context, goal, landingChangedFiles);
+            if (merge?.FastForwardReceipt is { } receipt)
+                GoalWorktrees.AcknowledgeCliFastForward(root, goal.Id, receipt);
         }
         else
         {
@@ -632,6 +633,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
     RunPostLandingCanary(context, goal, landingChangedFiles);
     return true;
+}
 }
 
 private static void RunPostLandingCanary(

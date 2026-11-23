@@ -90,7 +90,7 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                 new(candidateHead.Output.Trim(), mainHead));
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
-                : FormatWorkspaceMerge(merge));
+                : CliWorkspaceMerge.FormatResult(merge));
             if (merge?.FastForwarded == true)
             {
                 var mergeChangedFiles = merge.ChangedFiles
@@ -104,8 +104,12 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                         mergeChangedFiles,
                         landingSha.Succeeded ? landingSha.Output.Trim() : null),
                     Console.WriteLine);
+                if (merge.FastForwardReceipt is { } receipt)
+                    GoalWorktrees.AcknowledgeCliFastForward(executionDirectory, goal.Id, receipt);
             }
-            return publication is not null;
+            if (merge is { FastForwarded: false, FastForwardReceipt: not null })
+                Console.WriteLine("Resolve the checkout issue in the repository root, then rerun workspace merge.");
+            return merge?.FastForwarded == true && publication is not null;
 
         case "rebase":
             Console.WriteLine(FormatWorkspaceRebase(context.Worktrees.TryRebaseOntoMain(executionDirectory, goal.Id)));
@@ -380,13 +384,6 @@ private static void PrintGoalCleanupBackoffStatus(
 
     Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(backoff)}");
     Console.WriteLine($"Cleanup retry: conduct {goalId.Value[..8].ToLowerInvariant()} --loop");
-}
-
-private static string FormatWorkspaceMerge(GoalWorktreeMergeResult merge)
-{
-    return merge.FastForwarded
-        ? merge.Message
-        : $"{merge.Message} command: {merge.SuggestedCommand}";
 }
 
 private static string FormatWorkspaceRebase(GoalWorktreeRebaseResult rebase)

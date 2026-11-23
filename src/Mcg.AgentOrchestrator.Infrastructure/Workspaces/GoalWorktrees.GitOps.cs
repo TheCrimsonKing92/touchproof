@@ -137,9 +137,9 @@ public static partial class GoalWorktrees
             goalId,
             static (workingDirectory, args) => GitCli.Run(workingDirectory, args));
 
-    internal static GoalWorktreeMergeResult TryFastForwardMergeExact(
+    internal static GoalWorktreeMergeResult TryAdvanceFastForwardRefs(
         string executionDirectory, GoalId goalId, string targetRef, string main, string candidate,
-        Func<string?> mutationBlocker)
+        Func<string?> mutationBlocker, IClock clock, bool fromAcceptance)
     {
         var branch = BranchName(goalId);
         var candidateRef = $"refs/heads/{branch}";
@@ -148,48 +148,117 @@ public static partial class GoalWorktrees
         GoalWorktreeMergeResult Blocked(string reason) => new(false, branch,
             $"Fast-forward blocked before merge: {reason}", null, changedFiles.Files);
         GoalWorktreeMergeResult Stale() => Blocked(revisionChanged) with { RevisionPairChanged = true };
-        bool OnTarget() => GitCli.Run(executionDirectory, "symbolic-ref", "--quiet", "HEAD") is
-            { Succeeded: true, DrainTimedOut: false } head && head.Output.Trim() == targetRef;
         bool Matches(string reference, string revision) =>
             GitRevisionReader.Shared.TryResolve(executionDirectory, reference, out var actual) && actual == revision;
-        bool Complete(GitCli.GitResult result) => result is { Succeeded: true, DrainTimedOut: false };
 
         if (!changedFiles.Succeeded) return Blocked($"changed-file determination failed: {changedFiles.FailureReason}");
         if (mutationBlocker() is { Length: > 0 } blockReason) return Blocked(blockReason);
-        if (!OnTarget() || !Matches(targetRef, main) || !Matches(candidateRef, candidate)) return Stale();
+        if (!IsCheckoutOnRef(executionDirectory, targetRef) || !Matches(targetRef, main) || !Matches(candidateRef, candidate)) return Stale();
 
-        var alreadyMerged = Complete(GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", candidate, main));
+        CliFastForwardReceipt? receipt = null;
+        var alreadyMerged = CompletedGitCommand(GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", candidate, main));
         if (!alreadyMerged)
         {
-            if (!Complete(GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", main, candidate)))
+            if (!CompletedGitCommand(GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", main, candidate)))
                 return new(false, branch, $"Branch {branch} cannot fast-forward; merge it explicitly after review.",
                     $"git merge {branch}", changedFiles.Files);
             if (!TryEnsureNoGitOperation(executionDirectory, static (dir, args) => GitCli.Run(dir, args), out _))
                 return Blocked("checkout has an active or unreadable Git operation");
             var checkout = GitCli.Run(executionDirectory, "read-tree", "-n", "-m", "-u", main, candidate);
-            if (!Complete(checkout)) return Blocked($"checkout cannot be fast-forwarded: {checkout.Error.Trim()}");
+            if (!CompletedGitCommand(checkout)) return Blocked($"checkout cannot be fast-forwarded: {checkout.Error.Trim()}");
+            receipt = new(goalId.Value, targetRef, main, candidate, clock.UtcNow, fromAcceptance);
+            var write = GitCli.RunWithStandardInput(executionDirectory, GitCli.DefaultTimeoutMilliseconds,
+                System.Text.Json.JsonSerializer.Serialize(receipt), "hash-object", "-w", "--stdin");
+            if (!CompletedGitCommand(write)) return Blocked($"cannot write the fast-forward receipt: {write.Error.Trim()}");
+            receipt = receipt with { ObjectId = write.Output.Trim() };
         }
 
-        // Verify the source ref in the same Git transaction that compares and advances the target.
+        // The goal-bound receipt exists only if the exact ref update committed.
         var targetCommand = alreadyMerged ? $"verify {targetRef} {main}" : $"update {targetRef} {candidate} {main}";
         var commands = targetRef == candidateRef ? $"{targetCommand}\n" : $"verify {candidateRef} {candidate}\n{targetCommand}\n";
+        if (receipt is not null) commands += $"create {CliFastForwardRef(goalId)} {receipt.ObjectId}\n";
         var update = GitCli.RunWithStandardInput(executionDirectory, GitCli.DefaultTimeoutMilliseconds,
             commands, "update-ref", "-m", $"merge {branch}: Fast-forward", "--stdin");
-        if (!Complete(update))
+        if (!CompletedGitCommand(update))
         {
             if (!Matches(targetRef, main) || !Matches(candidateRef, candidate)) return Stale();
             return Blocked($"ref transaction failed: {update.Error.Trim()}");
         }
 
-        var message = $"Fast-forwarded to {branch}.";
-        if (!alreadyMerged && OnTarget() && Matches(targetRef, candidate))
-        {
-            var refresh = GitCli.Run(executionDirectory, "read-tree", "-m", "-u", main, candidate);
-            if (!Complete(refresh))
-                message += $" The target ref advanced, but its checkout could not be refreshed: {refresh.Error.Trim()}";
-        }
-        return new(true, branch, message, null, changedFiles.Files) { AdvancedTarget = !alreadyMerged };
+        return receipt is null
+            ? new(true, branch, $"Fast-forwarded to {branch}.", null, changedFiles.Files)
+            : new(false, branch, "Target ref advanced; checkout synchronization pending.", null, changedFiles.Files)
+                { FastForwardReceipt = receipt };
     }
+
+    internal static CliFastForwardReceipt? ReadCliFastForward(string directory, GoalId goalId)
+    {
+        if (!GitRevisionReader.Shared.TryResolve(directory, CliFastForwardRef(goalId), out var objectId)) return null;
+        var read = GitCli.Run(directory, "cat-file", "blob", objectId);
+        if (!CompletedGitCommand(read) ||
+            System.Text.Json.JsonSerializer.Deserialize<CliFastForwardReceipt>(read.Output) is not { } receipt ||
+            receipt.GoalId != goalId.Value ||
+            receipt.TargetRef?.StartsWith("refs/heads/", StringComparison.Ordinal) != true ||
+            !IsFullRevision(receipt.PriorRevision) || !IsFullRevision(receipt.PromotedRevision) ||
+            receipt.PriorRevision == receipt.PromotedRevision || receipt.PublishedAt == default ||
+            receipt.PublishedAt.Offset != TimeSpan.Zero)
+            throw new InvalidOperationException($"Cannot read the CLI fast-forward receipt for {goalId.Value}.");
+        return receipt with { ObjectId = objectId };
+
+        static bool IsFullRevision(string? value) => value is { Length: 40 or 64 } && value.All(Uri.IsHexDigit);
+    }
+
+    internal static GoalWorktreeMergeResult SynchronizeCliFastForward(
+        string directory, GoalId goalId, CliFastForwardReceipt receipt, IReadOnlyList<string>? changedFiles = null)
+    {
+        var branch = BranchName(goalId);
+        GoalWorktreeMergeResult Pending(string reason) => new(false, branch,
+            $"The target ref advanced, but its checkout could not be refreshed: {reason}.", null, changedFiles)
+            { FastForwardReceipt = receipt };
+
+        if (!IsCheckoutOnRef(directory, receipt.TargetRef) ||
+            !GitRevisionReader.Shared.TryResolve(directory, receipt.TargetRef, out var tip))
+            return Pending($"attach the root checkout to {receipt.TargetRef}");
+        if (!CompletedGitCommand(GitCli.Run(directory, "merge-base", "--is-ancestor", receipt.PromotedRevision, tip)))
+            return Pending($"confirm the recorded promotion {receipt.PromotedRevision} is reachable from {receipt.TargetRef}");
+        if (!TryEnsureNoGitOperation(directory, static (dir, args) => GitCli.Run(dir, args), out _))
+            return Pending("finish the active Git operation in the root checkout");
+
+        var refresh = tip == receipt.PromotedRevision
+            ? GitCli.Run(directory, "read-tree", "-m", "-u", receipt.PriorRevision, tip)
+            : GitCli.Run(directory, "diff-index", "--cached", "--quiet", tip, "--");
+        if (!CompletedGitCommand(refresh))
+            return Pending(string.IsNullOrWhiteSpace(refresh.Error)
+                ? "synchronize the root index with its current branch"
+                : refresh.Error.Trim());
+        if (!IsCheckoutOnRef(directory, receipt.TargetRef) ||
+            !GitRevisionReader.Shared.TryResolve(directory, receipt.TargetRef, out var currentTip) || currentTip != tip)
+            return Pending("the root checkout changed during synchronization");
+
+        if (changedFiles is null)
+        {
+            var changed = ResolveChangedFiles(directory, receipt.PriorRevision, receipt.PromotedRevision,
+                static (dir, args) => GitCli.Run(dir, args));
+            if (!changed.Succeeded) return Pending($"cannot recover the change list: {changed.FailureReason}");
+            changedFiles = changed.Files;
+        }
+        return new(true, branch, $"Fast-forwarded to {branch}.", null, changedFiles) { FastForwardReceipt = receipt };
+    }
+
+    internal static void AcknowledgeCliFastForward(string directory, GoalId goalId, CliFastForwardReceipt receipt)
+    {
+        var result = GitCli.Run(directory, "update-ref", "-d", CliFastForwardRef(goalId), receipt.ObjectId);
+        if (!CompletedGitCommand(result))
+            throw new InvalidOperationException($"Cannot acknowledge the CLI fast-forward for {goalId.Value}: {result.Error.Trim()}");
+    }
+
+    private static string CliFastForwardRef(GoalId id) => $"refs/mcg/cli-fast-forward/{id.Value}";
+
+    private static bool IsCheckoutOnRef(string directory, string reference) =>
+        GitCli.Run(directory, "symbolic-ref", "--quiet", "HEAD") is
+            { Succeeded: true, DrainTimedOut: false } head && head.Output.Trim() == reference;
+
+    private static bool CompletedGitCommand(GitCli.GitResult command) => command is { Succeeded: true, DrainTimedOut: false };
 
     internal static GoalWorktreeChangedFilesResult ResolveChangedFilesAgainstHead(
         string executionDirectory,

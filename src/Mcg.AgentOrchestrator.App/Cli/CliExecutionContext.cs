@@ -315,7 +315,8 @@ internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message,
     AcceptanceMergeGuardMismatch? GuardAbort = null,
-    GoalPromotionFact? Publication = null)
+    GoalPromotionFact? Publication = null,
+    bool CheckoutPending = false)
 {
     public bool GuardAborted => GuardAbort is not null;
 }

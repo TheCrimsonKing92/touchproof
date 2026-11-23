@@ -10,7 +10,14 @@ public sealed record GoalWorktreeMergeResult(
     IReadOnlyList<string>? ChangedFiles = null)
 {
     internal bool RevisionPairChanged { get; init; }
-    internal bool AdvancedTarget { get; init; }
+    internal CliFastForwardReceipt? FastForwardReceipt { get; init; }
+}
+
+internal sealed record CliFastForwardReceipt(
+    string GoalId, string TargetRef, string PriorRevision, string PromotedRevision, DateTimeOffset PublishedAt,
+    bool FromAcceptance)
+{
+    internal string ObjectId { get; init; } = "";
 }
 
 public sealed record GoalWorktreeChangedFilesResult(

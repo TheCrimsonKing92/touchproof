@@ -64,14 +64,10 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Goal = CompletedGoal(Kernel, committed: committed);
     }
 
-    internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
-        bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
-        string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null)
-    {
-        var checkout = candidateWorktree ?? Repo;
-        var checkedGoal = goal ?? Goal;
-        var failedBuilds = 0;
-        var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
+    internal GoalAcceptanceVerifier CreateVerifier(string checkout, bool baselineThrows = false, bool baselineFails = false,
+        bool collidingPassedRows = false, bool mixed = false, bool singleRow = false, string? firstCase = null,
+        Action? onFailedBuild = null) =>
+        new(new GoalAcceptanceVerifierTestOverrides
         {
             BuildStorageRootForTests = new(Path.Combine(Root, "dotnet")),
             ShardPermitRootForTests = Path.Combine(Root, "permits"),
@@ -80,9 +76,9 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         }, (args, directory, _) =>
         {
             var results = Array.IndexOf(args, "--results-directory");
-            if (buildFails && args.Contains("build"))
+            if (onFailedBuild is not null && args.Contains("build"))
             {
-                failedBuilds++;
+                onFailedBuild();
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1,
                     "SoloTests.cs(1,1): error CS1002: ; expected\nBuild FAILED."));
             }
@@ -108,6 +104,16 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                 passed ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
                     $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}."));
         });
+
+    internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
+        bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
+        string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null)
+    {
+        var checkout = candidateWorktree ?? Repo;
+        var checkedGoal = goal ?? Goal;
+        var failedBuilds = 0;
+        var verifier = CreateVerifier(checkout, baselineThrows, baselineFails, collidingPassedRows, mixed,
+            singleRow, firstCase, buildFails ? () => failedBuilds++ : null);
         await using var owner = AcceptanceExecutionOwners.CreateAttempt(checkout, checkedGoal.Id,
             options: new(RunId: attemptId ?? "solo-attempt", ResultsPrefix: attemptId is null
                 ? Path.Combine(Root, "results") : Path.Combine(Root, attemptId, "results"), IntegrationBranch: "main"));
