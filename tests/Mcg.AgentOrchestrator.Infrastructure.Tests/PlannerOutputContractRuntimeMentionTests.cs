@@ -114,6 +114,28 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
         Xunit.Assert.Contains("'src/Other/settings.json'", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("global.json", "./global.json")]
+    [Xunit.InlineData("config/global.json", "config/global.json")]
+    public void Resolve_WrongCaseTrackedJson_RejectsWithCanonicalPath(string trackedPath, string explicitPath)
+    {
+        var root = CreateFixtureRepository();
+        var path = Path.Combine(root, trackedPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{}");
+        StagePlannerCitationFixtures(root, trackedPath);
+
+        var plan = PlanWithExcerpt("  - Inspect `Global.json:43` for configuration.");
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, root);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.StartsWith("target citation 'Global.json:43' does not exist", result.Diagnostic);
+        Xunit.Assert.Contains($"Did you mean `{explicitPath}:43`?", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(
+            plan.Replace("Global.json:43", $"{explicitPath}:43", StringComparison.Ordinal),
+            root, out _, out var diagnostic), diagnostic);
+    }
+
     [Xunit.Fact]
     public void BareRuntimeJsonMentionDoesNotResolveToAnUntrackedSourceFile()
     {

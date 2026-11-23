@@ -155,8 +155,10 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         }
     }
 
-    [Xunit.Fact]
-    public void AmbiguousRejectionPrescribesPathThatPreservesSiblingNewFileDeclaration()
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(" and `MissingSibling.cs`")]
+    public void AmbiguousRejectionPrescribesPathThatPreservesSiblingNewFileDeclaration(string missingSibling)
     {
         const string citation = "Guide.cs:43";
         string[] candidates = ["a/Guide.cs", "b/Guide.cs", "docs/Guide.cs"];
@@ -174,7 +176,9 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
             var plan = PlanWithTargetCitation(citation, " and `NewSibling.cs`").Replace(
                 "The premise is valid", "Create `docs/NewSibling.cs` (new file). The premise is valid",
                 StringComparison.Ordinal);
-            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var rejection));
+            var planWithSiblings = plan.Replace(" and `NewSibling.cs`", missingSibling + " and `NewSibling.cs`",
+                StringComparison.Ordinal);
+            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(planWithSiblings, root, out _, out var rejection));
             Xunit.Assert.StartsWith($"target citation '{citation}' is ambiguous;", rejection);
 
             foreach (var candidate in candidates[..2])
@@ -187,6 +191,15 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
 
             var validRepair = plan.Replace(citation, "docs/Guide.cs:43", StringComparison.Ordinal);
             Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(validRepair, root, out _, out var diagnostic), diagnostic);
+
+            if (missingSibling.Length > 0)
+            {
+                var partialRepair = planWithSiblings.Replace(citation, "docs/Guide.cs:43", StringComparison.Ordinal);
+                Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(partialRepair, root, out _, out var remainingRejection));
+                Xunit.Assert.StartsWith("target citation 'MissingSibling.cs' does not exist", remainingRejection);
+                var completeRepair = partialRepair.Replace(missingSibling, string.Empty, StringComparison.Ordinal);
+                Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(completeRepair, root, out _, out diagnostic), diagnostic);
+            }
 
             var route = RoutePersistedRejection(root, rejection);
             Xunit.Assert.Contains($"Offending ambiguous target citation: '{citation}'", route.Text);

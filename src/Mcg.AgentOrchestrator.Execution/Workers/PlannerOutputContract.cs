@@ -819,7 +819,7 @@ internal static partial class PlannerOutputContract
         IReadOnlyList<string>? acceptanceCriteria,
         out string resolvedPlan,
         out string diagnostic,
-        int? repairLineStart = null)
+        (int Start, HashSet<int> FailedCitations)? repairLine = null)
     {
         resolvedPlan = plan;
         diagnostic = string.Empty;
@@ -845,11 +845,11 @@ internal static partial class PlannerOutputContract
         {
             var match = targetCitations[citationIndex];
             var lineStart = targetSection.LastIndexOf('\n', match.Index);
-            if (repairLineStart is int repairLine)
+            if (repairLine is { } screening)
             {
-                if (lineStart < repairLine)
+                if (lineStart < screening.Start)
                     continue;
-                if (lineStart > repairLine)
+                if (lineStart > screening.Start)
                     break;
             }
 
@@ -922,6 +922,9 @@ internal static partial class PlannerOutputContract
             {
                 if (citation.IndexOfAny(['*', '?']) >= 0 || candidate.IndexOfAny(['*', '?']) >= 0)
                 {
+                    if (RecordRepairFailure(citationIndex))
+                        continue;
+
                     var wildcardCitationStart = targetHeading.Index + match.Groups["citation"].Index;
                     diagnostic =
                         $"target citation '{citation}' cannot be marked as a new file because its path contains a wildcard; source span [{wildcardCitationStart}..{wildcardCitationStart + citation.Length})." +
@@ -955,6 +958,9 @@ internal static partial class PlannerOutputContract
                     var canonicalCitationPath = NormalizedShortCitationPath(canonicalPath);
                     if (!CanUseTrackedCitation(workingDirectory, canonicalPath, canonicalCitationPath, location))
                     {
+                        if (RecordRepairFailure(citationIndex))
+                            continue;
+
                         var evidence = JsonSerializer.Serialize(new ResolvedCitationEvidence(citation, canonicalPath));
                         diagnostic = DescribeCitationFailure(plan, citation, citationStart,
                             "does not exist and is not marked as a new file",
@@ -977,9 +983,13 @@ internal static partial class PlannerOutputContract
                 if (matches.Length > 1)
                 {
                     // Other ambiguous citations can be repaired separately. Keep checking the rest of the line.
-                    if (repairLineStart is not null)
+                    if (repairLine is not null)
                         continue;
 
+                    // Compare the same citation slots before and after replacing the ambiguous path.
+                    var originalFailures = new HashSet<int>();
+                    TryResolveCitedPaths(plan, workingDirectory, trackedFiles, revalidateDurablePlan,
+                        acceptanceCriteria, out _, out _, repairLine: (lineStart, originalFailures));
                     var usable = matches.Where(path =>
                     {
                         var explicitPath = ExplicitCitationPath(path);
@@ -989,9 +999,11 @@ internal static partial class PlannerOutputContract
                         // An explicit directory can change how other citations on this line resolve.
                         var repairedPlan = string.Concat(plan.AsSpan(0, citationStart), explicitPath,
                             plan.AsSpan(citationStart + citedPath.Length));
+                        var repairedFailures = new HashSet<int>();
                         return TryValidate(repairedPlan, out _, out _, acceptanceCriteria) &&
                             TryResolveCitedPaths(repairedPlan, workingDirectory, trackedFiles, revalidateDurablePlan,
-                                acceptanceCriteria, out _, out _, repairLineStart: lineStart);
+                                acceptanceCriteria, out _, out _, repairLine: (lineStart, repairedFailures)) &&
+                            repairedFailures.IsSubsetOf(originalFailures);
                     }).Take(2).ToArray();
                     var reported = usable.Concat(matches).Distinct(StringComparer.Ordinal).Take(2).Order(StringComparer.Ordinal).ToArray();
                     var candidates = string.Join(", ", reported.Select(QuoteDiagnosticPath));
@@ -1002,7 +1014,20 @@ internal static partial class PlannerOutputContract
                     return false;
                 }
 
+                string? casingSuggestion = null;
                 if (IsRuntimeJsonArtifactMention(citedPath) && !citedPath.StartsWith("...", StringComparison.Ordinal))
+                {
+                    var casingMatches = paths
+                        ?.Where(path => string.Equals(Path.GetFileName(path), citedPath, StringComparison.OrdinalIgnoreCase))
+                        .Distinct(StringComparer.Ordinal).Take(2).ToArray() ?? [];
+                    if (casingMatches.Length == 0)
+                        continue;
+
+                    if (casingMatches is [var matchWithCorrectCasing])
+                        casingSuggestion = $" Did you mean `{ExplicitCitationPath(matchWithCorrectCasing)}{location}`?";
+                }
+
+                if (RecordRepairFailure(citationIndex))
                     continue;
 
                 diagnostic = paths is null
@@ -1011,7 +1036,7 @@ internal static partial class PlannerOutputContract
                         " Cite the full repository-relative file path.")
                     : DescribeCitationFailure(plan, citation, citationStart,
                         "does not exist and is not marked as a new file",
-                        " No tracked file matches the short citation. Cite the full repository-relative file path.");
+                        " No tracked file matches the short citation. Cite the full repository-relative file path." + casingSuggestion);
                 return false;
             }
 
@@ -1090,6 +1115,9 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
+            if (RecordRepairFailure(citationIndex))
+                continue;
+
             var suggestionText = suggestion is null
                 ? string.Empty
                 : $" Did you mean `{suggestion}`?";
@@ -1122,6 +1150,15 @@ internal static partial class PlannerOutputContract
         }
 
         return true;
+
+        bool RecordRepairFailure(int citationIndex)
+        {
+            if (repairLine is not { } screening)
+                return false;
+
+            screening.FailedCitations.Add(citationIndex);
+            return true;
+        }
     }
 
     private static string DescribeCitationFailure(
