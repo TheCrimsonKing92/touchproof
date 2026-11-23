@@ -133,7 +133,13 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
             ConductorParallelAcceptanceCandidate.Create(first, 0, ["README.md"], firstRevision, firstEnvelope.MainSha),
             ConductorParallelAcceptanceCandidate.Create(second, 1, ["README.md"], secondEnvelope.CandidateSha, secondEnvelope.MainSha)
         };
-        using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [first, second], candidates, ["README.md"], firstEnvelope.MainSha);
+        var request = $"{SoloAttributedFailureRouteFixture.Project}: FullyQualifiedName~{SoloAttributedFailureRouteFixture.First}";
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
+        {
+            UnresolvedAttributionRequests = defect is null ? [] : [request]
+        };
+        using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [first, second], candidates, ["README.md"],
+            firstEnvelope.MainSha, verifier);
         await new PortfolioStore(scenario.Workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
         scenario.Complete(0, firstFailure, expectLegacyHold: false);
         Assert.Empty(await scenario.Events.ReadAllAsync());
@@ -144,12 +150,14 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         var events = await scenario.Events.ReadAllAsync();
         if (defect is null)
         {
+            Assert.Empty(verifier.FocusedRuns);
             Assert.Equal(new[] { first.Id, second.Id }, receipts.Select(receipt => receipt.GoalId));
             Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First }, Assert.Single(events).Payload.SharedFailingTests);
             Assert.Equal(AcceptanceEngineHealth.Unhealthy, (await scenario.Circuit.ReadAsync()).Health);
         }
         else
         {
+            Assert.Equal((request, firstRevision), Assert.Single(verifier.FocusedRuns));
             Assert.Equal(second.Id, Assert.Single(receipts).GoalId);
             Assert.Empty(events);
             Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
@@ -301,8 +309,11 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
 
     internal sealed class Scenario : IDisposable
     {
+        private readonly SoloRepairWorkflowTests.ControlledVerifier _verifier;
+
         internal Scenario(string repo, AgentOrchestratorKernel kernel, Goal[] goals,
-            ConductorParallelAcceptanceCandidate[] candidates, string[] paths, string mainSha)
+            ConductorParallelAcceptanceCandidate[] candidates, string[] paths, string mainSha,
+            SoloRepairWorkflowTests.ControlledVerifier? verifier = null)
         {
             Repo = repo;
             Kernel = kernel;
@@ -315,6 +326,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
             StorePath = Path.Combine(Workspace.OrchestratorDirectory, "cohort-acceptance.db");
             Events = new(new SqliteRunEventStore(Workspace.RunEventStorePath), Workspace.RunEventStorePath);
             Circuit = new(Events);
+            _verifier = verifier ?? new(repo);
             RestartDriver();
         }
 
@@ -329,11 +341,9 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         internal PostLandingCanaryEventStore Events { get; }
         internal AcceptanceEngineCircuitBreaker Circuit { get; }
         private ConductorDriver _driver = null!;
-        private SequenceAcceptanceVerifier _verifier = null!;
 
         internal void RestartDriver()
         {
-            _verifier = new SequenceAcceptanceVerifier([]);
             _driver = new ConductorDriver(Kernel, Workspace, _verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 cleanupHooks: CreateIsolatedCleanupContext(Repo).Hooks);
@@ -370,7 +380,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                 Assert.Contains("pre-existing/main-red", held.Reason, StringComparison.Ordinal);
                 Assert.Equal(GoalStatus.Verified, Goals[index].Status);
             }
-            Assert.Equal(0, _verifier.RunCount);
+            Assert.Empty(_verifier.NormalRuns);
             Assert.Equal(0, Goals[index].Tasks.Single().CriterionRetryCount);
             return result;
         }
