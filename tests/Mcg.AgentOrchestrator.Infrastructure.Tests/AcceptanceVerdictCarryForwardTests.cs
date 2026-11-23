@@ -495,7 +495,7 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
 
     private static CandidateFixture CreateAcceptedCandidate(string repo, string path, string content)
     {
-        var workspace = OrchestratorWorkspace.ForDirectory(repo);
+        var workspace = InfrastructureTestSupport.CreateSetUpWorkspace(repo);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement the accepted candidate.", AgentRole.Developer);
         var goal = kernel.CreateGoal("Acceptance carry-forward test", [task]);
