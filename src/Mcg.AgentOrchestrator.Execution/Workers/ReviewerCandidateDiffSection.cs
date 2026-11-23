@@ -11,6 +11,7 @@ internal static class ReviewerCandidateDiffSection
     internal const int SectionBytes = 16384;
     internal const string Heading = "\n\n## Candidate diff excerpts\n";
     private const string Truncation = "\n[Excerpt truncated]\n";
+    private const string BinaryPortionOmitted = "[Binary portion omitted]\n";
 
     internal static string Render(string root, ReviewerChangedFileScope? scope, int? scopedFileCount,
         int sectionBytes = SectionBytes)
@@ -39,7 +40,7 @@ internal static class ReviewerCandidateDiffSection
                 ? $"\n### {ReviewerChangedFileScopeBriefSection.DisplayPath(change.Path)}\n"
                 : $"\n### {ReviewerChangedFileScopeBriefSection.DisplayPath(change.PreviousPath)} → {ReviewerChangedFileScopeBriefSection.DisplayPath(change.Path)}\n";
             var allowance = Math.Min(PerFileBytes, remaining) - ByteCount(label);
-            if (allowance < Math.Max(ByteCount(Truncation), ByteCount("Omitted: diff unavailable.\n")))
+            if (allowance < Math.Max(ReservedMarkerBytes(change), ByteCount("Omitted: diff unavailable.\n")))
                 break;
 
             var patch = change.CanHaveTextHunks
@@ -96,13 +97,11 @@ internal static class ReviewerCandidateDiffSection
         var singlePath = change.PreviousPath is null;
         var quotedPath = singlePath ? ReviewerScopedChange.GetNonUtf8PathQuote(change.Path) : null;
         if (singlePath)
-            args.Add("--no-renames");
-        // Process arguments cannot carry non-UTF-8 bytes. Match Git's quoted header in the stream.
-        if (quotedPath is not null)
-            args.AddRange(["--src-prefix=a/", "--dst-prefix=b/"]);
+            args.AddRange(["--no-renames", "--src-prefix=a/", "--dst-prefix=b/"]);
         args.AddRange([$"--diff-filter={change.Status}", scope.MergeBase, scope.CandidateCommit, "--"]);
         // Disabling renames above preserves the captured one-path classification
         // even when path filtering would bring the search below Git's rename limit.
+        // For non-UTF-8 paths, match Git's quoted header without a pathspec.
         if (singlePath && quotedPath is null)
             args.Add($":(top,literal){change.Path}");
         return args.ToArray();
@@ -182,16 +181,18 @@ internal static class ReviewerCandidateDiffSection
         var exactHeader = quotedPath is null ? null :
             Encoding.ASCII.GetBytes($"diff --git \"a/{quotedPath[1..]} \"b/{quotedPath[1..]}\n");
         // Git can quote each path byte as a four-byte octal escape.
-        var pathLineCapacity = previousPath is null ? exactHeader?.Length ?? 0 :
-            Math.Max(Encoding.UTF8.GetByteCount(previousPath), Encoding.UTF8.GetByteCount(path!)) * 4 + sourcePrefix.Length + 3;
+        var pathLineCapacity = previousPath is not null
+            ? Math.Max(ByteCount(previousPath), ByteCount(path!)) * 4 + sourcePrefix.Length + 3
+            : exactHeader?.Length ?? (path is null ? 0 : "diff --git "u8.Length + 2 * (ByteCount(path) * 4 + 4) + 2);
         var line = new byte[Math.Max(allowance + 1, pathLineCapacity)];
         var length = 0;
         var output = new StringBuilder();
-        var remaining = allowance - ByteCount(Truncation);
+        var remaining = allowance - ReservedMarkerBytes(change);
         var patchKind = PatchKind.NoHunks;
         var fileHeaders = 0;
         var inHunk = false;
         var skipHunks = false;
+        var omittedBinary = false;
         var matchingPaths = change is null;
         var matchingSource = false;
         var foundMatch = matchingPaths;
@@ -201,8 +202,8 @@ internal static class ReviewerCandidateDiffSection
             if (read == 0)
             {
                 if (length != 0 && !ConsumeLine())
-                    return new(PatchKind.Truncated, output.Append(Truncation).ToString());
-                return foundMatch ? new(patchKind, output.ToString()) : new(PatchKind.Failed);
+                    return Finish(PatchKind.Truncated);
+                return foundMatch ? Finish(patchKind) : new(PatchKind.Failed);
             }
 
             foreach (var value in buffer.AsSpan(0, read))
@@ -212,14 +213,14 @@ internal static class ReviewerCandidateDiffSection
                 if (value == (byte)'\n')
                 {
                     if (!ConsumeLine())
-                        return new(PatchKind.Truncated, output.Append(Truncation).ToString());
+                        return Finish(PatchKind.Truncated);
                     length = 0;
                 }
                 else if (inHunk && (line[0] is (byte)'+' or (byte)'-' or (byte)' ') && length > remaining)
                 {
                     // The body line alone has exhausted the budget. Its unseen tail is immaterial.
                     AppendPrefix(line.AsSpan(0, length));
-                    return new(PatchKind.Truncated, output.Append(Truncation).ToString());
+                    return Finish(PatchKind.Truncated);
                 }
             }
         }
@@ -230,7 +231,7 @@ internal static class ReviewerCandidateDiffSection
             if (bytes.StartsWith("diff --git "u8))
             {
                 inHunk = skipHunks = false;
-                matchingPaths = previousPath is null && (exactHeader is null || bytes.SequenceEqual(exactHeader));
+                matchingPaths = previousPath is null && (path is null || MatchesSinglePathHeader(bytes, path));
                 // Type changes can emit distinct deletion and addition patches for one path.
                 if (matchingPaths && ++fileHeaders > 2)
                     throw new InvalidDataException("Unexpected number of patches for a scoped path.");
@@ -253,13 +254,12 @@ internal static class ReviewerCandidateDiffSection
             }
             if (bytes.StartsWith("Binary files "u8))
             {
-                patchKind = PatchKind.Binary;
-                output.Clear();
+                omittedBinary = skipHunks = true;
                 return true;
             }
             if (bytes.StartsWith("new file mode 160000"u8) || bytes.StartsWith("deleted file mode 160000"u8))
                 skipHunks = true;
-            if (patchKind == PatchKind.Binary || skipHunks)
+            if (skipHunks)
                 return true;
 
             var header = bytes.StartsWith("@@ "u8);
@@ -281,6 +281,22 @@ internal static class ReviewerCandidateDiffSection
             return true;
         }
 
+        bool MatchesSinglePathHeader(ReadOnlySpan<byte> bytes, string expected)
+        {
+            if (exactHeader is not null)
+                return bytes.SequenceEqual(exactHeader);
+            if (bytes[^1] != (byte)'\n')
+                return false;
+
+            // Both sides use the same Git quoting and prefix length for a one-path patch.
+            // Split at their midpoint so spaces within a path remain part of that path.
+            var paths = bytes["diff --git "u8.Length..^1];
+            var separator = paths.Length / 2;
+            return paths.Length % 2 == 1 && paths[separator] == (byte)' ' &&
+                WorkerGitContext.DecodeReviewerPath(Encoding.UTF8.GetString(paths[..separator])).Equals($"a/{expected}", StringComparison.Ordinal) &&
+                WorkerGitContext.DecodeReviewerPath(Encoding.UTF8.GetString(paths[(separator + 1)..])).Equals($"b/{expected}", StringComparison.Ordinal);
+        }
+
         static bool IsPath(ReadOnlySpan<byte> bytes, string expected) =>
             bytes.Length > 0 && bytes[^1] == (byte)'\n' &&
             WorkerGitContext.DecodeReviewerPath(Encoding.UTF8.GetString(bytes[..^1])).Equals(expected, StringComparison.Ordinal);
@@ -295,11 +311,29 @@ internal static class ReviewerCandidateDiffSection
                 remaining -= rune.Utf8SequenceLength;
             }
         }
+
+        Patch Finish(PatchKind kind)
+        {
+            if (kind == PatchKind.Truncated)
+                output.Append(Truncation);
+            if (omittedBinary)
+            {
+                if (kind == PatchKind.NoHunks)
+                    return new(PatchKind.Binary);
+                output.Append(BinaryPortionOmitted);
+                if (kind == PatchKind.Complete)
+                    kind = PatchKind.PartialBinary;
+            }
+            return new(kind, output.ToString());
+        }
     }
+
+    private static int ReservedMarkerBytes(ReviewerScopedChange? change) =>
+        ByteCount(Truncation) + (change?.Status == 'T' ? ByteCount(BinaryPortionOmitted) : 0);
 
     private static int ByteCount(string value) => Encoding.UTF8.GetByteCount(value);
 
-    internal enum PatchKind { Complete, Truncated, Binary, NoHunks, Failed }
+    internal enum PatchKind { Complete, Truncated, Binary, NoHunks, Failed, PartialBinary }
 
     internal readonly record struct Patch(PatchKind Kind, string Text = "");
 }

@@ -281,6 +281,85 @@ public sealed class ReviewerCandidateDiffSectionTests(ITestOutputHelper output)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void MixedBinaryTypeChangeDeliversTextAndMarksBinaryOmission(bool binaryFirst)
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        const string path = "link.txt";
+        const string binarySentinel = "binary-payload-sentinel";
+        const string target = "text-target";
+        var source = Path.Combine(repo.Worktree, "blob-source");
+        File.WriteAllBytes(source, Encoding.UTF8.GetBytes("\0" + binarySentinel));
+        var binary = repo.Git("hash-object", "-w", "blob-source");
+        File.WriteAllText(source, target);
+        var text = repo.Git("hash-object", "-w", "blob-source");
+        var regular = $"100644,{binary},{path}";
+        var symlink = $"120000,{text},{path}";
+        repo.Git("update-index", "--add", "--cacheinfo", binaryFirst ? regular : symlink);
+        repo.Git("commit", "-m", "Before type change");
+        repo.Git("switch", "-c", "candidate");
+        repo.Git("update-index", "--cacheinfo", binaryFirst ? symlink : regular);
+        repo.Git("commit", "-m", "After type change");
+
+        var scope = Capture(repo);
+        Assert.Equal(new ReviewerScopedChange(path, null, 'T', true), Assert.Single(scope.Changes));
+        var hunk = binaryFirst ? $"@@ -0,0 +1 @@\n+{target}" : $"@@ -1 +0,0 @@\n-{target}";
+        var oracle = repo.Git("diff", "--no-ext-diff", "--no-textconv", Range(scope));
+        Assert.Contains("Binary files ", oracle);
+        Assert.Contains(hunk, oracle);
+
+        var dispatch = Prepare(repo, NewWork(AgentRole.Reviewer), true, scope);
+        var section = CandidateSection(File.ReadAllText(dispatch.PromptPath));
+        Assert.Contains($"### {path}\n{hunk}", section);
+        Assert.Contains("[Binary portion omitted]", section);
+        Assert.DoesNotContain(binarySentinel, section);
+        Assert.Contains($"git diff {Range(scope)}", section);
+    }
+
+    [Fact]
+    public void CaseInsensitivePathspecDeliversOnlyEachExactPathHunk()
+    {
+        using var repo = new InProcessGitFixture(commit: false);
+        var paths = new[] { "Case name.txt", "case name.txt" };
+        var bodies = new[] { "upper-only", "lower-only" };
+        repo.Git("commit", "--allow-empty", "-m", "Base");
+        repo.Git("switch", "-c", "candidate");
+        var records = new StringBuilder();
+        for (var index = 0; index < paths.Length; index++)
+        {
+            Write(repo, "blob-source", bodies[index] + "\n");
+            var blob = repo.Git("hash-object", "-w", "blob-source");
+            records.Append($"100644 blob {blob}\t{paths[index]}\n");
+        }
+        // Construct the tree directly so Windows can represent both names without checking them out.
+        var tree = GitCli.RunWithStandardInput(repo.Worktree, GitCli.DefaultTimeoutMilliseconds, records.ToString(), "mktree");
+        Assert.True(tree.Succeeded, tree.Error);
+        var candidate = repo.Git("commit-tree", tree.Output.Trim(), "-p", "HEAD", "-m", "Case-distinct paths");
+        repo.Git("update-ref", "HEAD", candidate);
+        var scope = Capture(repo);
+        Assert.Equal(paths, scope.Changes.Select(change => change.Path).Order(StringComparer.Ordinal).ToArray());
+
+        for (var index = 0; index < paths.Length; index++)
+        {
+            var path = paths[index];
+            var other = bodies[1 - index];
+            var change = Assert.Single(scope.Changes, change => change.Path == path);
+            // Use the Git option equivalent to GIT_ICASE_PATHSPECS=1 for this child only.
+            string[] args = ["--icase-pathspecs", "diff", "--no-renames", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+                "--diff-filter=A", scope.MergeBase, scope.CandidateCommit, "--", $":(top,literal){path}"];
+            var oracle = repo.Git(args);
+            Assert.Contains($"+{bodies[index]}", oracle);
+            Assert.Contains($"+{other}", oracle);
+
+            var patch = ReviewerCandidateDiffSection.ReadGitPatch(repo.Worktree, args, 512, change);
+            Assert.Equal(ReviewerCandidateDiffSection.PatchKind.Complete, patch.Kind);
+            Assert.Equal($"@@ -0,0 +1 @@\n+{bodies[index]}\n", patch.Text);
+            Assert.DoesNotContain(other, patch.Text);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void DisplayEscapesControlPathInScopeAndExcerpts(bool typed)
     {
         using var repo = new InProcessGitFixture(commit: false);
