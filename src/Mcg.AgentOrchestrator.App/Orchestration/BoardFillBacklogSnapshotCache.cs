@@ -109,10 +109,11 @@ internal sealed class BoardFillBacklogSnapshotCache(
     {
         // Microsoft.Data.Sqlite in this application uses the bundled e_sqlite3
         // provider. Compare against the actual VFS handle, including for aliases.
+        // sqlite3_file_control uses the primary database when its schema name is null.
         try
         {
             return SQLitePCL.raw.GetNativeLibraryName() == "e_sqlite3" &&
-                GetWin32Handle(connection.Handle!, "main", SqliteWin32GetHandle, out var file) == 0
+                GetWin32Handle(connection.Handle!, null, SqliteWin32GetHandle, out var file) == 0
                 ? GetIdentity(file) : null;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
@@ -133,6 +134,6 @@ internal sealed class BoardFillBacklogSnapshotCache(
         out FileIdentity information, int size);
 
     [DllImport("e_sqlite3", EntryPoint = "sqlite3_file_control", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int GetWin32Handle(SQLitePCL.sqlite3 database, [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+    private static extern int GetWin32Handle(SQLitePCL.sqlite3 database, [MarshalAs(UnmanagedType.LPUTF8Str)] string? name,
         int operation, out nint file);
 }

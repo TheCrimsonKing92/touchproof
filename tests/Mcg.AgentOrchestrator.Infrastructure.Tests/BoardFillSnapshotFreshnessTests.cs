@@ -168,7 +168,7 @@ public sealed class BoardFillSnapshotFreshnessTests
         var baseline = Exercise(false, noteCommitted);
         var candidate = Exercise(true, noteCommitted);
         Assert.Equal(noteCommitted ? "refused" : "filed", baseline.Result);
-        Assert.Equal(noteCommitted ? "not-fileable:owner-gated" : null, baseline.Reason);
+        Assert.Equal(noteCommitted ? "not-fileable:owner-gated" : "ok", baseline.Reason);
         Assert.Equal(noteCommitted ? null : ItemId, baseline.FiledItem);
         Assert.Equal(baseline, candidate);
 
