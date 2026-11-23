@@ -16,6 +16,13 @@ internal static class FixtureGitReplay
     private const string FactoryClass = "WorkerDispatchTestsSeededRepositoryFactoryTests";
     private const string FactoryMethod = "Create_MultipleCopies_ProducesIndependentCommittedRepositories";
 
+    internal sealed record ReplayHost(
+        Func<string, string, string[], string> RunNative,
+        Func<string> LocalAppData,
+        Action<string> LabelStaging,
+        Func<ProcessStartInfo, string, string, FixtureGitReplayTrace.Job> Capture,
+        Func<string, FixtureGitReplayTrace.Job, List<FixtureGitReplayTrace.Start>> ReadTree);
+
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -23,7 +30,7 @@ internal static class FixtureGitReplay
         WriteIndented = true
     };
 
-    internal static int Run(string[] args)
+    internal static int Run(string[] args, ReplayHost? host = null)
     {
         if (args.Length is < 2 or > 3)
         {
@@ -35,7 +42,10 @@ internal static class FixtureGitReplay
         {
             if (!OperatingSystem.IsWindows())
                 throw new PlatformNotSupportedException("Fixture Git replay requires an ETW-capable Windows host.");
-            var receipt = Replay(Path.GetFullPath(args[0]), Path.GetFullPath(args[1]), args.Length == 3 ? args[2] : "Debug");
+            host ??= new ReplayHost(RunNative, ResolveLocalAppData, LabelStaging,
+                FixtureGitReplayTrace.Capture, FixtureGitReplayTrace.ReadTree);
+            var receipt = Replay(Path.GetFullPath(args[0]), Path.GetFullPath(args[1]),
+                args.Length == 3 ? args[2] : "Debug", host);
             Console.WriteLine($"Fixture Git replay receipt {receipt}");
             return 0;
         }
@@ -47,18 +57,18 @@ internal static class FixtureGitReplay
     }
 
     [SupportedOSPlatform("windows")]
-    private static string Replay(string repo, string output, string configuration)
+    private static string Replay(string repo, string output, string configuration, ReplayHost host)
     {
-        var revision = RunNative(repo, "git.exe", "rev-parse", "HEAD");
-        if (RunNative(repo, "git.exe", "status", "--porcelain").Length != 0)
+        var revision = host.RunNative(repo, "git.exe", ["rev-parse", "HEAD"]);
+        if (host.RunNative(repo, "git.exe", ["status", "--porcelain"]).Length != 0)
             throw new InvalidOperationException("Start replay from a clean candidate checkout.");
         foreach (var ancestor in new[] { FixtureRevision, ExclusionTip, CensusRevision })
-            RunNative(repo, "git.exe", "merge-base", "--is-ancestor", ancestor, revision);
-        var parents = RunNative(repo, "git.exe", "log", "-1", "--format=%P");
-        var origin = RunNative(repo, "git.exe", "remote", "get-url", "origin");
-        var gitVersion = RunNative(repo, "git.exe", "--version");
-        var sdk = RunNative(repo, "dotnet.exe", "--version");
-        var powerShell = RunNative(repo, WorkerShell.Executable, "-NoProfile", "-NonInteractive", "--version");
+            host.RunNative(repo, "git.exe", ["merge-base", "--is-ancestor", ancestor, revision]);
+        var parents = host.RunNative(repo, "git.exe", ["log", "-1", "--format=%P"]);
+        var origin = host.RunNative(repo, "git.exe", ["remote", "get-url", "origin"]);
+        var gitVersion = host.RunNative(repo, "git.exe", ["--version"]);
+        var sdk = host.RunNative(repo, "dotnet.exe", ["--version"]);
+        var powerShell = host.RunNative(repo, WorkerShell.Executable, ["-NoProfile", "-NonInteractive", "--version"]);
         var launcherHash = Hash(typeof(FixtureGitReplay).Assembly.Location);
         var runnerHash = Hash(Path.Combine(repo, Runner));
 
@@ -79,9 +89,9 @@ internal static class FixtureGitReplay
                     "AdditiveConflict_MergesWithOriginalHeadAsFirstParent",
                     "MissingBranch_ReturnsRecoveryWithoutCreatingBranch",
                     "MissingWorktree_LeavesExistingBranchUnchanged"
-                ]),
+                ], host),
             CaptureSelection(repo, output, configuration, "seeded-factory", FactoryClass,
-                $"FullyQualifiedName={FactoryClass}&Name~{FactoryMethod}", [FactoryMethod])
+                $"FullyQualifiedName={FactoryClass}&Name~{FactoryMethod}", [FactoryMethod], host)
         };
 
         var artifacts = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories)
@@ -108,13 +118,10 @@ internal static class FixtureGitReplay
 
     [SupportedOSPlatform("windows")]
     private static FixtureGitReplayEvidence.Selection CaptureSelection(string repo, string output, string configuration,
-        string family, string testClass, string filter, string[] methods)
+        string family, string testClass, string filter, string[] methods, ReplayHost host)
     {
         var directory = Directory.CreateDirectory(Path.Combine(output, family)).FullName;
-        var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
-        if (string.IsNullOrWhiteSpace(localAppData))
-            localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var lowRoot = TempRootJanitor.ResolveLowIntegrityOwnedRootParent(Path.GetFullPath(localAppData));
+        var lowRoot = TempRootJanitor.ResolveLowIntegrityOwnedRootParent(Path.GetFullPath(host.LocalAppData()));
         var staging = Directory.CreateDirectory(Path.Combine(lowRoot, $"fixture-git-{Guid.NewGuid():N}")).FullName;
         var ownership = Path.Combine(staging, ".mtp-run-ownership.json");
         FixtureGitReplayTrace.Job job;
@@ -132,14 +139,12 @@ internal static class FixtureGitReplay
                 ["createdAt"] = DateTimeOffset.UtcNow,
                 ["runLabel"] = "fixture-git"
             });
-            var label = NativeIntegrityLabelWriter.Write(staging, "(OI)(CI)L", recursive: false);
-            if (!label.Succeeded)
-                throw new Win32Exception(label.Win32Error, $"Could not label fixture replay staging directory {staging} ({label.Reason}).");
+            host.LabelStaging(staging);
             var runner = StartInfo(repo, WorkerShell.Executable, "-NoProfile", "-NonInteractive", "-File", Path.Combine(repo, Runner),
                 "-Target", Path.Combine(repo, Project), "-Configuration", configuration, "-NoBuild", "-Filter", filter,
                 "-ResultsRoot", Path.Combine(staging, "tests"), "-SlotTimingFile", Path.Combine(staging, "slot.jsonl"),
                 "-TestInput", $"MCG_TEST_INPUT_FIXTURE_GIT_PROBE_TRACE={Path.Combine(staging, "probes.jsonl")}");
-            job = FixtureGitReplayTrace.Capture(runner, directory, trace);
+            job = host.Capture(runner, directory, trace);
         }
         finally
         {
@@ -154,8 +159,24 @@ internal static class FixtureGitReplay
             Directory.Delete(staging, recursive: true);
         }
 
-        var tree = FixtureGitReplayTrace.ReadTree(trace, job);
+        var tree = host.ReadTree(trace, job);
         return FixtureGitReplayEvidence.Reconcile(directory, family, testClass, filter, methods, tree, job);
+    }
+
+    private static string ResolveLocalAppData()
+    {
+        var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        return string.IsNullOrWhiteSpace(localAppData)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : localAppData;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void LabelStaging(string staging)
+    {
+        var label = NativeIntegrityLabelWriter.Write(staging, "(OI)(CI)L", recursive: false);
+        if (!label.Succeeded)
+            throw new Win32Exception(label.Win32Error, $"Could not label fixture replay staging directory {staging} ({label.Reason}).");
     }
 
     internal static ProcessStartInfo StartInfo(string directory, string executable, params string[] args)
