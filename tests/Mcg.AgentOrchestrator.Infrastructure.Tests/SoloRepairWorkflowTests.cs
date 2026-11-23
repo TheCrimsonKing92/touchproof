@@ -47,7 +47,7 @@ public sealed class SoloRepairWorkflowTests
         store.Retain(fixture.Goal.Id.Value, [finding]);
         store.ReserveGroup(finding.GroupKey, "{}");
         store.AcknowledgeRepair(finding.GroupKey, Guid.NewGuid().ToString("N"));
-        store.AcknowledgeEffect(SoloBaselineRepairStore.ValidationKey(finding, fixture.Main), "refreshed check");
+        RecordPassedValidation(store, finding, fixture.Main);
         store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main),
             PullRequestLandingTestFixture.Attempt);
         var changed = false;
@@ -369,6 +369,91 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Fact]
+    public async Task MainMovement_PreparesCandidateBeforeChargingBothArms()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var kernel = fixture.Kernel;
+        var goal = NewCandidate(fixture, kernel);
+        await ProduceFailure(fixture, goal);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with { Artifacts = [] }).ToArray() });
+        var failure = fixture.Summary;
+        kernel.RecordAcceptanceFailure(goal.Id, failure.FailedChecks!, failure.BranchHeadSha, failure.MainHeadSha,
+            failure.CheckAttributions, failure.BaselineAttestation, failure.AttemptId, failure.SoloFailureReceipt);
+        kernel.RouteRecordedAcceptanceFailure(goal.Id, "Hold the unresolved acceptance failure.");
+        var original = Assert.Single(Assert.IsType<SoloRepairPartition>(
+            SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null, failure)).Findings);
+        Assert.Equal(First, original.Identity);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+
+        fixture.Git("commit", "--allow-empty", "-m", "Move only main");
+        var main = fixture.Git("rev-parse", "main");
+        var path = Worktree(fixture, goal);
+        Assert.Equal(failure.MainHeadSha, RunGit(path, "merge-base", "HEAD", main));
+        var verifier = new ControlledVerifier(fixture.Root) { Finding = original, AttributionBaselinePass = false };
+        var driver = Driver(kernel, workspace, verifier);
+
+        AssertHold(driver.AdvanceOnce(goal, Policy), SoloHoldReasons.RepairPending);
+        var candidate = RunGit(path, "rev-parse", "HEAD");
+        Assert.NotEqual(failure.BranchHeadSha, candidate);
+        Assert.Equal(main, RunGit(path, "merge-base", "HEAD", main));
+        Assert.Empty(verifier.FocusedRuns);
+
+        AssertHold(driver.AdvanceOnce(goal, Policy), SoloHoldReasons.RepairPending);
+        Assert.Equal((original.Request!, candidate), Assert.Single(verifier.FocusedRuns));
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(storePath);
+        var inherited = Assert.Single(store.ReadFindings(goal.Id.Value).Where(row => row.Inherited));
+        Assert.Equal((candidate, main, main), (inherited.Candidate, inherited.Main, inherited.Baseline));
+        Assert.Equal(1, SoloRepairReplayTests.Count(storePath, "solo_repair_check"));
+    }
+
+    [Fact]
+    public async Task FocusedIntroduced_RoutesFromThePersistedProofAfterRestart()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var kernel = fixture.Kernel;
+        var goal = NewCandidate(fixture, kernel);
+        await ProduceFailure(fixture, goal);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with { Artifacts = [] }).ToArray() });
+        var failure = fixture.Summary;
+        var receipt = failure.SoloFailureReceipt!;
+        var context = new SoloAcceptanceConsumptionContext(receipt.CandidateSha, receipt.MainSha,
+            receipt.CandidateTreeSha, receipt.BaselineSha);
+        kernel.RecordAcceptanceFailure(goal.Id, failure.FailedChecks!, failure.BranchHeadSha, failure.MainHeadSha,
+            failure.CheckAttributions, failure.BaselineAttestation, failure.AttemptId, receipt);
+        kernel.RouteRecordedAcceptanceFailure(goal.Id, "Hold the unresolved acceptance failure.");
+        var original = Assert.Single(Assert.IsType<SoloRepairPartition>(
+            SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, context, failure)).Findings);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        var verifier = new ControlledVerifier(fixture.Root) { Finding = original, AttributionBaselinePass = true };
+        var interrupted = new SoloBaselineRepairCoordinator(workspace, kernel, verifier,
+            _ => new(receipt.CandidateSha, receipt.MainSha), _ => context,
+            () => throw new InvalidOperationException("Lost introduced route before dispatch."),
+            _ => new(true, false, false, false, false, false),
+            (_, _, _, _) => LandingEscalationWriteResult.CompletedWithoutExternalSinks,
+            (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory));
+        Assert.Equal("Lost introduced route before dispatch.", Assert.Throws<InvalidOperationException>(
+            () => interrupted.TryAdvance(goal, goal.Id.Value[..8], Policy)).Message);
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        Assert.Empty(store.ReadFindings(goal.Id.Value));
+        Assert.Equal(First, Assert.Single(store.ReadFindings(goal.Id.Value, introduced: true)).Identity);
+
+        var restarted = await repository.LoadAsync();
+        var dependent = restarted.GetGoal(goal.Id);
+        var driver = Driver(restarted, workspace, verifier);
+        driver.FailureDiagnosis = null;
+        _ = driver.AdvanceOnce(dependent, Policy with { MaxCriterionRetries = 1 });
+        Assert.Contains($"failing_tests={First}{Environment.NewLine}", Assert.Single(MarkerRetries(dependent)).Message);
+        Assert.Single(verifier.FocusedRuns);
+    }
+
+    [Fact]
     public async Task AcknowledgedRepair_WithItsOwnFailureRequiresRepairOwnerAction()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
@@ -409,6 +494,26 @@ public sealed class SoloRepairWorkflowTests
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         AgentCatalogStore.Save(workspace.AgentCatalogPath, AgentCatalog.Default());
         return workspace;
+    }
+
+    internal static SoloRepairCheckReceipt RecordPassedValidation(SoloBaselineRepairStore store, SoloRepairFinding finding, string main)
+    {
+        var key = SoloBaselineRepairStore.ValidationKey(finding, main);
+        var root = store.ResultDirectory(key);
+        Directory.CreateDirectory(root);
+        var trx = Path.Combine(root, "original-selection.trx");
+        WriteTrx(trx, true, finding.Identity);
+        var evidence = SoloRepairEvidenceTests.FocusedResult(finding, main, trx, true, true, finding.Identity);
+        var validation = SoloAcceptanceFailureReceiptReader.ReadRepairCheck(evidence, FindingEvidenceArm.Candidate, main, finding, root);
+        Assert.Equal("passed", validation.Outcome);
+        var proof = Path.Combine(root, "focused-result.json");
+        var identity = SoloBaselineRepairStore.FocusedProofIdentity(key, finding, main, main, false, false);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new SoloRepairVerifierResult(identity, validation));
+        File.WriteAllBytes(proof, bytes);
+        var receipt = validation with { Proof = new(proof, SoloBaselineRepairStore.Digest(bytes)) };
+        Assert.True(store.TryClaimCheck(key));
+        store.CompleteCheck(key, receipt);
+        return receipt;
     }
 
     private static ConductorDriver Driver(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,

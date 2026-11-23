@@ -15,7 +15,8 @@ internal sealed class SoloBaselineRepairCoordinator(
     Func<SoloAcceptanceFailureHandler> failureHandler,
     Func<Goal, GoalLifecycleFacts> getFacts,
     Func<Goal, GoalLifecycleState, string, string, LandingEscalationWriteResult> writeEscalation,
-    Func<string, CancellationToken, DotnetBuildEnvironmentLease> acquireStableSlot)
+    Func<string, CancellationToken, DotnetBuildEnvironmentLease> acquireStableSlot,
+    Func<Goal, string, ConductorAutonomyPolicy, ConductorAdvanceResult?>? prepareAttribution = null)
 {
     private readonly SoloBaselineRepairStore _store = new(
         Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
@@ -26,10 +27,12 @@ internal sealed class SoloBaselineRepairCoordinator(
         var context = goal.LatestAcceptanceFailure?.SoloFailureReceipt is not null ? readContext(goal) : null;
         RetainSoloRepairPartition(goal, context, completion);
         var findings = SoloRepairFindings(goal);
-        if (findings.Count == 0) return null;
+        var introducedFindings = _store.ReadFindings(goal.Id.Value, introduced: true);
+        if (findings.Count == 0 && introducedFindings.Count == 0) return null;
         var current = readCurrentRevisions(goal);
-        var introduced = ReadIntroduced(goal, current);
-        var repair = ReconcileSoloRepairs(goal, prefix, policy, findings, current, allowFreshGate: introduced is null);
+        var introduced = ReadIntroduced(introducedFindings, current);
+        var repair = findings.Count == 0 ? null :
+            ReconcileSoloRepairs(goal, prefix, policy, findings, current, allowFreshGate: introduced is null);
         introduced ??= ReadIntroduced(goal, current);
         if (introduced is not null && current is not null && readCurrentRevisions(goal) == current &&
             AttributedFailureDeveloperRoute.Decide(goal, introduced, current.BranchRevision, current.MainRevision) is { IsRoute: true } route)
@@ -37,8 +40,11 @@ internal sealed class SoloBaselineRepairCoordinator(
         return repair;
     }
 
-    private AttributedFailure? ReadIntroduced(Goal goal, GateReadyCandidateRevisionPair? current) => current is null ? null :
-        SoloAcceptanceFailureReceiptReader.RestoreIntroduced(_store.ReadFindings(goal.Id.Value, introduced: true).Where(finding =>
+    private AttributedFailure? ReadIntroduced(Goal goal, GateReadyCandidateRevisionPair? current) =>
+        ReadIntroduced(_store.ReadFindings(goal.Id.Value, introduced: true), current);
+
+    private static AttributedFailure? ReadIntroduced(IEnumerable<SoloRepairFinding> findings, GateReadyCandidateRevisionPair? current) =>
+        current is null ? null : SoloAcceptanceFailureReceiptReader.RestoreIntroduced(findings.Where(finding =>
             finding.Candidate == current.BranchRevision && finding.Main == current.MainRevision));
 
     private void RetainSoloRepairPartition(Goal goal, SoloAcceptanceConsumptionContext? current,
@@ -84,10 +90,14 @@ internal sealed class SoloBaselineRepairCoordinator(
                     continue;
                 }
 
-                var runBaseline = finding.Main == main || mainIsMergeBase.Value;
-                var requestKey = SoloBaselineRepairStore.AttributionKey(goal.Id.Value, finding, candidate, main,
-                    verifyCurrentPair: runBaseline);
-                var result = RunSoloRepairCheck(requestKey, finding, runBaseline ? candidate : main, main, runBaseline,
+                // Attribution requires an executed candidate and its merge base at the observed main.
+                // Prepare the candidate before charging an attempt for the resulting pair.
+                if (!mainIsMergeBase.Value)
+                    return prepareAttribution?.Invoke(goal, prefix, policy) ??
+                        SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairPending,
+                            "Preparing the candidate for focused attribution on current main.");
+                var requestKey = SoloBaselineRepairStore.AttributionKey(goal.Id.Value, finding, candidate, main);
+                var result = RunSoloRepairCheck(requestKey, finding, candidate, main, runBaseline: true,
                     allowCandidatePass: movedPair);
                 if (result.Outcome == "pending") { waiting ??= finding.Request; continue; }
                 if (movedPair && result.Outcome == "passed") continue;
@@ -248,7 +258,9 @@ internal sealed class SoloBaselineRepairCoordinator(
     private SoloRepairCheckReceipt RunSoloRepairCheck(string key, SoloRepairFinding finding, string checkoutSha,
         string baselineSha, bool runBaseline, bool allowCandidatePass = false)
     {
-        if (_store.ReadCheck(key) is { } prior) return prior;
+        var proofIdentity = SoloBaselineRepairStore.FocusedProofIdentity(key, finding, checkoutSha, baselineSha,
+            runBaseline, allowCandidatePass);
+        if (_store.ReadVerifiedCheck(key, proofIdentity) is { } prior) return prior;
         if (finding.Request is null)
             return new("unresolved", "An exact focused verifier execution is required.", []);
         using var ownership = new Mutex(false, "mcg-solo-repair-" + SoloBaselineRepairStore.Key(workspace.SqliteStatePath, key));
@@ -259,13 +271,10 @@ internal sealed class SoloBaselineRepairCoordinator(
         catch (AbandonedMutexException) { }
         try
         {
-            if (_store.ReadCheck(key) is { } completed) return completed;
+            if (_store.ReadVerifiedCheck(key, proofIdentity) is { } completed) return completed;
             var checkout = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("solo-repair-worktrees"),
                 SoloBaselineRepairStore.Key(workspace.SqliteStatePath, key));
-            var artifacts = Path.Combine(workspace.OrchestratorDirectory, "solo-repair-results", key);
-            var proofIdentity = SoloBaselineRepairStore.Key("focused-repair-result-v1", key, checkoutSha, baselineSha,
-                runBaseline.ToString(), allowCandidatePass.ToString(), finding.Request, finding.Check, finding.Identity,
-                finding.Project, finding.BaselineCheck);
+            var artifacts = _store.ResultDirectory(key);
             // The mutex owns execution. Recover the verifier's terminal output before
             // treating a claim with no SQLite execution record as an interrupted run.
             var staged = _store.ReadCheckExecution(key);
@@ -344,8 +353,6 @@ internal sealed class SoloBaselineRepairCoordinator(
         finally { RemoveSoloRepairCheckout(root, checkout); }
     }
 
-    private sealed record SoloRepairVerifierResult(string Identity, SoloRepairCheckReceipt Receipt);
-
     private static SoloRepairCheckReceipt WriteSoloRepairResult(string resultsRoot, string identity, SoloRepairCheckReceipt result)
     {
         var path = Path.Combine(resultsRoot, "focused-result.json");
@@ -357,7 +364,7 @@ internal sealed class SoloBaselineRepairCoordinator(
             stream.Flush(flushToDisk: true);
         }
         File.Move(temporary, path, overwrite: true);
-        return result with { Proof = new(path, SoloAcceptanceFailureEvidenceWriter.Digest(bytes)) };
+        return result with { Proof = new(path, SoloBaselineRepairStore.Digest(bytes)) };
     }
 
     private static SoloRepairCheckReceipt? ReadSoloRepairResult(string resultsRoot, string identity, string? expectedDigest = null)
@@ -365,17 +372,21 @@ internal sealed class SoloBaselineRepairCoordinator(
         var path = Path.Combine(resultsRoot, "focused-result.json");
         try
         {
-            var bytes = File.ReadAllBytes(path);
-            var digest = SoloAcceptanceFailureEvidenceWriter.Digest(bytes);
-            var result = JsonSerializer.Deserialize<SoloRepairVerifierResult>(bytes);
-            if (result?.Identity != identity || (expectedDigest is not null && expectedDigest != digest))
-                throw new InvalidDataException("The focused verifier result does not match its repair request.");
-            SoloAcceptanceFailureReceiptReader.ValidateRepairArtifacts(result.Receipt, resultsRoot);
-            return result.Receipt with { Proof = new(path, digest) };
+            return SoloBaselineRepairStore.ReadVerifierResult(path, resultsRoot, identity, expectedDigest);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException && !File.Exists(path))
         {
-            return null;
+            if (expectedDigest is not null) return null;
+            var temporary = path + ".tmp";
+            SoloRepairCheckReceipt recovered;
+            try { recovered = SoloBaselineRepairStore.ReadVerifierResult(temporary, resultsRoot, identity); }
+            catch (Exception temporaryError) when (SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(temporaryError))
+            {
+                // A partial write never acknowledged an execution. Reuse its existing claim.
+                return null;
+            }
+            File.Move(temporary, path);
+            return recovered with { Proof = recovered.Proof! with { Path = path } };
         }
         catch (Exception ex) when (SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(ex))
         {

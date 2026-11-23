@@ -144,6 +144,41 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
         finally { TryDeleteDirectory(repo); }
     }
 
+    [Xunit.Fact]
+    public void ReceiptReplay_ValidatedBaselineRepairRequiresAFreshGateOnDisjointMainAdvance()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var fixture = CreateAcceptedCandidate(repo, "src/candidate-only.txt", "candidate");
+            SeedReplayReceipt(fixture);
+            AppendCommit(repo, "src/unrelated-lane.txt", "racing landing");
+            var main = ReadGit(repo, "rev-parse", "main");
+            Assert.True(GoalWorktrees.TryRebaseOntoMain(repo, fixture.Goal.Id).UpdatedBranch);
+            var store = new SoloBaselineRepairStore(Path.Combine(fixture.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+            var finding = SoloRepairReplayTests.Finding() with
+                { Candidate = fixture.BranchHeadSha, Main = fixture.MainHeadSha, Baseline = fixture.MainHeadSha };
+            store.Retain(fixture.Goal.Id.Value, [finding]);
+            store.ReserveGroup(finding.GroupKey, "{}");
+            store.AcknowledgeRepair(finding.GroupKey, GoalId.New().Value);
+            SoloRepairWorkflowTests.RecordPassedValidation(store, finding, main);
+            var policy = ConductorAutonomyPolicy.Conservative;
+            var fresh = fixture.Driver.TryBuildParallelAcceptanceCandidate(fixture.Goal, policy, 0, out var declineReason);
+            Assert.Null(declineReason);
+            Assert.NotNull(fresh);
+            Assert.Equal(main, fresh.MainHeadSha);
+
+            Assert.Null(fixture.Driver.TryReplayPassedAcceptance(fixture.Goal, policy));
+            Assert.Null(fixture.Driver.TryReplayPassedAcceptance(fixture.Goal, policy));
+            Assert.IsType<AcceptanceMainAdvanceDisposition.Unknown>(
+                fixture.Driver.CarryForwardGreenVerdict(fixture.Candidate, fixture.Acceptance));
+            Assert.DoesNotContain(GoalOperationJournal.Read(repo, fixture.Goal.Id).Entries,
+                entry => entry.Operation == ConductorDriver.AcceptanceMainAdvanceCarryOperation);
+            Assert.Equal(main, ReadGit(repo, "rev-parse", "main"));
+        }
+        finally { TryDeleteDirectory(repo); }
+    }
+
     private static ConductorParallelAcceptanceAttempt SeedReplayReceipt(CandidateFixture fixture)
     {
         fixture.Kernel.RecordGoalRefinement(fixture.Goal.Id, new RefinedSpec(

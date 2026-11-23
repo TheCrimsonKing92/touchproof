@@ -43,7 +43,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                 if (SoloCoveredCheckInheritance.CoveredChecks(check, checks) is not null) continue;
                 var candidateRows = new Lazy<ILookup<string, TrxRow>>(() =>
                     ReadRows(item, receipt.ResultsRoot, partitionAmbiguousRows: true)
-                    .ValidateRows().ToLookup(row => row.Key, StringComparer.Ordinal));
+                    .ValidateRows().SelectMany(row => (row.AmbiguousIdentities ?? [row.Key])
+                        .Select(key => (Key: key, Row: row))).ToLookup(item => item.Key, item => item.Row, StringComparer.Ordinal));
                 var identities = (check.FailingTestIdentities ?? []).DefaultIfEmpty("").Distinct(StringComparer.Ordinal);
                 foreach (var identity in identities)
                 {
@@ -191,7 +192,9 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                 !baseline.Check.Passed && exact?.Value.Outcome == "Failed")
                 return finding with { Inherited = true, Reason = null };
             if (origin != AcceptanceTestFailureOrigin.Introduced) return finding;
-            var selected = rows.Where(row => AcceptanceFailureAttributionPlanner.NormalizeIdentity(row.Key) == selector).ToArray();
+            if (rows.Any(row => row.AmbiguousIdentities?.Contains(identity, StringComparer.Ordinal) == true)) return finding;
+            var selected = rows.Where(row => row.AmbiguousIdentities is null &&
+                AcceptanceFailureAttributionPlanner.NormalizeIdentity(row.Key) == selector).ToArray();
             var introduced = baseline.Check.Passed
                 ? exact?.Value.Outcome == "Passed" && rows.All(row => row.Value.Outcome == "Passed")
                 : (exact is null || exact.Value.Outcome == "Passed") && selected.Count(row => row.Key == identity) <= 1 &&
@@ -211,8 +214,9 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
     private static TrxRow? ReadExactRow(IEnumerable<TrxRow> rows, string identity)
     {
-        var matches = rows.Where(row => row.Key == identity).ToArray();
-        return matches.Length == 1 ? matches[0] : null;
+        var matches = rows.Where(row => row.Key == identity ||
+            row.AmbiguousIdentities?.Contains(identity, StringComparer.Ordinal) == true).ToArray();
+        return matches is [{ AmbiguousIdentities: null } exact] ? exact : null;
     }
 
     internal static SoloRepairCheckReceipt ReadRepairCheck(FocusedEvidenceRunResult result, FindingEvidenceArm arm,
@@ -268,12 +272,6 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             CandidateArtifacts = candidate.Artifacts,
             Feedback = candidate.Feedback
         };
-    }
-
-    internal static void ValidateRepairArtifacts(SoloRepairCheckReceipt receipt, string resultsRoot)
-    {
-        foreach (var artifact in receipt.Artifacts.Concat(receipt.CandidateArtifacts ?? []))
-            ReadArtifact(artifact, resultsRoot);
     }
 
     internal static bool IsRepairEvidenceError(Exception ex) =>

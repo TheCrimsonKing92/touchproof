@@ -199,17 +199,32 @@ public sealed class SoloRepairEvidenceTests
         Assert.Equal($"{Project}: FullyQualifiedName~{First}", unresolved.Request);
     }
 
-    [Fact]
-    public async Task ContradictoryCandidateRows_LeaveOnlyTheirIdentityUnresolved()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ContradictoryCandidateRows_LeaveOnlyTheirIdentityUnresolved(bool duplicateDefinition)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce(baselineFails: true);
         var original = Assert.Single(Assert.Single(fixture.Proof().Checks).Artifacts);
         var trx = XDocument.Load(original.Path);
         var results = trx.Root!.Element("Results")!;
-        var contradictory = new XElement(results.Elements().Single(row => (string?)row.Attribute("testName") == First));
-        contradictory.SetAttributeValue("outcome", "Passed");
-        results.Add(contradictory);
+        var row = results.Elements().Single(row => (string?)row.Attribute("testName") == First);
+        if (duplicateDefinition)
+        {
+            var definitions = trx.Root!.Element("TestDefinitions")!;
+            var contradictory = new XElement(definitions.Elements().Single(definition =>
+                (string?)definition.Attribute("id") == (string?)row.Attribute("testId")));
+            contradictory.Element("TestMethod")!.SetAttributeValue("name", "Unknown");
+            definitions.Add(contradictory);
+        }
+        else
+        {
+            var contradictory = new XElement(row);
+            contradictory.SetAttributeValue("outcome", "Passed");
+            results.Add(contradictory);
+        }
+        var extraRows = duplicateDefinition ? 0 : 1;
         var artifact = fixture.WriteLiteralTrx("contradictory.trx", trx.ToString());
         fixture.ReplaceProof(proof => proof with
         {
@@ -218,8 +233,8 @@ public sealed class SoloRepairEvidenceTests
                 Artifacts = [artifact],
                 Check = item.Check with
                 {
-                    ExecutedTestCount = item.Check.ExecutedTestCount + 1,
-                    DiscoveredTestCount = item.Check.DiscoveredTestCount + 1
+                    ExecutedTestCount = item.Check.ExecutedTestCount + extraRows,
+                    DiscoveredTestCount = item.Check.DiscoveredTestCount + extraRows
                 }
             }).ToArray()
         });

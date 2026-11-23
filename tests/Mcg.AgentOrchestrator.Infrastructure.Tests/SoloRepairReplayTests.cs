@@ -9,6 +9,33 @@ using static SoloAttributedFailureRouteFixture;
 public sealed class SoloRepairReplayTests
 {
     [Fact]
+    public void CompletedValidation_RequiresItsRetainedProofAndOriginalSelectionArtifacts()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var goal = fixture.Goal.Id.Value;
+        var finding = Finding();
+        store.Retain(goal, [finding]);
+        store.ReserveGroup(finding.GroupKey, "{}");
+        store.AcknowledgeRepair(finding.GroupKey, GoalId.New().Value);
+        var result = SoloRepairWorkflowTests.RecordPassedValidation(store, finding, finding.Main);
+        bool Ready() => store.IsEvidenceCurrent(goal, store.ReadFindings(goal), finding.Candidate, finding.Main);
+        Assert.True(Ready());
+
+        var artifact = Assert.Single(result.Artifacts);
+        var original = File.ReadAllBytes(artifact.Path);
+        File.AppendAllText(artifact.Path, " ");
+        Assert.False(Ready());
+        File.WriteAllBytes(artifact.Path, original);
+        Assert.True(Ready());
+
+        File.Delete(result.Proof!.Path);
+        Assert.False(Ready());
+        Assert.Equal("passed", store.ReadCheck(SoloBaselineRepairStore.ValidationKey(finding, finding.Main))?.Outcome);
+    }
+
+    [Fact]
     public void Grouping_UsesExactBaselineScopeAndDataCase()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
@@ -87,6 +114,7 @@ public sealed class SoloRepairReplayTests
     [InlineData("busy")]
     [InlineData("claimed")]
     [InlineData("verifier-result")]
+    [InlineData("flushed-result")]
     [InlineData("executed")]
     public async Task MissingCandidateTrx_RecoversFocusedEvidenceAcrossDeferralAndRestart(string boundary)
     {
@@ -129,7 +157,7 @@ public sealed class SoloRepairReplayTests
         }
         else
         {
-            var write = boundary == "verifier-result" ? "INSERT ON solo_repair_check_execution" : "UPDATE OF result ON solo_repair_check";
+            var write = boundary == "executed" ? "UPDATE OF result ON solo_repair_check" : "INSERT ON solo_repair_check_execution";
             ExecuteSql(storePath, $"""
                 CREATE TRIGGER stop_check_ack BEFORE {write}
                 BEGIN SELECT RAISE(ABORT, 'lost check write'); END
@@ -137,11 +165,13 @@ public sealed class SoloRepairReplayTests
             var interrupted = Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier);
             Assert.Contains("lost check write", Assert.Throws<SqliteException>(() => Advance(interrupted, fixture.Goal)).Message);
             Assert.Equal(boundary == "executed" ? "inherited" : null, store.ReadCheckExecution(key)?.Outcome);
-            Assert.True(File.Exists(Path.Combine(workspace.OrchestratorDirectory, "solo-repair-results", key, "focused-result.json")));
+            var resultPath = Path.Combine(store.ResultDirectory(key), "focused-result.json");
+            Assert.True(File.Exists(resultPath));
+            if (boundary == "flushed-result") File.Move(resultPath, resultPath + ".tmp");
             Assert.Null(store.ReadCheck(key));
             ExecuteSql(storePath, "DROP TRIGGER stop_check_ack");
         }
-        Assert.Equal(boundary is "executed" or "verifier-result" ? 1 : 0, verifier.FocusedRuns.Count);
+        Assert.Equal(boundary is "executed" or "verifier-result" or "flushed-result" ? 1 : 0, verifier.FocusedRuns.Count);
 
         var restarted = await repository.LoadAsync();
         var dependent = restarted.GetGoal(fixture.Goal.Id);

@@ -255,7 +255,7 @@ internal sealed partial class ConductorDriver
         _soloBaselineRepair = new(workspace, kernel, acceptanceVerifier, ReadCurrentCohortAttributionRevisions,
             ReadSoloAcceptanceContext, () => SoloAcceptanceFailure, GetFacts, WriteEscalation,
             (key, token) => CohortPartitionStableSlotLeaseSource?.Invoke(key, token) ??
-                _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token));
+                _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token), PrepareSoloRepairAttribution);
         _runDeveloperCompletionStructuralPreflight = path =>
             DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
         _cohortAcceptanceVerifier = acceptanceVerifier;

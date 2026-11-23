@@ -81,12 +81,15 @@ internal sealed partial class ConductorDriver
         return _parallelAcceptanceAttemptCoordinator.ReplayPassedReconciledReceipt(candidate,
             decision =>
             {
+                var original = decision.Run!.Candidate;
+                if ((original.BranchHeadSha != candidate.BranchHeadSha || original.MainHeadSha != candidate.MainHeadSha) &&
+                    _soloBaselineRepair?.HasObligations(goal) == true)
+                    return null;
                 if (PassedAcceptanceReceiptReplay.LandingHold(goal, policy,
                     () => HasActiveOwnerReviewHold(goal, out var sha, out var receipt)
                         ? OwnerReviewHeld(goal, candidate.GoalPrefix, policy, sha, receipt!) : null,
                     () => HasActiveApparatusHold(goal, out _), FormatAcceptanceCandidate) is { } hold)
                 {
-                    var original = decision.Run!.Candidate;
                     var current = _resolveAcceptanceHeads(goal);
                     if ((original.BranchHeadSha != current.BranchHeadSha || original.MainHeadSha != current.MainHeadSha) &&
                         CarryForwardGreenVerdict(original, decision.Run.Acceptance!) is not

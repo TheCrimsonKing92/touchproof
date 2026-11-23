@@ -21,6 +21,7 @@ internal sealed record SoloRepairGroup(string Key, string IntakePayload, string?
 internal sealed record SoloRepairCheckReceipt(string Outcome, string Detail, IReadOnlyList<SoloAcceptanceArtifact> Artifacts,
     IReadOnlyList<SoloAcceptanceArtifact>? CandidateArtifacts = null, string? Feedback = null,
     SoloAcceptanceArtifact? Proof = null);
+internal sealed record SoloRepairVerifierResult(string Identity, SoloRepairCheckReceipt Receipt);
 
 internal sealed class SoloBaselineRepairStore
 {
@@ -251,11 +252,10 @@ internal sealed class SoloBaselineRepairStore
     }
 
     internal static string NormalGateKey(string goal, string candidate, string main) => Key("normal-gate", goal, candidate, main);
-    internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main,
-        bool verifyCurrentPair = false)
+    internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main)
     {
         var moved = finding.Candidate != candidate || finding.Main != main;
-        return Key(moved && (verifyCurrentPair || finding.Main == main) ? "attribution-current-pair" : "attribution",
+        return Key(moved ? "attribution-current-pair" : "attribution",
             goal, finding.Check, finding.Identity, candidate, main);
     }
     internal static string ValidationKey(SoloRepairFinding finding, string main) => Key("validation", finding.GroupKey, main);
@@ -275,12 +275,64 @@ internal sealed class SoloBaselineRepairStore
         if (candidate is null || main is null) return false;
         return findings.All(finding => finding.Inherited
             ? ReadGroup(finding.GroupKey)?.RepairGoal is { } repair && repair != goal &&
-                ReadCheck(ValidationKey(finding, main))?.Outcome == "passed"
+                IsVerifiedPass(ValidationKey(finding, main), finding, main, main, attribution: false)
             : HasExactReplacement(finding, findings, candidate, main) ||
                 ((finding.Candidate != candidate || finding.Main != main) &&
-                 (ReadCheck(AttributionKey(goal, finding, candidate, main, verifyCurrentPair: true)) ??
-                  ReadCheck(AttributionKey(goal, finding, candidate, main)))?.Outcome == "passed"));
+                 IsVerifiedPass(AttributionKey(goal, finding, candidate, main), finding, candidate, main, attribution: true)));
     }
+
+    private bool IsVerifiedPass(string key, SoloRepairFinding finding, string checkout, string main, bool attribution) =>
+        ReadVerifiedCheck(key, FocusedProofIdentity(key, finding, checkout, main, attribution, attribution))?.Outcome == "passed";
+
+    internal string ResultDirectory(string key) => Path.Combine(Path.GetDirectoryName(_path)!, "solo-repair-results", key);
+
+    internal static string FocusedProofIdentity(string key, SoloRepairFinding finding, string checkout, string main,
+        bool runBaseline, bool allowCandidatePass) => Key("focused-repair-result-v1", key, checkout, main,
+            runBaseline.ToString(), allowCandidatePass.ToString(), finding.Request, finding.Check, finding.Identity,
+            finding.Project, finding.BaselineCheck);
+
+    internal SoloRepairCheckReceipt? ReadVerifiedCheck(string key, string identity)
+    {
+        var stored = ReadCheck(key);
+        if (stored is null || stored.Outcome == "unresolved") return stored;
+        var root = ResultDirectory(key);
+        if (stored.Proof is { } proof && proof.Path == Path.Combine(root, "focused-result.json"))
+        {
+            try
+            {
+                var verified = ReadVerifierResult(proof.Path, root, identity, proof.Sha256);
+                if (verified.Outcome == stored.Outcome && verified.Artifacts.Count > 0)
+                    return verified;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
+            {
+                return new("unresolved", ex.Message, []);
+            }
+        }
+        return new("unresolved", "The completed check is missing matching focused verifier evidence.", []);
+    }
+
+    internal static SoloRepairCheckReceipt ReadVerifierResult(string path, string root, string identity, string? expectedDigest = null)
+    {
+        var bytes = File.ReadAllBytes(path);
+        var digest = Digest(bytes);
+        var result = JsonSerializer.Deserialize<SoloRepairVerifierResult>(bytes);
+        if (result?.Identity != identity || result.Receipt?.Artifacts is null ||
+            (expectedDigest is not null && expectedDigest != digest))
+            throw new InvalidDataException("The focused verifier result does not match its repair request.");
+        var prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        foreach (var artifact in result.Receipt.Artifacts.Concat(result.Receipt.CandidateArtifacts ?? []))
+        {
+            if (artifact is null || !Path.GetFullPath(artifact.Path).StartsWith(prefix,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidDataException("solo-foreign-artifact");
+            if (Digest(File.ReadAllBytes(artifact.Path)) != artifact.Sha256)
+                throw new InvalidDataException("solo-artifact-digest-mismatch");
+        }
+        return result.Receipt with { Proof = new(path, digest) };
+    }
+
+    internal static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
     internal void AcknowledgeEffect(string key, string detail)
     {

@@ -82,9 +82,11 @@ internal sealed class SoloAcceptanceFlakePartition
             throw new InvalidDataException($"solo-incomplete-check-rows: discovered rows={discoveredRows}; recorded={discovered}");
 
         // Each check must account for its own failures. A flake proven elsewhere cannot excuse a local mismatch.
-        var observed = _rows.Where(row => row.Value.Outcome == "Failed" && !_confirmedFlakes.Contains(row.Key))
+        var ambiguous = _rows.SelectMany(row => row.AmbiguousIdentities ?? []).ToHashSet(StringComparer.Ordinal);
+        bool IsAccountable(string identity) => !_confirmedFlakes.Contains(identity) && !ambiguous.Contains(identity);
+        var observed = _rows.Where(row => row.Value.Outcome == "Failed" && IsAccountable(row.Key))
             .Select(row => row.Key).Distinct(StringComparer.Ordinal);
-        var declared = (_check.FailingTestIdentities ?? []).Where(identity => !_confirmedFlakes.Contains(identity));
+        var declared = (_check.FailingTestIdentities ?? []).Where(IsAccountable);
         if (!SoloAcceptanceFailureReceiptReader.SameNames(observed, declared))
             throw new InvalidDataException("solo-failing-tests-mismatch");
         return _rows;

@@ -194,7 +194,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         check.ExecutedTestCount is > 0 && check.CompletionDecision?.TimedOut != true &&
         (check.Passed ? check.ExitCode == 0 : check.ExitCode is > 0);
 
-    internal sealed record TrxRow(string Key, AcceptanceTrxFailure Value, string Path);
+    internal sealed record TrxRow(string Key, AcceptanceTrxFailure Value, string Path,
+        IReadOnlyList<string>? AmbiguousIdentities = null);
 
     private static SoloAcceptanceFlakePartition ReadRows(SoloAcceptanceCheckEvidence check, string root,
         bool allowConfirmedFlakes = false, bool partitionAmbiguousRows = false)
@@ -211,26 +212,44 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         if (doc.Root?.Name.LocalName != "TestRun" || string.IsNullOrWhiteSpace(doc.Root.Attribute("id")?.Value))
             throw new InvalidDataException("solo-trx-run-identity-missing: identity=(unresolved); outcomes=(unavailable)");
         var definitions = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
+        var alternateDefinitions = new Dictionary<string, List<XElement>>(StringComparer.OrdinalIgnoreCase);
         foreach (var definition in doc.Descendants().Where(e => e.Name.LocalName == "UnitTest"))
-            if (definition.Attribute("id")?.Value is not { Length: > 0 } id || !definitions.TryAdd(id, definition))
-                throw new InvalidDataException($"solo-trx-ambiguous-definition: identity=(unresolved); outcomes=(unavailable); testId={definition.Attribute("id")?.Value ?? "(absent)"}");
+        {
+            if (definition.Attribute("id")?.Value is { Length: > 0 } id)
+            {
+                if (definitions.TryAdd(id, definition)) continue;
+                if (partitionAmbiguousRows)
+                {
+                    if (!alternateDefinitions.TryGetValue(id, out var alternatives))
+                        alternateDefinitions.Add(id, alternatives = []);
+                    alternatives.Add(definition);
+                    continue;
+                }
+            }
+            throw new InvalidDataException($"solo-trx-ambiguous-definition: identity=(unresolved); outcomes=(unavailable); testId={definition.Attribute("id")?.Value ?? "(absent)"}");
+        }
         var rows = new List<TrxRow>();
         foreach (var row in doc.Descendants().Where(e => e.Name.LocalName == "UnitTestResult"))
         {
-            if (!definitions.TryGetValue(row.Attribute("testId")?.Value ?? "", out var definition))
+            var testId = row.Attribute("testId")?.Value ?? "";
+            if (!definitions.TryGetValue(testId, out var definition))
                 throw new InvalidDataException("solo-trx-definition-missing: " + RowContext(row, null));
             var identity = AcceptanceTrxTestIdentityResolver.Resolve(row, definition);
             var outcome = row.Attribute("outcome")?.Value;
             if (string.IsNullOrWhiteSpace(identity) || outcome is not ("Passed" or "Failed" or "NotExecuted"))
                 throw new InvalidDataException("solo-trx-nonexecuted-row: " + RowContext(row, identity));
-            rows.Add(new(identity, new(identity, outcome, null, null), artifact.Path));
+            var ambiguous = alternateDefinitions.TryGetValue(testId, out var alternatives)
+                ? alternatives.Select(other => AcceptanceTrxTestIdentityResolver.Resolve(row, other))
+                    .OfType<string>().Prepend(identity).Distinct(StringComparer.Ordinal).ToArray()
+                : null;
+            rows.Add(new(identity, new(identity, outcome, null, null), artifact.Path, ambiguous));
         }
         if (rows.Count == 0) throw new InvalidDataException("solo-trx-empty: identity=(unavailable); outcomes=(unavailable)");
         // Prove uniqueness before looking up a failure message by identity.
         if (!partitionAmbiguousRows) RequireUnambiguousFailures(rows, "solo-trx-ambiguous-row");
         var failures = AcceptanceTrxFailureReader.Read(doc, artifact.Path).Failures
             .ToLookup(failure => failure.TestName, StringComparer.Ordinal);
-        return rows.Select(row => row.Value.Outcome == "Failed"
+        return rows.Select(row => row.AmbiguousIdentities is null && row.Value.Outcome == "Failed"
             ? row with { Value = failures[row.Key].First(failure => failure.Outcome == "Failed") } : row).ToList();
     }
 
