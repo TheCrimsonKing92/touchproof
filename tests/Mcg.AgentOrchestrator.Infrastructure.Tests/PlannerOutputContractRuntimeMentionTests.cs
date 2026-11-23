@@ -129,7 +129,9 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
         var result = PlannerOutputContract.Resolve(plan, string.Empty, root);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.StartsWith("target citation 'Global.json:43' does not exist", result.Diagnostic);
+        Xunit.Assert.Contains(
+            "target citation 'Global.json:43' does not exist and is not marked as a new file",
+            result.Diagnostic, StringComparison.Ordinal);
         Xunit.Assert.Contains($"Did you mean `{explicitPath}:43`?", result.Diagnostic, StringComparison.Ordinal);
         Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(
             plan.Replace("Global.json:43", $"{explicitPath}:43", StringComparison.Ordinal),
