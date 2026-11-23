@@ -280,10 +280,11 @@ public sealed class SoloRepairWorkflowTests
         store.ReserveGroup(finding.GroupKey, "{}");
         store.AcknowledgeRepair(finding.GroupKey, repair.Id.Value);
         Assert.Empty(repair.OutstandingPostLandingDuties);
-        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true, Finding = finding };
+        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true, NormalCheckName = finding.Check, Finding = finding };
 
         var context = CreateCliContext(fixture.Kernel, workspace, repair, verifier);
         Assert.True(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+        Assert.Equal((repair.Id, repairHead), Assert.Single(verifier.NormalRuns));
         Assert.Equal(repairHead, fixture.Git("rev-parse", "main"));
         Assert.True(File.Exists(Path.Combine(fixture.Repo, "repair.txt")));
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
@@ -931,6 +932,7 @@ public sealed class SoloRepairWorkflowTests
         internal List<(string Request, string Sha)> FocusedRuns { get; } = [];
         internal List<(GoalId Goal, string Sha)> NormalRuns { get; } = [];
         internal bool NormalPass { get; set; }
+        internal string NormalCheckName { get; init; } = "normal candidate acceptance";
 
         public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(string worktreePath, GoalId? goalId,
             string request, IAcceptanceFocusedVerificationOwner executionOwner, int? stableSlotIndex = null,
@@ -966,7 +968,7 @@ public sealed class SoloRepairWorkflowTests
         {
             var id = Assert.IsType<GoalId>(goalId);
             NormalRuns.Add((id, RunGit(worktreePath, "rev-parse", "HEAD")));
-            var check = new AcceptanceCheckResult("normal candidate acceptance", NormalPass, NormalPass ? 0 : 1,
+            var check = new AcceptanceCheckResult(NormalCheckName, NormalPass, NormalPass ? 0 : 1,
                 NormalPass ? "pass" : "branch-local failure");
             return Task.FromResult(new AcceptanceVerificationResult(NormalPass, false, check.ExitCode, check.OutputTail,
                 Checks: [check]));
