@@ -165,6 +165,9 @@ public sealed class SoloRepairWorkflowTests
         var kernel = await repository.LoadAsync();
         first = kernel.GetGoal(first.Id);
         second = kernel.GetGoal(second.Id);
+        var secondDispatch = Assert.Single(second.Tasks.Single().DispatchHistory);
+        Assert.Equal(oldMain, secondDispatch.BaseCommit);
+        Assert.Equal(RunGit(Worktree(fixture, second), "rev-parse", "HEAD"), secondDispatch.ResultCommit);
         driver = Driver(kernel, workspace, verifier);
         AssertHold(driver.AdvanceOnce(first, Policy), SoloHoldReasons.RepairPending);
         Assert.Equal(receipt.GoalId, store.ReadGroup(finding.GroupKey)?.RepairGoal);
@@ -362,9 +365,12 @@ public sealed class SoloRepairWorkflowTests
     {
         var goal = CompletedGoal(kernel, fixture.Repo);
         var worktree = GoalWorktrees.Ensure(fixture.Repo, goal.Id);
+        var taskId = goal.Tasks.Single().Id;
+        kernel.RecordDispatchBaseCommit(goal.Id, taskId, RunGit(worktree, "rev-parse", "HEAD"));
         File.WriteAllText(Path.Combine(worktree, "README.md"), goal.Id.Value);
         RunGit(worktree, "add", "README.md");
         RunGit(worktree, "commit", "-m", "Candidate changes");
+        kernel.RecordDispatchResultCommit(goal.Id, taskId, RunGit(worktree, "rev-parse", "HEAD"));
         return goal;
     }
 
