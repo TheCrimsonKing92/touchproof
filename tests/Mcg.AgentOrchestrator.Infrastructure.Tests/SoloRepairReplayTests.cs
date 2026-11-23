@@ -179,7 +179,8 @@ public sealed class SoloRepairReplayTests
         using var db = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,
-            Mode = SqliteOpenMode.ReadOnly
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
         }.ToString());
         db.Open();
         using var command = db.CreateCommand();
@@ -189,7 +190,11 @@ public sealed class SoloRepairReplayTests
 
     private static void ExecuteSql(string path, string sql)
     {
-        using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+        using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Pooling = false
+        }.ToString());
         db.Open();
         using var command = db.CreateCommand();
         command.CommandText = sql;

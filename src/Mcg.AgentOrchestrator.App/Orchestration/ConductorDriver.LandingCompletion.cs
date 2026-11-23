@@ -92,6 +92,15 @@ internal sealed partial class ConductorDriver
 
         if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt))
         {
+            // Cross-goal repetition is compatible with an inherited failure. Give the
+            // repair coordinator the first decision on these rows for a live worktree.
+            if (_soloBaselineRepair is not null && acceptance.SoloFailureReceipt is not null &&
+                acceptance.RequiredUnmetCriteria.Any(check =>
+                    check.FailingTestAttributions is not { Count: > 0 } attributions ||
+                    attributions.Any(test => test.Origin is AcceptanceTestFailureOrigin.Inherited or AcceptanceTestFailureOrigin.Unattributed)) &&
+                ReadSoloAcceptanceContext(goal) is not null)
+                return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance);
+
             // Prepared solo attribution can prove every failure is inherited. Keep
             // the existing excluded hold and main-suspect evidence before routing
             // actionable findings through the solo receipt consumer.

@@ -152,6 +152,58 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(5, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
     }
 
+    [Fact]
+    public async Task MixedCompletion_LinksRepairRoutesOnlyIntroducedFeedbackAndRetainsUnresolvedRow()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var main = fixture.Git("rev-parse", "HEAD");
+        var workspace = Workspace(fixture);
+        var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+        var maintenance = await portfolio.AddEpicAsync("baseline-maintenance");
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(fixture.Kernel);
+        await fixture.Produce(mixed: true, attemptId: goal.Id.Value, candidateWorktree: Worktree(fixture, goal), goal: goal);
+        fixture.ReplaceProof(proof => proof with
+        {
+            Bindings = proof.Bindings.Where(binding => binding.TestIdentity != Unknown).ToArray()
+        });
+        var request = $"Sample.Tests: FullyQualifiedName~{Unknown}";
+        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequest = request };
+        var driver = Driver(fixture.Kernel, workspace, verifier);
+        driver.FailureDiagnosis = null;
+
+        var outcome = Complete(driver, goal, fixture.Summary, Policy with { MaxCriterionRetries = 1 }).Outcome;
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(outcome);
+        var retry = Assert.Single(MarkerRetries(goal));
+        Assert.Equal(RetryCause.NewTestFinding, goal.Tasks.Single().PendingRetryCause);
+        Assert.Contains($"failing_tests={Long}{Environment.NewLine}", retry.Message);
+        Assert.Contains($"reproduced {Long}:", retry.Message);
+        Assert.DoesNotContain(First, retry.Message);
+        Assert.DoesNotContain(Unknown, retry.Message);
+
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(storePath);
+        var findings = store.ReadFindings(goal.Id.Value);
+        Assert.Equal(2, findings.Count);
+        var inherited = Assert.Single(findings.Where(row => row.Inherited));
+        Assert.Equal(First, inherited.Identity);
+        var group = Assert.IsType<SoloRepairGroup>(store.ReadGroup(inherited.GroupKey));
+        Assert.Equal(maintenance.Id, (await portfolio.GetGoalMembershipAsync(Assert.IsType<string>(group.RepairGoal)))?.EpicId);
+        Assert.Equal(1, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
+
+        var unresolved = Assert.Single(findings.Where(row => !row.Inherited));
+        Assert.Equal(Unknown, unresolved.Identity);
+        Assert.Equal(request, unresolved.Request);
+        Assert.Equal(fixture.Summary.SoloFailureReceipt!.Evidence, unresolved.Proof);
+        Assert.NotEmpty(unresolved.CandidateArtifacts);
+        var candidate = Assert.IsType<string>(fixture.Summary.BranchHeadSha);
+        Assert.Equal((request, candidate), Assert.Single(verifier.FocusedRuns));
+        var attribution = store.ReadCheck(SoloBaselineRepairStore.AttributionKey(goal.Id.Value, unresolved, candidate, main));
+        Assert.Equal("unresolved", attribution?.Outcome);
+    }
+
     internal static OrchestratorWorkspace Workspace(SoloAttributedFailureRouteFixture fixture)
     {
         var workspace = OrchestratorWorkspace.ForProject("solo-repair-test", fixture.Repo, integrationBranch: "main",
@@ -165,8 +217,9 @@ public sealed class SoloRepairWorkflowTests
     private static ConductorDriver Driver(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         ControlledVerifier verifier)
     {
+        var now = DateTimeOffset.UtcNow;
         var driver = new ConductorDriver(kernel, workspace, verifier, AgentCatalog.Default().Agents,
-            WorkerProfileCatalog.Default(), runAcceptanceAttemptsInCurrentProcess: true,
+            WorkerProfileCatalog.Default(), utcNow: () => now, runAcceptanceAttemptsInCurrentProcess: true,
             cleanupHooks: new GoalWorktreeCleanupHooks
             {
                 BuildStorageRoot = new DotnetBuildStorageRoot(Path.Combine(workspace.OrchestratorDirectory, "build"))
@@ -207,10 +260,11 @@ public sealed class SoloRepairWorkflowTests
         return fixture.Summary;
     }
 
-    private static ConductorAdvanceResult Complete(ConductorDriver driver, Goal goal, AcceptanceVerificationSummary summary) =>
+    private static ConductorAdvanceResult Complete(ConductorDriver driver, Goal goal, AcceptanceVerificationSummary summary,
+        ConductorAutonomyPolicy? policy = null) =>
         driver.CompleteParallelLandingAcceptance(
             ConductorParallelAcceptanceCandidate.Create(goal, 0, ["README.md"], summary.BranchHeadSha, summary.MainHeadSha),
-            Policy, summary, out _);
+            policy ?? Policy, summary, out _);
 
     private static void AssertHold(ConductorAdvanceResult result, string reason)
     {
@@ -246,6 +300,7 @@ public sealed class SoloRepairWorkflowTests
     internal sealed class ControlledVerifier(string root) : IGoalAcceptanceVerifier
     {
         internal SoloRepairFinding? Finding { get; set; }
+        internal string? UnresolvedAttributionRequest { get; init; }
         internal List<(string Request, string Sha)> FocusedRuns { get; } = [];
         internal List<(GoalId Goal, string Sha)> NormalRuns { get; } = [];
         internal bool NormalPass { get; set; }
@@ -254,12 +309,16 @@ public sealed class SoloRepairWorkflowTests
             string request, IAcceptanceFocusedVerificationOwner executionOwner, int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null, bool runBaselineArm = false)
         {
-            var finding = Assert.IsType<SoloRepairFinding>(Finding);
-            Assert.Equal(finding.Request, request);
-            Assert.False(runBaselineArm);
             Assert.NotNull(stableSlotLease);
             var sha = RunGit(worktreePath, "rev-parse", "HEAD");
             FocusedRuns.Add((request, sha));
+            if (runBaselineArm)
+            {
+                Assert.Equal(UnresolvedAttributionRequest, request);
+                return Task.FromResult(new FocusedEvidenceRunResult(request, false, false, "The focused test did not execute.", []));
+            }
+            var finding = Assert.IsType<SoloRepairFinding>(Finding);
+            Assert.Equal(finding.Request, request);
             var trx = Path.Combine(root, sha + ".trx");
             WriteTrx(trx, true, finding.Identity);
             return Task.FromResult(SoloRepairEvidenceTests.FocusedResult(finding, sha, trx, true, true, finding.Identity));
