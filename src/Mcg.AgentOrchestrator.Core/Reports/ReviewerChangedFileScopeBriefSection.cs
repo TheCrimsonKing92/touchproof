@@ -110,8 +110,8 @@ internal static class ReviewerChangedFileScopeBriefSection
         lines.Add(pinnedScope is null
             ? "Independent scope checks must use git diff main...HEAD. Do not use two-dot diffs such as main..HEAD, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence."
             : pinnedScope.TotalChangedFileCount > 0
-                ? $"All paths omitted if no excerpts follow. git diff {pinnedScope.ThreeDotRange}"
-                : $"Scope checks: git diff {pinnedScope.ThreeDotRange}. Use committed changes only.");
+                ? $"All paths omitted if no excerpts follow. git diff {pinnedScope.ThreeDotRange}. Do not use two-dot diffs."
+                : $"Scope checks: git diff {pinnedScope.ThreeDotRange}. Do not use two-dot diffs. Use committed changes only.");
         lines.Add(string.Empty);
         // Substitution preserves line order and the scope's typed coordinates.
         segments.Add(new TaskBriefSegment(RoleRequirementIntegrationBranch.Apply(lines, integrationBranch),
