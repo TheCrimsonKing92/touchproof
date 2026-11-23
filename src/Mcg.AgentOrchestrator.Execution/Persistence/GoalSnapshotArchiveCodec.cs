@@ -19,12 +19,21 @@ public static class GoalSnapshotArchiveCodec
         _ => throw new InvalidDataException("Unsupported goal_snapshot_archive snapshot encoding.")
     };
 
+    internal static long? GetCompleteUtf8Bytes(Stream stream) => stream switch
+    {
+        MemoryStream memory when memory.Position == memory.Length => memory.Length,
+        ArchiveReadStream archive => archive.CompleteUtf8Bytes,
+        _ => null
+    };
+
     private sealed class ArchiveReadStream(byte[] bytes) : Stream
     {
         private BrotliDecoder decoder = new();
         private readonly Decoder utf8 = StrictUtf8.GetDecoder();
         private int offset = Marker.Length;
         private bool done;
+        private long delivered;
+        internal long? CompleteUtf8Bytes { get; private set; }
 
         public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
 
@@ -46,6 +55,9 @@ public static class GoalSnapshotArchiveCodec
             {
                 throw new InvalidDataException("Invalid goal_snapshot_archive UTF-8 payload.", ex);
             }
+            delivered += written;
+            if (done)
+                CompleteUtf8Bytes = delivered;
             return written;
         }
 
@@ -75,8 +87,11 @@ public static class GoalSnapshotArchiveCodec
         return output.ToArray();
     }
 
-    public static string? Decode(object? value)
+    public static string? Decode(object? value) => Decode(value, out _);
+
+    internal static string? Decode(object? value, out long? utf8Bytes)
     {
+        utf8Bytes = null;
         if (value is null or DBNull)
             return null;
         if (value is string json)
@@ -101,7 +116,10 @@ public static class GoalSnapshotArchiveCodec
 
         try
         {
-            return StrictUtf8.GetString(output.GetBuffer().AsSpan(0, checked((int)output.Length)));
+            var length = checked((int)output.Length);
+            var text = StrictUtf8.GetString(output.GetBuffer().AsSpan(0, length));
+            utf8Bytes = length;
+            return text;
         }
         catch (DecoderFallbackException ex)
         {

@@ -53,7 +53,12 @@ internal sealed class StateLogDivergenceCheckRunner(
             if (_lastStarted is { } previous && now - previous < Interval) return false;
             _lastStarted = now;
             // Repository and journal construction also perform IO, so both occur off the tick.
-            _currentRun = Task.Run(() => RunOnceAsync(now));
+            var snapshotWork = GoalSnapshotByteAccounting.TrackDeferredSnapshotWork(maySerialize: false);
+            _currentRun = Task.Run(async () =>
+            {
+                using var observation = snapshotWork;
+                return await RunOnceAsync(now);
+            });
             return true;
         }
     }

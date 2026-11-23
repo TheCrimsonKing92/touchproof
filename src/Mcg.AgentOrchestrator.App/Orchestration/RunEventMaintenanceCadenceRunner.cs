@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -54,8 +55,10 @@ internal sealed class RunEventMaintenanceCadenceRunner(
             if (shouldStart is not null && !shouldStart())
                 return false;
 
+            var snapshotWork = GoalSnapshotByteAccounting.TrackDeferredSnapshotWork();
             _currentRun = Task.Run(() =>
             {
+                using var observation = snapshotWork;
                 var startedAt = _utcNow();
                 TryAppendJournal("storage-retention-sweep-started", "STORAGE_RETENTION_SWEEP_STARTED");
                 var outcome = "failed";

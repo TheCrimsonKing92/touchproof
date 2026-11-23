@@ -203,7 +203,8 @@ internal sealed partial class GoalTaskHistoryStore
     // One per-save preparation supplies the document decisions and all task history row payloads.
     // Options, resolver and task metadata are shared lazily per source options object. Reference-keyed
     // counts belong to this save, scoped to its synchronous document write on this thread. No output is kept.
-    internal PreparedWrite PrepareWrite(GoalSnapshot goal, int? timelineInTable = null)
+    internal PreparedWrite PrepareWrite(GoalSnapshot goal, int? timelineInTable = null,
+        GoalSnapshotByteAccounting.Measurement? measurement = null)
     {
         var buildHistory = _buildHistory.PrepareWrite(goal);
         var projectedGoal = buildHistory.ProjectedGoal;
@@ -239,7 +240,15 @@ internal sealed partial class GoalTaskHistoryStore
         _activeTimelineCount = timelineInTable;
         try
         {
-            document = JsonSerializer.Serialize(projectedGoal, documentOptions);
+            if (measurement is null)
+            {
+                document = GoalSnapshotByteAccounting.Serialize(projectedGoal, documentOptions);
+            }
+            else
+            {
+                measurement.Start();
+                document = JsonSerializer.Serialize(projectedGoal, documentOptions);
+            }
         }
         finally
         {
@@ -535,14 +544,14 @@ internal sealed partial class GoalTaskHistoryStore
     private static JsonElement[] Elements(JsonElement value) =>
         value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? [] : value.EnumerateArray().ToArray();
 
-    internal GoalSnapshot? DecodeDocument(string documentText, DocumentMarkers markers)
+    internal GoalSnapshot? DecodeDocument(string documentText, DocumentMarkers markers, long? utf8Bytes = null)
     {
         var previous = _activeReadMarkers;
         _activeReadMarkers = markers;
         try
         {
-            return JsonSerializer.Deserialize<GoalSnapshot>(documentText,
-                SharedReadOptions.GetValue(options, CreateReadOptions));
+            return GoalSnapshotByteAccounting.Deserialize<GoalSnapshot>(documentText,
+                SharedReadOptions.GetValue(options, CreateReadOptions), utf8Bytes);
         }
         finally
         {
@@ -620,16 +629,16 @@ internal sealed partial class GoalTaskHistoryStore
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
         command.Parameters.AddWithValue("$id", goalId);
-        var documentText = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token))
+        var documentText = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token), out var utf8Bytes)
             ?? throw new InvalidDataException($"Missing archive for goal '{goalId}'.");
-        return DecodeLegacyMarkers(documentText, goalId, readObserver);
+        return DecodeLegacyMarkers(documentText, goalId, readObserver, utf8Bytes);
     }
 
     private HistoryDocument? DecodeLegacyMarkers(string documentText, string goalId,
-        Action<GoalSnapshotReadObservation>? readObserver)
+        Action<GoalSnapshotReadObservation>? readObserver, long? utf8Bytes = null)
     {
         readObserver?.Invoke(new("history-marker-decode", goalId, documentText.Length));
-        return JsonSerializer.Deserialize<HistoryDocument>(documentText, options);
+        return GoalSnapshotByteAccounting.Deserialize<HistoryDocument>(documentText, options, utf8Bytes);
     }
 
     private Task<GoalSnapshot> ApplyLegacyMarkersAsync(SqliteConnection connection, GoalSnapshot snapshot,
@@ -746,7 +755,7 @@ internal sealed partial class GoalTaskHistoryStore
     internal async Task<bool> RequiresReconstructionAsync(SqliteConnection connection, string goalId, Stream stream,
         InvalidVerification invalidVerification, CancellationToken token)
     {
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: token);
+        using var document = await GoalSnapshotByteAccounting.ParseAsync(stream, token);
         var invalid = false;
         foreach (var task in document.RootElement.GetProperty("Tasks").EnumerateArray())
         {
