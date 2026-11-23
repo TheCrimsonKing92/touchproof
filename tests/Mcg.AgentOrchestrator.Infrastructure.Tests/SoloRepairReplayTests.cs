@@ -96,6 +96,8 @@ public sealed class SoloRepairReplayTests
         var finding = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
         Assert.Equal(First, finding.Identity);
         Assert.Equal($"{Project}: FullyQualifiedName~{First}", finding.Request);
+        var checkName = $"reviewer focused evidence: {GoalAcceptanceVerifier.ProjectLabel(Project)} FullyQualifiedName~{First}";
+        Assert.Equal(checkName, finding.BaselineCheck);
         Assert.Empty(finding.CandidateArtifacts);
         Assert.False(finding.Inherited);
 
@@ -108,7 +110,7 @@ public sealed class SoloRepairReplayTests
         var key = SoloBaselineRepairStore.AttributionKey(fixture.Goal.Id.Value, finding, finding.Candidate, finding.Main);
         var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
         {
-            Finding = finding with { BaselineCheck = $"reviewer focused evidence: Sample.Tests FullyQualifiedName~{First}" },
+            Finding = finding with { BaselineCheck = checkName },
             AttributionBaselinePass = false
         };
         var escalations = new List<string>();

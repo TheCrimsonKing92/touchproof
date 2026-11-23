@@ -107,7 +107,7 @@ public sealed class SoloRepairWorkflowTests
         await repository.SaveAsync(fixture.Kernel);
         var restarted = await repository.LoadAsync();
         driver = Driver(restarted, workspace, verifier);
-        AssertHold(driver.AdvanceOnce(restarted.GetGoal(goal.Id), Policy), SoloHoldReasons.RepairEvidenceRequired);
+        AssertHold(driver.AdvanceOnce(restarted.GetGoal(goal.Id), Policy), SoloHoldReasons.RepairEvidenceRequired, owner: "operator");
 
         Assert.Equal(delivered, Assert.Single(File.ReadLines(events).Where(line => line.Contains("\"eventType\":\"GoalEscalated\""))));
         Assert.Single(await collaboration.ListAsync(goal.Id.Value));
@@ -248,12 +248,17 @@ public sealed class SoloRepairWorkflowTests
 
         await fixture.Produce(attemptId: "normal-introduced-" + second.Id.Value, singleRow: true,
             candidateWorktree: Worktree(fixture, second), goal: second);
+        Assert.Equal(secondAdmission.BranchHeadSha, fixture.Summary.BranchHeadSha);
+        Assert.Equal(refreshedMain, fixture.Summary.MainHeadSha);
         driver.FailureDiagnosis = null;
-        Complete(driver, second, fixture.Summary, Policy with { MaxCriterionRetries = 1 });
-        var retry = Assert.Single(MarkerRetries(second));
+        var completion = Complete(driver, second, fixture.Summary, Policy with { MaxCriterionRetries = 1 });
+        var retries = MarkerRetries(second);
+        Assert.True(retries.Length > 0, completion.Outcome.ToString());
+        var retry = Assert.Single(retries);
         Assert.Contains($"failing_tests={First}{Environment.NewLine}", retry.Message);
         Assert.Contains($"reproduced {First}:", retry.Message);
         Assert.Equal(RetryCause.NewTestFinding, second.Tasks.Single().PendingRetryCause);
+        Assert.Null(store.ReadCheck(GateKey(secondAdmission)));
         Assert.Equal(4, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
 
         fixture.Git("commit", "--allow-empty", "-m", "Move integration before another candidate gate");
@@ -386,11 +391,11 @@ public sealed class SoloRepairWorkflowTests
             ConductorParallelAcceptanceCandidate.Create(goal, 0, ["README.md"], summary.BranchHeadSha, summary.MainHeadSha),
             policy ?? Policy, summary, out _);
 
-    private static void AssertHold(ConductorAdvanceResult result, string reason)
+    private static void AssertHold(ConductorAdvanceResult result, string reason, string owner = "conductor")
     {
         var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
         Assert.Equal(reason, hold.Decision?.DiscriminatingEvidence);
-        Assert.Contains(new PolicyDecisionFact("owner", "conductor"), hold.Decision!.Facts);
+        Assert.Contains(new PolicyDecisionFact("owner", owner), hold.Decision!.Facts);
     }
 
     private static ConductorParallelAcceptanceCandidate Admit(ConductorDriver driver, Goal goal)
