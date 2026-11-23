@@ -16,10 +16,10 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task RealSoloInheritedFailure_CorroboratesMainWithOrWithoutRepairRouting(bool repairRouting)
+    public async Task RealSoloInheritedFailure_CorroboratesMainAndRequiresCurrentRevisionsToLinkRepairs(bool hasCurrentRevisions)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
-        if (repairRouting)
+        if (hasCurrentRevisions)
             CreateWorktreeCandidate(fixture.Repo, fixture.Goal.Id, "README.md", "repair-dependent candidate");
         await fixture.Produce(baselineFails: true,
             candidateWorktree: GoalWorktrees.TryResolve(fixture.Repo, fixture.Goal.Id));
@@ -39,22 +39,34 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [fixture.Goal],
             [candidate], ["README.md"], envelope.MainSha);
 
-        if (repairRouting) await new PortfolioStore(scenario.Workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
-        var result = scenario.Complete(0, summary, repairRouting);
+        await new PortfolioStore(scenario.Workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var result = scenario.Complete(0, summary, expectLegacyHold: false);
 
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
         var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
-        if (repairRouting)
+        var repairStore = Path.Combine(scenario.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        if (hasCurrentRevisions)
         {
             Assert.Equal(SoloHoldReasons.RepairPending, decision.DiscriminatingEvidence);
-            var repairStore = Path.Combine(scenario.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+            Assert.Equal(GoalStatus.AcceptanceFailed, fixture.Goal.Status);
             Assert.Equal(2, SoloRepairReplayTests.Count(repairStore, "solo_repair_dependency"));
         }
         else
         {
-            Assert.Equal(AcceptanceApparatusDispositionPolicy.StageName, decision.Stage);
-            Assert.StartsWith($"acceptance-unattributable:{envelope.CandidateSha}:{envelope.MainSha}:", held.StableIdentity);
-            Assert.Equal(GoalLifecycleState.Verified, held.State);
+            Assert.Equal(SoloHoldReasons.RepairEvidenceRequired, decision.DiscriminatingEvidence);
+            Assert.Contains("Current candidate and integration revisions are required.", held.Reason, StringComparison.Ordinal);
+            Assert.Equal(ConductorHoldOwner.Operator, held.Owner);
+            Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+            Assert.Equal(0, SoloRepairReplayTests.Count(repairStore, "solo_repair_dependency"));
+            var unresolved = new SoloBaselineRepairStore(repairStore).ReadFindings(fixture.Goal.Id.Value);
+            Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First, SoloAttributedFailureRouteFixture.Long },
+                unresolved.Select(finding => finding.Identity).Order(StringComparer.Ordinal).ToArray());
+            Assert.All(unresolved, finding =>
+            {
+                Assert.False(finding.Inherited);
+                Assert.Equal(SoloHoldReasons.RevisionMismatch, finding.Reason);
+                Assert.Equal(envelope.Evidence, finding.Proof);
+            });
         }
         var receipt = Assert.Single(scenario.ReadReceipts());
         Assert.Equal(fixture.Goal.Id, receipt.GoalId);
@@ -272,7 +284,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                 BranchHeadSha: Candidates[index].BranchHeadSha, MainHeadSha: main);
         }
 
-        internal ConductorAdvanceResult Complete(int index, AcceptanceVerificationSummary summary, bool repairRouting = false)
+        internal ConductorAdvanceResult Complete(int index, AcceptanceVerificationSummary summary, bool expectLegacyHold = true)
         {
             // Retain the failed gate evidence as the background completion path does.
             Kernel.RecordAcceptanceFailure(Goals[index].Id, summary.FailedChecks ?? [],
@@ -281,10 +293,12 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                 ConductorAutonomyPolicy.Permissive, summary, out var leaseHeld);
             Assert.False(leaseHeld);
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-            if (!repairRouting)
+            if (expectLegacyHold)
+            {
                 Assert.Contains("pre-existing/main-red", held.Reason, StringComparison.Ordinal);
+                Assert.Equal(GoalStatus.Verified, Goals[index].Status);
+            }
             Assert.Equal(0, _verifier.RunCount);
-            Assert.Equal(repairRouting ? GoalStatus.AcceptanceFailed : GoalStatus.Verified, Goals[index].Status);
             Assert.Equal(0, Goals[index].Tasks.Single().CriterionRetryCount);
             return result;
         }
