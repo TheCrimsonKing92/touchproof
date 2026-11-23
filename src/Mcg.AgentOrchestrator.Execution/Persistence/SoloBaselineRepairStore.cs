@@ -295,19 +295,21 @@ internal sealed class SoloBaselineRepairStore
         var current = requests[0];
         using var db = Open();
         using var command = Command(db, """
-            SELECT request_key, result FROM solo_repair_check WHERE request_key IN ($current, $pair, $previous)
+            SELECT claimed.request_key, COALESCE(claimed.result, executed.result)
+            FROM solo_repair_check AS claimed
+            LEFT JOIN solo_repair_check_execution AS executed ON executed.request_key = claimed.request_key
+            WHERE claimed.request_key IN ($current, $pair, $previous)
             """, ("$current", current.Key), ("$pair", requests[1].Key), ("$previous", requests[2].Key));
         using var rows = command.ExecuteReader();
         var claims = new Dictionary<string, SoloRepairCheckReceipt?>(StringComparer.Ordinal);
         while (rows.Read())
             claims.Add(rows.GetString(0), rows.IsDBNull(1) ? null : JsonSerializer.Deserialize<SoloRepairCheckReceipt>(rows.GetString(1)));
         if (claims.ContainsKey(current.Key)) return current;
-        (string Key, bool AllowCandidatePass)? completedUnbound = null;
+        (string Key, bool AllowCandidatePass)? recordedUnbound = null;
         (string Key, bool AllowCandidatePass)? unbound = null;
         foreach (var legacy in requests.Skip(1))
         {
-            if (!claims.TryGetValue(legacy.Key, out var completed)) continue;
-            var recorded = completed ?? ReadCheckExecution(legacy.Key);
+            if (!claims.TryGetValue(legacy.Key, out var recorded)) continue;
             var root = ResultDirectory(legacy.Key);
             var path = Path.Combine(root, "focused-result.json");
             var identity = FocusedProofIdentity(legacy.Key, finding, candidate, main, true, legacy.AllowCandidatePass);
@@ -323,14 +325,14 @@ internal sealed class SoloBaselineRepairStore
                 if (MatchesAttributionProof(retained, root, identity)) return legacy;
                 continue;
             }
-            if (completed is not null)
-                completedUnbound ??= legacy;
+            if (recorded is not null)
+                recordedUnbound ??= legacy;
             else
                 unbound ??= legacy;
         }
-        // Without its selection binding, a completed charge may belong to any matching selection.
+        // Without its selection binding, a recorded execution may belong to any matching selection.
         // Reuse it to preserve the budget. ReadVerifiedCheck still requires exact evidence to route.
-        if (completedUnbound is { } spent) return spent;
+        if (recordedUnbound is { } spent) return spent;
 
         // Older keys omit selection scope. A charge without a readable binding can be reused
         // when the retained findings identify a single selection for that check and test.

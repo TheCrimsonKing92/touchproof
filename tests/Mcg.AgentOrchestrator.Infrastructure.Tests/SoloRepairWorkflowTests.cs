@@ -93,6 +93,80 @@ public sealed class SoloRepairWorkflowTests
             RunGit(fixture.Repository, "rev-parse", "main"));
     }
 
+    [Theory]
+    [InlineData("repair", "baseline repair and original-selection validation")]
+    [InlineData("normal gate", "normal acceptance is pending")]
+    [InlineData("moved candidate", "revision pair changed")]
+    public void CliFastForward_HoldsMainUntilRepairAndExactGatePass(string pending, string expectedReason)
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var (context, store, finding) = PrepareCliRepair(fixture, new ControlledVerifier(fixture.Repository));
+        if (pending != "repair") RecordPassedValidation(store, finding, fixture.Main);
+        GateReadyCandidateRevisionPair? testedPair = null;
+        if (pending == "moved candidate")
+        {
+            testedPair = new(fixture.Candidate, fixture.Main);
+            store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main), "prior-attempt");
+        }
+
+        var merge = CliWorkspaceMerge.MergeWithPublication(context, fixture.Goal, out var publication,
+            () =>
+            {
+                if (pending == "moved candidate")
+                {
+                    var path = GoalWorktrees.TryResolve(fixture.Repository, fixture.Goal.Id)!;
+                    RunGit(path, "commit", "--allow-empty", "-m", "Move candidate before merge");
+                }
+                return null;
+            }, out var repairBlock, testedPair);
+
+        Assert.False(Assert.IsType<GoalWorktreeMergeResult>(merge).FastForwarded);
+        Assert.Contains(expectedReason, repairBlock);
+        Assert.Null(publication);
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+    }
+
+    [Fact]
+    public void CliAcceptance_WaitsForOriginalSelectionAndRequiresNormalVerification()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var verifier = new ControlledVerifier(fixture.Repository);
+        var (context, store, finding) = PrepareCliRepair(fixture, verifier);
+
+        Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+        Assert.Empty(verifier.NormalRuns);
+        Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+
+        RecordPassedValidation(store, finding, fixture.Main);
+        Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context, skipVerify: true));
+        Assert.Empty(verifier.NormalRuns);
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+
+        Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+        Assert.Equal((fixture.Goal.Id, fixture.Candidate), Assert.Single(verifier.NormalRuns));
+        Assert.Null(store.ReadCheck(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main)));
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+    }
+
+    private static (CliExecutionContext Context, SoloBaselineRepairStore Store, SoloRepairFinding Finding)
+        PrepareCliRepair(PullRequestLandingTestFixture fixture, ControlledVerifier verifier)
+    {
+        var workspace = fixture.Workspace with { Delivery = ProjectDelivery.Direct };
+        var context = new CliExecutionContext(fixture.Kernel, workspace, new InMemoryModelProviderRegistry([]),
+            AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), fixture.Goal)
+        {
+            AcceptanceVerifier = verifier,
+            StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
+        };
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var finding = CapturePublicationFinding(fixture);
+        store.Retain(fixture.Goal.Id.Value, [finding]);
+        store.ReserveGroup(finding.GroupKey, "{}");
+        store.AcknowledgeRepair(finding.GroupKey, Guid.NewGuid().ToString("N"));
+        return (context, store, finding);
+    }
+
     private static SoloRepairFinding CapturePublicationFinding(PullRequestLandingTestFixture fixture)
     {
         var finding = SoloRepairReplayTests.Finding() with

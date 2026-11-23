@@ -53,7 +53,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         var failedWorktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
         var failedBranchHead = TryResolveGitHead(context, failedWorktreePath);
         var failedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
-        if (ClearSupersededAcceptanceFailureForCandidate(
+        if (CliWorkspaceMerge.ClearSupersededAcceptanceFailureForCandidate(
             context,
             goal,
             failedBranchHead,
@@ -89,6 +89,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     AcceptanceVerificationResult? verification = null;
     IReadOnlyList<string> landingChangedFiles = [];
     string? testedWorktreeHead = null;
+    GateReadyCandidateRevisionPair? preparedPair = null;
     DateTimeOffset? acceptanceAttemptStartedAt = null;
     AcceptanceMergeGuardSnapshot? expectedMergeGuard = null;
     var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
@@ -147,7 +148,10 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
 
         testedWorktreeHead = context.Worktrees.ResolveHead(worktreePath);
         testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
-        if (ClearSupersededAcceptanceFailureForCandidate(context, goal, testedWorktreeHead, testedMainHead))
+        preparedPair = new(testedWorktreeHead, testedMainHead);
+        if (RepairGateHeld(requireNormalAcceptance: skipVerify, out _)) return false;
+
+        if (CliWorkspaceMerge.ClearSupersededAcceptanceFailureForCandidate(context, goal, testedWorktreeHead, testedMainHead))
         {
             goal = context.Kernel.GetGoal(goal.Id);
             context.CurrentGoal = goal;
@@ -266,6 +270,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             }
             using (stableSlotLease)
             {
+                if (RepairGateHeld(requireNormalAcceptance: false, out _)) return false;
+
                 var enteredVerifying = context.Kernel.BeginGoalAcceptanceVerification(
                     goal.Id,
                     "Acceptance entered Verifying while the terminal gate runs.");
@@ -490,6 +496,14 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         Console.WriteLine($"Verification artifacts: {verification.ArtifactsPath}");
     }
 
+    if (verification is { Passed: true, Skipped: false } passedGate)
+    {
+        if (RepairGateHeld(requireNormalAcceptance: false, out var repairStore)) return false;
+        if (repairStore is not null)
+            repairStore.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, testedWorktreeHead!, testedMainHead!),
+                passedGate.AttemptId ?? "inline-gate");
+    }
+
     var hostStop = context.StopAcceptanceHosts(new AcceptanceHostStopRequest(
         goal.Id,
         worktreePath,
@@ -532,7 +546,13 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             {
                 var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id, context.Workspace.IntegrationBranch);
                 var merge = CliWorkspaceMerge.MergeWithPublication(context, goal, out var publication,
-                    mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
+                    mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace),
+                    out var repairBlockReason, preparedPair);
+
+                if (repairBlockReason is not null)
+                    return new AcceptanceMergeCommitResult(false, repairBlockReason,
+                        new(AcceptanceMergeGuardMismatchKind.BaselineRepair, "Baseline repair admission",
+                            "current validation and normal acceptance", repairBlockReason));
 
                 if (merge is null)
                 {
@@ -607,6 +627,15 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
     RunPostLandingCanary(context, goal, landingChangedFiles);
     return true;
+
+    bool RepairGateHeld(bool requireNormalAcceptance, out SoloBaselineRepairStore? repairStore)
+    {
+        var blocked = CliWorkspaceMerge.CheckRepairAdmission(context, goal, preparedPair, requireNormalAcceptance,
+            out repairStore, worktreePath);
+        if (blocked is null) return false;
+        Console.WriteLine($"Acceptance blocked: {blocked}.");
+        return true;
+    }
 }
 
 private static void RunPostLandingCanary(
@@ -740,37 +769,6 @@ private static string FormatShortSha(string? sha) =>
     string.IsNullOrWhiteSpace(sha)
         ? "unknown"
         : sha.Trim()[..Math.Min(12, sha.Trim().Length)];
-
-private static bool ClearSupersededAcceptanceFailureForCandidate(
-    CliExecutionContext context,
-    Goal goal,
-    string? branchHeadSha,
-    string? mainHeadSha)
-{
-    if (goal.LatestAcceptanceFailure is not { } failure ||
-        string.IsNullOrWhiteSpace(failure.BranchHeadSha) ||
-        string.IsNullOrWhiteSpace(failure.MainHeadSha))
-    {
-        return false;
-    }
-
-    if (string.Equals(failure.BranchHeadSha, branchHeadSha, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(failure.MainHeadSha, mainHeadSha, StringComparison.OrdinalIgnoreCase))
-    {
-        return false;
-    }
-
-    if (goal.Status == GoalStatus.AcceptanceFailed)
-    {
-        return context.Kernel.RestoreVerifiedForSupersededAcceptanceFailure(
-            goal.Id,
-            branchHeadSha,
-            mainHeadSha);
-    }
-
-    context.Kernel.ClearAcceptanceFailure(goal.Id);
-    return true;
-}
 
 private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerificationResult verification)
 {

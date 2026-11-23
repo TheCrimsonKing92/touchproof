@@ -85,7 +85,7 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             }
 
             var merge = CliWorkspaceMerge.MergeWithPublication(context, goal, out var publication,
-                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
+                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace), out _);
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));

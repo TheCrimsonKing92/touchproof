@@ -298,15 +298,18 @@ public sealed class SoloRepairReplayTests
     }
 
     [Theory]
-    [InlineData("no-proof", false, false)]
-    [InlineData("no-proof", false, true)]
-    [InlineData("missing-result", true, false)]
-    [InlineData("missing-result", false, true)]
-    [InlineData("missing-result", true, true)]
-    [InlineData("missing-trx", false, false)]
-    [InlineData("missing-trx", true, true)]
-    public async Task CompletedLegacyAttribution_PreservesTheChargeWithUnavailableProof(
-        string unavailable, bool allowCandidatePass, bool distinctSelection)
+    [InlineData("no-proof", false, false, false)]
+    [InlineData("no-proof", false, true, false)]
+    [InlineData("missing-result", true, false, false)]
+    [InlineData("missing-result", false, true, false)]
+    [InlineData("missing-result", true, true, false)]
+    [InlineData("missing-trx", false, false, false)]
+    [InlineData("missing-trx", true, true, false)]
+    [InlineData("missing-result", false, true, true)]
+    [InlineData("missing-result", true, true, true)]
+    [InlineData("missing-trx", true, true, true)]
+    public async Task RecordedLegacyAttribution_PreservesTheChargeWithUnavailableProof(
+        string unavailable, bool allowCandidatePass, bool distinctSelection, bool staged)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce(baselineFails: true, singleRow: true);
@@ -338,7 +341,15 @@ public sealed class SoloRepairReplayTests
             File.Delete(unavailable == "missing-result" ? resultPath : trx);
         }
         Assert.True(store.TryClaimCheck(legacy.Key));
-        store.CompleteCheck(legacy.Key, recorded);
+        if (staged)
+        {
+            store.RecordCheckExecution(legacy.Key, recorded);
+            Assert.Null(store.ReadCheck(legacy.Key));
+        }
+        else
+        {
+            store.CompleteCheck(legacy.Key, recorded);
+        }
 
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel);
@@ -361,6 +372,7 @@ public sealed class SoloRepairReplayTests
         Assert.Equal(legacy, store.ResolveAttributionRequest(goal, finding, finding.Candidate, finding.Main));
         Assert.Null(store.ReadCheck(SoloBaselineRepairStore.AttributionKey(goal, finding, finding.Candidate, finding.Main)));
         Assert.Equal("unresolved", store.ReadVerifiedCheck(legacy.Key, identity)?.Outcome);
+        Assert.Null(store.ReadCheckExecution(legacy.Key));
         Assert.Equal(0, Count(path, "solo_repair_dependency"));
         Assert.Equal(2 + expectedRuns.Length, Count(path, "solo_repair_check")); // Includes the escalation.
         Assert.Single(escalations);

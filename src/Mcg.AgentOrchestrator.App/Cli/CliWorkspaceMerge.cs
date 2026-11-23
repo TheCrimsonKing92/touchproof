@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -10,9 +11,11 @@ internal static class CliWorkspaceMerge
     // recovery clock cannot establish when the original duty became due.
     internal static GoalWorktreeMergeResult? MergeWithPublication(
         CliExecutionContext context, Goal goal, out GoalPromotionFact? publication,
-        Func<string?> mutationBlocker)
+        Func<string?> mutationBlocker, out string? repairBlockReason,
+        GateReadyCandidateRevisionPair? testedPair = null)
     {
         publication = null;
+        repairBlockReason = null;
         var duties = goal.OutstandingPostLandingDuties;
         var needsPublication = duties.Any(item => item.Publication is null);
         var root = context.Workspace.ExecutionDirectory;
@@ -31,7 +34,14 @@ internal static class CliWorkspaceMerge
         }
         var priorMain = needsPublication ? ReadRevision("HEAD") : null;
         var candidate = needsPublication ? ReadRevision(context.Worktrees.BranchName(goal.Id)) : null;
-        var merge = context.Worktrees.TryFastForwardMerge(root, goal.Id, mutationBlocker);
+        string? repairBlock = null;
+        var merge = context.Worktrees.TryFastForwardMerge(root, goal.Id, () =>
+        {
+            var blocked = mutationBlocker();
+            if (!string.IsNullOrWhiteSpace(blocked)) return blocked;
+            return repairBlock = CheckRepairAdmission(context, goal, testedPair, requireNormalAcceptance: true, out _);
+        });
+        repairBlockReason = repairBlock;
         if (merge?.FastForwarded != true || !needsPublication) return merge;
 
         var at = (context.DiagnosticsClock ?? new SystemClock()).UtcNow;
@@ -56,6 +66,85 @@ internal static class CliWorkspaceMerge
                 throw new InvalidOperationException($"Cannot capture CLI publication revision '{revision}': {result.Error}");
             return result.Output.Trim();
         }
+    }
+
+    internal static string? CheckRepairAdmission(
+        CliExecutionContext context, Goal goal, GateReadyCandidateRevisionPair? preparedPair,
+        bool requireNormalAcceptance, out SoloBaselineRepairStore? repairStore, string? worktreePath = null)
+    {
+        repairStore = null;
+        var workspace = context.Workspace;
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        if (!File.Exists(storePath)) return null;
+
+        var store = new SoloBaselineRepairStore(storePath);
+        var root = workspace.ExecutionDirectory;
+        var candidateRef = $"refs/heads/{context.Worktrees.BranchName(goal.Id)}";
+        var mainRef = $"refs/heads/{workspace.IntegrationBranch}";
+        var pair = preparedPair ?? ReadPair();
+        var findings = SoloBaselineRepairCoordinator.SoloRepairFindings(store, goal, pair.BranchRevision, pair.MainRevision);
+        if (findings.Count == 0) return null;
+
+        if (pair.BranchRevision is not { } candidate || pair.MainRevision is not { } main ||
+            !store.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main))
+            return "baseline repair and original-selection validation are pending for the current revision pair";
+
+        if (requireNormalAcceptance &&
+            store.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome != "passed")
+            return "normal acceptance is pending for the current revision pair";
+
+        if (worktreePath is not null)
+        {
+            if (ReadRef(worktreePath, "HEAD") != candidate ||
+                GitCli.Run(root, "merge-base", "--is-ancestor", main, candidate) is not { Succeeded: true, DrainTimedOut: false })
+                return "the candidate must be prepared on the current integration revision";
+        }
+        else if (GitCli.Run(root, "symbolic-ref", "--quiet", "HEAD") is not { Succeeded: true, DrainTimedOut: false } target ||
+                 target.Output.Trim() != mainRef)
+        {
+            return $"HEAD must be attached to integration branch '{workspace.IntegrationBranch}'";
+        }
+
+        if (ReadPair() != pair)
+            return "the revision pair changed after baseline repair validation or normal acceptance";
+
+        repairStore = store;
+        return null;
+
+        GateReadyCandidateRevisionPair ReadPair() => new(ReadRef(root, candidateRef), ReadRef(root, mainRef));
+        static string? ReadRef(string directory, string reference) =>
+            GitRevisionReader.Shared.TryResolve(directory, reference, out var revision) ? revision : null;
+    }
+
+    internal static bool ClearSupersededAcceptanceFailureForCandidate(
+        CliExecutionContext context,
+        Goal goal,
+        string? branchHeadSha,
+        string? mainHeadSha)
+    {
+        if (goal.LatestAcceptanceFailure is not { } failure ||
+            string.IsNullOrWhiteSpace(failure.BranchHeadSha) ||
+            string.IsNullOrWhiteSpace(failure.MainHeadSha))
+        {
+            return false;
+        }
+
+        if (string.Equals(failure.BranchHeadSha, branchHeadSha, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(failure.MainHeadSha, mainHeadSha, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (goal.Status == GoalStatus.AcceptanceFailed)
+        {
+            return context.Kernel.RestoreVerifiedForSupersededAcceptanceFailure(
+                goal.Id,
+                branchHeadSha,
+                mainHeadSha);
+        }
+
+        context.Kernel.ClearAcceptanceFailure(goal.Id);
+        return true;
     }
 
     internal static void ApplyAcceptanceResult(
