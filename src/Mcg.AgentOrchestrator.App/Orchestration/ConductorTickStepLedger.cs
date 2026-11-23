@@ -440,6 +440,13 @@ internal sealed class ConductorTickStepLedger
         ("goals_reused", Interlocked.Read(ref _goalsReused))
     }.Select(pair => pair.Item1 + "=" + pair.Item2.ToString(CultureInfo.InvariantCulture)));
 
+    internal static string FormatSnapshotByteCounters(long? deserialized, long? serialized)
+    {
+        static string Format(long? bytes) => bytes?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+        return $"goal_snapshot_deserialized_utf8_bytes={Format(deserialized)} " +
+            $"goal_snapshot_serialized_utf8_bytes={Format(serialized)}";
+    }
+
     private sealed class Frame(string name, TimeSpan start)
     {
         internal string Name { get; } = name;
