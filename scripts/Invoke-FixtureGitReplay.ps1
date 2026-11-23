@@ -4,6 +4,8 @@
 .DESCRIPTION
   Acceptance runs this on Windows with permission to start the Kernel-Process ETW
   provider. Use a clean, already-built candidate and a new evidence directory.
+  The test host writes to an isolated MTP results directory. The launcher copies
+  its artifacts to the evidence directory after each capture.
   Run both arms with the same configuration, host, Git, .NET and fixture inputs.
   ETW is bounded to 64 MiB and each replay job to 900 seconds. The raw ETL is
   system-wide and should stay with the restricted acceptance artifacts.
@@ -31,6 +33,7 @@ if (-not $IsWindows) { throw 'Fixture Git replay requires Windows and PowerShell
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj'
 $runner = Join-Path $PSScriptRoot 'Invoke-TestSummary.ps1'
+Import-Module (Join-Path $PSScriptRoot 'MtpTestRunner.psm1') -Force
 $nativeSource = Join-Path $PSScriptRoot 'FixtureGitReplayWindows.cs.txt'
 $pwsh = Join-Path $PSHOME 'pwsh.exe'
 $provider = 'Microsoft-Windows-Kernel-Process'
@@ -216,12 +219,13 @@ function Read-ProbeStarts {
 function Invoke-ReplaySelection {
     param([string]$Family, [string]$Class, [string]$Filter, [string[]]$Methods)
     $directory = Join-Path $outputRoot $Family
-    $results = Join-Path $directory 'tests'
     [void][IO.Directory]::CreateDirectory($directory)
     $etl = Join-Path $directory 'process.etl'
-    $slotFile = Join-Path $directory 'slot.jsonl'
-    $probeFile = Join-Path $directory 'probes.jsonl'
     $log = Join-Path $directory 'runner.log'
+    $staging = Initialize-MtpResultsDirectory -RunLabel 'fixture-git'
+    $results = Join-Path $staging 'tests'
+    $slotFile = Join-Path $staging 'slot.jsonl'
+    $probeFile = Join-Path $staging 'probes.jsonl'
     $command = @'
 param($Runner, $Project, $Configuration, $Filter, $Results, $Slots, $Probes, $Log)
 & $Runner -Target $Project -Configuration $Configuration -NoBuild -Filter $Filter -ResultsRoot $Results -SlotTimingFile $Slots -TestInput "MCG_TEST_INPUT_FIXTURE_GIT_PROBE_TRACE=$Probes" *> $Log
@@ -232,19 +236,29 @@ exit $LASTEXITCODE
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("& {`n$command`n} $literals"))
     $session = 'McgFixtureGit-' + [Guid]::NewGuid().ToString('N')
     $started = [DateTimeOffset]::UtcNow
-    Invoke-CheckedNative logman.exe @('create', 'trace', $session, '-ets', '-p', $provider, '0x10', '4',
-        '-o', $etl, '-f', 'bin', '-max', [string]$traceLimitMiB) | Out-Null
     try {
-        $replay = [FixtureGitReplayWindows]::Run($pwsh, $encoded, $repo, $timeoutSeconds)
-    }
-    finally {
-        try { $loss = [FixtureGitReplayWindows]::StopTrace($session) }
-        catch {
-            & logman.exe stop $session -ets | Out-Null
-            throw
+        Invoke-CheckedNative logman.exe @('create', 'trace', $session, '-ets', '-p', $provider, '0x10', '4',
+            '-o', $etl, '-f', 'bin', '-max', [string]$traceLimitMiB) | Out-Null
+        try {
+            $replay = [FixtureGitReplayWindows]::Run($pwsh, $encoded, $repo, $timeoutSeconds)
+        }
+        finally {
+            try { $loss = [FixtureGitReplayWindows]::StopTrace($session) }
+            catch {
+                & logman.exe stop $session -ets | Out-Null
+                throw
+            }
+            $stopped = [DateTimeOffset]::UtcNow
         }
     }
-    $stopped = [DateTimeOffset]::UtcNow
+    finally {
+        foreach ($artifact in $results, $slotFile, $probeFile) {
+            if (Test-Path -LiteralPath $artifact) {
+                Copy-Item -LiteralPath $artifact -Destination $directory -Recurse -Force
+            }
+        }
+        Remove-Item -LiteralPath $staging -Recurse -Force
+    }
     Write-JsonFile (Join-Path $directory 'capture.json') ([ordered]@{
         job = $replay; loss = $loss; trace_start_utc = $started; trace_end_utc = $stopped
         trace_provider = $provider; trace_limit_mib = $traceLimitMiB; job_timeout_seconds = $timeoutSeconds
@@ -257,9 +271,9 @@ exit $LASTEXITCODE
 
     $tree = @(Read-TraceTree $etl $replay)
     $git = @($tree | Where-Object { [IO.Path]::GetFileName($_.image) -match '^git(?:-.+)?\.exe$' })
-    $cases = @(Read-ReplayCases $results $Class $Methods)
-    $slots = Read-SlotCensus $slotFile $cases $tree
-    $probes = @(Read-ProbeStarts $probeFile $slots $git)
+    $cases = @(Read-ReplayCases (Join-Path $directory 'tests') $Class $Methods)
+    $slots = Read-SlotCensus (Join-Path $directory 'slot.jsonl') $cases $tree
+    $probes = @(Read-ProbeStarts (Join-Path $directory 'probes.jsonl') $slots $git)
     $probeSequences = @($probes | ForEach-Object { $_.sequence })
     $insideGitTree = [Collections.Generic.HashSet[string]]::new()
     $nativeRows = @(foreach ($node in $tree) {
