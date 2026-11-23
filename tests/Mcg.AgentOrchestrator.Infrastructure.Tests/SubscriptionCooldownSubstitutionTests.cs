@@ -574,6 +574,42 @@ public sealed class SubscriptionCooldownSubstitutionTests
     }
 
     [Xunit.Fact]
+    public void Apply_CooldownExpiresDuringFinalPreflight_PreservesAssignment()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        scenario.Limit(goal);
+        var task = goal.Tasks.Single();
+        var checkedAlternate = false;
+        var expiredDuringFinalPreflight = false;
+        var resolver = new ProviderHoldAgentSubstitution(scenario.Kernel, scenario.Agents, (g, t, scope) =>
+        {
+            var check = scenario.Preflight(g, t, scope);
+            if (t.AssignedAgentId == scenario.Alternate.Id)
+            {
+                Assert.True(check.Allowed);
+                checkedAlternate = true;
+            }
+            else if (t.AssignedAgentId == scenario.Primary.Id && checkedAlternate)
+            {
+                var selected = Assert.IsType<ProviderSubscriptionCooldown>(check.BlockedSubscriptionCooldown);
+                Assert.Equal(task.SubscriptionRetryAfter, selected.RetryAfter);
+                Assert.True(scenario.Clock.UtcNow < selected.RetryAfter);
+                scenario.Clock.UtcNow = selected.RetryAfter;
+                expiredDuringFinalPreflight = true;
+            }
+            return check;
+        }, () => scenario.Clock.UtcNow);
+
+        resolver.ApplyBatch(goal, [task.Id]);
+
+        Assert.True(expiredDuringFinalPreflight);
+        Assert.Equal(scenario.Primary.Id, scenario.Kernel.GetTask(goal.Id, task.Id).AssignedAgentId);
+        Assert.DoesNotContain(scenario.Kernel.GetGoal(goal.Id).Timeline,
+            evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.ProviderHoldSubstituted);
+    }
+
+    [Xunit.Fact]
     public void Apply_AlternateHitsLimit_SharedBoundRejectsThirdAgent()
     {
         using var scenario = new Scenario();

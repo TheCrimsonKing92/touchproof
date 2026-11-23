@@ -86,6 +86,7 @@ internal sealed class ProviderHoldAgentSubstitution(
                 RecordCandidateFindings(goal, taskId, none.HoldIdentity, none.Rejections, substituted: false);
             if (result is Result.Substitute substitute)
             {
+                if (substitute.SubscriptionCooldown is { } cooldown && cooldown.RetryAfter <= UtcNow) continue;
                 kernel.SubstituteProviderHeldTaskAgent(goal.Id, taskId, substitute.Agent,
                     substitute.HeldBindingKey, substitute.EvidenceReceipt, substitute.SubscriptionCooldown);
                 RecordCandidateFindings(goal, taskId, substitute.HoldIdentity, substitute.Rejections, substituted: true);
