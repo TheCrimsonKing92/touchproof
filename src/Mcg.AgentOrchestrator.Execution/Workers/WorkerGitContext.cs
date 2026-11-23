@@ -1,3 +1,4 @@
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -115,7 +116,23 @@ internal sealed class WorkerGitContext
                 mainResult.Error);
         }
 
-        var mergeBaseResult = GitCli.Run(workingDirectory, "merge-base", integrationBranch, "HEAD");
+        var integrationCommit = mainResult.Output.Trim();
+        var candidateCommit = (resolveRevision ?? ResolveRevision)(workingDirectory, "HEAD^{commit}");
+        if (candidateCommit is null)
+        {
+            var headResult = GitCli.Run(workingDirectory, "rev-parse", "--verify", "HEAD^{commit}");
+            if (!headResult.Succeeded || string.IsNullOrWhiteSpace(headResult.Output))
+            {
+                throw new ReviewerChangedFileScopeException(
+                    ReviewerMergeBaseUnavailableErrorCode,
+                    $"Reviewer changed-file scope unavailable because git merge-base {integrationBranch} HEAD could not be computed.",
+                    headResult.Error);
+            }
+
+            candidateCommit = headResult.Output.Trim();
+        }
+
+        var mergeBaseResult = GitCli.Run(workingDirectory, "merge-base", integrationCommit, candidateCommit);
         if (!mergeBaseResult.Succeeded || string.IsNullOrWhiteSpace(mergeBaseResult.Output))
         {
             throw new ReviewerChangedFileScopeException(
@@ -124,8 +141,13 @@ internal sealed class WorkerGitContext
                 mergeBaseResult.Error);
         }
 
-        var diffResult = GitCli.Run(workingDirectory, "diff", "--name-only", $"{integrationBranch}...HEAD", "--");
-        if (!diffResult.Succeeded)
+        var mergeBase = mergeBaseResult.Output.Trim();
+        // Diff drivers affect rename detection, so use the same candidate attributes as patch extraction.
+        // Git quotes non-ASCII bytes and separator characters before the pipe decodes them.
+        var diffResult = GitCli.RunWithUtf8Output(workingDirectory, "--no-lazy-fetch", $"--attr-source={candidateCommit}",
+            "-c", "core.quotePath=true", "diff", "--raw", "--no-abbrev", "--no-ext-diff", "--no-textconv", "--no-relative",
+            mergeBase, candidateCommit, "--");
+        if (!diffResult.Succeeded || diffResult.DrainTimedOut)
         {
             throw new ReviewerChangedFileScopeException(
                 ReviewerScopeUnavailableErrorCode,
@@ -133,14 +155,50 @@ internal sealed class WorkerGitContext
                 diffResult.Error);
         }
 
-        var changedFiles = SplitGitOutput(diffResult.Output)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return new ReviewerChangedFileScope(
-            mergeBaseResult.Output.Trim(),
-            changedFiles,
-            changedFiles.Length);
+        var records = diffResult.Output.Split('\n');
+        if (records[^1].Length != 0)
+            throw InvalidScopeMetadata();
+        var changes = new List<ReviewerScopedChange>();
+        foreach (var record in records.AsSpan(0, records.Length - 1))
+        {
+            var fields = record.Split('\t');
+            var metadata = fields[0].Split(' ');
+            if (metadata.Length != 5 || metadata[4].Length == 0)
+                throw InvalidScopeMetadata();
+
+            var status = metadata[4][0];
+            var paired = status is 'R' or 'C';
+            if (fields.Length != (paired ? 3 : 2) || fields[1].Length == 0 || fields[^1].Length == 0)
+                throw InvalidScopeMetadata();
+
+            var path = DecodeReviewerPath(fields[^1]);
+            var previousPath = paired ? DecodeReviewerPath(fields[1]) : null;
+            var oldBlob = ExcerptableBlob(metadata[0].AsSpan(1), metadata[2]);
+            var newBlob = ExcerptableBlob(metadata[1], metadata[3]);
+            var canHaveTextHunks = oldBlob != newBlob;
+            changes.Add(new ReviewerScopedChange(path, previousPath, status, canHaveTextHunks));
+        }
+
+        return new ReviewerChangedFileScope(mergeBase, integrationCommit, candidateCommit,
+            changes.OrderBy(change => change.Path, StringComparer.OrdinalIgnoreCase).ToArray());
+
+        ReviewerChangedFileScopeException InvalidScopeMetadata() => new(ReviewerScopeUnavailableErrorCode,
+            $"Reviewer changed-file scope unavailable because git diff --name-only {integrationBranch}...HEAD failed.",
+            "Git returned incomplete changed-file metadata.");
     }
+
+    internal static string DecodeReviewerPath(string gitPath)
+    {
+        try { return GitCli.UnquotePath(gitPath); }
+        catch (DecoderFallbackException) { return ReviewerScopedChange.EncodeNonUtf8Path(gitPath); }
+    }
+
+    // Git's SHA-1 and SHA-256 object IDs for the empty blob.
+    private static string? ExcerptableBlob(ReadOnlySpan<char> mode, string objectId) =>
+        mode is "000000" or "160000" || objectId is
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391" or
+            "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
+            ? null : objectId;
 
     internal IReadOnlyList<ReviewFindingLocation> ReadReviewerRoundTouchedAnchors(
         string workingDirectory,
@@ -761,14 +819,6 @@ internal sealed record SourceLineRange(int Start, int End)
         var changedEnd = changedStart + changedCount - 1;
         return changedStart <= End && changedEnd >= Start;
     }
-}
-
-internal sealed record ReviewerChangedFileScope(
-    string MergeBase,
-    IReadOnlyList<string> ChangedFiles,
-    int TotalChangedFileCount)
-{
-    public bool Truncated => ChangedFiles.Count < TotalChangedFileCount;
 }
 
 internal sealed record ReviewerMergeTreeStatus(
