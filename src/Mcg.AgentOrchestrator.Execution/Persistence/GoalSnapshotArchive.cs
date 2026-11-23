@@ -62,7 +62,7 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             GoalSnapshot? snapshot;
             try
             {
-                snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
+                snapshot = GoalSnapshotByteAccounting.Deserialize<GoalSnapshot>(json, serializerOptions);
                 snapshot = await new GoalTaskHistoryStore(serializerOptions)
                     .HydrateAsync(connection, snapshot, json, cancellationToken);
             }
@@ -100,7 +100,7 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             await using var update = connection.CreateCommand();
             update.CommandText = "UPDATE goals SET snapshot_json = $stub WHERE id = $id";
             update.Parameters.AddWithValue("$id", id);
-            update.Parameters.AddWithValue("$stub", JsonSerializer.Serialize(stub, serializerOptions));
+            update.Parameters.AddWithValue("$stub", GoalSnapshotByteAccounting.Serialize(stub, serializerOptions));
             var updated = await update.ExecuteNonQueryAsync(cancellationToken);
             archived += updated;
             if (updated > 0)
@@ -119,16 +119,16 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
         if (snapshot is not { IsMetadataOnly: true })
             return snapshot;
 
-        var json = await ReadDocumentAsync(connection, snapshot.Id, cancellationToken);
+        var (json, utf8Bytes) = await ReadDocumentAsync(connection, snapshot.Id, cancellationToken);
         if (json is null) return snapshot;
         readObserver?.Invoke(new("archive-attempt", snapshot.Id, json.Length));
-        var hydrated = JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
+        var hydrated = GoalSnapshotByteAccounting.Deserialize<GoalSnapshot>(json, serializerOptions, utf8Bytes);
         if (hydrated is not null)
             readObserver?.Invoke(new("archive-deserialized", snapshot.Id, json.Length));
-        return await new GoalTimelineStore(serializerOptions).HydrateAsync(connection, hydrated, json, cancellationToken);
+        return await new GoalTimelineStore(serializerOptions).HydrateAsync(connection, hydrated, json, cancellationToken, utf8Bytes);
     }
 
-    internal static async Task<string?> ReadDocumentAsync(
+    internal static async Task<(string? Json, long? Utf8Bytes)> ReadDocumentAsync(
         SqliteConnection connection, string goalId, CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
@@ -136,12 +136,13 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
         command.Parameters.AddWithValue("$id", goalId);
         try
         {
-            return GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(cancellationToken));
+            var json = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(cancellationToken), out var utf8Bytes);
+            return (json, utf8Bytes);
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
             ex.Message.Contains("no such table: goal_snapshot_archive", StringComparison.OrdinalIgnoreCase))
         {
-            return null;
+            return default;
         }
     }
 

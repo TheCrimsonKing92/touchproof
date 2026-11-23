@@ -236,18 +236,18 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
     }
 
     internal async Task<GoalSnapshot?> HydrateAsync(SqliteConnection connection, GoalSnapshot? snapshot,
-        string text, CancellationToken token = default)
+        string text, CancellationToken token = default, long? utf8Bytes = null)
     {
         if (snapshot is null || snapshot.IsMetadataOnly) return snapshot;
-        var fields = JsonSerializer.Deserialize<TimelineDocument>(text, options);
+        var fields = GoalSnapshotByteAccounting.Deserialize<TimelineDocument>(text, options, utf8Bytes);
         if (fields?.IsMetadataOnly == true)
         {
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
             command.Parameters.AddWithValue("$id", snapshot.Id);
-            text = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token))
+            text = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(token), out utf8Bytes)
                 ?? throw Error(snapshot.Id, "missing archive");
-            fields = JsonSerializer.Deserialize<TimelineDocument>(text, options);
+            fields = GoalSnapshotByteAccounting.Deserialize<TimelineDocument>(text, options, utf8Bytes);
         }
         return await ApplyAsync(connection, snapshot, fields?.TimelineInTable ?? default, token);
     }

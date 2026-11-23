@@ -16,6 +16,85 @@ public sealed class ConductorBatchLoopTestsConductEvents : ConductorBatchLoopTes
     {
     }
 
+    [Fact]
+    public void TickLoadCountersDoNotDrainPendingEvents()
+    {
+        var root = CreateTempDirectory("mcg-tick-counters");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var drainCalls = 0;
+        var writer = new ConductEventLogWriter(logPath, beforeRequiredEventDrain: () => drainCalls++);
+        var previousWriter = ConductorBatchLoop.CurrentConductEventLogWriter.Value;
+        const string line = "TICK_LOAD_COUNTERS tick=1 goal_snapshot_deserialized_utf8_bytes=0 goal_snapshot_serialized_utf8_bytes=0";
+        try
+        {
+            ConductorBatchLoop.CurrentConductEventLogWriter.Value = writer;
+            _ = AsyncLocalConsoleRouter.Capture(() => ConductorBatchLoop.EmitProgress(line));
+        }
+        finally
+        {
+            ConductorBatchLoop.CurrentConductEventLogWriter.Value = previousWriter;
+        }
+
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var record = JsonSerializer.Deserialize<ConductEventRecord>(Assert.Single(File.ReadLines(logPath)), options);
+        Assert.Equal("tick-load-counters", record!.EventKind);
+        Assert.Equal(line, record.Detail);
+        Assert.Equal(0, drainCalls);
+        writer.Append("phase-timing", goalId: null, "regular progress");
+        Assert.Equal(1, drainCalls);
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task TickReceiptIsDeliveredWhileConductEventGateIsHeld()
+    {
+        var root = CreateTempDirectory("mcg-tick-receipt");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var gateHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseGate = new ManualResetEventSlim();
+        var gateOwner = new ConductEventLogWriter(logPath, beforeAppendCommit: () =>
+        {
+            gateHeld.SetResult();
+            releaseGate.Wait();
+        });
+        var tickWriter = new ConductEventLogWriter(logPath);
+        var append = Task.Run(() => gateOwner.Append("phase-timing", null, "regular progress"));
+        Task<(BatchTickSummary? Receipt, string Output)>? publish = null;
+
+        try
+        {
+            await TestHangGuard.WaitAsync(gateHeld.Task, "the other writer acquired the conduct event gate");
+            publish = Task.Run(() =>
+            {
+                ConductorBatchLoop.CurrentConductEventLogWriter.Value = tickWriter;
+                using var snapshotBytes = GoalSnapshotByteAccounting.Begin();
+                BatchTickSummary? receipt = null;
+                var output = AsyncLocalConsoleRouter.Capture(() =>
+                    ConductorTickPusher.Publish(new BatchTickSummary(7, 0, 0, 0, 0, 0, WatchSleeping: false),
+                        snapshotBytes, tick => receipt = tick, pendingReadWork: true));
+                return (receipt, output);
+            });
+
+            var (receipt, output) = await TestHangGuard.WaitAsync(publish, "tick receipt delivery while the gate is held");
+            Assert.NotNull(receipt);
+            Assert.Equal(7, receipt.Tick);
+            Assert.Null(receipt.GoalSnapshotDeserializedUtf8Bytes);
+            Assert.Equal(0, receipt.GoalSnapshotSerializedUtf8Bytes);
+            Assert.Contains("TICK_LOAD_COUNTERS tick=7 goal_snapshot_deserialized_utf8_bytes=unknown " +
+                "goal_snapshot_serialized_utf8_bytes=0", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseGate.Set();
+            await TestHangGuard.WaitAsync(append, "the other writer finished after gate release");
+            if (publish is not null)
+                await TestHangGuard.WaitAsync(publish, "tick publisher finished after gate release");
+        }
+
+        var record = JsonSerializer.Deserialize<ConductEventRecord>(Assert.Single(File.ReadLines(logPath)),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Equal("phase-timing", record!.EventKind);
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_shared_stream_receives_events_from_sequential_loop_instances")]
     public void ConductEventsSharedStreamReceivesEventsFromSequentialLoopInstances()
     {

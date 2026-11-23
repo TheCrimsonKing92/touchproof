@@ -37,7 +37,7 @@ internal static class ProviderConnectionHistoryReader
             var payload = reader.IsDBNull(1) ? reader.GetValue(2) : reader.GetValue(1);
             observer?.Invoke(new("provider-connection-history-projection", id));
             using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
-            var goal = await JsonSerializer.DeserializeAsync<GoalFields>(stream, options, token)
+            var goal = await GoalSnapshotByteAccounting.DeserializeAsync<GoalFields>(stream, options, token)
                 ?? throw new InvalidDataException("Provider connection history is unavailable.");
             if (goal.Id != id || goal.IsMetadataOnly)
                 throw new InvalidDataException("Provider connection history identity is invalid.");
