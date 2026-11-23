@@ -268,6 +268,31 @@ public sealed class ConductorContinuitySupervisorTests
     }
 
     [Xunit.Fact]
+    public async Task ResolverObservationCheckpointReachesOnlyTheNextCleanRenewalChild()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        const string checkpoint = "window:token:digest";
+        var prefix = ConductorContinuitySupervisor.ResolverObservationHandoffPrefix;
+        var host = new ScriptedSupervisorProcessHost((request, index) =>
+        {
+            ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                new(index < 2 ? "max-duration" : "stop-file", 1, 1, RestartRequested: index < 2,
+                    ResolverObservationHandoff: index == 0 ? checkpoint : null));
+            return new(0, 300 + index);
+        });
+        var supervisor = new ConductorContinuitySupervisor(host, new RecordingRunEventStore());
+
+        var result = await supervisor.RunAsync(["conduct", "--loop", prefix + "untrusted"],
+            fixture.Root, fixture.Root, "default", "default");
+
+        Assert.Equal(0, result);
+        Assert.Equal(3, host.Requests.Count);
+        Assert.DoesNotContain(host.Requests[0].Arguments, arg => arg.StartsWith(prefix, StringComparison.Ordinal));
+        Assert.Contains(prefix + checkpoint, host.Requests[1].Arguments);
+        Assert.DoesNotContain(host.Requests[2].Arguments, arg => arg.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public async Task PlannedRenewal_StagesFromHeadAndLaunchesStagedSuccessor()
     {
         var store = new RecordingRunEventStore();

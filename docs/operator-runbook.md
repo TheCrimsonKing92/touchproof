@@ -297,6 +297,14 @@ The default Windows host holds one in-memory entry. It validates the SQLite main
 
 `BoardFillSnapshotMeasurementTests.Bounded_windows_report_paired_costs_and_freshness` emits cold, unchanged, changed and mixed receipts. It reports repeated calling-thread CPU measurements with each arm's spread and the observed accounting increment. Deltas within that increment or with inconsistent direction are inconclusive. SQLite tracing runs separately and counts statements and rows, including production note setup and coverage repair on the writer side. The fixture checks raw contents and the selected action. Retained bytes are estimated from a managed live-heap delta across caches populated from each window's final database. The historical whole-step CPU and delivered backlog row counters serve as workload context.
 
+### Collect an ordinary pre-Tester resolver window
+
+After normal acceptance and a healthy `ACTIVATION_ADOPTED` receipt, verify the workspace and the supervisor and child lease identities. Set `preTesterResolverObservationWindowId` in the resolved project's `conductor-policy.json` to a fresh UUID. The ordinary supervised child reads the policy on its next tick. An absent or null value disables recording.
+
+The state directory holds `pretester-resolver-observation/<window-id>.jsonl` and its `.receipt.json` sidecar. The deadline is 24 hours after the first captured tick starts. A clean scheduled renewal checkpoints the corpus and carries its digest to the next child. An unexpected exit, unfinished tick, or failed capture leaves the window incomplete. Reusing a UUID preserves the existing window and its deadline.
+
+Package both files with the digest from a `complete` receipt, the healthy adoption identity, and the pinned optimization candidate and original resolver build identities. An `insufficient-coverage` receipt records the captured mix for inspection. Only `complete` qualifies for the parent goal's CPU claim. Use the parent replay harness with the expected digest and a fresh result path. Associate the package with goal `85288928` before applying its current authoritative resume transition.
+
 ### Manual bounce fallback after loop-affecting code lands
 
 Use this procedure when self-relaunch is disabled, when activation reverts, or when the running supervisor predates the automatic activation implementation. Re-arm the landed code deliberately:

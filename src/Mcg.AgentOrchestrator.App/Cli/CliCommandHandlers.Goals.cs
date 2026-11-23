@@ -1428,7 +1428,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
                     cleanupHooks: context.CleanupHooks)
                 {
-                    MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains
+                    MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains,
+                    PreTesterResolverObservation = PreTesterResolverObservationWindow.ForConductLoop(
+                        supervisedChild, noDispatch, context.Workspace,
+                        parts.FirstOrDefault(part => part.StartsWith(ConductorContinuitySupervisor.ResolverObservationHandoffPrefix,
+                            StringComparison.OrdinalIgnoreCase))?[ConductorContinuitySupervisor.ResolverObservationHandoffPrefix.Length..])
                 };
                 if (!noDispatch) loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
                 if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)

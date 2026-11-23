@@ -394,6 +394,69 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
     }
 
     [Fact]
+    public void WorktreeResolverObservationPreservesEvidenceAndTesterTransitions()
+    {
+        var baseline = Run(observe: false);
+        var observed = Run(observe: true);
+        Assert.Equal(["focused", "Tester"], baseline.Order);
+        Assert.Equal(baseline.Order, observed.Order);
+        Assert.Equal(baseline.Outcomes, observed.Outcomes);
+        Assert.Contains("green", observed.Outcomes);
+
+        static (string[] Order, string[] Outcomes) Run(bool observe)
+        {
+            using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+            var worktree = GoalWorktrees.WorktreePath(scenario.Root, scenario.Goal.Id);
+            const string source = PreTesterReverseDependencySelectionFixture.Source;
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(worktree, source))!);
+            File.WriteAllText(Path.Combine(worktree, source), "public class AppContract {}");
+            File.WriteAllText(Path.Combine(worktree, "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"), "<Project />");
+            var project = PreTesterReverseDependencySelectionFixture.Project;
+            File.WriteAllText(Path.Combine(worktree, project), """
+                <Project Sdk="Microsoft.NET.Sdk"><ItemGroup>
+                  <ProjectReference Include="../../src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj" />
+                </ItemGroup></Project>
+                """);
+            File.WriteAllText(Path.Combine(worktree, Path.GetDirectoryName(project)!, "DeferredAlphaTests.cs"), """
+                public class DeferredAlphaTests {
+                    [Xunit.Fact] public void Runs() { var item = new AppContract(); }
+                }
+                """);
+            var order = new List<string>();
+            var driver = scenario.Driver(request =>
+            {
+                order.Add("focused");
+                return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                    scenario.Root, request, CandidateSha);
+            }, role => order.Add(role.ToString()), changedPaths: [source]);
+            var id = Guid.NewGuid();
+            driver.PreTesterResolverObservation = observe ? PreTesterResolverObservationTests.Window(scenario.Root) : null;
+            var policy = ConductorAutonomyPolicy.Conservative with { PreTesterResolverObservationWindowId = observe ? id : null };
+
+            new ConductorBatchLoop(utcNow: () => PreTesterResolverObservationTests.Start).Run(
+                scenario.Kernel, driver, policy, Path.Combine(scenario.Root, ".conduct-stop"), maxIterations: 1, quiet: true);
+
+            var path = PreTesterResolverObservationTests.CorpusPath(scenario.Root, id);
+            if (observe)
+            {
+                var tick = System.Text.Json.JsonSerializer.Deserialize<PreTesterReverseDependencyObservation.CompletedTick>(
+                    File.ReadLines(path).Skip(1).Single())!;
+                var invocation = Assert.Single(tick.Rows);
+                Assert.Equal(scenario.Goal.Id.Value, invocation.Boundary.GoalId);
+                Assert.Equal(scenario.Tester.Id.Value, invocation.Boundary.TesterTaskId);
+                Assert.Contains("DeferredAlphaTests", invocation.Names);
+                Assert.Equal("incomplete", PreTesterResolverObservationTests.Receipt(path).Status);
+            }
+            else
+            {
+                Assert.False(File.Exists(path));
+            }
+            return (order.ToArray(), scenario.Goal.Timeline.Select(evt => PreTesterEvidenceIndexLines.Parse(evt.Message))
+                .OfType<PreTesterEvidenceEntry>().Select(entry => entry.Outcome).ToArray());
+        }
+    }
+
+    [Fact]
     public void ActionableRedRetriesDeveloperWithoutTesterDispatch()
     {
         using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);

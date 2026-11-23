@@ -256,6 +256,7 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
+        using var resolverObservation = driver.PreTesterResolverObservation;
         if (watchSleep.IsIgnoringInitialStopFile)
             Console.WriteLine($"[conduct --watch] The existing repo-wide stop file is ignored for named goal {ShortGoalId(onlyGoalId!)}.");
         using var activationAdmissionHealth = BeginActivationAdmission(emitActivationHeartbeat);
@@ -807,6 +808,7 @@ internal sealed partial class ConductorBatchLoop
                 }
             }
 
+            using var resolverTick = resolverObservation?.BeginTick(policy.PreTesterResolverObservationWindowId, _utcNow);
             var preTickTimingLines = new List<string>();
             if (checkpointGoalTick is not null && checkpointHeldGoals.Count > 0)
             {
@@ -1083,6 +1085,7 @@ internal sealed partial class ConductorBatchLoop
                         ProgressLines = intentTickLines,
                         OperatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? []
                     }, tickSnapshotBytes, activationSweepFollows: true);
+                    resolverTick?.Complete();
                     if (watchSleep.IsStopRequested())
                     {
                         stopRequested = true;
@@ -1178,6 +1181,7 @@ internal sealed partial class ConductorBatchLoop
                         Math.Max(recheckableBlockedGoals, transientLoadRecheckPending ? 1 : 0));
                     if (totalTicks < nextTick)
                         CompleteActivationTick(nextTick);
+                    resolverTick?.Complete();
                     EmitProgress(
                         recheckableBlockedGoals > 0 || transientLoadRecheckPending
                             ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals}" +
@@ -1789,6 +1793,7 @@ internal sealed partial class ConductorBatchLoop
                 ProgressLines = tickLines,
                 OperatorDispositions = operatorDispositions
             };
+            resolverTick?.Complete();
             if (drain.IsDraining && !watchSleep.IsStopRequested() && TryFinishDrain())
             {
                 PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
@@ -1903,7 +1908,11 @@ internal sealed partial class ConductorBatchLoop
         }
         if (stopReason == ConductorDrainSignal.DrainedReason)
             EmitProgress(drain.FormatDrained(totalTicks));
-        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds)) { HomeBuildTarget = handedOffHomeBuild };
+        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds))
+        {
+            HomeBuildTarget = handedOffHomeBuild,
+            ResolverObservationHandoff = maxDurationReached ? resolverObservation?.CloseForRenewal(_utcNow) : null
+        };
         }
         catch (Exception ex)
         {

@@ -18,7 +18,9 @@ internal static class PreTesterReverseDependencySelections
     internal static (IReadOnlyList<FindingEvidenceSelection> Selections, IReadOnlyList<Provenance> Provenance) Select(
         string worktreePath, IReadOnlyList<string> changedPaths, Action<string>? progress = null,
         Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? selector = null,
-        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? costDecision = null)
+        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? costDecision = null,
+        PreTesterReverseDependencyObservation.Tick? resolverTick = null,
+        PreTesterReverseDependencyObservation.Boundary? resolverBoundary = null)
     {
         var paths = ShippingSourcePaths(changedPaths);
         if (paths.Length == 0) return ([], []);
@@ -48,6 +50,9 @@ internal static class PreTesterReverseDependencySelections
         }
         if (result.TestClasses.Count == 0) return ([], []);
 
+        var ordinal = resolverBoundary is null ? null : resolverTick?.Enter();
+        IReadOnlyList<AcceptanceTestClassDescriptor>? observedInventory = null;
+        string? unresolvedName = null;
         var resolved = Measure("resolve-class-names", () =>
         {
             IReadOnlyList<AcceptanceTestClassDescriptor> inventory;
@@ -59,20 +64,27 @@ internal static class PreTesterReverseDependencySelections
             {
                 inventory = [];
             }
+            if (ordinal.HasValue) observedInventory = inventory;
             // Resolve the entire contribution before emitting success or creating any obligation.
             foreach (var name in result.TestClasses)
                 if (inventory.Count(item => item.FullName == name ||
                         item.FullName.EndsWith("." + name, StringComparison.Ordinal)) != 1)
                 {
+                    unresolvedName = name;
                     (progress ?? Console.WriteLine)(
                         $"PRE_TESTER_GUARD_SELECTED class={name} kind=reverse-dependency-unresolved reason=class-match-not-unique path={paths[0]}");
                     return false;
                 }
             return true;
         });
-        if (!resolved) return ([], []);
+        if (!resolved)
+        {
+            RecordObservation(null);
+            return ([], []);
+        }
         var classes = result.TestClasses.Distinct(StringComparer.Ordinal).ToArray();
         var decision = Measure("evaluate-cost-rule", () => (costDecision ?? ReadCostDecision)(classes));
+        RecordObservation(decision);
         if (!decision.Run)
         {
             (progress ?? Console.WriteLine)(
@@ -86,6 +98,13 @@ internal static class PreTesterReverseDependencySelections
 
         void Degraded(string reason) => (progress ?? Console.WriteLine)(
             $"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-degraded reason={reason} path={paths[0]}");
+
+        void RecordObservation(ReverseDependencyEvidenceCostRule.Decision? cost)
+        {
+            if (ordinal is { } entered)
+                resolverTick!.Record(entered, resolverBoundary!, Project, result.TestClasses,
+                    observedInventory!, paths, unresolvedName, cost);
+        }
 
         ReverseDependencyEvidenceCostRule.Decision ReadCostDecision(IReadOnlyList<string> selectedClasses)
         {

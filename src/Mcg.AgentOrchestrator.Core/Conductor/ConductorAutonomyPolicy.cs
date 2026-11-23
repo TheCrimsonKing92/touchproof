@@ -70,6 +70,7 @@ public sealed record ConductorAutonomyPolicy(
 
     public ConductorFeatureSwitches Features { get; init; } = ConductorFeatureSwitches.Default;
     public int BuildRootReapIntervalSeconds { get; init; } = DefaultBuildRootReapIntervalSeconds;
+    public Guid? PreTesterResolverObservationWindowId { get; init; }
 
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
@@ -264,6 +265,8 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"buildGcHeapCount\": {BuildGcHeapCount},");
         sb.AppendLine($"  \"buildRootRetentionDays\": {BuildRootRetentionDays},");
         sb.AppendLine($"  \"buildRootReapIntervalSeconds\": {BuildRootReapIntervalSeconds},");
+        if (PreTesterResolverObservationWindowId is { } windowId)
+            sb.AppendLine($"  \"preTesterResolverObservationWindowId\": {JsonStr(windowId.ToString("D"))},");
         sb.AppendLine($"  \"terminalBuildRootMaxBytes\": {TerminalBuildRootMaxBytes?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "null"},");
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
@@ -553,6 +556,7 @@ public sealed record ConductorAutonomyPolicy(
                 terminalBuildRootMaxBytes)
             {
                 Features = ParseFeatures(root, src),
+                PreTesterResolverObservationWindowId = ParseObservationWindowId(root, src),
                 BuildRootReapIntervalSeconds = root.TryGetProperty("buildRootReapIntervalSeconds", out _)
                     ? RequireInt(root, "buildRootReapIntervalSeconds", src)
                     : DefaultBuildRootReapIntervalSeconds
@@ -566,6 +570,16 @@ public sealed record ConductorAutonomyPolicy(
 
             return policy;
         }
+    }
+
+    private static Guid? ParseObservationWindowId(JsonElement root, string src)
+    {
+        if (!root.TryGetProperty("preTesterResolverObservationWindowId", out var value) ||
+            value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (value.ValueKind == JsonValueKind.String && value.TryGetGuid(out var id) && id != Guid.Empty)
+            return id;
+        throw new FormatException($"conductor-policy.json{src}: preTesterResolverObservationWindowId must be a nonempty UUID or null.");
     }
 
     private static ConductorFeatureSwitches ParseFeatures(JsonElement root, string src)

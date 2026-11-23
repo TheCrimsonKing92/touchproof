@@ -40,7 +40,8 @@ internal sealed record ConductorContinuityExitArtifact(
     int Done,
     bool RestartRequested,
     [property: JsonPropertyName("landedGoals")] int LandedGoals = 0,
-    HomeBuildAdoptionRecord? HomeBuildTarget = null)
+    HomeBuildAdoptionRecord? HomeBuildTarget = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolverObservationHandoff = null)
 {
     public static void Write(string path, ConductorContinuityExitArtifact artifact)
     {
@@ -109,6 +110,7 @@ internal sealed partial class ConductorContinuitySupervisor(
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
+    internal const string ResolverObservationHandoffPrefix = "--pretester-resolver-handoff=";
     internal const string LoopReadyLinePrefix = "LOOP_READY ";
     internal const string StdoutLogPathEnvironmentVariable = "MCG_ORCHESTRATOR_STDOUT_LOG_PATH";
     internal const string StderrLogPathEnvironmentVariable = "MCG_ORCHESTRATOR_STDERR_LOG_PATH";
@@ -235,6 +237,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             if (inheritedActiveChild is not null)
                 attempt = inheritedActiveChild.Attempt - 1;
         }
+        string? resolverObservationHandoff = null;
         while (true)
         {
             attempt++;
@@ -330,7 +333,9 @@ internal sealed partial class ConductorContinuitySupervisor(
             }
             var childArgs = ComposeChildArguments(args, projectName, tenantName, artifactPath,
                 homeBuildFollower is not null ? blockedActivationCommit : null,
-                requireCurrentStores: activeChild is null && pendingSuccessor is not null);
+                requireCurrentStores: activeChild is null && pendingSuccessor is not null,
+                resolverObservationHandoff: resolverObservationHandoff);
+            resolverObservationHandoff = null;
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             string? stallFailure = null;
@@ -730,6 +735,9 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
 
                 Record("restart", "planned", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
+                if (stallFailure is null && result is { ExitCode: 0, TerminationConfirmed: true, ForcedStop: false } &&
+                    artifact.StopReason == "max-duration")
+                    resolverObservationHandoff = artifact.ResolverObservationHandoff;
                 Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor?>? prepareWithHook = followingHome
                     ? (hook, token) => homeBuildFollower!.Prepare(artifact.HomeBuildTarget!,
                         new ConductorSupervisorBuildIdentity(currentBuild.CommitSha, currentBuild.StagedBuildId),
@@ -900,10 +908,12 @@ internal sealed partial class ConductorContinuitySupervisor(
     }
 
     internal static string[] ComposeChildArguments(IReadOnlyList<string> args, string projectName,
-        string tenantName, string exitArtifactPath, string? blockedHomeBuildCommit, bool requireCurrentStores) =>
+        string tenantName, string exitArtifactPath, string? blockedHomeBuildCommit, bool requireCurrentStores,
+        string? resolverObservationHandoff = null) =>
         args
             .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
             .Where(arg => !arg.StartsWith("--home-build-blocked-commit=", StringComparison.Ordinal))
+            .Where(arg => !arg.StartsWith(ResolverObservationHandoffPrefix, StringComparison.OrdinalIgnoreCase))
             .Concat([
                 $"--project={projectName}",
                 $"--tenant={tenantName}",
@@ -914,6 +924,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             .Concat(blockedHomeBuildCommit is not null
                 ? new[] { $"--home-build-blocked-commit={blockedHomeBuildCommit}" } : Array.Empty<string>())
             .Concat(requireCurrentStores ? new[] { "--require-current-stores" } : Array.Empty<string>())
+            .Concat(resolverObservationHandoff is null ? [] : [ResolverObservationHandoffPrefix + resolverObservationHandoff])
             .ToArray();
 
     private static IDisposable? TryAcquireRunDirectoryLease(string appDll)
