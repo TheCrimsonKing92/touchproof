@@ -50,11 +50,14 @@ internal sealed partial class ConductorDriver
         var failedChecks = acceptance.FailedChecks is { Count: > 0 }
             ? acceptance.FailedChecks
             : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+        var missingRequiredReceipt = acceptance is { RequiresSoloFailureReceipt: true, SoloFailureReceipt: null };
         if (goal.Status == GoalStatus.AcceptanceFailed)
         {
             RestoreVerifiedAfterAcceptanceClassification(
                 goal,
-                "All acceptance failures classified as Inherited; restored Verified for existing hold routing.");
+                missingRequiredReceipt
+                    ? "Restored Verified while focused solo attribution is pending."
+                    : "All acceptance failures classified as Inherited; restored Verified for existing hold routing.");
         }
         _recordAcceptanceFailure(
             goal,
@@ -63,6 +66,11 @@ internal sealed partial class ConductorDriver
             mainHeadSha,
             acceptance.CheckAttributions,
             acceptance.BaselineAttestation);
+        if (missingRequiredReceipt)
+            return MakeResult(goal.Id.Value, goalPrefix, policy, SoloBaselineRepairCoordinator.CreateSoloRepairHold(
+                GoalLifecycleState.Verified, SoloHoldReasons.RepairPending,
+                "The required solo evidence receipt is missing. Focused attribution is pending."));
+
         var excludedSummary = string.Join(
             ", ",
             retryDisposition.ExcludedFailures.Select(FormatExcludedAcceptanceFailure));

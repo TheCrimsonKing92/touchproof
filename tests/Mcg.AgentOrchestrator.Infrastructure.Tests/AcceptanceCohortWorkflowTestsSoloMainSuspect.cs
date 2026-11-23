@@ -85,6 +85,19 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
     }
 
     [Fact]
+    public async Task TwoSoloGoals_MissingRequiredReceipts_DoNotCorroborateMainSuspect()
+    {
+        using var scenario = CreateScenario();
+        scenario.Complete(0, scenario.Summary(0, [TestA]) with { RequiresSoloFailureReceipt = true }, expectLegacyHold: false);
+        scenario.RestartDriver();
+        scenario.Complete(1, scenario.Summary(1, [TestA]) with { RequiresSoloFailureReceipt = true }, expectLegacyHold: false);
+
+        Assert.Empty(scenario.ReadReceipts());
+        Assert.Empty(await scenario.Events.ReadAllAsync());
+        Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
+    }
+
+    [Fact]
     public async Task TwoSoloGoals_SharedUntouchedFailure_TripCircuit()
     {
         using var scenario = CreateScenario();

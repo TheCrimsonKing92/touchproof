@@ -1017,12 +1017,23 @@ public sealed class SoloRepairWorkflowTests
 
         var request = $"{Project}: FullyQualifiedName~{First}";
         var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequests = [request] };
-        var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(Complete(Driver(kernel, workspace, verifier), goal, completion).Outcome);
-        var disposition = AcceptanceApparatusDispositionFacts.FromRecordedFacts(hold.Decision!.Facts);
-        Assert.Equal(lostInheritedEnvelope ? AcceptanceApparatusDisposition.ExcludedUnattributableHold :
-            AcceptanceApparatusDisposition.ApparatusRedRegateHold, disposition.Disposition);
-        if (!lostInheritedEnvelope)
+        var result = Complete(Driver(kernel, workspace, verifier), goal, completion);
+        var events = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).EventFilePath(goal.Id);
+        var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        if (lostInheritedEnvelope)
+        {
+            AssertHold(result, SoloHoldReasons.RepairPending);
+            Assert.Empty(await collaboration.ListAsync(goal.Id.Value));
+            if (File.Exists(events))
+                Assert.DoesNotContain(File.ReadLines(events), line => line.Contains("\"eventType\":\"GoalEscalated\""));
+        }
+        else
+        {
+            var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            var disposition = AcceptanceApparatusDispositionFacts.FromRecordedFacts(hold.Decision!.Facts);
+            Assert.Equal(AcceptanceApparatusDisposition.ApparatusRedRegateHold, disposition.Disposition);
             Assert.Equal(ApparatusRedClassifier.BaselineNotExecutedEvidenceKind, disposition.EvidenceKind);
+        }
         Assert.Empty(verifier.FocusedRuns);
         await repository.SaveAsync(kernel);
 
@@ -1038,7 +1049,25 @@ public sealed class SoloRepairWorkflowTests
         Assert.Null(unresolved.Proof);
         Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
 
-        AssertHold(Driver(restarted, workspace, verifier).AdvanceOnce(reloaded, Policy), SoloHoldReasons.RepairEvidenceRequired, "operator");
+        var evidenceHold = Driver(restarted, workspace, verifier).AdvanceOnce(reloaded, Policy);
+        AssertHold(evidenceHold, SoloHoldReasons.RepairEvidenceRequired, "operator");
+        if (lostInheritedEnvelope)
+        {
+            Assert.Single(await collaboration.ListAsync(goal.Id.Value));
+            var escalation = Assert.Single(File.ReadLines(events).Where(line => line.Contains("\"eventType\":\"GoalEscalated\"")));
+            using var record = JsonDocument.Parse(escalation);
+            var reason = Assert.IsType<string>(record.RootElement.GetProperty("reason").GetString());
+            Assert.Contains(First + dataCase, reason, StringComparison.Ordinal);
+            Assert.Contains($"The verifier did not execute a conclusive selection on {candidate}", reason, StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(record.RootElement.GetProperty("deliveryId").GetString()));
+
+            await repository.SaveAsync(restarted);
+            var replay = await repository.LoadAsync();
+            AssertHold(Driver(replay, workspace, verifier).AdvanceOnce(replay.GetGoal(goal.Id), Policy),
+                SoloHoldReasons.RepairEvidenceRequired, "operator");
+            Assert.Single(await collaboration.ListAsync(goal.Id.Value));
+            Assert.Equal(escalation, Assert.Single(File.ReadLines(events).Where(line => line.Contains("\"eventType\":\"GoalEscalated\""))));
+        }
         Assert.Equal((request, candidate), Assert.Single(verifier.FocusedRuns));
         Assert.Empty(verifier.NormalRuns);
         Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
