@@ -252,6 +252,36 @@ public sealed class ProviderHoldSeedWorkBoundTests
         }
     }
 
+    [Fact]
+    public async Task Seed_UnindexedRecoveryWithOrphanRefusal_MatchesCanonicalReplay()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        var source = ProviderHoldSeedFixture.Id(0);
+        var witness = ProviderHoldSeedFixture.Id(806);
+        await fixture.RequeueRefusedAttemptAsync();
+        await fixture.CompleteOnOriginalBindingAsync(legacyModel: true, includeOrphanRefusal: true);
+        var token = TestContext.Current.CancellationToken;
+        var repository = fixture.Repository;
+        Assert.DoesNotContain(await repository.ListModelFitHistoryAsync(token), row => row.GoalId == witness);
+        var canonical = await repository.LoadGoalsAsync([new(source), new(witness)], token);
+        Assert.Equal(2, canonical.Goals.Count);
+        var recoveryGoal = Assert.Single(canonical.Goals, goal => goal.Id.Value == witness);
+        Assert.Contains(recoveryGoal.Tasks, task => task.LastVerification is { } verification &&
+            ProviderHoldEvidence.Read(verification).Confirmed);
+        Assert.Empty(ProviderHoldHistory.SeedAttempts(recoveryGoal));
+        Assert.Equal(witness, Assert.Single(ProviderHoldHistory.SeedRecoveryAttempts(recoveryGoal)).GoalId);
+        var now = ProviderHoldSeedFixture.At.AddMinutes(4);
+        var canonicalHolds = ProviderUsageHoldView.Read(canonical.Goals, now);
+        Assert.Empty(canonicalHolds);
+
+        var kernel = new AgentOrchestratorKernel();
+        var result = Seed(repository, kernel);
+        Assert.Equal(new[] { source }, result.Selection.Sources);
+        Assert.Equal(new[] { witness }, result.Selection.Dependencies);
+        Assert.Null(Assert.Single(result.Index.Evaluations).Value.Schedule);
+        Assert.Equal(canonicalHolds.ToArray(), ProviderUsageHoldView.Read(kernel.ProviderHoldScope, now).ToArray());
+    }
+
     private static ProviderHoldHistoryStartupSeed.Result Seed(ProviderHoldSeedFixture fixture, AgentOrchestratorKernel kernel) =>
         Seed(fixture.Repository, kernel);
 
@@ -462,13 +492,22 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         }]);
     }
 
-    internal Task CompleteOnOriginalBindingAsync(bool legacyModel)
+    internal Task CompleteOnOriginalBindingAsync(bool legacyModel, bool includeOrphanRefusal = false)
     {
         var goal = Make(806, At.AddMinutes(3), Credentials[0], success: true);
-        if (!legacyModel) return SaveAsync([goal]);
         var task = goal.Tasks.Single();
-        var dispatch = task.LastDispatch! with { ModelName = null };
-        return SaveAsync([goal with { Tasks = [task with { LastDispatch = dispatch, DispatchHistory = [dispatch] }] }]);
+        if (legacyModel)
+        {
+            var dispatch = task.LastDispatch! with { ModelName = null };
+            task = task with { LastDispatch = dispatch, DispatchHistory = [dispatch] };
+        }
+        if (!includeOrphanRefusal) return SaveAsync([goal with { Tasks = [task] }]);
+
+        var orphan = MakeHold(0).Tasks.Single() with
+        {
+            Id = Id(807), LastDispatch = null, DispatchHistory = []
+        };
+        return SaveAsync([goal with { Tasks = [task, orphan] }]);
     }
 
     internal int CountDispatchGoals()

@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 // Parallel-safe: private databases, AsyncLocal output capture and injected time.
 public sealed class ProviderUsageHoldJsonTests
@@ -81,6 +82,44 @@ public sealed class ProviderUsageHoldJsonTests
     }
 
     [Fact]
+    public async Task UnreadableUnrelatedArchive_PreservesHistoricalHoldInStatusAndFleet()
+    {
+        using var fixture = new Fixture();
+        var unrelated = fixture.NewGoal();
+        fixture.Kernel.CancelGoal(unrelated.Id, "Archive fixture unrelated to provider holds.");
+        var cancelled = fixture.Kernel.ExportGoalSnapshot(unrelated.Id);
+        fixture.Kernel.ReplaceGoalWithSnapshot(cancelled with
+        {
+            Tasks = [cancelled.Tasks.Single() with { Status = WorkTaskStatus.Cancelled }]
+        });
+        var source = fixture.Exhaust();
+        fixture.Kernel.ReplaceGoalWithSnapshot(fixture.Kernel.ExportGoalSnapshot(source.Id) with { Status = GoalStatus.Completed });
+        await fixture.Save();
+
+        var path = fixture.Workspace.SqliteStatePath;
+        var token = TestContext.Current.CancellationToken;
+        var writer = new SqliteOrchestratorStateRepository(path);
+        Assert.Equal(1, await writer.ArchiveTerminalGoalSnapshotsAsync(Start.AddSeconds(30), cancellationToken: token));
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+        {
+            await connection.OpenAsync(token);
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = X'00' WHERE goal_id = $id";
+            command.Parameters.AddWithValue("$id", unrelated.Id.Value);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync(token));
+        }
+
+        var reader = SqliteOrchestratorStateRepository.OpenReadOnly(path);
+        await Assert.ThrowsAsync<InvalidDataException>(() => reader.ReadProviderHoldSeedHistoryAsync(token));
+        Assert.Contains(await reader.ListModelFitHistoryAsync(token), row =>
+            row.GoalId == source.Id.Value && row.OutcomeRule == TaskOutcomeRules.ProviderBudgetExhausted.Token);
+        using var status = JsonDocument.Parse(fixture.Status(json: true));
+        var row = Assert.Single(status.RootElement.GetProperty("payload").GetProperty("providerHolds").EnumerateArray());
+        Assert.Equal(source.Id.Value, row.GetProperty("sourceGoalId").GetString());
+        Assert.Equal(source.Id, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, Start.AddMinutes(2))).Hold.SourceGoalId);
+    }
+
+    [Fact]
     public void NoHistoryCandidates_NeverLoadsGoalsAndMatchesPlainView()
     {
         using var fixture = new Fixture();
@@ -104,6 +143,7 @@ public sealed class ProviderUsageHoldJsonTests
         spy.FailHistory = true;
         Assert.Single(ProviderUsageHoldReader.Read(repository, fixture.Kernel.Goals, Start.AddMinutes(2)));
         Assert.Equal(1, spy.HistoryCalls);
+        Assert.Equal(1, spy.FallbackHistoryCalls);
         Assert.Equal(0, spy.LoadCalls);
     }
 
@@ -127,6 +167,7 @@ public sealed class ProviderUsageHoldJsonTests
     public class QueryProbe : DispatchProxy
     {
         internal int HistoryCalls;
+        internal int FallbackHistoryCalls;
         internal int LoadCalls;
         internal bool FailHistory;
         protected override object? Invoke(MethodInfo? method, object?[]? args)
@@ -137,6 +178,9 @@ public sealed class ProviderUsageHoldJsonTests
                     HistoryCalls++;
                     return FailHistory ? Task.FromException<ProviderHoldSeedHistory>(new IOException("fixture history failure"))
                         : Task.FromResult(new ProviderHoldSeedHistory([], [], new HashSet<GoalId>(), []));
+                case nameof(IOrchestratorStateRepository.ListModelFitHistoryAsync):
+                    FallbackHistoryCalls++;
+                    return Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
                 case nameof(IOrchestratorStateQueries.LoadGoalsAsync):
                     LoadCalls++;
                     return Task.FromResult(new AgentOrchestratorKernel());

@@ -2387,8 +2387,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         var candidates = await ProviderHoldSeedEvidenceReader.FindCandidatesAsync(
             connection, SerializerOptions, cancellationToken);
         var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
-        var attempts = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals)
-            .SelectMany(ProviderHoldHistory.SeedAttempts).Distinct().ToArray();
+        var failureHistory = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals).ToArray();
+        var attempts = failureHistory.SelectMany(ProviderHoldHistory.SeedAttempts).Distinct().ToArray();
         var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
             cancellationToken, attempts);
         var selection = ProviderHoldHistory.SelectSeedEvidence(rows, attempts, new HashSet<string>(StringComparer.Ordinal));
@@ -2396,7 +2396,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             connection, candidates, selection, cancellationToken);
         recoveryIds.ExceptWith(candidates.FailureGoals);
         var (recoveryEvidence, recoveryGoals) = await ReadAttemptsAsync(recoveryIds);
-        var recoveries = recoveryEvidence.Select(ProviderHoldSeedPruning.Adapt).Concat(recoveryGoals)
+        // An orphan refusal may have selected a goal that supplies an unindexed recovery.
+        var unindexedFailureHistory = failureHistory.Where(goal =>
+            !selection.Sources.Contains(goal.Id.Value) && !selection.Dependencies.Contains(goal.Id.Value));
+        var recoveries = unindexedFailureHistory.Concat(recoveryEvidence.Select(ProviderHoldSeedPruning.Adapt))
+            .Concat(recoveryGoals)
             .SelectMany(ProviderHoldHistory.SeedRecoveryAttempts).Where(attempt =>
                 selection.LowerBounds.TryGetValue(attempt.ProviderName, out var first) && attempt.Timestamp >= first)
             .Distinct().ToArray();

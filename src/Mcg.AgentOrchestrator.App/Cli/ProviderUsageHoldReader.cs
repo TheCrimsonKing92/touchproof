@@ -38,10 +38,7 @@ internal static class ProviderUsageHoldReader
             working = loaded.Concat(evidence.Values.Where(goal => failedIds.Contains(goal.Id)))
                 .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal).ToArray();
             var retained = evidence.Values.Where(goal => !workingIds.Contains(goal.Id.Value)).ToArray();
-            if (retained.Length == 0) return ProviderUsageHoldView.Read(working, now);
-            var index = ProviderHoldSeedIndex.Evaluate(working, [], retained, selection.Sources);
-            return ProviderUsageHoldView.Read(working.Concat(retained.Where(goal =>
-                index.RequiredGoals.Contains(goal.Id.Value))).ToArray(), now);
+            return ReadRetained(working, retained, selection.Sources, now);
         }
         catch (Exception)
         {
@@ -50,8 +47,30 @@ internal static class ProviderUsageHoldReader
                 try { working = loaded.Concat(repository.LoadGoalsAsync(failedIds).GetAwaiter().GetResult().Goals).ToArray(); }
                 catch (Exception) { }
             }
+            try
+            {
+                // Indexed history can still identify readable goals when sparse discovery fails.
+                var sources = ProviderHoldHistory.SeedCandidates(
+                    repository.ListModelFitHistoryAsync().GetAwaiter().GetResult(), workingIds);
+                if (sources.Count != 0)
+                {
+                    var retained = repository.LoadGoalsAsync(sources.Select(id => new GoalId(id)).ToArray())
+                        .GetAwaiter().GetResult().Goals;
+                    return ReadRetained(working, retained, sources.ToHashSet(StringComparer.Ordinal), now);
+                }
+            }
+            catch (Exception) { }
             return ProviderUsageHoldView.Read(working, now);
         }
+    }
+
+    private static IReadOnlyList<ProviderUsageHoldRow> ReadRetained(IReadOnlyCollection<Goal> working,
+        IReadOnlyCollection<Goal> retained, IReadOnlySet<string> sources, DateTimeOffset now)
+    {
+        if (retained.Count == 0) return ProviderUsageHoldView.Read(working, now);
+        var index = ProviderHoldSeedIndex.Evaluate(working, [], retained, sources);
+        return ProviderUsageHoldView.Read(working.Concat(retained.Where(goal =>
+            index.RequiredGoals.Contains(goal.Id.Value))).ToArray(), now);
     }
 
     internal static IReadOnlyList<ProviderUsageHoldRow> ReadWorkspace(OrchestratorWorkspace workspace, DateTimeOffset now)

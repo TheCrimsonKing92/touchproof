@@ -184,6 +184,34 @@ public sealed class ProviderHoldRecoveryLifecycleTests
     }
 
     [Fact]
+    public void AdmittedTaskProbe_PreservesSandboxRefusal()
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        var waiting = fixture.NewGoal();
+        var task = waiting.Tasks.Single();
+        fixture.WaitingTask = task.Id;
+        fixture.Clock.UtcNow = fixture.Due;
+        ProviderBudgetProbeAdmission.Apply(fixture.Kernel, waiting, [task.Id], fixture.Preflight, fixture.Clock.UtcNow);
+        var dispatch = new TaskDispatchRecord("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory,
+            fixture.Clock.UtcNow, ProviderName: "xAI");
+        fixture.Kernel.RecordTaskDispatch(waiting.Id, task.Id, dispatch);
+        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch));
+        var previousRetryAt = task.LatestRetryAt;
+
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
+        fixture.Kernel.RecordDispatchExecutionResult(waiting.Id, task.Id,
+            new(dispatch.Command, dispatch.WorkingDirectory, 1, "",
+                $"WORKER_SANDBOX_REFUSED reason=node-dependency-preparation-failed path={dispatch.WorkingDirectory}",
+                fixture.Clock.UtcNow, DispatchStartedAt: dispatch.DispatchedAt));
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(previousRetryAt, task.LatestRetryAt);
+        var recorded = Assert.IsType<TaskVerificationRecord>(task.LastVerification);
+        Assert.Equal(TaskOutcomeRules.WorkerSandboxRefused.Token, recorded.CompletionVerdictRule);
+        Assert.Equal(RecoveryRecommendation.OperatorNeeded, DispatchFailureClassifier.Classify(task, recorded).RecoveryRecommendation);
+    }
+
+    [Fact]
     public void SignInCheckKeepsQuotaHeldAndRefusedRecheckRefreshesProviderReset()
     {
         using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("authentication-required");

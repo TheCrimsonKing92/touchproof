@@ -12,6 +12,7 @@ internal static class ProviderHoldRetry
         DispatchOutcome outcome, DateTimeOffset now, IGoalLifecycleEventWriter eventWriter)
     {
         if (outcome.Kind is DispatchOutcomeKind.VerifiedSuccess or DispatchOutcomeKind.DirtyWorktreeRecoverable ||
+            TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt) == TaskOutcomeRules.WorkerSandboxRefused.Token ||
             task.LastDispatch is not { } dispatch ||
             !ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch) ||
             DispatchCompletionEvidence.HasWorkerEvidenceThatOutranksSubscriptionLimit(
