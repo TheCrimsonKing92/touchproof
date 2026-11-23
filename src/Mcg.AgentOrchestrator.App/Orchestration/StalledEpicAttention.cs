@@ -81,11 +81,12 @@ internal sealed class StalledEpicAttention
         return changes;
     }
 
-    internal static IReadOnlyList<StalledEpicCandidate> ReadCandidates(OrchestratorWorkspace workspace)
+    internal static IReadOnlyList<StalledEpicCandidate> ReadCandidates(OrchestratorWorkspace workspace,
+        Func<IReadOnlyList<BacklogItem>>? readBacklog = null)
     {
         if (!File.Exists(workspace.PortfolioStorePath)) return [];
         var epics = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListEpicsAsync().GetAwaiter().GetResult();
-        var views = EpicPlanStatusReader.Load(workspace, epics);
+        var views = EpicPlanStatusReader.Load(workspace, epics, readBacklog: readBacklog);
         return epics.Select(epic => new StalledEpicCandidate(epic.Id, epic.Title, views[epic.Id])).ToArray();
     }
 }
