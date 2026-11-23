@@ -27,7 +27,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             var kernel = await LoadFromConnectionAsync(conn, goalIds, cancellationToken);
             // Compare exported snapshots, rather than stored JSON formatting or load-time repairs.
             var baseline = kernel.ExportSnapshot().Goals.ToDictionary(
-                goal => goal.Id, goal => JsonSerializer.Serialize(goal, SerializerOptions), StringComparer.Ordinal);
+                goal => goal.Id, goal => GoalSnapshotByteAccounting.Serialize(goal, SerializerOptions), StringComparer.Ordinal);
             var shouldSave = false;
             IReadOnlyList<OrchestratorStateOutboxMessage> outboxMessages = [];
             try
@@ -108,7 +108,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 {
                     try
                     {
-                        using var document = JsonDocument.Parse(reader.GetString(0));
+                        using var document = GoalSnapshotByteAccounting.Parse(reader.GetString(0));
                         if (document.RootElement.ValueKind != JsonValueKind.Object ||
                             !document.RootElement.TryGetProperty(nameof(GoalSnapshot.DependsOn), out var dependencies) ||
                             dependencies.ValueKind != JsonValueKind.Array)
@@ -147,7 +147,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         var updatedAt = DateTimeOffset.UtcNow.ToString("O");
         foreach (var goal in snapshot.Goals)
         {
-            var json = JsonSerializer.Serialize(goal, SerializerOptions);
+            var json = GoalSnapshotByteAccounting.Serialize(goal, SerializerOptions);
             if (baseline.TryGetValue(goal.Id, out var original) && string.Equals(json, original, StringComparison.Ordinal))
                 continue;
             changedGoalIds.Add(goal.Id);

@@ -50,7 +50,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         while (await reader.ReadAsync(cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var hot = JsonDocument.Parse(reader.GetString(1));
+            using var hot = GoalSnapshotByteAccounting.Parse(reader.GetString(1));
             var goalId = reader.GetString(0);
             var sourceBacklogItemId = reader.IsDBNull(2) ? null : reader.GetString(2);
             var archived = hasArchive && ReadAttentionField<bool>(hot.RootElement, "IsMetadataOnly");
@@ -73,10 +73,10 @@ public sealed partial class SqliteOrchestratorStateRepository
                     if (value is not null and not DBNull)
                     {
                         archiveReads++;
-                        var json = GoalSnapshotArchiveCodec.Decode(value)!;
+                        var json = GoalSnapshotArchiveCodec.Decode(value, out var utf8Bytes)!;
                         archiveDecodes++;
                         _readObserver?.Invoke(new("attention-archive-decode", goalId, json.Length));
-                        archive = JsonDocument.Parse(json);
+                        archive = GoalSnapshotByteAccounting.Parse(json, utf8Bytes);
                     }
                 }
                 await rows.AddGoalAsync(connection, archive?.RootElement ?? hot.RootElement, goalId,
@@ -290,9 +290,10 @@ public sealed partial class SqliteOrchestratorStateRepository
                 var goalId = reader.GetString(0);
                 try
                 {
-                    using var hot = JsonDocument.Parse(reader.GetString(1));
+                    using var hot = GoalSnapshotByteAccounting.Parse(reader.GetString(1));
                     if (!ReadAttentionField<bool>(hot.RootElement, "IsMetadataOnly") || reader.IsDBNull(2)) continue;
-                    using var archive = JsonDocument.Parse(GoalSnapshotArchiveCodec.Decode(reader.GetValue(2))!);
+                    var archiveJson = GoalSnapshotArchiveCodec.Decode(reader.GetValue(2), out var utf8Bytes)!;
+                    using var archive = GoalSnapshotByteAccounting.Parse(archiveJson, utf8Bytes);
                     var rows = new AttentionProjectionRows();
                     await rows.AddGoalAsync(connection, archive.RootElement, goalId, null, options, null, token);
                     var facts = rows.Facts.Single();

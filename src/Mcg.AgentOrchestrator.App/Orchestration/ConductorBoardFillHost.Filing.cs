@@ -38,7 +38,15 @@ internal sealed partial class ConductorBoardFillHost
             })
             .OrderByDescending(round => (round.Filings ?? []).Any(attempt => attempt.Result is null))
             .ThenByDescending(round => round.StartedAt).ThenBy(round => round.Id, StringComparer.Ordinal).FirstOrDefault();
-        if (candidate is not null) _filing = Task.Run(() => AttemptFiling(candidate.Id, _shutdown.Token));
+        if (candidate is not null)
+        {
+            var snapshotWork = GoalSnapshotByteAccounting.TrackDeferredSnapshotWork();
+            _filing = Task.Run(() =>
+            {
+                using var observation = snapshotWork;
+                return AttemptFiling(candidate.Id, _shutdown.Token);
+            });
+        }
     }
 
     // Refusals are retryable, but a persistent read failure must not append a row on every tick.

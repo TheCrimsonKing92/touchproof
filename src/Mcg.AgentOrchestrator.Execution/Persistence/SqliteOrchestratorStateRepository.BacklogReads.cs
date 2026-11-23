@@ -127,7 +127,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         {
             if (SimilarityProjectionRejection.Value is { } rejection && rejection.GoalId == id)
                 throw new InvalidSimilarityShapeException(rejection.Member);
-            return JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SimilarityJson.Options);
+            return GoalSnapshotByteAccounting.Deserialize<GoalSimilarityFields>(stream, SimilarityJson.Options);
         }
         catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
         {
@@ -135,7 +135,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             // with the original contract, preserving its type names, member paths and
             // byte locations in diagnostics before hot quarantine or archive propagation.
             using var diagnosticStream = reopenStream();
-            var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(diagnosticStream, SerializerOptions);
+            var snapshot = GoalSnapshotByteAccounting.Deserialize<GoalSnapshot>(diagnosticStream, SerializerOptions);
             if (snapshot is null) return null;
 
             var line = $"SIMILARITY_PROJECTION_FALLBACK goal={id} member={SimilarityRejectedMember(ex)}";
@@ -151,7 +151,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             // Full deserialization is authoritative for shape; Core still owns reconstruction
             // and effective status, including version-chain and explicit-disposition rules.
             using var markerStream = reopenStream();
-            var marker = JsonSerializer.Deserialize<GoalTimelineStore.TimelineDocument>(markerStream, SerializerOptions);
+            var marker = GoalSnapshotByteAccounting.Deserialize<GoalTimelineStore.TimelineDocument>(markerStream, SerializerOptions);
             return new(snapshot.Id, snapshot.Objective, snapshot.Status, snapshot.IsMetadataOnly,
                 snapshot.CreatedAt, snapshot.TerminatedAt,
                 snapshot.Tasks is null ? null : new(snapshot.Tasks.Count, true),
@@ -174,7 +174,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         using var stream = reopenStream();
         using var textReader = new StreamReader(stream);
         var documentText = await textReader.ReadToEndAsync(cancellationToken);
-        var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(documentText, SerializerOptions);
+        var snapshot = GoalSnapshotByteAccounting.Deserialize<GoalSnapshot>(documentText, SerializerOptions);
         snapshot = await TaskHistoryStore.HydrateAsync(connection, snapshot, documentText, cancellationToken);
         // Explicit parks also need Core's effective status: reconstruction can normalize
         // a stored Completed status to Parked or retain a terminal stop.
