@@ -8,11 +8,6 @@ using static Mcg.AgentOrchestrator.App.Orchestration.ConductorRelaunchDrainInten
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record ConductorPolicyResolution(
-    ConductorAutonomyPolicy Policy,
-    string Source,
-    IReadOnlyList<string> Warnings);
-
 internal readonly record struct ParallelAcceptanceOldestWaiterObservation(
     Goal? Waiter,
     int ConsecutiveTicks)
@@ -793,9 +788,7 @@ internal sealed partial class ConductorBatchLoop
                             EmitProgress($"POLICY_WARNING tick={nextTick} message={SanitizeReason(warning)}");
                         }
 
-                        EmitProgress(
-                            $"POLICY_RELOAD tick={nextTick} source={SanitizeReason(reloaded.Source)} " +
-                            $"{FormatPolicyValues("old", policy)} {FormatPolicyValues("new", reloaded.Policy)}");
+                        EmitProgress(reloaded.FormatReload(nextTick, policy));
                         policy = reloaded.Policy;
                         policySource = reloaded.Source;
                     }
@@ -2310,27 +2303,6 @@ internal sealed partial class ConductorBatchLoop
 
     private static bool PoliciesMatch(ConductorAutonomyPolicy left, ConductorAutonomyPolicy right) =>
         string.Equals(left.ToJson(), right.ToJson(), StringComparison.Ordinal);
-
-    private static string FormatPolicyValues(string prefix, ConductorAutonomyPolicy policy)
-    {
-        var transitions = string.Join(',', policy.TransitionMap
-            .OrderBy(entry => entry.Key)
-            .Select(entry => $"{entry.Key}:{entry.Value}"));
-
-        return $"{prefix}Name={Sanitize(policy.Name)} " +
-               $"{prefix}MaxConcurrentPaidWorkers={policy.MaxConcurrentPaidWorkers} " +
-               $"{prefix}MaxCriterionRetries={policy.MaxCriterionRetries} {prefix}BuildRootReapIntervalSeconds={policy.BuildRootReapIntervalSeconds} " +
-               $"{prefix}AutoPromoteRiskThreshold={policy.AutoPromoteRiskThreshold?.ToString() ?? "none"} " +
-               $"{prefix}MaxEmptyOutputDispatchRetries={policy.MaxEmptyOutputDispatchRetries} " +
-               $"{prefix}MaxEmptyOutputAutoRecoverCycles={policy.MaxEmptyOutputAutoRecoverCycles} " +
-               $"{prefix}EmptyOutputRetryInitialDelaySeconds={policy.EmptyOutputRetryInitialDelaySeconds} " +
-               $"{prefix}EmptyOutputRetryBackoffMultiplier={policy.EmptyOutputRetryBackoffMultiplier} " +
-               $"{prefix}EmptyOutputRetryMaxDelaySeconds={policy.EmptyOutputRetryMaxDelaySeconds} " +
-               $"{prefix}ReviewAutoRetryWarningRound={policy.ReviewAutoRetryWarningRound} " +
-               $"{prefix}ReviewAutoRetryStopRound={policy.ReviewAutoRetryStopRound} " +
-               $"{prefix}ReviewAutoRetryLifetimeMultiplier={policy.ReviewAutoRetryLifetimeMultiplier} " +
-               $"{prefix}TransitionMap={transitions}";
-    }
 
     private IReadOnlyDictionary<string, ParallelLandingOutcome> ReconcileDrainingAcceptance(
         IReadOnlyList<Goal> goals, AgentOrchestratorKernel kernel, ConductorDriver driver,

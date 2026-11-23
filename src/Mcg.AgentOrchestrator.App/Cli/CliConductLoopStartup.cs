@@ -8,6 +8,20 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliConductLoopStartup
 {
+    internal static ConductLoopHandoffOptions CreateHandoffOptions(CliExecutionContext context,
+        IReadOnlyList<string> parts, string stopFilePath) => new(
+        Args: parts.ToArray(),
+        ExecutionDirectory: context.Workspace.ExecutionDirectory,
+        OrchestratorDirectory: context.Workspace.OrchestratorDirectory,
+        LogDirectory: context.Workspace.LogDirectory,
+        RunEventStorePath: context.Workspace.RunEventStorePath,
+        StopFilePath: stopFilePath,
+        RenewalCount: ConductorLoopHandoff.ParseRenewalCount(parts),
+        MaxRenewals: ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
+        ReleaseCurrentLease: context.ReleaseConductLoopLease,
+        ReacquireCurrentLease: context.ReacquireConductLoopLease,
+        StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
+
     internal static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)
     {
         foreach (var warning in resolution.Warnings)

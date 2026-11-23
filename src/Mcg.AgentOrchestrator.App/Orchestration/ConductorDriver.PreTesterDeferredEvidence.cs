@@ -113,20 +113,8 @@ internal sealed partial class ConductorDriver
         }
 
         // Open requests follow Developer declarations, then brief- and Planner-named classes.
-        foreach (var finding in goal.Tasks
-                     .Where(task => task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer)
-                     .SelectMany(task => task.LastVerification?.MergedReviewFindings ?? [])
-                     .Where(finding => finding.State == ReviewFindingState.Open && finding.EvidenceRequest is not null))
-        {
-            foreach (var selection in finding.EvidenceRequest!.Selections)
-            {
-                if (TryNormalizeFindingEvidenceRequest(
-                        new FindingEvidenceRequest([selection]), settings,
-                        (project, name) => _resolveFindingEvidenceSiblingClasses(goal, project, name),
-                        out var normalized, out _, out _, out _))
-                    selected.AddRange(normalized.Selections);
-            }
-        }
+        DeveloperDeferredTestSelectionNormalization.AddOpenFindingSelections(
+            selected, goal, settings, (project, name) => _resolveFindingEvidenceSiblingClasses(goal, project, name));
         var resolverTick = PreTesterResolverObservation?.ActiveTick;
         var resolverBoundary = resolverTick is not null && !goal.Tasks.Any(task =>
             task.RequiredRole == AgentRole.Tester && (task.LastDispatch is not null || task.DispatchHistory.Count != 0))

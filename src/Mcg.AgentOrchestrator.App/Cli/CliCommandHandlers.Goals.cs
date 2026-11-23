@@ -1447,18 +1447,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             .Append("canary-gate", null, line);
                     });
                 var stopFilePath = context.Workspace.ConductorStopFilePath;
-                var handoffOptions = new ConductLoopHandoffOptions(
-                    Args: parts.ToArray(),
-                    ExecutionDirectory: context.Workspace.ExecutionDirectory,
-                    OrchestratorDirectory: context.Workspace.OrchestratorDirectory,
-                    LogDirectory: context.Workspace.LogDirectory,
-                    RunEventStorePath: context.Workspace.RunEventStorePath,
-                    StopFilePath: stopFilePath,
-                    RenewalCount: ConductorLoopHandoff.ParseRenewalCount(parts),
-                    MaxRenewals: ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
-                    ReleaseCurrentLease: context.ReleaseConductLoopLease,
-                    ReacquireCurrentLease: context.ReacquireConductLoopLease,
-                    StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
+                var handoffOptions = CliConductLoopStartup.CreateHandoffOptions(context, parts, stopFilePath);
                 var handoff = ConductorLoopHandoff.Create(handoffOptions);
                 var selfRelaunch = noDispatch ? null : ConductorSelfRelaunch.CreateForHome(
                     OrchestratorHome.ResolveForProcess(), context.Workspace, handoffOptions,
