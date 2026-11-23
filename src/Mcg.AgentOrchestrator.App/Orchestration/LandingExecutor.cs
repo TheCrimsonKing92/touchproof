@@ -31,6 +31,7 @@ internal sealed record AcceptanceCohortLandingResult(
     MergeTrainLandingEvidenceGaps? EvidenceGaps = null)
 {
     public bool MainAdvanced => Outcome == AcceptanceCohortLandingOutcome.Advanced;
+    internal IReadOnlySet<GoalId>? CriterionEvidenceBlockedGoalIds { get; init; }
 }
 
 internal static partial class LandingExecutor
@@ -829,17 +830,19 @@ internal static partial class LandingExecutor
                 $"Cohort landing held before mutation because {pendingInput}");
         }
 
+        var evidenceBlockedGoalIds = new HashSet<GoalId>();
         var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
             goals,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
             kernel,
             $"cohort-receipt:{receipt.ReceiptId}", workspace.IntegrationBranch,
-            executionDirectory);
+            executionDirectory, goalId => evidenceBlockedGoalIds.Add(goalId));
         if (evidenceDiagnostic is not null)
         {
             return new AcceptanceCohortLandingResult(
                 AcceptanceCohortLandingOutcome.RetryableHold,
-                $"Cohort landing held before mutation because {evidenceDiagnostic}");
+                $"Cohort landing held before mutation because {evidenceDiagnostic}")
+            { CriterionEvidenceBlockedGoalIds = evidenceBlockedGoalIds };
         }
 
         var changedFiles = receipt.Identity.Members

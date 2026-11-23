@@ -48,8 +48,8 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
     public void MergeTrainEntry_IntegrationOnlyChain_RebindsAndRecords()
     {
         using var fixture = template.Copy();
-        Assert.Null(AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
-            fixture.Goal, fixture.Candidate, "main", fixture.Repository));
+        Assert.False(AcceptanceCriterionEvidence.IsFullGateCarryRefused(
+            fixture.Goal, fixture.Candidate, "main", fixture.Repository, out _));
         Assert.Empty(AutoRebindEntries(fixture)); // The planning entry is read-only.
         Assert.All(fixture.Goal.CriterionEvidenceObligations, item => Assert.Equal(fixture.Bound, item.ExpectedCandidateSha));
 
@@ -57,8 +57,7 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
             fixture.Goal, fixture.Candidate, fixture.Kernel, "test-full-acceptance", "main", fixture.Repository));
         AssertSatisfied(fixture);
         AssertAutoRebind(fixture);
-        Assert.Null(AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
-            fixture.Goal, fixture.Candidate, "main", fixture.Repository));
+        Assert.Empty(AcceptanceCriterionEvidence.StaleFullGateBindings(fixture.Goal, fixture.Candidate));
         Assert.Null(AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
             fixture.Goal, fixture.Candidate, fixture.Kernel, "test-full-acceptance", "main", fixture.Repository));
         AssertAutoRebind(fixture); // Replaying the same candidate does not duplicate the journal entry.
@@ -133,10 +132,9 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
         var result = RunLoop(fixture);
         Assert.Equal(0, result.LandCalls);
         Assert.Equal(1, result.Summary.Held);
-        var held = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
-            fixture.Goal, fixture.Candidate, "main", fixture.Repository);
-        Assert.NotNull(held);
-        Assert.Contains($"reason={refusal}", held.Reason, StringComparison.Ordinal);
+        Assert.True(AcceptanceCriterionEvidence.IsFullGateCarryRefused(
+            fixture.Goal, fixture.Candidate, "main", fixture.Repository, out var admissionRefusal));
+        Assert.Contains($"reason={refusal}", admissionRefusal, StringComparison.Ordinal);
         Assert.All(fixture.Goal.CriterionEvidenceObligations, item =>
         {
             Assert.Equal(fixture.Bound, item.ExpectedCandidateSha);

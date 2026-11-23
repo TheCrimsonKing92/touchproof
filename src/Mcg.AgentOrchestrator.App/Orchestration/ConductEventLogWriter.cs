@@ -11,6 +11,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductEventLogWriter
 {
     public const string CurrentFileName = "conduct-events.log";
+    internal const string TickLoadCountersKind = "tick-load-counters";
     internal const string PendingEventsDirectoryName = "pending-events";
     internal const long DefaultMaxBytes = 1_048_576;
     internal const int DefaultRotatedGenerationCount = 8;
@@ -70,7 +71,29 @@ internal sealed class ConductEventLogWriter
     }
 
     public void Append(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp = null)
-        => AppendGoalProgress(eventKind, goalId, detail, null, timestamp);
+    {
+        if (eventKind != TickLoadCountersKind)
+        {
+            AppendGoalProgress(eventKind, goalId, detail, null, timestamp);
+            return;
+        }
+
+        // The path mutex serializes this advisory append with regular writes and rotation.
+        // Stdout and the tick receipt carry the counters even when the shared stream is busy.
+        using var crossProcessGate = new Mutex(initiallyOwned: false, _requiredEventMutexName);
+        if (!AcquireRequiredEventMutex(crossProcessGate, millisecondsTimeout: 0))
+            return;
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
+            File.AppendAllText(_path, Serialize(eventKind, goalId, detail, timestamp));
+        }
+        finally
+        {
+            crossProcessGate.ReleaseMutex();
+        }
+    }
 
     internal void AppendGoalProgress(string eventKind, string? goalId, string detail,
         GoalProgressEventFields? fields, DateTimeOffset? timestamp = null)
@@ -216,27 +239,27 @@ internal sealed class ConductEventLogWriter
         lock (RequiredEventDrainGate)
         {
             using var crossProcessGate = new Mutex(initiallyOwned: false, _requiredEventMutexName);
-            var ownsGate = false;
+            AcquireRequiredEventMutex(crossProcessGate, Timeout.Infinite);
             try
             {
-                try
-                {
-                    ownsGate = crossProcessGate.WaitOne();
-                }
-                catch (AbandonedMutexException)
-                {
-                    ownsGate = true;
-                }
-
                 return action();
             }
             finally
             {
-                if (ownsGate)
-                {
-                    crossProcessGate.ReleaseMutex();
-                }
+                crossProcessGate.ReleaseMutex();
             }
+        }
+    }
+
+    private static bool AcquireRequiredEventMutex(Mutex gate, int millisecondsTimeout)
+    {
+        try
+        {
+            return gate.WaitOne(millisecondsTimeout);
+        }
+        catch (AbandonedMutexException)
+        {
+            return true;
         }
     }
 

@@ -156,6 +156,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             attempt.ScopePaths, attempt.BranchHeadSha, attempt.MainHeadSha);
         if (!HasSameReplayScope(attempt, currentCandidate))
             return null;
+        if ((!string.Equals(attempt.BranchHeadSha, currentCandidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase) ||
+             !string.Equals(attempt.MainHeadSha, currentCandidate.MainHeadSha, StringComparison.OrdinalIgnoreCase)) &&
+            _executionDirectory is not null &&
+            GoalOperationJournal.HasRefusedCarryHoldForPair(_executionDirectory, currentCandidate.Goal, attempt))
+            return null;
         // A branch-only change is new work, not a main-advance carry candidate.
         if (string.Equals(attempt.MainHeadSha, currentCandidate.MainHeadSha, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(attempt.BranchHeadSha, currentCandidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase))

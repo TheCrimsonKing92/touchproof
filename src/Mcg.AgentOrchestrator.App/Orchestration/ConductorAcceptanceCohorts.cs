@@ -90,11 +90,6 @@ internal sealed record ConductorAcceptanceCohortSelectionResult(
     IReadOnlyList<ConductorAcceptanceCohortPairExclusion> Exclusions,
     ConductorAcceptanceCohortFairnessDecision? FairnessDecision = null);
 
-internal sealed record ConductorAcceptanceCohortRunResult(
-    AcceptanceCohortReceipt? Receipt,
-    IReadOnlyDictionary<string, ConductorAdvanceResult> MemberResults,
-    string Detail);
-
 // A background acceptance cohort gate that ended in an exception, carried as data so the conduct tick
 // can classify it and hold or escalate the members instead of receiving a throw across the tick boundary.
 internal sealed record ConductorAcceptanceCohortGateFault(
