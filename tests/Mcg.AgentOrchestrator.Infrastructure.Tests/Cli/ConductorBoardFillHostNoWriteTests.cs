@@ -13,6 +13,7 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
         // Unique root and SQLite files. The model and repository seams are entirely in memory.
         var root = CreateTempDirectory();
         ConductorBoardFillHost? host = null;
+        BoardFillBacklogSnapshotCache? snapshot = null;
         try
         {
             File.WriteAllText(Path.Combine(root, "App.sln"), "");
@@ -27,6 +28,7 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
             var kernel = await probe.LoadGoalsAsync([existing.Id]);
             var beforeGoals = JsonSerializer.Serialize(kernel.ExportSnapshot());
             var beforeBacklog = File.ReadAllBytes(workspace.BacklogStorePath);
+            snapshot = new(workspace.BacklogStorePath);
             var drafts = new ConductorBoardFillDraftStore(Path.Combine(workspace.OrchestratorDirectory, "board-fill.db"));
             var events = Path.Combine(workspace.OrchestratorDirectory, "conduct-events.log");
             var repository = new Repository();
@@ -52,7 +54,7 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
             }, repository);
             host = new(drafts, (id, token) => AuthorBriefDraftService.Run(id, workspace, seams,
                 TextWriter.Null, TextWriter.Null, token, "board-fill-drafts", () => clock.UtcNow),
-                () => BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath),
+                snapshot.Read,
                 (_, _) => candidate => BacklogDependencyReadiness.Evaluate(candidate,
                     _ => null, _ => null, _ => new(null), _ => "Running"),
                 () => ConductorAutonomyPolicy.Permissive with { BoardFillMaxDraftsPerDay = 1 },
@@ -84,7 +86,8 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
         }
         finally
         {
-            host?.Stop();
+            try { host?.Stop(); }
+            finally { snapshot?.Dispose(); }
             Directory.Delete(root, recursive: true);
         }
     }

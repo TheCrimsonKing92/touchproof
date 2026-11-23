@@ -148,7 +148,9 @@ public sealed class BacklogStore
         _dbPath, _readOnly, SqliteStoreDurability.Strict, foreignKeys: false,
         operationTag: "BacklogStore.OpenConnection");
 
-    public static void Setup(string dbPath)
+    public static void Setup(string dbPath) => Setup(dbPath, observe: null);
+
+    internal static void Setup(string dbPath, Action<SqliteConnection>? observe)
     {
         var directory = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(directory))
@@ -156,7 +158,7 @@ public sealed class BacklogStore
 
         using var conn = SqliteStoreConnectionPolicy.Open(
             dbPath, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
-            operationTag: "BacklogStore.Setup");
+            operationTag: "BacklogStore.Setup", observe: observe);
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS backlog (
@@ -216,21 +218,25 @@ public sealed class BacklogStore
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_history_item_created ON backlog_history(backlog_item_id, created_at, id)");
         // Current stores can be opened while another connection holds an item mutation lease.
-        // Only an actual schema upgrade needs a write reservation; never downgrade a newer store.
-        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.Backlog);
-        if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
+        // Only a schema upgrade or incomplete coverage needs a write reservation.
+        if (!NeedsSnapshotSetup(conn))
             return;
 
         RunNonQuery(conn, "BEGIN IMMEDIATE");
         try
         {
-            AddColumnIfMissing(conn, "backlog", "priority", "TEXT");
-            AddColumnIfMissing(conn, "backlog", "tags", "TEXT NOT NULL DEFAULT ''");
-            AddColumnIfMissing(conn, "backlog", "superseded_by", "TEXT");
-            AddColumnIfMissing(conn, "backlog", "superseded_at", "TEXT");
-            AddColumnIfMissing(conn, "backlog", "pinned_at", "TEXT");
-            AddColumnIfMissing(conn, "backlog", "bundled_reason", "TEXT NOT NULL DEFAULT ''");
-            StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Backlog);
+            // Another setup may have completed while this connection waited.
+            if (NeedsSnapshotSetup(conn))
+            {
+                AddColumnIfMissing(conn, "backlog", "priority", "TEXT");
+                AddColumnIfMissing(conn, "backlog", "tags", "TEXT NOT NULL DEFAULT ''");
+                AddColumnIfMissing(conn, "backlog", "superseded_by", "TEXT");
+                AddColumnIfMissing(conn, "backlog", "superseded_at", "TEXT");
+                AddColumnIfMissing(conn, "backlog", "pinned_at", "TEXT");
+                AddColumnIfMissing(conn, "backlog", "bundled_reason", "TEXT NOT NULL DEFAULT ''");
+                BacklogSnapshotRevision.Install(conn);
+                StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Backlog);
+            }
             RunNonQuery(conn, "COMMIT");
         }
         catch
@@ -239,6 +245,14 @@ public sealed class BacklogStore
             throw;
         }
     }
+
+    private static bool NeedsSnapshotSetup(SqliteConnection connection) =>
+        StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.Backlog) switch
+        {
+            StoreSchemaState.Newer => false,
+            StoreSchemaState.Current => BacklogSnapshotRevision.TryRead(connection) is null,
+            _ => true
+        };
 
     public async Task<BacklogItem> AddAsync(
         string title,
