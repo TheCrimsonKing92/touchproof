@@ -12,13 +12,14 @@ internal sealed partial class ConductorBoardFillHost
         Func<string, CancellationToken, AuthorBriefDraftOutcome>? draft = null)
     {
         var changedFiles = CreateChangedFilesSeam(workspace);
+        var snapshot = new BoardFillBacklogSnapshotCache(workspace.BacklogStorePath);
         return new(
         new(ConductorBoardFillDraftStore.DefaultPath(workspace)),
         draft ?? ((id, token) => AuthorBriefDraftService.Run(id, workspace,
             new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch),
                 ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
             TextWriter.Null, TextWriter.Null, token, "board-fill-drafts", includeBoardFillMetadata: true)),
-        () => BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath),
+        snapshot.Read,
         (kernel, items) =>
         {
             var byId = items.DistinctBy(item => item.Id, StringComparer.Ordinal)
@@ -62,13 +63,16 @@ internal sealed partial class ConductorBoardFillHost
         filing: CreateFilingSeams(workspace, changedFiles), mainHead: mainHead,
         trackedEdits: () => GitTrackedEditsProbe.Probe(workspace.ExecutionDirectory),
         staleMainHead: mainHead ?? (() => BoardFillStaleItemRule.ReadMainHead(workspace.ExecutionDirectory, workspace.IntegrationBranch)),
-        preferredOrder: () => EpicPlanReadySliceSelector.Read(workspace),
-        stalledEpics: new StalledEpicAttention(() => StalledEpicAttention.ReadCandidates(workspace),
+        preferredOrder: () => EpicPlanReadySliceSelector.Read(workspace, snapshot.Read),
+        stalledEpics: new StalledEpicAttention(() => StalledEpicAttention.ReadCandidates(workspace, snapshot.Read),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory), new(workspace.ConductEventsLogPath)),
         revise: CreateRevisionSeam(workspace),
         appendBacklogNote: (id, text) => new BacklogStore(workspace.BacklogStorePath)
             .AppendNoteAsync(id, text).GetAwaiter().GetResult(), changedFiles: changedFiles,
-        epicAttention: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+        epicAttention: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory))
+        {
+            BacklogSnapshotCache = snapshot
+        };
     }
 
     internal static Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>

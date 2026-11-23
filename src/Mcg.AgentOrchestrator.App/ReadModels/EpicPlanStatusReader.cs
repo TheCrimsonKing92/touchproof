@@ -36,13 +36,14 @@ internal static class EpicPlanStatusReader
     internal static IReadOnlyDictionary<string, EpicPlanView> Load(OrchestratorWorkspace workspace,
         IReadOnlyList<PortfolioEpic> epics, bool includeReasons = false,
         IReadOnlyList<BacklogItem>? backlogSnapshot = null, IReadOnlyList<GoalSummary>? goalSnapshot = null,
-        IReadOnlyList<PortfolioEpicMember>? memberSnapshot = null)
+        IReadOnlyList<PortfolioEpicMember>? memberSnapshot = null, Func<IReadOnlyList<BacklogItem>>? readBacklog = null)
     {
         if (epics.Count == 0) return new Dictionary<string, EpicPlanView>();
         var planStore = EpicPlanStore.OpenReadOnly(workspace.PortfolioStorePath);
         var plans = epics.Select(epic => planStore.LoadAsync(epic.Id).GetAwaiter().GetResult()).ToArray();
         var portfolio = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath);
-        var backlog = (backlogSnapshot ?? BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath)).ToDictionary(item => item.Id, StringComparer.Ordinal);
+        var backlog = (backlogSnapshot ?? readBacklog?.Invoke() ?? BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath))
+            .ToDictionary(item => item.Id, StringComparer.Ordinal);
         var goals = (goalSnapshot ?? EpicProgressReadModel.LoadGoalMetadata(workspace)).ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         var claims = EpicPlanGoalClaimSnapshot.Read(workspace.SqliteStatePath);
         var reasons = new Dictionary<string, string>(StringComparer.Ordinal);

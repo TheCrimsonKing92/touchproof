@@ -8,10 +8,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Snapshot only: never instantiate BacklogStore, whose constructor writes schema.
 internal static class BoardFillBacklogSnapshot
 {
-    internal static IReadOnlyList<BacklogItem> Read(string path)
+    internal static IReadOnlyList<BacklogItem> Read(string path, Action<string, SqliteConnection>? observe = null)
     {
         if (!File.Exists(path)) return [];
-        using var session = new SqliteReadSession(path);
+        using var session = new SqliteReadSession(path, observe);
         return ReadCore(session.Connection);
     }
 
@@ -37,8 +37,8 @@ internal static class BoardFillBacklogSnapshot
         return items.Values.ToArray();
     }
 
-    private static IReadOnlyList<BacklogItem> ReadCore(SqliteConnection connection, string[]? ids = null,
-        CancellationToken cancellationToken = default)
+    internal static IReadOnlyList<BacklogItem> ReadCore(SqliteConnection connection, string[]? ids = null,
+        CancellationToken cancellationToken = default, bool retain = false)
     {
         var items = new Dictionary<string, BacklogItem>(StringComparer.Ordinal);
         using var probe = connection.CreateCommand();
@@ -94,11 +94,12 @@ internal static class BoardFillBacklogSnapshot
                     Parse(reader.GetString(3))));
             }
         }
-        return items.Values.Select(item => item with
+        var snapshot = items.Values.Select(item => item with
         {
-            Notes = notes.TryGetValue(item.Id, out var noteList) ? noteList : [],
-            Dependencies = dependencies.TryGetValue(item.Id, out var dependencyList) ? dependencyList : []
+            Notes = notes.TryGetValue(item.Id, out var noteList) ? retain ? noteList.AsReadOnly() : noteList : [],
+            Dependencies = dependencies.TryGetValue(item.Id, out var dependencyList) ? retain ? dependencyList.AsReadOnly() : dependencyList : []
         }).ToArray();
+        return retain ? Array.AsReadOnly(snapshot) : snapshot;
     }
 
     private static DateTimeOffset Parse(string value) => DateTimeOffset.Parse(value, CultureInfo.InvariantCulture);
