@@ -302,6 +302,7 @@ internal sealed class SoloBaselineRepairStore
         while (rows.Read())
             claims.Add(rows.GetString(0), rows.IsDBNull(1) ? null : JsonSerializer.Deserialize<SoloRepairCheckReceipt>(rows.GetString(1)));
         if (claims.ContainsKey(current.Key)) return current;
+        (string Key, bool AllowCandidatePass)? completedUnbound = null;
         (string Key, bool AllowCandidatePass)? unbound = null;
         foreach (var legacy in requests.Skip(1))
         {
@@ -322,8 +323,15 @@ internal sealed class SoloBaselineRepairStore
                 if (MatchesAttributionProof(retained, root, identity)) return legacy;
                 continue;
             }
-            unbound ??= legacy;
+            if (completed is not null)
+                completedUnbound ??= legacy;
+            else
+                unbound ??= legacy;
         }
+        // Without its selection binding, a completed charge may belong to any matching selection.
+        // Reuse it to preserve the budget. ReadVerifiedCheck still requires exact evidence to route.
+        if (completedUnbound is { } spent) return spent;
+
         // Older keys omit selection scope. A charge without a readable binding can be reused
         // when the retained findings identify a single selection for that check and test.
         if (unbound is { } charge && ReadFindings(goal).All(other =>

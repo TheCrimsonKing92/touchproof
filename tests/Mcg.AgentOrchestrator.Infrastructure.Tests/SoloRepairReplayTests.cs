@@ -299,7 +299,10 @@ public sealed class SoloRepairReplayTests
 
     [Theory]
     [InlineData("no-proof", false, false)]
+    [InlineData("no-proof", false, true)]
     [InlineData("missing-result", true, false)]
+    [InlineData("missing-result", false, true)]
+    [InlineData("missing-result", true, true)]
     [InlineData("missing-trx", false, false)]
     [InlineData("missing-trx", true, true)]
     public async Task CompletedLegacyAttribution_PreservesTheChargeWithUnavailableProof(
@@ -352,8 +355,9 @@ public sealed class SoloRepairReplayTests
             Assert.Equal(SoloHoldReasons.RepairEvidenceRequired, held.Decision?.DiscriminatingEvidence);
         }
 
-        string[] expectedRuns = distinctSelection ? [sibling.Request!] : [];
+        string[] expectedRuns = distinctSelection && unavailable == "missing-trx" ? [sibling.Request!] : [];
         Assert.Equal(expectedRuns, verifier.FocusedRuns.Select(run => run.Request));
+        Assert.Equal(distinctSelection ? 2 : 1, store.ReadFindings(goal).Count);
         Assert.Equal(legacy, store.ResolveAttributionRequest(goal, finding, finding.Candidate, finding.Main));
         Assert.Null(store.ReadCheck(SoloBaselineRepairStore.AttributionKey(goal, finding, finding.Candidate, finding.Main)));
         Assert.Equal("unresolved", store.ReadVerifiedCheck(legacy.Key, identity)?.Outcome);
