@@ -4,7 +4,7 @@ using ResetGeneration = ProviderBudgetHoldSchedules.ResetGeneration;
 using ProviderBindingKey = SubscriptionLimitEvidence.ProviderBindingKey;
 
 /// <summary>The dispatches and evidence that can affect one exact hold binding.</summary>
-internal sealed class ProviderHoldBindingHistory(string key)
+internal sealed class ProviderHoldBindingHistory(string key, ProviderBindingKey? identity = null)
 {
     internal sealed record Observation(Goal Goal, TaskSpec Task, TaskVerificationRecord Verification,
         TaskDispatchRecord Dispatch, ProviderHoldEvidence Evidence);
@@ -67,10 +67,14 @@ internal sealed class ProviderHoldBindingHistory(string key)
         }
     }
 
-    internal IEnumerable<Observation> HoldObservations() => ReadObservations().Where(item =>
-        item.Evidence.Confirmed &&
-        string.Equals(ProviderHoldBinding.From(item.Dispatch, item.Evidence.ScopedModel(item.Dispatch)).Key,
-            Key, StringComparison.OrdinalIgnoreCase));
+    internal IEnumerable<Observation> HoldObservations() => ReadObservations().Where(IsHoldObservation);
+
+    internal bool IsHoldObservation(Observation item)
+    {
+        if (!item.Evidence.Confirmed) return false;
+        var binding = ProviderHoldBinding.From(item.Dispatch, item.Evidence.ScopedModel(item.Dispatch));
+        return identity is null ? binding.Key.Equals(Key, StringComparison.OrdinalIgnoreCase) : binding.ScopedKey == identity;
+    }
 
     internal Note? DispatchMarker(TaskSpec task, TaskDispatchRecord dispatch)
     {
@@ -336,22 +340,59 @@ internal sealed class ProviderHoldBindingHistory(string key)
         return low == 0 ? default : values.Values[low - 1];
     }
 
-    internal static ProviderHoldBindingHistory Read(IEnumerable<Goal> goals, string key, string? bindingScope = null)
+    internal static ProviderHoldBindingHistory Read(IEnumerable<Goal> goals, string key) => Read(goals, key, null);
+
+    internal static ProviderHoldBindingHistory Read(IEnumerable<Goal> goals, ProviderBindingKey binding) =>
+        Read(goals, binding.RenderedKey, binding);
+
+    private static ProviderHoldBindingHistory Read(IEnumerable<Goal> goals, string key, ProviderBindingKey? binding)
     {
-        var history = new ProviderHoldBindingHistory(key);
-        Populate(goals, candidate => (bindingScope is null || candidate.Scope == bindingScope) &&
-                candidate.Key.Equals(key, StringComparison.OrdinalIgnoreCase) ? history : null,
-            getNotes: noteKey => noteKey.Equals(key, StringComparison.OrdinalIgnoreCase) ? history.Notes : null);
+        var history = new ProviderHoldBindingHistory(key, binding);
+        if (binding is null)
+            Populate(goals, candidate => candidate.RenderedKey.Equals(key, StringComparison.OrdinalIgnoreCase) ? history : null,
+                addNote: (text, _, note) =>
+                {
+                    if (text.Equals(key, StringComparison.OrdinalIgnoreCase)) history.Notes.Add(note);
+                });
+        else
+            Populate(goals, candidate => candidate == binding ? history : null,
+                addNote: (_, candidate, note) =>
+                {
+                    if (candidate == binding) history.Notes.Add(note);
+                });
         return history;
     }
 
     internal static void Populate(IEnumerable<Goal> goals, Func<ProviderBindingKey, ProviderHoldBindingHistory?> getHistory,
         Action<Goal>? visit = null, Action<Observation>? observe = null, Action<int>? recordDispatchVisits = null,
-        Func<string, List<Note>?>? getNotes = null)
+        Action<string, ProviderBindingKey?, Note>? addNote = null)
     {
+        var bindingsByText = new Dictionary<string, HashSet<ProviderBindingKey>>(StringComparer.OrdinalIgnoreCase);
+        var pendingNotes = new List<(string Text, ProviderBindingKey? Identity, Note Note,
+            Dictionary<ProviderBindingKey, DateTimeOffset>? TaskBindings)>();
         foreach (var goal in goals)
         {
             visit?.Invoke(goal);
+            var notes = new List<(string Text, ProviderBindingKey? Identity, Note Note)>();
+            var sourceTasks = new Dictionary<TaskId, Dictionary<ProviderBindingKey, DateTimeOffset>>();
+            if (addNote is not null)
+            {
+                var timeline = goal.Timeline;
+                for (var index = 0; index < timeline.Count; index++)
+                {
+                    var evt = timeline[index];
+                    (string Text, ProviderBindingKey? Identity)? marker =
+                        ProviderBudgetHoldSchedules.TryParseProbe(evt, out var probe) ? (probe.BindingKey, probe.BindingIdentity)
+                        : ProviderBudgetHoldSchedules.TryParseReset(evt, out var reset) ? (reset.BindingKey, reset.BindingIdentity)
+                        : ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out var result) ? (result.BindingKey, result.BindingIdentity)
+                        : null;
+                    if (marker is not { } parsed) continue;
+                    notes.Add((parsed.Text, parsed.Identity, new(goal, evt, index)));
+                    if (parsed.Identity is null && evt.TaskId is { } taskId && !sourceTasks.ContainsKey(taskId))
+                        sourceTasks.Add(taskId, []);
+                }
+            }
+
             foreach (var task in goal.Tasks)
             {
                 var attempts = new ProviderHoldBinding.DispatchIndex();
@@ -368,21 +409,44 @@ internal sealed class ProviderHoldBindingHistory(string key)
                     var observation = new Observation(goal, task, verification, dispatch, ProviderHoldEvidence.Read(verification));
                     observe?.Invoke(observation);
                     foreach (var history in Histories(dispatch)) history.Observations.Add(observation);
+                    if (addNote is not null && observation.Evidence.Confirmed)
+                    {
+                        var binding = ProviderHoldBinding.From(dispatch, observation.Evidence.ScopedModel(dispatch)).ScopedKey;
+                        var text = binding.RenderedKey;
+                        if (!bindingsByText.TryGetValue(text, out var matches))
+                            bindingsByText.Add(text, matches = []);
+                        matches.Add(binding);
+                        if (sourceTasks.TryGetValue(task.Id, out var taskBindings) &&
+                            (!taskBindings.TryGetValue(binding, out var first) || verification.CompletedAt < first))
+                            taskBindings[binding] = verification.CompletedAt;
+                    }
                 }
                 if (task.LatestProviderBudgetRecoveryAt is { } at &&
                     attempts.LastStoredAtOrBefore(at) is { } recovered)
                     foreach (var history in Histories(recovered)) history.Recoveries[task] = (goal, at);
                 recordDispatchVisits?.Invoke(attempts.Visits);
             }
-            var timeline = goal.Timeline;
-            for (var index = 0; index < timeline.Count; index++)
+            foreach (var (text, identity, note) in notes)
+                pendingNotes.Add((text, identity, note,
+                    note.Event.TaskId is { } taskId ? sourceTasks.GetValueOrDefault(taskId) : null));
+        }
+
+        foreach (var (text, explicitIdentity, note, taskBindings) in pendingNotes)
+        {
+            if (explicitIdentity is not null)
             {
-                var evt = timeline[index];
-                var binding = ProviderBudgetHoldSchedules.TryParseProbe(evt, out var probe) ? probe.BindingKey
-                    : ProviderBudgetHoldSchedules.TryParseReset(evt, out var reset) ? reset.BindingKey
-                    : ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out var result) ? result.BindingKey : null;
-                if (binding is not null) getNotes?.Invoke(binding)?.Add(new(goal, evt, index));
+                addNote!(text, explicitIdentity, note);
+                continue;
             }
+            // Old markers carry display text. Prefer an unambiguous refusal on
+            // the marker's source task, or an unambiguous binding in the history.
+            var local = taskBindings?.Where(pair => pair.Value <= note.Event.OccurredAt &&
+                    pair.Key.RenderedKey.Equals(text, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Key).Take(2).ToArray() ?? [];
+            var identity = local.Length == 1 ? local[0] :
+                local.Length == 0 && bindingsByText.TryGetValue(text, out var matches) && matches.Count == 1
+                    ? matches.Single() : null;
+            addNote!(text, identity, note);
         }
 
         IEnumerable<ProviderHoldBindingHistory> Histories(TaskDispatchRecord dispatch)

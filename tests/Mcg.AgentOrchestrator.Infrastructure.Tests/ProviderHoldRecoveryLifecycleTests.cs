@@ -51,6 +51,87 @@ public sealed class ProviderHoldRecoveryLifecycleTests
     }
 
     [Fact]
+    public void CoincidentBindingTextDoesNotShareACooldown()
+    {
+        var clock = new ProviderHoldScenarioClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var source = Record(kernel, clock, SubscriptionCooldownSubstitutionTests.Scenario.FableLimit, "", null,
+            model: "claude-fable-5-2");
+        var candidate = NewGoal(kernel).Tasks.Single().Id;
+
+        Assert.True(HasCooldown(null));
+        Assert.False(HasCooldown("<provider-default>"));
+
+        bool HasCooldown(string? credential) => ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
+            source, candidate, "Anthropic", "claude-fable-5-2", clock.UtcNow, out _,
+            new("Anthropic", credential, null));
+    }
+
+    [Fact]
+    public void CoincidentModelHoldTextDoesNotShareAMemoizedHold()
+    {
+        var clock = new ProviderHoldScenarioClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var provider = Record(kernel, clock, "You've hit your sonnet limit", "", null);
+        var credential = Record(kernel, clock, "You've hit your sonnet limit", "", "<provider-default>");
+        var providerBinding = new ProviderHoldBinding("Anthropic", null, "CLAUDE-SONNET-4-6");
+        var credentialBinding = new ProviderHoldBinding("Anthropic", "<provider-default>", "claude-sonnet-4-6");
+        var memo = new ProviderBudgetHoldMemo(kernel.Goals);
+
+        Assert.Equal(providerBinding.Key, credentialBinding.Key);
+        Assert.True(memo.TryGetExact(providerBinding, out var providerHold));
+        Assert.True(memo.TryGetExact(credentialBinding, out var credentialHold));
+        Assert.Equal(provider.Id, providerHold.SourceGoalId);
+        Assert.Equal(credential.Id, credentialHold.SourceGoalId);
+        Assert.True(memo.TryGetExact(credentialBinding with { Model = "CLAUDE-SONNET-4-6" }, out var repeated));
+        Assert.Same(credentialHold, repeated);
+        Assert.Equal(2, memo.EvaluationCount);
+    }
+
+    [Fact]
+    public void AdmissionAndSubstitutionUseTheHoldSelectedByPreflight()
+    {
+        var clock = new ProviderHoldScenarioClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var provider = Record(kernel, clock, "", "ERROR: weekly usage limit reached", null);
+        clock.UtcNow = clock.UtcNow.AddMinutes(1);
+        var credential = Record(kernel, clock, "", "ERROR: weekly usage limit reached", "<provider-default>");
+        var goal = NewGoal(kernel);
+        var task = goal.Tasks.Single();
+        var primary = ProviderHoldAgentSubstitutionTests.Scenario.Agent("claude-tester", "Anthropic", "claude-cli", "claude-sonnet-4-6");
+        var alternate = ProviderHoldAgentSubstitutionTests.Scenario.Agent("openai-tester", "OpenAI", "codex-cli", "gpt-6.1-sol");
+        clock.UtcNow = clock.UtcNow.AddMinutes(30);
+        var blocked = Preflight(goal, task, kernel.ProviderHoldScope);
+        var hold = Assert.IsType<ProviderBudgetExhaustionHold>(blocked.BlockedProviderHold);
+        Assert.Equal(credential.Id, hold.SourceGoalId);
+        var other = Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, clock.UtcNow),
+            row => row.Hold.SourceGoalId == provider.Id).Hold;
+        Assert.Equal(other.BindingKey, hold.BindingKey);
+        Assert.False(ProviderBudgetProbeAdmission.WaitsOnBinding(blocked, other));
+        var resolution = new ProviderHoldAgentSubstitution(kernel, [primary, alternate], Preflight, () => clock.UtcNow)
+            .Resolve(goal, task);
+        Assert.StartsWith($"{hold.BindingKey}|{credential.Id}|", Assert.IsType<ProviderHoldAgentSubstitution.Result.Substitute>(resolution).HoldIdentity);
+
+        ProviderBudgetProbeAdmission.Apply(kernel, goal, [task.Id], Preflight, clock.UtcNow);
+        var note = Assert.Single(goal.Timeline, evt => ProviderBudgetHoldSchedules.TryParseProbe(evt, out _));
+        Assert.True(ProviderBudgetHoldSchedules.TryParseProbe(note, out var marker));
+        Assert.Equal(hold.BindingIdentity, marker.BindingIdentity);
+        Assert.Equal(task.Id, ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, hold, clock.UtcNow).AdmittedTaskId);
+        Assert.Null(ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, other, clock.UtcNow).AdmittedTaskId);
+
+        WorkerSubscriptionPreflightResult Preflight(Goal current, TaskSpec assigned, IEnumerable<Goal> scope)
+        {
+            if (assigned.AssignedAgentId == alternate.Id) return new(true, "codex-cli", "fixture", []);
+            var findings = new List<string>();
+            var blockedHold = WorkerSubscriptionPreflightFindings.AddProviderHoldFindings(
+                findings, scope, "Anthropic", "<provider-default>", "claude-sonnet-4-6", current, assigned, clock.UtcNow);
+            return new(blockedHold is null, "claude-cli", "fixture", findings,
+                blockedHold is null ? null : WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode)
+                { BlockedProviderHold = blockedHold };
+        }
+    }
+
+    [Fact]
     public void FailedCheckSurvivesRestartAndAvailableCheckUnblocksOneRetry()
     {
         using var workspace = new ConductorVerbStartTests.Fixture();

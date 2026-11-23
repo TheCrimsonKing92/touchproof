@@ -63,16 +63,16 @@ internal static class WorkerSubscriptionPreflightFindings
         string? credentialBinding, Goal goal, TaskSpec task, DateTimeOffset now) =>
         AddProviderBudgetExhaustionFinding(findings, providerHoldScope, providerName, credentialBinding, task.LastDispatch?.ModelName, goal, task, now);
 
-    internal static void AddProviderHoldFindings(List<string> findings, IEnumerable<Goal> scope, string provider,
+    internal static ProviderBudgetExhaustionHold? AddProviderHoldFindings(List<string> findings, IEnumerable<Goal> scope, string provider,
         string? credential, string? model, Goal goal, TaskSpec task, DateTimeOffset now)
     {
         if (ProviderLimitSignals.TryGetProviderSubscriptionCooldown(goal, task.Id, provider, model, now,
                 out var cooldown, new ProviderHoldBinding(provider, credential, null)))
             findings.Add($"blocked: provider {cooldown.ProviderName} is cooling down after task {TaskDisplayNumber.Resolve(goal, cooldown.SourceTaskId)} until {cooldown.RetryAfter:u}");
-        AddProviderBudgetExhaustionFinding(findings, scope, provider, credential, model, goal, task, now);
+        return AddProviderBudgetExhaustionFinding(findings, scope, provider, credential, model, goal, task, now);
     }
 
-    internal static void AddProviderBudgetExhaustionFinding(
+    internal static ProviderBudgetExhaustionHold? AddProviderBudgetExhaustionFinding(
         List<string> findings,
         IEnumerable<Goal> providerHoldScope,
         string providerName,
@@ -88,14 +88,14 @@ internal static class WorkerSubscriptionPreflightFindings
             modelName,
             out var providerHold))
         {
-            return;
+            return null;
         }
 
         var schedule = ProviderBudgetHoldSchedules.Evaluate(goals, providerHold, now);
         if (schedule.AdmittedGoalId == goal.Id && schedule.AdmittedTaskId == task.Id)
         {
             findings.Add($"probe: code=provider-budget-probe; binding={providerHold.BindingKey}; due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)}; attempt={schedule.Attempt}");
-            return;
+            return null;
         }
         var reason = schedule.Reason == ProviderFailureKind.AuthenticationRequired
             ? "provider authentication required" : "provider budget exhausted";
@@ -106,5 +106,6 @@ internal static class WorkerSubscriptionPreflightFindings
             (schedule.Reason == ProviderFailureKind.BudgetExhausted ? $"; provider_reset={reset}" : "") +
             (schedule.LastActionableFailure == ProviderFailureKind.AuthenticationRequired ? $"; sign in to {providerHold.ProviderName} and recheck availability" : "") +
             $"; next_probe={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)}; reset_source={schedule.ResetSource}; attempt={schedule.Attempt}");
+        return providerHold;
     }
 }

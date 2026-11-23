@@ -96,7 +96,12 @@ public static class SubscriptionLimitEvidence
             "provider+credential");
     }
 
-    internal sealed record ProviderBindingKey(string Key, string Scope);
+    // Key identifies the provider and credential. Model is a separate component
+    // because a credential can contain the delimiter used in display text.
+    internal sealed record ProviderBindingKey(string Key, string Scope, string? Model = null)
+    {
+        internal string RenderedKey => ProviderHoldBinding.Render(Key, Model);
+    }
 
     internal static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line)
     {

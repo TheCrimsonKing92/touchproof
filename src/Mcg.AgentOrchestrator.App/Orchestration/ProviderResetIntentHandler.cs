@@ -12,12 +12,13 @@ internal static class ProviderResetIntentHandler
                 ProviderBudgetHoldSchedules.TryParseReset(evt, out var marker) && marker.IntentId == intent.Id)) return;
         var payload = JsonSerializer.Deserialize<ProviderResetOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
             ?? throw new InvalidOperationException("provider-reset requires a payload.");
-        if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(kernel.Goals, payload.BindingKey, out _))
+        if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(kernel.Goals, payload.BindingKey, out var hold))
             throw new InvalidOperationException("no-current-hold");
         if (payload.ResetAt > now.AddDays(31)) throw new InvalidOperationException("reset-too-far");
         if (intent.GoalId != goal.Id.Value || intent.TaskId is null || !goal.Tasks.Any(task => task.Id.Value == intent.TaskId))
             throw new InvalidOperationException("provider-reset requires its source task in the walked goal.");
         kernel.RecordTaskNote(goal.Id, new TaskId(intent.TaskId), ProviderBudgetHoldSchedules.FormatReset(
-            new(payload.BindingKey, payload.ResetAt, intent.Id)), operatorIntentCreatedAt: intent.CreatedAt);
+            new(payload.BindingKey, payload.ResetAt, intent.Id) { BindingIdentity = hold.BindingIdentity }),
+            operatorIntentCreatedAt: intent.CreatedAt);
     }
 }

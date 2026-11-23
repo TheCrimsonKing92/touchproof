@@ -41,12 +41,12 @@ public sealed class ProviderHoldSeedWorkBoundTests
             "anthropic::c:/profiles/superseded", "anthropic::c:/profiles/held"
         };
         Assert.Equal(keys.Order(StringComparer.Ordinal),
-            result.Index.Evaluations.Keys.Select(binding => binding.Key).Order(StringComparer.Ordinal));
+            result.Index.Evaluations.Keys.Select(binding => binding.RenderedKey).Order(StringComparer.Ordinal));
         Assert.All(result.Index.Evaluations.Keys, binding => Assert.Equal("provider+credential", binding.Scope));
         var expectedSources = new[] { 0, 199, 299, 399, 499, -1, 699, 799 };
         for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
         {
-            var evaluation = result.Index.Evaluations[new(keys[keyIndex], "provider+credential")];
+            var evaluation = Assert.Single(result.Index.Evaluations, entry => entry.Key.RenderedKey == keys[keyIndex]).Value;
             Assert.Equal(1, evaluation.Count);
             var source = expectedSources[keyIndex];
             if (source < 0)
@@ -100,7 +100,8 @@ public sealed class ProviderHoldSeedWorkBoundTests
         static IEnumerable<KeyValuePair<SubscriptionLimitEvidence.ProviderBindingKey, ProviderHoldSeedEvaluation>>
             OrderedEvaluations(ProviderHoldHistoryStartupSeed.Result result) =>
             result.Index.Evaluations.OrderBy(entry => entry.Key.Key, StringComparer.Ordinal)
-                .ThenBy(entry => entry.Key.Scope, StringComparer.Ordinal);
+                .ThenBy(entry => entry.Key.Scope, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Key.Model, StringComparer.Ordinal);
     }
 
     [Theory]
@@ -388,6 +389,40 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(source, Assert.Single(kernel.ProviderHoldHistory.Retained).Id.Value);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Seed_SharedBindingText_ReplaysOnlyTheResetTarget(bool modelCollision, bool explicitIdentity)
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateCollidingResetAsync(modelCollision, explicitIdentity);
+        var kernel = new AgentOrchestratorKernel();
+        var seeded = Seed(fixture, kernel);
+        var first = new ProviderHoldBinding("Anthropic", modelCollision ? "/profiles/account|model=claude-sonnet-4-6" : null, null);
+        var second = new ProviderHoldBinding("Anthropic", modelCollision ? "/profiles/account" : "<provider-default>",
+            modelCollision ? "claude-sonnet-4-6" : null);
+        var at = ProviderHoldSeedFixture.At;
+
+        Assert.Equal(first.Key, second.Key);
+        Assert.Equal(2, seeded.Index.Evaluations.Count);
+        var firstEvaluation = seeded.Index.Evaluations[first.ScopedKey];
+        var secondEvaluation = seeded.Index.Evaluations[second.ScopedKey];
+        Assert.Equal(1, firstEvaluation.Count);
+        Assert.Equal(1, secondEvaluation.Count);
+        var unaffected = Assert.IsType<ProviderBudgetHoldSchedule>(firstEvaluation.Schedule);
+        var reset = Assert.IsType<ProviderBudgetHoldSchedule>(secondEvaluation.Schedule);
+        Assert.Equal(ProviderHoldSeedFixture.Id(0), unaffected.Hold.SourceGoalId.Value);
+        Assert.Equal(ProviderHoldSeedFixture.Id(1), reset.Hold.SourceGoalId.Value);
+        Assert.Equal(at.AddMinutes(30), unaffected.NextProbeAt);
+        Assert.Null(unaffected.ResetIntentId);
+        Assert.Equal(at.AddHours(3), reset.NextProbeAt);
+        Assert.Equal("collision-reset", reset.ResetIntentId);
+        Assert.Equal(new[] { unaffected, reset }, ProviderUsageHoldView.Read(kernel.ProviderHoldScope, at)
+            .OrderBy(row => row.Hold.SourceGoalId.Value, StringComparer.Ordinal).Select(row => row.Schedule));
+    }
+
     private static ProviderHoldHistoryStartupSeed.Result Seed(ProviderHoldSeedFixture fixture, AgentOrchestratorKernel kernel) =>
         Seed(fixture.Repository, kernel);
 
@@ -447,6 +482,26 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
             stderr: "ERROR: weekly usage limit reached", apiIdentity: recoveredCredential),
         Make(2, At.AddMinutes(2), null, success: true, apiIdentity: recoveredCredential)
     ]);
+
+    internal Task PopulateCollidingResetAsync(bool modelCollision, bool explicitIdentity)
+    {
+        const string model = "claude-sonnet-4-6";
+        var first = Make(0, At, null, rule: Rules[0], kind: ProviderFailureKind.BudgetExhausted,
+            stderr: "ERROR: weekly usage limit reached",
+            apiIdentity: modelCollision ? "/profiles/account|model=claude-sonnet-4-6" : null);
+        var credential = modelCollision ? "/profiles/account" : "<provider-default>";
+        var second = Make(1, At.AddMinutes(1), null, rule: Rules[modelCollision ? 2 : 0],
+            stdout: modelCollision ? "You've hit your sonnet limit" : "",
+            stderr: modelCollision ? "" : "ERROR: weekly usage limit reached", model: model,
+            apiIdentity: credential);
+        var binding = new ProviderHoldBinding("Anthropic", credential, modelCollision ? model : null);
+        var marker = ProviderBudgetHoldSchedules.FormatReset(new(binding.Key, At.AddHours(3), "collision-reset")
+            { BindingIdentity = explicitIdentity ? binding.ScopedKey : null });
+        return SaveAsync([first, second with
+        {
+            Timeline = [.. second.Timeline, new(second.Id, second.Tasks[0].Id, ProgressKind.TaskNote, marker, At.AddMinutes(2))]
+        }]);
+    }
 
     internal async Task PopulateResetCaseAsync(bool? legacyArchive)
     {

@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
+using ProviderBindingKey = SubscriptionLimitEvidence.ProviderBindingKey;
+
 public sealed record ProviderBudgetHoldSchedule(
     ProviderBudgetExhaustionHold Hold, int Attempt, DateTimeOffset? ResetAt, string ResetSource,
     DateTimeOffset NextProbeAt, bool ProbeInFlight, GoalId? AdmittedGoalId, TaskId? AdmittedTaskId,
@@ -22,17 +24,20 @@ public static class ProviderBudgetHoldSchedules
 {
     public sealed record ProbeMarker(string BindingKey, DateTimeOffset Due, int Attempt, string ResetSource)
     {
+        internal ProviderBindingKey? BindingIdentity { get; init; }
         public string? ResetIntentId { get; init; }
         public DateTimeOffset? HoldPlacedAt { get; init; }
     }
     public sealed record ResetMarker(string BindingKey, DateTimeOffset ResetAt, string IntentId)
     {
+        internal ProviderBindingKey? BindingIdentity { get; init; }
         public DateTimeOffset? IssuedAt { get; init; }
     }
     public sealed record ResetGeneration(ResetMarker Marker, DateTimeOffset AppliedAt);
     public sealed record StandaloneResult(string BindingKey, DateTimeOffset PlacedAt, DateTimeOffset Due,
         int Attempt, DateTimeOffset StartedAt, string Outcome, string Reason)
     {
+        internal ProviderBindingKey? BindingIdentity { get; init; }
         public string? ResetIntentId { get; init; }
         public DateTimeOffset? ProviderResetAt { get; init; }
         public ProviderFailureKind FailureKind => ClassifyOutcome(Outcome);
@@ -102,26 +107,32 @@ public static class ProviderBudgetHoldSchedules
         TaskDispatchRecord dispatch, DateTimeOffset completedAt) =>
         IsStaleProbeResult(ProviderHoldBindingHistory.Read(goals, bindingKey), task, dispatch, completedAt);
 
+    internal static bool IsStaleProbeResult(IEnumerable<Goal> goals, ProviderBindingKey binding, TaskSpec task,
+        TaskDispatchRecord dispatch, DateTimeOffset completedAt) =>
+        IsStaleProbeResult(ProviderHoldBindingHistory.Read(goals, binding), task, dispatch, completedAt);
+
     internal static bool IsStaleProbeResult(ProviderHoldBindingHistory history, TaskSpec task,
         TaskDispatchRecord dispatch, DateTimeOffset completedAt) =>
         history.DispatchMarker(task, dispatch) is not null && !IsCurrentDispatch(history, task, dispatch, completedAt);
 
     internal static bool IsAdmittedProbe(Goal goal, TaskSpec task, TaskDispatchRecord dispatch) =>
         goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.OccurredAt <= dispatch.DispatchedAt &&
-            TryParseProbe(evt, out var marker) && dispatch.DispatchedAt >= marker.Due && IsBinding(dispatch, marker.BindingKey) &&
+            TryParseProbe(evt, out var marker) && dispatch.DispatchedAt >= marker.Due &&
+            (marker.BindingIdentity is { } identity ? ProviderHoldBinding.Matches(dispatch, identity) : IsBinding(dispatch, marker.BindingKey)) &&
             !task.DispatchHistory.Any(prior => prior.DispatchedAt >= evt.OccurredAt && prior.DispatchedAt < dispatch.DispatchedAt));
 
     public static string FormatStandaloneResult(StandaloneResult result) =>
         $"PROVIDER_BUDGET_CHECK binding={Uri.EscapeDataString(result.BindingKey)} placed_at={FormatInstant(result.PlacedAt)} due={FormatInstant(result.Due)} attempt={result.Attempt} started_at={FormatInstant(result.StartedAt)} outcome={result.Outcome} reason={Uri.EscapeDataString(result.Reason)}" +
         (result.ResetIntentId is { } intent ? $" reset_intent={Uri.EscapeDataString(intent)}" : "") +
-        (result.Outcome == "exhausted" && result.ProviderResetAt is { } reset ? $" provider_reset_at={FormatInstant(reset)}" : "");
+        (result.Outcome == "exhausted" && result.ProviderResetAt is { } reset ? $" provider_reset_at={FormatInstant(reset)}" : "") +
+        FormatBindingIdentity(result.BindingIdentity);
 
     public static bool TryParseStandaloneResult(ProgressEvent evt, out StandaloneResult result)
     {
         result = null!;
         if (evt.Kind != ProgressKind.TaskNote || !evt.Message.StartsWith("PROVIDER_BUDGET_CHECK ", StringComparison.Ordinal)) return false;
         var fields = evt.Message.Split(' ');
-        if (fields.Length is < 8 or > 10) return false;
+        if (fields.Length is < 8 or > 11) return false;
         string Value(int index, string key) => fields[index].StartsWith(key + "=", StringComparison.Ordinal)
             ? fields[index][(key.Length + 1)..] : "";
         if (!TryParseInstant(Value(2, "placed_at"), out var placed) || !TryParseInstant(Value(3, "due"), out var due) ||
@@ -139,18 +150,21 @@ public static class ProviderBudgetHoldSchedules
             reset = parsedReset;
             next++;
         }
+        var binding = Uri.UnescapeDataString(Value(1, "binding"));
+        ProviderBindingKey? identity = null;
+        if (next < fields.Length && !TryParseBindingIdentity(binding, Value(next++, "binding_identity"), out identity)) return false;
         if (next != fields.Length) return false;
-        result = new(Uri.UnescapeDataString(Value(1, "binding")), placed, due, attempt, started,
+        result = new(binding, placed, due, attempt, started,
             Value(6, "outcome"), Uri.UnescapeDataString(Value(7, "reason")))
-            { ResetIntentId = intent.Length > 0 ? Uri.UnescapeDataString(intent) : null, ProviderResetAt = reset };
+            { ResetIntentId = intent.Length > 0 ? Uri.UnescapeDataString(intent) : null, ProviderResetAt = reset, BindingIdentity = identity };
         return true;
     }
 
     private static readonly Regex ProbePattern = new(
-        @"\APROVIDER_BUDGET_PROBE binding=(?<binding>.+) due=(?<at>\S+) attempt=(?<attempt>\d+) reset_source=(?<source>operator|parsed|backoff)(?: reset_intent=(?<intent>\S+))?(?: placed_at=(?<placed>\S+))?\z",
+        @"\APROVIDER_BUDGET_PROBE binding=(?<binding>.+) due=(?<at>\S+) attempt=(?<attempt>\d+) reset_source=(?<source>operator|parsed|backoff)(?: reset_intent=(?<intent>\S+))?(?: placed_at=(?<placed>\S+))?(?: binding_identity=(?<identity>\S+))?\z",
         RegexOptions.CultureInvariant);
     private static readonly Regex ResetPattern = new(
-        @"\APROVIDER_BUDGET_RESET binding=(?<binding>.+) reset_at=(?<at>\S+) source=operator intent=(?<intent>\S+)\z",
+        @"\APROVIDER_BUDGET_RESET binding=(?<binding>.+) reset_at=(?<at>\S+) source=operator intent=(?<intent>\S+)(?: binding_identity=(?<identity>\S+))?\z",
         RegexOptions.CultureInvariant);
     private static readonly Regex IsoResetPattern = new(
         @"\bresets (?:at|on) (?<at>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))(?![\w:+-])",
@@ -163,9 +177,24 @@ public static class ProviderBudgetHoldSchedules
     public static string FormatProbe(ProbeMarker marker) =>
         $"PROVIDER_BUDGET_PROBE binding={marker.BindingKey} due={FormatInstant(marker.Due)} attempt={marker.Attempt} reset_source={marker.ResetSource}" +
         (marker.ResetIntentId is { } intent ? $" reset_intent={Uri.EscapeDataString(intent)}" : "") +
-        (marker.HoldPlacedAt is { } placed ? $" placed_at={FormatInstant(placed)}" : "");
+        (marker.HoldPlacedAt is { } placed ? $" placed_at={FormatInstant(placed)}" : "") +
+        FormatBindingIdentity(marker.BindingIdentity);
     public static string FormatReset(ResetMarker marker) =>
-        $"PROVIDER_BUDGET_RESET binding={marker.BindingKey} reset_at={FormatInstant(marker.ResetAt)} source=operator intent={marker.IntentId}";
+        $"PROVIDER_BUDGET_RESET binding={marker.BindingKey} reset_at={FormatInstant(marker.ResetAt)} source=operator intent={marker.IntentId}" +
+        FormatBindingIdentity(marker.BindingIdentity);
+
+    private static string FormatBindingIdentity(ProviderBindingKey? identity) =>
+        identity is null ? "" : $" binding_identity={identity.Scope}:{Uri.EscapeDataString(identity.Model ?? "")}";
+
+    private static bool TryParseBindingIdentity(string binding, string value, out ProviderBindingKey? identity)
+    {
+        identity = null;
+        var separator = value.IndexOf(':');
+        if (separator < 0 || value[..separator] is not ("provider-only" or "provider+credential")) return false;
+        var model = value[(separator + 1)..];
+        identity = ProviderHoldBinding.Identity(binding, value[..separator], model.Length == 0 ? null : Uri.UnescapeDataString(model));
+        return SameBinding(identity.RenderedKey, binding);
+    }
 
     public static bool TryParseProbe(ProgressEvent evt, out ProbeMarker marker)
     {
@@ -175,8 +204,13 @@ public static class ProviderBudgetHoldSchedules
         if (!match.Success || !TryParseInstant(match.Groups["at"].Value, out var at) ||
             !int.TryParse(match.Groups["attempt"].Value, out var attempt) || attempt < 1) return false;
         if (match.Groups["placed"].Success && !TryParseInstant(match.Groups["placed"].Value, out _)) return false;
-        marker = new(match.Groups["binding"].Value, at, attempt, match.Groups["source"].Value)
+        var binding = match.Groups["binding"].Value;
+        ProviderBindingKey? identity = null;
+        if (match.Groups["identity"].Success &&
+            !TryParseBindingIdentity(binding, match.Groups["identity"].Value, out identity)) return false;
+        marker = new(binding, at, attempt, match.Groups["source"].Value)
         {
+            BindingIdentity = identity,
             ResetIntentId = match.Groups["intent"].Success ? Uri.UnescapeDataString(match.Groups["intent"].Value) : null,
             HoldPlacedAt = match.Groups["placed"].Success ? DateTimeOffset.Parse(match.Groups["placed"].Value, CultureInfo.InvariantCulture) : null
         };
@@ -189,8 +223,12 @@ public static class ProviderBudgetHoldSchedules
         if (evt.Kind != ProgressKind.TaskNote) return false;
         var match = ResetPattern.Match(evt.Message);
         if (!match.Success || !TryParseInstant(match.Groups["at"].Value, out var at)) return false;
-        marker = new(match.Groups["binding"].Value, at, match.Groups["intent"].Value)
-            { IssuedAt = evt.OperatorIntentCreatedAt };
+        var binding = match.Groups["binding"].Value;
+        ProviderBindingKey? identity = null;
+        if (match.Groups["identity"].Success &&
+            !TryParseBindingIdentity(binding, match.Groups["identity"].Value, out identity)) return false;
+        marker = new(binding, at, match.Groups["intent"].Value)
+            { IssuedAt = evt.OperatorIntentCreatedAt, BindingIdentity = identity };
         return true;
     }
 
@@ -262,22 +300,33 @@ public static class ProviderBudgetHoldSchedules
     internal static bool TryGetHoldByBindingKey(IReadOnlyCollection<Goal> all, string bindingKey,
         out ProviderBudgetExhaustionHold hold, ProviderBudgetHoldMemo memo)
     {
+        ProviderBudgetExhaustionHold? found = null;
+        var checkedBindings = new HashSet<ProviderBindingKey>();
         foreach (var dispatch in all.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
         {
             var binding = ProviderHoldBinding.From(dispatch);
-            if (SameBinding(binding.Key, bindingKey) && memo.TryGetExact(binding, out hold))
-                return true;
-            if (dispatch.ModelName is not { Length: > 0 } model) continue;
-            var modelBinding = binding with { Model = model };
-            if (SameBinding(modelBinding.Key, bindingKey) && memo.TryGetExact(modelBinding, out hold))
-                return true;
+            if (!TryCollect(binding) ||
+                dispatch.ModelName is { Length: > 0 } model && !TryCollect(binding with { Model = model }))
+            {
+                hold = null!;
+                return false;
+            }
         }
-        hold = null!;
-        return false;
+        hold = found!;
+        return found is not null;
+
+        bool TryCollect(ProviderHoldBinding binding)
+        {
+            if (!SameBinding(binding.Key, bindingKey) || !checkedBindings.Add(binding.ScopedKey) ||
+                !memo.TryGetExact(binding, out var candidate)) return true;
+            if (found is not null) return false;
+            found = candidate;
+            return true;
+        }
     }
 
     public static ProviderBudgetHoldSchedule Evaluate(IEnumerable<Goal> goals, ProviderBudgetExhaustionHold hold, DateTimeOffset now) =>
-        Evaluate(ProviderHoldBindingHistory.Read(goals, hold.BindingKey, hold.BindingScope), hold, out _);
+        Evaluate(ProviderHoldBindingHistory.Read(goals, hold.BindingIdentity), hold, out _);
 
     internal static ProviderBudgetHoldSchedule Evaluate(ProviderHoldBindingHistory history, ProviderBudgetExhaustionHold hold,
         out IReadOnlyList<ProviderHoldBindingHistory.Observation> currentHolds)
@@ -285,7 +334,7 @@ public static class ProviderBudgetHoldSchedules
         var dispatches = history.Dispatches;
         var observations = history.ReadObservations().Where(item =>
             !IsStaleProbeResult(history, item.Task, item.Dispatch, item.Verification.CompletedAt)).ToArray();
-        var held = observations.Where(item => IsHoldObservation(item.Verification, item.Dispatch, hold.BindingKey)).ToArray();
+        var held = observations.Where(item => history.IsHoldObservation(item)).ToArray();
         var exhaustion = held.FirstOrDefault(item => item.Goal.Id == hold.SourceGoalId &&
             item.Task.Id == hold.SourceTaskId && item.Verification.CompletedAt == hold.PlacedAt)
             ?? throw new InvalidOperationException("A provider hold requires a confirmed verification on its binding.");
@@ -414,9 +463,4 @@ public static class ProviderBudgetHoldSchedules
     private static bool SameBinding(string left, string right) => left.Equals(right, StringComparison.OrdinalIgnoreCase);
     private static bool IsBinding(TaskDispatchRecord dispatch, string bindingKey) => ProviderHoldBinding.Matches(dispatch, bindingKey);
 
-    internal static bool IsHoldObservation(TaskVerificationRecord verification, TaskDispatchRecord dispatch, string bindingKey)
-    {
-        var evidence = ProviderHoldEvidence.Read(verification);
-        return evidence.Confirmed && SameBinding(ProviderHoldBinding.From(dispatch, evidence.ScopedModel(dispatch)).Key, bindingKey);
-    }
 }

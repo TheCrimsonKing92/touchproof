@@ -7,19 +7,20 @@ internal sealed record ProviderHoldBinding(string Provider, string? Credential, 
     internal SubscriptionLimitEvidence.ProviderBindingKey Base =>
         SubscriptionLimitEvidence.BuildProviderBindingKey(Provider, Credential);
 
-    internal string Key => WithModel(Base.Key);
+    internal string Key => ScopedKey.RenderedKey;
 
-    internal SubscriptionLimitEvidence.ProviderBindingKey ScopedKey
+    internal SubscriptionLimitEvidence.ProviderBindingKey ScopedKey => Base with { Model = Model?.ToLowerInvariant() };
+
+    internal static string Render(string baseKey, string? model) =>
+        model is null ? baseKey : baseKey + ModelSeparator + Uri.EscapeDataString(model);
+
+    internal static SubscriptionLimitEvidence.ProviderBindingKey Identity(string key, string scope, string? model)
     {
-        get
-        {
-            var providerBinding = Base;
-            return Model is null ? providerBinding : providerBinding with { Key = WithModel(providerBinding.Key) };
-        }
+        var normalizedModel = model?.ToLowerInvariant();
+        var suffix = Render("", normalizedModel);
+        var baseKey = key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) ? key[..(key.Length - suffix.Length)] : key;
+        return new(baseKey.ToLowerInvariant(), scope, normalizedModel);
     }
-
-    private string WithModel(string baseKey) =>
-        Model is null ? baseKey : baseKey + ModelSeparator + Uri.EscapeDataString(Model.ToLowerInvariant());
 
     internal static ProviderHoldBinding From(TaskDispatchRecord dispatch, string? model = null) =>
         new(dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeApiHoldIdentity ?? dispatch.ClaudeCredentialSourceDirectory, model);
@@ -82,6 +83,9 @@ internal sealed record ProviderHoldBinding(string Provider, string? Credential, 
     internal static bool Matches(TaskDispatchRecord dispatch, string key) =>
         From(dispatch).Key.Equals(key, StringComparison.OrdinalIgnoreCase) ||
         From(dispatch, dispatch.ModelName).Key.Equals(key, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool Matches(TaskDispatchRecord dispatch, SubscriptionLimitEvidence.ProviderBindingKey identity) =>
+        From(dispatch, identity.Model is null ? null : dispatch.ModelName).ScopedKey == identity;
 
     internal static string BaseKey(string key)
     {

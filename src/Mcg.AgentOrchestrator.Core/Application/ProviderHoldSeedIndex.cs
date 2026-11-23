@@ -13,10 +13,6 @@ internal sealed record ProviderHoldSeedIndexResult(
 
 internal static class ProviderHoldSeedIndex
 {
-    private static readonly IEqualityComparer<ProviderBindingKey> BindingComparer = EqualityComparer<ProviderBindingKey>.Create(
-        (left, right) => left?.Scope == right?.Scope && StringComparer.OrdinalIgnoreCase.Equals(left?.Key, right?.Key),
-        binding => HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(binding.Key), binding.Scope));
-
     internal static ProviderHoldSeedIndexResult Evaluate(
         IReadOnlyCollection<Goal> working, IReadOnlyCollection<Goal> retained, IReadOnlyCollection<Goal> persisted,
         IReadOnlySet<string> sources)
@@ -29,38 +25,34 @@ internal static class ProviderHoldSeedIndex
         var scope = working.Concat(persistedById.Values.Where(goal => !workingIds.Contains(goal.Id.Value))
             .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal));
 
-        var buckets = new Dictionary<ProviderBindingKey, ProviderHoldBindingHistory>(BindingComparer);
+        var buckets = new Dictionary<ProviderBindingKey, ProviderHoldBindingHistory>();
         var indexedGoals = 0;
         ProviderHoldBindingHistory Bucket(ProviderBindingKey key)
         {
-            if (!buckets.TryGetValue(key, out var bucket)) buckets.Add(key, bucket = new(key.Key));
+            if (!buckets.TryGetValue(key, out var bucket)) buckets.Add(key, bucket = new(key.RenderedKey, key));
             return bucket;
         }
-        var bindings = new Dictionary<ProviderBindingKey, ProviderHoldBinding>(BindingComparer);
-        // Persisted timeline markers identify a binding by its rendered key alone.
-        var notes = new Dictionary<string, List<ProviderHoldBindingHistory.Note>>(StringComparer.OrdinalIgnoreCase);
+        var bindings = new HashSet<ProviderBindingKey>();
         var dispatchMatchingVisits = 0;
         ProviderHoldBindingHistory.Populate(scope, Bucket, _ => indexedGoals++, observation =>
         {
             if (!observation.Evidence.Confirmed || !sourceIds.Contains(observation.Goal.Id.Value)) return;
             var binding = ProviderHoldBinding.From(observation.Dispatch, observation.Evidence.ScopedModel(observation.Dispatch));
-            bindings.TryAdd(binding.ScopedKey, binding);
-        }, visits => dispatchMatchingVisits += visits, getNotes: key =>
+            bindings.Add(binding.ScopedKey);
+        }, visits => dispatchMatchingVisits += visits, addNote: (_, key, note) =>
         {
-            if (!notes.TryGetValue(key, out var entries)) notes.Add(key, entries = []);
-            return entries;
+            if (key is not null && buckets.TryGetValue(key, out var bucket)) bucket.Notes.Add(note);
         });
 
-        var evaluations = new Dictionary<ProviderBindingKey, ProviderHoldSeedEvaluation>(BindingComparer);
+        var evaluations = new Dictionary<ProviderBindingKey, ProviderHoldSeedEvaluation>();
         var required = new HashSet<string>(StringComparer.Ordinal);
         var clearedBindingsBySource = new Dictionary<string, List<ProviderBindingKey>>(StringComparer.Ordinal);
-        var clearingEvidence = new Dictionary<ProviderBindingKey, string[]>(BindingComparer);
-        foreach (var (key, binding) in bindings)
+        var clearingEvidence = new Dictionary<ProviderBindingKey, string[]>();
+        foreach (var key in bindings)
         {
             var bucket = buckets[key];
-            if (notes.TryGetValue(key.Key, out var entries)) bucket.Notes.AddRange(entries);
             IReadOnlyList<ProviderHoldBindingHistory.Observation> currentHolds = [];
-            var schedule = ProviderLimitSignals.TryGetExactHold(bucket, binding, out var hold)
+            var schedule = ProviderLimitSignals.TryGetExactHold(bucket, key, out var hold)
                 ? ProviderBudgetHoldSchedules.Evaluate(bucket, hold, out currentHolds) : null;
             // Probe and reset generations can refer to an earlier placement. For an
             // ordinary recovery, superseded evidence cannot affect the current schedule.

@@ -57,22 +57,24 @@ public static class ProviderUsageHoldView
     internal static IReadOnlyList<ProviderUsageHoldRow> Read(IReadOnlyCollection<Goal> holdScope,
         IReadOnlyCollection<Goal> scheduleScope, DateTimeOffset now)
     {
-        var holds = new Dictionary<string, ProviderBudgetExhaustionHold>(StringComparer.OrdinalIgnoreCase);
+        var holds = new Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetExhaustionHold>();
         var memo = new ProviderBudgetHoldMemo(holdScope);
         foreach (var binding in ProviderHoldBinding.Candidates(holdScope))
             if (memo.TryGetExact(binding, out var hold))
-                holds.TryAdd(hold.BindingKey, hold);
-        return holds.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).Select(pair =>
+                holds.TryAdd(binding.ScopedKey, hold);
+        return holds.Values.OrderBy(hold => hold.BindingKey, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(hold => hold.BindingScope, StringComparer.Ordinal)
+            .ThenBy(hold => hold.ModelName, StringComparer.OrdinalIgnoreCase).Select(hold =>
         {
             ProviderBudgetHoldSchedule? schedule;
-            try { schedule = ProviderBudgetHoldSchedules.Evaluate(scheduleScope, pair.Value, now); }
+            try { schedule = ProviderBudgetHoldSchedules.Evaluate(scheduleScope, hold, now); }
             catch (InvalidOperationException) { schedule = null; }
-            return new ProviderUsageHoldRow(pair.Value, schedule)
+            return new ProviderUsageHoldRow(hold, schedule)
             {
                 OverdueSince = schedule is { ProbeInFlight: false, AdmittedTaskId: null } && now >= schedule.NextProbeAt
                     ? schedule.NextProbeAt : null,
-                LastObservedAt = schedule?.LastProbeAt ?? pair.Value.PlacedAt,
-                Diagnosis = schedule is null ? null : FormatDiagnosis(pair.Value, schedule, now)
+                LastObservedAt = schedule?.LastProbeAt ?? hold.PlacedAt,
+                Diagnosis = schedule is null ? null : FormatDiagnosis(hold, schedule, now)
             };
         }).ToArray();
     }

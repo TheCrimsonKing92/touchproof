@@ -10,7 +10,8 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
     Func<AgentOrchestratorKernel, ProviderBudgetExhaustionHold, string, DateTimeOffset, bool>? recordRetained = null,
     Func<DateTimeOffset>? utcNow = null, Func<bool>? providerBusy = null, Action<string>? diagnostic = null)
 {
-    private readonly HashSet<(string Binding, DateTimeOffset Placed, DateTimeOffset Due, int Attempt, string? Reset)> _claims = [];
+    private readonly HashSet<(SubscriptionLimitEvidence.ProviderBindingKey Binding, DateTimeOffset Placed,
+        DateTimeOffset Due, int Attempt, string? Reset)> _claims = [];
 
     internal IReadOnlyList<GoalId> ObserveTick(AgentOrchestratorKernel kernel, DateTimeOffset now)
     {
@@ -36,7 +37,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
     private void ObserveHold(AgentOrchestratorKernel kernel, ProviderBudgetExhaustionHold hold,
         ProviderBudgetHoldSchedule schedule, DateTimeOffset now, List<GoalId> changed)
     {
-        var claim = (hold.BindingKey.ToUpperInvariant(), hold.PlacedAt, schedule.NextProbeAt, schedule.Attempt, schedule.ResetIntentId);
+        var claim = (hold.BindingIdentity, hold.PlacedAt, schedule.NextProbeAt, schedule.Attempt, schedule.ResetIntentId);
         if (_claims.Contains(claim)) return;
         // Provider-wide, including other credential bindings and processes whose task has moved state.
         if (kernel.ProviderHoldScope.SelectMany(goal => goal.Tasks).Any(task =>
@@ -46,11 +47,11 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
         if (hold.Reason != ProviderFailureKind.AuthenticationRequired &&
             kernel.Goals.Where(goal => !goal.IsTerminal).Any(goal => goal.Tasks.Any(task =>
                 task.Status == WorkTaskStatus.Assigned && ProviderBudgetProbeAdmission.WaitsOnBinding(
-                    preflight(goal, task, kernel.ProviderHoldScope), hold.BindingKey)))) return;
+                    preflight(goal, task, kernel.ProviderHoldScope), hold)))) return;
         var source = kernel.ProviderHoldScope.Single(goal => goal.Id == hold.SourceGoalId);
         var sourceTask = source.Tasks.Single(task => task.Id == hold.SourceTaskId);
         var dispatch = sourceTask.DispatchHistory.Last(record => record.DispatchedAt <= hold.PlacedAt &&
-            ProviderHoldBinding.Matches(record, hold.BindingKey));
+            ProviderHoldBinding.Matches(record, hold.BindingIdentity));
         if (!_claims.Add(claim)) return;
         ProviderHoldProbeResult result;
         try { result = probe.CheckAsync(hold, dispatch, CancellationToken.None).GetAwaiter().GetResult(); }
@@ -58,7 +59,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
         if (result.Outcome is not ("available" or "exhausted" or "failed" or "authentication-required"))
             result = new("failed", "invalid-probe-outcome");
         var completed = utcNow?.Invoke() ?? now;
-        if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(kernel.ProviderHoldScope, hold.BindingKey, out var current) ||
+        if (!ProviderLimitSignals.TryGetHoldForIdentity(kernel.ProviderHoldScope, hold.BindingIdentity, out var current) ||
             current != hold || ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, current, completed) is not { } latest ||
             latest.NextProbeAt != schedule.NextProbeAt || latest.Attempt != schedule.Attempt || latest.ResetIntentId != schedule.ResetIntentId)
         {
@@ -67,7 +68,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
         }
         var note = ProviderBudgetHoldSchedules.FormatStandaloneResult(new(hold.BindingKey, hold.PlacedAt,
             schedule.NextProbeAt, schedule.Attempt, now, result.Outcome, result.Reason)
-            { ResetIntentId = schedule.ResetIntentId, ProviderResetAt = result.ProviderResetAt });
+            { ResetIntentId = schedule.ResetIntentId, ProviderResetAt = result.ProviderResetAt, BindingIdentity = hold.BindingIdentity });
         var recorded = true;
         try
         {
@@ -92,7 +93,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
         try
         {
             writer.Append("provider-hold-check", hold.SourceGoalId.Value,
-                $"PROVIDER_HOLD_CHECK due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} attempt={schedule.Attempt} outcome={outcome} reason={Uri.EscapeDataString(reason)}{(diagnosis is null ? "" : $" diagnosis={Uri.EscapeDataString(diagnosis)}")} binding={ConductorProviderHoldWatch.EventBinding(hold.BindingKey)}", timestamp: completed);
+                $"PROVIDER_HOLD_CHECK due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} attempt={schedule.Attempt} outcome={outcome} reason={Uri.EscapeDataString(reason)}{(diagnosis is null ? "" : $" diagnosis={Uri.EscapeDataString(diagnosis)}")} binding={ConductorProviderHoldWatch.EventBinding(hold.BindingIdentity)}", timestamp: completed);
         }
         catch (Exception error) { ReportFault(error, hold.BindingKey); }
     }

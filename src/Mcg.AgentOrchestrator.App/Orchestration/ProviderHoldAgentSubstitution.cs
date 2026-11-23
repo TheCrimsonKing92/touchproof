@@ -32,7 +32,7 @@ internal sealed class ProviderHoldAgentSubstitution(
 
         var assigned = preflight(goal, task, kernel.ProviderHoldScope);
         var hold = assigned.ErrorCode == WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode
-            ? FindHold(assigned.Findings) : null;
+            ? assigned.BlockedProviderHold : null;
         var agent = agents.First(candidate => candidate.Id == task.AssignedAgentId);
         var now = UtcNow;
         var cooldown = TryGetSubscriptionCooldown(goal, task, agent, now, out var observed)
@@ -56,7 +56,7 @@ internal sealed class ProviderHoldAgentSubstitution(
             var check = preflight(scratch.GetGoal(goal.Id), view, scratch.ProviderHoldScope);
             if (check.Allowed)
                 return hold is not null && (cooldown is null ||
-                        !ProviderHoldBinding.BaseKey(hold.BindingKey).Equals(cooldown.BindingKey, StringComparison.OrdinalIgnoreCase))
+                        (hold.BindingIdentity with { Model = null }) != cooldown.BindingIdentity)
                     ? new Result.Substitute(candidate, hold.BindingKey, hold.EvidenceReceipt, null, rejections, holdIdentity)
                     : new Result.Substitute(candidate, cooldown!.BindingKey, cooldown.EvidenceReceipt, cooldown, rejections, holdIdentity);
             var blocked = check.Findings.Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -138,17 +138,6 @@ internal sealed class ProviderHoldAgentSubstitution(
             assigned.Model.ProviderName,
             assigned.Id == task.AssignedAgentId ? null : ProviderLimitSignals.GetSubscriptionModelName(assigned),
             now, out cooldown);
-    }
-
-    private ProviderBudgetExhaustionHold? FindHold(IReadOnlyList<string> findings)
-    {
-        var scope = kernel.ProviderHoldScope;
-        foreach (var binding in ProviderHoldBinding.Candidates(scope))
-            if (findings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase) &&
-                    finding.Contains($"binding {binding.Key} (", StringComparison.OrdinalIgnoreCase)) &&
-                ProviderLimitSignals.TryGetExactHold(scope, binding, out var hold))
-                return hold;
-        return null;
     }
 
     private static bool IsPinned(Goal goal, TaskId taskId) => OfflineAssignedAgentRedelegation.IsOperatorPin(goal, taskId);

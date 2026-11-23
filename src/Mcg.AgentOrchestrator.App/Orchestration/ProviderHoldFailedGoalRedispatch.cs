@@ -76,7 +76,7 @@ internal sealed class ProviderHoldFailedGoalRedispatch(
             ProviderHoldBinding.FindDispatch(task, verification) is not { } dispatch) return null;
         var all = scope.ToArray();
         var binding = ProviderHoldBinding.From(dispatch);
-        if (ProviderBudgetHoldSchedules.IsStaleProbeResult(all, binding.Key, task, dispatch, verification.CompletedAt) ||
+        if (ProviderBudgetHoldSchedules.IsStaleProbeResult(all, binding.ScopedKey, task, dispatch, verification.CompletedAt) ||
             ProviderLimitSignals.TryGetExactHold(all, binding, out _)) return null;
         return "Retry after verified provider availability.";
     }

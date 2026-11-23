@@ -52,7 +52,10 @@ public sealed record WorkerSubscriptionPreflightResult(
     // The Claude credential source this preflight selected and reported in its auth finding. It is
     // recorded on the dispatch so the dispatch start boundary transports THIS decision to the worker
     // sandbox; null whenever no Claude login was inspected (other providers, sandbox disabled, blocked).
-    ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null);
+    ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null)
+{
+    internal ProviderBudgetExhaustionHold? BlockedProviderHold { get; init; }
+}
 
 public sealed class WorkerSubscriptionPreflightException : InvalidOperationException
 {
@@ -704,7 +707,7 @@ public static partial class WorkerProfileDispatcher
                     $"blocked: subscription retry deferred until {retryAfter:u}; source: {ProviderLimitSignals.DescribeSubscriptionRetrySource(task)}");
             }
 
-            WorkerSubscriptionPreflightFindings.AddProviderHoldFindings(
+            var blockedProviderHold = WorkerSubscriptionPreflightFindings.AddProviderHoldFindings(
                 findings, providerHoldScope ?? [goal], dispatchProviderName,
                 claudeCredentialSelection?.HoldBinding, effectiveModelName, goal, task, now);
 
@@ -731,7 +734,7 @@ public static partial class WorkerProfileDispatcher
                 reviewerMergeTree?.IsClean,
                 reviewerMergeTree?.ConflictPaths,
                 reviewerMergeTree?.TotalConflictPathCount,
-                claudeCredentialSelection);
+                claudeCredentialSelection) { BlockedProviderHold = blockedProviderHold };
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {

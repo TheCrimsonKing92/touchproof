@@ -50,6 +50,7 @@ public sealed record ProviderSubscriptionCooldown(
     DateTimeOffset RetryAfter)
 {
     public string BindingKey { get; init; } = "";
+    internal SubscriptionLimitEvidence.ProviderBindingKey? BindingIdentity { get; init; }
     public string EvidenceReceipt { get; init; } = "";
     public DateTimeOffset DispatchStartedAt { get; init; }
     // Null retains provider-wide authority, including historical records without a model.
@@ -78,6 +79,9 @@ public sealed record ProviderBudgetExhaustionHold(
     DateTimeOffset PlacedAt,
     string EvidenceReceipt)
 {
+    internal SubscriptionLimitEvidence.ProviderBindingKey BindingIdentity =>
+        ProviderHoldBinding.Identity(BindingKey, BindingScope, ModelName);
+
     public ProviderFailureKind Reason { get; init; } = ProviderFailureKind.BudgetExhausted;
     public string? ModelName { get; init; }
     public DateTimeOffset? ProviderResetAt { get; init; }

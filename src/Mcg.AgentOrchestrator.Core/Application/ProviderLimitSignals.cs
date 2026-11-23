@@ -87,8 +87,7 @@ public static class ProviderLimitSignals
                     TryGetSubscriptionCooldown(task, verification, now, out var observed) &&
                     observed.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
                     (candidateBinding is null || !ProviderHoldEvidence.Read(verification).Confirmed ||
-                        FindDispatchForVerification(task, verification) is { } dispatch &&
-                        ProviderHoldBinding.From(dispatch).Key.Equals(candidateBinding.Key, StringComparison.OrdinalIgnoreCase)) &&
+                        observed.BindingIdentity == candidateBinding.Base) &&
                     observed.AppliesToModel(modelName) &&
                     (cooldown is null || observed.RetryAfter > cooldown.RetryAfter))
                     cooldown = observed;
@@ -153,6 +152,7 @@ public static class ProviderLimitSignals
         cooldown = new(providerName, task.Id, retryAfter)
         {
             BindingKey = ProviderHoldBinding.From(dispatch).Key,
+            BindingIdentity = ProviderHoldBinding.From(dispatch).Base,
             EvidenceReceipt = !string.IsNullOrWhiteSpace(verification.StandardErrorPath)
                 ? verification.StandardErrorPath : $"verification:{verification.CompletedAt:O}",
             DispatchStartedAt = dispatch.DispatchedAt,
@@ -182,15 +182,21 @@ public static class ProviderLimitSignals
     internal static bool TryGetExactHold(
         IEnumerable<Goal> goals,
         ProviderHoldBinding requestedBinding,
+        out ProviderBudgetExhaustionHold hold) =>
+        TryGetHoldForIdentity(goals, requestedBinding.ScopedKey, out hold);
+
+    internal static bool TryGetHoldForIdentity(
+        IEnumerable<Goal> goals,
+        SubscriptionLimitEvidence.ProviderBindingKey requestedBinding,
         out ProviderBudgetExhaustionHold hold)
     {
         ArgumentNullException.ThrowIfNull(goals);
-        var history = ProviderHoldBindingHistory.Read(goals, requestedBinding.Key, requestedBinding.Base.Scope);
+        var history = ProviderHoldBindingHistory.Read(goals, requestedBinding);
         return TryGetExactHold(history, requestedBinding, out hold);
     }
 
     internal static bool TryGetExactHold(ProviderHoldBindingHistory history,
-        ProviderHoldBinding requestedBinding, out ProviderBudgetExhaustionHold hold)
+        SubscriptionLimitEvidence.ProviderBindingKey requestedBinding, out ProviderBudgetExhaustionHold hold)
     {
         history.EvaluationCount++;
         ProviderBudgetExhaustionHold? latest = null;
@@ -231,8 +237,8 @@ public static class ProviderLimitSignals
                 : $"verification:{verification.CompletedAt:O}";
             var candidate = new ProviderBudgetExhaustionHold(
                 dispatch.ProviderName ?? dispatch.WorkerName,
-                requestedBinding.Key,
-                requestedBinding.Base.Scope,
+                requestedBinding.RenderedKey,
+                requestedBinding.Scope,
                 goal.Id,
                 task.Id,
                 verification.CompletedAt,

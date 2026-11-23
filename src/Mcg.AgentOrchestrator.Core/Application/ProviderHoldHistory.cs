@@ -47,7 +47,7 @@ public sealed class ProviderHoldHistory
             if (!ids.Contains(goal.Id.Value)) _retained[goal.Id.Value] = goal;
 
         var scope = Scope(working);
-        var answers = new Dictionary<string, ProviderBudgetHoldSchedule?>(StringComparer.OrdinalIgnoreCase);
+        var answers = new Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetHoldSchedule?>();
         var exhaustedBindings = ExhaustedBindings(scope);
         bool dropped;
         do
@@ -170,22 +170,23 @@ public sealed class ProviderHoldHistory
     }
 
     private bool SameAnswers(Goal goal, IReadOnlyCollection<Goal> scope, IReadOnlyCollection<Goal> without,
-        Dictionary<string, ProviderBudgetHoldSchedule?> answers,
+        Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetHoldSchedule?> answers,
         IReadOnlyCollection<ProviderHoldBinding> exhaustedBindings,
-        out Dictionary<string, ProviderBudgetHoldSchedule?> withoutAnswers)
+        out Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetHoldSchedule?> withoutAnswers)
     {
-        withoutAnswers = new(StringComparer.OrdinalIgnoreCase);
+        withoutAnswers = new();
         var dispatches = goal.Tasks.SelectMany(task => task.DispatchHistory).ToArray();
         foreach (var binding in exhaustedBindings)
         {
-            if (!dispatches.Any(dispatch => ProviderHoldBinding.Matches(dispatch, binding.Key))) continue;
-            if (!answers.TryGetValue(binding.Key, out var answer))
+            var identity = binding.ScopedKey;
+            if (!dispatches.Any(dispatch => ProviderHoldBinding.Matches(dispatch, identity))) continue;
+            if (!answers.TryGetValue(identity, out var answer))
             {
                 answer = Evaluate(scope, binding);
-                answers.Add(binding.Key, answer);
+                answers.Add(identity, answer);
             }
             var withoutAnswer = Evaluate(without, binding);
-            withoutAnswers.Add(binding.Key, withoutAnswer);
+            withoutAnswers.Add(identity, withoutAnswer);
             if (answer != withoutAnswer) return false;
         }
         return true;
@@ -199,14 +200,14 @@ public sealed class ProviderHoldHistory
     internal static IReadOnlyCollection<ProviderHoldBinding> ExhaustedBindings(
         IReadOnlyCollection<Goal> scope)
     {
-        var bindings = new Dictionary<string, ProviderHoldBinding>(StringComparer.OrdinalIgnoreCase);
+        var bindings = new Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderHoldBinding>();
         foreach (var task in scope.SelectMany(goal => goal.Tasks))
             foreach (var verification in task.VerificationHistory)
                 if (ProviderHoldEvidence.Read(verification) is { Confirmed: true } evidence &&
                     ProviderHoldBinding.FindDispatch(task, verification) is { } dispatch)
                 {
                     var binding = ProviderHoldBinding.From(dispatch, evidence.ScopedModel(dispatch));
-                    bindings.TryAdd(binding.Key, binding);
+                    bindings.TryAdd(binding.ScopedKey, binding);
                 }
         return bindings.Values;
     }

@@ -31,7 +31,7 @@ internal sealed class ConductorProviderHoldWatch
         {
             if (_writer is null) return;
             if (!_rehydrated) { Rehydrate(); _rehydrated = true; }
-            var held = ProviderUsageHoldView.Read(scope, now).ToDictionary(row => EventBinding(row.Hold.BindingKey), StringComparer.OrdinalIgnoreCase);
+            var held = ProviderUsageHoldView.Read(scope, now).ToDictionary(row => EventBinding(row.Hold.BindingIdentity), StringComparer.OrdinalIgnoreCase);
             foreach (var binding in _announced.Keys.Concat(held.Keys).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray())
             {
                 if (!held.TryGetValue(binding, out var row))
@@ -56,7 +56,7 @@ internal sealed class ConductorProviderHoldWatch
                         $"PROVIDER_HOLD_PLACED source={Prefix(hold.SourceGoalId.Value)}/{Prefix(hold.SourceTaskId.Value)} placed_at={Instant(hold.PlacedAt)} next_probe={(schedule is null ? "unavailable" : Instant(schedule.NextProbeAt))} reset_source={schedule?.ResetSource ?? "unavailable"} attempt={(schedule?.Attempt ?? 0).ToString(CultureInfo.InvariantCulture)}{(row.OverdueSince is { } overdue ? $" state=probe-overdue due={Instant(overdue)}" : "")}{ScopeField(hold.BindingKey)}{DiagnosisField(row)}{reset} binding={binding}", timestamp: now);
                     _announced[binding] = new(hold.SourceGoalId.Value, hold.SourceTaskId.Value, hold.PlacedAt);
                 }
-                AnnounceProbe(scope, hold.BindingKey, now);
+                AnnounceProbe(scope, hold.BindingIdentity, now);
                 if (row.OverdueSince is { } due && _overdue.Add((binding.ToUpperInvariant(), due)))
                     _writer.Append("provider-hold-overdue", hold.SourceGoalId.Value,
                         $"PROVIDER_HOLD_OVERDUE due={Instant(due)} balance=unverified{DiagnosisField(row)} binding={binding}", timestamp: now);
@@ -82,7 +82,7 @@ internal sealed class ConductorProviderHoldWatch
                     (item.Task.DispatchHistory.Any(prior => prior.DispatchedAt <= placed && Matches(prior, binding)) ||
                      item.Goal.Timeline.Any(evt => evt.TaskId == item.Task.Id && evt.OccurredAt <= item.Dispatch.DispatchedAt &&
                          ProviderBudgetHoldSchedules.TryParseProbe(evt, out var probe) &&
-                         EventBinding(probe.BindingKey) == binding && (probe.HoldPlacedAt ?? probe.Due) >= placed)) &&
+                         EventBinding(probe) == binding && (probe.HoldPlacedAt ?? probe.Due) >= placed)) &&
                     IsRecoveryDispatch(scope, item.Goal, item.Task, item.Dispatch, binding))
                 .MinBy(item => item.Dispatch.DispatchedAt);
             if (next.Dispatch is null) continue;
@@ -98,25 +98,25 @@ internal sealed class ConductorProviderHoldWatch
         if (!ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch)) return true;
 
         // A task probe counts as resumed work only when its own result established availability.
-        var binding = ProviderHoldBinding.From(dispatch).Key;
-        if (EventBinding(binding) != eventBinding) binding = ProviderHoldBinding.From(dispatch, dispatch.ModelName).Key;
+        var binding = ProviderHoldBinding.From(dispatch).ScopedKey;
+        if (EventBinding(binding) != eventBinding) binding = ProviderHoldBinding.From(dispatch, dispatch.ModelName).ScopedKey;
         return task.VerificationHistory.Any(verification => ProviderLimitSignals.HasAvailabilityEvidence(verification) &&
                    ProviderHoldBinding.FindDispatch(task, verification) == dispatch) &&
-               ProviderBudgetHoldSchedules.IsCurrentDispatch(scope, binding, task, dispatch);
+               ProviderBudgetHoldSchedules.IsCurrentDispatch(ProviderHoldBindingHistory.Read(scope, binding), task, dispatch);
     }
 
     private static bool Matches(TaskDispatchRecord dispatch, string eventBinding) =>
-        EventBinding(ProviderHoldBinding.From(dispatch).Key) == eventBinding ||
-        EventBinding(ProviderHoldBinding.From(dispatch, dispatch.ModelName).Key) == eventBinding;
+        EventBinding(ProviderHoldBinding.From(dispatch).ScopedKey) == eventBinding ||
+        EventBinding(ProviderHoldBinding.From(dispatch, dispatch.ModelName).ScopedKey) == eventBinding;
 
-    private void AnnounceProbe(IReadOnlyCollection<Goal> scope, string binding, DateTimeOffset now)
+    private void AnnounceProbe(IReadOnlyCollection<Goal> scope, SubscriptionLimitEvidence.ProviderBindingKey binding, DateTimeOffset now)
     {
         var redacted = EventBinding(binding);
         foreach (var (goal, note) in scope.SelectMany(goal => goal.Timeline.Select(note => (goal, note)))
                      .OrderByDescending(pair => pair.note.OccurredAt))
         {
             if (!ProviderBudgetHoldSchedules.TryParseProbe(note, out var probe) || note.TaskId is not { } task ||
-                !string.Equals(probe.BindingKey, binding, StringComparison.OrdinalIgnoreCase)) continue;
+                EventBinding(probe) != redacted) continue;
             var key = (redacted.ToUpperInvariant(), probe.Due, probe.Attempt);
             if (!_probes.Contains(key))
             {
@@ -171,6 +171,24 @@ internal sealed class ConductorProviderHoldWatch
         ? $" diagnosis={Uri.EscapeDataString(diagnosis)}" : "";
     private static string ScopeField(string binding) => EventBinding(binding) == binding ? "" :
         $" scope={Uri.EscapeDataString(OwnerProviderHoldNarration.DisplayName(binding))}";
+
+    private static string EventBinding(ProviderBudgetHoldSchedules.ProbeMarker probe) =>
+        probe.BindingIdentity is { } identity ? EventBinding(identity) : EventBinding(probe.BindingKey);
+
+    internal static string EventBinding(SubscriptionLimitEvidence.ProviderBindingKey binding)
+    {
+        // Preserve existing event ids for ordinary bindings. Credential text
+        // that mimics a default or model suffix needs a separate redacted id.
+        var key = binding.RenderedKey;
+        if (binding.Scope != "provider+credential" ||
+            !binding.Key.EndsWith("::<provider-default>", StringComparison.Ordinal) &&
+            !binding.Key.Contains("|model=", StringComparison.Ordinal))
+            return EventBinding(key);
+        var separator = binding.Key.IndexOf("::", StringComparison.Ordinal);
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{binding.Key.Length}:{binding.Key}{binding.Model}")));
+        return binding.Key[..(separator + 2)] + "scope-exact-" + digest[..16].ToLowerInvariant();
+    }
     internal static string EventBinding(string binding)
     {
         var separator = binding.IndexOf("::", StringComparison.Ordinal);
