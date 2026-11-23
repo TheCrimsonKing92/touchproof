@@ -344,6 +344,12 @@ $selections = @(
     )
     Invoke-ReplaySelection 'seeded-factory' $factory "FullyQualifiedName=$factory&Name~$factoryMethod" @($factoryMethod)
 )
+[long]$totalCpu100ns = 0
+[int]$totalNativeGit = 0
+foreach ($selection in $selections) {
+    $totalCpu100ns += $selection.cpu_100ns
+    $totalNativeGit += $selection.native_git
+}
 $artifacts = @(Get-ChildItem -LiteralPath $outputRoot -Recurse -Force -File | ForEach-Object {
     [ordered]@{
         path = [IO.Path]::GetRelativePath($outputRoot, $_.FullName)
@@ -363,9 +369,9 @@ Write-JsonFile $receipt ([ordered]@{
     configuration = $Configuration; os = [Environment]::OSVersion.VersionString
     git = $gitVersion; dotnet_sdk = $dotnetVersion; powershell = $PSVersionTable.PSVersion.ToString()
     boundary = 'suspended launcher creation through all contained processes exiting'
-    cpu_100ns = ($selections | ForEach-Object { $_.cpu_100ns } | Measure-Object -Sum).Sum
-    cpu_seconds = ($selections | ForEach-Object { $_.cpu_seconds } | Measure-Object -Sum).Sum
-    native_git = ($selections | ForEach-Object { $_.native_git } | Measure-Object -Sum).Sum
+    cpu_100ns = $totalCpu100ns
+    cpu_seconds = $totalCpu100ns / 1e7
+    native_git = $totalNativeGit
     selections = $selections; artifacts = $artifacts
 })
 Write-Output "Fixture Git replay receipt $receipt"
