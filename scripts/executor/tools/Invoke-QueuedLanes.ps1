@@ -83,7 +83,7 @@ public static class ExecutorRetentionDiskSpace {
         $ErrorActionPreference = 'Continue'
         $PSNativeCommandUseErrorActionPreference = $false
         try {
-            $git = Get-Command git -CommandType Application -ErrorAction Stop
+            $git = Get-Command git -CommandType Application -TotalCount 1 -ErrorAction Stop
             $output = @(& $git.Source -C $repo @Arguments 2>&1)
             return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($output -join ' ') }
         } catch { return [pscustomobject]@{ ExitCode = -1; Text = $_.Exception.Message } }
