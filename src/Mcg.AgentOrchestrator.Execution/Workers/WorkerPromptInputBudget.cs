@@ -134,6 +134,9 @@ public static class WorkerPromptInputBudget
         return (content.Length + ApproximateCharactersPerToken - 1) / ApproximateCharactersPerToken;
     }
 
+    internal static int RemainingCharacterCapacity(int tokenBudget, string content) =>
+        tokenBudget * ApproximateCharactersPerToken - content.Length;
+
     public static int InputTokenBudget(
         string? providerName,
         string? modelName,

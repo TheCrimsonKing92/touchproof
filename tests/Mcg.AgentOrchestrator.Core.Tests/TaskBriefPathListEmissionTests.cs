@@ -56,6 +56,27 @@ public sealed class TaskBriefPathListEmissionTests
     }
 
     [Xunit.Fact]
+    public void PinnedScopeIncludesWhitespaceOnlyGitPathInPreview()
+    {
+        const string path = " ";
+        var scope = new ReviewerChangedFileScope("base", "integration", "candidate",
+            [new ReviewerScopedChange(path, null, 'A', true)]);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review scope", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Preserve literal Git path", [task]);
+        var source = kernel.BuildTaskBriefSource(goal.Id, task.Id,
+            reviewerScopeChangedFiles: scope.ChangedFiles, reviewerScopeMergeBase: scope.MergeBase,
+            reviewerScopeTotalChangedFileCount: scope.TotalChangedFileCount, pinnedReviewerScope: scope);
+
+        var segment = Assert.Single(source.Segments, s => s.ReviewerChangedFiles is not null);
+        var changed = segment.ReviewerChangedFiles!;
+        Assert.Equal(path, Assert.Single(changed.Paths));
+        Assert.Equal(1, changed.Total);
+        Assert.Equal("Changed files: 1; showing 1.", segment.Lines[changed.CountLineIndex!.Value]);
+        Assert.Equal(new[] { $"- {path}" }, segment.Lines.Skip(changed.FirstListLineIndex).Take(changed.ListLineCount));
+    }
+
+    [Xunit.Fact]
     public void ConvergenceCarriesEveryPathWithoutAPreviewBound()
     {
         var kernel = new AgentOrchestratorKernel();
