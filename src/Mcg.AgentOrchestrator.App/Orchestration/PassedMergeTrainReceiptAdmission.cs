@@ -23,7 +23,8 @@ internal static class PassedMergeTrainReceiptAdmission
         Func<MergeTrainReceipt, string, AcceptanceRevalidationPlan>? PlanRevalidation = null,
         Action<MergeTrainReceipt, AcceptanceRevalidationReceipt?>? RecordRevalidation = null,
         Func<string, IReadOnlyList<MergeTrainEjection>>? ReadAttemptEjections = null,
-        Action<GoalId, string>? RecordDecision = null);
+        Action<GoalId, string>? RecordDecision = null,
+        Func<Goal, ConductorAutonomyPolicy, ConductorAdvanceResult?>? TryHoldRefusedCarry = null);
 
     internal static (Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates) Apply(
         ConductorDriver driver,
@@ -51,7 +52,8 @@ internal static class PassedMergeTrainReceiptAdmission
                 attemptId => MergeTrainAcceptanceStore.OpenReadOnly(Path.Combine(
                     OrchestratorWorkspace.ForDirectory(driver.ExecutionDirectory).OrchestratorDirectory,
                     "merge-train-acceptance.db")).ReadAttemptEjections(attemptId),
-                (goalId, reason) => kernel.RecordGoalPolicyDecision(goalId, reason)),
+                (goalId, reason) => kernel.RecordGoalPolicyDecision(goalId, reason),
+                (goal, autonomy) => driver.TryHoldRepeatSoloAcceptance(goal, autonomy, bindingOnly: true)),
             policy, eligible, candidates, scopedGoals, results, tick, changedGoalLines, holds,
             reportedStaleReceiptIds, emitProgress, recordProgress, heldResult);
 
@@ -90,6 +92,13 @@ internal static class PassedMergeTrainReceiptAdmission
         foreach (var (selection, receipt) in operations.Find(
                      candidates, ineligibleGoalIds, ReportStale, (receipt, observation) =>
                      {
+                         // Leave this receipt unobserved so EndPass drops any earlier hold on its peers.
+                         if (observation.NotReadyGoalIds.Any(member =>
+                                 PassedAcceptanceReceiptReplay.HasRefusedCarryHold(member, results)))
+                         {
+                             return;
+                         }
+
                          var landingHeldRequestIds = new Dictionary<GoalId, string>();
                          foreach (var member in observation.NotReadyGoalIds)
                          {
@@ -158,14 +167,8 @@ internal static class PassedMergeTrainReceiptAdmission
                 holds.PendingLandings.Observe(pending);
             else
                 holds.PendingLandings.Release(receipt.ReceiptId);
-            foreach (var member in run.MemberResults)
-            {
-                results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
-            }
-            recordProgress(
-                $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', selection.Members.Select(member => member.GoalId.Value[..8]))} " +
-                $"ejected={string.Join(',', run.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {run.Detail}",
-                changedGoalLines);
+            RecordMergeTrainResult(selection, eligible, policy, run, operations.TryHoldRefusedCarry,
+                results, tick, changedGoalLines, recordProgress);
             if (run.Detail.StartsWith("outcome=passed", StringComparison.Ordinal))
             {
                 ReportOmissions(operations, selection, receipt, tick, changedGoalLines, recordProgress);
@@ -211,8 +214,38 @@ internal static class PassedMergeTrainReceiptAdmission
                 $"ADMISSION tick={tick} result=held reason=PendingLanding train={decision.Receipt.Identity.Value} " +
                 $"receipt={decision.Receipt.ReceiptId} goal={goal.Id.Value[..8]}", changedGoalLines);
         }
-        return (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
+        return ExcludeResults(eligible, candidates, results);
+    }
+
+    internal static (Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates) ExcludeResults(
+        Goal[] eligible, ConductorSpeculativeAcceptanceCandidate[] candidates,
+        IReadOnlyDictionary<string, ParallelLandingOutcome> results) =>
+        (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
             candidates.Where(candidate => !results.ContainsKey(candidate.GoalId.Value)).ToArray());
+
+    internal static void RecordMergeTrainResult(
+        ConductorMergeTrainSelection selection, IReadOnlyList<Goal> eligible, ConductorAutonomyPolicy policy,
+        ConductorMergeTrainRunResult run, Func<Goal, ConductorAutonomyPolicy, ConductorAdvanceResult?>? tryHold,
+        Dictionary<string, ParallelLandingOutcome> results, int tick, List<string> changedGoalLines,
+        Action<string, List<string>> recordProgress)
+    {
+        foreach (var member in run.MemberResults)
+            results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
+        recordProgress(
+            $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', selection.Members.Select(member => member.GoalId.Value[..8]))} " +
+            $"ejected={string.Join(',', run.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {run.Detail}",
+            changedGoalLines);
+
+        if (tryHold is null) return;
+        // Landing a passed receipt can discover a carry refusal after the initial admission check.
+        // Revalidate members returned to admission before another receipt or gate can use them.
+        foreach (var member in selection.Members)
+        {
+            if (results.ContainsKey(member.GoalId.Value)) continue;
+            var goal = eligible.FirstOrDefault(candidate => candidate.Id == member.GoalId);
+            if (goal is not null && tryHold(goal, policy) is { } hold)
+                PassedAcceptanceReceiptReplay.RecordRepeatGateHold(hold, results, tick, changedGoalLines, recordProgress);
+        }
     }
 
     private static void ReportOmissions(Operations operations, ConductorMergeTrainSelection selection,

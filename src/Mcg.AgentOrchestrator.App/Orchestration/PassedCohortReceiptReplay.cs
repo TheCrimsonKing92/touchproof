@@ -86,9 +86,14 @@ internal static class PassedCohortReceiptReplay
             }
 
             var run = driver.RunAcceptanceCohort(selection, eligible, policy, runGateInBackground: true);
-            foreach (var member in run.MemberResults)
+            foreach (var member in RevalidateCriterionEvidenceHolds(driver, policy, eligible, run))
             {
                 var result = member.Value;
+                if (PassedAcceptanceReceiptReplay.IsRefusedCarryHold(result))
+                {
+                    PassedAcceptanceReceiptReplay.RecordRepeatGateHold(result, results, tick, recordProgress);
+                    continue;
+                }
                 if (run.Detail.StartsWith("outcome=passed", StringComparison.Ordinal))
                 {
                     var goal = eligible.Single(goal => goal.Id.Value == member.Key);
@@ -132,5 +137,26 @@ internal static class PassedCohortReceiptReplay
         }
         return (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
             candidates.Where(candidate => !results.ContainsKey(candidate.GoalId.Value)).ToArray());
+    }
+
+    private static IReadOnlyDictionary<string, ConductorAdvanceResult> RevalidateCriterionEvidenceHolds(
+        ConductorDriver driver, ConductorAutonomyPolicy policy, IReadOnlyList<Goal> eligible,
+        ConductorAcceptanceCohortRunResult run)
+    {
+        if (run.CriterionEvidenceBlockedGoalIds is not { } blockedGoalIds) return run.MemberResults;
+
+        var memberHolds = new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal);
+        var hasRefusedCarry = false;
+        foreach (var goalId in blockedGoalIds)
+        {
+            var goal = eligible.Single(goal => goal.Id == goalId);
+            var bindingHold = driver.TryHoldRepeatSoloAcceptance(goal, policy, bindingOnly: true);
+            hasRefusedCarry |= bindingHold is not null;
+            memberHolds.Add(goalId.Value, bindingHold ?? run.MemberResults[goalId.Value]);
+        }
+
+        // A live binding refusal belongs to its member. Peers whose evidence cleared
+        // can return to ordinary admission while the receipt awaits repair.
+        return hasRefusedCarry ? memberHolds : run.MemberResults;
     }
 }

@@ -202,9 +202,9 @@ public sealed class CliCriterionEvidenceNumberTests
         kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
             "operator", findingStableId: "original-finding", expectedCandidateSha: "old-candidate");
 
-        var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(goal, Candidate, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, null);
+        var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(goal, Candidate, "main-sha",
+            "passed-branch", "passed-main", AcceptanceCriterionEvidence.StaleFullGateBindings(goal, Candidate), null);
 
-        Assert.NotNull(hold);
         Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value} --criterion 1 --version 1 acceptance acceptance:full-gate original-finding {Candidate}", hold.Reason, StringComparison.Ordinal);
     }
 
@@ -322,10 +322,11 @@ public sealed class CliCriterionEvidenceNumberTests
             "operator", expectedCandidateSha: "old-candidate");
 
         var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
-            goal, Candidate, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, null);
+            goal, Candidate, "main-sha", "passed-branch", "passed-main",
+            AcceptanceCriterionEvidence.StaleFullGateBindings(goal, Candidate), null);
 
-        Assert.NotNull(hold);
-        Assert.Contains(" Also bound to other candidates: 'criterion-v1-1' to old-candidate.", hold.Reason, StringComparison.Ordinal);
+        Assert.Contains("criterion-v1-0` (v1) to old-candidate", hold.Reason, StringComparison.Ordinal);
+        Assert.Contains("criterion-v1-1` (v1) to old-candidate", hold.Reason, StringComparison.Ordinal);
         Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value} --criterion 1 --version 1 acceptance acceptance:full-gate criterion-v1-0 {Candidate}", hold.Reason, StringComparison.Ordinal);
         Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value} --criterion 2 --version 1 acceptance acceptance:full-gate criterion-v1-1 {Candidate}", hold.Reason, StringComparison.Ordinal);
     }

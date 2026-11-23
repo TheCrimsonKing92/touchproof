@@ -2476,12 +2476,15 @@ public sealed class MtpTestRunnerScriptTests
         public string ReadyPath { get; }
         public string ReleasePath { get; }
 
-        public static ScriptSandbox Create(string behavior, string rootNamePrefix = "sandbox")
+        public static ScriptSandbox Create(string behavior, string rootNamePrefix = "sandbox", string? checkoutParent = null)
         {
             var suffix = Guid.NewGuid().ToString("n")[..8];
             var repositoryRoot = RepositoryRoot();
-            var root = Path.Combine(repositoryRoot, $".mtp-{rootNamePrefix}-{suffix}");
-            var localApplicationDataRoot = Path.Combine(repositoryRoot, $".mtp-local-{suffix}");
+            var root = Path.Combine(checkoutParent ?? repositoryRoot, $".mtp-{rootNamePrefix}-{suffix}");
+            // Scheduled checkouts can be deep. Keep the nested closure and TRX paths under a short,
+            // private profile root so they still fit the runner's Low-integrity results layout.
+            var localApplicationDataRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp", $".mtp-local-{suffix}");
             var resultsRoot = Path.Combine(localApplicationDataRoot, "Temp", "Low", "mcg-tests");
             var scripts = Path.Combine(root, "scripts");
             var config = Path.Combine(root, "config");
@@ -2493,7 +2496,7 @@ public sealed class MtpTestRunnerScriptTests
 
             foreach (var fileName in new[] { "Invoke-InfrastructureTestPartition.ps1", "Invoke-TestSummary.ps1", "MtpTestRunner.psm1", "WorkerBuildReceipt.psm1" })
             {
-                File.Copy(Path.Combine(RepositoryRoot(), "scripts", fileName), Path.Combine(scripts, fileName));
+                File.Copy(Path.Combine(repositoryRoot, "scripts", fileName), Path.Combine(scripts, fileName));
             }
             File.WriteAllText(Path.Combine(projectDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");

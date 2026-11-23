@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class MtpTestRunnerScriptTestsSandboxCleanup
 {
     [Fact]
-    public void DisposeRemovesBothSandboxRootsFromTheRepositoryRoot()
+    public void DisposeRemovesCheckoutAndLocalApplicationDataRoots()
     {
         using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
         var root = sandbox.Root;

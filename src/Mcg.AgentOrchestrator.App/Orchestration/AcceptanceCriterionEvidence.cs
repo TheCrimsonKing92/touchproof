@@ -86,9 +86,27 @@ internal static partial class AcceptanceCriterionEvidence
         return true;
     }
 
-    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null, string? currentHeadSha = null)
+    internal static ConductorAdvanceOutcome.Held? RecordAndCreateHold(
+        Goal goal, AcceptanceVerificationSummary acceptance, AgentOrchestratorKernel? kernel, string integrationBranch,
+        string? executionDirectory, Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> resolveHeads)
+    {
+        var currentHead = resolveHeads(goal).BranchHeadSha;
+        return RecordAndCreateHold(goal, acceptance.BranchHeadSha ?? currentHead, kernel, integrationBranch, executionDirectory,
+            acceptance.BranchHeadSha is null ? null : currentHead, acceptance.MainHeadSha, acceptance.AttemptId);
+    }
+
+    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(
+        Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch,
+        string? executionDirectory = null, string? currentHeadSha = null,
+        string? passedMainSha = null, string? attemptId = null)
     {
         var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, integrationBranch, executionDirectory, currentHeadSha);
+        if (kernel is not null && diagnostic is not null && candidateSha is not null &&
+            StaleFullGateBindings(goal, candidateSha) is { Length: > 0 } stale)
+        {
+            GoalOperationJournal.RecordRefusedCarryHold(executionDirectory, goal, candidateSha, passedMainSha, stale,
+                FormatOperatorRebind(goal, candidateSha, stale, diagnostic), attemptId);
+        }
         return diagnostic is null ? null : new ConductorAdvanceOutcome.Held(
             GoalLifecycleState.Verified, diagnostic, StableIdentity: HoldIdentity(goal, candidateSha));
     }
@@ -154,7 +172,7 @@ internal static partial class AcceptanceCriterionEvidence
         Func<GoalId, string?> resolveCandidateSha,
         AgentOrchestratorKernel? kernel,
         string evidenceSource,
-        string integrationBranch, string? executionDirectory)
+        string integrationBranch, string? executionDirectory, Action<GoalId>? onOutstanding = null)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(resolveCandidateSha);
@@ -169,6 +187,7 @@ internal static partial class AcceptanceCriterionEvidence
                 integrationBranch, executionDirectory);
             if (diagnostic is not null)
             {
+                onOutstanding?.Invoke(goal.Id);
                 diagnostics.Add($"goal {goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}: {diagnostic}");
             }
         }
@@ -193,7 +212,8 @@ internal static partial class AcceptanceCriterionEvidence
             goal, normalizedCandidate, kernel, integrationBranch, executionDirectory);
         if (rebindDiagnostic is not null) return rebindDiagnostic;
 
-        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, integrationBranch, executionDirectory);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource,
+            integrationBranch, executionDirectory, recordLandingRefusal: true);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetLandingPrerequisiteObligations(normalizedCandidate)
             .Where(IsBoundOrNonAcceptanceObligation)
@@ -242,7 +262,8 @@ internal static partial class AcceptanceCriterionEvidence
         string? candidateSha,
         AgentOrchestratorKernel? kernel,
         string? evidenceSource,
-        string integrationBranch, string? executionDirectory, string? currentHeadSha = null)
+        string integrationBranch, string? executionDirectory, string? currentHeadSha = null,
+        bool recordLandingRefusal = false)
     {
         kernel?.RecordCarriedAcceptanceFindingGateOutcome(goal.Id, candidateSha, passed: true,
             source: evidenceSource ?? "normal deterministic full acceptance");
@@ -264,9 +285,14 @@ internal static partial class AcceptanceCriterionEvidence
         foreach (var obligation in matching)
         {
             if (!string.Equals(obligation.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))
-                return FormatStaleBindingsDiagnostic(candidateSha, obligation,
-                    matching.Where(item => !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)),
-                    carryRefusal);
+            {
+                var stale = matching.Where(item =>
+                    !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var diagnostic = FormatStaleBindingsDiagnostic(candidateSha, obligation, stale, carryRefusal);
+                if (recordLandingRefusal)
+                    RecordLandingCarryRefusal(executionDirectory, goal, candidateSha, stale, diagnostic);
+                return diagnostic;
+            }
             // This receipt is generated by the conductor only after the normal
             // deterministic acceptance verifier returned success. External
             // operator intents cannot submit Acceptance-owned receipts.
