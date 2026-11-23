@@ -302,6 +302,7 @@ internal sealed class SoloBaselineRepairStore
         while (rows.Read())
             claims.Add(rows.GetString(0), rows.IsDBNull(1) ? null : JsonSerializer.Deserialize<SoloRepairCheckReceipt>(rows.GetString(1)));
         if (claims.ContainsKey(current.Key)) return current;
+        (string Key, bool AllowCandidatePass)? unbound = null;
         foreach (var legacy in requests.Skip(1))
         {
             if (!claims.TryGetValue(legacy.Key, out var completed)) continue;
@@ -309,31 +310,47 @@ internal sealed class SoloBaselineRepairStore
             var root = ResultDirectory(legacy.Key);
             var path = Path.Combine(root, "focused-result.json");
             var identity = FocusedProofIdentity(legacy.Key, finding, candidate, main, true, legacy.AllowCandidatePass);
-            if (recorded?.Proof is { } proof)
+            if (recorded?.Proof is { } proof && proof.Path == path &&
+                MatchesRecordedAttributionScope(path, identity, proof.Sha256) is { } matches)
             {
-                if (proof.Path == path && MatchesAttributionProof(path, root, identity, proof.Sha256)) return legacy;
+                if (matches) return legacy;
+                continue;
             }
-            else if (recorded is null)
+            if (recorded is null && (File.Exists(path) || File.Exists(path + ".tmp")))
             {
-                if (File.Exists(path) || File.Exists(path + ".tmp"))
-                {
-                    var retained = File.Exists(path) ? path : path + ".tmp";
-                    if (MatchesAttributionProof(retained, root, identity, null)) return legacy;
-                }
-                // A bare claim can be resumed when the retained findings identify a single selection.
-                else if (ReadFindings(goal).All(other => other.Check != finding.Check || other.Identity != finding.Identity ||
-                    other.Request is null || other.HasSameSelection(finding)))
-                    return legacy;
+                var retained = File.Exists(path) ? path : path + ".tmp";
+                if (MatchesAttributionProof(retained, root, identity)) return legacy;
+                continue;
             }
+            unbound ??= legacy;
         }
+        // Older keys omit selection scope. A charge without a readable binding can be reused
+        // when the retained findings identify a single selection for that check and test.
+        if (unbound is { } charge && ReadFindings(goal).All(other =>
+            other.Check != finding.Check || other.Identity != finding.Identity ||
+            other.Request is null || other.HasSameSelection(finding)))
+            return charge;
         return current;
     }
 
-    private static bool MatchesAttributionProof(string path, string root, string identity, string? digest)
+    private static bool? MatchesRecordedAttributionScope(string path, string identity, string digest)
     {
         try
         {
-            ReadVerifierResult(path, root, identity, digest);
+            // The authenticated envelope binds the charge even if its execution artifacts are gone.
+            return ReadVerifierEnvelope(path, digest).Result.Identity == identity;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static bool MatchesAttributionProof(string path, string root, string identity)
+    {
+        try
+        {
+            ReadVerifierResult(path, root, identity);
             return true;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
@@ -403,11 +420,8 @@ internal sealed class SoloBaselineRepairStore
 
     internal static SoloRepairCheckReceipt ReadVerifierResult(string path, string root, string identity, string? expectedDigest = null)
     {
-        var bytes = File.ReadAllBytes(path);
-        var digest = Digest(bytes);
-        var result = JsonSerializer.Deserialize<SoloRepairVerifierResult>(bytes);
-        if (result?.Identity != identity || result.Receipt?.Artifacts is null ||
-            (expectedDigest is not null && expectedDigest != digest))
+        var (result, digest) = ReadVerifierEnvelope(path, expectedDigest);
+        if (result.Identity != identity)
             throw new InvalidDataException("The focused verifier result does not match its repair request.");
         var prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         foreach (var artifact in result.Receipt.Artifacts.Concat(result.Receipt.CandidateArtifacts ?? []))
@@ -419,6 +433,17 @@ internal sealed class SoloBaselineRepairStore
                 throw new InvalidDataException("solo-artifact-digest-mismatch");
         }
         return result.Receipt with { Proof = new(path, digest) };
+    }
+
+    private static (SoloRepairVerifierResult Result, string Digest) ReadVerifierEnvelope(string path, string? expectedDigest)
+    {
+        var bytes = File.ReadAllBytes(path);
+        var digest = Digest(bytes);
+        var result = JsonSerializer.Deserialize<SoloRepairVerifierResult>(bytes);
+        if (string.IsNullOrEmpty(result?.Identity) || result.Receipt?.Artifacts is null ||
+            (expectedDigest is not null && expectedDigest != digest))
+            throw new InvalidDataException("The focused verifier result does not match its repair request.");
+        return (result, digest);
     }
 
     internal static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

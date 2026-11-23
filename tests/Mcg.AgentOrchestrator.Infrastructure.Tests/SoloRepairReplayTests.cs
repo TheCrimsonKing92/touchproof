@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -293,6 +294,71 @@ public sealed class SoloRepairReplayTests
         Assert.Equal(!previousClaim || distinctSelection, currentRequest.AllowCandidatePass);
         var unboundLegacyClaim = previousClaim && distinctSelection ? 1 : 0;
         Assert.Equal(expectedRequests.Length + unboundLegacyClaim + 1, Count(path, "solo_repair_check")); // Includes the escalation.
+        Assert.Single(escalations);
+    }
+
+    [Theory]
+    [InlineData("no-proof", false, false)]
+    [InlineData("missing-result", true, false)]
+    [InlineData("missing-trx", false, false)]
+    [InlineData("missing-trx", true, true)]
+    public async Task CompletedLegacyAttribution_PreservesTheChargeWithUnavailableProof(
+        string unavailable, bool allowCandidatePass, bool distinctSelection)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true, singleRow: true);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with { Artifacts = [] }).ToArray() });
+        fixture.Record(fixture.Summary);
+        var finding = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        var goal = fixture.Goal.Id.Value;
+        var sibling = finding with { Project = "Other.csproj", Request = "Other: FullyQualifiedName~" + finding.Identity };
+        store.Retain(goal, distinctSelection ? [finding, sibling] : [finding]);
+        var legacy = SoloBaselineRepairStore.AttributionRequests(goal, finding, finding.Candidate, finding.Main)
+            .Skip(1).Single(request => request.AllowCandidatePass == allowCandidatePass);
+        var identity = SoloBaselineRepairStore.FocusedProofIdentity(
+            legacy.Key, finding, finding.Candidate, finding.Main, true, legacy.AllowCandidatePass);
+        var recorded = new SoloRepairCheckReceipt("unresolved", "The verifier produced no result.", []);
+        if (unavailable != "no-proof")
+        {
+            var root = Directory.CreateDirectory(store.ResultDirectory(legacy.Key)).FullName;
+            var resultPath = Path.Combine(root, "focused-result.json");
+            var trx = Path.Combine(root, "baseline.trx");
+            WriteTrx(trx, false, finding.Identity);
+            var artifact = new SoloAcceptanceArtifact(trx, SoloBaselineRepairStore.Digest(File.ReadAllBytes(trx)));
+            recorded = new("inherited", finding.BaselineCheck!, [artifact], [artifact]);
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(new SoloRepairVerifierResult(identity, recorded));
+            File.WriteAllBytes(resultPath, bytes);
+            recorded = recorded with { Proof = new(resultPath, SoloBaselineRepairStore.Digest(bytes)) };
+            File.Delete(unavailable == "missing-result" ? resultPath : trx);
+        }
+        Assert.True(store.TryClaimCheck(legacy.Key));
+        store.CompleteCheck(legacy.Key, recorded);
+
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var restarted = await repository.LoadAsync();
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
+        {
+            UnresolvedAttributionRequests = [finding.Request!, sibling.Request!]
+        };
+        var escalations = new List<string>();
+        var coordinator = Coordinator(fixture, workspace, restarted, escalations, verifier);
+        for (var tick = 0; tick < 2; tick++)
+        {
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(Advance(coordinator, restarted.GetGoal(fixture.Goal.Id))?.Outcome);
+            Assert.Equal(SoloHoldReasons.RepairEvidenceRequired, held.Decision?.DiscriminatingEvidence);
+        }
+
+        string[] expectedRuns = distinctSelection ? [sibling.Request!] : [];
+        Assert.Equal(expectedRuns, verifier.FocusedRuns.Select(run => run.Request));
+        Assert.Equal(legacy, store.ResolveAttributionRequest(goal, finding, finding.Candidate, finding.Main));
+        Assert.Null(store.ReadCheck(SoloBaselineRepairStore.AttributionKey(goal, finding, finding.Candidate, finding.Main)));
+        Assert.Equal("unresolved", store.ReadVerifiedCheck(legacy.Key, identity)?.Outcome);
+        Assert.Equal(0, Count(path, "solo_repair_dependency"));
+        Assert.Equal(2 + expectedRuns.Length, Count(path, "solo_repair_check")); // Includes the escalation.
         Assert.Single(escalations);
     }
 
