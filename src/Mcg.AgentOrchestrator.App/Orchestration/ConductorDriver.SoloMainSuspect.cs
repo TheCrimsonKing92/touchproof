@@ -25,6 +25,10 @@ internal sealed partial class ConductorDriver
             const string prefix = "same focused identity failed at merge-base ";
             var identities = excluded.Select(failure => failure.Identity)
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            if ((acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt) &&
+                !SoloAcceptanceFailureHandler.HasVerifiedSoloCorroboration(goal, acceptance, workspace.ExecutionDirectory,
+                    _integrationBranch, ReadSoloAcceptanceContext, ReadCurrentCohortAttributionRevisions))
+                return;
             var attributions = acceptance.RequiredUnmetCriteria
                 .SelectMany(check => check.FailingTestAttributions ?? []).ToArray();
             foreach (var identity in identities)

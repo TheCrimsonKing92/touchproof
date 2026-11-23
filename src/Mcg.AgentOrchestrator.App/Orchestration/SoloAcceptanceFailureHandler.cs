@@ -17,9 +17,11 @@ internal sealed class SoloAcceptanceFailureHandler(
     Func<Goal, AttributedFailureRouteDecision, AttributedFailureRouteDecision>? diagnose = null,
     Func<Goal, string, ConductorAutonomyPolicy, AcceptanceVerificationSummary, ConductorAdvanceResult?>? advanceRepair = null)
 {
-    internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
+    internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy,
+        AcceptanceVerificationSummary acceptance, Action? afterRecord = null)
     {
         Record(goal, acceptance);
+        afterRecord?.Invoke();
         if (advanceRepair?.Invoke(goal, prefix, policy, acceptance) is { } repair) return repair;
         var current = readContext(goal);
         return SoloFreshGateAdmission.TryConsume(kernelReader(), goal, prefix, policy,
@@ -117,7 +119,11 @@ internal sealed class SoloAcceptanceFailureHandler(
     internal static SoloAcceptanceConsumptionContext? ReadContext(Goal goal, string? executionDirectory, GateReadyCandidateRevisionPair? revisions)
     {
         var path = executionDirectory is null ? null : GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-        if (path is null || revisions is null) return null;
+        return path is null || revisions is null ? null : ReadCheckoutContext(path, revisions);
+    }
+
+    private static SoloAcceptanceConsumptionContext? ReadCheckoutContext(string path, GateReadyCandidateRevisionPair revisions)
+    {
         string? Read(params string[] args)
         {
             var result = GitCli.Run(path, args);
@@ -126,6 +132,35 @@ internal sealed class SoloAcceptanceFailureHandler(
         var tree = Read("rev-parse", revisions.BranchRevision + "^{tree}");
         var baseline = Read("merge-base", revisions.BranchRevision, revisions.MainRevision);
         return tree is null || baseline is null ? null : new(revisions.BranchRevision, revisions.MainRevision, tree, baseline);
+    }
+
+    internal static bool HasVerifiedSoloCorroboration(Goal goal, AcceptanceVerificationSummary acceptance,
+        string executionDirectory, string integrationBranch, Func<Goal, SoloAcceptanceConsumptionContext?> readContext,
+        Func<Goal, GateReadyCandidateRevisionPair?> readCurrentRevisions)
+    {
+        if (acceptance.SoloFailureReceipt is not { } envelope || goal.LatestAcceptanceFailure?.SoloFailureReceipt != envelope)
+            return false;
+
+        var current = readContext(goal);
+        // A solo gate can execute in the repository checkout without a dedicated goal worktree.
+        var useRepositoryCheckout = current is null && GoalWorktrees.TryResolve(executionDirectory, goal.Id) is null;
+        if (useRepositoryCheckout)
+            current = ReadCheckoutContext(executionDirectory,
+                ConductorGitRevisionReader.ReadRequiredPair(executionDirectory, integrationBranch));
+        if (current is null || current.CandidateSha != acceptance.BranchHeadSha || current.MainSha != acceptance.MainHeadSha ||
+            SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, current, acceptance) is not { } partition ||
+            partition.Findings.Any(finding => !finding.Inherited || finding.Reason is not null))
+            return false;
+
+        var executed = partition.Findings.Select(finding => (finding.Check, finding.Identity)).ToHashSet();
+        if (!executed.SetEquals(acceptance.RequiredUnmetCriteria.SelectMany(check =>
+                (check.FailingTestIdentities ?? []).Select(identity => (check.Name, identity)))))
+            return false;
+
+        var latest = useRepositoryCheckout
+            ? ConductorGitRevisionReader.ReadRequiredPair(executionDirectory, integrationBranch)
+            : readCurrentRevisions(goal);
+        return latest == new GateReadyCandidateRevisionPair(current.CandidateSha, current.MainSha);
     }
 
     internal ConductorAdvanceResult Hold(Goal goal, string prefix, ConductorAutonomyPolicy policy, string reason)

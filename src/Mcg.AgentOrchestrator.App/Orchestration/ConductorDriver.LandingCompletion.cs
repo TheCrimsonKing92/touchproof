@@ -122,10 +122,11 @@ internal sealed partial class ConductorDriver
 
             // A solo test finding must use the evidence route, never the generic
             // criterion feedback retry (which cannot establish attribution).
-            if (acceptance.SoloFailureReceipt is not null && retryDisposition.ActionableCriteria.Count == 0)
-                TryRecordSoloMainSuspect(goal, goalPrefix, acceptance, retryDisposition.ExcludedFailures,
-                    acceptance.BranchHeadSha, acceptance.MainHeadSha, apparatusRedReading?.ChangedPaths, preferSoloRepair);
-            return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance);
+            return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance,
+                afterRecord: acceptance.SoloFailureReceipt is not null && retryDisposition.ActionableCriteria.Count == 0
+                    ? () => TryRecordSoloMainSuspect(goal, goalPrefix, acceptance, retryDisposition.ExcludedFailures,
+                        acceptance.BranchHeadSha, acceptance.MainHeadSha, apparatusRedReading?.ChangedPaths, preferSoloRepair)
+                    : null);
         }
 
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)

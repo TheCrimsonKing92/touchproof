@@ -97,6 +97,65 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
     }
 
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(null)]
+    [InlineData("contract")]
+    [InlineData("baseline-trx")]
+    public async Task DistinctCandidateAfterRestart_CorroboratesOnlyVerifiedSoloExecution(string? defect)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var first = fixture.Goal;
+        var second = CreateCompletedGoal(fixture.Kernel, "Second solo inherited goal", fixture.Repo);
+        var firstRevision = CreateWorktreeCandidate(fixture.Repo, first.Id, "README.md", "first candidate");
+        await fixture.Produce(baselineFails: true, singleRow: true, attemptId: "first-solo-attempt",
+            candidateWorktree: GoalWorktrees.TryResolve(fixture.Repo, first.Id));
+        var firstFailure = fixture.Summary;
+        var firstEnvelope = Assert.IsType<SoloAcceptanceFailureReceipt>(firstFailure.SoloFailureReceipt);
+        Assert.Equal(firstRevision, firstEnvelope.CandidateSha);
+        if (defect == "contract")
+            firstFailure = firstFailure with { SoloFailureReceipt = firstEnvelope with { ContractVersion = 0 } };
+        if (defect == "baseline-trx")
+        {
+            var evidence = Assert.IsType<SoloAcceptanceFailureEvidence>(
+                JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(File.ReadAllBytes(firstEnvelope.Evidence.Path)));
+            var trx = Assert.Single(Assert.Single(evidence.BaselineChecks).Artifacts);
+            File.AppendAllText(trx.Path, " ");
+        }
+
+        await fixture.Produce(baselineFails: true, singleRow: true, attemptId: "second-solo-attempt", goal: second);
+        var secondFailure = fixture.Summary;
+        var secondEnvelope = Assert.IsType<SoloAcceptanceFailureReceipt>(secondFailure.SoloFailureReceipt);
+        Assert.NotEqual(firstRevision, secondEnvelope.CandidateSha);
+        Assert.Equal(firstEnvelope.MainSha, secondEnvelope.MainSha);
+        Assert.Equal(firstEnvelope.MainSha, secondEnvelope.BaselineSha);
+        var candidates = new[]
+        {
+            ConductorParallelAcceptanceCandidate.Create(first, 0, ["README.md"], firstRevision, firstEnvelope.MainSha),
+            ConductorParallelAcceptanceCandidate.Create(second, 1, ["README.md"], secondEnvelope.CandidateSha, secondEnvelope.MainSha)
+        };
+        using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [first, second], candidates, ["README.md"], firstEnvelope.MainSha);
+        await new PortfolioStore(scenario.Workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        scenario.Complete(0, firstFailure, expectLegacyHold: false);
+        Assert.Empty(await scenario.Events.ReadAllAsync());
+        scenario.RestartDriver();
+        scenario.Complete(1, secondFailure, expectLegacyHold: false);
+
+        var receipts = scenario.ReadReceipts();
+        var events = await scenario.Events.ReadAllAsync();
+        if (defect is null)
+        {
+            Assert.Equal(new[] { first.Id, second.Id }, receipts.Select(receipt => receipt.GoalId));
+            Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First }, Assert.Single(events).Payload.SharedFailingTests);
+            Assert.Equal(AcceptanceEngineHealth.Unhealthy, (await scenario.Circuit.ReadAsync()).Health);
+        }
+        else
+        {
+            Assert.Equal(second.Id, Assert.Single(receipts).GoalId);
+            Assert.Empty(events);
+            Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
+        }
+    }
+
     [Fact]
     public async Task TwoSoloGoals_SharedUntouchedFailure_TripCircuit()
     {
