@@ -26,6 +26,8 @@ public sealed class WorkerGitContextInProcessRevisionTests
         Assert.Equal(expectedHead, target.HeadCommit);
         Assert.Equal(expectedBranch, target.BranchName);
         var scope = new WorkerGitContext().ReadReviewerChangedFileScope(fixture.Worktree, integrationBranch);
+        Assert.Equal(expectedMain, scope.IntegrationCommit);
+        Assert.Equal(expectedHead, scope.CandidateCommit);
         Assert.Equal(expectedBase, scope.MergeBase);
         Assert.Equal(expectedPaths, scope.ChangedFiles);
         launches.AssertRevParseCount(0, expectedBranch: 0);
@@ -48,8 +50,8 @@ public sealed class WorkerGitContextInProcessRevisionTests
         Assert.Equal(expected, WorkerGitContext.ReadCurrentMainIdentityForRetry(fixture.Worktree, "trunk", Miss));
         Assert.Equal(expected, WorkerProfileDispatcher.TryReadCurrentTargetContext(fixture.Worktree, Miss)?.HeadCommit);
         Assert.Equal(expected, new WorkerGitContext().ReadReviewerChangedFileScope(fixture.Worktree, "trunk", Miss).MergeBase);
-        launches.AssertRevParseCount(3);
-        Assert.Equal(["trunk", "HEAD", "trunk^{commit}"], seen);
+        launches.AssertRevParseCount(4);
+        Assert.Equal(["trunk", "HEAD", "trunk^{commit}", "HEAD^{commit}"], seen);
     }
 
     [Fact]
