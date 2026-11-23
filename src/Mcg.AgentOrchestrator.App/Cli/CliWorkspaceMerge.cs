@@ -65,10 +65,45 @@ internal static class CliWorkspaceMerge
         ReadRef(context.Workspace.ExecutionDirectory, $"refs/heads/{context.Worktrees.BranchName(goal.Id)}") ==
             receipt.PromotedRevision;
 
-    internal static string FormatResult(GoalWorktreeMergeResult merge) =>
+    private static string FormatResult(GoalWorktreeMergeResult merge) =>
         merge.FastForwarded || merge.FastForwardReceipt is not null
             ? merge.Message
             : $"{merge.Message} command: {merge.SuggestedCommand}";
+
+    internal static bool CompleteWorkspaceMerge(CliExecutionContext context, Goal goal,
+        GoalWorktreeMergeResult? merge, GoalPromotionFact? publication)
+    {
+        Console.WriteLine(merge is null ? "Goal has no workspace branch to merge." : FormatResult(merge));
+        if (merge?.FastForwarded == true)
+        {
+            var mergeChangedFiles = merge.ChangedFiles
+                ?? throw new InvalidOperationException(
+                    "Workspace merge advanced main without an authoritative changed-file receipt.");
+            RunPostLandingCanary(context, goal, mergeChangedFiles, merge.FastForwardReceipt);
+            if (merge.FastForwardReceipt is { } receipt)
+                GoalWorktrees.AcknowledgeCliFastForward(context.Workspace.ExecutionDirectory, goal.Id, receipt);
+        }
+        if (merge is { FastForwarded: false, FastForwardReceipt: not null })
+            Console.WriteLine("Resolve the checkout issue in the repository root, then rerun workspace merge.");
+        return merge?.FastForwarded == true && publication is not null;
+    }
+
+    internal static void RunPostLandingCanary(CliExecutionContext context, Goal goal,
+        IReadOnlyList<string> changedFiles, CliFastForwardReceipt? receipt)
+    {
+        var landingSha = receipt?.PromotedRevision
+            ?? CliCommandHandlers.TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
+        var landing = new ConductorLandingReceipt(goal.Id.Value, changedFiles, landingSha);
+        var disposition = context.PostLandingCanary?.HandleLanding(landing)
+            ?? PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(context.Workspace, landing, Console.WriteLine);
+        if (receipt is not null && disposition == PostLandingCanaryDisposition.Deferred)
+        {
+            var events = new SqliteRunEventStore(context.Workspace.RunEventStorePath, ensureSchema: false);
+            if (events.ReadByEventIdAsync(PostLandingCanaryEventIds.Queued(receipt.PromotedRevision))
+                .GetAwaiter().GetResult() is null)
+                throw new IOException($"Post-landing canary for {receipt.PromotedRevision} was not durably queued. Rerun the landing command.");
+        }
+    }
 
     // Capture publication at the successful CLI merge boundary. A later HEAD or
     // recovery clock cannot establish when the original duty became due.
@@ -167,15 +202,23 @@ internal static class CliWorkspaceMerge
         return retain || File.Exists(path) ? new SoloBaselineRepairStore(path) : null;
     }
 
-    internal static void RetainRepairEvidence(CliExecutionContext context, Goal goal)
+    internal static void RetainRepairEvidence(CliExecutionContext context, Goal goal,
+        AcceptanceVerificationSummary? completion = null)
     {
-        if (goal.LatestAcceptanceFailure?.SoloFailureReceipt is null) return;
         var workspace = context.Workspace;
+        if (goal.LatestAcceptanceFailure?.SoloFailureReceipt is null)
+        {
+            if (completion?.RequiresSoloFailureReceipt == true &&
+                SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null, completion) is { } unresolved)
+                OpenRepairStore(workspace, retain: true)!.Retain(goal.Id.Value, unresolved.Findings);
+            return;
+        }
+
         var root = workspace.ExecutionDirectory;
         GateReadyCandidateRevisionPair ReadCurrent() => new(ReadRef(root, $"refs/heads/{context.Worktrees.BranchName(goal.Id)}"),
             ReadRef(root, $"refs/heads/{workspace.IntegrationBranch}"));
         SoloBaselineRepairCoordinator.RetainSoloRepairPartition(OpenRepairStore(workspace, retain: true)!, goal,
-            () => SoloAcceptanceFailureHandler.ReadContext(goal, root, ReadCurrent()), ReadCurrent);
+            () => SoloAcceptanceFailureHandler.ReadContext(goal, root, ReadCurrent()), ReadCurrent, completion);
     }
 
     internal static void RetainVerificationFailure(
@@ -190,7 +233,13 @@ internal static class CliWorkspaceMerge
             CleanTestBaseline.WithExecutedBaselineAttestation(baseline, failedChecks, goal.Id, verification?.Checks));
         context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead,
             attributions, attestation, verification?.AttemptId, verification?.SoloFailureReceipt);
-        RetainRepairEvidence(context, goal);
+        if (verification is { Passed: false } &&
+            (verification.RequiresSoloFailureReceipt || verification.SoloFailureReceipt is not null))
+        {
+            var completion = AcceptanceVerificationSummary.FromVerification(verification, verification.Checks ?? [],
+                failedChecks, testedWorktreeHead, testedMainHead, verification.TestResultPaths, attributions, attestation);
+            RetainRepairEvidence(context, goal, completion);
+        }
     }
 
     internal static bool ReportRepairHold(CliExecutionContext context, Goal goal, GateReadyCandidateRevisionPair? pair,

@@ -194,6 +194,8 @@ public Action<BatchTickSummary>? ConductorTickObserver { get; init; }
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 
+internal PostLandingCanaryCoordinator? PostLandingCanary { get; init; }
+
 public CollaborationItemRaise? RefinementCollaborationItemRaise { get; } = refinementCollaborationItemRaise;
 
 public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }

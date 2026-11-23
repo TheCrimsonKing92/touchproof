@@ -15,7 +15,11 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         AcceptanceVerificationSummary? completion = null)
     {
         var summary = goal.LatestAcceptanceFailure;
-        if (summary?.SoloFailureReceipt is not { } retained) return null;
+        if (summary is null) return null;
+        if (summary.SoloFailureReceipt is not { } retained)
+            return completion is { RequiresSoloFailureReceipt: true }
+                ? UnresolvedChecks(summary, null, completion, SoloHoldReasons.CaptureUnavailable)
+                : null;
         try
         {
             var (receipt, proof, reason) = ReadProof(goal, current, retainUnresolvedIdentities: true);
@@ -84,7 +88,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         }
     }
 
-    private static SoloRepairPartition UnresolvedChecks(AcceptanceFailureSummary summary, SoloAcceptanceFailureReceipt receipt,
+    private static SoloRepairPartition UnresolvedChecks(AcceptanceFailureSummary summary, SoloAcceptanceFailureReceipt? receipt,
         AcceptanceVerificationSummary? completion, string reason)
     {
         var observed = completion is not null && completion.BranchHeadSha == summary.BranchHeadSha &&
@@ -98,7 +102,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             foreach (var identity in (check?.FailingTestIdentities ?? []).DefaultIfEmpty("").Distinct(StringComparer.Ordinal))
             {
                 var finding = NewUnresolvedFinding(summary.BranchHeadSha ?? "", summary.MainHeadSha ?? "", "",
-                    summary.AttemptId ?? "", receipt.Evidence, name, identity, check?.TestProjectPath, reason);
+                    summary.AttemptId ?? "", receipt?.Evidence, name, identity, check?.TestProjectPath, reason);
                 findings.Add(check is null ? finding : BindRepairSelection(finding, check));
             }
         }
@@ -106,7 +110,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
     }
 
     private static SoloRepairFinding NewUnresolvedFinding(string candidate, string main, string baseline, string attempt,
-        SoloAcceptanceArtifact proof, string check, string identity, string? project, string reason) =>
+        SoloAcceptanceArtifact? proof, string check, string identity, string? project, string reason) =>
         new(candidate, main, baseline, check, identity, project, null, null, false, attempt, proof, [], [], reason);
 
     private static SoloRepairFinding BindRepairSelection(SoloRepairFinding finding, AcceptanceCheckResult check)
@@ -135,13 +139,14 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
     internal static void VerifyRetainedRepairProof(string goal, SoloRepairFinding finding)
     {
-        var proofDirectory = Path.GetDirectoryName(Path.GetFullPath(finding.Proof.Path))!;
-        var proof = JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(ReadArtifact(finding.Proof, proofDirectory));
+        var envelope = finding.Proof ?? throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
+        var proofDirectory = Path.GetDirectoryName(Path.GetFullPath(envelope.Path))!;
+        var proof = JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(ReadArtifact(envelope, proofDirectory));
         var receipt = proof?.Identity;
         if (receipt is not { ContractVersion: 1, CaptureError: null } || receipt.GoalId != goal ||
             receipt.AttemptId != finding.Attempt || receipt.CandidateSha != finding.Candidate ||
             receipt.MainSha != finding.Main || receipt.BaselineSha != finding.Baseline ||
-            receipt.Evidence != (finding.Proof with { Sha256 = "" }) ||
+            receipt.Evidence != (envelope with { Sha256 = "" }) ||
             Path.GetFullPath(receipt.ResultsRoot) != proofDirectory)
             throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
 

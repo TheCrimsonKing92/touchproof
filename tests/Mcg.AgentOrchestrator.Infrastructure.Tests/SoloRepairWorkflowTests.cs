@@ -71,7 +71,7 @@ public sealed class SoloRepairWorkflowTests
                 if (++beforePublication == (pullRequest ? 1 : 2))
                 {
                     if (invalidation == "envelope")
-                        File.Delete(finding.Proof.Path);
+                        File.Delete(Assert.IsType<SoloAcceptanceArtifact>(finding.Proof).Path);
                     else if (invalidation == "trx")
                         File.AppendAllText(Assert.Single(finding.CandidateArtifacts).Path, " ");
                     else
@@ -293,6 +293,163 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CliAcceptance_KeepsExactSelectionWhenCaptureFails(bool baselineThrows)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var checkout = Worktree(fixture, goal);
+        var candidate = RunGit(checkout, "rev-parse", "HEAD");
+        var main = fixture.Git("rev-parse", "main");
+        const string dataCase = "(value: 1)";
+        var verifier = fixture.CreateVerifier(checkout, baselineThrows: baselineThrows, baselineFails: true,
+            singleRow: true, firstCase: dataCase, captureFails: !baselineThrows);
+        Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(
+            CreateCliContext(fixture.Kernel, workspace, goal, verifier)));
+        Assert.True(fixture.CandidateRuns > 0);
+        Assert.True(fixture.BaselineRuns > 0);
+
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var restarted = await repository.LoadAsync();
+        var reloaded = restarted.GetGoal(goal.Id);
+        var failure = Assert.IsType<AcceptanceFailureSummary>(reloaded.LatestAcceptanceFailure);
+        if (baselineThrows)
+            Assert.Null(failure.SoloFailureReceipt);
+        else
+            Assert.NotNull(Assert.IsType<SoloAcceptanceFailureReceipt>(failure.SoloFailureReceipt).CaptureError);
+
+        Assert.True(CliWorkspaceMerge.ReportRepairHold(CreateCliContext(restarted, workspace, reloaded, verifier),
+            reloaded, new(candidate, main), checkout, requireNormalAcceptance: false, out _));
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var unresolved = Assert.Single(new SoloBaselineRepairStore(path).ReadFindings(goal.Id.Value)
+            .Where(finding => finding.Identity.Length > 0));
+        Assert.Equal((candidate, main, failure.AttemptId), (unresolved.Candidate, unresolved.Main, unresolved.Attempt));
+        Assert.Equal(First + dataCase, unresolved.Identity);
+        Assert.Equal(Project, unresolved.Project);
+        Assert.Equal($"{Project}: FullyQualifiedName~{First}", unresolved.Request);
+        Assert.Equal(failure.SoloFailureReceipt?.Evidence, unresolved.Proof);
+        Assert.NotNull(unresolved.Reason);
+        Assert.False(unresolved.Inherited);
+        Assert.Null(unresolved.Feedback);
+        Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CliLanding_ReplaysEffectsForOriginalPromotion(bool fromAcceptance)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var checkout = Worktree(fixture, goal);
+        const string enginePath = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs";
+        var source = Path.Combine(checkout, enginePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "// Acceptance-engine change.");
+        RunGit(checkout, "add", enginePath);
+        RunGit(checkout, "commit", "-m", "Change the acceptance engine");
+        var candidate = RunGit(checkout, "rev-parse", "HEAD");
+        fixture.Kernel.RecordDispatchResultCommit(goal.Id, goal.Tasks.Single().Id, candidate);
+        var main = fixture.Git("rev-parse", "main");
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true };
+        if (fromAcceptance)
+        {
+            var interrupted = CreateCliContext(fixture.Kernel, workspace, goal, verifier, finalize: request =>
+            {
+                var result = request.Merge();
+                Assert.True(result.FastForwarded, result.Message);
+                CliWorkspaceMerge.ApplyAcceptanceResult(fixture.Kernel, request, result);
+                repository.SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
+                throw new IOException("Interrupted after saving goal completion.");
+            });
+            Assert.Equal("Interrupted after saving goal completion.",
+                Assert.Throws<IOException>(() => CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(interrupted)).Message);
+        }
+        else
+        {
+            var advanced = GoalWorktrees.TryAdvanceFastForwardRefs(fixture.Repo, goal.Id, "refs/heads/main",
+                main, candidate, () => null, new SystemClock(), fromAcceptance: false);
+            var receipt = Assert.IsType<CliFastForwardReceipt>(advanced.FastForwardReceipt);
+            Assert.True(GoalWorktrees.SynchronizeCliFastForward(fixture.Repo, goal.Id, receipt).FastForwarded);
+            await repository.SaveAsync(fixture.Kernel);
+        }
+
+        Assert.Empty(CompletionReceipts());
+        var reloaded = await repository.LoadAsync();
+        Assert.Equal(fromAcceptance ? GoalStatus.Completed : GoalStatus.Verified, reloaded.GetGoal(goal.Id).Status);
+        fixture.Git("commit", "--allow-empty", "-m", "Advance main after the promotion");
+        var laterMain = fixture.Git("rev-parse", "main");
+        Assert.NotEqual(candidate, laterMain);
+
+        var events = new PostLandingCanaryEventStore(new SqliteRunEventStore(workspace.RunEventStorePath), workspace.RunEventStorePath);
+        var runner = new LandingCanaryRunner(fromAcceptance
+            ? PostLandingCanaryOutcome.Passed(1, "Fixture canary passed.")
+            : PostLandingCanaryOutcome.Failed(PostLandingCanaryFailureReason.Reject, "Fixture canary rejected.", 1));
+        var writer = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+        var refLock = Path.GetFullPath(fixture.Git("rev-parse", "--git-path", $"refs/mcg/cli-fast-forward/{goal.Id.Value}.lock"), fixture.Repo);
+        File.WriteAllText(refLock, "fixture blocks acknowledgement after effects are delivered");
+        try
+        {
+            var failure = Assert.Throws<InvalidOperationException>(() => Replay(reloaded));
+            Assert.Contains("Cannot acknowledge the CLI fast-forward", failure.Message);
+            Assert.NotNull(GoalWorktrees.ReadCliFastForward(fixture.Repo, goal.Id));
+        }
+        finally
+        {
+            File.Delete(refLock);
+        }
+
+        Replay(await repository.LoadAsync());
+        Assert.Null(GoalWorktrees.ReadCliFastForward(fixture.Repo, goal.Id));
+        Assert.Equal(laterMain, fixture.Git("rev-parse", "main"));
+        var delivery = Assert.Single(runner.Runs);
+        Assert.Equal(candidate, delivery.LandingSha);
+        Assert.Equal(enginePath, Assert.Single(delivery.TriggeringPaths));
+        var retained = await events.ReadForLandingAsync(candidate);
+        Assert.Single(retained.Where(record => record.Kind == PostLandingCanaryEventKind.Queued));
+        var expectedCanary = fromAcceptance ? PostLandingCanaryEventKind.Passed : PostLandingCanaryEventKind.Failed;
+        Assert.Single(retained.Where(record => record.Kind == expectedCanary));
+        Assert.Empty(await events.ReadForLandingAsync(laterMain));
+        if (fromAcceptance)
+        {
+            var completion = Assert.Single(CompletionReceipts());
+            Assert.True(completion.HasCandidate(candidate, main));
+            var lifecycle = File.ReadLines(writer.EventFilePath(goal.Id));
+            Assert.Single(lifecycle.Where(line => line.Contains("\"eventType\":\"AcceptanceResult\"", StringComparison.Ordinal)));
+            Assert.Single(File.ReadLines(workspace.ConductEventsLogPath)
+                .Where(line => line.Contains($"cli-acceptance-completed:{goal.Id.Value}:{main}:{candidate}", StringComparison.Ordinal)));
+            Assert.Equal((goal.Id, candidate), Assert.Single(verifier.NormalRuns));
+        }
+        else
+        {
+            Assert.Empty(CompletionReceipts());
+            Assert.Empty(verifier.NormalRuns);
+        }
+
+        GoalOperationJournalEntry[] CompletionReceipts() => GoalOperationJournal.Read(fixture.Repo, goal.Id).Entries
+            .Where(entry => entry.Operation == "acceptance" && entry.AcceptanceOutcome == "passed").ToArray();
+
+        void Replay(AgentOrchestratorKernel kernel)
+        {
+            var canary = new PostLandingCanaryCoordinator(PostLandingCanaryConfiguration.Default, runner, events,
+                PostLandingCanaryFactory.CreateCircuit(workspace));
+            var context = CreateCliContext(kernel, workspace, kernel.GetGoal(goal.Id), verifier,
+                eventWriter: writer, canary: canary);
+            if (fromAcceptance)
+                CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context);
+            else
+                CliCommandHandlers.Execute(["workspace", "merge", goal.Id.Value], context);
+        }
+    }
+
+    [Theory]
     [InlineData("completed")]
     [InlineData("interrupted")]
     [InlineData("checkout-blocked")]
@@ -423,14 +580,28 @@ public sealed class SoloRepairWorkflowTests
 
     private static CliExecutionContext CreateCliContext(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         Goal goal, IGoalAcceptanceVerifier verifier, Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopHosts = null,
-        Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalize = null) =>
+        Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalize = null,
+        IGoalLifecycleEventWriter? eventWriter = null, PostLandingCanaryCoordinator? canary = null) =>
         new(kernel, workspace, new InMemoryModelProviderRegistry([]), AgentCatalog.Default().Agents,
             WorkerProfileCatalog.Default(), goal, finalizeAcceptanceMerge: finalize,
             stopAcceptanceHosts: stopHosts ?? (_ => AcceptanceHostStopResult.Success("Fixture stopped hosts.")))
         {
             AcceptanceVerifier = verifier,
+            EventWriter = eventWriter ?? NullGoalLifecycleEventWriter.Instance,
+            PostLandingCanary = canary,
             StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
         };
+
+    private sealed class LandingCanaryRunner(PostLandingCanaryOutcome outcome) : IPostLandingCanaryRunner
+    {
+        internal List<PostLandingCanaryRequest> Runs { get; } = [];
+
+        public Task<PostLandingCanaryOutcome> RunAsync(PostLandingCanaryRequest request, CancellationToken cancellationToken)
+        {
+            Runs.Add(request);
+            return Task.FromResult(outcome);
+        }
+    }
 
     private static SoloRepairFinding CapturePublicationFinding(PullRequestLandingTestFixture fixture)
     {

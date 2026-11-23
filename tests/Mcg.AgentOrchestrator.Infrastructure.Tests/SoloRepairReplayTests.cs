@@ -424,7 +424,7 @@ public sealed class SoloRepairReplayTests
         await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
 
         if (removeEnvelope)
-            File.Delete(finding.Proof.Path);
+            File.Delete(Assert.IsType<SoloAcceptanceArtifact>(finding.Proof).Path);
         else
             File.AppendAllText(Assert.Single(finding.CandidateArtifacts).Path, " ");
         var restarted = await repository.LoadAsync();
@@ -498,9 +498,9 @@ public sealed class SoloRepairReplayTests
         query.CommandText = "SELECT json_extract(proof, '$.Proof.Path') FROM solo_repair_conflicting_proof ORDER BY 1";
         using var proofs = query.ExecuteReader();
         Assert.True(proofs.Read());
-        Assert.Equal(first.Proof.Path, proofs.GetString(0));
+        Assert.Equal(Assert.IsType<SoloAcceptanceArtifact>(first.Proof).Path, proofs.GetString(0));
         Assert.True(proofs.Read());
-        Assert.Equal(second.Proof.Path, proofs.GetString(0));
+        Assert.Equal(Assert.IsType<SoloAcceptanceArtifact>(second.Proof).Path, proofs.GetString(0));
         Assert.False(proofs.Read());
         Assert.Equal(0, Count(path, "solo_repair_dependency"));
         Assert.Contains(First, Assert.Single(escalations));

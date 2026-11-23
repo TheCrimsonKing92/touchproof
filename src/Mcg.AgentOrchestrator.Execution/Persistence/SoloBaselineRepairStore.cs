@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record SoloRepairFinding(string Candidate, string Main, string Baseline, string Check,
     string Identity, string? Project, string? Request, string? BaselineCheck, bool Inherited,
-    string Attempt, SoloAcceptanceArtifact Proof, IReadOnlyList<SoloAcceptanceArtifact> CandidateArtifacts,
+    string Attempt, SoloAcceptanceArtifact? Proof, IReadOnlyList<SoloAcceptanceArtifact> CandidateArtifacts,
     IReadOnlyList<SoloAcceptanceArtifact> BaselineArtifacts, string? Reason, string? Feedback = null)
 {
     internal string GroupKey => SoloBaselineRepairStore.Key(Baseline.ToLowerInvariant(), Check, Project,

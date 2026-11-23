@@ -33,6 +33,18 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
 {
     var goal = context.CurrentGoal!;
     if (CliMultiRepositoryAcceptance.Apply(context, goal, runGate: !skipVerify)) return false;
+    var root = context.Workspace.ExecutionDirectory;
+    var pendingFastForward = GoalWorktrees.ReadCliFastForward(root, goal.Id);
+    IReadOnlyList<string> landingChangedFiles = [];
+    // The goal transaction may have committed before the Git receipt was acknowledged.
+    if (goal.Status == GoalStatus.Completed && pendingFastForward is { FromAcceptance: true })
+    {
+        var pending = CliWorkspaceMerge.FinishFastForward(context, goal, pendingFastForward, null, out _);
+        if (!pending.FastForwarded) return ReportCheckoutPending(pending.Message);
+        CompletePublishedAcceptance(pending);
+        return false;
+    }
+
     if (TryReconcileLandedCleanedAcceptance(context, goal, "acceptance retry", out var reconciledDetail))
     {
         Console.WriteLine(reconciledDetail);
@@ -68,19 +80,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         }
     }
 
-    var root = context.Workspace.ExecutionDirectory;
-    var pendingFastForward = GoalWorktrees.ReadCliFastForward(root, goal.Id);
-    if (goal.Status != GoalStatus.Verified)
-    {
-        // The goal transaction may have committed before Git receipt acknowledgement.
-        if (goal.Status == GoalStatus.Completed && pendingFastForward is { FromAcceptance: true })
-        {
-            var pending = CliWorkspaceMerge.FinishFastForward(context, goal, pendingFastForward, null, out _);
-            if (!pending.FastForwarded) return ReportCheckoutPending(pending.Message);
-            GoalWorktrees.AcknowledgeCliFastForward(root, goal.Id, pendingFastForward);
-        }
-        return false;
-    }
+    if (goal.Status != GoalStatus.Verified) return false;
 
     var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
     var engineDecision = AcceptanceEngineAcceptanceGate.Decide(
@@ -97,7 +97,6 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
 
     var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
-    IReadOnlyList<string> landingChangedFiles = [];
     string? testedWorktreeHead = null;
     GateReadyCandidateRevisionPair? preparedPair = null;
     DateTimeOffset? acceptanceAttemptStartedAt = null;
@@ -117,6 +116,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         // Recover the old publication and checkout before evaluating any new pair.
         var pending = CliWorkspaceMerge.FinishFastForward(context, goal, pendingFastForward, null, out _);
         if (!pending.FastForwarded) return ReportCheckoutPending(pending.Message);
+        CliWorkspaceMerge.RunPostLandingCanary(context, goal, pending.ChangedFiles!, pendingFastForward);
         GoalWorktrees.AcknowledgeCliFastForward(root, goal.Id, pendingFastForward);
     }
     if (worktreePath is not null)
@@ -463,7 +463,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         {
             failedChecks = ["acceptance evidence blocked"];
         }
-        if (verification?.SoloFailureReceipt is not null)
+        var retainSoloFailure = verification is { RequiresSoloFailureReceipt: true } or { SoloFailureReceipt: not null };
+        if (retainSoloFailure)
             CliWorkspaceMerge.RetainVerificationFailure(context, goal, failedChecks, testedWorktreeHead, testedMainHead, verification);
 
         if (verification is { Passed: false })
@@ -507,7 +508,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             Console.WriteLine("Acceptance evidence: blocked; merge blocked");
         }
 
-        if (verification?.SoloFailureReceipt is null)
+        if (!retainSoloFailure)
             CliWorkspaceMerge.RetainVerificationFailure(context, goal, failedChecks, testedWorktreeHead, testedMainHead, verification);
         GoalOperationJournal.AcceptanceFailed(
             context.Workspace.ExecutionDirectory,
@@ -581,8 +582,6 @@ bool FinalizeMerge(CliFastForwardReceipt? recovery = null)
 {
     var (mergeCommit, merge) = CliWorkspaceMerge.FinalizeAcceptance(context, goal, worktreePath, testedWorktreeHead,
         expectedMergeGuard, verification is { Passed: true } || reuseNormalGate, preparedPair, recovery);
-    landingChangedFiles = merge?.ChangedFiles ?? landingChangedFiles;
-
     if (mergeCommit.GuardAborted)
     {
         RecordAcceptanceGuardAbort(
@@ -605,10 +604,7 @@ bool FinalizeMerge(CliFastForwardReceipt? recovery = null)
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
         if (mergeCommit.FastForwarded)
         {
-            RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
-            RunPostLandingCanary(context, goal, landingChangedFiles);
-            if (merge?.FastForwardReceipt is { } receipt)
-                GoalWorktrees.AcknowledgeCliFastForward(root, goal.Id, receipt);
+            CompletePublishedAcceptance(merge, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
         }
         else
         {
@@ -630,22 +626,20 @@ bool FinalizeMerge(CliFastForwardReceipt? recovery = null)
         return mergeCommit.FastForwarded;
     }
 
-    RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
-    RunPostLandingCanary(context, goal, landingChangedFiles);
+    CompletePublishedAcceptance(merge, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
     return true;
 }
-}
 
-private static void RunPostLandingCanary(
-    CliExecutionContext context,
-    Goal goal,
-    IReadOnlyList<string> changedFiles)
+void CompletePublishedAcceptance(GoalWorktreeMergeResult? merge, string? branchHead = null,
+    string? mainHead = null, DateTimeOffset? startedAt = null, AcceptanceVerificationResult? result = null)
 {
-    var landingSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
-    PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
-        context.Workspace,
-        new ConductorLandingReceipt(goal.Id.Value, changedFiles, landingSha),
-        Console.WriteLine);
+    var receipt = merge?.FastForwardReceipt;
+    RecordAcceptanceCompleted(context, goal, receipt?.PromotedRevision ?? branchHead,
+        receipt?.PriorRevision ?? mainHead, startedAt, result, receipt);
+    CliWorkspaceMerge.RunPostLandingCanary(context, goal, merge?.ChangedFiles ?? landingChangedFiles, receipt);
+    if (receipt is not null)
+        GoalWorktrees.AcknowledgeCliFastForward(root, goal.Id, receipt);
+}
 }
 
 private static bool TryNormalizePrematureCompletedGoalForAcceptance(
@@ -696,25 +690,40 @@ private static void RecordAcceptanceCompleted(
     string? branchHeadSha,
     string? mainHeadSha,
     DateTimeOffset? acceptanceAttemptStartedAt,
-    AcceptanceVerificationResult? verification)
+    AcceptanceVerificationResult? verification,
+    CliFastForwardReceipt? receipt)
 {
-    GoalOperationJournal.AcceptancePassed(
-        context.Workspace.ExecutionDirectory,
-        goal,
-        "acceptance",
-        branchHeadSha,
-        mainHeadSha,
-        $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} and merge completed.",
-        acceptanceAttemptStartedAt,
-        GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+    var root = context.Workspace.ExecutionDirectory;
+    var journal = receipt is null ? null : GoalOperationJournal.Read(root, goal.Id);
+    if (journal?.Entries.Any(entry => entry.Operation == "acceptance" && entry.AcceptanceOutcome == "passed" &&
+            entry.HasCandidate(branchHeadSha, mainHeadSha)) != true)
+    {
+        GoalOperationJournal.AcceptancePassed(root, goal, "acceptance", branchHeadSha, mainHeadSha,
+            $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} and merge completed.",
+            acceptanceAttemptStartedAt, GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+    }
     context.Kernel.ClearAcceptanceFailure(goal.Id);
     if (goal.Status == GoalStatus.Verified)
     {
         context.Kernel.CompleteGoal(goal.Id, "Acceptance completed goal after merge; cleanup deferred to conductor sweep.");
     }
 
-    context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
-    AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=passed");
+    var detail = $"ACCEPTANCE goal={goal.Id.Value[..8]} result=passed";
+    if (receipt is null)
+    {
+        context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
+        AppendConductEvent(context, "acceptance", goal.Id, detail);
+        return;
+    }
+
+    var deliveryId = $"cli-acceptance-completed:{goal.Id.Value}:{receipt.PriorRevision}:{receipt.PromotedRevision}";
+    if (context.EventWriter is GoalLifecycleEventWriter writer)
+        writer.AppendIdempotent(goal.Id, deliveryId, target => target.AppendAcceptanceResult(goal.Id, true, []));
+    else
+        context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
+    if (!new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+        .AppendRequired("acceptance", goal.Id.Value[..8], detail, eventId: deliveryId))
+        throw new IOException($"Acceptance completion for {goal.Id.Value[..8]} could not be recorded. Rerun acceptance.");
 }
 
 private static void AppendConductEvent(CliExecutionContext context, string eventKind, GoalId goalId, string detail)

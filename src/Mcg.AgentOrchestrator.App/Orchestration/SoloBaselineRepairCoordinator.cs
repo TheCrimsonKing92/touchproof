@@ -71,15 +71,16 @@ internal sealed class SoloBaselineRepairCoordinator(
         if (finding.Reason is not null) return finding;
         try
         {
+            var proof = finding.Proof ?? throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
             var (request, allowCandidatePass) = SoloBaselineRepairStore
                 .AttributionRequests(goal.Id.Value, finding, finding.Candidate, finding.Main)
-                .FirstOrDefault(item => finding.Proof.Path == Path.Combine(store.ResultDirectory(item.Key), "focused-result.json"));
+                .FirstOrDefault(item => proof.Path == Path.Combine(store.ResultDirectory(item.Key), "focused-result.json"));
             if (request is not null)
             {
                 var identity = SoloBaselineRepairStore.FocusedProofIdentity(request, finding, finding.Candidate, finding.Main,
                     runBaseline: true, allowCandidatePass: allowCandidatePass);
-                var verified = SoloBaselineRepairStore.ReadVerifierResult(finding.Proof.Path,
-                    store.ResultDirectory(request), identity, finding.Proof.Sha256);
+                var verified = SoloBaselineRepairStore.ReadVerifierResult(proof.Path,
+                    store.ResultDirectory(request), identity, proof.Sha256);
                 if (verified.Outcome != (finding.Inherited ? "inherited" : "introduced") ||
                     !verified.Artifacts.SequenceEqual(finding.BaselineArtifacts) ||
                     !(verified.CandidateArtifacts ?? []).SequenceEqual(finding.CandidateArtifacts) ||
@@ -128,7 +129,8 @@ internal sealed class SoloBaselineRepairCoordinator(
                 }
                 if (finding.Request is null)
                 {
-                    missing ??= $"Check {finding.Check}, test {finding.Identity}, needs exact verifier evidence ({finding.Reason}, {finding.Proof.Path}).";
+                    missing ??= $"Check {finding.Check}, test {finding.Identity}, needs exact verifier evidence " +
+                        $"({finding.Reason}, {finding.Proof?.Path ?? "receipt missing"}).";
                     continue;
                 }
 

@@ -54,6 +54,12 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
+            if (GoalWorktrees.ReadCliFastForward(executionDirectory, goal.Id) is { FromAcceptance: false } pending)
+            {
+                var recovered = CliWorkspaceMerge.FinishFastForward(context, goal, pending, null, out var recoveredPublication);
+                return CliWorkspaceMerge.CompleteWorkspaceMerge(context, goal, recovered, recoveredPublication);
+            }
+
             var mainHead = TryResolveGitHead(context, executionDirectory);
             var candidateHead = GitCli.Run(executionDirectory, "rev-parse", branch);
             if (!candidateHead.Succeeded || string.IsNullOrWhiteSpace(candidateHead.Output))
@@ -88,28 +94,7 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             var merge = CliWorkspaceMerge.MergeWithPublication(context, goal, out var publication,
                 mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace), out _,
                 new(candidateHead.Output.Trim(), mainHead));
-            Console.WriteLine(merge is null
-                ? "Goal has no workspace branch to merge."
-                : CliWorkspaceMerge.FormatResult(merge));
-            if (merge?.FastForwarded == true)
-            {
-                var mergeChangedFiles = merge.ChangedFiles
-                    ?? throw new InvalidOperationException(
-                        "Workspace merge advanced main without an authoritative changed-file receipt.");
-                var landingSha = GitCli.Run(executionDirectory, "rev-parse", "HEAD");
-                PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
-                    context.Workspace,
-                    new ConductorLandingReceipt(
-                        goal.Id.Value,
-                        mergeChangedFiles,
-                        landingSha.Succeeded ? landingSha.Output.Trim() : null),
-                    Console.WriteLine);
-                if (merge.FastForwardReceipt is { } receipt)
-                    GoalWorktrees.AcknowledgeCliFastForward(executionDirectory, goal.Id, receipt);
-            }
-            if (merge is { FastForwarded: false, FastForwardReceipt: not null })
-                Console.WriteLine("Resolve the checkout issue in the repository root, then rerun workspace merge.");
-            return merge?.FastForwarded == true && publication is not null;
+            return CliWorkspaceMerge.CompleteWorkspaceMerge(context, goal, merge, publication);
 
         case "rebase":
             Console.WriteLine(FormatWorkspaceRebase(context.Worktrees.TryRebaseOntoMain(executionDirectory, goal.Id)));

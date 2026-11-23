@@ -66,8 +66,10 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
 
     internal GoalAcceptanceVerifier CreateVerifier(string checkout, bool baselineThrows = false, bool baselineFails = false,
         bool collidingPassedRows = false, bool mixed = false, bool singleRow = false, string? firstCase = null,
-        Action? onFailedBuild = null) =>
-        new(new GoalAcceptanceVerifierTestOverrides
+        Action? onFailedBuild = null, bool captureFails = false)
+    {
+        string? candidateTrx = null;
+        return new(new GoalAcceptanceVerifierTestOverrides
         {
             BuildStorageRootForTests = new(Path.Combine(Root, "dotnet")),
             ShardPermitRootForTests = Path.Combine(Root, "permits"),
@@ -99,11 +101,17 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             var path = Path.Combine(args[results + 1], args[filename + 1]);
             if (collidingPassedRows && !baseline && method < 0) File.WriteAllText(path, CollisionTrx);
             else WriteTrx(path, passed, names);
+            if (captureFails)
+            {
+                if (!baseline) candidateTrx = path;
+                else File.Delete(Assert.IsType<string>(candidateTrx));
+            }
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(passed ? 0 : 1,
                 collidingPassedRows && !baseline && method < 0 ? "Failed! - Failed: 1, Passed: 3, Skipped: 2, Total: 6." :
                 passed ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
                     $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}."));
         });
+    }
 
     internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
         bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
