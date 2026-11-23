@@ -818,7 +818,8 @@ internal static partial class PlannerOutputContract
         bool revalidateDurablePlan,
         IReadOnlyList<string>? acceptanceCriteria,
         out string resolvedPlan,
-        out string diagnostic)
+        out string diagnostic,
+        int? repairLineStart = null)
     {
         resolvedPlan = plan;
         diagnostic = string.Empty;
@@ -844,6 +845,14 @@ internal static partial class PlannerOutputContract
         {
             var match = targetCitations[citationIndex];
             var lineStart = targetSection.LastIndexOf('\n', match.Index);
+            if (repairLineStart is int repairLine)
+            {
+                if (lineStart < repairLine)
+                    continue;
+                if (lineStart > repairLine)
+                    break;
+            }
+
             if (lineStart != contextualLineStart)
             {
                 contextualDirectory = null;
@@ -967,16 +976,21 @@ internal static partial class PlannerOutputContract
 
                 if (matches.Length > 1)
                 {
+                    if (repairLineStart is not null)
+                        return false;
+
                     var usable = matches.Where(path =>
                     {
                         var explicitPath = ExplicitCitationPath(path);
                         if (!CanUseTrackedCitation(workingDirectory, path, explicitPath, location))
                             return false;
 
-                        // Test the proposed edit in context before spending a slot on it.
+                        // An explicit directory can change how other citations on this line resolve.
                         var repairedPlan = string.Concat(plan.AsSpan(0, citationStart), explicitPath,
                             plan.AsSpan(citationStart + citedPath.Length));
-                        return TryValidate(repairedPlan, out _, out _, acceptanceCriteria);
+                        return TryValidate(repairedPlan, out _, out _, acceptanceCriteria) &&
+                            TryResolveCitedPaths(repairedPlan, workingDirectory, trackedFiles, revalidateDurablePlan,
+                                acceptanceCriteria, out _, out _, repairLineStart: lineStart);
                     }).Take(2).ToArray();
                     var reported = usable.Concat(matches).Distinct(StringComparer.Ordinal).Take(2).Order(StringComparer.Ordinal).ToArray();
                     var candidates = string.Join(", ", reported.Select(QuoteDiagnosticPath));

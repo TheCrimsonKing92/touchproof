@@ -155,6 +155,53 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         }
     }
 
+    [Xunit.Fact]
+    public void AmbiguousRejectionPrescribesPathThatPreservesSiblingNewFileDeclaration()
+    {
+        const string citation = "Guide.cs:43";
+        string[] candidates = ["a/Guide.cs", "b/Guide.cs", "docs/Guide.cs"];
+        var root = CreateTempDirectory();
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var file = Path.Combine(root, candidate);
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, "// citation fixture");
+            }
+            StagePlannerCitationFixtures(root, candidates);
+
+            var plan = PlanWithTargetCitation(citation, " and `NewSibling.cs`").Replace(
+                "The premise is valid", "Create `docs/NewSibling.cs` (new file). The premise is valid",
+                StringComparison.Ordinal);
+            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var rejection));
+            Xunit.Assert.StartsWith($"target citation '{citation}' is ambiguous;", rejection);
+
+            foreach (var candidate in candidates[..2])
+            {
+                var invalidRepair = plan.Replace(citation, candidate + ":43", StringComparison.Ordinal);
+                Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(invalidRepair, root, out _, out var invalidDiagnostic));
+                Xunit.Assert.StartsWith("target citation 'NewSibling.cs' does not exist and is not marked as a new file;",
+                    invalidDiagnostic);
+            }
+
+            var validRepair = plan.Replace(citation, "docs/Guide.cs:43", StringComparison.Ordinal);
+            Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(validRepair, root, out _, out var diagnostic), diagnostic);
+
+            var route = RoutePersistedRejection(root, rejection);
+            Xunit.Assert.Contains($"Offending ambiguous target citation: '{citation}'", route.Text);
+            Xunit.Assert.Contains(
+                "Cite exactly one of these full repository-relative paths on the same mapping line: 'docs/Guide.cs'.",
+                route.Text);
+            foreach (var candidate in candidates[..2])
+                Xunit.Assert.DoesNotContain(candidate, route.Text);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("...Target.cs:43", "src/TrackedTarget.cs", true)]
     [Xunit.InlineData("...Target.cs:43", "src/has`tick/TrackedTarget.cs", false)]
@@ -200,7 +247,7 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         return route;
     }
 
-    private static string PlanWithTargetCitation(string citation)
+    private static string PlanWithTargetCitation(string citation, string sameLineCitations = "")
     {
         var plan = PlannerContractPlanFixture().ReplaceLineEndings("\n");
         const string heading = "## Target seams and symbols";
@@ -209,6 +256,6 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         var bodyStart = headingStart + heading.Length;
         var bodyEnd = plan.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
         Xunit.Assert.True(bodyEnd > bodyStart, "Fixture must contain the following section.");
-        return plan[..bodyStart] + $"\n\n- Extend `{citation}` with focused ambiguity coverage.\n" + plan[bodyEnd..];
+        return plan[..bodyStart] + $"\n\n- Extend `{citation}`{sameLineCitations} with focused ambiguity coverage.\n" + plan[bodyEnd..];
     }
 }
