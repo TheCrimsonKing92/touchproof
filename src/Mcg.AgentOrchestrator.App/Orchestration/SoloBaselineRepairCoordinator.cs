@@ -307,12 +307,15 @@ internal sealed class SoloBaselineRepairCoordinator(
         var state = GoalLifecycle.ResolveState(goal, getFacts(goal));
         var message = $"{reason}. {detail} {next.NextAction}";
         var identity = SoloBaselineRepairStore.Key(reason, detail);
-        if (reason == SoloHoldReasons.RepairEvidenceRequired)
+        var requiresOperator = reason == SoloHoldReasons.RepairEvidenceRequired;
+        if (requiresOperator)
             PublishSoloRepairEscalation(goal, state, message, identity);
         return new ConductorAdvanceResult(goal.Id.Value, prefix, policy.Name, new ConductorAdvanceOutcome.Held(state, message,
             StableIdentity: identity)
         {
-            Owner = reason == SoloHoldReasons.RepairEvidenceRequired ? ConductorHoldOwner.Operator : ConductorHoldOwner.None
+            Owner = requiresOperator ? ConductorHoldOwner.Operator : ConductorHoldOwner.None,
+            Decision = new("solo-baseline-repair", "Hold", 1, reason, detail,
+                [new("holdIdentity", identity), new("owner", next.Owner), new("nextAction", next.NextAction)])
         });
     }
 

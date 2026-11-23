@@ -12,6 +12,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
 {
     internal const string First = "Sample.Tests.SoloTests.Fails";
     internal const string Long = "Sample.Tests.SoloTests.Long";
+    internal const string Unknown = "Sample.Tests.SoloTests.Unknown";
     internal const string Project = "tests/Sample.Tests/Sample.Tests.csproj";
     internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-solo-route", Guid.NewGuid().ToString("N"));
     internal string Repo => Path.Combine(Root, "repo");
@@ -34,6 +35,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             public class SoloTests {
                 [Xunit.Fact] public void Fails() { }
                 [Xunit.Fact] public void Long() { }
+                [Xunit.Fact] public void Unknown() { }
             }
             """);
         File.WriteAllText(Path.Combine(Repo, "config/acceptance-manifest.json"), """
@@ -63,8 +65,11 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     }
 
     internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
-        bool collidingPassedRows = false, string? attemptId = null)
+        bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
+        string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null)
     {
+        var checkout = candidateWorktree ?? Repo;
+        var checkedGoal = goal ?? Goal;
         var failedBuilds = 0;
         var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
         {
@@ -84,13 +89,17 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             if (results < 0) return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             var filename = Array.IndexOf(args, "--report-trx-filename");
             Assert.True(filename >= 0, "The fixture must execute the MTP TRX path.");
-            var baseline = !Path.GetFullPath(directory).Equals(Path.GetFullPath(Repo), StringComparison.OrdinalIgnoreCase);
+            var baseline = !Path.GetFullPath(directory).Equals(Path.GetFullPath(checkout), StringComparison.OrdinalIgnoreCase);
             if (baseline) BaselineRuns++; else CandidateRuns++;
             if (baseline && baselineThrows) throw new InvalidOperationException("Fixture baseline runner failed.");
             var method = Array.IndexOf(args, "--filter-method");
-            string[] names = method < 0 ? collidingPassedRows ? [First] : [First, Long] : [args[method + 1].Trim('*')];
+            string[] names = method < 0
+                ? collidingPassedRows || singleRow ? [First] : mixed ? [First, Long, Unknown] : [First, Long]
+                : [args[method + 1].Trim('*')];
+            if (firstCase is not null)
+                names = names.Select(name => name == First ? name + firstCase : name).ToArray();
             Directory.CreateDirectory(args[results + 1]);
-            var passed = baseline && !baselineFails;
+            var passed = baseline && (mixed ? names.SequenceEqual([Long]) : !baselineFails);
             var path = Path.Combine(args[results + 1], args[filename + 1]);
             if (collidingPassedRows && !baseline && method < 0) File.WriteAllText(path, CollisionTrx);
             else WriteTrx(path, passed, names);
@@ -99,10 +108,10 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                 passed ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
                     $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}."));
         });
-        await using var owner = AcceptanceExecutionOwners.CreateAttempt(Repo, Goal.Id,
+        await using var owner = AcceptanceExecutionOwners.CreateAttempt(checkout, checkedGoal.Id,
             options: new(RunId: attemptId ?? "solo-attempt", ResultsPrefix: attemptId is null
                 ? Path.Combine(Root, "results") : Path.Combine(Root, attemptId, "results"), IntegrationBranch: "main"));
-        var verification = await verifier.RunOwnedAsync(Repo, Goal.Id, ["README.md"], null, null, owner);
+        var verification = await verifier.RunOwnedAsync(checkout, checkedGoal.Id, ["README.md"], null, null, owner);
         Assert.False(verification.Passed);
         if (buildFails)
         {
@@ -123,12 +132,14 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             Assert.True(CandidateRuns > 0);
         }
         var failed = verification.Checks!.Where(check => !check.Passed && !check.Advisory).ToArray();
-        Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
-            attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed :
-                baselineFails ? AcceptanceTestFailureOrigin.Inherited : AcceptanceTestFailureOrigin.Introduced,
-                attr.Origin));
+        if (!mixed)
+            Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
+                attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed :
+                    baselineFails ? AcceptanceTestFailureOrigin.Inherited : AcceptanceTestFailureOrigin.Introduced,
+                    attr.Origin));
         Summary = AcceptanceVerificationSummary.FromVerification(verification, failed, failed.Select(check => check.Name).ToArray(),
-            Context.CandidateSha, Context.MainSha, verification.TestResultPaths,
+            verification.SoloFailureReceipt?.CandidateSha ?? Context.CandidateSha,
+            verification.SoloFailureReceipt?.MainSha ?? Context.MainSha, verification.TestResultPaths,
             buildFails ? null : failed.Select(check => new AcceptanceCheckAttribution(check.Name,
                 baselineThrows ? AcceptanceFailureOrigin.Unattributed :
                     baselineFails ? AcceptanceFailureOrigin.Inherited : AcceptanceFailureOrigin.Introduced,
@@ -262,19 +273,24 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         </TestRun>
         """;
 
-    private string Git(params string[] args)
+    internal string Git(params string[] args)
     {
         var result = GitCli.Run(Repo, args);
         Assert.True(result.Succeeded, result.Error);
         return result.Output.Trim();
     }
 
-    private static void WriteTrx(string path, bool passed, string[] names)
+    internal static void WriteTrx(string path, bool passed, params string[] names)
     {
         new XDocument(new XElement("TestRun", new XAttribute("id", Guid.NewGuid()),
-            new XElement("TestDefinitions", names.Select((name, i) => new XElement("UnitTest", new XAttribute("id", i),
-                new XElement("TestMethod", new XAttribute("className", name[..name.LastIndexOf('.')]),
-                    new XAttribute("name", name[(name.LastIndexOf('.') + 1)..]))))),
+            new XElement("TestDefinitions", names.Select((name, i) =>
+            {
+                var method = AcceptanceTrxTestIdentityResolver.NormalizeSelector(name);
+                var separator = method.LastIndexOf('.');
+                return new XElement("UnitTest", new XAttribute("id", i),
+                    new XElement("TestMethod", new XAttribute("className", method[..separator]),
+                        new XAttribute("name", method[(separator + 1)..])));
+            })),
             new XElement("Results", names.Select((name, i) => new XElement("UnitTestResult", new XAttribute("testId", i),
                 new XAttribute("testName", name), new XAttribute("outcome", passed ? "Passed" : "Failed"),
                 passed ? null : new XElement("Output", new XElement("ErrorInfo", new XElement("Message",
