@@ -79,8 +79,13 @@ public sealed class BoardFillReadyItemSelectorTests
                 using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
                     { DataSource = path, Pooling = false }.ToString());
                 connection.Open();
+                BoardFillSnapshotTestDatabase.RemoveSnapshotProof(connection);
                 using var command = connection.CreateCommand();
-                command.CommandText = "ALTER TABLE backlog DROP COLUMN pinned_at; UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog'";
+                command.CommandText = """
+                    ALTER TABLE backlog DROP COLUMN pinned_at;
+                    ALTER TABLE backlog DROP COLUMN bundled_reason;
+                    UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog';
+                    """;
                 command.ExecuteNonQuery();
             }
             var bytes = File.ReadAllBytes(path);

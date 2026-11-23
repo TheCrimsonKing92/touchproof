@@ -21,6 +21,7 @@ public sealed class BacklogStoreBundledReasonTests
             using (var database = new SqliteConnection(connectionString.ToString()))
             {
                 database.Open();
+                BoardFillSnapshotTestDatabase.RemoveSnapshotProof(database);
                 using var command = database.CreateCommand();
                 command.CommandText = """
                     ALTER TABLE backlog DROP COLUMN bundled_reason;

@@ -47,7 +47,14 @@ public sealed class BacklogStoreTests
         await store.AppendNoteAsync(item.Id, "Original note");
         var expected = ItemSnapshot((await store.GetByExactIdAsync(item.Id))!);
         using (var connection = OpenSetupDatabase(path))
-            RunSetupSql(connection, "ALTER TABLE backlog DROP COLUMN pinned_at; UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog'");
+        {
+            BoardFillSnapshotTestDatabase.RemoveSnapshotProof(connection);
+            RunSetupSql(connection, """
+                ALTER TABLE backlog DROP COLUMN pinned_at;
+                ALTER TABLE backlog DROP COLUMN bundled_reason;
+                UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog';
+                """);
+        }
         const string oldColumns = "id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at";
         var rows = ReadSetupRows(path, $"SELECT {oldColumns} FROM backlog ORDER BY id");
         var history = ReadSetupRows(path, "SELECT * FROM backlog_history ORDER BY id");
@@ -55,7 +62,10 @@ public sealed class BacklogStoreTests
         BacklogStore.Setup(path);
 
         using (var current = OpenSetupDatabase(path))
+        {
             Assert.Equal(StoreSchemaRegistry.Backlog.CurrentVersion, StoreSchemaVersions.Read(current, "backlog"));
+            Assert.IsType<BacklogSnapshotRevision>(BacklogSnapshotRevision.TryRead(current));
+        }
         Assert.Single(ReadSetupRows(path, "SELECT name FROM pragma_table_info('backlog') WHERE name = 'pinned_at'"));
         Assert.Equal(rows, ReadSetupRows(path, $"SELECT {oldColumns} FROM backlog ORDER BY id"));
         Assert.Equal(history, ReadSetupRows(path, "SELECT * FROM backlog_history ORDER BY id"));
@@ -904,16 +914,8 @@ public sealed class BacklogStoreTests
         using var database = new BoardFillSnapshotTestDatabase();
         using (var connection = database.Open())
         {
-            var triggers = ReadSetupRows(database.Path, "SELECT name FROM sqlite_schema WHERE type = 'trigger'");
-            foreach (var row in triggers)
-            {
-                var name = System.Text.Json.JsonSerializer.Deserialize<string[]>(row)!.Single();
-                RunSetupSql(connection, $"DROP TRIGGER {name}");
-            }
-            RunSetupSql(connection, """
-                DROP TABLE backlog_snapshot_revision;
-                UPDATE store_schema_versions SET version = 3 WHERE store_name = 'backlog';
-                """);
+            BoardFillSnapshotTestDatabase.RemoveSnapshotProof(connection);
+            RunSetupSql(connection, "UPDATE store_schema_versions SET version = 3 WHERE store_name = 'backlog'");
         }
         var notes = ReadSetupRows(database.Path, "SELECT * FROM backlog_notes ORDER BY id");
         var dependencies = ReadSetupRows(database.Path, "SELECT * FROM backlog_dependencies ORDER BY sequence");

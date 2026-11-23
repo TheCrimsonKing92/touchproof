@@ -201,16 +201,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
                 // Recreate the pre-proof writer shape after seeding. Setup's newer-schema
                 // short circuit runs the same SQL as the old current-schema short circuit.
                 using var connection = Database.Open();
-                using var command = connection.CreateCommand();
-                command.CommandText = "SELECT type, name FROM sqlite_schema WHERE name GLOB 'backlog_snapshot_revision_*'";
-                var coverage = new List<(string Type, string Name)>();
-                using (var reader = command.ExecuteReader())
-                    while (reader.Read()) coverage.Add((reader.GetString(0), reader.GetString(1)));
-                foreach (var (type, name) in coverage) Execute(connection, $"DROP {type} {name}");
-                Execute(connection, $"""
-                    DROP TABLE backlog_snapshot_revision;
-                    UPDATE store_schema_versions SET version = {StoreSchemaRegistry.Backlog.CurrentVersion + 1} WHERE store_name = 'backlog';
-                    """);
+                RemoveSnapshotProof(connection);
+                Execute(connection, $"UPDATE store_schema_versions SET version = {StoreSchemaRegistry.Backlog.CurrentVersion + 1} WHERE store_name = 'backlog'");
             }
             ResetMetrics();
         }

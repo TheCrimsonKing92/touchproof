@@ -49,6 +49,23 @@ internal sealed class BoardFillSnapshotTestDatabase : IDisposable
         command.ExecuteNonQuery();
     }
 
+    internal static void RemoveSnapshotProof(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT type, name FROM sqlite_schema WHERE name GLOB 'backlog_snapshot_revision_*'";
+        var coverage = new List<(string Type, string Name)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                coverage.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        foreach (var (type, name) in coverage)
+            Execute(connection, $"DROP {type} {name}");
+
+        Execute(connection, "DROP TABLE backlog_snapshot_revision");
+    }
+
     internal static string Mutation(string part, int value) => part switch
     {
         "item" => $"UPDATE backlog SET title = 'Title {value}' WHERE id = '{ItemId}'",
