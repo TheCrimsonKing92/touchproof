@@ -10,6 +10,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly ConductorBoardFillDraftStore _store;
     private readonly Func<string, CancellationToken, AuthorBriefDraftOutcome> _draft;
     private readonly Func<IReadOnlyList<BacklogItem>> _backlog;
+    private BoardFillBacklogSnapshotCache? BacklogSnapshotCache { get; init; }
     internal readonly Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> _readiness;
     private readonly Func<ConductorAutonomyPolicy> _policy;
     private readonly ConductEventLogWriter _events;
@@ -311,6 +312,12 @@ internal sealed partial class ConductorBoardFillHost
     }
 
     internal void Stop()
+    {
+        try { StopRounds(); }
+        finally { BacklogSnapshotCache?.Dispose(); }
+    }
+
+    private void StopRounds()
     {
         _shutdown.Cancel();
         // Only shutdown may drain. ServiceTick never waits on a drafting task.
