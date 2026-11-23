@@ -57,7 +57,7 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
