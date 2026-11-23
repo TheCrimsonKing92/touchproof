@@ -6,6 +6,85 @@ using static BoardFillSnapshotTestDatabase;
 
 public sealed class BoardFillBacklogSnapshotReuseTests
 {
+    [Fact]
+    public async Task Scoped_reads_use_one_snapshot_across_cross_status_and_historical_commits()
+    {
+        using var database = BoardFillSchedulingComparison.Create(32, 9);
+        var established = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var proceed = new ManualResetEventSlim();
+        var before = FullDecision();
+        var inFlight = Task.Run(() => BoardFillSchedulingComparison.ReadProjection(database.Path, query: (kind, _) =>
+        {
+            if (kind != "prerequisite" || !established.TrySetResult()) return;
+            if (!proceed.Wait(TimeSpan.FromSeconds(30)))
+                throw new InvalidOperationException("Signal did not occur: cross-status commit and snapshot release.");
+        }));
+
+        try
+        {
+            await PanelTestHarness.Signal(established.Task, "projection reached prerequisite acquisition");
+            database.Run($"""
+                BEGIN IMMEDIATE;
+                UPDATE backlog SET status = 'Superseded' WHERE id = '{BoardFillSchedulingComparison.Prerequisite}';
+                UPDATE backlog SET body = 'See src/Other.cs' WHERE id = '{BoardFillSchedulingComparison.Historical}';
+                COMMIT;
+                """);
+        }
+        finally { proceed.Set(); }
+
+        await PanelTestHarness.Signal(inFlight, "projection finished after the concurrent commit");
+        var acquired = await inFlight;
+        Assert.Equal(before.Receipt(), BoardFillSchedulingComparison.DecideProjected(acquired).Receipt());
+        var after = FullDecision();
+        Assert.NotEqual(before.Selected, after.Selected);
+        Assert.Empty(after.Duplicates);
+        Assert.Equal(after.Receipt(),
+            BoardFillSchedulingComparison.DecideProjected(BoardFillSchedulingComparison.ReadProjection(database.Path)).Receipt());
+
+        BoardFillSchedulingComparison.Decision FullDecision() =>
+            BoardFillSchedulingComparison.DecideFull(BoardFillBacklogSnapshot.Read(database.Path));
+    }
+
+    [Fact]
+    public void Scoped_decision_can_finish_after_replacement_and_next_acquisition_uses_replacement()
+    {
+        using var database = BoardFillSchedulingComparison.Create(32, 9);
+        database.Run("PRAGMA wal_checkpoint(TRUNCATE)");
+        var original = BoardFillSchedulingComparison.ReadProjection(database.Path);
+        var receipt = BoardFillSchedulingComparison.DecideProjected(original).Receipt();
+        var copy = database.At("replacement.db");
+        File.Copy(database.Path, copy);
+
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = copy, Mode = SqliteOpenMode.ReadWrite, Pooling = false
+        }.ToString()))
+        {
+            connection.Open();
+            using var proof = connection.CreateCommand();
+            proof.CommandText = "SELECT revision FROM backlog_snapshot_revision";
+            var revision = proof.ExecuteScalar();
+            Assert.NotNull(revision);
+            Execute(connection, $"""
+                UPDATE backlog SET body = 'See src/Other.cs' WHERE id = '{BoardFillSchedulingComparison.Historical}';
+                """);
+            using var restore = connection.CreateCommand();
+            restore.CommandText = "UPDATE backlog_snapshot_revision SET revision = $revision";
+            restore.Parameters.AddWithValue("$revision", revision);
+            restore.ExecuteNonQuery();
+            Assert.Equal(revision, proof.ExecuteScalar());
+            Execute(connection, "PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        File.Move(database.Path, database.At("retired.db"));
+        File.Move(copy, database.Path);
+
+        Assert.Equal(receipt, BoardFillSchedulingComparison.DecideProjected(original).Receipt());
+        var replacement = BoardFillSchedulingComparison.DecideProjected(BoardFillSchedulingComparison.ReadProjection(database.Path));
+        Assert.Empty(replacement.Duplicates);
+        Assert.Equal(BoardFillSchedulingComparison.Duplicate, replacement.Selected);
+        Assert.Equal(BoardFillSchedulingComparison.DecideFull(BoardFillBacklogSnapshot.Read(database.Path)).Receipt(), replacement.Receipt());
+    }
+
     public static bool IsWindows => OperatingSystem.IsWindows();
     private const string WindowsFileIdentity = "Backlog file identity requires the Windows SQLite VFS.";
 
