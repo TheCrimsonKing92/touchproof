@@ -295,24 +295,24 @@ public sealed class ProviderHoldSeedWorkBoundTests
         var canonical = await fixture.Repository.LoadGoalsAsync([new(id)], token);
         var task = Assert.Single(Assert.Single(canonical.Goals).Tasks);
         Assert.Equal(257, task.DispatchHistory.Count);
-        Assert.Equal(129, task.VerificationHistory.Count);
+        Assert.Equal(20, task.VerificationHistory.Count);
 
         var discovery = await fixture.Repository.ReadProviderHoldSeedHistoryAsync(token);
-        Assert.Equal(128, discovery.Attempts.Count);
+        Assert.Equal(19, discovery.Attempts.Count);
         Assert.All(discovery.Attempts, attempt => Assert.Equal("Anthropic", attempt.ProviderName));
         Assert.Contains(discovery.Attempts, attempt => attempt.Timestamp == ProviderHoldSeedFixture.At.AddSeconds(45));
-        // One build over 257 dispatches and keyed/binary queries for 129 verifications.
-        // A lookup per refusal over all dispatches would exceed this bound in either pass.
-        Assert.InRange(discovery.DispatchMatchingVisits, 386, 1000);
+        // One build over 257 dispatches, 15 exact lookups and up to nine visits per binary lookup.
+        // There are nine verification fallbacks and at most one explicit recovery lookup.
+        Assert.InRange(discovery.DispatchMatchingVisits, 277, 370);
 
         var kernel = new AgentOrchestratorKernel();
         var seeded = Seed(fixture, kernel);
         Assert.Equal(new[] { id }, seeded.Selection.Sources);
-        Assert.InRange(seeded.Index.DispatchMatchingVisits, 386, 1000);
+        Assert.InRange(seeded.Index.DispatchMatchingVisits, 277, 370);
         var evaluation = Assert.Single(seeded.Index.Evaluations);
         Assert.Equal("anthropic::c:/profiles/old", evaluation.Key);
         Assert.Equal(1, evaluation.Value.Count);
-        Assert.Equal(128, evaluation.Value.DispatchVisits);
+        Assert.Equal(19, evaluation.Value.DispatchVisits);
         if (recovered)
         {
             Assert.Null(evaluation.Value.Schedule);
@@ -322,9 +322,9 @@ public sealed class ProviderHoldSeedWorkBoundTests
 
         var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Value.Schedule);
         Assert.Equal(id, schedule.Hold.SourceGoalId.Value);
-        Assert.Equal("legacy-refusal-127", schedule.Hold.EvidenceReceipt);
-        Assert.Equal(128, schedule.Attempt);
-        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(487).AddSeconds(1), schedule.NextProbeAt);
+        Assert.Equal("legacy-refusal-18", schedule.Hold.EvidenceReceipt);
+        Assert.Equal(19, schedule.Attempt);
+        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(378).AddSeconds(1), schedule.NextProbeAt);
     }
 
     [Theory]
@@ -480,15 +480,18 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
 
     internal Task PopulateLegacyRefusalCaseAsync(bool recovered)
     {
+        // Leave one slot under the 20-record restore cap for the unmatched exact attempt.
+        const int refusalCount = 19;
+        var lastRefusalStart = At.AddMinutes(refusalCount - 1);
         var goal = Make(808, At, Credentials[0], kind: ProviderFailureKind.BudgetExhausted,
             stderr: "ERROR: weekly usage limit reached");
         var task = goal.Tasks[0];
         var original = task.LastDispatch!;
         var alternate = original with { ProviderName = "OpenAI", ClaudeCredentialSourceDirectory = null };
         var dispatches = Enumerable.Range(0, 256).Select(index =>
-            (index < 128 ? original : alternate) with { DispatchedAt = At.AddMinutes(index) }).ToList();
+            (index < refusalCount ? original : alternate) with { DispatchedAt = At.AddMinutes(index) }).ToList();
         dispatches.Insert(1, alternate with { DispatchedAt = At.AddSeconds(30) });
-        var refusals = Enumerable.Range(0, 128).Select(index => task.LastVerification! with
+        var refusals = Enumerable.Range(0, refusalCount).Select(index => task.LastVerification! with
         {
             DispatchAttemptAt = null,
             DispatchStartedAt = (index % 4) switch
@@ -503,8 +506,8 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         refusals.Add(task.LastVerification! with
         {
             DispatchAttemptAt = At.AddTicks(-1),
-            DispatchStartedAt = At.AddMinutes(127),
-            CompletedAt = At.AddMinutes(127).AddSeconds(10)
+            DispatchStartedAt = lastRefusalStart,
+            CompletedAt = lastRefusalStart.AddSeconds(10)
         });
         return SaveAsync([goal with
         {
@@ -512,7 +515,7 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
             {
                 DispatchHistory = dispatches, LastDispatch = dispatches[^1],
                 VerificationHistory = refusals, LastVerification = refusals[^1],
-                LatestProviderBudgetRecoveryAt = recovered ? At.AddMinutes(127).AddSeconds(30) : null
+                LatestProviderBudgetRecoveryAt = recovered ? lastRefusalStart.AddSeconds(30) : null
             }]
         }]);
     }
