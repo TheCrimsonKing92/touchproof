@@ -58,7 +58,7 @@ internal static class FixtureGitReplay
         var origin = RunNative(repo, "git.exe", "remote", "get-url", "origin");
         var gitVersion = RunNative(repo, "git.exe", "--version");
         var sdk = RunNative(repo, "dotnet.exe", "--version");
-        var powerShell = RunNative(repo, "pwsh.exe", "-NoProfile", "-NonInteractive", "--version");
+        var powerShell = RunNative(repo, WorkerShell.Executable, "-NoProfile", "-NonInteractive", "--version");
         var launcherHash = Hash(typeof(FixtureGitReplay).Assembly.Location);
         var runnerHash = Hash(Path.Combine(repo, Runner));
 
@@ -135,7 +135,7 @@ internal static class FixtureGitReplay
             var label = NativeIntegrityLabelWriter.Write(staging, "(OI)(CI)L", recursive: false);
             if (!label.Succeeded)
                 throw new Win32Exception(label.Win32Error, $"Could not label fixture replay staging directory {staging} ({label.Reason}).");
-            var runner = StartInfo(repo, "pwsh.exe", "-NoProfile", "-NonInteractive", "-File", Path.Combine(repo, Runner),
+            var runner = StartInfo(repo, WorkerShell.Executable, "-NoProfile", "-NonInteractive", "-File", Path.Combine(repo, Runner),
                 "-Target", Path.Combine(repo, Project), "-Configuration", configuration, "-NoBuild", "-Filter", filter,
                 "-ResultsRoot", Path.Combine(staging, "tests"), "-SlotTimingFile", Path.Combine(staging, "slot.jsonl"),
                 "-TestInput", $"MCG_TEST_INPUT_FIXTURE_GIT_PROBE_TRACE={Path.Combine(staging, "probes.jsonl")}");
