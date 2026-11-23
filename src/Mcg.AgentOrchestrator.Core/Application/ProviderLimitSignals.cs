@@ -197,13 +197,9 @@ public static class ProviderLimitSignals
             (HasAvailabilityEvidence(item.Verification) || item.Evidence.Confirmed &&
                 string.Equals(item.Evidence.ScopedModel(item.Dispatch), requestedBinding.Model, StringComparison.OrdinalIgnoreCase)) &&
             !ProviderBudgetHoldSchedules.IsStaleProbeResult(history, item.Task, item.Dispatch, item.Verification.CompletedAt)).ToArray();
-        var availableCompletions = observations.Where(item =>
+        var available = new ProviderHoldBindingHistory.VerifiedAvailability(observations.Where(item =>
                 HasAvailabilityEvidence(item.Verification) &&
-                ProviderBudgetHoldSchedules.IsCurrentDispatch(history, item.Task, item.Dispatch))
-            .GroupBy(item => (item.Task, item.Dispatch))
-            .ToDictionary(group => group.Key, group => (DateTimeOffset?)group.Max(item => item.Verification.CompletedAt));
-        var latestAvailableDispatchStart = availableCompletions.Keys
-            .Select(attempt => (DateTimeOffset?)attempt.Dispatch.DispatchedAt).Max();
+                ProviderBudgetHoldSchedules.IsCurrentDispatch(history, item.Task, item.Dispatch)));
         var reset = history.LatestReset();
         var placements = observations.Where(item => item.Evidence.Confirmed)
             .Select(item => (item.Goal, item.Task.Id, item.Verification.CompletedAt)).ToHashSet();
@@ -222,10 +218,9 @@ public static class ProviderLimitSignals
             // A later verified result can supersede the refusal from its own dispatch.
             // A different dispatch must have started at or after hold placement.
             if (!evidence.Confirmed ||
-                HasExplicitBudgetRecoveryForBinding(task, requestedBinding.Key, verification.CompletedAt) ||
+                history.HasExplicitRecovery(task, verification.CompletedAt) ||
                 checkedAvailabilityAt >= verification.CompletedAt ||
-                latestAvailableDispatchStart >= verification.CompletedAt ||
-                availableCompletions.GetValueOrDefault((task, dispatch)) > verification.CompletedAt)
+                available.Supersedes(observation))
             {
                 continue;
             }
@@ -263,21 +258,6 @@ public static class ProviderLimitSignals
     internal static bool HasAvailabilityEvidence(TaskVerificationRecord verification) =>
         verification.Succeeded && verification.CompletionVerdictVerifiedSuccess &&
         verification.ProviderFailureKind == ProviderFailureKind.Unknown;
-
-    private static bool HasExplicitBudgetRecoveryForBinding(
-        TaskSpec task,
-        string bindingKey,
-        DateTimeOffset exhaustedAt)
-    {
-        if (task.LatestProviderBudgetRecoveryAt is not { } recoveredAt || recoveredAt <= exhaustedAt)
-        {
-            return false;
-        }
-
-        var recoveredDispatch = task.DispatchHistory
-            .LastOrDefault(dispatch => dispatch.DispatchedAt <= recoveredAt);
-        return recoveredDispatch is not null && ProviderHoldBinding.Matches(recoveredDispatch, bindingKey);
-    }
 
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {

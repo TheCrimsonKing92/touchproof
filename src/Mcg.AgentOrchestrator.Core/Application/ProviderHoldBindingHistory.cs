@@ -9,10 +9,33 @@ internal sealed class ProviderHoldBindingHistory(string key)
         TaskDispatchRecord Dispatch, ProviderHoldEvidence Evidence);
     internal sealed record Note(Goal Goal, ProgressEvent Event, int Index);
 
+    internal sealed class VerifiedAvailability
+    {
+        private readonly Dictionary<(TaskSpec, TaskDispatchRecord), DateTimeOffset> _completed = [];
+        private DateTimeOffset? _latestStart;
+
+        internal VerifiedAvailability(IEnumerable<Observation> observations)
+        {
+            foreach (var (_, task, verification, dispatch, _) in observations)
+            {
+                var key = (task, dispatch);
+                if (!_completed.TryGetValue(key, out var completed) || verification.CompletedAt > completed)
+                    _completed[key] = verification.CompletedAt;
+                if (_latestStart is null || dispatch.DispatchedAt > _latestStart)
+                    _latestStart = dispatch.DispatchedAt;
+            }
+        }
+
+        internal bool Supersedes(Observation refusal) =>
+            _latestStart >= refusal.Verification.CompletedAt ||
+            _completed.TryGetValue((refusal.Task, refusal.Dispatch), out var completed) &&
+            completed > refusal.Verification.CompletedAt;
+    }
+
     internal string Key { get; } = key;
     internal List<(Goal Goal, TaskSpec Task, TaskDispatchRecord Dispatch)> Dispatches { get; } = [];
     internal List<Observation> Observations { get; } = [];
-    internal List<(Goal Goal, DateTimeOffset At)> Recoveries { get; } = [];
+    internal Dictionary<TaskSpec, (Goal Goal, DateTimeOffset At)> Recoveries { get; } = [];
     internal List<Note> Notes { get; } = [];
     private Dictionary<TaskId, SortedList<DateTimeOffset, Note>>? _probeNotes;
     private Dictionary<(Goal Goal, TaskId TaskId), List<(TaskSpec Task, TaskDispatchRecord Dispatch)>>? _probeDispatches;
@@ -26,6 +49,11 @@ internal sealed class ProviderHoldBindingHistory(string key)
     internal int ObservationVisits { get; private set; }
     internal int ResetVisits { get; private set; }
     internal int DispatchVisits { get; private set; }
+    internal bool HasExplicitRecovery(TaskSpec task, DateTimeOffset exhaustedAt)
+    {
+        DispatchVisits++;
+        return Recoveries.TryGetValue(task, out var recovery) && recovery.At > exhaustedAt;
+    }
     internal IReadOnlySet<(TaskSpec, TaskDispatchRecord)> ObservationsByAttempt =>
         _observationsByAttempt ??= ReadObservations().Select(item => (item.Task, item.Dispatch)).ToHashSet();
 
@@ -315,32 +343,32 @@ internal sealed class ProviderHoldBindingHistory(string key)
     }
 
     internal static void Populate(IEnumerable<Goal> goals, Func<string, ProviderHoldBindingHistory?> getHistory,
-        Action<Goal>? visit = null, Action<Observation>? observe = null)
+        Action<Goal>? visit = null, Action<Observation>? observe = null, Action<int>? recordDispatchVisits = null)
     {
         foreach (var goal in goals)
         {
             visit?.Invoke(goal);
             foreach (var task in goal.Tasks)
             {
-                var attempts = new Dictionary<DateTimeOffset, TaskDispatchRecord>();
+                var attempts = new ProviderHoldBinding.DispatchIndex();
                 foreach (var dispatch in task.DispatchHistory)
                 {
-                    attempts[dispatch.DispatchedAt] = dispatch;
+                    attempts.Add(dispatch);
                     foreach (var history in Histories(dispatch))
                         history.Dispatches.Add((goal, task, dispatch));
                 }
                 foreach (var verification in task.VerificationHistory)
                 {
-                    var dispatch = verification.DispatchAttemptAt is { } attempt
-                        ? attempts.GetValueOrDefault(attempt) : ProviderHoldBinding.FindDispatch(task, verification);
+                    var dispatch = attempts.MatchVerification(verification);
                     if (dispatch is null) continue;
                     var observation = new Observation(goal, task, verification, dispatch, ProviderHoldEvidence.Read(verification));
                     observe?.Invoke(observation);
                     foreach (var history in Histories(dispatch)) history.Observations.Add(observation);
                 }
                 if (task.LatestProviderBudgetRecoveryAt is { } at &&
-                    task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt <= at) is { } recovered)
-                    foreach (var history in Histories(recovered)) history.Recoveries.Add((goal, at));
+                    attempts.LastStoredAtOrBefore(at) is { } recovered)
+                    foreach (var history in Histories(recovered)) history.Recoveries[task] = (goal, at);
+                recordDispatchVisits?.Invoke(attempts.Visits);
             }
             var timeline = goal.Timeline;
             for (var index = 0; index < timeline.Count; index++)

@@ -118,16 +118,27 @@ public sealed class ProviderHoldHistory
         }
     }
 
-    internal static IEnumerable<ProviderHoldSeedAttempt> SeedAttempts(Goal goal) =>
-        from task in goal.Tasks
-        from verification in task.VerificationHistory
-        where ProviderHoldEvidence.Read(verification).Confirmed
-        let dispatch = ProviderHoldBinding.FindDispatch(task, verification)
-        where dispatch is not null
-        select new ProviderHoldSeedAttempt(goal.Id.Value, dispatch.ProviderName ?? dispatch.WorkerName,
-            verification.CompletedAt);
+    internal static IEnumerable<ProviderHoldSeedAttempt> SeedAttempts(Goal goal, Action<int>? recordDispatchVisits = null)
+    {
+        foreach (var task in goal.Tasks)
+        {
+            ProviderHoldBinding.DispatchIndex? attempts = null;
+            foreach (var verification in task.VerificationHistory)
+            {
+                if (!ProviderHoldEvidence.Read(verification).Confirmed) continue;
+                if (attempts is null)
+                {
+                    attempts = new();
+                    foreach (var dispatch in task.DispatchHistory) attempts.Add(dispatch);
+                }
+                if (attempts.MatchVerification(verification) is { } matched)
+                    yield return new(goal.Id.Value, matched.ProviderName ?? matched.WorkerName, verification.CompletedAt);
+            }
+            if (attempts is not null) recordDispatchVisits?.Invoke(attempts.Visits);
+        }
+    }
 
-    internal static IEnumerable<ProviderHoldSeedAttempt> SeedRecoveryAttempts(Goal goal)
+    internal static IEnumerable<ProviderHoldSeedAttempt> SeedRecoveryAttempts(Goal goal, Action<int>? recordDispatchVisits = null)
     {
         var recoveries = new List<ProviderHoldSeedAttempt>();
         ProviderHoldBindingHistory.Populate([goal], _ => null, observe: observation =>
@@ -135,7 +146,7 @@ public sealed class ProviderHoldHistory
             if (ProviderLimitSignals.HasAvailabilityEvidence(observation.Verification))
                 recoveries.Add(new(goal.Id.Value, observation.Dispatch.ProviderName ?? observation.Dispatch.WorkerName,
                     observation.Verification.CompletedAt));
-        });
+        }, recordDispatchVisits: recordDispatchVisits);
         return recoveries;
     }
 

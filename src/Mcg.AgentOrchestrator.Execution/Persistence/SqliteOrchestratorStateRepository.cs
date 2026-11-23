@@ -2388,7 +2388,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             connection, SerializerOptions, cancellationToken);
         var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
         var failureHistory = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals).ToArray();
-        var attempts = failureHistory.SelectMany(ProviderHoldHistory.SeedAttempts).Distinct().ToArray();
+        var dispatchMatchingVisits = 0;
+        void RecordDispatchVisits(int visits) => dispatchMatchingVisits += visits;
+        var attempts = failureHistory.SelectMany(goal => ProviderHoldHistory.SeedAttempts(goal, RecordDispatchVisits))
+            .Distinct().ToArray();
         var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
             cancellationToken, attempts);
         var selection = ProviderHoldHistory.SelectSeedEvidence(rows, attempts, new HashSet<string>(StringComparer.Ordinal));
@@ -2401,14 +2404,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             !selection.Sources.Contains(goal.Id.Value) && !selection.Dependencies.Contains(goal.Id.Value));
         var recoveries = unindexedFailureHistory.Concat(recoveryEvidence.Select(ProviderHoldSeedPruning.Adapt))
             .Concat(recoveryGoals)
-            .SelectMany(ProviderHoldHistory.SeedRecoveryAttempts).Where(attempt =>
+            .SelectMany(goal => ProviderHoldHistory.SeedRecoveryAttempts(goal, RecordDispatchVisits)).Where(attempt =>
                 selection.LowerBounds.TryGetValue(attempt.ProviderName, out var first) && attempt.Timestamp >= first)
             .Distinct().ToArray();
         var witnesses = recoveries.Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
         return new(rows, attempts, candidates.MarkerGoals,
             evidence.Concat(recoveryEvidence.Where(row => witnesses.Contains(row.GoalId))).ToArray())
         {
-            Recoveries = recoveries
+            Recoveries = recoveries,
+            DispatchMatchingVisits = dispatchMatchingVisits
         };
 
         async Task<(IReadOnlyList<ProviderUsageGoalEvidence> Evidence, Goal[] Goals)> ReadAttemptsAsync(

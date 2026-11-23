@@ -6,7 +6,8 @@ internal sealed record ProviderHoldSeedEvaluation(
 internal sealed record ProviderHoldSeedIndexResult(
     IReadOnlySet<string> RequiredGoals,
     IReadOnlyDictionary<string, ProviderHoldSeedEvaluation> Evaluations,
-    int IndexedGoals);
+    int IndexedGoals,
+    int DispatchMatchingVisits);
 
 internal static class ProviderHoldSeedIndex
 {
@@ -30,12 +31,13 @@ internal static class ProviderHoldSeedIndex
             return bucket;
         }
         var bindings = new Dictionary<string, ProviderHoldBinding>(StringComparer.OrdinalIgnoreCase);
+        var dispatchMatchingVisits = 0;
         ProviderHoldBindingHistory.Populate(scope, Bucket, _ => indexedGoals++, observation =>
         {
             if (!observation.Evidence.Confirmed || !sourceIds.Contains(observation.Goal.Id.Value)) return;
             var binding = ProviderHoldBinding.From(observation.Dispatch, observation.Evidence.ScopedModel(observation.Dispatch));
             bindings.TryAdd(binding.Key, binding);
-        });
+        }, visits => dispatchMatchingVisits += visits);
 
         var evaluations = new Dictionary<string, ProviderHoldSeedEvaluation>(StringComparer.OrdinalIgnoreCase);
         var required = new HashSet<string>(StringComparer.Ordinal);
@@ -44,20 +46,19 @@ internal static class ProviderHoldSeedIndex
         foreach (var binding in bindings.Values)
         {
             var bucket = buckets[binding.Key];
-            var recoveryBoundary = DateTimeOffset.MinValue;
+            IReadOnlyList<ProviderHoldBindingHistory.Observation> currentHolds = [];
             var schedule = ProviderLimitSignals.TryGetExactHold(bucket, binding, out var hold)
-                ? ProviderBudgetHoldSchedules.Evaluate(bucket, hold, out recoveryBoundary) : null;
+                ? ProviderBudgetHoldSchedules.Evaluate(bucket, hold, out currentHolds) : null;
             // Probe and reset generations can refer to an earlier placement. For an
             // ordinary recovery, superseded evidence cannot affect the current schedule.
-            var sourceGoals = bucket.HoldObservations()
-                .Where(item => bucket.Notes.Count > 0 || item.Verification.CompletedAt >= recoveryBoundary)
+            var sourceGoals = (schedule is null || bucket.Notes.Count > 0 ? bucket.HoldObservations() : currentHolds)
                 .Select(item => item.Goal.Id.Value)
                 .Distinct(StringComparer.Ordinal).ToArray();
             var dependencies = bucket.ReadObservations()
                 .Where(item => ProviderLimitSignals.HasAvailabilityEvidence(item.Verification))
                 .Select(item => item.Goal.Id.Value)
                 .Concat(bucket.Notes.Select(note => note.Goal.Id.Value))
-                .Concat(bucket.Recoveries.Select(recovery => recovery.Goal.Id.Value));
+                .Concat(bucket.Recoveries.Values.Select(recovery => recovery.Goal.Id.Value));
             if (bucket.Notes.Any(note => ProviderBudgetHoldSchedules.TryParseProbe(note.Event, out _)))
                 dependencies = dependencies.Concat(bucket.Dispatches.Select(attempt => attempt.Goal.Id.Value));
             var dependencyIds = dependencies.Distinct(StringComparer.Ordinal).ToArray();
@@ -91,6 +92,6 @@ internal static class ProviderHoldSeedIndex
                         foreach (var witness in witnesses)
                             if (required.Add(witness)) queue.Enqueue(witness);
         required.ExceptWith(workingIds);
-        return new(required, evaluations, indexedGoals);
+        return new(required, evaluations, indexedGoals, dispatchMatchingVisits);
     }
 }

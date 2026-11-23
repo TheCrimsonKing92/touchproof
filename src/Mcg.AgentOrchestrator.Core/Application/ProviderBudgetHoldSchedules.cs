@@ -280,14 +280,14 @@ public static class ProviderBudgetHoldSchedules
         Evaluate(ProviderHoldBindingHistory.Read(goals, hold.BindingKey), hold, out _);
 
     internal static ProviderBudgetHoldSchedule Evaluate(ProviderHoldBindingHistory history, ProviderBudgetExhaustionHold hold,
-        out DateTimeOffset recoveryAt)
+        out IReadOnlyList<ProviderHoldBindingHistory.Observation> currentHolds)
     {
         var dispatches = history.Dispatches;
         var observations = history.ReadObservations().Where(item =>
             !IsStaleProbeResult(history, item.Task, item.Dispatch, item.Verification.CompletedAt)).ToArray();
         var held = observations.Where(item => IsHoldObservation(item.Verification, item.Dispatch, hold.BindingKey)).ToArray();
         var exhaustion = held.FirstOrDefault(item => item.Goal.Id == hold.SourceGoalId &&
-            item.Task.Id == hold.SourceTaskId && item.Verification.CompletedAt == hold.PlacedAt)?.Verification
+            item.Task.Id == hold.SourceTaskId && item.Verification.CompletedAt == hold.PlacedAt)
             ?? throw new InvalidOperationException("A provider hold requires a confirmed verification on its binding.");
         var notes = history.Notes;
         var heldPlacements = held.Select(item => (item.Task.Id, item.Verification.CompletedAt)).ToHashSet();
@@ -300,17 +300,19 @@ public static class ProviderBudgetHoldSchedules
         var standaloneHistory = ApplicableWhenRecorded(history, standaloneResults)
             .Select(item => item.Note)
             .OrderBy(item => item.Event.OccurredAt).ToArray();
-        var latestRecovery = history.Recoveries.Select(item => item.At)
-            .Concat(observations.Where(item => ProviderLimitSignals.HasAvailabilityEvidence(item.Verification) &&
-                IsCurrentDispatch(history, item.Task, item.Dispatch, item.Verification.CompletedAt))
-                .Select(item => item.Verification.CompletedAt))
+        var latestRecovery = history.Recoveries.Values.Select(item => item.At)
             .Concat(standaloneHistory.Where(item => TryParseStandaloneResult(item.Event, out var result) && result.Outcome == "available")
                 .Select(item => item.Event.OccurredAt))
-            .Where(at => at <= exhaustion.CompletedAt)
+            .Where(at => at <= hold.PlacedAt)
             .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-        recoveryAt = latestRecovery;
+        var available = new ProviderHoldBindingHistory.VerifiedAvailability(observations.Where(item =>
+            item.Verification.CompletedAt <= hold.PlacedAt &&
+            ProviderLimitSignals.HasAvailabilityEvidence(item.Verification) &&
+            IsCurrentDispatch(history, item.Task, item.Dispatch, item.Verification.CompletedAt)));
+        currentHolds = held.Where(item => item == exhaustion ||
+            item.Verification.CompletedAt >= latestRecovery && !available.Supersedes(item)).ToArray();
         var reset = history.LatestReset();
-        var firstExhaustion = held.Where(item => item.Verification.CompletedAt >= latestRecovery).Min(item => item.Verification.CompletedAt);
+        var firstExhaustion = currentHolds.Min(item => item.Verification.CompletedAt);
         if (reset?.AppliedAt < firstExhaustion) reset = null;
         standaloneHistory = standaloneHistory.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
             result.PlacedAt >= firstExhaustion).ToArray();
@@ -335,7 +337,7 @@ public static class ProviderBudgetHoldSchedules
             .Select(item => item.Verification)
             .Where(verification => verification is not null && verification.CompletedAt >= firstExhaustion)
             .Select(verification => verification!).Distinct().ToArray();
-        var k = scheduleHolds.Count(item => item.Verification.CompletedAt >= latestRecovery && (reset is null ||
+        var k = currentHolds.Count(item => scheduleHolds.Contains(item) && (reset is null ||
                 item.Dispatch!.DispatchedAt >= reset.AppliedAt && item.Dispatch.DispatchedAt >= reset.Marker.ResetAt &&
                 InCurrentGeneration(item)));
         var attempt = (reset is null ? Math.Max(1, k) : 1 + k) + completedProbes.Length + standalone.Length;
@@ -358,7 +360,7 @@ public static class ProviderBudgetHoldSchedules
             source = "parsed";
         }
         var latestCompletion = completedProbes.Select(verification => verification.CompletedAt)
-            .Concat(standalone.Select(item => item.Event.OccurredAt)).Append(exhaustion.CompletedAt).Max();
+            .Concat(standalone.Select(item => item.Event.OccurredAt)).Append(hold.PlacedAt).Max();
         var next = completedProbes.Length == 0 && standalone.Length == 0 && (reset is null || k == 0) && resetAt is { } known
             ? (known < hold.PlacedAt ? hold.PlacedAt : known) :
             latestCompletion.AddMinutes(Math.Min(30 * Math.Pow(2, Math.Min(attempt - 1, 4)), 360)).ToUniversalTime();
@@ -400,7 +402,7 @@ public static class ProviderBudgetHoldSchedules
             }).Where(item => item.Kind != ProviderFailureKind.Unknown)).MaxBy(item => item.At);
         return new(hold, attempt, resetAt, source, next, inFlight, admittedGoal, admittedTask, lastOutcome)
         {
-            LastProbeAt = diagnosticChecks.Length > 0 ? diagnosticChecks[^1].At : exhaustion.CompletedAt,
+            LastProbeAt = diagnosticChecks.Length > 0 ? diagnosticChecks[^1].At : hold.PlacedAt,
             ProviderResetAt = providerReset,
             QuotaConfirmedByProbe = standaloneHistory.Any(item =>
                 TryParseStandaloneResult(item.Event, out var check) && check.Outcome == "exhausted"),

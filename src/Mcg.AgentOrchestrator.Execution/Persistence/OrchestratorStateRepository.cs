@@ -192,6 +192,7 @@ public sealed record ProviderHoldSeedHistory(IReadOnlyList<ModelFitHistoryRow> R
     IReadOnlyList<ProviderUsageGoalEvidence> Evidence)
 {
     internal IReadOnlyList<ProviderHoldSeedAttempt> Recoveries { get; init; } = [];
+    internal int DispatchMatchingVisits { get; init; }
 }
 
 internal static class ConductLoopGoalStatus

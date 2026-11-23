@@ -19,6 +19,54 @@ internal sealed record ProviderHoldBinding(string Provider, string? Credential, 
             ? dispatch : null;
     }
 
+    internal sealed class DispatchIndex
+    {
+        private readonly Dictionary<DateTimeOffset, TaskDispatchRecord> _exact = [];
+        private readonly List<TaskDispatchRecord> _completionFallback = [];
+
+        internal int Visits { get; private set; }
+
+        internal void Add(TaskDispatchRecord dispatch)
+        {
+            Visits++;
+            _exact[dispatch.DispatchedAt] = dispatch;
+            // A later stored dispatch with an earlier start wins every fallback
+            // that could have selected the earlier stored dispatch.
+            while (_completionFallback.Count > 0 &&
+                _completionFallback[^1].DispatchedAt >= dispatch.DispatchedAt)
+                _completionFallback.RemoveAt(_completionFallback.Count - 1);
+            _completionFallback.Add(dispatch);
+        }
+
+        internal TaskDispatchRecord? MatchVerification(TaskVerificationRecord verification)
+        {
+            if (verification.DispatchAttemptAt is { } attempt) return Exact(attempt);
+            if (verification.DispatchStartedAt is { } started && Exact(started) is { } dispatch)
+                return dispatch;
+            return LastStoredAtOrBefore(verification.CompletedAt);
+        }
+
+        private TaskDispatchRecord? Exact(DateTimeOffset at)
+        {
+            Visits++;
+            return _exact.GetValueOrDefault(at);
+        }
+
+        internal TaskDispatchRecord? LastStoredAtOrBefore(DateTimeOffset at)
+        {
+            var low = 0;
+            var high = _completionFallback.Count;
+            while (low < high)
+            {
+                var middle = low + (high - low) / 2;
+                Visits++;
+                if (_completionFallback[middle].DispatchedAt <= at) low = middle + 1;
+                else high = middle;
+            }
+            return low == 0 ? null : _completionFallback[low - 1];
+        }
+    }
+
     internal static bool Matches(TaskDispatchRecord dispatch, string key) =>
         From(dispatch).Key.Equals(key, StringComparison.OrdinalIgnoreCase) ||
         From(dispatch, dispatch.ModelName).Key.Equals(key, StringComparison.OrdinalIgnoreCase);

@@ -91,6 +91,7 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(before.Selection.RowsRead, after.Selection.RowsRead);
         Assert.Equal(before.EvidenceGoals, after.EvidenceGoals);
         Assert.Equal(before.Index.IndexedGoals, after.Index.IndexedGoals);
+        Assert.Equal(before.Index.DispatchMatchingVisits, after.Index.DispatchMatchingVisits);
         Assert.Equal(before.Index.RequiredGoals.Order(StringComparer.Ordinal), after.Index.RequiredGoals.Order(StringComparer.Ordinal));
         Assert.Equal(before.Index.Evaluations.OrderBy(entry => entry.Key), after.Index.Evaluations.OrderBy(entry => entry.Key));
     }
@@ -282,6 +283,70 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(canonicalHolds.ToArray(), ProviderUsageHoldView.Read(kernel.ProviderHoldScope, now).ToArray());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Seed_LegacyRefusals_BoundMatchingAndExplicitRecoveryVisits(bool recovered)
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        var id = ProviderHoldSeedFixture.Id(808);
+        await fixture.PopulateLegacyRefusalCaseAsync(recovered);
+        var token = TestContext.Current.CancellationToken;
+        var canonical = await fixture.Repository.LoadGoalsAsync([new(id)], token);
+        var task = Assert.Single(Assert.Single(canonical.Goals).Tasks);
+        Assert.Equal(257, task.DispatchHistory.Count);
+        Assert.Equal(129, task.VerificationHistory.Count);
+
+        var discovery = await fixture.Repository.ReadProviderHoldSeedHistoryAsync(token);
+        Assert.Equal(128, discovery.Attempts.Count);
+        Assert.All(discovery.Attempts, attempt => Assert.Equal("Anthropic", attempt.ProviderName));
+        Assert.Contains(discovery.Attempts, attempt => attempt.Timestamp == ProviderHoldSeedFixture.At.AddSeconds(45));
+        // One build over 257 dispatches and keyed/binary queries for 129 verifications.
+        // A lookup per refusal over all dispatches would exceed this bound in either pass.
+        Assert.InRange(discovery.DispatchMatchingVisits, 386, 1000);
+
+        var kernel = new AgentOrchestratorKernel();
+        var seeded = Seed(fixture, kernel);
+        Assert.Equal(new[] { id }, seeded.Selection.Sources);
+        Assert.InRange(seeded.Index.DispatchMatchingVisits, 386, 1000);
+        var evaluation = Assert.Single(seeded.Index.Evaluations);
+        Assert.Equal("anthropic::c:/profiles/old", evaluation.Key);
+        Assert.Equal(1, evaluation.Value.Count);
+        Assert.Equal(128, evaluation.Value.DispatchVisits);
+        if (recovered)
+        {
+            Assert.Null(evaluation.Value.Schedule);
+            Assert.Empty(kernel.ProviderHoldHistory.Retained);
+            return;
+        }
+
+        var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Value.Schedule);
+        Assert.Equal(id, schedule.Hold.SourceGoalId.Value);
+        Assert.Equal("legacy-refusal-127", schedule.Hold.EvidenceReceipt);
+        Assert.Equal(128, schedule.Attempt);
+        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(487).AddSeconds(1), schedule.NextProbeAt);
+    }
+
+    [Theory]
+    [InlineData("overlapping", 2)]
+    [InlineData("applicable", 1)]
+    [InlineData("same-attempt", 1)]
+    public async Task Seed_VerifiedRecovery_RespectsDispatchStartAndSameAttempt(string recovery, int expectedAttempts)
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateOverlappingAvailabilityAsync(recovery);
+        var kernel = new AgentOrchestratorKernel();
+        var seeded = Seed(fixture, kernel);
+        var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(Assert.Single(seeded.Index.Evaluations).Value.Schedule);
+        Assert.Equal(ProviderHoldSeedFixture.Id(810), schedule.Hold.SourceGoalId.Value);
+        Assert.Equal("receipt-810", schedule.Hold.EvidenceReceipt);
+        Assert.Equal(expectedAttempts, schedule.Attempt);
+        Assert.Equal(ProviderHoldSeedFixture.At.AddMinutes(expectedAttempts == 2 ? 64 : 34), schedule.NextProbeAt);
+        Assert.Equal(recovery != "applicable", seeded.Index.RequiredGoals.Contains(ProviderHoldSeedFixture.Id(809)));
+        Assert.Equal(schedule, Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope,
+            ProviderHoldSeedFixture.At.AddMinutes(5))).Schedule);
+    }
+
     private static ProviderHoldHistoryStartupSeed.Result Seed(ProviderHoldSeedFixture fixture, AgentOrchestratorKernel kernel) =>
         Seed(fixture.Repository, kernel);
 
@@ -410,6 +475,81 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
                 ProgressKind.TaskNote, ProviderBudgetHoldSchedules.FormatProbe(
                     new(binding, dispatch.DispatchedAt, index + 1, "backoff") { HoldPlacedAt = At }),
                 dispatch.DispatchedAt)).ToArray()
+        }]);
+    }
+
+    internal Task PopulateLegacyRefusalCaseAsync(bool recovered)
+    {
+        var goal = Make(808, At, Credentials[0], kind: ProviderFailureKind.BudgetExhausted,
+            stderr: "ERROR: weekly usage limit reached");
+        var task = goal.Tasks[0];
+        var original = task.LastDispatch!;
+        var alternate = original with { ProviderName = "OpenAI", ClaudeCredentialSourceDirectory = null };
+        var dispatches = Enumerable.Range(0, 256).Select(index =>
+            (index < 128 ? original : alternate) with { DispatchedAt = At.AddMinutes(index) }).ToList();
+        dispatches.Insert(1, alternate with { DispatchedAt = At.AddSeconds(30) });
+        var refusals = Enumerable.Range(0, 128).Select(index => task.LastVerification! with
+        {
+            DispatchAttemptAt = null,
+            DispatchStartedAt = (index % 4) switch
+            {
+                0 or 2 => At.AddMinutes(index),
+                3 => At.AddMinutes(index).AddTicks(1),
+                _ => null
+            },
+            CompletedAt = At.AddMinutes(index).AddSeconds(index == 0 ? 45 : 1),
+            StandardErrorPath = $"legacy-refusal-{index}"
+        }).ToList();
+        refusals.Add(task.LastVerification! with
+        {
+            DispatchAttemptAt = At.AddTicks(-1),
+            DispatchStartedAt = At.AddMinutes(127),
+            CompletedAt = At.AddMinutes(127).AddSeconds(10)
+        });
+        return SaveAsync([goal with
+        {
+            Tasks = [task with
+            {
+                DispatchHistory = dispatches, LastDispatch = dispatches[^1],
+                VerificationHistory = refusals, LastVerification = refusals[^1],
+                LatestProviderBudgetRecoveryAt = recovered ? At.AddMinutes(127).AddSeconds(30) : null
+            }]
+        }]);
+    }
+
+    internal Task PopulateOverlappingAvailabilityAsync(string recovery)
+    {
+        var first = Make(809, At.AddMinutes(2), Credentials[0], rule: Rules[0],
+            kind: ProviderFailureKind.BudgetExhausted, stderr: "ERROR: weekly usage limit reached");
+        var last = Make(810, At.AddMinutes(4), Credentials[0], rule: Rules[0],
+            kind: ProviderFailureKind.BudgetExhausted, stderr: "ERROR: weekly usage limit reached");
+        var success = Make(811, At.AddMinutes(3), Credentials[0], success: true);
+        var task = success.Tasks[0];
+        var refusal = first.Tasks[0];
+        var dispatch = recovery == "same-attempt" ? refusal.LastDispatch! : task.LastDispatch! with
+        {
+            DispatchedAt = recovery == "overlapping" ? At : At.AddMinutes(2)
+        };
+        var verification = task.LastVerification! with
+        {
+            DispatchAttemptAt = dispatch.DispatchedAt, DispatchStartedAt = dispatch.DispatchedAt
+        };
+        if (recovery == "same-attempt")
+            return SaveAsync([first with
+            {
+                Tasks = [refusal with
+                {
+                    Status = WorkTaskStatus.Completed, LastVerification = verification,
+                    VerificationHistory = [refusal.LastVerification!, verification]
+                }]
+            }, last]);
+        return SaveAsync([first, last, success with
+        {
+            Tasks = [task with
+            {
+                LastDispatch = dispatch, DispatchHistory = [dispatch],
+                LastVerification = verification, VerificationHistory = [verification]
+            }]
         }]);
     }
 
