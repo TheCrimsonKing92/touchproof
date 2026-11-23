@@ -20,8 +20,11 @@ public sealed class EpicPlanReadySliceSelectorTests
     public async Task Missing_store_and_epics_without_plans_contribute_no_preference()
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
-        Assert.Empty(EpicPlanReadySliceSelector.Read(fixture.Workspace));
+        IReadOnlyList<BacklogItem> UnexpectedBacklogRead() => throw new InvalidOperationException("No epics require a backlog read.");
+        Assert.Empty(EpicPlanReadySliceSelector.Read(fixture.Workspace, UnexpectedBacklogRead));
         Assert.False(File.Exists(fixture.Workspace.PortfolioStorePath));
+        _ = new PortfolioStore(fixture.Workspace.PortfolioStorePath);
+        Assert.Empty(EpicPlanReadySliceSelector.Read(fixture.Workspace, UnexpectedBacklogRead));
         await new PortfolioStore(fixture.Workspace.PortfolioStorePath).AddEpicAsync("No plan");
         var before = File.ReadAllBytes(fixture.Workspace.PortfolioStorePath);
         Assert.Empty(EpicPlanReadySliceSelector.Read(fixture.Workspace));
@@ -39,7 +42,13 @@ public sealed class EpicPlanReadySliceSelectorTests
         await plan.AddSliceAsync(epic.Id, blocked.Id);
         await plan.AddSliceAsync(epic.Id, fixture.Item.Id);
         var before = File.ReadAllBytes(fixture.Workspace.PortfolioStorePath);
-        Assert.Equal(new[] { fixture.Item.Id }, EpicPlanReadySliceSelector.Read(fixture.Workspace));
+        var acquisitions = 0;
+        Assert.Equal(new[] { fixture.Item.Id }, EpicPlanReadySliceSelector.Read(fixture.Workspace, () =>
+        {
+            acquisitions++;
+            return BoardFillBacklogSnapshot.Read(fixture.Workspace.BacklogStorePath);
+        }));
+        Assert.Equal(1, acquisitions);
         Assert.Equal(before, File.ReadAllBytes(fixture.Workspace.PortfolioStorePath));
     }
 

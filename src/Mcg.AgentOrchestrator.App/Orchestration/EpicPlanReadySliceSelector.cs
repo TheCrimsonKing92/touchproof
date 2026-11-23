@@ -5,12 +5,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class EpicPlanReadySliceSelector
 {
-    internal static IReadOnlyList<string> Read(OrchestratorWorkspace workspace)
+    internal static IReadOnlyList<string> Read(OrchestratorWorkspace workspace,
+        Func<IReadOnlyList<BacklogItem>>? readBacklog = null)
     {
         if (!File.Exists(workspace.PortfolioStorePath)) return [];
         var epics = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath)
             .ListEpicsAsync().GetAwaiter().GetResult();
-        return Order(EpicPlanStatusReader.Load(workspace, epics).Values);
+        return Order(EpicPlanStatusReader.Load(workspace, epics, readBacklog: readBacklog).Values);
     }
 
     internal static IReadOnlyList<string> Order(IEnumerable<EpicPlanView> views) =>
