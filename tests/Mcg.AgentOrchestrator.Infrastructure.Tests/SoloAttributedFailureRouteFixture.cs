@@ -67,7 +67,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
 
     internal GoalAcceptanceVerifier CreateVerifier(string checkout, bool baselineThrows = false, bool baselineFails = false,
         bool collidingPassedRows = false, bool mixed = false, bool singleRow = false, string? firstCase = null,
-        Action? onFailedBuild = null, bool captureFails = false)
+        Action? onFailedBuild = null, bool captureFails = false, Exception? baselineException = null)
     {
         string? candidateTrx = null;
         return new(new GoalAcceptanceVerifierTestOverrides
@@ -90,7 +90,8 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             Assert.True(filename >= 0, "The fixture must execute the MTP TRX path.");
             var baseline = !Path.GetFullPath(directory).Equals(Path.GetFullPath(checkout), StringComparison.OrdinalIgnoreCase);
             if (baseline) BaselineRuns++; else CandidateRuns++;
-            if (baseline && baselineThrows) throw new InvalidOperationException("Fixture baseline runner failed.");
+            if (baseline && (baselineThrows || baselineException is not null))
+                throw baselineException ?? new InvalidOperationException("Fixture baseline runner failed.");
             var method = Array.IndexOf(args, "--filter-method");
             string[] names = method < 0
                 ? collidingPassedRows || singleRow ? [First] : mixed ? [First, Long, Unknown] : [First, Long]
@@ -116,13 +117,15 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
 
     internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
         bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
-        string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null)
+        string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null,
+        Exception? baselineException = null)
     {
         var checkout = candidateWorktree ?? Repo;
         var checkedGoal = goal ?? Goal;
         var failedBuilds = 0;
         var verifier = CreateVerifier(checkout, baselineThrows, baselineFails, collidingPassedRows, mixed,
-            singleRow, firstCase, buildFails ? () => failedBuilds++ : null);
+            singleRow, firstCase, buildFails ? () => failedBuilds++ : null, baselineException: baselineException);
+        var baselineDidNotExecute = baselineThrows || baselineException is not null;
         await using var owner = AcceptanceExecutionOwners.CreateAttempt(checkout, checkedGoal.Id,
             options: new(RunId: attemptId ?? "solo-attempt", ResultsPrefix: attemptId is null
                 ? Path.Combine(Root, "results") : Path.Combine(Root, attemptId, "results"), IntegrationBranch: "main"));
@@ -137,7 +140,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         }
         else
         {
-            if (baselineThrows) Assert.Null(verification.SoloFailureReceipt);
+            if (baselineDidNotExecute) Assert.Null(verification.SoloFailureReceipt);
             else
             {
                 Assert.NotNull(verification.SoloFailureReceipt);
@@ -149,16 +152,16 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         var failed = verification.Checks!.Where(check => !check.Passed && !check.Advisory).ToArray();
         if (!mixed)
             Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
-                attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed :
+                attr => Assert.Equal(baselineDidNotExecute ? AcceptanceTestFailureOrigin.Unattributed :
                     baselineFails ? AcceptanceTestFailureOrigin.Inherited : AcceptanceTestFailureOrigin.Introduced,
                     attr.Origin));
         Summary = AcceptanceVerificationSummary.FromVerification(verification, failed, failed.Select(check => check.Name).ToArray(),
             verification.SoloFailureReceipt?.CandidateSha ?? Context.CandidateSha,
             verification.SoloFailureReceipt?.MainSha ?? Context.MainSha, verification.TestResultPaths,
             buildFails ? null : failed.Select(check => new AcceptanceCheckAttribution(check.Name,
-                baselineThrows ? AcceptanceFailureOrigin.Unattributed :
+                baselineDidNotExecute ? AcceptanceFailureOrigin.Unattributed :
                     baselineFails ? AcceptanceFailureOrigin.Inherited : AcceptanceFailureOrigin.Introduced,
-                baselineThrows ? "fixture baseline execution failed" :
+                baselineDidNotExecute ? "fixture baseline execution failed" :
                     baselineFails ? "fixture authoritative baseline fails the same identities" :
                     "fixture authoritative baseline is green")).ToArray(), null);
     }

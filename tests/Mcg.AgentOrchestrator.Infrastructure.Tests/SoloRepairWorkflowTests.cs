@@ -977,6 +977,73 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReceiptlessEarlyHold_RetainsExactSelectionAcrossRestart(bool lostInheritedEnvelope)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var kernel = fixture.Kernel;
+        var goal = NewCandidate(fixture, kernel);
+        var checkout = Worktree(fixture, goal);
+        var candidate = RunGit(checkout, "rev-parse", "HEAD");
+        var main = fixture.Git("rev-parse", "main");
+        fixture.Context = new(candidate, main, RunGit(checkout, "rev-parse", "HEAD^{tree}"), main);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+
+        const string dataCase = "(value: 1)";
+        var baselineException = lostInheritedEnvelope ? null : new DotnetBuildSlotsBusyException(new("fixture", []));
+        await fixture.Produce(baselineFails: lostInheritedEnvelope, attemptId: goal.Id.Value, candidateWorktree: checkout,
+            goal: goal, singleRow: true, firstCase: dataCase, baselineException: baselineException);
+        var completion = fixture.Summary;
+        var attribution = Assert.Single(completion.RequiredUnmetCriteria.SelectMany(check => check.FailingTestAttributions!));
+        Assert.Equal(First + dataCase, attribution.TestIdentity);
+        Assert.True(completion.RequiresSoloFailureReceipt);
+        if (lostInheritedEnvelope)
+        {
+            Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attribution.Origin);
+            Assert.NotNull(completion.SoloFailureReceipt);
+            completion = completion with { SoloFailureReceipt = null };
+        }
+        else
+        {
+            Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attribution.Origin);
+            Assert.Contains(nameof(DotnetBuildSlotsBusyException), attribution.Evidence, StringComparison.Ordinal);
+            Assert.Null(completion.SoloFailureReceipt);
+        }
+
+        var request = $"{Project}: FullyQualifiedName~{First}";
+        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequests = [request] };
+        var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(Complete(Driver(kernel, workspace, verifier), goal, completion).Outcome);
+        var disposition = AcceptanceApparatusDispositionFacts.FromRecordedFacts(hold.Decision!.Facts);
+        Assert.Equal(lostInheritedEnvelope ? AcceptanceApparatusDisposition.ExcludedUnattributableHold :
+            AcceptanceApparatusDisposition.ApparatusRedRegateHold, disposition.Disposition);
+        if (!lostInheritedEnvelope)
+            Assert.Equal(ApparatusRedClassifier.BaselineNotExecutedEvidenceKind, disposition.EvidenceKind);
+        Assert.Empty(verifier.FocusedRuns);
+        await repository.SaveAsync(kernel);
+
+        var restarted = await repository.LoadAsync();
+        var reloaded = restarted.GetGoal(goal.Id);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var unresolved = Assert.Single(new SoloBaselineRepairStore(path).ReadFindings(reloaded.Id.Value));
+        Assert.Equal((candidate, main, completion.AttemptId), (unresolved.Candidate, unresolved.Main, unresolved.Attempt));
+        Assert.Equal((ManifestCheckName, First + dataCase, Project, request),
+            (unresolved.Check, unresolved.Identity, unresolved.Project, unresolved.Request));
+        Assert.Equal(SoloHoldReasons.CaptureUnavailable, unresolved.Reason);
+        Assert.False(unresolved.Inherited);
+        Assert.Null(unresolved.Proof);
+        Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+
+        AssertHold(Driver(restarted, workspace, verifier).AdvanceOnce(reloaded, Policy), SoloHoldReasons.RepairEvidenceRequired, "operator");
+        Assert.Equal((request, candidate), Assert.Single(verifier.FocusedRuns));
+        Assert.Empty(verifier.NormalRuns);
+        Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+    }
+
     [Fact]
     public async Task InvalidEnvelope_KeepsLiveExactSelectionsAcrossRestart()
     {

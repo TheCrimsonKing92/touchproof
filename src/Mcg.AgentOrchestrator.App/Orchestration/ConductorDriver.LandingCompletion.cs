@@ -92,6 +92,10 @@ internal sealed partial class ConductorDriver
 
         if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt))
         {
+            // Excluded failures and apparatus re-gates can return without recording a solo receipt.
+            if (acceptance.SoloFailureReceipt is null)
+                _soloBaselineRepair?.RetainReceiptlessCompletion(goal, acceptance);
+
             // Earlier inherited failures can make a post-repair candidate failure look
             // recurrent. Let the repair coordinator validate the new receipt first.
             var preferSoloRepair = _soloBaselineRepair is not null && acceptance.SoloFailureReceipt is not null &&

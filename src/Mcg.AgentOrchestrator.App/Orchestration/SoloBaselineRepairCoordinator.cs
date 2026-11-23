@@ -50,6 +50,12 @@ internal sealed class SoloBaselineRepairCoordinator(
         string? candidate, string? main) => findings.Where(finding => finding.Candidate == candidate && finding.Main == main)
         .Select(finding => CheckRetainedProof(store, goal, finding)).ToArray();
 
+    internal void RetainReceiptlessCompletion(Goal goal, AcceptanceVerificationSummary completion)
+    {
+        var findings = SoloAcceptanceFailureReceiptReader.ReadReceiptlessCompletion(completion);
+        if (findings.Count > 0) RetainFindings(_store, goal, findings);
+    }
+
     internal static void RetainSoloRepairPartition(SoloBaselineRepairStore store, Goal goal,
         Func<SoloAcceptanceConsumptionContext?> readContext, Func<GateReadyCandidateRevisionPair?> readCurrentRevisions,
         AcceptanceVerificationSummary? completion = null)

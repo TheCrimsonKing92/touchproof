@@ -88,25 +88,39 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         }
     }
 
+    internal static IReadOnlyList<SoloRepairFinding> ReadReceiptlessCompletion(AcceptanceVerificationSummary completion)
+    {
+        var observed = completion.RequiredUnmetCriteria.ToLookup(check => check.Name, StringComparer.Ordinal);
+        var failedChecks = completion.FailedChecks ?? observed.Select(check => check.Key).ToArray();
+        return UnresolvedFindings(failedChecks, completion.BranchHeadSha, completion.MainHeadSha, completion.AttemptId,
+            observed, proof: null, SoloHoldReasons.CaptureUnavailable).Where(finding => finding.Identity.Length > 0).ToArray();
+    }
+
     private static SoloRepairPartition UnresolvedChecks(AcceptanceFailureSummary summary, SoloAcceptanceFailureReceipt? receipt,
         AcceptanceVerificationSummary? completion, string reason)
     {
         var observed = completion is not null && completion.BranchHeadSha == summary.BranchHeadSha &&
             completion.MainHeadSha == summary.MainHeadSha && completion.AttemptId == summary.AttemptId
             ? completion.RequiredUnmetCriteria.ToLookup(check => check.Name, StringComparer.Ordinal) : null;
-        var findings = new List<SoloRepairFinding>();
-        foreach (var name in summary.FailedChecks)
+        return new(UnresolvedFindings(summary.FailedChecks, summary.BranchHeadSha, summary.MainHeadSha,
+            summary.AttemptId, observed, receipt?.Evidence, reason).ToArray(), null);
+    }
+
+    private static IEnumerable<SoloRepairFinding> UnresolvedFindings(IReadOnlyList<string> failedChecks,
+        string? candidate, string? main, string? attempt, ILookup<string, AcceptanceCheckResult>? observed,
+        SoloAcceptanceArtifact? proof, string reason)
+    {
+        foreach (var name in failedChecks)
         {
             var checks = observed?[name].ToArray();
             var check = checks is [var only] && Usable(only) && !only.Passed && !only.Advisory ? only : null;
             foreach (var identity in (check?.FailingTestIdentities ?? []).DefaultIfEmpty("").Distinct(StringComparer.Ordinal))
             {
-                var finding = NewUnresolvedFinding(summary.BranchHeadSha ?? "", summary.MainHeadSha ?? "", "",
-                    summary.AttemptId ?? "", receipt?.Evidence, name, identity, check?.TestProjectPath, reason);
-                findings.Add(check is null ? finding : BindRepairSelection(finding, check));
+                var finding = NewUnresolvedFinding(candidate ?? "", main ?? "", "",
+                    attempt ?? "", proof, name, identity, check?.TestProjectPath, reason);
+                yield return check is null ? finding : BindRepairSelection(finding, check);
             }
         }
-        return new(findings, null);
     }
 
     private static SoloRepairFinding NewUnresolvedFinding(string candidate, string main, string baseline, string attempt,
