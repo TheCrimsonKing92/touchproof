@@ -168,7 +168,7 @@ public sealed class SoloRepairWorkflowTests
         {
             Bindings = proof.Bindings.Where(binding => binding.TestIdentity != Unknown).ToArray()
         });
-        var request = $"Sample.Tests: FullyQualifiedName~{Unknown}";
+        var request = $"{Project}: FullyQualifiedName~{Unknown}";
         var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequest = request };
         var driver = Driver(fixture.Kernel, workspace, verifier);
         driver.FailureDiagnosis = null;
