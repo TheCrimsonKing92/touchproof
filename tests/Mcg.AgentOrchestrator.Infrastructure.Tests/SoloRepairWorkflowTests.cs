@@ -932,6 +932,52 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Fact]
+    public async Task ConductorCompletion_KeepsExactSelectionWhenBaselineThrows()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var kernel = fixture.Kernel;
+        var goal = NewCandidate(fixture, kernel);
+        var checkout = Worktree(fixture, goal);
+        var candidate = RunGit(checkout, "rev-parse", "HEAD");
+        var main = fixture.Git("rev-parse", "main");
+        fixture.Context = new(candidate, main, RunGit(checkout, "rev-parse", "HEAD^{tree}"), main);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+
+        const string dataCase = "(value: 1)";
+        await fixture.Produce(baselineThrows: true, attemptId: goal.Id.Value, candidateWorktree: checkout,
+            goal: goal, singleRow: true, firstCase: dataCase);
+        var completion = fixture.Summary;
+        Assert.True(completion.RequiresSoloFailureReceipt);
+        Assert.Null(completion.SoloFailureReceipt);
+
+        var request = $"{Project}: FullyQualifiedName~{First}";
+        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequests = [request] };
+        AssertHold(Complete(Driver(kernel, workspace, verifier), goal, completion), SoloHoldReasons.RepairEvidenceRequired, "operator");
+        await repository.SaveAsync(kernel);
+
+        var restarted = await repository.LoadAsync();
+        var reloaded = restarted.GetGoal(goal.Id);
+        var failure = Assert.IsType<AcceptanceFailureSummary>(reloaded.LatestAcceptanceFailure);
+        Assert.Null(failure.SoloFailureReceipt);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var unresolved = Assert.Single(new SoloBaselineRepairStore(path).ReadFindings(reloaded.Id.Value)
+            .Where(finding => finding.Identity.Length > 0));
+        Assert.Equal((candidate, main, completion.AttemptId), (unresolved.Candidate, unresolved.Main, unresolved.Attempt));
+        Assert.Equal(First + dataCase, unresolved.Identity);
+        Assert.Equal(Project, unresolved.Project);
+        Assert.Equal(request, unresolved.Request);
+        Assert.Equal(SoloHoldReasons.CaptureUnavailable, unresolved.Reason);
+        Assert.False(unresolved.Inherited);
+        Assert.Null(unresolved.Proof);
+        Assert.Equal((request, candidate), Assert.Single(verifier.FocusedRuns));
+        Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+    }
+
+    [Fact]
     public async Task InvalidEnvelope_KeepsLiveExactSelectionsAcrossRestart()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();

@@ -54,8 +54,9 @@ internal sealed class SoloBaselineRepairCoordinator(
         Func<SoloAcceptanceConsumptionContext?> readContext, Func<GateReadyCandidateRevisionPair?> readCurrentRevisions,
         AcceptanceVerificationSummary? completion = null)
     {
-        if (goal.LatestAcceptanceFailure?.SoloFailureReceipt is null) return;
-        var current = readContext();
+        var receipt = goal.LatestAcceptanceFailure?.SoloFailureReceipt;
+        if (receipt is null && completion?.RequiresSoloFailureReceipt != true) return;
+        var current = receipt is null ? null : readContext();
         var partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, current, completion);
         if (current is not null && partition?.Findings.Any(finding => finding.Reason is null) == true &&
             readCurrentRevisions() != new GateReadyCandidateRevisionPair(current.CandidateSha, current.MainSha))
