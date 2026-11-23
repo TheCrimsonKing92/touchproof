@@ -115,6 +115,42 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Fact]
+    public async Task RefreshedBaselineStillRed_EscalatesTheRepairDecisionOnce()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var verifier = new ControlledVerifier(fixture.Root) { RefreshedBaselinePass = false };
+        var driver = Driver(fixture.Kernel, workspace, verifier);
+        AssertHold(Complete(driver, goal, await ProduceFailure(fixture, goal)), SoloHoldReasons.RepairPending);
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var finding = Assert.Single(store.ReadFindings(goal.Id.Value));
+        var repairId = Assert.IsType<string>(store.ReadGroup(finding.GroupKey)?.RepairGoal);
+        verifier.Finding = finding;
+        fixture.Git("commit", "--allow-empty", "-m", $"Integrate goal/{repairId}: incomplete repair");
+        var refreshedMain = fixture.Git("rev-parse", "HEAD");
+        RunGit(Worktree(fixture, goal), "rebase", "main");
+
+        for (var tick = 0; tick < 2; tick++)
+        {
+            var result = driver.AdvanceOnce(goal, Policy);
+            AssertHold(result, SoloHoldReasons.RepairEvidenceRequired, "operator");
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            Assert.Contains($"The original test {finding.Identity} executed and still fails on refreshed baseline {refreshedMain}",
+                held.Reason, StringComparison.Ordinal);
+            Assert.Contains($"reopen repair {repairId} or designate a follow-up repair", held.Reason, StringComparison.Ordinal);
+        }
+
+        Assert.Equal((finding.Request!, refreshedMain), Assert.Single(verifier.FocusedRuns));
+        Assert.Equal("failed", store.ReadCheck(SoloBaselineRepairStore.ValidationKey(finding, refreshedMain))?.Outcome);
+        var events = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).EventFilePath(goal.Id);
+        Assert.Single(File.ReadLines(events).Where(line => line.Contains("\"eventType\":\"GoalEscalated\"")));
+        Assert.Empty(verifier.NormalRuns);
+    }
+
+    [Fact]
     public async Task RepairFlow_AfterLostAcknowledgement_ReusesRepairAndRegatesEachCandidate()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
@@ -182,6 +218,9 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(1, SoloRepairReplayTests.Count(storePath, "solo_repair_group"));
         Assert.Equal(4, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
         Assert.Equal(0, SoloRepairReplayTests.Count(storePath, "solo_repair_check"));
+        var corroboration = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+        Assert.Equal(4, corroboration.ReadSoloInheritedReceipts(oldMain, repair.Id, oldMain).Count);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, PostLandingCanaryFactory.CreateCircuit(workspace).Read().Health);
         Assert.Equal(firstEpic.Id, (await portfolio.GetGoalMembershipAsync(first.Id.Value))?.EpicId);
         Assert.Equal(secondEpic.Id, (await portfolio.GetGoalMembershipAsync(second.Id.Value))?.EpicId);
 
@@ -608,6 +647,7 @@ public sealed class SoloRepairWorkflowTests
         internal string? UnresolvedAttributionRequest { get; init; }
         internal bool? AttributionBaselinePass { get; init; }
         internal bool AttributionCandidatePass { get; init; }
+        internal bool RefreshedBaselinePass { get; init; } = true;
         internal List<(string Request, string Sha)> FocusedRuns { get; } = [];
         internal List<(GoalId Goal, string Sha)> NormalRuns { get; } = [];
         internal bool NormalPass { get; set; }
@@ -627,7 +667,7 @@ public sealed class SoloRepairWorkflowTests
             var finding = Assert.IsType<SoloRepairFinding>(Finding);
             Assert.Equal(finding.Request, request);
             var trx = Path.Combine(root, sha + "-candidate.trx");
-            var candidatePass = !runBaselineArm || AttributionCandidatePass;
+            var candidatePass = runBaselineArm ? AttributionCandidatePass : RefreshedBaselinePass;
             WriteTrx(trx, candidatePass, finding.Identity);
             var candidate = SoloRepairEvidenceTests.FocusedResult(finding, sha, trx, candidatePass, true, finding.Identity);
             if (!runBaselineArm) return Task.FromResult(candidate);

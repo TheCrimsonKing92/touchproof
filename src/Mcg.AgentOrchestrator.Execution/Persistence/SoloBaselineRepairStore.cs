@@ -56,7 +56,8 @@ internal sealed class SoloBaselineRepairStore
     internal static string Key(params string?[] fields) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(fields))).ToLowerInvariant();
 
-    internal void Retain(string goal, IReadOnlyList<SoloRepairFinding> findings)
+    internal void Retain(string goal, IReadOnlyList<SoloRepairFinding> findings,
+        Func<SoloRepairFinding, bool>? isProofAvailable = null)
     {
         using var db = Open();
         using var transaction = db.BeginTransaction();
@@ -67,7 +68,10 @@ internal sealed class SoloBaselineRepairStore
             var rank = finding.Inherited ? 3 : finding.Reason is null ? 2 : finding.Request is not null ? 1 : 0;
             string? disputedGroup = null;
             var prior = rank is 2 or 3 ? ReadFinding(db, transaction, goal, finding.Key) : null;
-            if (prior is not null && prior.Baseline == finding.Baseline)
+            var replaceUnavailableProof = prior is { Reason: null } && prior.Proof != finding.Proof &&
+                isProofAvailable?.Invoke(prior) == false;
+            if (replaceUnavailableProof && prior!.Inherited) disputedGroup = prior.GroupKey;
+            if (!replaceUnavailableProof && prior is not null && prior.Baseline == finding.Baseline)
             {
                 if (prior.HasConflictingProofs)
                 {
@@ -88,9 +92,10 @@ internal sealed class SoloBaselineRepairStore
             using var command = Command(db, """
                 INSERT INTO solo_repair_finding VALUES ($goal, $key, $rank, $finding)
                 ON CONFLICT (goal, identity_key) DO UPDATE SET rank = excluded.rank, finding = excluded.finding
-                WHERE excluded.rank > solo_repair_finding.rank OR $preferExactMain
+                WHERE excluded.rank > solo_repair_finding.rank OR $preferExactMain OR $replaceUnavailableProof
                 """, ("$goal", goal), ("$key", finding.Key), ("$rank", rank),
-                ("$finding", JsonSerializer.Serialize(finding)), ("$preferExactMain", preferExactMain));
+                ("$finding", JsonSerializer.Serialize(finding)), ("$preferExactMain", preferExactMain),
+                ("$replaceUnavailableProof", replaceUnavailableProof));
             command.Transaction = transaction;
             var changed = command.ExecuteNonQuery() != 0;
             if (disputedGroup is not null) RemoveConflictingDependency(db, transaction, goal, disputedGroup);
@@ -252,11 +257,24 @@ internal sealed class SoloBaselineRepairStore
     }
 
     internal static string NormalGateKey(string goal, string candidate, string main) => Key("normal-gate", goal, candidate, main);
-    internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main)
+    internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main) =>
+        Key("attribution-current-pair", goal, finding.Check, finding.Identity, candidate, main);
+
+    internal static string PreviousAttributionKey(string goal, SoloRepairFinding finding, string candidate, string main) =>
+        Key("attribution", goal, finding.Check, finding.Identity, candidate, main);
+
+    internal (string Key, bool AllowCandidatePass) ResolveAttributionRequest(
+        string goal, SoloRepairFinding finding, string candidate, string main)
     {
-        var moved = finding.Candidate != candidate || finding.Main != main;
-        return Key(moved ? "attribution-current-pair" : "attribution",
-            goal, finding.Check, finding.Identity, candidate, main);
+        var key = AttributionKey(goal, finding, candidate, main);
+        var previous = PreviousAttributionKey(goal, finding, candidate, main);
+        using var db = Open();
+        using var command = Command(db, """
+            SELECT request_key FROM solo_repair_check WHERE request_key IN ($key, $previous)
+            ORDER BY request_key = $key DESC LIMIT 1
+            """, ("$key", key), ("$previous", previous));
+        // Preserve even an unacknowledged claim made before the two request keys were unified.
+        return command.ExecuteScalar() as string == previous ? (previous, false) : (key, true);
     }
     internal static string ValidationKey(SoloRepairFinding finding, string main) => Key("validation", finding.GroupKey, main);
 

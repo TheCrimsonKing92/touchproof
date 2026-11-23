@@ -200,12 +200,14 @@ public sealed class SoloRepairEvidenceTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ContradictoryCandidateRows_LeaveOnlyTheirIdentityUnresolved(bool duplicateDefinition)
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task ContradictoryCandidateRows_LeaveOnlyTheirIdentityUnresolved(bool duplicateDefinition, bool baselineFails)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
-        await fixture.Produce(baselineFails: true);
+        await fixture.Produce(baselineFails: baselineFails);
         var original = Assert.Single(Assert.Single(fixture.Proof().Checks).Artifacts);
         var trx = XDocument.Load(original.Path);
         var results = trx.Root!.Element("Results")!;
@@ -242,10 +244,15 @@ public sealed class SoloRepairEvidenceTests
 
         var partition = Read(fixture);
 
-        var inherited = Assert.Single(partition.Findings.Where(row => row.Inherited));
-        Assert.Equal(Long, inherited.Identity);
-        Assert.Equal(artifact, Assert.Single(inherited.CandidateArtifacts));
-        var unresolved = Assert.Single(partition.Findings.Where(row => !row.Inherited));
+        var proven = Assert.Single(partition.Findings.Where(row => row.Reason is null));
+        Assert.Equal(baselineFails, proven.Inherited);
+        Assert.Equal(Long, proven.Identity);
+        Assert.Equal(artifact, Assert.Single(proven.CandidateArtifacts));
+        if (baselineFails)
+            Assert.Null(partition.Introduced);
+        else
+            Assert.Equal(Long, Assert.Single(partition.Introduced!.FailingTests));
+        var unresolved = Assert.Single(partition.Findings.Where(row => row.Reason is not null));
         Assert.Equal(First, unresolved.Identity);
         Assert.NotNull(unresolved.Request);
         Assert.Null(unresolved.Feedback);

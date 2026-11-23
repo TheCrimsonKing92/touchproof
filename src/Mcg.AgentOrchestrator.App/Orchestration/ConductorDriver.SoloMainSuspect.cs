@@ -9,7 +9,7 @@ internal sealed partial class ConductorDriver
 {
     private void TryRecordSoloMainSuspect(Goal goal, string goalPrefix,
         AcceptanceVerificationSummary acceptance, IReadOnlyList<ExcludedAcceptanceFailure> excluded,
-        string? candidateSha, string? mainSha, IReadOnlyList<string>? changedPaths)
+        string? candidateSha, string? mainSha, IReadOnlyList<string>? changedPaths, bool repairRouting = false)
     {
         if (_cohortWorkspace is not { } workspace || _cohortAcceptanceStore is not { } store ||
             excluded.Count == 0 || excluded.Any(failure => failure.Kind != AcceptanceRetryExclusionKind.Inherited) ||
@@ -38,6 +38,8 @@ internal sealed partial class ConductorDriver
             }
 
             store.RecordSoloInheritedReceipt(new(goal.Id, candidateSha, mainSha, mainSha, identities, changedPaths));
+            // The canonical repair itself needs the normal acceptance engine to land.
+            if (repairRouting) return;
             foreach (var earlier in store.ReadSoloInheritedReceipts(mainSha, goal.Id, candidateSha))
             {
                 var shared = ConductorAcceptanceCohortMainSuspect.KeepUntouched(

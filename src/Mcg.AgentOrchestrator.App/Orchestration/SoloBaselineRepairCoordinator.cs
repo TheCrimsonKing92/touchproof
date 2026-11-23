@@ -26,14 +26,17 @@ internal sealed class SoloBaselineRepairCoordinator(
     {
         var context = goal.LatestAcceptanceFailure?.SoloFailureReceipt is not null ? readContext(goal) : null;
         RetainSoloRepairPartition(goal, context, completion);
-        var findings = SoloRepairFindings(goal);
+        var retained = _store.ReadFindings(goal.Id.Value);
         var introducedFindings = _store.ReadFindings(goal.Id.Value, introduced: true);
-        if (findings.Count == 0 && introducedFindings.Count == 0) return null;
+        if (retained.Count == 0 && introducedFindings.Count == 0) return null;
         var current = readCurrentRevisions(goal);
-        var introduced = ReadIntroduced(introducedFindings, current);
-        var repair = findings.Count == 0 ? null :
+        var currentIntroduced = CurrentIntroduced(goal, introducedFindings, current?.BranchRevision, current?.MainRevision);
+        var findings = retained.Select(finding => CheckRetainedProof(goal, finding))
+            .Concat(currentIntroduced.Where(finding => finding.Reason is not null)).ToArray();
+        var introduced = SoloAcceptanceFailureReceiptReader.RestoreIntroduced(currentIntroduced);
+        var repair = findings.Length == 0 ? null :
             ReconcileSoloRepairs(goal, prefix, policy, findings, current, allowFreshGate: introduced is null);
-        introduced ??= ReadIntroduced(goal, current);
+        introduced = ReadIntroduced(goal, current);
         if (introduced is not null && current is not null && readCurrentRevisions(goal) == current &&
             AttributedFailureDeveloperRoute.Decide(goal, introduced, current.BranchRevision, current.MainRevision) is { IsRoute: true } route)
             return failureHandler().RouteIntroduced(goal, prefix, policy, introduced, route);
@@ -41,11 +44,12 @@ internal sealed class SoloBaselineRepairCoordinator(
     }
 
     private AttributedFailure? ReadIntroduced(Goal goal, GateReadyCandidateRevisionPair? current) =>
-        ReadIntroduced(_store.ReadFindings(goal.Id.Value, introduced: true), current);
+        SoloAcceptanceFailureReceiptReader.RestoreIntroduced(CurrentIntroduced(goal,
+            _store.ReadFindings(goal.Id.Value, introduced: true), current?.BranchRevision, current?.MainRevision));
 
-    private static AttributedFailure? ReadIntroduced(IEnumerable<SoloRepairFinding> findings, GateReadyCandidateRevisionPair? current) =>
-        current is null ? null : SoloAcceptanceFailureReceiptReader.RestoreIntroduced(findings.Where(finding =>
-            finding.Candidate == current.BranchRevision && finding.Main == current.MainRevision));
+    private SoloRepairFinding[] CurrentIntroduced(Goal goal, IReadOnlyList<SoloRepairFinding> findings,
+        string? candidate, string? main) => findings.Where(finding => finding.Candidate == candidate && finding.Main == main)
+        .Select(finding => CheckRetainedProof(goal, finding)).ToArray();
 
     private void RetainSoloRepairPartition(Goal goal, SoloAcceptanceConsumptionContext? current,
         AcceptanceVerificationSummary? completion)
@@ -54,11 +58,49 @@ internal sealed class SoloBaselineRepairCoordinator(
         if (current is not null && partition?.Findings.Any(finding => finding.Reason is null) == true &&
             readCurrentRevisions(goal) != new GateReadyCandidateRevisionPair(current.CandidateSha, current.MainSha))
             partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null, completion);
-        if (partition is not null) _store.Retain(goal.Id.Value, partition.Findings);
+        if (partition is not null) RetainFindings(goal, partition.Findings);
     }
 
-    private IReadOnlyList<SoloRepairFinding> SoloRepairFindings(Goal goal) =>
-        _store.ReadFindings(goal.Id.Value);
+    private void RetainFindings(Goal goal, IReadOnlyList<SoloRepairFinding> findings) =>
+        _store.Retain(goal.Id.Value, findings, proof => CheckRetainedProof(goal, proof).Reason is null);
+
+    private SoloRepairFinding CheckRetainedProof(Goal goal, SoloRepairFinding finding)
+    {
+        if (finding.Reason is not null) return finding;
+        try
+        {
+            var key = SoloBaselineRepairStore.AttributionKey(goal.Id.Value, finding, finding.Candidate, finding.Main);
+            var previous = SoloBaselineRepairStore.PreviousAttributionKey(goal.Id.Value, finding, finding.Candidate, finding.Main);
+            var canonicalPath = Path.Combine(_store.ResultDirectory(key), "focused-result.json");
+            var previousPath = Path.Combine(_store.ResultDirectory(previous), "focused-result.json");
+            if (finding.Proof.Path == canonicalPath || finding.Proof.Path == previousPath)
+            {
+                var canonical = finding.Proof.Path == canonicalPath;
+                var request = canonical ? key : previous;
+                var identity = SoloBaselineRepairStore.FocusedProofIdentity(request, finding, finding.Candidate, finding.Main,
+                    runBaseline: true, allowCandidatePass: canonical);
+                var verified = SoloBaselineRepairStore.ReadVerifierResult(finding.Proof.Path,
+                    _store.ResultDirectory(request), identity, finding.Proof.Sha256);
+                if (verified.Outcome != (finding.Inherited ? "inherited" : "introduced") ||
+                    !verified.Artifacts.SequenceEqual(finding.BaselineArtifacts) ||
+                    !(verified.CandidateArtifacts ?? []).SequenceEqual(finding.CandidateArtifacts) ||
+                    (!finding.Inherited && verified.Feedback != finding.Feedback))
+                    throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
+            }
+            else
+                SoloAcceptanceFailureReceiptReader.VerifyRetainedRepairProof(goal.Id.Value, finding);
+            return finding;
+        }
+        catch (Exception ex) when (SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(ex))
+        {
+            return finding with { Inherited = false, Feedback = null, Reason = ex.Message };
+        }
+    }
+
+    private IReadOnlyList<SoloRepairFinding> SoloRepairFindings(Goal goal, string? candidate, string? main) =>
+        _store.ReadFindings(goal.Id.Value).Select(finding => CheckRetainedProof(goal, finding))
+            .Concat(CurrentIntroduced(goal, _store.ReadFindings(goal.Id.Value, introduced: true), candidate, main)
+                .Where(finding => finding.Reason is not null)).ToArray();
 
     private ConductorAdvanceResult? ReconcileSoloRepairs(Goal goal, string prefix, ConductorAutonomyPolicy policy,
         IReadOnlyList<SoloRepairFinding> findings, GateReadyCandidateRevisionPair? current, bool allowFreshGate)
@@ -96,14 +138,17 @@ internal sealed class SoloBaselineRepairCoordinator(
                     return prepareAttribution?.Invoke(goal, prefix, policy) ??
                         SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairPending,
                             "Preparing the candidate for focused attribution on current main.");
-                var requestKey = SoloBaselineRepairStore.AttributionKey(goal.Id.Value, finding, candidate, main);
+                var (requestKey, allowCandidatePass) = _store.ResolveAttributionRequest(goal.Id.Value, finding, candidate, main);
                 var result = RunSoloRepairCheck(requestKey, finding, candidate, main, runBaseline: true,
-                    allowCandidatePass: movedPair);
+                    allowCandidatePass: allowCandidatePass);
                 if (result.Outcome == "pending") { waiting ??= finding.Request; continue; }
                 if (movedPair && result.Outcome == "passed") continue;
                 if (result.Outcome is not ("inherited" or "introduced"))
                 {
-                    missing ??= $"{finding.Check}, {finding.Identity}, attribution {requestKey}: {result.Detail}";
+                    var detail = result.Outcome == "passed"
+                        ? "The focused candidate passed and did not confirm the recorded exact failure."
+                        : result.Detail;
+                    missing ??= $"{finding.Check}, {finding.Identity}, attribution {requestKey}: {detail}";
                     continue;
                 }
                 if (readCurrentRevisions(goal) != current)
@@ -120,7 +165,7 @@ internal sealed class SoloBaselineRepairCoordinator(
                     Reason = null, Feedback = result.Outcome == "introduced" ? result.Feedback : null,
                     Proof = result.Proof ?? finding.Proof
                 };
-                _store.Retain(goal.Id.Value, [finding]);
+                RetainFindings(goal, [finding]);
                 if (_store.HasConflictingProofs(goal.Id.Value, finding.Key))
                 {
                     missing ??= $"Resolve conflicting verifier proofs for check {finding.Check}, test {finding.Identity}, at {candidate} / {main}.";
@@ -152,6 +197,9 @@ internal sealed class SoloBaselineRepairCoordinator(
 
             var validation = RunSoloRepairCheck(SoloBaselineRepairStore.ValidationKey(finding, main), finding, main, main, false);
             if (validation.Outcome == "pending") waiting ??= finding.Request;
+            else if (validation.Outcome == "failed")
+                missing ??= $"The original test {finding.Identity} executed and still fails on refreshed baseline {main} " +
+                    $"in {validation.Detail}. Decide whether to reopen repair {repair.Goal.Id.Value} or designate a follow-up repair.";
             else if (validation.Outcome != "passed")
                 missing ??= $"Refreshed baseline {main}, check {finding.Check}, test {finding.Identity}: {validation.Detail}";
         }
@@ -401,20 +449,20 @@ internal sealed class SoloBaselineRepairCoordinator(
             throw new InvalidOperationException($"Could not remove solo repair checkout {checkout}.");
     }
 
-    internal bool HasObligations(Goal goal) => SoloRepairFindings(goal).Count > 0;
+    internal bool HasObligations(Goal goal) => _store.ReadFindings(goal.Id.Value).Count > 0;
 
     internal bool TryDeclineAdmission(Goal goal, string? candidate, string? main, out string? reason)
     {
-        var ready = _store.IsEvidenceCurrent(goal.Id.Value, SoloRepairFindings(goal), candidate, main);
+        var ready = _store.IsEvidenceCurrent(goal.Id.Value, SoloRepairFindings(goal, candidate, main), candidate, main);
         reason = ready ? null : SoloHoldReasons.RepairPending;
         return !ready;
     }
 
     internal ConductorAdvanceResult? HoldIfUnprepared(Goal goal, string prefix, ConductorAutonomyPolicy policy)
     {
-        var findings = SoloRepairFindings(goal);
-        if (findings.Count == 0) return null;
+        if (!HasObligations(goal) && _store.ReadFindings(goal.Id.Value, introduced: true).Count == 0) return null;
         var current = readCurrentRevisions(goal);
+        var findings = SoloRepairFindings(goal, current?.BranchRevision, current?.MainRevision);
         return _store.IsEvidenceCurrent(goal.Id.Value, findings, current?.BranchRevision, current?.MainRevision)
             ? null
             : SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairPending, "Revalidating the prepared candidate's baseline.");
@@ -424,7 +472,7 @@ internal sealed class SoloBaselineRepairCoordinator(
         AcceptanceVerificationSummary acceptance)
     {
         if (!acceptance.Passed || acceptance.RequiredUnmetCriteria.Count > 0) return null;
-        var findings = SoloRepairFindings(goal);
+        var findings = SoloRepairFindings(goal, acceptance.BranchHeadSha, acceptance.MainHeadSha);
         if (findings.Count == 0) return null;
         if (acceptance.BranchHeadSha is not { } candidate || acceptance.MainHeadSha is not { } main ||
             readCurrentRevisions(goal) is not { } current || current.BranchRevision != candidate ||

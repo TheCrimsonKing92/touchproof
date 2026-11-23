@@ -29,8 +29,10 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                      origins.All(origin => origin.Origin == AcceptanceTestFailureOrigin.Introduced) &&
                      SameNames(identities, origins.Select(origin => origin.TestIdentity))) ||
                     SoloCoveredCheckInheritance.CoveredChecks(check, checks) is not null);
-            // Keep the strict introduced-only consumer, including its confirmed-flake semantics.
+            // A successful strict read accounts for confirmed flakes. A refusal still
+            // leaves each unambiguous sibling eligible for its own proof.
             var strict = introducedOnly ? Read(goal, current) : null;
+            var checkAttributions = (summary.CheckAttributions ?? []).ToLookup(attr => attr.CheckName, StringComparer.Ordinal);
 
             var findings = new List<SoloRepairFinding>();
             var baselineRows = proof.BaselineChecks.ToDictionary(item => item.Check.Name,
@@ -41,6 +43,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             {
                 var check = item.Check;
                 if (SoloCoveredCheckInheritance.CoveredChecks(check, checks) is not null) continue;
+                var canPartition = !introducedOnly || checkAttributions[check.Name].ToArray() is
+                    [{ Origin: AcceptanceFailureOrigin.Introduced, Cause: AcceptanceFailureCause.NotClassified }];
                 var candidateRows = new Lazy<ILookup<string, TrxRow>>(() =>
                     ReadRows(item, receipt.ResultsRoot, partitionAmbiguousRows: true)
                     .ValidateRows().SelectMany(row => (row.AmbiguousIdentities ?? [row.Key])
@@ -61,10 +65,10 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                             findings.Add(finding with { Reason = null, Feedback = feedback, BaselineCheck = binding.BaselineCheckName,
                                 CandidateArtifacts = item.Artifacts, BaselineArtifacts = baseline.Artifacts });
                         }
+                        else if (!canPartition)
+                            findings.Add(finding with { Reason = SoloHoldReasons.AuthoritativeAttributionMismatch });
                         else
-                            findings.Add(strict is null
-                                ? ReadRepairFinding(item, identity, finding, receipt, proof, reason, candidateRows, baselineRows)
-                                : finding with { Reason = strict.Reason });
+                            findings.Add(ReadRepairFinding(item, identity, finding, receipt, proof, reason, candidateRows, baselineRows));
                     }
                     catch (Exception ex) when (IsRepairEvidenceError(ex))
                     {
@@ -129,6 +133,29 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             string.Join(Environment.NewLine, rows.Select(row => $"reproduced {row.Identity}: {row.Feedback}")));
     }
 
+    internal static void VerifyRetainedRepairProof(string goal, SoloRepairFinding finding)
+    {
+        var proofDirectory = Path.GetDirectoryName(Path.GetFullPath(finding.Proof.Path))!;
+        var proof = JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(ReadArtifact(finding.Proof, proofDirectory));
+        var receipt = proof?.Identity;
+        if (receipt is not { ContractVersion: 1, CaptureError: null } || receipt.GoalId != goal ||
+            receipt.AttemptId != finding.Attempt || receipt.CandidateSha != finding.Candidate ||
+            receipt.MainSha != finding.Main || receipt.BaselineSha != finding.Baseline ||
+            receipt.Evidence != (finding.Proof with { Sha256 = "" }) ||
+            Path.GetFullPath(receipt.ResultsRoot) != proofDirectory)
+            throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
+
+        var check = proof!.Checks.Single(item => item.Check.Name == finding.Check);
+        var baseline = proof.BaselineChecks.Single(item => item.Check.Name == finding.BaselineCheck);
+        if (!check.Artifacts.SequenceEqual(finding.CandidateArtifacts) ||
+            !baseline.Artifacts.SequenceEqual(finding.BaselineArtifacts))
+            throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
+        foreach (var artifact in finding.CandidateArtifacts.Concat(finding.BaselineArtifacts))
+            ReadArtifact(artifact, receipt.ResultsRoot);
+        if (check.CandidateReruns.TryGetValue(finding.Identity, out var rerun))
+            ReadArtifact(rerun, receipt.ResultsRoot);
+    }
+
     private static SoloRepairFinding ReadRepairFinding(SoloAcceptanceCheckEvidence item, string identity,
         SoloRepairFinding finding, SoloAcceptanceFailureReceipt receipt, SoloAcceptanceFailureEvidence proof,
         string currency, Lazy<ILookup<string, TrxRow>> candidateRows,
@@ -171,7 +198,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         if (attributions[0].CandidateRerun is { } rerun &&
             (rerun.Outcome != "Failed" || rerun.Error is not null ||
              !item.CandidateReruns.TryGetValue(identity, out var artifact) ||
-             ReadExactRow(ReadTrx(artifact, receipt.ResultsRoot), identity)?.Value.Outcome != "Failed"))
+             ReadExactRow(ReadTrx(artifact, receipt.ResultsRoot, partitionAmbiguousRows: true), identity)?.Value.Outcome != "Failed"))
             return finding with { CandidateArtifacts = [], Reason = SoloHoldReasons.CandidateRerunUnconfirmed };
         if (baseline.Check.BaselineSourceAbsence is { } absence)
         {

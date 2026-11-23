@@ -246,6 +246,93 @@ public sealed class SoloRepairReplayTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task HistoricalAndCurrentUnresolvedRows_ShareAnAttributionAcrossRestart(bool previousClaim)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true, singleRow: true);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with { Artifacts = [] }).ToArray() });
+        fixture.Record(fixture.Summary);
+        var original = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        fixture.Git("commit", "--allow-empty", "-m", "Move only the candidate");
+        var candidate = fixture.Git("rev-parse", "HEAD");
+        fixture.Context = fixture.Context with { CandidateSha = candidate };
+        var current = original with { Candidate = candidate };
+        store.Retain(fixture.Goal.Id.Value, [original, current]);
+        Assert.Equal(2, store.ReadFindings(fixture.Goal.Id.Value).Count);
+        if (previousClaim)
+            Assert.True(store.TryClaimCheck(SoloBaselineRepairStore.PreviousAttributionKey(
+                fixture.Goal.Id.Value, current, candidate, current.Main)));
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
+        {
+            UnresolvedAttributionRequest = original.Request
+        };
+        var escalations = new List<string>();
+        _ = Advance(Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier), fixture.Goal);
+        Assert.Equal((original.Request!, candidate), Assert.Single(verifier.FocusedRuns));
+
+        var restarted = await repository.LoadAsync();
+        _ = Advance(Coordinator(fixture, workspace, restarted, escalations, verifier), restarted.GetGoal(fixture.Goal.Id));
+
+        Assert.Single(verifier.FocusedRuns);
+        var request = store.ResolveAttributionRequest(fixture.Goal.Id.Value, current, candidate, current.Main);
+        Assert.Equal("unresolved", store.ReadCheck(request.Key)?.Outcome);
+        Assert.Equal(!previousClaim, request.AllowCandidatePass);
+        Assert.Equal(2, Count(path, "solo_repair_check")); // One attribution and one escalation.
+        Assert.Single(escalations);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task UnavailableRetainedProof_CannotRouteAfterRestart(bool inherited, bool removeEnvelope)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: inherited, singleRow: true);
+        fixture.Record(fixture.Summary);
+        var finding = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
+        Assert.Equal(inherited, finding.Inherited);
+        Assert.Null(finding.Reason);
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        store.Retain(fixture.Goal.Id.Value, [finding]);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+
+        if (removeEnvelope)
+            File.Delete(finding.Proof.Path);
+        else
+            File.AppendAllText(Assert.Single(finding.CandidateArtifacts).Path, " ");
+        var restarted = await repository.LoadAsync();
+        var goal = restarted.GetGoal(fixture.Goal.Id);
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
+        {
+            UnresolvedAttributionRequest = finding.Request
+        };
+        var escalations = new List<string>();
+        var coordinator = Coordinator(fixture, workspace, restarted, escalations, verifier);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(Advance(coordinator, goal)?.Outcome);
+
+        Assert.Equal(SoloHoldReasons.RepairEvidenceRequired, held.Decision?.DiscriminatingEvidence);
+        Assert.True(coordinator.TryDeclineAdmission(goal, finding.Candidate, finding.Main, out _));
+        Assert.Single(verifier.FocusedRuns);
+        Assert.Equal(0, Count(path, "solo_repair_group"));
+        Assert.Equal(inherited ? 1 : 0, Count(path, "solo_repair_dependency"));
+        Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        Assert.Contains(finding.Identity, Assert.Single(escalations));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task OppositeSamePairProofs_AreBothRetainedAndCannotRoute(bool inheritedFirst)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();

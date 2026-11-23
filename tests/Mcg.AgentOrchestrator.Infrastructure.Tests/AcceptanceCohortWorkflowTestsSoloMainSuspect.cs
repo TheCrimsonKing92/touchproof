@@ -13,39 +13,54 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
     internal const string TestC = "Fixture.OtherMainRedTests.FailsC";
     internal const string OtherSource = "tests/MainSuspectFixture/OtherMainRedTests.cs";
 
-    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
-    public async Task RealSoloInheritedFailure_PreservesExcludedHoldAndReceipt()
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealSoloInheritedFailure_CorroboratesMainWithOrWithoutRepairRouting(bool repairRouting)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
-        await fixture.Produce(baselineFails: true);
+        if (repairRouting)
+            CreateWorktreeCandidate(fixture.Repo, fixture.Goal.Id, "README.md", "repair-dependent candidate");
+        await fixture.Produce(baselineFails: true,
+            candidateWorktree: GoalWorktrees.TryResolve(fixture.Repo, fixture.Goal.Id));
         var summary = fixture.Summary;
         Assert.True(summary.RequiresSoloFailureReceipt);
-        Assert.NotNull(summary.SoloFailureReceipt);
+        var envelope = Assert.IsType<SoloAcceptanceFailureReceipt>(summary.SoloFailureReceipt);
         var attributions = summary.RequiredUnmetCriteria
             .SelectMany(check => check.FailingTestAttributions ?? []).ToArray();
         Assert.NotEmpty(attributions);
         Assert.All(attributions, attribution =>
         {
             Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attribution.Origin);
-            Assert.Equal($"same focused identity failed at merge-base {fixture.Context.MainSha}", attribution.Evidence);
+            Assert.Equal($"same focused identity failed at merge-base {envelope.MainSha}", attribution.Evidence);
         });
         var candidate = ConductorParallelAcceptanceCandidate.Create(fixture.Goal, 0, ["README.md"],
-            fixture.Context.CandidateSha, fixture.Context.MainSha);
+            envelope.CandidateSha, envelope.MainSha);
         using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [fixture.Goal],
-            [candidate], ["README.md"], fixture.Context.MainSha);
+            [candidate], ["README.md"], envelope.MainSha);
 
-        var result = scenario.Complete(0, summary);
+        if (repairRouting) await new PortfolioStore(scenario.Workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var result = scenario.Complete(0, summary, repairRouting);
 
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
         var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
-        Assert.Equal(AcceptanceApparatusDispositionPolicy.StageName, decision.Stage);
-        Assert.StartsWith($"acceptance-unattributable:{fixture.Context.CandidateSha}:{fixture.Context.MainSha}:", held.StableIdentity);
-        Assert.Equal(GoalLifecycleState.Verified, held.State);
+        if (repairRouting)
+        {
+            Assert.Equal(SoloHoldReasons.RepairPending, decision.DiscriminatingEvidence);
+            var repairStore = Path.Combine(scenario.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+            Assert.Equal(2, SoloRepairReplayTests.Count(repairStore, "solo_repair_dependency"));
+        }
+        else
+        {
+            Assert.Equal(AcceptanceApparatusDispositionPolicy.StageName, decision.Stage);
+            Assert.StartsWith($"acceptance-unattributable:{envelope.CandidateSha}:{envelope.MainSha}:", held.StableIdentity);
+            Assert.Equal(GoalLifecycleState.Verified, held.State);
+        }
         var receipt = Assert.Single(scenario.ReadReceipts());
         Assert.Equal(fixture.Goal.Id, receipt.GoalId);
-        Assert.Equal(fixture.Context.CandidateSha, receipt.CandidateRevision);
-        Assert.Equal(fixture.Context.MainSha, receipt.ObservedMainRevision);
-        Assert.Equal(fixture.Context.MainSha, receipt.MergeBaseRevision);
+        Assert.Equal(envelope.CandidateSha, receipt.CandidateRevision);
+        Assert.Equal(envelope.MainSha, receipt.ObservedMainRevision);
+        Assert.Equal(envelope.MainSha, receipt.MergeBaseRevision);
         Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First, SoloAttributedFailureRouteFixture.Long }, receipt.InheritedTests);
         Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
         Assert.DoesNotContain(fixture.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
@@ -257,7 +272,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                 BranchHeadSha: Candidates[index].BranchHeadSha, MainHeadSha: main);
         }
 
-        internal ConductorAdvanceResult Complete(int index, AcceptanceVerificationSummary summary)
+        internal ConductorAdvanceResult Complete(int index, AcceptanceVerificationSummary summary, bool repairRouting = false)
         {
             // Retain the failed gate evidence as the background completion path does.
             Kernel.RecordAcceptanceFailure(Goals[index].Id, summary.FailedChecks ?? [],
@@ -266,9 +281,10 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                 ConductorAutonomyPolicy.Permissive, summary, out var leaseHeld);
             Assert.False(leaseHeld);
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-            Assert.Contains("pre-existing/main-red", held.Reason, StringComparison.Ordinal);
+            if (!repairRouting)
+                Assert.Contains("pre-existing/main-red", held.Reason, StringComparison.Ordinal);
             Assert.Equal(0, _verifier.RunCount);
-            Assert.Equal(GoalStatus.Verified, Goals[index].Status);
+            Assert.Equal(repairRouting ? GoalStatus.AcceptanceFailed : GoalStatus.Verified, Goals[index].Status);
             Assert.Equal(0, Goals[index].Tasks.Single().CriterionRetryCount);
             return result;
         }

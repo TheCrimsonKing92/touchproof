@@ -94,16 +94,12 @@ internal sealed partial class ConductorDriver
         {
             // Earlier inherited failures can make a post-repair candidate failure look
             // recurrent. Let the repair coordinator validate the new receipt first.
-            if (_soloBaselineRepair is not null && acceptance.SoloFailureReceipt is not null &&
+            var preferSoloRepair = _soloBaselineRepair is not null && acceptance.SoloFailureReceipt is not null &&
                 (_soloBaselineRepair.HasObligations(goal) || acceptance.RequiredUnmetCriteria.Any(check =>
                     check.FailingTestAttributions is not { Count: > 0 } attributions ||
                     attributions.Any(test => test.Origin is AcceptanceTestFailureOrigin.Inherited or AcceptanceTestFailureOrigin.Unattributed))) &&
-                ReadSoloAcceptanceContext(goal) is not null)
-                return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance);
+                ReadSoloAcceptanceContext(goal) is not null;
 
-            // Prepared solo attribution can prove every failure is inherited. Keep
-            // the existing excluded hold and main-suspect evidence before routing
-            // actionable findings through the solo receipt consumer.
             var retryDisposition = AcceptanceRetryClassifier.Classify(acceptance.RequiredUnmetCriteria);
             var attemptedAllFlakyDisposition = false;
             if (acceptance.RequiredUnmetCriteria.Count > 0 && retryDisposition.ActionableCriteria.Count == 0 &&
@@ -115,8 +111,8 @@ internal sealed partial class ConductorDriver
             // Attempt IDs also identify legacy and background completions. Only
             // producer-owned solo evidence selects this path; keep that obligation
             // when a captured receipt is subsequently lost during transport.
-            // Preserve the existing apparatus disposition before admitting solo evidence.
-            if (!attemptedAllFlakyDisposition &&
+            // Retained repair obligations own matching completions ahead of apparatus routing.
+            if (!preferSoloRepair && !attemptedAllFlakyDisposition &&
                 TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } soloApparatus)
                 return soloApparatus;
 
@@ -124,7 +120,7 @@ internal sealed partial class ConductorDriver
             // criterion feedback retry (which cannot establish attribution).
             if (acceptance.SoloFailureReceipt is not null && retryDisposition.ActionableCriteria.Count == 0)
                 TryRecordSoloMainSuspect(goal, goalPrefix, acceptance, retryDisposition.ExcludedFailures,
-                    acceptance.BranchHeadSha, acceptance.MainHeadSha, apparatusRedReading?.ChangedPaths);
+                    acceptance.BranchHeadSha, acceptance.MainHeadSha, apparatusRedReading?.ChangedPaths, preferSoloRepair);
             return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance);
         }
 
