@@ -40,11 +40,13 @@ public sealed class ProviderHoldSeedWorkBoundTests
             "anthropic::claude-api:c:/profiles/old", "anthropic::c:/profiles/cleared",
             "anthropic::c:/profiles/superseded", "anthropic::c:/profiles/held"
         };
-        Assert.Equal(keys.Order(StringComparer.Ordinal), result.Index.Evaluations.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(keys.Order(StringComparer.Ordinal),
+            result.Index.Evaluations.Keys.Select(binding => binding.Key).Order(StringComparer.Ordinal));
+        Assert.All(result.Index.Evaluations.Keys, binding => Assert.Equal("provider+credential", binding.Scope));
         var expectedSources = new[] { 0, 199, 299, 399, 499, -1, 699, 799 };
         for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
         {
-            var evaluation = result.Index.Evaluations[keys[keyIndex]];
+            var evaluation = result.Index.Evaluations[new(keys[keyIndex], "provider+credential")];
             Assert.Equal(1, evaluation.Count);
             var source = expectedSources[keyIndex];
             if (source < 0)
@@ -93,7 +95,12 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(before.Index.IndexedGoals, after.Index.IndexedGoals);
         Assert.Equal(before.Index.DispatchMatchingVisits, after.Index.DispatchMatchingVisits);
         Assert.Equal(before.Index.RequiredGoals.Order(StringComparer.Ordinal), after.Index.RequiredGoals.Order(StringComparer.Ordinal));
-        Assert.Equal(before.Index.Evaluations.OrderBy(entry => entry.Key), after.Index.Evaluations.OrderBy(entry => entry.Key));
+        Assert.Equal(OrderedEvaluations(before), OrderedEvaluations(after));
+
+        static IEnumerable<KeyValuePair<SubscriptionLimitEvidence.ProviderBindingKey, ProviderHoldSeedEvaluation>>
+            OrderedEvaluations(ProviderHoldHistoryStartupSeed.Result result) =>
+            result.Index.Evaluations.OrderBy(entry => entry.Key.Key, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Key.Scope, StringComparer.Ordinal);
     }
 
     [Theory]
@@ -245,7 +252,7 @@ public sealed class ProviderHoldSeedWorkBoundTests
             Assert.Equal(new[] { id }, result.Selection.Sources);
             Assert.Empty(result.Selection.Dependencies);
             var evaluation = Assert.Single(result.Index.Evaluations);
-            Assert.Equal("anthropic::c:/profiles/old", evaluation.Key);
+            Assert.Equal("anthropic::c:/profiles/old", evaluation.Key.Key);
             var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(evaluation.Value.Schedule);
             Assert.Equal(id, schedule.Hold.SourceGoalId.Value);
             Assert.Equal(ProviderHoldSeedFixture.At, schedule.Hold.PlacedAt);
@@ -310,7 +317,7 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(new[] { id }, seeded.Selection.Sources);
         Assert.InRange(seeded.Index.DispatchMatchingVisits, 277, 370);
         var evaluation = Assert.Single(seeded.Index.Evaluations);
-        Assert.Equal("anthropic::c:/profiles/old", evaluation.Key);
+        Assert.Equal("anthropic::c:/profiles/old", evaluation.Key.Key);
         Assert.Equal(1, evaluation.Value.Count);
         Assert.Equal(19, evaluation.Value.DispatchVisits);
         if (recovered)
@@ -345,6 +352,40 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(recovery != "applicable", seeded.Index.RequiredGoals.Contains(ProviderHoldSeedFixture.Id(809)));
         Assert.Equal(schedule, Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope,
             ProviderHoldSeedFixture.At.AddMinutes(5))).Schedule);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Seed_SharedBindingText_IsolatesCredentialScopes(bool retainProviderOnly)
+    {
+        const string literalCredential = "<provider-default>";
+        var heldCredential = retainProviderOnly ? null : literalCredential;
+        var recoveredCredential = retainProviderOnly ? literalCredential : null;
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateBindingScopeCollisionAsync(heldCredential, recoveredCredential);
+
+        var kernel = new AgentOrchestratorKernel();
+        var seeded = Seed(fixture, kernel);
+        var source = ProviderHoldSeedFixture.Id(0);
+        Assert.Equal(new[] { source, ProviderHoldSeedFixture.Id(1) }, seeded.Selection.Sources.Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { ProviderHoldSeedFixture.Id(2) }, seeded.Selection.Dependencies);
+
+        const string bindingText = "anthropic::<provider-default>";
+        var heldScope = retainProviderOnly ? "provider-only" : "provider+credential";
+        var recoveredScope = retainProviderOnly ? "provider+credential" : "provider-only";
+        Assert.Equal(2, seeded.Index.Evaluations.Count);
+        var held = seeded.Index.Evaluations[new(bindingText, heldScope)];
+        var recovered = seeded.Index.Evaluations[new(bindingText, recoveredScope)];
+        Assert.Equal(1, held.Count);
+        Assert.Equal(1, recovered.Count);
+        Assert.Null(recovered.Schedule);
+        var hold = Assert.IsType<ProviderBudgetHoldSchedule>(held.Schedule).Hold;
+        Assert.Equal(heldScope, hold.BindingScope);
+        Assert.Equal(source, hold.SourceGoalId.Value);
+        Assert.Equal("receipt-0", hold.EvidenceReceipt);
+        Assert.Equal(new[] { source }, seeded.Index.RequiredGoals);
+        Assert.Equal(source, Assert.Single(kernel.ProviderHoldHistory.Retained).Id.Value);
     }
 
     private static ProviderHoldHistoryStartupSeed.Result Seed(ProviderHoldSeedFixture fixture, AgentOrchestratorKernel kernel) =>
@@ -398,6 +439,14 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
     }));
 
     internal Task AddUnrelatedAsync(int count) => SaveAsync(Enumerable.Range(3200, count).Select(MakeUnrelated));
+
+    internal Task PopulateBindingScopeCollisionAsync(string? heldCredential, string? recoveredCredential) => SaveAsync([
+        Make(0, At, null, rule: Rules[0], kind: ProviderFailureKind.BudgetExhausted,
+            stderr: "ERROR: weekly usage limit reached", apiIdentity: heldCredential),
+        Make(1, At.AddMinutes(1), null, rule: Rules[0], kind: ProviderFailureKind.BudgetExhausted,
+            stderr: "ERROR: weekly usage limit reached", apiIdentity: recoveredCredential),
+        Make(2, At.AddMinutes(2), null, success: true, apiIdentity: recoveredCredential)
+    ]);
 
     internal async Task PopulateResetCaseAsync(bool? legacyArchive)
     {
@@ -689,14 +738,15 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
     private static GoalSnapshot MakeUnrelated(int index) =>
         Make(index, At.AddDays(15).AddSeconds(index), Credentials[7], stderr: "fixture configuration failed");
 
-    private static GoalSnapshot Make(int index, DateTimeOffset completed, string credential, bool success = false,
+    private static GoalSnapshot Make(int index, DateTimeOffset completed, string? credential, bool success = false,
         string? rule = null, ProviderFailureKind kind = ProviderFailureKind.Unknown, string stdout = "",
         string stderr = "", string model = "fixture-model", string? apiIdentity = null)
     {
         var id = Id(index);
         var started = completed.AddSeconds(-1);
         var dispatch = new TaskDispatchSnapshot("fixture", "fixture", ".", started, ProviderName: "Anthropic",
-            ModelName: model, ClaudeCredentialSourceDirectory: $"C:/profiles/{credential}", ClaudeApiHoldIdentity: apiIdentity);
+            ModelName: model, ClaudeCredentialSourceDirectory: credential is null ? null : $"C:/profiles/{credential}",
+            ClaudeApiHoldIdentity: apiIdentity);
         var receipt = new TaskVerificationSnapshot("fixture", ".", success ? 0 : 1, stdout, stderr, completed,
             StandardErrorPath: $"receipt-{index}", DispatchStartedAt: started, DispatchAttemptAt: started,
             ProviderFailureKind: kind, CompletionVerdictVerifiedSuccess: success);

@@ -1,6 +1,7 @@
 namespace Mcg.AgentOrchestrator.Core;
 
 using ResetGeneration = ProviderBudgetHoldSchedules.ResetGeneration;
+using ProviderBindingKey = SubscriptionLimitEvidence.ProviderBindingKey;
 
 /// <summary>The dispatches and evidence that can affect one exact hold binding.</summary>
 internal sealed class ProviderHoldBindingHistory(string key)
@@ -338,14 +339,15 @@ internal sealed class ProviderHoldBindingHistory(string key)
     internal static ProviderHoldBindingHistory Read(IEnumerable<Goal> goals, string key, string? bindingScope = null)
     {
         var history = new ProviderHoldBindingHistory(key);
-        Populate(goals, candidate => candidate.Equals(key, StringComparison.OrdinalIgnoreCase) ? history : null,
-            bindingScope: bindingScope);
+        Populate(goals, candidate => (bindingScope is null || candidate.Scope == bindingScope) &&
+                candidate.Key.Equals(key, StringComparison.OrdinalIgnoreCase) ? history : null,
+            getNotes: noteKey => noteKey.Equals(key, StringComparison.OrdinalIgnoreCase) ? history.Notes : null);
         return history;
     }
 
-    internal static void Populate(IEnumerable<Goal> goals, Func<string, ProviderHoldBindingHistory?> getHistory,
+    internal static void Populate(IEnumerable<Goal> goals, Func<ProviderBindingKey, ProviderHoldBindingHistory?> getHistory,
         Action<Goal>? visit = null, Action<Observation>? observe = null, Action<int>? recordDispatchVisits = null,
-        string? bindingScope = null)
+        Func<string, List<Note>?>? getNotes = null)
     {
         foreach (var goal in goals)
         {
@@ -379,16 +381,15 @@ internal sealed class ProviderHoldBindingHistory(string key)
                 var binding = ProviderBudgetHoldSchedules.TryParseProbe(evt, out var probe) ? probe.BindingKey
                     : ProviderBudgetHoldSchedules.TryParseReset(evt, out var reset) ? reset.BindingKey
                     : ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out var result) ? result.BindingKey : null;
-                if (binding is not null) getHistory(binding)?.Notes.Add(new(goal, evt, index));
+                if (binding is not null) getNotes?.Invoke(binding)?.Add(new(goal, evt, index));
             }
         }
 
         IEnumerable<ProviderHoldBindingHistory> Histories(TaskDispatchRecord dispatch)
         {
             var binding = ProviderHoldBinding.From(dispatch);
-            if (bindingScope is not null && binding.Base.Scope != bindingScope) yield break;
-            if (getHistory(binding.Key) is { } provider) yield return provider;
-            if (dispatch.ModelName is { } model && getHistory((binding with { Model = model }).Key) is { } scoped)
+            if (getHistory(binding.ScopedKey) is { } provider) yield return provider;
+            if (dispatch.ModelName is { } model && getHistory((binding with { Model = model }).ScopedKey) is { } scoped)
                 yield return scoped;
         }
     }

@@ -7,7 +7,19 @@ internal sealed record ProviderHoldBinding(string Provider, string? Credential, 
     internal SubscriptionLimitEvidence.ProviderBindingKey Base =>
         SubscriptionLimitEvidence.BuildProviderBindingKey(Provider, Credential);
 
-    internal string Key => Model is null ? Base.Key : Base.Key + ModelSeparator + Uri.EscapeDataString(Model.ToLowerInvariant());
+    internal string Key => WithModel(Base.Key);
+
+    internal SubscriptionLimitEvidence.ProviderBindingKey ScopedKey
+    {
+        get
+        {
+            var providerBinding = Base;
+            return Model is null ? providerBinding : providerBinding with { Key = WithModel(providerBinding.Key) };
+        }
+    }
+
+    private string WithModel(string baseKey) =>
+        Model is null ? baseKey : baseKey + ModelSeparator + Uri.EscapeDataString(Model.ToLowerInvariant());
 
     internal static ProviderHoldBinding From(TaskDispatchRecord dispatch, string? model = null) =>
         new(dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeApiHoldIdentity ?? dispatch.ClaudeCredentialSourceDirectory, model);
