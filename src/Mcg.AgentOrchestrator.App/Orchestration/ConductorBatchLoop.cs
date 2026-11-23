@@ -661,6 +661,9 @@ internal sealed partial class ConductorBatchLoop
             return true;
         }
 
+        void PublishTick(BatchTickSummary summary, GoalSnapshotByteAccounting snapshotBytes, bool activationSweepFollows = false) =>
+            ConductorTickPusher.Publish(summary, snapshotBytes, onTick, pendingReadWork: activationSweepFollows && _workspace is not null);
+
         while (true)
         {
             if (observeTickWithoutDispatch is not null)
@@ -681,8 +684,11 @@ internal sealed partial class ConductorBatchLoop
                     StopLoop("max-duration");
                     break;
                 }
-                observeTickWithoutDispatch();
-                onTick?.Invoke(new BatchTickSummary(++totalTicks, 0, 0, 0, 0, 0, WatchSleeping: true));
+                using (var observationBytes = GoalSnapshotByteAccounting.Begin())
+                {
+                    observeTickWithoutDispatch();
+                    PublishTick(new BatchTickSummary(++totalTicks, 0, 0, 0, 0, 0, WatchSleeping: true), observationBytes);
+                }
                 if (watchSleep.Wait(watchInterval ?? TimeSpan.FromSeconds(1), null, []) != WatchSleepResult.StopRequested)
                     continue;
                 stopRequested = true;
@@ -771,6 +777,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var nextTick = totalTicks + 1;
+            using var tickSnapshotBytes = GoalSnapshotByteAccounting.Begin();
             using var tickStepLedger = BeginTickCpuAndStepLedger();
             if (reloadPolicy is not null)
             {
@@ -1064,7 +1071,7 @@ internal sealed partial class ConductorBatchLoop
                     }
 
                     totalHeld += preWalkIntentChangedGoalIds.Count;
-                    onTick?.Invoke(new BatchTickSummary(
+                    PublishTick(new BatchTickSummary(
                         totalTicks,
                         Advanced: 0,
                         Held: preWalkIntentChangedGoalIds.Count,
@@ -1075,7 +1082,7 @@ internal sealed partial class ConductorBatchLoop
                     {
                         ProgressLines = intentTickLines,
                         OperatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? []
-                    });
+                    }, tickSnapshotBytes, activationSweepFollows: true);
                     if (watchSleep.IsStopRequested())
                     {
                         stopRequested = true;
@@ -1784,7 +1791,7 @@ internal sealed partial class ConductorBatchLoop
             };
             if (drain.IsDraining && !watchSleep.IsStopRequested() && TryFinishDrain())
             {
-                onTick?.Invoke(tickSummary);
+                PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
                 CompleteActivationTick(totalTicks);
                 break;
             }
@@ -1798,7 +1805,7 @@ internal sealed partial class ConductorBatchLoop
                             setAsideGoals,
                             transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal)) > 0)
                     {
-                        onTick?.Invoke(tickSummary);
+                        PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
                         CompleteActivationTick(totalTicks);
                         continue;
                     }
@@ -1809,7 +1816,7 @@ internal sealed partial class ConductorBatchLoop
                     PersistGracefulDetachCheckpoint(
                         persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay,
                         checkpointGoalTick, checkpointHeldGoals);
-                    onTick?.Invoke(tickSummary);
+                    PublishTick(tickSummary, tickSnapshotBytes);
                     break;
                 }
 
@@ -1843,7 +1850,7 @@ internal sealed partial class ConductorBatchLoop
                     EmitProgress($"WATCH_SLEEP tick={totalTicks} seconds={sleepSeconds}");
                     Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {sleepSeconds}s for workers to complete.");
                 }
-                onTick?.Invoke(tickSummary with { WatchSleeping = true });
+                PublishTick(tickSummary with { WatchSleeping = true }, tickSnapshotBytes);
 
                 var sleepResult = sleepFunc is not null
                     ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
@@ -1872,7 +1879,7 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            onTick?.Invoke(tickSummary);
+            PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
             CompleteActivationTick(totalTicks);
         }
 
@@ -2526,16 +2533,3 @@ public sealed record ConductorLoopHandoffRequest(
     TimeSpan MaxDuration,
     int Done,
     int LandedGoalDelta = 0);
-
-public sealed record BatchTickSummary(
-    int Tick,
-    int Advanced,
-    int Held,
-    int Escalated,
-    int Retried,
-    int Done,
-    bool WatchSleeping)
-{
-    public IReadOnlyList<string>? ProgressLines { get; init; }
-    public IReadOnlyList<ConductorOperatorDispositionSnapshot>? OperatorDispositions { get; init; }
-}

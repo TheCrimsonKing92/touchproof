@@ -2175,11 +2175,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         var snapshotJson = reader.Read() ? reader.GetString(0) : throw new InvalidOperationException(
             $"Terminal goal metadata changed before detail access for goal '{key.Id}'.");
 
-        using var document = JsonDocument.Parse(snapshotJson);
+        using var document = GoalSnapshotByteAccounting.Parse(snapshotJson);
         var root = document.RootElement;
         if (root.TryGetProperty("IsMetadataOnly", out var metadataOnly) && metadataOnly.ValueKind == JsonValueKind.True)
         {
-            var stub = JsonSerializer.Deserialize<GoalSnapshot>(snapshotJson, SerializerOptions)!;
+            var stub = GoalSnapshotByteAccounting.Deserialize<GoalSnapshot>(snapshotJson, SerializerOptions)!;
             return new TerminalGoalMetadataValues(stub.ResultCommit, stub.CreatedAt, stub.TerminatedAt);
         }
         string? resultCommit = null;
@@ -2675,7 +2675,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         try
         {
             snapshot = markers is null
-                ? JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions)
+                ? GoalSnapshotByteAccounting.Deserialize<GoalSnapshot>(json, SerializerOptions)
                 : TaskHistoryStore.DecodeDocument(json, markers);
             if (snapshot is not null)
                 return true;
@@ -2909,7 +2909,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         // These collections merge by element and do not have a field-level winner.
         static JsonElement SerializeMergeFields(GoalSnapshot goal) =>
-            JsonSerializer.SerializeToElement(goal with
+            GoalSnapshotByteAccounting.SerializeToElement(goal with
             {
                 Tasks = [],
                 Timeline = [],
@@ -3269,6 +3269,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         IReadOnlyList<T>? stored,
         IReadOnlyList<T>? current) =>
         PickStoreOwned(baseline, stored, current);
+
+    private static bool SnapshotEquals(GoalSnapshot left, GoalSnapshot right) =>
+        GoalSnapshotByteAccounting.Serialize(left, SerializerOptions) ==
+        GoalSnapshotByteAccounting.Serialize(right, SerializerOptions);
 
     private static bool SnapshotEquals<T>(T? left, T? right) =>
         JsonSerializer.Serialize(left, SerializerOptions) == JsonSerializer.Serialize(right, SerializerOptions);
@@ -3774,7 +3778,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         }
 
         var timeline = await new GoalTimelineStore(SerializerOptions).WriteAsync(conn, goal, cancellationToken);
-        var prepared = TaskHistoryStore.PrepareWrite(goal, timeline.MarkerCount);
+        using var measurement = GoalSnapshotByteAccounting.PrepareWriteMeasurement();
+        var prepared = TaskHistoryStore.PrepareWrite(goal, timeline.MarkerCount, measurement);
         var json = prepared.Document;
         var historyChanged = await TaskHistoryStore.WriteAsync(conn, prepared, cancellationToken);
         await using var cmd = conn.CreateCommand();
@@ -3802,7 +3807,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         cmd.Parameters.AddWithValue("$skip_unchanged", skipUnchanged ? 1 : 0);
         cmd.Parameters.AddWithValue("$history_changed", historyChanged || timeline.Changed ? 1 : 0);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-        return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
+        var serializedBytes = rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0;
+        if (rows > 0 && measurement is not null)
+            measurement.Utf8Bytes = serializedBytes;
+        return (rows, serializedBytes);
     }
 
     private static string GoalMetadataTitleSql()

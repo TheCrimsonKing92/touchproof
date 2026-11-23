@@ -221,7 +221,7 @@ internal static class ProviderHoldSeedEvidenceReader
         JsonSerializerOptions options, CancellationToken cancellationToken = default, SqliteConnection? connection = null)
     {
         using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
-        var row = await JsonSerializer.DeserializeAsync<GoalFields>(stream, options, cancellationToken)
+        var row = await GoalSnapshotByteAccounting.DeserializeAsync<GoalFields>(stream, options, cancellationToken)
             ?? throw new InvalidDataException("Missing provider seed goal evidence.");
         if (row.Id != id) throw new InvalidDataException("Provider seed evidence goal identity mismatch.");
         var tasks = new List<ProviderUsageTaskEvidence>();

@@ -12,11 +12,11 @@ public sealed partial class SqliteOrchestratorStateRepository
         var id = snapshot.Id;
         if (snapshot.IsMetadataOnly)
         {
-            var archived = await GoalSnapshotArchive.ReadDocumentAsync(connection, id, token);
+            var (archived, utf8Bytes) = await GoalSnapshotArchive.ReadDocumentAsync(connection, id, token);
             if (archived is null) return snapshot;
             _readObserver?.Invoke(new("archive-attempt", id, archived.Length));
             markers = new GoalTaskHistoryStore.DocumentMarkers();
-            snapshot = TaskHistoryStore.DecodeDocument(archived, markers)
+            snapshot = TaskHistoryStore.DecodeDocument(archived, markers, utf8Bytes)
                 ?? throw new JsonException($"Archived snapshot for goal '{id}' is null.");
             _readObserver?.Invoke(new("archive-deserialized", id, archived.Length));
             if (snapshot.IsMetadataOnly) return snapshot;
@@ -74,12 +74,12 @@ public sealed partial class SqliteOrchestratorStateRepository
             version = reader.GetInt64(1);
         }
 
-        using var hot = JsonDocument.Parse(json);
+        using var hot = GoalSnapshotByteAccounting.Parse(json);
         if (hot.RootElement.TryGetProperty("IsMetadataOnly", out var stub) && stub.ValueKind == JsonValueKind.True)
         {
-            var archived = await GoalSnapshotArchive.ReadDocumentAsync(connection, goalId, CancellationToken.None)
-                ?? throw new InvalidDataException($"Missing archive for goal '{goalId}'.");
-            using var document = JsonDocument.Parse(archived);
+            var (archived, utf8Bytes) = await GoalSnapshotArchive.ReadDocumentAsync(connection, goalId, CancellationToken.None);
+            using var document = GoalSnapshotByteAccounting.Parse(
+                archived ?? throw new InvalidDataException($"Missing archive for goal '{goalId}'."), utf8Bytes);
             return await read(connection, document.RootElement, version);
         }
         return await read(connection, hot.RootElement, version);
