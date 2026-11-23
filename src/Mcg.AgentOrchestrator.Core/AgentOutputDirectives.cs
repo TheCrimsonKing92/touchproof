@@ -105,7 +105,7 @@ public static class AgentOutputDirectives
         "Cited repository paths must exist unless explicitly marked as a new file to create. " +
         "Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file. " +
         "Check: every backticked target is a full repository-relative path that `git ls-files <path>` lists, or carries a new-file marker. " +
-        "Never cite a bare file name or a name with only a line suffix, because it can match several files; write the full path. " +
+        "Example `src/Mcg.AgentOrchestrator.Execution/Persistence/SqliteOrchestratorStateRepository.AttentionReads.cs:43`. " +
         "Describe a runtime output, a file name pattern, or a conventional path this repository lacks in prose, not in backticks. " +
         "Mark a new file with the exact token `(new file)` or `— new file` immediately after its backticked path, " +
         "or use `— new` followed by up to three descriptive words and an artifact-kind noun (`store`, `class`, `record`, `interface`, `test`, `fixture`, `script`, `document`, or `receipt`) that ends the clause. " +

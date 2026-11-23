@@ -199,8 +199,12 @@ internal static class GitCli
         => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
 
     internal static GitResult RunWithUtf8Output(string workingDirectory, params string[] args) =>
+        RunWithUtf8Output(workingDirectory, false, args);
+
+    internal static GitResult RunWithUtf8Output(string workingDirectory, bool isolateRepository, params string[] args) =>
         RunExecutableCore("git", workingDirectory, null, null, args,
             Volatile.Read(ref CompletionObserver), TimeProvider.System,
+            isolateRepository: isolateRepository,
             configureStart: start => start.StandardOutputEncoding = Encoding.UTF8);
 
     // Explicit process boundary after an in-process proof declines, and for independent oracles.

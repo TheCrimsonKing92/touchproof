@@ -60,7 +60,7 @@ public sealed class PlannerDispatchCompletionTestsContractDiagnostic : WorkerDis
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(new DateTimeOffset(2026, 10, 7, 0, 0, 0, TimeSpan.Zero));
         var plan = PlannerContractPlanFixture().Replace(
-            "`seed.txt`", "`src/Missing.cs`", StringComparison.Ordinal);
+            "`./seed.txt`", "`src/Missing.cs`", StringComparison.Ordinal);
         var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
             root, AgentRole.Planner, plan, string.Empty, clock);
         Xunit.Assert.True(File.Exists(process.ExitCodePath));
@@ -76,6 +76,63 @@ public sealed class PlannerDispatchCompletionTestsContractDiagnostic : WorkerDis
             failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Offending plan line ", failure.Message, StringComparison.Ordinal);
         Xunit.Assert.EndsWith(" Command: " + task.LastDispatch!.Command, failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("src/Contract.AttentionReads.cs:43", true)]
+    [Xunit.InlineData("...AttentionReads.cs:43", true)]
+    [Xunit.InlineData("...MissingReads.cs:43", false)]
+    public void TrackedShortCitationCompletionRecordsCanonicalReceiptOrTypedRejection(string citation, bool accepted)
+    {
+        const string canonicalPath = "src/Contract.AttentionReads.cs";
+        const string canonicalCitation = canonicalPath + ":43";
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        File.WriteAllText(Path.Combine(root, canonicalPath), "// tracked citation fixture");
+        RunGit(root, ["add", "--", canonicalPath], clock.UtcNow);
+        RunGit(root, ["commit", "-m", "Seed tracked Planner target"], clock.UtcNow);
+        var plan = PlannerContractPlanFixture().Replace("`./seed.txt`", $"`{citation}`", StringComparison.Ordinal);
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root, AgentRole.Planner, plan, string.Empty, clock, includePlannerContract: false);
+        Xunit.Assert.Equal("0", File.ReadAllText(process.ExitCodePath).Trim());
+        Xunit.Assert.Equal(plan, File.ReadAllText(process.StandardOutputPath));
+        Xunit.Assert.Equal(canonicalPath, ReadGit(process.WorkingDirectory, ["ls-files", "--", canonicalPath]));
+        Xunit.Assert.Empty(ReadGit(process.WorkingDirectory, ["status", "--porcelain"]));
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Single(task.DispatchHistory);
+        Xunit.Assert.Empty(ReadGit(process.WorkingDirectory, ["status", "--porcelain"]));
+        var stdout = File.ReadAllText(process.StandardOutputPath);
+        if (!accepted)
+        {
+            Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
+            Xunit.Assert.Equal(1, task.LastVerification!.ExitCode);
+            Xunit.Assert.False(PlannerOutputContract.TryExtractDurablePlan(stdout, out _, out _));
+            var failure = Xunit.Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskFailed));
+            Xunit.Assert.Contains("rule=planner-output-contract-rejected", failure.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Retry Planner for contract repair", failure.Message, StringComparison.Ordinal);
+            var stderr = File.ReadAllText(process.StandardErrorPath);
+            Xunit.Assert.Contains($"Offending citation: '{citation}'", stderr, StringComparison.Ordinal);
+            Xunit.Assert.Contains("No tracked file matches the short citation.", stderr, StringComparison.Ordinal);
+            return;
+        }
+
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
+        Xunit.Assert.NotEqual(GoalStatus.Failed, goal.Status);
+        Xunit.Assert.Single(goal.Timeline.Where(item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskCompleted));
+        Xunit.Assert.DoesNotContain(goal.Timeline, item => item.Kind is ProgressKind.TaskFailed or ProgressKind.TaskRetried);
+        Xunit.Assert.True(PlannerOutputContract.TryExtractDurablePlan(stdout, out var receipt, out var receiptDiagnostic),
+            receiptDiagnostic);
+        Xunit.Assert.Contains($"Inspect repository evidence `{canonicalCitation}`", receipt, StringComparison.Ordinal);
+        var audit = $"Planner contract note: raw citation `{citation}` resolved to `{canonicalCitation}`.";
+        Xunit.Assert.Equal(citation == canonicalCitation ? 0 : 1, receipt.Split(audit, StringSplitOptions.None).Length - 1);
+        var revalidated = PlannerOutputContract.Resolve(stdout, string.Empty, process.WorkingDirectory);
+        Xunit.Assert.True(revalidated.Succeeded, revalidated.Diagnostic);
+        Xunit.Assert.Equal(receipt, revalidated.Plan);
     }
 
     private static string PlanWithNewTarget(string citation)

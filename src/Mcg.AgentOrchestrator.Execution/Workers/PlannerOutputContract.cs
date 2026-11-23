@@ -797,7 +797,7 @@ internal static partial class PlannerOutputContract
         resolvedPlan = plan;
         diagnostic = string.Empty;
         var substitutions = new List<CitationSubstitution>();
-        var repositoryFilenameMatches = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        var trackedFiles = new Lazy<string[]?>(() => ReadTrackedCitationPaths(workingDirectory));
         string? contextualDirectory = null;
         var contextualLineStart = -2;
         var targetHeading = TargetSeamsHeading().Match(plan);
@@ -822,7 +822,10 @@ internal static partial class PlannerOutputContract
                 contextualLineStart = lineStart;
             }
 
-            var citation = match.Groups["citation"].Value.Trim();
+            var citationGroup = match.Groups["citation"];
+            var citation = citationGroup.Value.Trim();
+            var citationStart = targetHeading.Index + citationGroup.Index +
+                (citationGroup.Length - citationGroup.Value.TrimStart().Length);
             var citedPath = NormalizeCitedPath(citation);
             if (citedPath is null)
             {
@@ -903,6 +906,56 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
+            if (!hasExplicitDirectory && !isFullyQualifiedCitation &&
+                citedPath.IndexOfAny(['*', '?']) < 0 && CitedFilePath().IsMatch(citation))
+            {
+                var paths = trackedFiles.Value;
+                string[] matches = paths is null ? [] : ResolveRepositoryFilesByName(paths, citedPath);
+                if (matches.Length == 1)
+                {
+                    var canonicalPath = matches[0];
+                    var canonicalCitation = canonicalPath + citation[citedPath.Length..];
+                    var canonicalFile = Path.Combine(workingDirectory, canonicalPath);
+                    if (canonicalPath.Contains('`') || NormalizeCitedPath(canonicalCitation) != canonicalPath ||
+                        !File.Exists(canonicalFile) ||
+                        !PathExistsWithExactCasing(canonicalFile, workingDirectory))
+                    {
+                        diagnostic = DescribeCitationFailure(plan, citation, citationStart,
+                            "does not exist and is not marked as a new file",
+                            $" Tracked match `{canonicalPath}` is unavailable as an existing target citation in this checkout.");
+                        return false;
+                    }
+
+                    if (canonicalCitation != citation)
+                    {
+                        substitutions.Add(new CitationSubstitution(
+                            citationStart, citation.Length, citation, canonicalCitation));
+                    }
+
+                    continue;
+                }
+
+                if (matches.Length > 1)
+                {
+                    var candidates = string.Join(", ", matches.Select(path => $"'{path}'"));
+                    diagnostic = DescribeCitationFailure(plan, citation, citationStart,
+                        $"is ambiguous; at least these repository files match: {candidates}");
+                    return false;
+                }
+
+                if (!IsRuntimeJsonArtifactMention(citedPath) || citedPath.StartsWith("...", StringComparison.Ordinal))
+                {
+                    diagnostic = paths is null
+                        ? DescribeCitationFailure(plan, citation, citationStart,
+                            "could not be resolved because the checkout's tracked file list was unavailable",
+                            " Cite the full repository-relative file path.")
+                        : DescribeCitationFailure(plan, citation, citationStart,
+                            "does not exist and is not marked as a new file",
+                            " No tracked file matches the short citation. Cite the full repository-relative file path.");
+                    return false;
+                }
+            }
+
             if (PathExistsWithExactCasing(candidate, candidateCasingRoot))
             {
                 continue;
@@ -963,38 +1016,6 @@ internal static partial class PlannerOutputContract
                 }
             }
 
-            if (!hasExplicitDirectory)
-            {
-                var filename = Path.GetFileName(citedPath);
-                if (!string.IsNullOrWhiteSpace(filename) && CitedFilePath().IsMatch(citation))
-                {
-                    if (!repositoryFilenameMatches.TryGetValue(filename, out var repositoryMatches))
-                    {
-                        repositoryMatches = ResolveRepositoryFilesByName(workingDirectory, filename);
-                        repositoryFilenameMatches[filename] = repositoryMatches;
-                    }
-
-                    if (repositoryMatches.Length == 1)
-                    {
-                        continue;
-                    }
-
-                    if (repositoryMatches.Length > 1)
-                    {
-                        var ambiguousCitationStart = targetHeading.Index + match.Groups["citation"].Index;
-                        var candidates = string.Join(
-                            ", ",
-                            repositoryMatches.Select(path => $"'{Path.GetRelativePath(workingDirectory, path).Replace(Path.DirectorySeparatorChar, '/')}'"));
-                        diagnostic =
-                            $"target citation '{citation}' is ambiguous; at least these repository files match: {candidates}; source span [{ambiguousCitationStart}..{ambiguousCitationStart + citation.Length})." +
-                            $"{Environment.NewLine}Offending citation: '{citation}'" +
-                            $" {DescribeOffendingPlanLine(plan, ambiguousCitationStart)}";
-                        return false;
-                    }
-                }
-            }
-
-            var citationStart = targetHeading.Index + match.Groups["citation"].Index;
             var suggestion = FindSingleCaseInsensitiveSuggestion(
                 candidate,
                 citation,
@@ -1013,10 +1034,8 @@ internal static partial class PlannerOutputContract
             var suggestionText = suggestion is null
                 ? string.Empty
                 : $" Did you mean `{suggestion}`?";
-            diagnostic =
-                $"target citation '{citation}' does not exist and is not marked as a new file; source span [{citationStart}..{citationStart + citation.Length})." +
-                $"{suggestionText}{Environment.NewLine}Offending citation: '{citation}'" +
-                $" {DescribeOffendingPlanLine(plan, citationStart)}";
+            diagnostic = DescribeCitationFailure(plan, citation, citationStart,
+                "does not exist and is not marked as a new file", suggestionText);
             return false;
         }
 
@@ -1031,7 +1050,9 @@ internal static partial class PlannerOutputContract
         {
             var notes = substitutions.Select(substitution =>
                 $"Planner contract note: raw citation `{substitution.RawCitation}` resolved to `{substitution.ResolvedCitation}`.");
-            resolvedPlan = resolvedPlan.TrimEnd() + Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, notes);
+            var notesHeading = nextHeading.Success ? string.Empty : "### Citation normalization" + Environment.NewLine;
+            resolvedPlan = resolvedPlan.TrimEnd() + Environment.NewLine + Environment.NewLine +
+                notesHeading + string.Join(Environment.NewLine, notes);
             if (resolvedPlan.Length > MaxPlanChars)
             {
                 diagnostic = $"resolved plan is {resolvedPlan.Length} characters after citation audit notes; maximum durable size is {MaxPlanChars}";
@@ -1043,63 +1064,33 @@ internal static partial class PlannerOutputContract
         return true;
     }
 
-    private static string[] ResolveRepositoryFilesByName(string workingDirectory, string filename)
+    private static string DescribeCitationFailure(
+        string plan, string citation, int start, string reason, string repair = "") =>
+        $"target citation '{citation}' {reason}; source span [{start}..{start + citation.Length})." +
+        $"{repair}{Environment.NewLine}Offending citation: '{citation}' {DescribeOffendingPlanLine(plan, start)}";
+
+    private static string[]? ReadTrackedCitationPaths(string workingDirectory)
     {
-        var matches = new List<string>(capacity: 2);
-        var pendingDirectories = new Stack<string>();
-        pendingDirectories.Push(workingDirectory);
-
-        while (pendingDirectories.Count > 0 && matches.Count < 2)
-        {
-            var directory = pendingDirectories.Pop();
-            try
-            {
-                foreach (var file in Directory.EnumerateFiles(directory))
-                {
-                    if (string.Equals(Path.GetFileName(file), filename, StringComparison.Ordinal))
-                    {
-                        matches.Add(file);
-                        if (matches.Count == 2)
-                        {
-                            break;
-                        }
-                    }
-                }
-
-                if (matches.Count == 2)
-                {
-                    break;
-                }
-
-                foreach (var childDirectory in Directory.EnumerateDirectories(directory).OrderByDescending(path => path, StringComparer.Ordinal))
-                {
-                    var name = Path.GetFileName(childDirectory);
-                    if (IsExcludedRepositorySearchDirectory(name) ||
-                        (File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) != 0)
-                    {
-                        continue;
-                    }
-
-                    pendingDirectories.Push(childDirectory);
-                }
-            }
-            catch (Exception error) when (
-                error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
-            {
-                // An unreadable subtree cannot contribute a safe unique match.
-            }
-        }
-
-        return matches.ToArray();
+        var result = GitCli.RunWithUtf8Output(workingDirectory, isolateRepository: true, "ls-files", "-z");
+        return result.Succeeded && !result.DrainTimedOut &&
+            (result.Output.Length == 0 || result.Output.EndsWith('\0'))
+            ? result.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            : null;
     }
 
-    private static bool IsExcludedRepositorySearchDirectory(string name) =>
-        name.StartsWith(".", StringComparison.Ordinal) ||
-        name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("TestResults", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("playwright-report", StringComparison.OrdinalIgnoreCase);
+    private static string[] ResolveRepositoryFilesByName(string[] trackedPaths, string filename)
+    {
+        var suffixMatch = filename.StartsWith("...", StringComparison.Ordinal);
+        var name = suffixMatch ? filename[3..] : filename;
+        return trackedPaths
+            .Where(path => suffixMatch
+                ? Path.GetFileName(path).EndsWith(name, StringComparison.Ordinal)
+                : string.Equals(Path.GetFileName(path), name, StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .Take(2)
+            .ToArray();
+    }
 
     private static bool PathExistsWithExactCasing(string path, string? citationCasingRoot)
     {

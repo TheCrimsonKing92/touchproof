@@ -13,7 +13,9 @@ internal sealed class ConductorStewardDeterministicRoute(
     private const string ConcreteFileRule = "Cite a concrete repository-relative file path that exists at HEAD, without wildcards, or explicitly mark the path as new.";
     private static readonly Regex Unmapped = new(@"\bcriterion (?<number>\d+) is unmapped\b", RegexOptions.CultureInvariant);
     private static readonly Regex MissingPlan = new(@"acceptance criterion (?<number>\d+) with disposition=planned must include a non-empty plan", RegexOptions.CultureInvariant);
-    private static readonly Regex Citation = new(@"target citation '(?<path>[^']+)' does not exist and is not marked as a new file", RegexOptions.CultureInvariant);
+    private static readonly Regex Citation = new(
+        @"target citation '(?<path>[^']+)' does not exist and is not marked as a new file(?:; source span \[\d+\.\.\d+\)\. Tracked match `(?<tracked>[^`\r\n]+)`)?",
+        RegexOptions.CultureInvariant);
     private static readonly Regex AmbiguousCitation = new(@"target citation '(?<path>[^']+)' is ambiguous; at least these repository files match:[ \t]*(?<candidates>[^;\r\n]*)", RegexOptions.CultureInvariant);
     private static readonly Regex QuotedCandidate = new(@"'(?<path>[^']+)'", RegexOptions.CultureInvariant);
     private static readonly Regex Section = new(@"missing required section '(?<section>[^']+)'", RegexOptions.CultureInvariant);
@@ -100,7 +102,14 @@ internal sealed class ConductorStewardDeterministicRoute(
             corrections.Add($"Acceptance criterion {number} with disposition=planned must include a non-empty plan. {SameLineRule}");
         }
         var citation = Citation.Match(evidence);
-        if (citation.Success)
+        var trackedCitation = citation.Groups["tracked"];
+        if (trackedCitation.Success)
+        {
+            corrections.Add($"Offending target citation: '{citation.Groups["path"].Value}'. " +
+                $"The tracked path '{trackedCitation.Value}' is unavailable as an existing target in this checkout. " +
+                $"Verify that path before citing it. {ConcreteFileRule} {SameLineRule}");
+        }
+        else if (citation.Success)
         {
             if (files is null) return null;
             var path = citation.Groups["path"].Value;

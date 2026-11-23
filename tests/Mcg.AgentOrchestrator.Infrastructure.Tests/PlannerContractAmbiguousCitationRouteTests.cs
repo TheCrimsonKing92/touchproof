@@ -7,6 +7,7 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
     [Xunit.Theory]
     [Xunit.InlineData("Program.cs")]
     [Xunit.InlineData("Program.cs:472")]
+    [Xunit.InlineData("...gram.cs:472")]
     public void Real_ambiguous_rejection_routes_to_both_full_paths(string citation)
     {
         var root = CreateTempDirectory();
@@ -19,6 +20,7 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllText(path, "// citation fixture");
             }
+            StagePlannerCitationFixtures(root, candidates);
 
             var plan = PlanWithTargetCitation(citation);
             Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(
@@ -57,6 +59,37 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Xunit.Fact]
+    public void UnavailableTrackedMatchRoutesWithCanonicalPath()
+    {
+        const string citation = "...Target.cs:43";
+        const string canonicalPath = "src/TrackedTarget.cs";
+        var root = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        var path = Path.Combine(root, canonicalPath);
+        File.WriteAllText(path, "// tracked citation fixture");
+        StagePlannerCitationFixtures(root, canonicalPath);
+        File.Delete(path);
+
+        Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(
+            PlanWithTargetCitation(citation), root, out _, out var rejection));
+        var stderrPath = Path.Combine(root, "planner.stderr.txt");
+        Xunit.Assert.True(PlannerOutputContract.TryPersistRejectionDiagnostic(
+            stderrPath, rejection, out var persistenceDiagnostic), persistenceDiagnostic);
+        var trigger = new ConductorStewardTrigger(
+            "goal", "planner-task", "sha", ConductorStewardTriggerKind.PlannerOutputContractRejected,
+            DateTimeOffset.UnixEpoch, File.ReadAllText(stderrPath), "", ["planner-rule=planner-output-contract-rejected"],
+            ["Repair unavailable citation"]);
+
+        var output = new ConductorStewardDeterministicRoute().TryBuild(trigger, root);
+
+        Xunit.Assert.NotNull(output);
+        var route = ConductorStewardAdjudicationParser.Parse(output);
+        Xunit.Assert.Equal("ContractClarification", route.Cause);
+        Xunit.Assert.Contains($"Offending target citation: '{citation}'", route.Text);
+        Xunit.Assert.Contains($"The tracked path '{canonicalPath}' is unavailable", route.Text);
     }
 
     private static string PlanWithTargetCitation(string citation)
