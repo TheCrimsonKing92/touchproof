@@ -46,11 +46,13 @@ internal static class CliProviderResetCommand
         var sourceTerminal = context.Kernel.Goals.Any(goal => goal.Id == selected.SourceGoalId && goal.IsTerminal);
         var attribution = CliPersistentStateRunner.ResolveOperatorIntentAttribution(parts,
             CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli);
+        var payload = new ProviderResetOperatorIntentPayload(selected.BindingKey, resetAt.ToUniversalTime(), rationale)
+            { BindingIdentity = selected.BindingIdentity };
         var id = Guid.NewGuid().ToString("N");
         var intent = new OperatorIntentRecord(id, GetFlagValue(parts, "--idempotency-key") ?? id,
             OperatorIntentVerbs.ProviderReset, sourceTerminal ? OperatorIntentScopes.Workspace : selected.SourceGoalId.Value,
             sourceTerminal ? null : selected.SourceTaskId.Value,
-            JsonSerializer.Serialize(new ProviderResetOperatorIntentPayload(selected.BindingKey, resetAt.ToUniversalTime(), rationale), OperatorIntentJson.Options),
+            JsonSerializer.Serialize(payload, OperatorIntentJson.Options),
             [], attribution.Actor, attribution.Channel, attribution.AuthenticationAssurance,
             DateTimeOffset.UtcNow, ActorKind: attribution.ActorKind);
         var persisted = (intentStore ?? SqliteOperatorIntentStore.ForDirectories(

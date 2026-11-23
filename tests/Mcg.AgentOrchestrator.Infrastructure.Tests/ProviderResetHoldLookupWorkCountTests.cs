@@ -191,11 +191,13 @@ public sealed class ProviderResetHoldLookupWorkCountTests
             var terminal = Kernel.Goals.Any(goal => goal.Id == selected.SourceGoalId && goal.IsTerminal);
             var attribution = CliPersistentStateRunner.ResolveOperatorIntentAttribution(parts,
                 CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli);
+            var payload = new ProviderResetOperatorIntentPayload(selected.BindingKey,
+                DateTimeOffset.Parse(ResetText).ToUniversalTime(), File.ReadAllText(_textPath).Trim())
+                { BindingIdentity = selected.BindingIdentity };
             var expected = new OperatorIntentRecord("reference-intent", "reference-intent", OperatorIntentVerbs.ProviderReset,
                 terminal ? OperatorIntentScopes.Workspace : selected.SourceGoalId.Value,
                 terminal ? null : selected.SourceTaskId.Value,
-                JsonSerializer.Serialize(new ProviderResetOperatorIntentPayload(selected.BindingKey,
-                    DateTimeOffset.Parse(ResetText).ToUniversalTime(), File.ReadAllText(_textPath).Trim()), OperatorIntentJson.Options),
+                JsonSerializer.Serialize(payload, OperatorIntentJson.Options),
                 [], attribution.Actor, attribution.Channel, attribution.AuthenticationAssurance, _clock.UtcNow, ActorKind: attribution.ActorKind);
             if (terminal)
                 OperatorIntentSubmissionOutput.PrintWorkspace(expected, _workspace.OrchestratorDirectory, false);

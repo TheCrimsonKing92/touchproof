@@ -15,8 +15,7 @@ internal sealed class ProviderResetRetainedSourceRecorder(Func<ITransactionalOrc
             return true;
         var payload = JsonSerializer.Deserialize<ProviderResetOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
             ?? throw new InvalidOperationException("provider-reset requires a payload.");
-        if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(kernel.ProviderHoldScope, payload.BindingKey, out var hold))
-            throw new InvalidOperationException("no-current-hold");
+        var hold = ProviderResetIntentHandler.ResolveHold(kernel.ProviderHoldScope, payload);
         if (payload.ResetAt > now.AddDays(31)) throw new InvalidOperationException("reset-too-far");
         if (kernel.Goals.Any(goal => goal.Id == hold.SourceGoalId))
             throw new InvalidOperationException("source-goal-in-working-set");
