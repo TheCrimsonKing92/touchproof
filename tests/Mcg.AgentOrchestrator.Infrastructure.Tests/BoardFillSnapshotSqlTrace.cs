@@ -3,17 +3,19 @@ using Microsoft.Data.Sqlite;
 
 // Fixture-only SQLite instrumentation. ROW counts results crossing the SQLite
 // API boundary, and STMT separates top-level executions from trigger subprograms.
-internal sealed class BoardFillSnapshotSqlTrace(Action? snapshotEstablished = null)
+internal sealed class BoardFillSnapshotSqlTrace(Action? snapshotEstablished = null, bool measureResultPayload = false)
 {
     private const uint Statement = 1;
     private const uint Row = 4;
     private const uint Close = 8;
     private static readonly Callback Trace = Observe;
     private readonly Action? _snapshotEstablished = snapshotEstablished;
+    private readonly bool _measureResultPayload = measureResultPayload;
     internal int Statements { get; private set; }
     internal int ImmediateTransactions { get; private set; }
     internal int TriggerSteps { get; private set; }
     internal int Rows { get; private set; }
+    internal long ResultPayloadBytes { get; private set; }
     internal Exception? Failure { get; private set; }
 
     internal void Attach(string path, SqliteConnection connection)
@@ -53,6 +55,8 @@ internal sealed class BoardFillSnapshotSqlTrace(Action? snapshotEstablished = nu
             else if (kind == Row)
             {
                 trace.Rows++;
+                if (trace._measureResultPayload)
+                    trace.ResultPayloadBytes += MeasureRowPayload(statement);
                 if (trace._snapshotEstablished is not null &&
                     Marshal.PtrToStringUTF8(Sql(statement))?.StartsWith("SELECT store_id, revision", StringComparison.Ordinal) == true)
                     trace._snapshotEstablished();
@@ -65,6 +69,28 @@ internal sealed class BoardFillSnapshotSqlTrace(Action? snapshotEstablished = nu
         return 0;
     }
 
+    private static long MeasureRowPayload(nint statement)
+    {
+        // The bundled SQLite engine exposes its current result row before invoking SQLITE_TRACE_ROW.
+        var columns = DataCount(statement);
+        if (columns == 0)
+            throw new InvalidOperationException("SQLite row trace did not expose a result row.");
+
+        long bytes = 0;
+        for (var column = 0; column < columns; column++)
+        {
+            bytes += ColumnType(statement, column) switch
+            {
+                SQLitePCL.raw.SQLITE_TEXT or SQLitePCL.raw.SQLITE_BLOB => ColumnBytes(statement, column),
+                SQLitePCL.raw.SQLITE_INTEGER => sizeof(long),
+                SQLitePCL.raw.SQLITE_FLOAT => sizeof(double),
+                SQLitePCL.raw.SQLITE_NULL => 0,
+                _ => throw new InvalidOperationException("Unknown SQLite result storage class.")
+            };
+        }
+        return bytes;
+    }
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int Callback(uint kind, nint context, nint statement, nint argument);
 
@@ -73,4 +99,13 @@ internal sealed class BoardFillSnapshotSqlTrace(Action? snapshotEstablished = nu
 
     [DllImport("e_sqlite3", EntryPoint = "sqlite3_sql", CallingConvention = CallingConvention.Cdecl)]
     private static extern nint Sql(nint statement);
+
+    [DllImport("e_sqlite3", EntryPoint = "sqlite3_data_count", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int DataCount(nint statement);
+
+    [DllImport("e_sqlite3", EntryPoint = "sqlite3_column_type", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ColumnType(nint statement, int column);
+
+    [DllImport("e_sqlite3", EntryPoint = "sqlite3_column_bytes", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ColumnBytes(nint statement, int column);
 }

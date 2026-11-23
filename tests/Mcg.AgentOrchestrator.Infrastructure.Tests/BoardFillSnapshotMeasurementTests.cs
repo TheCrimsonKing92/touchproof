@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using static BoardFillSnapshotTestDatabase;
 
 public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
@@ -9,6 +10,28 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
     private const int SeedItems = 2600;
     private const int TimedPairs = 5;
     private static readonly HashSet<string> NoExclusions = [];
+
+    [Fact]
+    public void Sql_trace_counts_result_payload_by_storage_class()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:;Pooling=False");
+        connection.Open();
+        var trace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+        trace.Attach(":memory:", connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT char(233), X'0001', 4, 1.5, NULL
+            UNION ALL SELECT 'a', X'', NULL, NULL, char(25991, 23383)
+            """;
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.True(reader.Read());
+        Assert.False(reader.Read());
+
+        Assert.Null(trace.Failure);
+        Assert.Equal(2, trace.Rows);
+        Assert.Equal(27L, trace.ResultPayloadBytes); // 2 + 2 + 8 + 8 on row one, 1 + 6 on row two.
+    }
 
     [Fact(Skip = "Requires the Windows SQLite VFS and per-thread CPU accounting.", SkipUnless = nameof(IsWindows))]
     public void Bounded_windows_report_paired_costs_and_freshness()
@@ -30,6 +53,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             $"runtime={RuntimeInformation.FrameworkDescription} warmup_pairs=1 " +
             "allocated_bytes=GC.GetAllocatedBytesForCurrentThread sql_rows=SQLite trace ROW events " +
             "sql_exec=SQLite trace STMT top-level events trigger_steps=SQLite trace trigger subprogram events " +
+            "sql_result_payload_bytes=sum of SQLite trace ROW columns using sqlite3_column_bytes for UTF-8 TEXT and BLOB, " +
+            "8 bytes per INTEGER or REAL, 0 per NULL. Payload excludes terminators, framing and database page bytes. " +
             "timing_and_trace=separate identical runs managed_retained_bytes=forced-GC heap estimate per host " +
             "from eight independently populated caches on each window's final database " +
             "full_read_retained_bytes=0 by lifetime writer=deterministic SQL mutations plus production note setup and coverage repair " +
@@ -42,6 +67,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             var timed = samples.OrderBy(pair => (pair.Full - pair.Reuse).TotalCpu).ElementAt(TimedPairs / 2);
             var counted = MeasureWindow(steps, trace: true);
             Assert.All(samples, sample => Assert.Equal(counted.Mix, sample.Mix));
+            Assert.True(counted.Full.ReadResultPayloadBytes > 0);
+            Assert.True(counted.Reuse.ReadResultPayloadBytes > 0);
             if (name == "unchanged")
             {
                 Assert.Equal(steps.Length, counted.Mix.Hit);
@@ -185,8 +212,10 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         {
             ReadRows = _readerTrace?.Rows ?? 0,
             ReadStatements = _readerTrace?.Statements ?? 0,
+            ReadResultPayloadBytes = _readerTrace?.ResultPayloadBytes ?? 0,
             WriteRows = (_writerTrace?.Rows ?? 0) + (_setupTrace?.Rows ?? 0),
             WriteStatements = (_writerTrace?.Statements ?? 0) + (_setupTrace?.Statements ?? 0),
+            WriteResultPayloadBytes = (_writerTrace?.ResultPayloadBytes ?? 0) + (_setupTrace?.ResultPayloadBytes ?? 0),
             TriggerSteps = (_writerTrace?.TriggerSteps ?? 0) + (_setupTrace?.TriggerSteps ?? 0),
             SetupStatements = _setupTrace?.Statements ?? 0,
             CoverageRepairs = _setupTrace?.ImmediateTransactions ?? 0
@@ -209,9 +238,9 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
 
         internal void ResetMetrics()
         {
-            _readerTrace = _trace ? new() : null;
-            _writerTrace = _trace ? new() : null;
-            _setupTrace = _trace ? new() : null;
+            _readerTrace = _trace ? new(measureResultPayload: true) : null;
+            _writerTrace = _trace ? new(measureResultPayload: true) : null;
+            _setupTrace = _trace ? new(measureResultPayload: true) : null;
             _timed = default;
         }
 
@@ -279,7 +308,7 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
 
     private record struct Costs(long ReadCpu, long WriteCpu, long ReadAllocated, long WriteAllocated,
         int ReadStatements, int WriteStatements, int ReadRows, int WriteRows, int TriggerSteps,
-        int SetupStatements, int CoverageRepairs)
+        int SetupStatements, int CoverageRepairs, long ReadResultPayloadBytes, long WriteResultPayloadBytes)
     {
         internal long TotalCpu => ReadCpu + WriteCpu;
 
@@ -287,7 +316,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         {
             ReadStatements = counted.ReadStatements, WriteStatements = counted.WriteStatements,
             ReadRows = counted.ReadRows, WriteRows = counted.WriteRows, TriggerSteps = counted.TriggerSteps,
-            SetupStatements = counted.SetupStatements, CoverageRepairs = counted.CoverageRepairs
+            SetupStatements = counted.SetupStatements, CoverageRepairs = counted.CoverageRepairs,
+            ReadResultPayloadBytes = counted.ReadResultPayloadBytes, WriteResultPayloadBytes = counted.WriteResultPayloadBytes
         };
 
         public static Costs operator -(Costs full, Costs reuse) => new(full.ReadCpu - reuse.ReadCpu,
@@ -295,10 +325,12 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             full.WriteAllocated - reuse.WriteAllocated, full.ReadStatements - reuse.ReadStatements,
             full.WriteStatements - reuse.WriteStatements, full.ReadRows - reuse.ReadRows,
             full.WriteRows - reuse.WriteRows, full.TriggerSteps - reuse.TriggerSteps,
-            full.SetupStatements - reuse.SetupStatements, full.CoverageRepairs - reuse.CoverageRepairs);
+            full.SetupStatements - reuse.SetupStatements, full.CoverageRepairs - reuse.CoverageRepairs,
+            full.ReadResultPayloadBytes - reuse.ReadResultPayloadBytes,
+            full.WriteResultPayloadBytes - reuse.WriteResultPayloadBytes);
 
         internal string Report() => FormattableString.Invariant(
-            $"snapshot_cpu_us={ReadCpu / 10.0:F1} writer_cpu_us={WriteCpu / 10.0:F1} total_cpu_us={TotalCpu / 10.0:F1} snapshot_allocated_bytes={ReadAllocated} writer_allocated_bytes={WriteAllocated} snapshot_sql_exec={ReadStatements} writer_sql_exec={WriteStatements} writer_setup_sql_exec={SetupStatements} snapshot_sql_rows={ReadRows} writer_sql_rows={WriteRows} writer_trigger_steps={TriggerSteps}");
+            $"snapshot_cpu_us={ReadCpu / 10.0:F1} writer_cpu_us={WriteCpu / 10.0:F1} total_cpu_us={TotalCpu / 10.0:F1} snapshot_allocated_bytes={ReadAllocated} writer_allocated_bytes={WriteAllocated} snapshot_sql_exec={ReadStatements} writer_sql_exec={WriteStatements} writer_setup_sql_exec={SetupStatements} snapshot_sql_rows={ReadRows} writer_sql_rows={WriteRows} writer_trigger_steps={TriggerSteps} snapshot_sql_result_payload_bytes={ReadResultPayloadBytes} writer_sql_result_payload_bytes={WriteResultPayloadBytes}");
     }
 
     private static string CpuSpread(IEnumerable<Costs> samples)
