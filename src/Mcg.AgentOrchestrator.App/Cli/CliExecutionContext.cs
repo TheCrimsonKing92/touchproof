@@ -376,7 +376,8 @@ internal interface ICliGoalWorktreeService
         string? worktreePath,
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
-        string? executionDirectory = null);
+        string? executionDirectory = null,
+        bool verificationAlreadyPassed = false);
 }
 
 internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
@@ -454,10 +455,11 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         string? worktreePath,
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
-        string? executionDirectory = null) =>
+        string? executionDirectory = null,
+        bool verificationAlreadyPassed = false) =>
         GoalAcceptanceEvidenceBundleBuilder.Build(
             kernel, goal, worktreePath, verification, verificationSkipped,
-            cleanupHooks.BuildStorageRoot, trunkBranch, executionDirectory, targetHome);
+            cleanupHooks.BuildStorageRoot, trunkBranch, executionDirectory, targetHome, verificationAlreadyPassed);
 }
 
 internal sealed record AcceptanceHostStopRequest(

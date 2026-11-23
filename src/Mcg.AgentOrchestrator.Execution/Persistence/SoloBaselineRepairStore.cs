@@ -193,6 +193,13 @@ internal sealed class SoloBaselineRepairStore
         return row.Read() ? new(key, row.GetString(0), row.IsDBNull(1) ? null : row.GetString(1)) : null;
     }
 
+    internal bool IsCanonicalRepair(string goal)
+    {
+        using var db = Open();
+        using var command = Command(db, "SELECT 1 FROM solo_repair_group WHERE repair_goal = $goal LIMIT 1", ("$goal", goal));
+        return command.ExecuteScalar() is not null;
+    }
+
     internal SoloRepairGroup ReserveGroup(string key, string intakePayload)
     {
         using var db = Open();

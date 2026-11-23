@@ -137,6 +137,60 @@ public static partial class GoalWorktrees
             goalId,
             static (workingDirectory, args) => GitCli.Run(workingDirectory, args));
 
+    internal static GoalWorktreeMergeResult TryFastForwardMergeExact(
+        string executionDirectory, GoalId goalId, string targetRef, string main, string candidate,
+        Func<string?> mutationBlocker)
+    {
+        var branch = BranchName(goalId);
+        var candidateRef = $"refs/heads/{branch}";
+        const string revisionChanged = "the revision pair changed after baseline repair validation or normal acceptance";
+        var changedFiles = ResolveChangedFiles(executionDirectory, main, candidate, static (directory, args) => GitCli.Run(directory, args));
+        GoalWorktreeMergeResult Blocked(string reason) => new(false, branch,
+            $"Fast-forward blocked before merge: {reason}", null, changedFiles.Files);
+        GoalWorktreeMergeResult Stale() => Blocked(revisionChanged) with { RevisionPairChanged = true };
+        bool OnTarget() => GitCli.Run(executionDirectory, "symbolic-ref", "--quiet", "HEAD") is
+            { Succeeded: true, DrainTimedOut: false } head && head.Output.Trim() == targetRef;
+        bool Matches(string reference, string revision) =>
+            GitRevisionReader.Shared.TryResolve(executionDirectory, reference, out var actual) && actual == revision;
+        bool Complete(GitCli.GitResult result) => result is { Succeeded: true, DrainTimedOut: false };
+
+        if (!changedFiles.Succeeded) return Blocked($"changed-file determination failed: {changedFiles.FailureReason}");
+        if (mutationBlocker() is { Length: > 0 } blockReason) return Blocked(blockReason);
+        if (!OnTarget() || !Matches(targetRef, main) || !Matches(candidateRef, candidate)) return Stale();
+
+        var alreadyMerged = Complete(GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", candidate, main));
+        if (!alreadyMerged)
+        {
+            if (!Complete(GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", main, candidate)))
+                return new(false, branch, $"Branch {branch} cannot fast-forward; merge it explicitly after review.",
+                    $"git merge {branch}", changedFiles.Files);
+            if (!TryEnsureNoGitOperation(executionDirectory, static (dir, args) => GitCli.Run(dir, args), out _))
+                return Blocked("checkout has an active or unreadable Git operation");
+            var checkout = GitCli.Run(executionDirectory, "read-tree", "-n", "-m", "-u", main, candidate);
+            if (!Complete(checkout)) return Blocked($"checkout cannot be fast-forwarded: {checkout.Error.Trim()}");
+        }
+
+        // Verify the source ref in the same Git transaction that compares and advances the target.
+        var targetCommand = alreadyMerged ? $"verify {targetRef} {main}" : $"update {targetRef} {candidate} {main}";
+        var commands = targetRef == candidateRef ? $"{targetCommand}\n" : $"verify {candidateRef} {candidate}\n{targetCommand}\n";
+        var update = GitCli.RunWithStandardInput(executionDirectory, GitCli.DefaultTimeoutMilliseconds,
+            commands, "update-ref", "-m", $"merge {branch}: Fast-forward", "--stdin");
+        if (!Complete(update))
+        {
+            if (!Matches(targetRef, main) || !Matches(candidateRef, candidate)) return Stale();
+            return Blocked($"ref transaction failed: {update.Error.Trim()}");
+        }
+
+        var message = $"Fast-forwarded to {branch}.";
+        if (!alreadyMerged && OnTarget() && Matches(targetRef, candidate))
+        {
+            var refresh = GitCli.Run(executionDirectory, "read-tree", "-m", "-u", main, candidate);
+            if (!Complete(refresh))
+                message += $" The target ref advanced, but its checkout could not be refreshed: {refresh.Error.Trim()}";
+        }
+        return new(true, branch, message, null, changedFiles.Files) { AdvancedTarget = !alreadyMerged };
+    }
+
     internal static GoalWorktreeChangedFilesResult ResolveChangedFilesAgainstHead(
         string executionDirectory,
         GoalId goalId,
@@ -153,7 +207,13 @@ public static partial class GoalWorktrees
                 $"goal branch '{branch}' does not exist");
         }
 
-        var diff = gitRunner(executionDirectory, ["diff", "--name-only", $"HEAD...{branch}"]);
+        return ResolveChangedFiles(executionDirectory, "HEAD", branch, gitRunner);
+    }
+
+    private static GoalWorktreeChangedFilesResult ResolveChangedFiles(
+        string executionDirectory, string baseline, string candidate, Func<string, string[], GitCli.GitResult> gitRunner)
+    {
+        var diff = gitRunner(executionDirectory, ["diff", "--name-only", $"{baseline}...{candidate}"]);
         if (diff.DrainTimedOut)
         {
             return new GoalWorktreeChangedFilesResult(

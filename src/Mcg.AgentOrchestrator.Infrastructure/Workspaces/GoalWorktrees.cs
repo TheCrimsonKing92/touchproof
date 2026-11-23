@@ -7,7 +7,11 @@ public sealed record GoalWorktreeMergeResult(
     string BranchName,
     string Message,
     string? SuggestedCommand,
-    IReadOnlyList<string>? ChangedFiles = null);
+    IReadOnlyList<string>? ChangedFiles = null)
+{
+    internal bool RevisionPairChanged { get; init; }
+    internal bool AdvancedTarget { get; init; }
+}
 
 public sealed record GoalWorktreeChangedFilesResult(
     bool Succeeded,

@@ -17,67 +17,90 @@ internal static class CliWorkspaceMerge
         publication = null;
         repairBlockReason = null;
         var duties = goal.OutstandingPostLandingDuties;
-        var needsPublication = duties.Any(item => item.Publication is null);
         var root = context.Workspace.ExecutionDirectory;
-        // Publication authority requires the integration target. Goals without later
-        // duties retain the existing worktree-service merge contract.
-        if (duties.Count > 0)
+        var branch = context.Worktrees.BranchName(goal.Id);
+        var mainRef = $"refs/heads/{context.Workspace.IntegrationBranch}";
+        var target = RootCheckoutLandingGuard.ReadSymbolicHead(static (dir, args) => GitCli.Run(dir, args), root);
+        var canonicalRepair = OpenRepairStore(context.Workspace)?.IsCanonicalRepair(goal.Id.Value) == true;
+        var needsPublication = canonicalRepair || duties.Any(item => item.Publication is null);
+        var requiresIntegrationTarget = canonicalRepair || duties.Count > 0;
+        if ((requiresIntegrationTarget && target != mainRef) ||
+            (target is null && ReadRef(root, "HEAD") is not null))
         {
-            var target = GitCli.Run(root, "symbolic-ref", "--quiet", "HEAD");
-            if (!target.Succeeded || !string.Equals(target.Output.Trim(),
-                    $"refs/heads/{context.Workspace.IntegrationBranch}", StringComparison.Ordinal))
-            {
-                return new GoalWorktreeMergeResult(false, context.Worktrees.BranchName(goal.Id),
-                    $"Fast-forward blocked: HEAD must be attached to integration branch '{context.Workspace.IntegrationBranch}'.",
-                    null);
-            }
+            return new GoalWorktreeMergeResult(false, branch,
+                $"Fast-forward blocked: HEAD must be attached to integration branch '{context.Workspace.IntegrationBranch}'.",
+                null);
         }
-        var priorMain = needsPublication ? ReadRevision("HEAD") : null;
-        var candidate = needsPublication ? ReadRevision(context.Worktrees.BranchName(goal.Id)) : null;
+
+        var pair = testedPair ?? new GateReadyCandidateRevisionPair(ReadRef(root, $"refs/heads/{branch}"),
+            target is null ? null : ReadRef(root, target));
+        if (target is not null && pair is not { BranchRevision: not null, MainRevision: not null })
+        {
+            return new(false, branch, "Fast-forward blocked: cannot resolve the candidate and target revisions.", null);
+        }
         string? repairBlock = null;
-        var merge = context.Worktrees.TryFastForwardMerge(root, goal.Id, () =>
+        var merge = target is not null && pair is { BranchRevision: { } candidate, MainRevision: { } priorMain }
+            ? GoalWorktrees.TryFastForwardMergeExact(root, goal.Id, target, priorMain, candidate, CheckMutation)
+            : context.Worktrees.TryFastForwardMerge(root, goal.Id, CheckMutation);
+        repairBlockReason = merge?.RevisionPairChanged == true ? merge.Message : repairBlock;
+        if (merge?.FastForwarded != true || !needsPublication) return merge;
+
+        var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
+        publication = repository.ReadPromotionFactAsync(goal.Id).GetAwaiter().GetResult();
+        if (merge.AdvancedTarget && publication is null)
+        {
+            var at = (context.DiagnosticsClock ?? new SystemClock()).UtcNow;
+            publication = new GoalPromotionFact(goal.Id.Value, pair.BranchRevision!, pair.MainRevision!,
+                pair.BranchRevision!, at, GoalPromotionFact.CliFastForwardProvenance);
+            repository.RecordPromotionFacts([publication]);
+        }
+        // An already-merged branch may recover a known fact, but never invent one.
+        if (publication is not null && duties.Count > 0) context.Kernel.BindPostLandingPublication(goal.Id, publication);
+        return merge;
+
+        string? CheckMutation()
         {
             var blocked = mutationBlocker();
             if (!string.IsNullOrWhiteSpace(blocked)) return blocked;
-            return repairBlock = CheckRepairAdmission(context, goal, testedPair, requireNormalAcceptance: true, out _);
-        });
-        repairBlockReason = repairBlock;
-        if (merge?.FastForwarded != true || !needsPublication) return merge;
-
-        var at = (context.DiagnosticsClock ?? new SystemClock()).UtcNow;
-        var promotedMain = ReadRevision("HEAD");
-        var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
-        if (!string.Equals(priorMain, promotedMain, StringComparison.OrdinalIgnoreCase))
-        {
-            if (!string.Equals(candidate, promotedMain, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("CLI publication does not match the captured goal candidate.");
-            repository.RecordPromotionFacts([new GoalPromotionFact(goal.Id.Value, candidate!, priorMain!,
-                promotedMain, at, GoalPromotionFact.CliFastForwardProvenance)]);
-        }
-        // An already-merged branch may recover a known fact, but never invent one.
-        publication = repository.ReadPromotionFactAsync(goal.Id).GetAwaiter().GetResult();
-        if (publication is not null) context.Kernel.BindPostLandingPublication(goal.Id, publication);
-        return merge;
-
-        string ReadRevision(string revision)
-        {
-            var result = GitCli.Run(root, "rev-parse", revision);
-            if (!result.Succeeded || string.IsNullOrWhiteSpace(result.Output))
-                throw new InvalidOperationException($"Cannot capture CLI publication revision '{revision}': {result.Error}");
-            return result.Output.Trim();
+            return repairBlock = CheckRepairAdmission(context, goal, pair, requireNormalAcceptance: true, out _);
         }
     }
 
-    internal static string? CheckRepairAdmission(
+    private static SoloBaselineRepairStore? OpenRepairStore(OrchestratorWorkspace workspace, bool retain = false)
+    {
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        return retain || File.Exists(path) ? new SoloBaselineRepairStore(path) : null;
+    }
+
+    internal static void RetainRepairEvidence(CliExecutionContext context, Goal goal)
+    {
+        if (goal.LatestAcceptanceFailure?.SoloFailureReceipt is null) return;
+        var workspace = context.Workspace;
+        var root = workspace.ExecutionDirectory;
+        GateReadyCandidateRevisionPair ReadCurrent() => new(ReadRef(root, $"refs/heads/{context.Worktrees.BranchName(goal.Id)}"),
+            ReadRef(root, $"refs/heads/{workspace.IntegrationBranch}"));
+        SoloBaselineRepairCoordinator.RetainSoloRepairPartition(OpenRepairStore(workspace, retain: true)!, goal,
+            () => SoloAcceptanceFailureHandler.ReadContext(goal, root, ReadCurrent()), ReadCurrent);
+    }
+
+    internal static bool ReportRepairHold(CliExecutionContext context, Goal goal, GateReadyCandidateRevisionPair? pair,
+        string? worktreePath, bool requireNormalAcceptance, out SoloBaselineRepairStore? repairStore)
+    {
+        var blocked = CheckRepairAdmission(context, goal, pair, requireNormalAcceptance, out repairStore, worktreePath);
+        if (blocked is null) return false;
+        Console.WriteLine($"Acceptance blocked: {blocked}.");
+        return true;
+    }
+
+    private static string? CheckRepairAdmission(
         CliExecutionContext context, Goal goal, GateReadyCandidateRevisionPair? preparedPair,
         bool requireNormalAcceptance, out SoloBaselineRepairStore? repairStore, string? worktreePath = null)
     {
         repairStore = null;
         var workspace = context.Workspace;
-        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
-        if (!File.Exists(storePath)) return null;
+        RetainRepairEvidence(context, goal);
+        if (OpenRepairStore(workspace) is not { } store) return null;
 
-        var store = new SoloBaselineRepairStore(storePath);
         var root = workspace.ExecutionDirectory;
         var candidateRef = $"refs/heads/{context.Worktrees.BranchName(goal.Id)}";
         var mainRef = $"refs/heads/{workspace.IntegrationBranch}";
@@ -89,8 +112,7 @@ internal static class CliWorkspaceMerge
             !store.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main))
             return "baseline repair and original-selection validation are pending for the current revision pair";
 
-        if (requireNormalAcceptance &&
-            store.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome != "passed")
+        if (requireNormalAcceptance && !HasPassedNormalGate(store, goal, pair))
             return "normal acceptance is pending for the current revision pair";
 
         if (worktreePath is not null)
@@ -112,9 +134,14 @@ internal static class CliWorkspaceMerge
         return null;
 
         GateReadyCandidateRevisionPair ReadPair() => new(ReadRef(root, candidateRef), ReadRef(root, mainRef));
-        static string? ReadRef(string directory, string reference) =>
-            GitRevisionReader.Shared.TryResolve(directory, reference, out var revision) ? revision : null;
     }
+
+    internal static bool HasPassedNormalGate(SoloBaselineRepairStore? store, Goal goal, GateReadyCandidateRevisionPair? pair) =>
+        pair is { BranchRevision: { } candidate, MainRevision: { } main } &&
+        store?.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed";
+
+    private static string? ReadRef(string directory, string reference) =>
+        GitRevisionReader.Shared.TryResolve(directory, reference, out var revision) ? revision : null;
 
     internal static bool ClearSupersededAcceptanceFailureForCandidate(
         CliExecutionContext context,

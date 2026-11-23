@@ -20,7 +20,8 @@ internal sealed record AcceptanceMergeGuardTask(
 
 internal sealed record AcceptanceMergeGuardSnapshot(
     GoalStatus GoalStatus,
-    IReadOnlyList<AcceptanceMergeGuardTask> Tasks);
+    IReadOnlyList<AcceptanceMergeGuardTask> Tasks,
+    SoloAcceptanceFailureReceipt? SoloFailureReceipt = null);
 
 internal sealed record AcceptanceMergeGuardMismatch(
     AcceptanceMergeGuardMismatchKind Kind,
@@ -44,7 +45,8 @@ internal static class AcceptanceMergeGuard
             goal.Tasks
                 .OrderBy(task => task.Id, StringComparer.Ordinal)
                 .Select(task => new AcceptanceMergeGuardTask(task.Id, task.RequiredRole, task.Status))
-                .ToArray());
+                .ToArray(),
+            goal.AcceptanceFailureDeferredForRetry == true ? null : goal.LatestAcceptanceFailure?.SoloFailureReceipt);
     }
 
     public static AcceptanceMergeGuardMismatch? Compare(
@@ -58,6 +60,12 @@ internal static class AcceptanceMergeGuard
                 "Goal.Status",
                 expected.GoalStatus.ToString(),
                 actual.GoalStatus.ToString());
+        }
+
+        if (expected.SoloFailureReceipt != actual.SoloFailureReceipt)
+        {
+            return new AcceptanceMergeGuardMismatch(AcceptanceMergeGuardMismatchKind.BaselineRepair,
+                "Solo acceptance failure evidence", DescribeReceipt(expected.SoloFailureReceipt), DescribeReceipt(actual.SoloFailureReceipt));
         }
 
         var expectedById = expected.Tasks.ToDictionary(task => task.Id, StringComparer.Ordinal);
@@ -97,6 +105,9 @@ internal static class AcceptanceMergeGuard
 
         return null;
     }
+
+    private static string DescribeReceipt(SoloAcceptanceFailureReceipt? receipt) =>
+        receipt is null ? "absent" : $"attempt {receipt.AttemptId}, proof {receipt.Evidence.Sha256}";
 
     public static AcceptanceMergeGuardMismatch? CompareWorktreeHead(string? expected, string? actual) =>
         string.Equals(Normalize(expected), Normalize(actual), StringComparison.OrdinalIgnoreCase)

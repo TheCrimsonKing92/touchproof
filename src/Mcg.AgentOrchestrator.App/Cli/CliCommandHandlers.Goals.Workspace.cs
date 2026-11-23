@@ -54,6 +54,7 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
+            var mainHead = TryResolveGitHead(context, executionDirectory);
             var candidateHead = GitCli.Run(executionDirectory, "rev-parse", branch);
             if (!candidateHead.Succeeded || string.IsNullOrWhiteSpace(candidateHead.Output))
             {
@@ -85,7 +86,8 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             }
 
             var merge = CliWorkspaceMerge.MergeWithPublication(context, goal, out var publication,
-                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace), out _);
+                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace), out _,
+                new(candidateHead.Output.Trim(), mainHead));
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));

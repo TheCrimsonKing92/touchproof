@@ -149,16 +149,163 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
     }
 
+    [Theory]
+    [InlineData("candidate")]
+    [InlineData("main")]
+    public void CliFastForward_RejectsRefMovementAtTheGitMutation(string moved)
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var (context, store, finding) = PrepareCliRepair(fixture, new ControlledVerifier(fixture.Repository));
+        RecordPassedValidation(store, finding, fixture.Main);
+        store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main), "prior-attempt");
+        var mutationPath = moved == "main" ? fixture.Repository : GoalWorktrees.TryResolve(fixture.Repository, fixture.Goal.Id)!;
+        var thread = Environment.CurrentManagedThreadId;
+        var prior = Volatile.Read(ref GitCli.LaunchObserver);
+        GitCli.GitResult? mutation = null;
+        Action<string> observer = command =>
+        {
+            prior?.Invoke(command);
+            if (Environment.CurrentManagedThreadId == thread && command == "update-ref" && mutation is null)
+                mutation = GitCli.Run(mutationPath, "commit", "--allow-empty", "-m", $"Advance {moved} after CLI admission");
+        };
+        Assert.Same(prior, Interlocked.CompareExchange(ref GitCli.LaunchObserver, observer, prior));
+        try
+        {
+            var merge = CliWorkspaceMerge.MergeWithPublication(context, fixture.Goal, out var publication,
+                () => null, out var repairBlock, new(fixture.Candidate, fixture.Main));
+
+            Assert.True(mutation?.Succeeded, mutation?.Error);
+            Assert.False(Assert.IsType<GoalWorktreeMergeResult>(merge).FastForwarded);
+            Assert.Contains("revision pair changed", repairBlock);
+            Assert.Null(publication);
+            var currentMain = RunGit(fixture.Repository, "rev-parse", "main");
+            if (moved == "main")
+            {
+                Assert.NotEqual(fixture.Main, currentMain);
+                Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main^"));
+                Assert.Equal(fixture.Candidate, RunGit(fixture.Repository, "rev-parse", GoalWorktrees.BranchName(fixture.Goal.Id)));
+            }
+            else
+            {
+                Assert.Equal(fixture.Main, currentMain);
+                Assert.Equal(fixture.Candidate, RunGit(mutationPath, "rev-parse", "HEAD^"));
+            }
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref GitCli.LaunchObserver, prior, observer);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CliAcceptance_RetainsSupersededSoloEnvelopeBeforeAnyNewGate(bool routeToHold)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var failure = await ProduceFailure(fixture, goal);
+        var receipt = Assert.IsType<SoloAcceptanceFailureReceipt>(failure.SoloFailureReceipt);
+        fixture.Kernel.RecordAcceptanceFailure(goal.Id, failure.FailedChecks!, failure.BranchHeadSha, failure.MainHeadSha,
+            failure.CheckAttributions, failure.BaselineAttestation, failure.AttemptId, receipt);
+        if (routeToHold) fixture.Kernel.RouteRecordedAcceptanceFailure(goal.Id, "Hold the original solo failure.");
+
+        fixture.Git("commit", "--allow-empty", "-m", "Advance main before CLI acceptance");
+        var currentMain = fixture.Git("rev-parse", "main");
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        Assert.False(File.Exists(storePath));
+        var verifier = new ControlledVerifier(fixture.Root);
+        var context = CreateCliContext(fixture.Kernel, workspace, goal, verifier);
+
+        Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+        Assert.Empty(verifier.NormalRuns);
+        Assert.Equal(currentMain, fixture.Git("rev-parse", "main"));
+        var finding = Assert.Single(new SoloBaselineRepairStore(storePath).ReadFindings(goal.Id.Value));
+        Assert.False(finding.Inherited);
+        Assert.Equal(First, finding.Identity);
+        Assert.Equal($"{GoalAcceptanceVerifier.ProjectLabel(Project)}: FullyQualifiedName~{First}", finding.Request);
+        Assert.Equal(receipt.Evidence, finding.Proof);
+    }
+
+    [Fact]
+    public async Task CliAcceptance_ReusesAcknowledgedNormalGateAfterRestart()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var verifier = new ControlledVerifier(fixture.Repository) { NormalPass = true };
+        var (context, store, finding) = PrepareCliRepair(fixture, verifier,
+            _ => throw new IOException("Stopped after normal acceptance acknowledgement."));
+        RecordPassedValidation(store, finding, fixture.Main);
+        var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+
+        Assert.Equal("Stopped after normal acceptance acknowledgement.",
+            Assert.Throws<IOException>(() => CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context)).Message);
+        var key = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
+        Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+
+        var restarted = await repository.LoadAsync();
+        var resumed = CreateCliContext(restarted, context.Workspace, restarted.GetGoal(fixture.Goal.Id), verifier);
+        Assert.True(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(resumed));
+        Assert.Equal((fixture.Goal.Id, fixture.Candidate), Assert.Single(verifier.NormalRuns));
+        Assert.Equal(fixture.Candidate, RunGit(fixture.Repository, "rev-parse", "main"));
+    }
+
+    [Fact]
+    public async Task CliAcceptance_LandsRepairWithoutDutiesAndValidatesDependentAfterReload()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var dependent = NewCandidate(fixture, fixture.Kernel);
+        var failure = await ProduceFailure(fixture, dependent);
+        var receipt = Assert.IsType<SoloAcceptanceFailureReceipt>(failure.SoloFailureReceipt);
+        fixture.Kernel.RecordAcceptanceFailure(dependent.Id, failure.FailedChecks!, failure.BranchHeadSha, failure.MainHeadSha,
+            failure.CheckAttributions, failure.BaselineAttestation, failure.AttemptId, receipt);
+        fixture.Kernel.RouteRecordedAcceptanceFailure(dependent.Id, "Hold the inherited solo failure.");
+        CliWorkspaceMerge.RetainRepairEvidence(CreateCliContext(fixture.Kernel, workspace, dependent,
+            new ControlledVerifier(fixture.Root)), dependent);
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(storePath);
+        var finding = Assert.Single(store.ReadFindings(dependent.Id.Value));
+        Assert.True(finding.Inherited, finding.Reason);
+        var repair = CompletedGoal(fixture.Kernel, fixture.Repo);
+        var repairWorktree = GoalWorktrees.Ensure(fixture.Repo, repair.Id);
+        File.WriteAllText(Path.Combine(repairWorktree, "repair.txt"), "baseline repair");
+        RunGit(repairWorktree, "add", "repair.txt");
+        RunGit(repairWorktree, "commit", "-m", "Repair the baseline");
+        var repairHead = RunGit(repairWorktree, "rev-parse", "HEAD");
+        store.ReserveGroup(finding.GroupKey, "{}");
+        store.AcknowledgeRepair(finding.GroupKey, repair.Id.Value);
+        Assert.Empty(repair.OutstandingPostLandingDuties);
+        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true, Finding = finding };
+
+        var context = CreateCliContext(fixture.Kernel, workspace, repair, verifier);
+        Assert.True(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+        Assert.Equal(repairHead, fixture.Git("rev-parse", "main"));
+        Assert.True(File.Exists(Path.Combine(fixture.Repo, "repair.txt")));
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var restarted = await repository.LoadAsync();
+        var promoted = Assert.IsType<GoalPromotionFact>(await repository.ReadPromotionFactAsync(repair.Id));
+        Assert.Equal(GoalPromotionFact.CliFastForwardProvenance, promoted.Provenance);
+        Assert.Equal(repairHead, promoted.PromotedMainRevision);
+        Assert.Equal(receipt.MainSha, promoted.PriorMainRevision);
+        RunGit(Worktree(fixture, dependent), "rebase", "main");
+        var result = Driver(restarted, workspace, verifier).AdvanceOnce(restarted.GetGoal(dependent.Id), Policy);
+        Assert.Equal(SoloHoldReasons.RepairValidated, Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome).Decision?.DiscriminatingEvidence);
+        Assert.Equal((finding.Request!, repairHead), Assert.Single(verifier.FocusedRuns));
+        Assert.Equal("passed", new SoloBaselineRepairStore(storePath).ReadCheck(SoloBaselineRepairStore.ValidationKey(finding, repairHead))?.Outcome);
+    }
+
     private static (CliExecutionContext Context, SoloBaselineRepairStore Store, SoloRepairFinding Finding)
-        PrepareCliRepair(PullRequestLandingTestFixture fixture, ControlledVerifier verifier)
+        PrepareCliRepair(PullRequestLandingTestFixture fixture, ControlledVerifier verifier,
+            Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopHosts = null)
     {
         var workspace = fixture.Workspace with { Delivery = ProjectDelivery.Direct };
-        var context = new CliExecutionContext(fixture.Kernel, workspace, new InMemoryModelProviderRegistry([]),
-            AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), fixture.Goal)
-        {
-            AcceptanceVerifier = verifier,
-            StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
-        };
+        var context = CreateCliContext(fixture.Kernel, workspace, fixture.Goal, verifier, stopHosts);
         var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
         var finding = CapturePublicationFinding(fixture);
         store.Retain(fixture.Goal.Id.Value, [finding]);
@@ -166,6 +313,15 @@ public sealed class SoloRepairWorkflowTests
         store.AcknowledgeRepair(finding.GroupKey, Guid.NewGuid().ToString("N"));
         return (context, store, finding);
     }
+
+    private static CliExecutionContext CreateCliContext(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
+        Goal goal, ControlledVerifier verifier, Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopHosts = null) =>
+        new(kernel, workspace, new InMemoryModelProviderRegistry([]), AgentCatalog.Default().Agents,
+            WorkerProfileCatalog.Default(), goal, stopAcceptanceHosts: stopHosts ?? (_ => AcceptanceHostStopResult.Success("Fixture stopped hosts.")))
+        {
+            AcceptanceVerifier = verifier,
+            StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
+        };
 
     private static SoloRepairFinding CapturePublicationFinding(PullRequestLandingTestFixture fixture)
     {

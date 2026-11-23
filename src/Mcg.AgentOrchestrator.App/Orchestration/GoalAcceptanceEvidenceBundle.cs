@@ -62,7 +62,8 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         DotnetBuildStorageRoot? buildStorageRoot,
         string integrationBranch,
         string? executionDirectory = null,
-        WorkerTargetHome? targetHome = null)
+        WorkerTargetHome? targetHome = null,
+        bool verificationAlreadyPassed = false)
     {
         var blockers = new List<GoalAcceptanceEvidenceBlocker>();
         var nextCommands = new List<string>();
@@ -160,9 +161,9 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             string.Join(Environment.NewLine, goal.Tasks.Select(task => task.VerificationPlan)),
             changedFiles,
             testImpactPlan);
-        var policyChecks = BuildPolicyCheckEvidence(verificationPolicy, verification);
+        var policyChecks = BuildPolicyCheckEvidence(verificationPolicy, verification, verificationAlreadyPassed);
 
-        if (!verificationSkipped)
+        if (!verificationSkipped && !verificationAlreadyPassed)
         {
             if (verification is null)
             {
@@ -232,12 +233,14 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
 
     private static GoalAcceptancePolicyCheckEvidence[] BuildPolicyCheckEvidence(
         VerificationPolicy policy,
-        AcceptanceVerificationResult? verification)
+        AcceptanceVerificationResult? verification,
+        bool verificationAlreadyPassed)
     {
         var acceptanceChecks = verification?.Checks ?? [];
         return policy.Checks.Select(check =>
         {
             var state = ResolvePolicyCheckState(check, acceptanceChecks);
+            if (verificationAlreadyPassed && check.Required && state == "missing") state = "recorded";
             return new GoalAcceptancePolicyCheckEvidence(
                 check.Name,
                 check.Kind,

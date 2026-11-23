@@ -48,6 +48,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         context.CurrentGoal = normalizedGoal;
     }
 
+    CliWorkspaceMerge.RetainRepairEvidence(context, goal);
     if (goal.Status == GoalStatus.AcceptanceFailed)
     {
         var failedWorktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
@@ -92,6 +93,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     GateReadyCandidateRevisionPair? preparedPair = null;
     DateTimeOffset? acceptanceAttemptStartedAt = null;
     AcceptanceMergeGuardSnapshot? expectedMergeGuard = null;
+    var reuseNormalGate = false;
     var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
     if (worktreePath is not null)
     {
@@ -149,7 +151,9 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         testedWorktreeHead = context.Worktrees.ResolveHead(worktreePath);
         testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
         preparedPair = new(testedWorktreeHead, testedMainHead);
-        if (RepairGateHeld(requireNormalAcceptance: skipVerify, out _)) return false;
+        if (CliWorkspaceMerge.ReportRepairHold(context, goal, preparedPair, worktreePath, skipVerify, out var admissionStore)) return false;
+        reuseNormalGate = CliWorkspaceMerge.HasPassedNormalGate(admissionStore, goal, preparedPair);
+        if (reuseNormalGate && !skipVerify) Console.WriteLine("Verification: reused the recorded normal acceptance pass for the current revision pair.");
 
         if (CliWorkspaceMerge.ClearSupersededAcceptanceFailureForCandidate(context, goal, testedWorktreeHead, testedMainHead))
         {
@@ -196,7 +200,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                 ("reason", "--skip-verify"));
             Console.WriteLine("Verification: skipped (--skip-verify)");
         }
-        else
+        else if (!reuseNormalGate)
         {
             var sourceSizePreflight = SourceSizeRatchetPreflight.Evaluate(worktreePath);
             if (sourceSizePreflight.HasBlockingViolation)
@@ -270,7 +274,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             }
             using (stableSlotLease)
             {
-                if (RepairGateHeld(requireNormalAcceptance: false, out _)) return false;
+                if (CliWorkspaceMerge.ReportRepairHold(context, goal, preparedPair, worktreePath, false, out _)) return false;
 
                 var enteredVerifying = context.Kernel.BeginGoalAcceptanceVerification(
                     goal.Id,
@@ -421,7 +425,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         worktreePath,
         verification,
         skipVerify,
-        context.Workspace.ExecutionDirectory);
+        context.Workspace.ExecutionDirectory,
+        verificationAlreadyPassed: reuseNormalGate);
     AcceptanceEvidenceBundleTextView.Print(evidence);
 
     if (!evidence.Passed)
@@ -498,7 +503,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
 
     if (verification is { Passed: true, Skipped: false } passedGate)
     {
-        if (RepairGateHeld(requireNormalAcceptance: false, out var repairStore)) return false;
+        if (CliWorkspaceMerge.ReportRepairHold(context, goal, preparedPair, worktreePath, false, out var repairStore)) return false;
         if (repairStore is not null)
             repairStore.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, testedWorktreeHead!, testedMainHead!),
                 passedGate.AttemptId ?? "inline-gate");
@@ -541,7 +546,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             goal.Id,
             expectedMergeGuard ?? AcceptanceMergeGuard.Capture(context.Kernel, goal.Id),
             testedWorktreeHead,
-            PassingGateReceiptRecorded: verification is { Passed: true },
+            PassingGateReceiptRecorded: verification is { Passed: true } || reuseNormalGate,
             Merge: () =>
             {
                 var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id, context.Workspace.IntegrationBranch);
@@ -627,15 +632,6 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
     RunPostLandingCanary(context, goal, landingChangedFiles);
     return true;
-
-    bool RepairGateHeld(bool requireNormalAcceptance, out SoloBaselineRepairStore? repairStore)
-    {
-        var blocked = CliWorkspaceMerge.CheckRepairAdmission(context, goal, preparedPair, requireNormalAcceptance,
-            out repairStore, worktreePath);
-        if (blocked is null) return false;
-        Console.WriteLine($"Acceptance blocked: {blocked}.");
-        return true;
-    }
 }
 
 private static void RunPostLandingCanary(

@@ -24,8 +24,7 @@ internal sealed class SoloBaselineRepairCoordinator(
     internal ConductorAdvanceResult? TryAdvance(Goal goal, string prefix, ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary? completion = null)
     {
-        var context = goal.LatestAcceptanceFailure?.SoloFailureReceipt is not null ? readContext(goal) : null;
-        RetainSoloRepairPartition(goal, context, completion);
+        RetainSoloRepairPartition(_store, goal, () => readContext(goal), () => readCurrentRevisions(goal), completion);
         var retained = _store.ReadFindings(goal.Id.Value);
         var introducedFindings = _store.ReadFindings(goal.Id.Value, introduced: true);
         if (retained.Count == 0 && introducedFindings.Count == 0) return null;
@@ -51,18 +50,21 @@ internal sealed class SoloBaselineRepairCoordinator(
         string? candidate, string? main) => findings.Where(finding => finding.Candidate == candidate && finding.Main == main)
         .Select(finding => CheckRetainedProof(store, goal, finding)).ToArray();
 
-    private void RetainSoloRepairPartition(Goal goal, SoloAcceptanceConsumptionContext? current,
-        AcceptanceVerificationSummary? completion)
+    internal static void RetainSoloRepairPartition(SoloBaselineRepairStore store, Goal goal,
+        Func<SoloAcceptanceConsumptionContext?> readContext, Func<GateReadyCandidateRevisionPair?> readCurrentRevisions,
+        AcceptanceVerificationSummary? completion = null)
     {
+        if (goal.LatestAcceptanceFailure?.SoloFailureReceipt is null) return;
+        var current = readContext();
         var partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, current, completion);
         if (current is not null && partition?.Findings.Any(finding => finding.Reason is null) == true &&
-            readCurrentRevisions(goal) != new GateReadyCandidateRevisionPair(current.CandidateSha, current.MainSha))
+            readCurrentRevisions() != new GateReadyCandidateRevisionPair(current.CandidateSha, current.MainSha))
             partition = SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null, completion);
-        if (partition is not null) RetainFindings(goal, partition.Findings);
+        if (partition is not null) RetainFindings(store, goal, partition.Findings);
     }
 
-    private void RetainFindings(Goal goal, IReadOnlyList<SoloRepairFinding> findings) =>
-        _store.Retain(goal.Id.Value, findings, proof => CheckRetainedProof(_store, goal, proof).Reason is null);
+    private static void RetainFindings(SoloBaselineRepairStore store, Goal goal, IReadOnlyList<SoloRepairFinding> findings) =>
+        store.Retain(goal.Id.Value, findings, proof => CheckRetainedProof(store, goal, proof).Reason is null);
 
     private static SoloRepairFinding CheckRetainedProof(SoloBaselineRepairStore store, Goal goal, SoloRepairFinding finding)
     {
@@ -163,7 +165,7 @@ internal sealed class SoloBaselineRepairCoordinator(
                     Reason = null, Feedback = result.Outcome == "introduced" ? result.Feedback : null,
                     Proof = result.Proof ?? finding.Proof
                 };
-                RetainFindings(goal, [finding]);
+                RetainFindings(_store, goal, [finding]);
                 if (_store.HasConflictingProofs(goal.Id.Value, finding))
                 {
                     missing ??= $"Resolve conflicting verifier proofs for check {finding.Check}, test {finding.Identity}, at {candidate} / {main}.";
