@@ -28,7 +28,8 @@ internal static class PullRequestLandingDelivery
 
     public static LandingResult Deliver(AgentOrchestratorKernel kernel, Goal goal, OrchestratorWorkspace workspace,
         string candidate, IPullRequestPublisher publisher,
-        IGoalLifecycleEventWriter? eventWriter, Func<string?>? mutationBlocker, IClock clock)
+        IGoalLifecycleEventWriter? eventWriter, Func<string?>? mutationBlocker, IClock clock,
+        Func<string?>? publicationBlocker = null)
     {
         LandingResult Result(string reason, bool stateChanged = false) => new(goal.Id.Value, goal.Id.Value[..8],
             new LandingDecision.Escalate(reason), LandingExecutor.IntegrationBranchName, false, reason,
@@ -81,6 +82,8 @@ internal static class PullRequestLandingDelivery
 
         if (RefreshStopped(goal)) return Result("landing mutation blocked: pull request refresh stopped");
         if (PullRequestReviewRound.Stopped(goal)) return Result("landing mutation blocked: pull request review round stopped");
+        if (publicationBlocker?.Invoke() is { Length: > 0 } publicationBlocked)
+            return Result($"landing mutation blocked: {publicationBlocked}");
         var publication = publisher.Publish(request);
         if (!publication.Succeeded)
         {

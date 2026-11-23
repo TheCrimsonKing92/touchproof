@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using static SoloAttributedFailureRouteFixture;
 
 // Parallel-safe: each test owns its database and uses local logical work keys.
 public sealed class SoloRepairReplayTests
@@ -83,6 +84,81 @@ public sealed class SoloRepairReplayTests
     }
 
     [Theory]
+    [InlineData("busy")]
+    [InlineData("claimed")]
+    [InlineData("executed")]
+    public async Task MissingCandidateTrx_RecoversFocusedEvidenceAcrossDeferralAndRestart(string boundary)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true, singleRow: true);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with { Artifacts = [] }).ToArray() });
+        fixture.Record(fixture.Summary);
+        var finding = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
+        Assert.Equal(First, finding.Identity);
+        Assert.Equal($"{Project}: FullyQualifiedName~{First}", finding.Request);
+        Assert.Empty(finding.CandidateArtifacts);
+        Assert.False(finding.Inherited);
+
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(storePath);
+        var key = SoloBaselineRepairStore.AttributionKey(fixture.Goal.Id.Value, finding, finding.Candidate, finding.Main);
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
+        {
+            Finding = finding with { BaselineCheck = $"reviewer focused evidence: Sample.Tests FullyQualifiedName~{First}" },
+            AttributionBaselinePass = false
+        };
+        var escalations = new List<string>();
+        if (boundary == "busy")
+        {
+            var busy = Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier,
+                (_, _) => throw new DotnetBuildSlotsBusyException(new("fixture-stable-slot", [])));
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(Advance(busy, fixture.Goal)?.Outcome);
+            Assert.Equal(SoloHoldReasons.RepairPending, held.Decision?.DiscriminatingEvidence);
+            Assert.Equal(0, Count(storePath, "solo_repair_check"));
+        }
+        else if (boundary == "claimed")
+        {
+            Assert.True(store.TryClaimCheck(key));
+        }
+        else
+        {
+            ExecuteSql(storePath, """
+                CREATE TRIGGER stop_check_ack BEFORE UPDATE OF result ON solo_repair_check
+                BEGIN SELECT RAISE(ABORT, 'lost check acknowledgement'); END
+                """);
+            var interrupted = Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier);
+            Assert.Contains("lost check acknowledgement", Assert.Throws<SqliteException>(() => Advance(interrupted, fixture.Goal)).Message);
+            Assert.Equal("inherited", store.ReadCheckExecution(key)?.Outcome);
+            Assert.Null(store.ReadCheck(key));
+            ExecuteSql(storePath, "DROP TRIGGER stop_check_ack");
+        }
+        Assert.Equal(boundary == "executed" ? 1 : 0, verifier.FocusedRuns.Count);
+
+        var restarted = await repository.LoadAsync();
+        var dependent = restarted.GetGoal(fixture.Goal.Id);
+        var coordinator = Coordinator(fixture, workspace, restarted, escalations, verifier);
+        for (var tick = 0; tick < 2; tick++)
+        {
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(Advance(coordinator, dependent)?.Outcome);
+            Assert.Equal(SoloHoldReasons.RepairPending, held.Decision?.DiscriminatingEvidence);
+        }
+
+        Assert.Equal((finding.Request!, finding.Candidate), Assert.Single(verifier.FocusedRuns));
+        var result = Assert.IsType<SoloRepairCheckReceipt>(store.ReadCheck(key));
+        Assert.Equal("inherited", result.Outcome);
+        Assert.NotEmpty(result.CandidateArtifacts!);
+        Assert.NotEmpty(result.Artifacts);
+        Assert.Null(store.ReadCheckExecution(key));
+        Assert.Equal(1, Count(storePath, "solo_repair_dependency"));
+        Assert.Equal(1, Count(storePath, "solo_repair_check"));
+        Assert.Empty(escalations);
+    }
+
+    [Theory]
     [InlineData("INSERT ON solo_repair_dependency", 0, 0, false)]
     [InlineData("INSERT ON solo_repair_group", 1, 0, false)]
     [InlineData("UPDATE OF repair_goal ON solo_repair_group", 1, 1, true)]
@@ -148,17 +224,21 @@ public sealed class SoloRepairReplayTests
     }
 
     private static SoloBaselineRepairCoordinator Coordinator(SoloAttributedFailureRouteFixture fixture,
-        OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel, List<string> escalations) =>
-        new(workspace, kernel, new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root),
+        OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel, List<string> escalations,
+        SoloRepairWorkflowTests.ControlledVerifier? verifier = null,
+        Func<string, CancellationToken, DotnetBuildEnvironmentLease>? acquireSlot = null) =>
+        new(workspace, kernel, verifier ?? new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root),
             _ => new(fixture.Context.CandidateSha, fixture.Context.MainSha), _ => fixture.Context,
             () => throw new InvalidOperationException("The inherited rows must not route to a Developer."),
             _ => new(true, false, false, false, false, false),
-            (_, _, message) =>
+            (_, _, message, _) =>
             {
                 escalations.Add(message);
                 return LandingEscalationWriteResult.CompletedWithoutExternalSinks;
             },
-            (_, _) => throw new InvalidOperationException("A repair must land before validation."));
+            acquireSlot ?? ((_, _) => verifier is not null
+                ? AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
+                : throw new InvalidOperationException("A repair must land before validation.")));
 
     private static ConductorAdvanceResult? Advance(SoloBaselineRepairCoordinator coordinator, Goal goal) =>
         coordinator.TryAdvance(goal, goal.Id.Value[..8], ConductorAutonomyPolicy.Permissive);
@@ -188,7 +268,7 @@ public sealed class SoloRepairReplayTests
         return Assert.IsType<long>(command.ExecuteScalar());
     }
 
-    private static void ExecuteSql(string path, string sql)
+    internal static void ExecuteSql(string path, string sql)
     {
         using var db = new SqliteConnection(new SqliteConnectionStringBuilder
         {

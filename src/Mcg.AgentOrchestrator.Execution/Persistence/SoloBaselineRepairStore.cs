@@ -13,10 +13,12 @@ internal sealed record SoloRepairFinding(string Candidate, string Main, string B
     internal string GroupKey => SoloBaselineRepairStore.Key(Baseline.ToLowerInvariant(), Check, Project,
         Request, BaselineCheck, Identity);
     internal string Key => SoloBaselineRepairStore.Key(Candidate, Main, Check, Identity);
+    internal bool MatchesAttributionPair(string candidate, string main) => Candidate == candidate && Main == main && Baseline == main;
 }
 
 internal sealed record SoloRepairGroup(string Key, string IntakePayload, string? RepairGoal);
-internal sealed record SoloRepairCheckReceipt(string Outcome, string Detail, IReadOnlyList<SoloAcceptanceArtifact> Artifacts);
+internal sealed record SoloRepairCheckReceipt(string Outcome, string Detail, IReadOnlyList<SoloAcceptanceArtifact> Artifacts,
+    IReadOnlyList<SoloAcceptanceArtifact>? CandidateArtifacts = null, string? Feedback = null);
 
 internal sealed class SoloBaselineRepairStore
 {
@@ -38,6 +40,8 @@ internal sealed class SoloBaselineRepairStore
                 goal TEXT NOT NULL, group_key TEXT NOT NULL, PRIMARY KEY (goal, group_key));
             CREATE TABLE IF NOT EXISTS solo_repair_check (
                 request_key TEXT PRIMARY KEY, result TEXT);
+            CREATE TABLE IF NOT EXISTS solo_repair_check_execution (
+                request_key TEXT PRIMARY KEY, result TEXT NOT NULL);
             """);
         command.ExecuteNonQuery();
     }
@@ -124,10 +128,31 @@ internal sealed class SoloBaselineRepairStore
     internal void CompleteCheck(string key, SoloRepairCheckReceipt result)
     {
         using var db = Open();
+        using var transaction = db.BeginTransaction();
         using var command = Command(db, """
             UPDATE solo_repair_check SET result = $result WHERE request_key = $key AND result IS NULL
             """, ("$key", key), ("$result", JsonSerializer.Serialize(result)));
+        command.Transaction = transaction;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException($"Check claim already completed for {key}.");
+        using var clear = Command(db, "DELETE FROM solo_repair_check_execution WHERE request_key = $key", ("$key", key));
+        clear.Transaction = transaction;
+        clear.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    internal void RecordCheckExecution(string key, SoloRepairCheckReceipt result)
+    {
+        using var db = Open();
+        using var command = Command(db, "INSERT INTO solo_repair_check_execution VALUES ($key, $result)",
+            ("$key", key), ("$result", JsonSerializer.Serialize(result)));
+        command.ExecuteNonQuery();
+    }
+
+    internal SoloRepairCheckReceipt? ReadCheckExecution(string key)
+    {
+        using var db = Open();
+        using var command = Command(db, "SELECT result FROM solo_repair_check_execution WHERE request_key = $key", ("$key", key));
+        return command.ExecuteScalar() is string json ? JsonSerializer.Deserialize<SoloRepairCheckReceipt>(json) : null;
     }
 
     internal SoloRepairCheckReceipt? ReadCheck(string key)
@@ -152,7 +177,8 @@ internal sealed class SoloBaselineRepairStore
         if (candidate is null || main is null) return false;
         return findings.All(finding => finding.Inherited
             ? ReadGroup(finding.GroupKey)?.RepairGoal is not null && ReadCheck(ValidationKey(finding, main))?.Outcome == "passed"
-            : HasExactReplacement(finding, findings) || ReadCheck(AttributionKey(goal, finding, candidate, main))?.Outcome == "passed");
+            : HasExactReplacement(finding, findings) || (!finding.MatchesAttributionPair(candidate, main) &&
+                ReadCheck(AttributionKey(goal, finding, candidate, main))?.Outcome == "passed"));
     }
 
     internal void AcknowledgeEffect(string key, string detail)

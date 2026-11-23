@@ -153,6 +153,62 @@ public sealed class SoloRepairEvidenceTests
         Assert.NotEmpty(unresolved.CandidateArtifacts);
     }
 
+    [Fact]
+    public async Task PartialIntroducedOrigins_RetainTheUnattributedIdentity()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        fixture.ReplaceProof(proof => proof with
+        {
+            Checks = proof.Checks.Select(item => item with
+            {
+                Check = item.Check with
+                {
+                    FailingTestAttributions = item.Check.FailingTestAttributions!.Where(row => row.TestIdentity == First).ToArray()
+                }
+            }).ToArray()
+        });
+        fixture.Record(fixture.Summary);
+
+        var partition = Read(fixture);
+
+        Assert.Equal(First, Assert.Single(partition.Introduced!.FailingTests));
+        var unresolved = Assert.Single(partition.Findings.Where(row => row.Reason is not null));
+        Assert.Equal(Long, unresolved.Identity);
+        Assert.Equal($"{Project}: FullyQualifiedName~{Long}", unresolved.Request);
+        Assert.False(unresolved.Inherited);
+    }
+
+    [Theory]
+    [InlineData(false, false, false, "inherited")]
+    [InlineData(false, true, false, "introduced")]
+    [InlineData(true, false, false, "unresolved")]
+    [InlineData(false, false, true, "unresolved")]
+    public void FocusedAttribution_RequiresBothExactArms(bool candidatePassed, bool baselinePassed,
+        bool wrongCandidateCase, string expected)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var finding = SoloRepairReplayTests.Finding();
+        var candidatePath = Path.Combine(fixture.Root, "candidate.trx");
+        var baselinePath = Path.Combine(fixture.Root, "baseline.trx");
+        var candidateIdentity = wrongCandidateCase ? First + "(value: 2)" : finding.Identity;
+        WriteTrx(candidatePath, candidatePassed, candidateIdentity);
+        WriteTrx(baselinePath, baselinePassed, finding.Identity);
+        var candidate = FocusedResult(finding, finding.Candidate, candidatePath, candidatePassed, true, candidateIdentity);
+        var baseline = FocusedResult(finding, finding.Baseline, baselinePath, baselinePassed, true, finding.Identity,
+            FindingEvidenceArm.Baseline);
+
+        var result = SoloAcceptanceFailureReceiptReader.ReadRepairAttribution(
+            candidate with { Arms = [Assert.Single(candidate.Arms!), Assert.Single(baseline.Arms!)] },
+            finding.Candidate, finding.Baseline, finding, fixture.Root);
+
+        Assert.Equal(expected, result.Outcome);
+        Assert.NotEmpty(result.Artifacts);
+        Assert.NotEmpty(result.CandidateArtifacts!);
+        if (expected == "introduced") Assert.Contains("(trx:", result.Feedback!);
+        if (expected == "unresolved") Assert.Contains("did not confirm the original exact failure", result.Detail);
+    }
+
     [Theory]
     [InlineData("passed", true, true, 1, "passed")]
     [InlineData("failed", false, true, 1, "failed")]

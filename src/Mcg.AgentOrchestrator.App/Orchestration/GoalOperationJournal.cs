@@ -873,6 +873,14 @@ internal static partial class GoalOperationJournal
             : TryDeserializeLandingIntent(latestLandingIntent.Detail);
     }
 
+    internal static IEnumerable<GoalLandingIntent> ReadLandingIntents(GoalOperationJournalSummary journal,
+        GoalId goalId, string goalBranch) => journal.Entries.Reverse()
+        .Where(entry => entry.GoalId == goalId && entry.Status == GoalOperationStatus.Completed &&
+            entry.Operation.Equals(LandingIntentOperation, StringComparison.OrdinalIgnoreCase))
+        .Select(entry => TryDeserializeLandingIntent(entry.Detail))
+        .OfType<GoalLandingIntent>()
+        .Where(intent => intent.GoalId == goalId.Value && intent.GoalBranch == goalBranch);
+
     public static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> ReadAll(string executionDirectory) =>
         ReadAll(executionDirectory, []);
 

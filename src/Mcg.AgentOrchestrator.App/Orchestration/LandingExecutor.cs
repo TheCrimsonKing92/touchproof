@@ -196,9 +196,10 @@ internal static partial class LandingExecutor
         var evidenceCandidateSha = ResolveRef(executionDirectory, goalBranch);
         var boundMainRevision = ResolveRef(executionDirectory, workspace.IntegrationBranch);
         var repairStorePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
-        var repairStore = File.Exists(repairStorePath) ? new SoloBaselineRepairStore(repairStorePath) : null;
+        SoloBaselineRepairStore? repairStore = null;
         bool RepairAdmissionCurrent(string candidate, string main)
         {
+            if (repairStore is null && File.Exists(repairStorePath)) repairStore = new SoloBaselineRepairStore(repairStorePath);
             var findings = repairStore?.ReadFindings(goal.Id.Value);
             return findings is not { Count: > 0 } ||
                 (repairStore!.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main) &&
@@ -280,7 +281,10 @@ internal static partial class LandingExecutor
 
         if (PullRequestLandingDelivery.Applies(workspace))
             return PullRequestLandingDelivery.Deliver(kernel, goal, workspace, evidenceCandidateSha,
-                pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()), eventWriter, mutationBlocker, promotionClock ?? new SystemClock());
+                pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()), eventWriter, mutationBlocker,
+                promotionClock ?? new SystemClock(),
+                () => RepairAdmissionCurrent(evidenceCandidateSha, boundMainRevision)
+                    ? null : "the revision pair changed after baseline repair validation or normal acceptance");
 
         var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
         var integrationDiverged = previousIntegrationRevision is not null &&
@@ -573,7 +577,7 @@ internal static partial class LandingExecutor
             Message: reason);
     }
 
-    private static bool HasAdmittedGoalLandedEvent(OrchestratorWorkspace workspace, GoalId goalId, string candidateSha)
+    internal static bool HasAdmittedGoalLandedEvent(OrchestratorWorkspace workspace, GoalId goalId, string candidateSha)
     {
         var path = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goalId.Value}.jsonl");
         if (!File.Exists(path)) return false;
@@ -585,6 +589,8 @@ internal static partial class LandingExecutor
                 using var document = JsonDocument.Parse(line);
                 var root = document.RootElement;
                 if (root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("goalId", out var recordedGoal) && recordedGoal.ValueKind == JsonValueKind.String &&
+                    recordedGoal.GetString() == goalId.Value &&
                     root.TryGetProperty("eventType", out var eventType) &&
                     eventType.ValueKind == JsonValueKind.String &&
                     string.Equals(eventType.GetString(), "GoalLanded", StringComparison.OrdinalIgnoreCase) &&

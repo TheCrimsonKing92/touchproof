@@ -21,13 +21,16 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             if (receipt is null || proof is null)
                 return UnresolvedChecks(summary.FailedChecks, retained, reason);
 
-            if (proof.Checks.All(item => item.Check.FailingTestAttributions is { Count: > 0 } origins &&
-                    origins.All(origin => origin.Origin == AcceptanceTestFailureOrigin.Introduced) ||
-                    SoloCoveredCheckInheritance.CoveredChecks(item.Check, proof.Checks.Select(c => c.Check).ToArray()) is not null))
+            var checks = proof.Checks.Select(c => c.Check).ToArray();
+            if (checks.All(check =>
+                    (check.FailingTestIdentities is { Count: > 0 } identities &&
+                     check.FailingTestAttributions is { Count: > 0 } origins &&
+                     origins.All(origin => origin.Origin == AcceptanceTestFailureOrigin.Introduced) &&
+                     SameNames(identities, origins.Select(origin => origin.TestIdentity))) ||
+                    SoloCoveredCheckInheritance.CoveredChecks(check, checks) is not null))
                 return null; // The established introduced-only path also handles confirmed flakes.
 
             var findings = new List<SoloRepairFinding>();
-            var checks = proof.Checks.Select(c => c.Check).ToArray();
             var baselineRows = proof.BaselineChecks.ToDictionary(item => item.Check.Name,
                 item => new Lazy<IReadOnlyList<TrxRow>>(() => ReadRows(item, receipt.ResultsRoot).ValidateRows()),
                 StringComparer.Ordinal);
@@ -84,8 +87,6 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         if (string.IsNullOrWhiteSpace(identity) || identity != identity.Trim() || !Usable(check) || check.Passed ||
             check.Advisory || check.TestResultIsExplicitCrossAttemptReuse || check.TestResultAttemptId != receipt.AttemptId)
             return finding with { Reason = SoloHoldReasons.CandidateNotIntroduced };
-        var candidate = ReadExactRow(candidateRows.Value[identity], identity);
-        if (candidate?.Value.Outcome != "Failed") return finding with { Reason = SoloHoldReasons.FailingTestsAbsent };
         var project = check.TestProjectPath;
         var selector = AcceptanceFailureAttributionPlanner.NormalizeIdentity(identity);
         var selection = ConductorAcceptanceCohortFocusedAttribution.TrySelect([selector],
@@ -94,10 +95,16 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             return finding with { Reason = SoloHoldReasons.TestBindingMismatch };
         finding = finding with
         {
-            Request = selection.Request, CandidateArtifacts = item.Artifacts,
+            Request = selection.Request,
+            BaselineCheck = $"reviewer focused evidence: {GoalAcceptanceVerifier.ProjectLabel(project)} FullyQualifiedName~{selector}",
             Reason = SoloHoldReasons.TestBindingMismatch
         };
-        if (currency.Length != 0) return finding with { CandidateArtifacts = [], Reason = currency };
+        if (currency.Length != 0) return finding with { Reason = currency };
+        TrxRow? candidate;
+        try { candidate = ReadExactRow(candidateRows.Value[identity], identity); }
+        catch (Exception ex) when (IsRepairEvidenceError(ex)) { return finding with { Reason = ex.Message }; }
+        if (candidate?.Value.Outcome != "Failed") return finding with { Reason = SoloHoldReasons.FailingTestsAbsent };
+        finding = finding with { CandidateArtifacts = item.Artifacts };
         if (!proof.Baseline.Accepted || proof.Baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)
             return finding with { Reason = SoloHoldReasons.BaselineUnavailable };
         var bindings = proof.Bindings.Where(b => b.CheckName == check.Name && b.TestIdentity == identity).ToArray();
@@ -109,7 +116,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         var baseline = baselines[0];
         var armCheck = proof.Baseline.Checks.Single(b => b.Name == baselineName);
         if (JsonSerializer.Serialize(armCheck) != JsonSerializer.Serialize(baseline.Check) ||
-            baselineName != $"reviewer focused evidence: {GoalAcceptanceVerifier.ProjectLabel(project)} FullyQualifiedName~{selector}" ||
+            baselineName != finding.BaselineCheck ||
             (baseline.Check.TestProjectPath is { } baselineProject && baselineProject != project))
             return finding with { Reason = SoloHoldReasons.BaselineResultMismatch };
 
@@ -132,7 +139,9 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         else
         {
             if (!Usable(baseline.Check)) return finding with { Reason = SoloHoldReasons.BaselineApparatusOrUnknown };
-            var rows = baselineRows[baselineName].Value;
+            IReadOnlyList<TrxRow> rows;
+            try { rows = baselineRows[baselineName].Value; }
+            catch (Exception ex) when (IsRepairEvidenceError(ex)) { return finding with { Reason = ex.Message }; }
             var exact = ReadExactRow(rows, identity);
             if (origin == AcceptanceTestFailureOrigin.Inherited && receipt.BaselineSha == receipt.MainSha &&
                 proof.Baseline.Disposition == FindingEvidenceArmDisposition.Red && !proof.Baseline.Passed &&
@@ -148,9 +157,13 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             if (!introduced) return finding with { Reason = SoloHoldReasons.BaselineInheritedOrUncovered };
         }
 
-        var first = candidate.Value.Message?.Split(['\r', '\n'])[0] ?? "(no message)";
-        var feedback = (first.Length <= 2000 ? first : first[..1997] + "...") + $" (trx: {candidate.Path})";
-        return finding with { Reason = null, Feedback = feedback };
+        return finding with { Reason = null, Feedback = RepairFeedback(candidate) };
+    }
+
+    private static string RepairFeedback(TrxRow row)
+    {
+        var first = row.Value.Message?.Split(['\r', '\n'])[0] ?? "(no message)";
+        return (first.Length <= 2000 ? first : first[..1997] + "...") + $" (trx: {row.Path})";
     }
 
     private static TrxRow? ReadExactRow(IEnumerable<TrxRow> rows, string identity)
@@ -163,10 +176,11 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         string revision, SoloRepairFinding finding, string resultsRoot)
     {
         var arms = result.Arms?.Where(item => item.Arm == arm).ToArray();
-        if (result.Request != finding.Request || arms is not { Length: 1 } || arms[0].Sha != revision ||
-            !arms[0].Accepted || arms[0].Disposition is not (FindingEvidenceArmDisposition.Green or FindingEvidenceArmDisposition.Red))
+        if (!result.Accepted || result.Request != finding.Request || arms is not { Length: 1 } || arms[0].Sha != revision ||
+            !arms[0].Accepted || arms[0].Disposition != (arms[0].Passed
+                ? FindingEvidenceArmDisposition.Green : FindingEvidenceArmDisposition.Red))
             return new("unresolved", "The verifier did not execute a conclusive selection on " + revision, []);
-        var check = arms[0].Checks.SingleOrDefault();
+        var check = arms[0].Checks is [var selected] ? selected : null;
         if (check is null || !Usable(check) || check.Advisory || check.TestResultIsExplicitCrossAttemptReuse ||
             (finding.BaselineCheck is not null && finding.BaselineCheck != check.Name) ||
             check.TestResultPaths is not { Count: > 0 } paths)
@@ -190,9 +204,25 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             var classified = AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures([finding.Identity], [selector],
                 new Dictionary<string, string>(StringComparer.Ordinal) { [selector] = check.Name }, arms[0]);
             if (classified.Single().Origin == AcceptanceTestFailureOrigin.Inherited)
-                return new("failed", check.Name, artifacts);
+                return new("failed", check.Name, artifacts, Feedback: RepairFeedback(exact));
         }
         return new("unresolved", "The verifier did not produce a unique executed row for the original identity.", artifacts);
+    }
+
+    internal static SoloRepairCheckReceipt ReadRepairAttribution(FocusedEvidenceRunResult result, string candidateSha,
+        string baselineSha, SoloRepairFinding finding, string resultsRoot)
+    {
+        var candidate = ReadRepairCheck(result, FindingEvidenceArm.Candidate, candidateSha, finding, resultsRoot);
+        var baseline = ReadRepairCheck(result, FindingEvidenceArm.Baseline, baselineSha, finding, resultsRoot);
+        if (candidate.Outcome != "failed" || result.Passed)
+            return new("unresolved", $"The candidate arm at {candidateSha} did not confirm the original exact failure: {candidate.Detail}",
+                baseline.Artifacts, candidate.Artifacts);
+        return baseline with
+        {
+            Outcome = baseline.Outcome switch { "failed" => "inherited", "passed" => "introduced", _ => "unresolved" },
+            CandidateArtifacts = candidate.Artifacts,
+            Feedback = candidate.Feedback
+        };
     }
 
     internal static bool IsRepairEvidenceError(Exception ex) =>

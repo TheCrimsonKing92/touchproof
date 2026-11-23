@@ -94,7 +94,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<Goal> _record;
     private readonly Func<Goal, GoalWorktreeRemoveResult> _cleanup;
     private readonly Action<Goal> _completeGoal;
-    private readonly Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult> _writeEscalation;
+    private readonly Func<Goal, GoalLifecycleState, string, string?, LandingEscalationWriteResult> _writeEscalation;
     private readonly Action<Goal, GoalLifecycleState> _resolveParkedWaitEscalations;
     internal readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly ChangeRiskClassificationMemo _changeRiskMemo = new();
@@ -865,13 +865,7 @@ internal sealed partial class ConductorDriver
 
         _resolveParkedWaitEscalations = (goal, state) =>
             OperatorInbox.ResolveParkedWaitLandingEscalationsAsync(workspace, goal, state).GetAwaiter().GetResult();
-        _writeEscalation = (goal, state, reason) =>
-        {
-            var source = $"conductor:{state}";
-            var result = OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source);
-            eventWriter.AppendGoalEscalated(goal.Id, state, goal.Status, reason, source);
-            return result;
-        };
+        _writeEscalation = CreateEscalationWriter(workspace, eventWriter);
 
         _classifyChangeRisk = goal => _changeRiskMemo.Classify(dir, workspace.IntegrationBranch, GoalWorktrees.BranchName(goal.Id));
         _emptyOutputBackoffDelay = Thread.Sleep;
@@ -1152,11 +1146,12 @@ internal sealed partial class ConductorDriver
         _cleanup = cleanup;
         _completeGoal = completeGoal ?? (_ => { });
         _resolveParkedWaitEscalations = resolveParkedWaitEscalations ?? ((_, _) => { });
-        _writeEscalation = writeEscalationWithResult ?? ((goal, state, reason) =>
+        _writeEscalation = (goal, state, reason, _) =>
         {
+            if (writeEscalationWithResult is not null) return writeEscalationWithResult(goal, state, reason);
             writeEscalation(goal, state, reason);
             return LandingEscalationWriteResult.CompletedWithoutExternalSinks;
-        });
+        };
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
         _evaluateReadiness = evaluateReadiness ?? (goal =>

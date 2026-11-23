@@ -1,8 +1,10 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using static AttributedFailureDeveloperRouteTests;
 using static SoloAttributedFailureRouteFixture;
 
@@ -11,6 +13,106 @@ public sealed class SoloRepairWorkflowTests
 {
     private static readonly ConductorAutonomyPolicy Policy = ConductorAutonomyPolicy.Permissive with { MaxCriterionRetries = 0 };
     private const string LandingBlocker = "fixture stops at landing mutation";
+
+    [Fact]
+    public void PullRequestRepair_UsesTheReachableSquashPromotion()
+    {
+        using var fixture = new PullRequestTrackingTestFixture();
+        var squash = fixture.Git("commit-tree", fixture.Delivery.Candidate + "^{tree}", "-p", fixture.Delivery.Main,
+            "-m", "Squashed baseline repair");
+        fixture.Git("update-ref", "refs/remotes/origin/main", squash);
+        fixture.Forge.Json = JsonSerializer.Serialize(new
+        {
+            state = "MERGED", mergedAt = "2026-10-31T12:00:00Z", mergeCommit = new { oid = squash },
+            closedAt = "2026-10-31T12:00:00Z", url = PullRequestLandingTestFixture.Url,
+            reviewDecision = (string?)null, latestReviews = Array.Empty<object>()
+        });
+        Assert.Contains(fixture.Goal.Id, fixture.Tick());
+        Assert.Equal(squash, fixture.Fact()?.PromotedMainRevision);
+        Assert.Equal(fixture.Delivery.Candidate, fixture.Fact()?.CandidateRevision);
+        Assert.Equal(squash, SoloBaselineRepairCoordinator.ResolveSoloRepairLanding(fixture.Workspace, fixture.Goal,
+            fixture.Git("rev-parse", "main")));
+        Assert.Null(SoloBaselineRepairCoordinator.ResolveSoloRepairLanding(fixture.Workspace, fixture.Goal, fixture.Delivery.Main));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PullRequestPublication_RejectsARefChangeAfterRepairAdmission(bool moveMain)
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var store = new SoloBaselineRepairStore(Path.Combine(fixture.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var finding = SoloRepairReplayTests.Finding() with
+            { Candidate = fixture.Candidate, Main = fixture.Main, Baseline = fixture.Main };
+        store.Retain(fixture.Goal.Id.Value, [finding]);
+        store.ReserveGroup(finding.GroupKey, "{}");
+        store.AcknowledgeRepair(finding.GroupKey, Guid.NewGuid().ToString("N"));
+        store.AcknowledgeEffect(SoloBaselineRepairStore.ValidationKey(finding, fixture.Main), "refreshed check");
+        store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main),
+            PullRequestLandingTestFixture.Attempt);
+        var changed = false;
+
+        var result = LandingExecutor.Execute(fixture.Kernel, fixture.Goal, fixture.Workspace,
+            pullRequestPublisher: new GitHubPullRequestPublisher(fixture.Forge), mutationBlocker: () =>
+            {
+                var branch = moveMain ? "main" : GoalWorktrees.BranchName(fixture.Goal.Id);
+                RunGit(fixture.Repository, "update-ref", "refs/heads/" + branch, moveMain ? fixture.Candidate : fixture.Main);
+                changed = true;
+                return null;
+            });
+
+        Assert.True(changed);
+        Assert.Contains("revision pair changed after baseline repair validation or normal acceptance", result.Message);
+        Assert.Empty(fixture.Forge.Calls);
+        Assert.Null(fixture.Goal.DeliveredForReview);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Escalation_ReplaysOnceAfterDeliveryAndPartialSinkFailure(bool failCollaborationSink)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var failure = await ProduceFailure(fixture, goal);
+        var verifier = new ControlledVerifier(fixture.Root);
+        var driver = Driver(fixture.Kernel, workspace, verifier);
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var collabPath = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
+        var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        Assert.Empty(await collaboration.ListAsync(goal.Id.Value));
+        if (failCollaborationSink)
+            SoloRepairReplayTests.ExecuteSql(collabPath, """
+                CREATE TRIGGER stop_collab BEFORE INSERT ON collaboration_items
+                BEGIN SELECT RAISE(ABORT, 'controlled collaboration failure'); END
+                """);
+        SoloRepairReplayTests.ExecuteSql(storePath, """
+            CREATE TRIGGER stop_escalation_ack BEFORE INSERT ON solo_repair_check
+            BEGIN SELECT RAISE(ABORT, 'lost escalation acknowledgement'); END
+            """);
+
+        Assert.Contains("lost escalation acknowledgement", Assert.Throws<SqliteException>(() => Complete(driver, goal, failure)).Message);
+        Assert.Equal(failCollaborationSink ? 0 : 1, (await collaboration.ListAsync(goal.Id.Value)).Count);
+        var events = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).EventFilePath(goal.Id);
+        var delivered = Assert.Single(File.ReadLines(events).Where(line => line.Contains("\"eventType\":\"GoalEscalated\"")));
+        using var initial = JsonDocument.Parse(delivered);
+        var deliveryId = initial.RootElement.GetProperty("deliveryId").GetString()!;
+        Assert.Null(new SoloBaselineRepairStore(storePath).ReadCheck(deliveryId));
+
+        SoloRepairReplayTests.ExecuteSql(storePath, "DROP TRIGGER stop_escalation_ack");
+        if (failCollaborationSink) SoloRepairReplayTests.ExecuteSql(collabPath, "DROP TRIGGER stop_collab");
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var restarted = await repository.LoadAsync();
+        driver = Driver(restarted, workspace, verifier);
+        AssertHold(driver.AdvanceOnce(restarted.GetGoal(goal.Id), Policy), SoloHoldReasons.RepairEvidenceRequired);
+
+        Assert.Equal(delivered, Assert.Single(File.ReadLines(events).Where(line => line.Contains("\"eventType\":\"GoalEscalated\""))));
+        Assert.Single(await collaboration.ListAsync(goal.Id.Value));
+        Assert.Equal("passed", new SoloBaselineRepairStore(storePath).ReadCheck(deliveryId)?.Outcome);
+    }
 
     [Fact]
     public async Task RepairFlow_AfterLostAcknowledgement_ReusesRepairAndRegatesEachCandidate()
@@ -85,7 +187,15 @@ public sealed class SoloRepairWorkflowTests
         AssertHold(driver.AdvanceOnce(first, Policy), SoloHoldReasons.RepairPending);
         fixture.Git("checkout", "-b", "unmerged-repair");
         fixture.Git("commit", "--allow-empty", "-m", $"Integrate goal/{repair.Id.Value}: repair baseline");
+        var unmerged = fixture.Git("rev-parse", "HEAD");
         fixture.Git("checkout", "main");
+        var branch = GoalWorktrees.BranchName(repair.Id);
+        var integrationBranch = LandingExecutor.IntegrationBranchName;
+        GoalOperationJournal.RecordLandingIntent(fixture.Repo, repair, branch, integrationBranch, unmerged, "earlier landing intent");
+        GoalOperationJournal.Completed(fixture.Repo, repair, "conductor:land", "earlier landing completed", mainHeadSha: unmerged);
+        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).AppendGoalLanded(repair.Id, integrationBranch,
+            branch, LandingAdmissionReceipt.Recovered(unmerged));
+        GoalOperationJournal.RecordLandingIntent(fixture.Repo, repair, branch, integrationBranch, oldMain, "unrelated reachable intent");
         AssertHold(driver.AdvanceOnce(first, Policy), SoloHoldReasons.RepairPending);
         Assert.Empty(verifier.FocusedRuns);
 
@@ -135,6 +245,16 @@ public sealed class SoloRepairWorkflowTests
             Complete(driver, first, firstPass).Outcome).Reason);
         Assert.Equal(2, SoloRepairReplayTests.Count(storePath, "solo_repair_check"));
         Assert.Single(verifier.FocusedRuns);
+
+        await fixture.Produce(attemptId: "normal-introduced-" + second.Id.Value, singleRow: true,
+            candidateWorktree: Worktree(fixture, second), goal: second);
+        driver.FailureDiagnosis = null;
+        Complete(driver, second, fixture.Summary, Policy with { MaxCriterionRetries = 1 });
+        var retry = Assert.Single(MarkerRetries(second));
+        Assert.Contains($"failing_tests={First}{Environment.NewLine}", retry.Message);
+        Assert.Contains($"reproduced {First}:", retry.Message);
+        Assert.Equal(RetryCause.NewTestFinding, second.Tasks.Single().PendingRetryCause);
+        Assert.Equal(4, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
 
         fixture.Git("commit", "--allow-empty", "-m", "Move integration before another candidate gate");
         Assert.Null(driver.TryBuildParallelAcceptanceCandidate(first, Policy, 0, out var decline));
@@ -301,6 +421,7 @@ public sealed class SoloRepairWorkflowTests
     {
         internal SoloRepairFinding? Finding { get; set; }
         internal string? UnresolvedAttributionRequest { get; init; }
+        internal bool? AttributionBaselinePass { get; init; }
         internal List<(string Request, string Sha)> FocusedRuns { get; } = [];
         internal List<(GoalId Goal, string Sha)> NormalRuns { get; } = [];
         internal bool NormalPass { get; set; }
@@ -312,16 +433,24 @@ public sealed class SoloRepairWorkflowTests
             Assert.NotNull(stableSlotLease);
             var sha = RunGit(worktreePath, "rev-parse", "HEAD");
             FocusedRuns.Add((request, sha));
-            if (runBaselineArm)
+            if (runBaselineArm && AttributionBaselinePass is null)
             {
                 Assert.Equal(UnresolvedAttributionRequest, request);
                 return Task.FromResult(new FocusedEvidenceRunResult(request, false, false, "The focused test did not execute.", []));
             }
             var finding = Assert.IsType<SoloRepairFinding>(Finding);
             Assert.Equal(finding.Request, request);
-            var trx = Path.Combine(root, sha + ".trx");
-            WriteTrx(trx, true, finding.Identity);
-            return Task.FromResult(SoloRepairEvidenceTests.FocusedResult(finding, sha, trx, true, true, finding.Identity));
+            var trx = Path.Combine(root, sha + "-candidate.trx");
+            WriteTrx(trx, !runBaselineArm, finding.Identity);
+            var candidate = SoloRepairEvidenceTests.FocusedResult(finding, sha, trx, !runBaselineArm, true, finding.Identity);
+            if (!runBaselineArm) return Task.FromResult(candidate);
+            var baselineSha = RunGit(worktreePath, "merge-base", "HEAD", "main");
+            var baselineTrx = Path.Combine(root, baselineSha + "-baseline.trx");
+            var baselinePass = AttributionBaselinePass!.Value;
+            WriteTrx(baselineTrx, baselinePass, finding.Identity);
+            var baseline = SoloRepairEvidenceTests.FocusedResult(finding, baselineSha, baselineTrx, baselinePass, true,
+                finding.Identity, FindingEvidenceArm.Baseline);
+            return Task.FromResult(candidate with { Arms = [Assert.Single(candidate.Arms!), Assert.Single(baseline.Arms!)] });
         }
 
         public Task<AcceptanceVerificationResult> RunOwnedAsync(string worktreePath, GoalId? goalId,
