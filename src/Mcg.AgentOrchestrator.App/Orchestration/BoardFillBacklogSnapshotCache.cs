@@ -42,19 +42,20 @@ internal sealed class BoardFillBacklogSnapshotCache(
                     return ReadFull();
                 }
 
-                if (revision is not { } proof)
+                if (revision is not { } proof || BoardFillBacklogSnapshot.TryReadContentHash(connection) is not { } contentHash)
                 {
                     Evict();
                     return BoardFillBacklogSnapshot.ReadCore(connection);
                 }
 
-                if (_entry is { } entry && entry.Identity == identity && entry.Revision == proof)
+                if (_entry is { } entry && entry.Identity == identity && entry.Revision == proof &&
+                    entry.ContentHash == contentHash)
                     return entry.Items;
 
                 Evict();
                 var items = BoardFillBacklogSnapshot.ReadCore(connection, retain: true);
                 // Transfer ownership only after the entire graph has materialized.
-                _entry = new(identity, proof, items, current);
+                _entry = new(identity, proof, contentHash, items, current);
                 current = null;
                 return items;
             }
@@ -95,7 +96,7 @@ internal sealed class BoardFillBacklogSnapshotCache(
         }
     }
 
-    private sealed record CacheEntry(FileIdentity Identity, BacklogSnapshotRevision Revision,
+    private sealed record CacheEntry(FileIdentity Identity, BacklogSnapshotRevision Revision, string ContentHash,
         IReadOnlyList<BacklogItem> Items, SafeFileHandle File);
 
     private static FileIdentity? GetIdentity(SafeFileHandle file) =>

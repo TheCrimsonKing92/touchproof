@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
@@ -224,6 +225,39 @@ public sealed class BoardFillBacklogSnapshotReuseTests
                 using var blob = new SqliteBlob(writer, "backlog_notes", "text", 1, readOnly: false);
             });
     }
+
+    [Theory(Skip = WindowsFileIdentity, SkipUnless = nameof(IsWindows))]
+    [InlineData("item")]
+    [InlineData("note")]
+    [InlineData("dependency")]
+    public void Trigger_disabled_commit_invalidates_matching_revision(string part)
+    {
+        using var database = new BoardFillSnapshotTestDatabase();
+        using var cache = new BoardFillBacklogSnapshotCache(database.Path);
+        var warm = cache.Read();
+        Assert.Same(warm, cache.Read());
+        var before = ReadProof(database.Path);
+
+        using (var writer = database.Open())
+        {
+            Assert.Equal(0, ConfigureTriggerExecution(writer.Handle!, EnableTrigger, 0, out var enabled));
+            Assert.Equal(0, enabled);
+            Execute(writer, Mutation(part, 1));
+        }
+
+        Assert.Equal(before, ReadProof(database.Path));
+        var full = Contents(BoardFillBacklogSnapshot.Read(database.Path));
+        Assert.NotEqual(Contents(warm), full);
+        var refreshed = cache.Read();
+        Assert.Equal(full, Contents(refreshed));
+        Assert.Same(refreshed, cache.Read());
+    }
+
+    private const int EnableTrigger = 1003;
+
+    [DllImport("e_sqlite3", EntryPoint = "sqlite3_db_config", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ConfigureTriggerExecution(SQLitePCL.sqlite3 database, int operation, int enabled,
+        out int current);
 
     private static BacklogSnapshotRevision ReadProof(string path)
     {
