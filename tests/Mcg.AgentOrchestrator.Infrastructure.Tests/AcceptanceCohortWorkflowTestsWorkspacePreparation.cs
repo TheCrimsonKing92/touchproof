@@ -341,7 +341,8 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
     [Fact]
     public void DisposableWorkspaces_UnderNestedGitWorktree_UseShortTokensAndCleanUp()
     {
-        var repo = CreateAcceptanceCohortRepository();
+        // The test owns its repository depth; a long caller checkout can exhaust Git for Windows' GIT_DIR budget.
+        var repo = CreateSeededRepository(Path.GetTempPath());
         var outerToken = Guid.NewGuid().ToString("N")[..8];
         var outerWorktree = Path.Combine(
             repo,
@@ -349,6 +350,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
             $"w-{outerToken}");
         try
         {
+            RunGit(repo, "branch", "-M", "main");
             var main = RunGitOutput(repo, "rev-parse", "main").Trim();
             var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
             var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
@@ -394,7 +396,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
             {
                 RunGit(repo, "worktree", "remove", "--force", outerWorktree);
             }
-            DeleteDirectory(repo);
+            SharedTestSupport.RemoveTempDirectory(Path.GetDirectoryName(repo)!);
         }
     }
 
