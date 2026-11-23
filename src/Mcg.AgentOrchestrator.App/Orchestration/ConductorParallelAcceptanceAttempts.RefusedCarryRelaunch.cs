@@ -1,13 +1,10 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 {
-    private const string RefusedCarryHoldOperation = "conductor:criterion-evidence-refused-carry-hold";
-
     private bool TryHoldRefusedCarryRelaunch(
         ConductorParallelAcceptanceAttempt current,
         ConductorParallelAcceptanceCandidate candidate,
@@ -17,51 +14,80 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     {
         decision = null!;
         if (current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed ||
-            !string.Equals(dispatchKind, GateDispatchKind, StringComparison.Ordinal) ||
-            !string.Equals(current.Kind, GateDispatchKind, StringComparison.Ordinal) ||
-            !string.Equals(current.BranchHeadSha, candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(current.MainHeadSha, candidate.MainHeadSha, StringComparison.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(candidate.BranchHeadSha) ||
-            string.IsNullOrWhiteSpace(candidate.MainHeadSha))
+            !string.Equals(dispatchKind, GateDispatchKind, StringComparison.Ordinal))
             return false;
 
-        var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
-            candidate.Goal, candidate.BranchHeadSha, _integrationBranch, _executionDirectory);
+        var hold = EvaluateRefusedCarryAdmission(candidate.Goal, candidate.BranchHeadSha, candidate.MainHeadSha,
+            policy, _executionDirectory, current);
         if (hold is null) return false;
-
-        RecordRefusedCarryTimelineNoteOnce(candidate, hold.Reason);
 
         decision = ConductorParallelAcceptanceAttemptDecision.Completed(
             current,
-            ConductorParallelAcceptanceRunResult.Early(
-                candidate,
-                new ConductorAdvanceResult(candidate.Goal.Id.Value, candidate.GoalPrefix, policy.Name, hold)));
+            ConductorParallelAcceptanceRunResult.Early(candidate, hold));
         return true;
     }
 
-    private void RecordRefusedCarryTimelineNoteOnce(
-        ConductorParallelAcceptanceCandidate candidate, string reason)
+    internal ConductorAdvanceResult? EvaluateRefusedCarryAdmission(
+        Goal goal, string? branchSha, string? mainSha, ConductorAutonomyPolicy policy, string? executionDirectory,
+        ConductorParallelAcceptanceAttempt? latest = null)
     {
-        if (string.IsNullOrWhiteSpace(_executionDirectory)) return;
+        if (string.IsNullOrWhiteSpace(branchSha) || string.IsNullOrWhiteSpace(mainSha))
+            return null;
+        var stale = AcceptanceCriterionEvidence.StaleFullGateBindings(goal, branchSha);
+        if (stale.Length == 0) return null;
 
-        var instanceId = $"{candidate.BranchHeadSha!.ToLowerInvariant()}:{candidate.MainHeadSha!.ToLowerInvariant()}";
-        if (GoalOperationJournal.ReadActive(_executionDirectory, candidate.Goal.Id).Entries.Any(entry =>
-                entry.Operation == RefusedCarryHoldOperation &&
-                string.Equals(entry.OperationInstanceId, instanceId, StringComparison.Ordinal)))
-            return;
+        var history = string.IsNullOrWhiteSpace(executionDirectory)
+            ? [] : GoalOperationJournal.ReadRefusedCarryHolds(executionDirectory, goal.Id).ToArray();
+        var liveBindings = stale.Select(AcceptanceCriterionEvidence.BindingOf).ToHashSet();
+        var prior = history.FirstOrDefault(note => note.RequiresLandingProof && note.Bindings.Any(liveBindings.Contains)) ??
+            history.FirstOrDefault(note => note.IsLegacy ? IsLiveLegacyRefusal(note) : note.Bindings.Any(liveBindings.Contains));
+        var passedBranch = prior?.BranchSha;
+        var passedMain = prior?.MainSha;
+        CriterionEvidenceObligation[]? inferredBindings = null;
+        if (prior is null)
+        {
+            // Earlier attempts may have reached the refusal before admission journaled it.
+            // Re-derive it against the original branch and the current binding contract.
+            latest ??= TryReadLatest(goal.Id.Value);
+            if (latest is not { Kind: GateDispatchKind, Outcome: ConductorParallelAcceptanceAttemptOutcome.Passed,
+                    ReconciledAt: not null, SupersededBy: null, RegateRequestedAt: null, ReplayLandedAt: null,
+                    BranchHeadSha: { Length: > 0 }, MainHeadSha: { Length: > 0 } } ||
+                history.Any(note => string.Equals(note.BranchSha, latest.BranchHeadSha, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(note.MainSha, latest.MainHeadSha, StringComparison.OrdinalIgnoreCase)) ||
+                (latest.ReplayContextFingerprint is not null && !HasReplayProof(latest, goal)))
+                return null;
+            passedBranch = latest.BranchHeadSha;
+            passedMain = latest.MainHeadSha;
+            if (string.IsNullOrWhiteSpace(executionDirectory) &&
+                (!string.Equals(branchSha, passedBranch, StringComparison.OrdinalIgnoreCase) ||
+                 !string.Equals(mainSha, passedMain, StringComparison.OrdinalIgnoreCase)))
+                return null;
+            inferredBindings = AcceptanceCriterionEvidence.StaleFullGateBindings(goal, passedBranch)
+                .Where(item => liveBindings.Contains(AcceptanceCriterionEvidence.BindingOf(item))).ToArray();
+            if (inferredBindings.Length == 0 ||
+                (!string.Equals(branchSha, passedBranch, StringComparison.OrdinalIgnoreCase) &&
+                 !AcceptanceCriterionEvidence.IsFullGateCarryRefused(goal, passedBranch!, _integrationBranch, executionDirectory, out _)))
+                return null;
+        }
 
-        var obligationIds = candidate.Goal.GetOutstandingCriterionEvidenceObligations(candidate.BranchHeadSha)
-            .Where(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
-                !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
-                !string.Equals(item.ExpectedCandidateSha, candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
-            .Select(item => item.Id);
-        GoalOperationJournal.Completed(
-            _executionDirectory,
-            candidate.Goal,
-            RefusedCarryHoldOperation,
-            $"obligations={string.Join(',', obligationIds)}; candidate={candidate.BranchHeadSha}; main={candidate.MainHeadSha}; {reason}",
-            mainHeadSha: candidate.MainHeadSha,
-            operationInstanceId: instanceId);
+        if (!AcceptanceCriterionEvidence.IsFullGateCarryRefused(goal, branchSha, _integrationBranch, executionDirectory,
+                out var refusal, allowPassedHeadProof: prior?.RequiresLandingProof != true))
+            return null;
+        var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
+            goal, branchSha, mainSha, passedBranch!, passedMain, stale, refusal);
+        if (inferredBindings is not null)
+            GoalOperationJournal.RecordRefusedCarryHold(executionDirectory, goal, passedBranch!, passedMain,
+                inferredBindings, hold.Reason, latest!.AttemptId);
+        return new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8], policy.Name, hold);
+
+        bool IsLiveLegacyRefusal(GoalOperationJournal.RefusedCarryHistory note)
+        {
+            var stillStale = AcceptanceCriterionEvidence.StaleFullGateBindings(goal, note.BranchSha)
+                .Select(AcceptanceCriterionEvidence.BindingOf)
+                .Where(liveBindings.Contains);
+            return stillStale.Any(note.Bindings.Contains) &&
+                AcceptanceCriterionEvidence.IsFullGateCarryRefused(goal, note.BranchSha, _integrationBranch,
+                    executionDirectory, out _);
+        }
     }
 }

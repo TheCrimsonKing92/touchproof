@@ -10,8 +10,142 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
 {
     public ConductorBatchLoopTestsRefusedCarryRelaunch(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Fact]
-    public void RefusedCarryHoldsAcrossTwoTicksWithoutRelaunchingPassedCandidate()
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Xunit.Trait("Category", "CrossTick")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void LegacyRefusalSurvivesNewerReconciledFailureUntilRebind(bool secondaryBinding)
+    {
+        var repository = CreateGitRepository();
+        var attemptRoot = CreateTempDirectory("mcg-legacy-refused-carry");
+        try
+        {
+            const string path = "src/goal.txt";
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, $"Update {path}");
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective, secondaryBinding ? ["Full acceptance passes", "Second criterion passes"] : ["Full acceptance passes"],
+                VerificationClass.TestVerifiable, [], []));
+            var originalMain = ReadGit(repository, "rev-parse", "main");
+            var worktree = GoalWorktrees.Ensure(repository, goal.Id);
+            AppendCommit(worktree, path, "reviewed goal line");
+            var bound = ReadGit(worktree, "rev-parse", "HEAD");
+            AppendCommit(worktree, path, "changed goal line");
+            var branch = ReadGit(worktree, "rev-parse", "HEAD");
+            var obligation = kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: bound);
+            var secondary = secondaryBinding
+                ? kernel.MapCriterionEvidenceOwner(goal.Id, 1, 1, CriterionEvidenceOwner.Acceptance,
+                    "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: originalMain)
+                : null;
+
+            // Seed the old attempt history independently of today's journal-writing path.
+            var now = DateTimeOffset.UtcNow;
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default, utcNow: () => now, runInline: true);
+            var passed = SeedAttempt(originalMain, passed: true);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passed.Outcome);
+            var ids = secondary is null ? obligation.Id : $"{obligation.Id},{secondary.Id}";
+            var suffix = secondary is null ? string.Empty : $" Also bound to other candidates: '{secondary.Id}' to {originalMain}.";
+            GoalOperationJournal.Completed(repository, goal, "conductor:criterion-evidence-refused-carry-hold",
+                $"obligations={ids}; candidate={branch}; main={originalMain}; Acceptance passed for {branch}, but obligation '{obligation.Id}' is bound to {bound}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=range-diff-not-identical; head={bound}.{suffix} Operator rebind: criterion-evidence-map --goal {goal.Id.Value} 0 1 acceptance {obligation.RequiredScope} {obligation.Id} {branch}",
+                mainHeadSha: originalMain, operationInstanceId: $"{branch}:{originalMain}");
+            Assert.Null(Assert.Single(GoalOperationJournal.ReadActive(repository, goal.Id).Entries
+                .Where(entry => entry.Operation == "conductor:criterion-evidence-refused-carry-hold")).BranchHeadSha);
+
+            AppendCommit(repository, "src/main.txt", "in-between main");
+            now = now.AddSeconds(1);
+            var failed = SeedAttempt(ReadGit(repository, "rev-parse", "main"), passed: false);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, failed.Outcome);
+            AppendCommit(repository, "src/main.txt", "live main");
+            var liveMain = ReadGit(repository, "rev-parse", "main");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default, repository, utcNow: () => now, runInline: true);
+            var latest = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
+            Assert.Equal(failed.AttemptId, latest.AttemptId);
+            Assert.NotNull(latest.ReconciledAt);
+
+            var runs = new List<(string Branch, string Main)>();
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    runs.Add((branch, liveMain));
+                    return new AcceptanceVerificationSummary(true, [], BranchHeadSha: branch, MainHeadSha: liveMain);
+                },
+                resolveAcceptanceHeads: _ => (branch, liveMain),
+                getLandingFileScopes: _ => [path],
+                executionDirectory: repository,
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            BatchTickSummary? heldTick = null;
+            var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+                NoStopPath(), maxIterations: 1, onTick: result => heldTick = result);
+            Assert.Equal(1, summary.Held);
+            Assert.Empty(runs);
+            Assert.Equal(failed.AttemptId, coordinator.TryReadLatest(goal.Id.Value)!.AttemptId);
+            Assert.Contains(heldTick!.ProgressLines!, line =>
+                line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
+                line.Contains(obligation.Id, StringComparison.Ordinal) &&
+                line.Contains(branch, StringComparison.Ordinal) &&
+                line.Contains(liveMain, StringComparison.Ordinal));
+            var held = driver.TryHoldRepeatSoloAcceptance(goal, ConductorAutonomyPolicy.Conservative);
+            var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(held?.Outcome);
+            var holdDecision = Assert.IsType<PolicyDecisionRecord>(hold.Decision);
+            Assert.Contains(new PolicyDecisionFact("historicalCandidateSha", branch), holdDecision.Facts);
+            Assert.Contains(new PolicyDecisionFact("historicalMainSha", originalMain), holdDecision.Facts);
+
+            kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                "operator rebind", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: branch);
+            if (secondary is not null)
+            {
+                var secondaryHold = Assert.IsType<ConductorAdvanceOutcome.Held>(
+                    driver.TryHoldRepeatSoloAcceptance(goal, ConductorAutonomyPolicy.Conservative)?.Outcome);
+                Assert.Equal(AcceptanceCriterionEvidence.RefusedCarryAdmissionReason,
+                    secondaryHold.Decision?.DiscriminatingEvidence);
+                Assert.Contains(secondary.Id, secondaryHold.Reason, StringComparison.Ordinal);
+                kernel.MapCriterionEvidenceOwner(goal.Id, 1, 1, CriterionEvidenceOwner.Acceptance,
+                    "operator replaces secondary binding", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: bound);
+                Assert.Contains(AcceptanceCriterionEvidence.StaleFullGateBindings(goal, branch),
+                    item => item.Id == secondary.Id && item.ExpectedCandidateSha == bound);
+            }
+            now = now.AddSeconds(1);
+            new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+                NoStopPath(), maxIterations: 1);
+            Assert.Equal((branch, liveMain), Assert.Single(runs));
+            var fresh = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
+            Assert.Equal((branch, liveMain), (fresh.BranchHeadSha, fresh.MainHeadSha));
+
+            ConductorParallelAcceptanceAttempt SeedAttempt(string mainSha, bool passed)
+            {
+                var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [path], branch, mainSha);
+                IReadOnlyList<AcceptanceCheckResult> unmet = passed ? [] : [new("historical check", false, 1, null)];
+                var decision = seedCoordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative,
+                    (current, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(current,
+                        new AcceptanceVerificationSummary(passed, unmet,
+                            BranchHeadSha: branch, MainHeadSha: mainSha)));
+                Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+                seedCoordinator.MarkReconciled(decision.Attempt);
+                return decision.Attempt;
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(repository);
+        }
+    }
+
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Xunit.Trait("Category", "CrossTick")]
+    [Xunit.InlineData(false, "rebind")]
+    [Xunit.InlineData(true, "rebind")]
+    [Xunit.InlineData(false, "new-brief")]
+    [Xunit.InlineData(false, "evidence")]
+    [Xunit.InlineData(false, "evidence-ready")]
+    [Xunit.InlineData(false, "partial")]
+    [Xunit.InlineData(false, "exact-replay")]
+    public void RefusedCarryDefersAcrossHeadMovementAndReleasesForLivePair(bool moveBranch, string repair)
     {
         var repository = CreateGitRepository();
         var attemptRoot = CreateTempDirectory("mcg-refused-carry-attempts");
@@ -27,33 +161,54 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
             AppendCommit(repository, "src/goal.txt", "reviewed goal line");
             var boundSha = ReadGit(repository, "rev-parse", "HEAD");
             ReadGit(repository, "checkout", "main");
+            if (repair == "evidence-ready")
+            {
+                AppendCommit(repository, "src/disjoint.txt", "different candidate base");
+                baseSha = ReadGit(repository, "rev-parse", "main");
+            }
             ReadGit(repository, "checkout", "-b", "candidate-new", baseSha);
-            AppendCommit(repository, "src/goal.txt", "changed goal line");
+            AppendCommit(repository, "src/goal.txt", repair == "evidence-ready" ? "reviewed goal line" : "changed goal line");
             var candidateSha = ReadGit(repository, "rev-parse", "HEAD");
             var mainSha = ReadGit(repository, "rev-parse", "main");
 
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateVerifiedSimpleGoal(kernel, "Update src/goal.txt");
+            string[] criteria = repair == "partial"
+                ? ["Full acceptance passes", "Second acceptance obligation"]
+                : ["Full acceptance passes"];
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
-                goal.Objective, ["Full acceptance passes"], VerificationClass.TestVerifiable, [], []));
+                goal.Objective, criteria, VerificationClass.TestVerifiable, [], []));
             kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
                 "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: boundSha);
-            var obligation = Assert.Single(goal.CriterionEvidenceObligations);
+            if (repair == "partial")
+                kernel.MapCriterionEvidenceOwner(goal.Id, 1, 1, CriterionEvidenceOwner.Acceptance,
+                    "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: boundSha);
+            var obligation = goal.CriterionEvidenceObligations.Single(item => item.CriterionIndex == 0);
+            if (repair == "evidence-ready")
+                RecordEvidence(boundSha, "failed-old-branch", passed: false);
             var worktree = GoalWorktrees.WorktreePath(repository, goal.Id);
             Directory.CreateDirectory(Path.GetDirectoryName(worktree)!);
             ReadGit(repository, "worktree", "add", "-b", GoalWorktrees.BranchName(goal.Id),
                 worktree, candidateSha);
             ReadGit(repository, "checkout", "main");
 
-            var acceptanceRuns = 0;
+            var runs = new List<(string Branch, string Main)>();
+            var trxPath = Path.Combine(attemptRoot, "acceptance.trx");
+            File.WriteAllText(trxPath, """
+                <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                  <Results><UnitTestResult testName="Fixture.Check" outcome="Passed" /></Results>
+                  <ResultSummary outcome="Completed"><Counters total="1" executed="1" passed="1" failed="0" /></ResultSummary>
+                </TestRun>
+                """);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repository, runInline: true);
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 runAcceptanceWithSlot: (_, _) =>
                 {
-                    acceptanceRuns++;
-                    return new AcceptanceVerificationSummary(true, [], BranchHeadSha: candidateSha);
+                    runs.Add((candidateSha, mainSha));
+                    return new AcceptanceVerificationSummary(true, [], BranchHeadSha: candidateSha, MainHeadSha: mainSha,
+                        TestResultPaths: [trxPath]);
                 },
                 resolveAcceptanceHeads: _ => (candidateSha, mainSha),
                 getLandingFileScopes: _ => ["src/goal.txt"],
@@ -62,18 +217,20 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
 
             var first = new ConductorBatchLoop().Run(
                 kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
-            Assert.Equal(1, acceptanceRuns);
+            Assert.Equal((candidateSha, mainSha), Assert.Single(runs));
             Assert.Equal(1, first.Held);
             Assert.Equal(GoalStatus.Verified, goal.Status);
             var passedReceipt = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passedReceipt.Outcome);
             Assert.Equal(GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(worktree, ["src/goal.txt"]),
                 passedReceipt.EffectiveManifestIdentity);
+            var expectedRefusal = repair == "evidence-ready" ? "not-eligible" : $"range-diff-not-identical; head={boundSha}";
             var expectedDiagnostic =
-                $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {boundSha}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=range-diff-not-identical; head={boundSha}.";
-            Assert.Equal(expectedDiagnostic,
+                $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {boundSha}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason={expectedRefusal}.";
+            Assert.StartsWith(expectedDiagnostic,
                 AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                    goal, candidateSha, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repository));
+                    goal, candidateSha, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repository),
+                StringComparison.Ordinal);
 
             for (var tick = 0; tick < 2; tick++)
             {
@@ -82,7 +239,7 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                     kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
                     maxIterations: 1, onTick: item => observed = item);
                 Assert.Equal(1, summary.Held);
-                Assert.Equal(1, acceptanceRuns);
+                Assert.Single(runs);
                 Assert.Equal(GoalStatus.Verified, goal.Status);
                 var retainedReceipt = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
                 Assert.Equal(passedReceipt.AttemptId, retainedReceipt.AttemptId);
@@ -90,7 +247,7 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 Assert.Null(retainedReceipt.RegateRequestedAt);
                 Assert.Contains(observed!.ProgressLines!, line =>
                     line.Contains("result=held", StringComparison.Ordinal) &&
-                    line.Contains("Carry-forward_refused:_reason=range-diff-not-identical", StringComparison.Ordinal));
+                    line.Contains($"Carry-forward_refused:_reason={expectedRefusal.Split(';')[0]}", StringComparison.Ordinal));
             }
 
             Assert.Single(Directory.GetFiles(Path.Combine(attemptRoot, goal.Id.Value), "*.attempt.json"));
@@ -103,11 +260,98 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
             Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value}", note.Detail,
                 StringComparison.Ordinal);
 
-            AppendCommit(repository, "src/main.txt", "new main commit");
-            mainSha = ReadGit(repository, "rev-parse", "main");
-            new ConductorBatchLoop().Run(
-                kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
-            Assert.Equal(2, acceptanceRuns);
+            if (moveBranch)
+            {
+                AppendCommit(worktree, "src/goal.txt", "further goal changes");
+                candidateSha = ReadGit(worktree, "rev-parse", "HEAD");
+            }
+            else if (repair != "exact-replay")
+            {
+                AppendCommit(repository, "src/main.txt", "new main commit");
+                mainSha = ReadGit(repository, "rev-parse", "main");
+            }
+
+            AssertStillHeld(obligation);
+            if (moveBranch)
+            {
+                driver.BeginTick(kernel, 0);
+                var fallback = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+                var held = Assert.IsType<ConductorAdvanceOutcome.Held>(fallback.Outcome);
+                Assert.Equal("criterion-binding-refused-carry", held.Decision!.DiscriminatingEvidence);
+                Assert.Single(runs);
+            }
+
+            if (repair == "new-brief")
+            {
+                kernel.ReviseGoalBrief(goal.Id, "Update src/goal.txt with the revised acceptance contract");
+                kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                    goal.Objective, ["Revised acceptance criterion"], VerificationClass.TestVerifiable, [], []));
+                kernel.MapCriterionEvidenceOwner(goal.Id, 0, goal.AuthoritativeRefinedSpecVersion!.Version,
+                    CriterionEvidenceOwner.Acceptance, "reviewer", CriterionEvidenceScopes.FullAcceptanceGate,
+                    expectedCandidateSha: candidateSha);
+            }
+            else if (repair == "evidence-ready")
+            {
+                RecordEvidence(boundSha, "passed-old-branch", passed: true);
+                Assert.Equal(boundSha, goal.CriterionEvidenceObligations.Single().ExpectedCandidateSha);
+            }
+            else
+            {
+                Rebind(0);
+                if (repair == "partial")
+                {
+                    AssertStillHeld(goal.CriterionEvidenceObligations.Single(item => item.CriterionIndex == 1));
+                    Rebind(1);
+                }
+                if (repair == "evidence")
+                {
+                    RecordEvidence(candidateSha, "verified-live-branch", passed: true);
+                }
+            }
+
+            Tick();
+            var fresh = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
+            if (repair == "exact-replay")
+            {
+                Assert.Single(runs);
+                Assert.Equal(passedReceipt.AttemptId, fresh.AttemptId);
+                Assert.Contains(passedReceipt.AttemptId, goal.CriterionEvidenceObligations.Single().Detail, StringComparison.Ordinal);
+                return;
+            }
+
+            Assert.Equal(2, runs.Count);
+            Assert.Equal((candidateSha, mainSha), runs[1]);
+            Assert.NotEqual(passedReceipt.AttemptId, fresh.AttemptId);
+            Assert.Equal(candidateSha, fresh.BranchHeadSha);
+            Assert.Equal(mainSha, fresh.MainHeadSha);
+
+            void Rebind(int index) => kernel.MapCriterionEvidenceOwner(goal.Id, index, 1, CriterionEvidenceOwner.Acceptance,
+                "operator rebind", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidateSha);
+
+            void RecordEvidence(string sha, string receipt, bool passed) =>
+                kernel.RecordCriterionEvidence(goal.Id, obligation.Id, CriterionEvidenceOwner.Acceptance,
+                    sha, receipt, CriterionEvidenceScopes.FullAcceptanceGate, passed, "Deterministic verification evidence.");
+
+            BatchTickSummary Tick()
+            {
+                BatchTickSummary? observed = null;
+                new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(), maxIterations: 1, onTick: item => observed = item);
+                return Assert.IsType<BatchTickSummary>(observed);
+            }
+
+            void AssertStillHeld(CriterionEvidenceObligation blocked)
+            {
+                var observed = Tick();
+                Assert.Single(runs);
+                Assert.Equal(passedReceipt.AttemptId, coordinator.TryReadLatest(goal.Id.Value)!.AttemptId);
+                Assert.Contains(observed.ProgressLines!, line =>
+                    line.Contains("result=held reason=criterion-binding-refused-carry", StringComparison.Ordinal) &&
+                    line.Contains(candidateSha, StringComparison.Ordinal) &&
+                    line.Contains(mainSha, StringComparison.Ordinal) &&
+                    line.Contains(blocked.Id, StringComparison.Ordinal) &&
+                    line.Contains("Operator_rebind", StringComparison.Ordinal));
+            }
         }
         finally
         {
