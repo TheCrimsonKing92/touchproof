@@ -175,7 +175,8 @@ public sealed partial class AgentOrchestratorKernel
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
-        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null, bool workerToolsAvailable = false)
+        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null, bool workerToolsAvailable = false,
+        ReviewerChangedFileScope? pinnedReviewerScope = null, bool reviewerScopeMissingFromDispatch = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -379,15 +380,11 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(standingRuleLines));
         }
 
-        var reviewerChangedFileScope = ReviewerChangedFileScopeBriefSection.Build(
-            task,
-            reviewerScopeChangedFiles,
-            reviewerScopeMergeBase,
-            reviewerScopeTotalChangedFileCount,
-            reviewerMergeTreeClean,
-            reviewerMergeTreeConflictPaths,
-            reviewerMergeTreeTotalConflictPathCount);
-        ReviewerChangedFileScopeBriefSection.AppendTo(segments, reviewerChangedFileScope, integrationBranchPromptName);
+        ReviewerChangedFileScopeBriefSection.AppendTo(
+            segments, task, integrationBranchPromptName,
+            reviewerScopeChangedFiles, reviewerScopeMergeBase, reviewerScopeTotalChangedFileCount,
+            reviewerMergeTreeClean, reviewerMergeTreeConflictPaths, reviewerMergeTreeTotalConflictPathCount,
+            pinnedReviewerScope, reviewerScopeMissingFromDispatch);
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
