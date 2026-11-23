@@ -186,6 +186,45 @@ public sealed class BoardFillBacklogSnapshotReuseTests
         Assert.Same(refreshed, cache.Read());
     }
 
+    [Fact(Skip = WindowsFileIdentity, SkipUnless = nameof(IsWindows))]
+    public void Incremental_text_write_requires_missing_guard_and_forces_warm_cache_fallback()
+    {
+        const string guard = "backlog_snapshot_revision_backlog_notes_blob_guard";
+        const string ownerGate = "owner approval required";
+        using var database = new BoardFillSnapshotTestDatabase();
+        database.Run($"UPDATE backlog_notes SET text = '{new string('x', ownerGate.Length)}' WHERE id = 1");
+        using var cache = new BoardFillBacklogSnapshotCache(database.Path);
+        var warm = cache.Read();
+        Assert.Same(warm, cache.Read());
+
+        using (var writer = database.Open())
+        {
+            AssertWritableHandleRefused(writer);
+            Execute(writer, $"DROP INDEX {guard}");
+            using var blob = new SqliteBlob(writer, "backlog_notes", "text", 1, readOnly: false);
+            blob.Write("owner approval required"u8);
+        }
+
+        var fallback = cache.Read();
+        Assert.NotSame(warm, fallback);
+        Assert.NotSame(fallback, cache.Read());
+        Assert.Equal(ownerGate, fallback.Single(item => item.Id == ItemId).Notes.Single().Text);
+        Assert.Equal(Contents(BoardFillBacklogSnapshot.Read(database.Path)), Contents(fallback));
+
+        BacklogStore.Setup(database.Path);
+        var repaired = cache.Read();
+        Assert.Equal(Contents(fallback), Contents(repaired));
+        Assert.Same(repaired, cache.Read());
+        using var repairedWriter = database.Open();
+        AssertWritableHandleRefused(repairedWriter);
+
+        static void AssertWritableHandleRefused(SqliteConnection writer) =>
+            Assert.Throws<SqliteException>(() =>
+            {
+                using var blob = new SqliteBlob(writer, "backlog_notes", "text", 1, readOnly: false);
+            });
+    }
+
     private static BacklogSnapshotRevision ReadProof(string path)
     {
         using var session = new SqliteReadSession(path);

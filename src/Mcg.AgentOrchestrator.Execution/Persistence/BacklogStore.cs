@@ -148,7 +148,9 @@ public sealed class BacklogStore
         _dbPath, _readOnly, SqliteStoreDurability.Strict, foreignKeys: false,
         operationTag: "BacklogStore.OpenConnection");
 
-    public static void Setup(string dbPath)
+    public static void Setup(string dbPath) => Setup(dbPath, observe: null);
+
+    internal static void Setup(string dbPath, Action<SqliteConnection>? observe)
     {
         var directory = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(directory))
@@ -156,7 +158,7 @@ public sealed class BacklogStore
 
         using var conn = SqliteStoreConnectionPolicy.Open(
             dbPath, readOnly: false, SqliteStoreDurability.Strict, foreignKeys: false,
-            operationTag: "BacklogStore.Setup");
+            operationTag: "BacklogStore.Setup", observe: observe);
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS backlog (

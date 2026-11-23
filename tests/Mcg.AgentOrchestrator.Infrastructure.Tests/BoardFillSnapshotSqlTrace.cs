@@ -11,6 +11,7 @@ internal sealed class BoardFillSnapshotSqlTrace(Action? snapshotEstablished = nu
     private static readonly Callback Trace = Observe;
     private readonly Action? _snapshotEstablished = snapshotEstablished;
     internal int Statements { get; private set; }
+    internal int ImmediateTransactions { get; private set; }
     internal int TriggerSteps { get; private set; }
     internal int Rows { get; private set; }
     internal Exception? Failure { get; private set; }
@@ -39,10 +40,15 @@ internal sealed class BoardFillSnapshotSqlTrace(Action? snapshotEstablished = nu
         {
             if (kind == Statement)
             {
-                if (Marshal.PtrToStringUTF8(argument)?.StartsWith("--", StringComparison.Ordinal) == true)
+                var sql = Marshal.PtrToStringUTF8(argument);
+                if (sql?.StartsWith("--", StringComparison.Ordinal) == true)
                     trace.TriggerSteps++;
                 else
+                {
                     trace.Statements++;
+                    if (sql == "BEGIN IMMEDIATE")
+                        trace.ImmediateTransactions++;
+                }
             }
             else if (kind == Row)
             {

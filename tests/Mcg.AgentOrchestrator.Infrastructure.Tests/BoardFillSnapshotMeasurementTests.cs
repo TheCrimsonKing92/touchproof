@@ -7,13 +7,14 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
 {
     public static bool IsWindows => OperatingSystem.IsWindows();
     private const int SeedItems = 2600;
+    private const int TimedPairs = 5;
     private static readonly HashSet<string> NoExclusions = [];
 
     [Fact(Skip = "Requires the Windows SQLite VFS and per-thread CPU accounting.", SkipUnless = nameof(IsWindows))]
     public void Bounded_windows_report_paired_costs_and_freshness()
     {
         // JIT both arms and the probe before collecting bounded measurements.
-        _ = MeasureWindow(["cold", "hit", "item", "fallback", "recovery"], trace: false);
+        _ = MeasureWindow(["cold", "hit", "item", "note", "dependency", "fallback", "recovery"], trace: false);
         var windows = new (string Name, string[] Steps)[]
         {
             ("cold", Repeat(12, "cold")),
@@ -22,19 +23,25 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             ("mixed", ["cold", .. Repeat(4, "hit", "hit", "hit", "item", "note", "dependency"),
                 "fallback", "recovery", "hit"])
         };
-        var retained = MeasureRetainedBytes();
+        var cpuQuantum = ObserveCpuQuantum();
         output.WriteLine($"snapshot-metrics method=paired deterministic windows items={SeedItems} notes={SeedItems} " +
             $"dependencies={SeedItems / 2} cpu_us=calling-thread kernel+user GetThreadTimes " +
+            $"cpu_unit_ns=100 observed_cpu_quantum_us={CpuMicroseconds(cpuQuantum)} timed_pairs={TimedPairs} " +
+            $"runtime={RuntimeInformation.FrameworkDescription} warmup_pairs=1 " +
             "allocated_bytes=GC.GetAllocatedBytesForCurrentThread sql_rows=SQLite trace ROW events " +
             "sql_exec=SQLite trace STMT top-level events trigger_steps=SQLite trace trigger subprogram events " +
-            "timing_and_trace=separate identical runs managed_retained_bytes=forced-GC heap delta per warmed host " +
-            "full_read_retained_bytes=0 by lifetime writer=independent single-row SQLite statements " +
-            "writer_cost_includes_trigger_and_injected_coverage_changes history=workload sizing only");
+            "timing_and_trace=separate identical runs managed_retained_bytes=forced-GC heap estimate per host " +
+            "from eight independently populated caches on each window's final database " +
+            "full_read_retained_bytes=0 by lifetime writer=deterministic SQL mutations plus production note setup and coverage repair " +
+            "baseline_setup=shared setup with schema marked newer to skip proof work history=workload sizing only");
         foreach (var (name, steps) in windows)
         {
-            var timed = MeasureWindow(steps, trace: false);
+            var started = DateTimeOffset.UtcNow;
+            var samples = Enumerable.Range(0, TimedPairs)
+                .Select(i => MeasureWindow(steps, trace: false, candidateFirst: i % 2 != 0)).ToArray();
+            var timed = samples.OrderBy(pair => (pair.Full - pair.Reuse).TotalCpu).ElementAt(TimedPairs / 2);
             var counted = MeasureWindow(steps, trace: true);
-            Assert.Equal(timed.Mix, counted.Mix);
+            Assert.All(samples, sample => Assert.Equal(counted.Mix, sample.Mix));
             if (name == "unchanged")
             {
                 Assert.Equal(steps.Length, counted.Mix.Hit);
@@ -42,36 +49,42 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
                 Assert.True(counted.Reuse.ReadStatements < counted.Full.ReadStatements);
             }
             if (name == "changed")
+            {
                 Assert.True(counted.Reuse.TriggerSteps > counted.Full.TriggerSteps);
+                Assert.True(counted.Full.SetupStatements > 0);
+                Assert.True(counted.Reuse.SetupStatements > counted.Full.SetupStatements);
+            }
+            if (name == "mixed")
+                Assert.Equal(1, counted.Reuse.CoverageRepairs);
 
             var full = timed.Full.WithTrace(counted.Full);
             var reuse = timed.Reuse.WithTrace(counted.Reuse);
-            var endRetained = timed.Mix.PopulatedAtEnd ? retained : 0;
-            output.WriteLine($"snapshot-window name={name} ticks={steps.Length} starting_items={SeedItems} " +
+            var net = samples.Select(pair => pair.Full - pair.Reuse).ToArray();
+            output.WriteLine($"snapshot-window name={name} started_utc={started:O} ended_utc={DateTimeOffset.UtcNow:O} " +
+                $"ticks_per_pair={steps.Length} starting_items={SeedItems} pair_summary=median-net-cpu pair_order=alternating " +
                 $"cold={timed.Mix.Cold} hit={timed.Mix.Hit} changed={timed.Mix.Changed} fallback={timed.Mix.Fallback} " +
                 $"item_commits={steps.Count(x => x == "item")} note_commits={steps.Count(x => x is "note" or "fallback")} " +
-                $"dependency_commits={steps.Count(x => x == "dependency")} coverage_repairs={steps.Count(x => x == "recovery")} " +
+                $"dependency_commits={steps.Count(x => x == "dependency")} coverage_repairs={counted.Reuse.CoverageRepairs} " +
                 "retries=0 freshness=matched raw_and_selected_action=matched");
-            output.WriteLine($"full {full.Report()} managed_retained_bytes=0");
-            output.WriteLine($"reuse {reuse.Report()} managed_retained_bytes={endRetained}");
-            output.WriteLine($"net_full_minus_reuse {(full - reuse).Report()} managed_retained_bytes={-endRetained}");
+            output.WriteLine($"full {full.Report()} {CpuSpread(samples.Select(pair => pair.Full))} managed_retained_bytes=0");
+            output.WriteLine($"reuse {reuse.Report()} {CpuSpread(samples.Select(pair => pair.Reuse))} " +
+                $"managed_retained_bytes={counted.RetainedBytes}");
+            output.WriteLine($"net_full_minus_reuse {(full - reuse).Report()} {CpuSpread(net)} " +
+                $"managed_retained_bytes={-counted.RetainedBytes} " +
+                $"snapshot_cpu_net_resolution={CpuResolution(net.Select(pair => pair.ReadCpu), cpuQuantum)} " +
+                $"total_cpu_net_resolution={CpuResolution(net.Select(pair => pair.TotalCpu), cpuQuantum)}");
         }
     }
 
     private static string[] Repeat(int times, params string[] pattern) =>
         Enumerable.Range(0, times).SelectMany(_ => pattern).ToArray();
 
-    private static (Costs Full, Costs Reuse, Mix Mix) MeasureWindow(string[] steps, bool trace)
+    private static (Costs Full, Costs Reuse, Mix Mix, long RetainedBytes) MeasureWindow(
+        string[] steps, bool trace, bool candidateFirst = false)
     {
         using var baseline = new Arm(reuse: false, trace);
         using var candidate = new Arm(reuse: true, trace);
-        string restore;
-        using (var connection = candidate.Database.Open())
-        {
-            using var command = connection.CreateCommand();
-            command.CommandText = $"SELECT sql FROM sqlite_schema WHERE name = '{NoteTrigger}'";
-            restore = Assert.IsType<string>(command.ExecuteScalar());
-        }
+        var (first, second) = candidateFirst ? (candidate, baseline) : (baseline, candidate);
         IReadOnlyList<BacklogItem>? retained = null;
         if (steps[0] is not ("cold" or "fallback"))
         {
@@ -92,17 +105,18 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             {
                 case "cold": retained = null; break;
                 case "fallback": candidate.Write($"DROP TRIGGER {NoteTrigger}"); fallbacks++; break;
-                case "recovery": candidate.Write(restore); break;
+                case "recovery": candidate.RepairCoverage(); break;
             }
             if (step is "item" or "note" or "dependency" or "fallback")
             {
                 var sql = Mutation(step == "fallback" ? "note" : step, index);
-                baseline.Write(sql);
-                candidate.Write(sql);
+                first.Write(sql, setup: step == "note");
+                second.Write(sql, setup: step == "note");
             }
 
-            var full = baseline.Read();
-            var reuse = candidate.Read(restart: step == "cold");
+            var firstRead = first.Read(restart: step == "cold");
+            var secondRead = second.Read(restart: step == "cold");
+            var (full, reuse) = candidateFirst ? (secondRead, firstRead) : (firstRead, secondRead);
             var hit = ReferenceEquals(retained, reuse);
             Assert.Equal(step == "hit", hit);
             if (hit) hits++;
@@ -121,18 +135,17 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         Assert.Null(baseline.TraceFailure);
         Assert.Null(candidate.TraceFailure);
         Assert.Equal(steps.Length, cold + hits + changes + fallbacks);
-        Assert.NotNull(retained);
-        return (baseline.Costs, candidate.Costs, new(cold, hits, changes, fallbacks, retained is not null));
+        var retainedBytes = trace && retained is not null ? MeasureRetainedBytes(candidate.Database.Path) : 0;
+        return (baseline.Costs, candidate.Costs, new(cold, hits, changes, fallbacks, retained is not null), retainedBytes);
 
         static string? Select(IReadOnlyList<BacklogItem> snapshot) =>
             BoardFillReadyItemSelector.Select(snapshot, [], NoExclusions, item =>
                 new(item.Dependencies.All(dependency => dependency.PrerequisiteId == "prerequisite"), false, ""))?.Id;
     }
 
-    private static long MeasureRetainedBytes()
+    private static long MeasureRetainedBytes(string endStatePath)
     {
-        using var database = new BoardFillSnapshotTestDatabase(SeedItems);
-        var caches = Enumerable.Range(0, 8).Select(_ => new BoardFillBacklogSnapshotCache(database.Path)).ToArray();
+        var caches = Enumerable.Range(0, 8).Select(_ => new BoardFillBacklogSnapshotCache(endStatePath)).ToArray();
         try
         {
             var empty = GC.GetTotalMemory(forceFullCollection: true);
@@ -149,7 +162,12 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         finally { foreach (var cache in caches) cache.Dispose(); }
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        static void Populate(BoardFillBacklogSnapshotCache cache) => Assert.Equal(SeedItems, cache.Read().Count);
+        static void Populate(BoardFillBacklogSnapshotCache cache)
+        {
+            var snapshot = cache.Read();
+            Assert.Equal(SeedItems, snapshot.Count);
+            Assert.Same(snapshot, cache.Read());
+        }
     }
 
     private sealed class Arm : IDisposable
@@ -158,17 +176,20 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         private readonly bool _trace;
         private BoardFillSnapshotSqlTrace? _readerTrace;
         private BoardFillSnapshotSqlTrace? _writerTrace;
+        private BoardFillSnapshotSqlTrace? _setupTrace;
         private BoardFillBacklogSnapshotCache? _cache;
         private Costs _timed;
         internal BoardFillSnapshotTestDatabase Database { get; } = new(SeedItems);
-        internal Exception? TraceFailure => _readerTrace?.Failure ?? _writerTrace?.Failure;
+        internal Exception? TraceFailure => _readerTrace?.Failure ?? _writerTrace?.Failure ?? _setupTrace?.Failure;
         internal Costs Costs => _timed with
         {
             ReadRows = _readerTrace?.Rows ?? 0,
             ReadStatements = _readerTrace?.Statements ?? 0,
-            WriteRows = _writerTrace?.Rows ?? 0,
-            WriteStatements = _writerTrace?.Statements ?? 0,
-            TriggerSteps = _writerTrace?.TriggerSteps ?? 0
+            WriteRows = (_writerTrace?.Rows ?? 0) + (_setupTrace?.Rows ?? 0),
+            WriteStatements = (_writerTrace?.Statements ?? 0) + (_setupTrace?.Statements ?? 0),
+            TriggerSteps = (_writerTrace?.TriggerSteps ?? 0) + (_setupTrace?.TriggerSteps ?? 0),
+            SetupStatements = _setupTrace?.Statements ?? 0,
+            CoverageRepairs = _setupTrace?.ImmediateTransactions ?? 0
         };
 
         internal Arm(bool reuse, bool trace)
@@ -177,16 +198,19 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             _trace = trace;
             if (!reuse)
             {
-                // Restore the v3 writer shape after seeding. Both arms issue the
-                // same logical data updates, paying the candidate trigger cost.
+                // Recreate the pre-proof writer shape after seeding. Setup's newer-schema
+                // short circuit runs the same SQL as the old current-schema short circuit.
                 using var connection = Database.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = "SELECT name FROM sqlite_schema WHERE type = 'trigger'";
-                var triggers = new List<string>();
+                command.CommandText = "SELECT type, name FROM sqlite_schema WHERE name GLOB 'backlog_snapshot_revision_*'";
+                var coverage = new List<(string Type, string Name)>();
                 using (var reader = command.ExecuteReader())
-                    while (reader.Read()) triggers.Add(reader.GetString(0));
-                foreach (var trigger in triggers) Execute(connection, $"DROP TRIGGER {trigger}");
-                Execute(connection, "DROP TABLE backlog_snapshot_revision; UPDATE store_schema_versions SET version = 3 WHERE store_name = 'backlog';");
+                    while (reader.Read()) coverage.Add((reader.GetString(0), reader.GetString(1)));
+                foreach (var (type, name) in coverage) Execute(connection, $"DROP {type} {name}");
+                Execute(connection, $"""
+                    DROP TABLE backlog_snapshot_revision;
+                    UPDATE store_schema_versions SET version = {StoreSchemaRegistry.Backlog.CurrentVersion + 1} WHERE store_name = 'backlog';
+                    """);
             }
             ResetMetrics();
         }
@@ -195,6 +219,7 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         {
             _readerTrace = _trace ? new() : null;
             _writerTrace = _trace ? new() : null;
+            _setupTrace = _trace ? new() : null;
             _timed = default;
         }
 
@@ -205,7 +230,7 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         {
             var cpu = _trace ? 0 : ThreadCpu();
             var bytes = _trace ? 0 : GC.GetAllocatedBytesForCurrentThread();
-            if (restart)
+            if (_reuse && restart)
             {
                 _cache?.Dispose();
                 _cache = null;
@@ -222,15 +247,27 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             return result;
         }
 
-        internal void Write(string sql)
+        internal void Write(string sql, bool setup = false) => MeasureWrite(() =>
+        {
+            if (setup)
+                SetupWriter();
+            using var connection = Database.Open();
+            _writerTrace?.Attach(Database.Path, connection);
+            Execute(connection, sql);
+        });
+
+        internal void RepairCoverage() => MeasureWrite(SetupWriter);
+
+        private void SetupWriter() => BacklogStore.Setup(Database.Path, _trace ? ObserveSetup : null);
+
+        private void ObserveSetup(Microsoft.Data.Sqlite.SqliteConnection connection) =>
+            _setupTrace!.Attach(Database.Path, connection);
+
+        private void MeasureWrite(Action write)
         {
             var cpu = _trace ? 0 : ThreadCpu();
             var bytes = _trace ? 0 : GC.GetAllocatedBytesForCurrentThread();
-            using (var connection = Database.Open())
-            {
-                _writerTrace?.Attach(Database.Path, connection);
-                Execute(connection, sql);
-            }
+            write();
             if (!_trace)
             {
                 var allocated = GC.GetAllocatedBytesForCurrentThread() - bytes;
@@ -249,23 +286,65 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
     private record struct Mix(int Cold, int Hit, int Changed, int Fallback, bool PopulatedAtEnd);
 
     private record struct Costs(long ReadCpu, long WriteCpu, long ReadAllocated, long WriteAllocated,
-        int ReadStatements, int WriteStatements, int ReadRows, int WriteRows, int TriggerSteps)
+        int ReadStatements, int WriteStatements, int ReadRows, int WriteRows, int TriggerSteps,
+        int SetupStatements, int CoverageRepairs)
     {
+        internal long TotalCpu => ReadCpu + WriteCpu;
+
         internal Costs WithTrace(Costs counted) => this with
         {
             ReadStatements = counted.ReadStatements, WriteStatements = counted.WriteStatements,
-            ReadRows = counted.ReadRows, WriteRows = counted.WriteRows, TriggerSteps = counted.TriggerSteps
+            ReadRows = counted.ReadRows, WriteRows = counted.WriteRows, TriggerSteps = counted.TriggerSteps,
+            SetupStatements = counted.SetupStatements, CoverageRepairs = counted.CoverageRepairs
         };
 
         public static Costs operator -(Costs full, Costs reuse) => new(full.ReadCpu - reuse.ReadCpu,
             full.WriteCpu - reuse.WriteCpu, full.ReadAllocated - reuse.ReadAllocated,
             full.WriteAllocated - reuse.WriteAllocated, full.ReadStatements - reuse.ReadStatements,
             full.WriteStatements - reuse.WriteStatements, full.ReadRows - reuse.ReadRows,
-            full.WriteRows - reuse.WriteRows, full.TriggerSteps - reuse.TriggerSteps);
+            full.WriteRows - reuse.WriteRows, full.TriggerSteps - reuse.TriggerSteps,
+            full.SetupStatements - reuse.SetupStatements, full.CoverageRepairs - reuse.CoverageRepairs);
 
         internal string Report() => FormattableString.Invariant(
-            $"snapshot_cpu_us={ReadCpu / 10.0:F1} writer_cpu_us={WriteCpu / 10.0:F1} total_cpu_us={(ReadCpu + WriteCpu) / 10.0:F1} snapshot_allocated_bytes={ReadAllocated} writer_allocated_bytes={WriteAllocated} snapshot_sql_exec={ReadStatements} writer_sql_exec={WriteStatements} snapshot_sql_rows={ReadRows} writer_sql_rows={WriteRows} writer_trigger_steps={TriggerSteps}");
+            $"snapshot_cpu_us={ReadCpu / 10.0:F1} writer_cpu_us={WriteCpu / 10.0:F1} total_cpu_us={TotalCpu / 10.0:F1} snapshot_allocated_bytes={ReadAllocated} writer_allocated_bytes={WriteAllocated} snapshot_sql_exec={ReadStatements} writer_sql_exec={WriteStatements} writer_setup_sql_exec={SetupStatements} snapshot_sql_rows={ReadRows} writer_sql_rows={WriteRows} writer_trigger_steps={TriggerSteps}");
     }
+
+    private static string CpuSpread(IEnumerable<Costs> samples)
+    {
+        var costs = samples.ToArray();
+        return $"snapshot_cpu_us_min_max={Range(costs.Select(cost => cost.ReadCpu))} " +
+            $"writer_cpu_us_min_max={Range(costs.Select(cost => cost.WriteCpu))} " +
+            $"total_cpu_us_min_max={Range(costs.Select(cost => cost.TotalCpu))}";
+
+        static string Range(IEnumerable<long> values) => $"{CpuMicroseconds(values.Min())},{CpuMicroseconds(values.Max())}";
+    }
+
+    private static string CpuResolution(IEnumerable<long> samples, long quantum)
+    {
+        if (quantum == 0)
+            return "inconclusive-no-quantum-observed";
+
+        return samples.All(sample => sample > quantum) || samples.All(sample => sample < -quantum)
+            ? "same-direction-beyond-observed-quantum"
+            : "inconclusive-clock-or-spread";
+    }
+
+    private static long ObserveCpuQuantum()
+    {
+        var minimum = long.MaxValue;
+        var previous = ThreadCpu();
+        for (var i = 0; i < 256; i++)
+        {
+            Thread.SpinWait(20_000);
+            var current = ThreadCpu();
+            if (current > previous)
+                minimum = Math.Min(minimum, current - previous);
+            previous = current;
+        }
+        return minimum == long.MaxValue ? 0 : minimum;
+    }
+
+    private static string CpuMicroseconds(long ticks) => FormattableString.Invariant($"{ticks / 10.0:F1}");
 
     private static long ThreadCpu() => GetThreadTimes(GetCurrentThread(), out _, out _, out var kernel, out var user)
         ? kernel + user : throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());

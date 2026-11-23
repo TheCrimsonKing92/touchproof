@@ -22,7 +22,8 @@ internal static class SqliteStoreConnectionPolicy
         SqliteStoreDurability durability,
         bool foreignKeys,
         string operationTag,
-        int busyTimeoutMilliseconds = DefaultBusyTimeoutMilliseconds)
+        int busyTimeoutMilliseconds = DefaultBusyTimeoutMilliseconds,
+        Action<SqliteConnection>? observe = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(operationTag);
@@ -44,6 +45,7 @@ internal static class SqliteStoreConnectionPolicy
         try
         {
             connection.Open();
+            observe?.Invoke(connection);
             ExecuteNonQuery(connection, "PRAGMA busy_timeout=" + busyTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture));
             if (!readOnly)
             {

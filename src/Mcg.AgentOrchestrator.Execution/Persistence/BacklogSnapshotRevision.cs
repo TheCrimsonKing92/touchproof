@@ -7,17 +7,32 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal readonly record struct BacklogSnapshotRevision(string StoreId, string Revision, long SchemaCookie)
 {
     private const string Table = "backlog_snapshot_revision";
-    private static readonly (string Name, string Table, string Sql)[] Triggers = (
+    private static readonly (string Type, string Name, string Table, string Sql)[] Triggers = (
         from table in new[] { "backlog", "backlog_notes", "backlog_dependencies" }
         from operation in new[] { "insert", "update", "delete" }
         let name = $"{Table}_{table}_{operation}"
-        select (name, table, $"""
+        select ("trigger", name, table, $"""
             CREATE TRIGGER {name} AFTER {operation} ON {table}
             BEGIN
                 UPDATE {Table} SET revision = lower(hex(randomblob(16))) WHERE singleton = 1;
                 SELECT CASE WHEN changes() <> 1 THEN RAISE(ABORT, 'Missing backlog snapshot revision') END;
             END
             """.ReplaceLineEndings("\n"))).ToArray();
+
+    // Incremental SQLite BLOB writes can change TEXT without firing UPDATE triggers.
+    // SQLite refuses writable blob handles for indexed columns. These partial indexes
+    // stay empty and cover every projected column except INTEGER PRIMARY KEY aliases.
+    private static readonly (string Type, string Name, string Table, string Sql)[] BlobWriteGuards = (
+        from projection in new[]
+        {
+            (Table: "backlog", Columns: "id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at, pinned_at, bundled_reason"),
+            (Table: "backlog_notes", Columns: "backlog_item_id, created_at, text"),
+            (Table: "backlog_dependencies", Columns: "dependent_id, prerequisite_id, prerequisite_kind, created_at")
+        }
+        let name = $"{Table}_{projection.Table}_blob_guard"
+        select ("index", name, projection.Table, $"CREATE INDEX {name} ON {projection.Table} ({projection.Columns}) WHERE 0")).ToArray();
+
+    private static readonly (string Type, string Name, string Table, string Sql)[] Coverage = [.. Triggers, .. BlobWriteGuards];
 
     private static readonly string ReadSql = $"""
         SELECT store_id, revision, schema_version
@@ -27,9 +42,9 @@ internal readonly record struct BacklogSnapshotRevision(string StoreId, string R
           AND typeof(revision) = 'text' AND length(revision) = 32 AND revision NOT GLOB '*[^0-9a-f]*'
           AND (SELECT version FROM store_schema_versions WHERE store_name = 'backlog') = {StoreSchemaRegistry.Backlog.CurrentVersion}
           AND (SELECT count(*) FROM main.sqlite_schema
-               WHERE type = 'trigger' AND (name, tbl_name, sql) IN (VALUES
-               {string.Join(",\n", Triggers.Select(trigger => $"('{trigger.Name}', '{trigger.Table}', '{trigger.Sql.Replace("'", "''", StringComparison.Ordinal)}')"))}
-               )) = {Triggers.Length}
+               WHERE (type, name, tbl_name, sql) IN (VALUES
+               {string.Join(",\n", Coverage.Select(obj => $"('{obj.Type}', '{obj.Name}', '{obj.Table}', '{obj.Sql.Replace("'", "''", StringComparison.Ordinal)}')"))}
+               )) = {Coverage.Length}
         """;
 
     internal static BacklogSnapshotRevision? TryRead(SqliteConnection connection)
@@ -53,9 +68,9 @@ internal readonly record struct BacklogSnapshotRevision(string StoreId, string R
     internal static void Install(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        foreach (var trigger in Triggers)
+        foreach (var obj in Coverage)
         {
-            command.CommandText = $"DROP TRIGGER IF EXISTS {trigger.Name}";
+            command.CommandText = $"DROP {obj.Type} IF EXISTS {obj.Name}";
             command.ExecuteNonQuery();
         }
         command.CommandText = $"""
@@ -68,9 +83,9 @@ internal readonly record struct BacklogSnapshotRevision(string StoreId, string R
             INSERT INTO {Table} VALUES (1, lower(hex(randomblob(16))), lower(hex(randomblob(16))));
             """;
         command.ExecuteNonQuery();
-        foreach (var trigger in Triggers)
+        foreach (var obj in Coverage)
         {
-            command.CommandText = trigger.Sql;
+            command.CommandText = obj.Sql;
             command.ExecuteNonQuery();
         }
     }
