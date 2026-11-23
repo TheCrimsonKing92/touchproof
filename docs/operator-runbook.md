@@ -89,7 +89,7 @@ Acceptance must execute `WorkerBuildRequestIntegrationTests`, `WorkerBuildReques
 
 On a new Windows host, run `.\mcg-orchestrator.cmd host-exclusions --apply` once from an elevated PowerShell as the same user account that runs the orchestrator. Run `host-exclusions` without a switch to inspect the required roots first; it changes nothing. New orchestrator roots must be created through `OrchestratorTempRoot`, `DotnetBuildEnvironmentManager` root resolution, `TempRootJanitor` low-integrity root resolution, or the `GoalAcceptanceVerifier` root-name members and included by `HostScanExclusionRoots`, so this verb lists the roots that the creating code owns.
 
-Repository scripts, diagnostic probes, and evidence utilities use PowerShell and .NET. Do not use Python for this work or introduce a Python installation requirement for repository users.
+Build new operator and worker tooling in .NET. Extend an existing C# tool when it owns the operation. For example, the pinned worker-tools command `wt read` already reads multiple source ranges under one shared cap. Existing PowerShell wrappers are available to run existing workflows. Put new capabilities in the native tool or orchestrator CLI. Do not introduce a Python installation requirement for repository users.
 
 The `scripts/Invoke-OrchestratorCommand.ps1` helper requires an explicit prebuilt `-AppDll`. Foreground commands without `-AppDll` exit nonzero with one line directing the operator to `mcg-orchestrator.cmd`.
 
