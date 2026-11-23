@@ -562,7 +562,8 @@ internal static partial class PlannerOutputContract
             return false;
         }
 
-        if (!TryResolveCitedPaths(plan, workingDirectory, trackedFiles, revalidateDurablePlan, out var resolvedPlan, out diagnostic))
+        if (!TryResolveCitedPaths(plan, workingDirectory, trackedFiles, revalidateDurablePlan, acceptanceCriteria,
+                out var resolvedPlan, out diagnostic))
         {
             return false;
         }
@@ -815,6 +816,7 @@ internal static partial class PlannerOutputContract
         string workingDirectory,
         Lazy<string[]?> trackedFiles,
         bool revalidateDurablePlan,
+        IReadOnlyList<string>? acceptanceCriteria,
         out string resolvedPlan,
         out string diagnostic)
     {
@@ -966,7 +968,16 @@ internal static partial class PlannerOutputContract
                 if (matches.Length > 1)
                 {
                     var usable = matches.Where(path =>
-                        CanUseTrackedCitation(workingDirectory, path, ExplicitCitationPath(path), location)).Take(2).ToArray();
+                    {
+                        var explicitPath = ExplicitCitationPath(path);
+                        if (!CanUseTrackedCitation(workingDirectory, path, explicitPath, location))
+                            return false;
+
+                        // Test the proposed edit in context before spending a slot on it.
+                        var repairedPlan = string.Concat(plan.AsSpan(0, citationStart), explicitPath,
+                            plan.AsSpan(citationStart + citedPath.Length));
+                        return TryValidate(repairedPlan, out _, out _, acceptanceCriteria);
+                    }).Take(2).ToArray();
                     var reported = usable.Concat(matches).Distinct(StringComparer.Ordinal).Take(2).Order(StringComparer.Ordinal).ToArray();
                     var candidates = string.Join(", ", reported.Select(QuoteDiagnosticPath));
                     var evidence = JsonSerializer.Serialize(new AmbiguousCitationEvidence(citation, reported, usable));

@@ -115,6 +115,46 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         }
     }
 
+    [Xunit.Fact]
+    public void AmbiguousDocumentRejectionPrescribesPathAcceptedByTargetSection()
+    {
+        const string citation = "Guide.md:43";
+        string[] candidates = ["a/Guide.md", "b/Guide.md", "docs/Guide.md"];
+        var root = CreateTempDirectory();
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var file = Path.Combine(root, candidate);
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, "# Citation fixture");
+            }
+            StagePlannerCitationFixtures(root, candidates);
+
+            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(
+                PlanWithTargetCitation(citation), root, out _, out var rejection));
+            Xunit.Assert.StartsWith($"target citation '{citation}' is ambiguous;", rejection);
+            var route = RoutePersistedRejection(root, rejection);
+            Xunit.Assert.Contains($"Offending ambiguous target citation: '{citation}'", route.Text);
+            Xunit.Assert.Contains(
+                "Cite exactly one of these full repository-relative paths on the same mapping line: 'docs/Guide.md'.",
+                route.Text);
+            foreach (var candidate in candidates[..2])
+            {
+                Xunit.Assert.DoesNotContain(candidate, route.Text);
+                Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(
+                    PlanWithTargetCitation(candidate + ":43"), root, out _, out var invalidDiagnostic));
+                Xunit.Assert.Contains("target seams and symbols", invalidDiagnostic);
+            }
+            Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(
+                PlanWithTargetCitation("docs/Guide.md:43"), root, out _, out var diagnostic), diagnostic);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("...Target.cs:43", "src/TrackedTarget.cs", true)]
     [Xunit.InlineData("...Target.cs:43", "src/has`tick/TrackedTarget.cs", false)]
