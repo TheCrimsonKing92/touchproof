@@ -202,6 +202,48 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         }
     }
 
+    [Xunit.Fact]
+    public void AmbiguousRejectionPrescribesPathsWhenSiblingCitationIsAlsoAmbiguous()
+    {
+        const string firstCitation = "Program.cs:43";
+        const string secondCitation = "AssemblyInfo.cs:43";
+        string[] candidates =
+        [
+            "src/First/Program.cs", "src/Second/Program.cs",
+            "src/First/AssemblyInfo.cs", "src/Second/AssemblyInfo.cs"
+        ];
+        var root = CreateTempDirectory();
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var file = Path.Combine(root, candidate);
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, "// citation fixture");
+            }
+            StagePlannerCitationFixtures(root, candidates);
+
+            var plan = PlanWithTargetCitation(firstCitation, $" and `{secondCitation}`");
+            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var rejection));
+            Xunit.Assert.StartsWith($"target citation '{firstCitation}' is ambiguous;", rejection);
+            var route = RoutePersistedRejection(root, rejection);
+            Xunit.Assert.Contains($"Offending ambiguous target citation: '{firstCitation}'", route.Text);
+            Xunit.Assert.Contains(
+                "Cite exactly one of these full repository-relative paths on the same mapping line: 'src/First/Program.cs', 'src/Second/Program.cs'.",
+                route.Text);
+
+            var partialRepair = PlanWithTargetCitation("src/First/Program.cs:43", $" and `{secondCitation}`");
+            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(partialRepair, root, out _, out var remainingRejection));
+            Xunit.Assert.StartsWith($"target citation '{secondCitation}' is ambiguous;", remainingRejection);
+            var repairedPlan = PlanWithTargetCitation("src/First/Program.cs:43", " and `src/Second/AssemblyInfo.cs:43`");
+            Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(repairedPlan, root, out _, out var diagnostic), diagnostic);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("...Target.cs:43", "src/TrackedTarget.cs", true)]
     [Xunit.InlineData("...Target.cs:43", "src/has`tick/TrackedTarget.cs", false)]

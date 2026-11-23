@@ -976,8 +976,9 @@ internal static partial class PlannerOutputContract
 
                 if (matches.Length > 1)
                 {
+                    // Other ambiguous citations can be repaired separately. Keep checking the rest of the line.
                     if (repairLineStart is not null)
-                        return false;
+                        continue;
 
                     var usable = matches.Where(path =>
                     {
