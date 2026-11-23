@@ -95,7 +95,7 @@ internal sealed class ConductorProviderHoldWatch
     private static bool IsRecoveryDispatch(IReadOnlyCollection<Goal> scope, Goal goal, TaskSpec task,
         TaskDispatchRecord dispatch, string eventBinding)
     {
-        if (!ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch)) return true;
+        if (!ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch, scope)) return true;
 
         // A task probe counts as resumed work only when its own result established availability.
         var binding = ProviderHoldBinding.From(dispatch).ScopedKey;

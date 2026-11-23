@@ -381,12 +381,7 @@ internal sealed class ProviderHoldBindingHistory(string key, ProviderBindingKey?
                 for (var index = 0; index < timeline.Count; index++)
                 {
                     var evt = timeline[index];
-                    (string Text, ProviderBindingKey? Identity)? marker =
-                        ProviderBudgetHoldSchedules.TryParseProbe(evt, out var probe) ? (probe.BindingKey, probe.BindingIdentity)
-                        : ProviderBudgetHoldSchedules.TryParseReset(evt, out var reset) ? (reset.BindingKey, reset.BindingIdentity)
-                        : ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out var result) ? (result.BindingKey, result.BindingIdentity)
-                        : null;
-                    if (marker is not { } parsed) continue;
+                    if (ProviderBudgetHoldSchedules.ReadMarkerBinding(evt) is not { } parsed) continue;
                     notes.Add((parsed.Text, parsed.Identity, new(goal, evt, index)));
                     if (parsed.Identity is null && evt.TaskId is { } taskId && !sourceTasks.ContainsKey(taskId))
                         sourceTasks.Add(taskId, []);

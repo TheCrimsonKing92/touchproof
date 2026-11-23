@@ -112,7 +112,8 @@ public sealed class ProviderHoldSeedWorkBoundTests
     {
         using var fixture = new ProviderHoldSeedFixture();
         await fixture.PopulateResetCaseAsync(legacyArchive);
-        var kernel = new AgentOrchestratorKernel();
+        var unrelated = ProviderHoldSeedFixture.MakeUnrelated(806);
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new([unrelated], []));
         var seeded = Seed(fixture, kernel);
         Assert.Equal(new[] { ProviderHoldSeedFixture.Id(799) }, seeded.Selection.Sources);
         Assert.Empty(seeded.Selection.Dependencies);
@@ -123,6 +124,10 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(ProviderHoldSeedFixture.At.AddDays(2), schedule.NextProbeAt);
         Assert.Equal(new[] { 799, 805 }.Select(ProviderHoldSeedFixture.Id),
             kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id.Value));
+
+        Assert.Equal(1, kernel.EvictTerminalGoalAggregates([new GoalId(unrelated.Id)]));
+        Assert.Equal(schedule, Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, schedule.NextProbeAt)).Schedule);
+        Assert.Contains(kernel.ProviderHoldHistory.Retained, goal => goal.Id.Value == ProviderHoldSeedFixture.Id(805));
     }
 
     [Fact]
@@ -790,7 +795,7 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
             stdout: stdout, stderr: stderr, model: model, apiIdentity: key == 4 ? "claude-api:c:/profiles/old" : null);
     }
 
-    private static GoalSnapshot MakeUnrelated(int index) =>
+    internal static GoalSnapshot MakeUnrelated(int index) =>
         Make(index, At.AddDays(15).AddSeconds(index), Credentials[7], stderr: "fixture configuration failed");
 
     private static GoalSnapshot Make(int index, DateTimeOffset completed, string? credential, bool success = false,

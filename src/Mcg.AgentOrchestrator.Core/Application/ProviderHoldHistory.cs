@@ -176,10 +176,14 @@ public sealed class ProviderHoldHistory
     {
         withoutAnswers = new();
         var dispatches = goal.Tasks.SelectMany(task => task.DispatchHistory).ToArray();
+        var markers = goal.Timeline.Select(ProviderBudgetHoldSchedules.ReadMarkerBinding)
+            .Where(marker => marker.HasValue).Select(marker => marker.GetValueOrDefault()).ToArray();
         foreach (var binding in exhaustedBindings)
         {
             var identity = binding.ScopedKey;
-            if (!dispatches.Any(dispatch => ProviderHoldBinding.Matches(dispatch, identity))) continue;
+            if (!dispatches.Any(dispatch => ProviderHoldBinding.Matches(dispatch, identity)) &&
+                !markers.Any(marker => marker.Identity is { } scoped ? scoped == identity :
+                    marker.Text.Equals(binding.Key, StringComparison.OrdinalIgnoreCase))) continue;
             if (!answers.TryGetValue(identity, out var answer))
             {
                 answer = Evaluate(scope, binding);

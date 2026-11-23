@@ -115,11 +115,48 @@ public static class ProviderBudgetHoldSchedules
         TaskDispatchRecord dispatch, DateTimeOffset completedAt) =>
         history.DispatchMarker(task, dispatch) is not null && !IsCurrentDispatch(history, task, dispatch, completedAt);
 
-    internal static bool IsAdmittedProbe(Goal goal, TaskSpec task, TaskDispatchRecord dispatch) =>
-        goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.OccurredAt <= dispatch.DispatchedAt &&
-            TryParseProbe(evt, out var marker) && dispatch.DispatchedAt >= marker.Due &&
-            (marker.BindingIdentity is { } identity ? ProviderHoldBinding.Matches(dispatch, identity) : IsBinding(dispatch, marker.BindingKey)) &&
-            !task.DispatchHistory.Any(prior => prior.DispatchedAt >= evt.OccurredAt && prior.DispatchedAt < dispatch.DispatchedAt));
+    internal static bool IsAdmittedProbe(Goal goal, TaskSpec task, TaskDispatchRecord dispatch,
+        IReadOnlyCollection<Goal> scope)
+    {
+        HashSet<int>? legacyProbes = null;
+        for (var index = 0; index < goal.Timeline.Count; index++)
+        {
+            var evt = goal.Timeline[index];
+            if (evt.TaskId != task.Id || evt.OccurredAt > dispatch.DispatchedAt ||
+                !TryParseProbe(evt, out var marker) || dispatch.DispatchedAt < marker.Due ||
+                task.DispatchHistory.Any(prior => prior.DispatchedAt >= evt.OccurredAt && prior.DispatchedAt < dispatch.DispatchedAt) ||
+                goal.Timeline.Skip(index + 1)
+                    .TakeWhile(later => later.TaskId != task.Id || later.Kind != ProgressKind.TaskDispatchRecorded)
+                    .Any(later => later.OccurredAt <= dispatch.DispatchedAt && InvalidatesProbeReservation(later, task.Id)))
+                continue;
+
+            if (marker.BindingIdentity is { } identity)
+            {
+                if (ProviderHoldBinding.Matches(dispatch, identity)) return true;
+            }
+            else if (ProviderHoldBinding.Matches(dispatch, marker.BindingKey))
+                (legacyProbes ??= []).Add(index);
+        }
+
+        if (legacyProbes is null) return false;
+        var matched = false;
+        ProviderHoldBindingHistory.Populate(scope, _ => null, addNote: (_, identity, note) =>
+        {
+            if (note.Goal.Id == goal.Id && legacyProbes.Contains(note.Index) && identity is not null &&
+                ProviderHoldBinding.Matches(dispatch, identity)) matched = true;
+        });
+        return matched;
+    }
+
+    private static bool InvalidatesProbeReservation(ProgressEvent evt, TaskId? taskId) =>
+        evt.TaskId == taskId && evt.Kind is ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
+            ProgressKind.ProviderCapabilitySubstituted or ProgressKind.TaskCancelled;
+
+    internal static (string Text, ProviderBindingKey? Identity)? ReadMarkerBinding(ProgressEvent evt) =>
+        TryParseProbe(evt, out var probe) ? (probe.BindingKey, probe.BindingIdentity)
+        : TryParseReset(evt, out var reset) ? (reset.BindingKey, reset.BindingIdentity)
+        : TryParseStandaloneResult(evt, out var result) ? (result.BindingKey, result.BindingIdentity)
+        : null;
 
     public static string FormatStandaloneResult(StandaloneResult result) =>
         $"PROVIDER_BUDGET_CHECK binding={Uri.EscapeDataString(result.BindingKey)} placed_at={FormatInstant(result.PlacedAt)} due={FormatInstant(result.Due)} attempt={result.Attempt} started_at={FormatInstant(result.StartedAt)} outcome={result.Outcome} reason={Uri.EscapeDataString(result.Reason)}" +
@@ -423,9 +460,7 @@ public static class ProviderBudgetHoldSchedules
             !dispatches.Any(item => item.Dispatch.DispatchedAt >= probeEvent.OccurredAt) &&
             !latestProbe.Goal.IsTerminal &&
             latestProbe.Goal.Tasks.Any(task => task.Id == probeEvent.TaskId && task.Status == WorkTaskStatus.Assigned && task.AssignedAgentId is not null) &&
-            !latestProbe.Goal.Timeline.Skip(latestProbe.Index + 1).Any(evt => evt.TaskId == probeEvent.TaskId &&
-                evt.Kind is ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
-                    ProgressKind.ProviderCapabilitySubstituted or ProgressKind.TaskCancelled))
+            !latestProbe.Goal.Timeline.Skip(latestProbe.Index + 1).Any(evt => InvalidatesProbeReservation(evt, probeEvent.TaskId)))
         {
             admittedGoal = latestProbe.Goal.Id;
             admittedTask = probeEvent.TaskId;
@@ -461,6 +496,5 @@ public static class ProviderBudgetHoldSchedules
     }
 
     private static bool SameBinding(string left, string right) => left.Equals(right, StringComparison.OrdinalIgnoreCase);
-    private static bool IsBinding(TaskDispatchRecord dispatch, string bindingKey) => ProviderHoldBinding.Matches(dispatch, bindingKey);
 
 }

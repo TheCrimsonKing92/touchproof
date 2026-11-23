@@ -404,7 +404,7 @@ public sealed partial class AgentOrchestratorKernel
             ResetAnsweredHumanInputSuppressionStreaks(goal.Id, task.Id);
         }
 
-        if (ProviderHoldRetry.TryRequeueInconclusiveCheck(goal, task, verification, outcome, _clock.UtcNow, _eventWriter))
+        if (ProviderHoldRetry.TryRequeueInconclusiveCheck(goal, task, verification, outcome, _clock.UtcNow, _eventWriter, ProviderHoldScope))
         {
             Append(goal, taskId, ProgressKind.TaskRetried, "Provider availability check was inconclusive; the held task remains eligible.");
             RefreshGoalStatus(goal);

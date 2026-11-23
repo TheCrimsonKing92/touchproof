@@ -64,11 +64,22 @@ internal static class WorkerSubscriptionPreflightFindings
         AddProviderBudgetExhaustionFinding(findings, providerHoldScope, providerName, credentialBinding, task.LastDispatch?.ModelName, goal, task, now);
 
     internal static ProviderBudgetExhaustionHold? AddProviderHoldFindings(List<string> findings, IEnumerable<Goal> scope, string provider,
-        string? credential, string? model, Goal goal, TaskSpec task, DateTimeOffset now)
+        string? credential, string? model, Goal goal, TaskSpec task, DateTimeOffset now,
+        out ProviderSubscriptionCooldown? blockedCooldown)
     {
+        var binding = new ProviderHoldBinding(provider, credential, null);
+        blockedCooldown = null;
         if (ProviderLimitSignals.TryGetProviderSubscriptionCooldown(goal, task.Id, provider, model, now,
-                out var cooldown, new ProviderHoldBinding(provider, credential, null)))
-            findings.Add($"blocked: provider {cooldown.ProviderName} is cooling down after task {TaskDisplayNumber.Resolve(goal, cooldown.SourceTaskId)} until {cooldown.RetryAfter:u}");
+                out var inherited, binding))
+        {
+            findings.Add($"blocked: provider {inherited.ProviderName} is cooling down after task {TaskDisplayNumber.Resolve(goal, inherited.SourceTaskId)} until {inherited.RetryAfter:u}");
+            blockedCooldown = inherited;
+        }
+        // The caller has already reported the task-local retry deferral.
+        if (ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, now, out var local) &&
+            local.ProviderName.Equals(provider, StringComparison.OrdinalIgnoreCase) && local.AppliesToModel(model) &&
+            (local.BindingIdentity == binding.Base || !ProviderHoldEvidence.Read(task.VerificationHistory[^1]).Confirmed))
+            blockedCooldown = local;
         return AddProviderBudgetExhaustionFinding(findings, scope, provider, credential, model, goal, task, now);
     }
 

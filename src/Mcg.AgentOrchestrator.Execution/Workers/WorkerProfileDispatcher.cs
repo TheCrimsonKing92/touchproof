@@ -56,6 +56,7 @@ public sealed record WorkerSubscriptionPreflightResult(
     ReviewerChangedFileScope? ReviewerScope = null)
 {
     internal ProviderBudgetExhaustionHold? BlockedProviderHold { get; init; }
+    internal ProviderSubscriptionCooldown? BlockedSubscriptionCooldown { get; init; }
 }
 
 public sealed class WorkerSubscriptionPreflightException : InvalidOperationException
@@ -682,7 +683,7 @@ public static partial class WorkerProfileDispatcher
 
             var blockedProviderHold = WorkerSubscriptionPreflightFindings.AddProviderHoldFindings(
                 findings, providerHoldScope ?? [goal], dispatchProviderName,
-                claudeCredentialSelection?.HoldBinding, effectiveModelName, goal, task, now);
+                claudeCredentialSelection?.HoldBinding, effectiveModelName, goal, task, now, out var blockedCooldown);
 
             if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
             {
@@ -707,7 +708,11 @@ public static partial class WorkerProfileDispatcher
                 reviewerMergeTree?.IsClean,
                 reviewerMergeTree?.ConflictPaths,
                 reviewerMergeTree?.TotalConflictPathCount,
-                claudeCredentialSelection, reviewerScope) { BlockedProviderHold = blockedProviderHold };
+                claudeCredentialSelection, reviewerScope)
+            {
+                BlockedProviderHold = blockedProviderHold,
+                BlockedSubscriptionCooldown = blockedCooldown
+            };
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {

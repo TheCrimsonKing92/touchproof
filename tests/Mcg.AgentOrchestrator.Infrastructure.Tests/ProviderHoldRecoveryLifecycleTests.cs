@@ -124,11 +124,99 @@ public sealed class ProviderHoldRecoveryLifecycleTests
             if (assigned.AssignedAgentId == alternate.Id) return new(true, "codex-cli", "fixture", []);
             var findings = new List<string>();
             var blockedHold = WorkerSubscriptionPreflightFindings.AddProviderHoldFindings(
-                findings, scope, "Anthropic", "<provider-default>", "claude-sonnet-4-6", current, assigned, clock.UtcNow);
+                findings, scope, "Anthropic", "<provider-default>", "claude-sonnet-4-6", current, assigned, clock.UtcNow, out var cooldown);
             return new(blockedHold is null, "claude-cli", "fixture", findings,
                 blockedHold is null ? null : WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode)
-                { BlockedProviderHold = blockedHold };
+                { BlockedProviderHold = blockedHold, BlockedSubscriptionCooldown = cooldown };
         }
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("<provider-default>", false)]
+    public void Substitution_RequiresCooldownSelectedForThePreflightBinding(string? credential, bool maySubstitute)
+    {
+        var clock = new ProviderHoldScenarioClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var primary = ProviderHoldAgentSubstitutionTests.Scenario.Agent("claude-tester", "Anthropic", "claude-cli", "claude-fable-5-2");
+        var alternate = ProviderHoldAgentSubstitutionTests.Scenario.Agent("openai-tester", "OpenAI", "codex-cli", "gpt-6.1-sol");
+        var goal = Record(kernel, clock, SubscriptionCooldownSubstitutionTests.Scenario.FableLimit, "", null, "claude-fable-5-2");
+        var source = goal.Tasks.Single();
+        var task = kernel.AddTask(goal.Id, AgentRole.Tester, "Verify cooldown routing", [primary]);
+        var resolver = new ProviderHoldAgentSubstitution(kernel, [primary, alternate], Preflight, () => clock.UtcNow);
+
+        var resolution = resolver.Resolve(goal, task);
+        if (maySubstitute)
+            Assert.Equal(source.Id, Assert.IsType<ProviderHoldAgentSubstitution.Result.Substitute>(resolution).SubscriptionCooldown?.SourceTaskId);
+        else
+            Assert.Equal(new[] { "blocked: fixture worktree unavailable" },
+                Assert.IsType<ProviderHoldAgentSubstitution.Result.None>(resolution).Findings);
+        resolver.ApplyBatch(goal, [task.Id]);
+        Assert.Equal(maySubstitute ? alternate.Id : primary.Id, task.AssignedAgentId);
+
+        WorkerSubscriptionPreflightResult Preflight(Goal current, TaskSpec candidate, IEnumerable<Goal> scope)
+        {
+            if (candidate.AssignedAgentId == alternate.Id) return new(true, "codex-cli", "fixture", []);
+            var findings = new List<string> { "blocked: fixture worktree unavailable" };
+            var hold = WorkerSubscriptionPreflightFindings.AddProviderHoldFindings(
+                findings, scope, "Anthropic", credential, "claude-fable-5-2", current, candidate, clock.UtcNow, out var cooldown);
+            return new(false, "claude-cli", "fixture", findings,
+                hold is null ? null : WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode)
+                { BlockedProviderHold = hold, BlockedSubscriptionCooldown = cooldown };
+        }
+    }
+
+    [Theory]
+    [InlineData(null, WorkTaskStatus.Assigned)]
+    [InlineData("<provider-default>", WorkTaskStatus.Failed)]
+    public void LegacyProbeCompletion_RequiresTheRefusalBinding(string? credential, WorkTaskStatus expectedStatus)
+    {
+        var clock = new ProviderHoldScenarioClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = Record(kernel, clock, "", "ERROR: 401 invalid credentials", null);
+        var task = goal.Tasks.Single();
+        kernel.RetryTaskAutomatically(goal.Id, task.Id, "Fixture requeues held work", RetryCause.ProviderInterruption);
+        var schedule = Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, clock.UtcNow)).Schedule!;
+        clock.UtcNow = schedule.NextProbeAt;
+        kernel.RecordTaskNote(goal.Id, task.Id, ProviderBudgetHoldSchedules.FormatProbe(
+            new(schedule.Hold.BindingKey, schedule.NextProbeAt, schedule.Attempt, schedule.ResetSource)));
+        var dispatch = new TaskDispatchRecord("claude-cli", "fixture", ".", clock.UtcNow,
+            ProviderName: "Anthropic", ClaudeCredentialSourceDirectory: credential);
+        Assert.Equal(schedule.Hold.BindingKey, ProviderHoldBinding.From(dispatch).Key);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+
+        clock.UtcNow = clock.UtcNow.AddSeconds(1);
+        RecordInconclusiveCompletion(kernel, goal, task, dispatch, clock.UtcNow);
+
+        Assert.Equal(expectedStatus, task.Status);
+        Assert.Equal(expectedStatus == WorkTaskStatus.Assigned,
+            task.VerificationHistory[^1].CompletionVerdictRule == TaskOutcomeRules.ProviderHoldCheckInconclusive.Token);
+    }
+
+    [Theory]
+    [InlineData(false, WorkTaskStatus.Assigned)]
+    [InlineData(true, WorkTaskStatus.Failed)]
+    public void ProbeCompletion_RespectsRedelegationBeforeDispatch(bool redelegate, WorkTaskStatus expectedStatus)
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        var goal = fixture.NewGoal();
+        var task = goal.Tasks.Single();
+        fixture.WaitingTask = task.Id;
+        fixture.Clock.UtcNow = fixture.Due;
+        ProviderBudgetProbeAdmission.Apply(fixture.Kernel, goal, [task.Id], fixture.Preflight, fixture.Clock.UtcNow);
+        Assert.Single(goal.Timeline, evt => ProviderBudgetHoldSchedules.TryParseProbe(evt, out var marker) && marker.BindingIdentity is not null);
+        if (redelegate)
+            fixture.Kernel.ReassignTaskAgent(goal.Id, task.Id,
+                ProviderHoldAgentSubstitutionTests.Scenario.Agent("different-xai-tester", "xAI", "grok-cli", "grok-4.7"));
+        var dispatch = new TaskDispatchRecord("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory,
+            fixture.Clock.UtcNow, ProviderName: "xAI");
+        fixture.Kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
+        RecordInconclusiveCompletion(fixture.Kernel, goal, task, dispatch, fixture.Clock.UtcNow);
+
+        Assert.Equal(expectedStatus, task.Status);
+        Assert.Equal(!redelegate, task.VerificationHistory[^1].CompletionVerdictRule == TaskOutcomeRules.ProviderHoldCheckInconclusive.Token);
     }
 
     [Fact]
@@ -204,7 +292,7 @@ public sealed class ProviderHoldRecoveryLifecycleTests
         var dispatch = new TaskDispatchRecord("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory,
             fixture.Clock.UtcNow, ProviderName: "xAI");
         fixture.Kernel.RecordTaskDispatch(waiting.Id, task.Id, dispatch);
-        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch));
+        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch, fixture.Kernel.ProviderHoldScope));
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
         fixture.Kernel.RecordDispatchExecutionResult(waiting.Id, task.Id,
             new(dispatch.Command, dispatch.WorkingDirectory, 1, "", "Provider process timed out", fixture.Clock.UtcNow,
@@ -242,7 +330,7 @@ public sealed class ProviderHoldRecoveryLifecycleTests
         var dispatch = new TaskDispatchRecord("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory,
             fixture.Clock.UtcNow, ProviderName: "xAI");
         fixture.Kernel.RecordTaskDispatch(waiting.Id, task.Id, dispatch);
-        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch));
+        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch, fixture.Kernel.ProviderHoldScope));
 
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
         fixture.Kernel.RecordDispatchExecutionResult(waiting.Id, task.Id,
@@ -276,7 +364,7 @@ public sealed class ProviderHoldRecoveryLifecycleTests
         var dispatch = new TaskDispatchRecord("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory,
             fixture.Clock.UtcNow, ProviderName: "xAI");
         fixture.Kernel.RecordTaskDispatch(waiting.Id, task.Id, dispatch);
-        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch));
+        Assert.True(ProviderBudgetHoldSchedules.IsAdmittedProbe(waiting, task, dispatch, fixture.Kernel.ProviderHoldScope));
         var previousRetryAt = task.LatestRetryAt;
 
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
@@ -339,6 +427,11 @@ public sealed class ProviderHoldRecoveryLifecycleTests
         Assert.Equal([RetryCause.ProviderInterruption], scenario.Causes);
         Assert.Empty(scenario.Escalations);
     }
+
+    private static void RecordInconclusiveCompletion(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task,
+        TaskDispatchRecord dispatch, DateTimeOffset completedAt) =>
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new(dispatch.Command, dispatch.WorkingDirectory,
+            1, "", "Provider process timed out", completedAt, DispatchStartedAt: dispatch.DispatchedAt));
 
     private sealed class TestProbe : IProviderHoldAvailabilityProbe
     {

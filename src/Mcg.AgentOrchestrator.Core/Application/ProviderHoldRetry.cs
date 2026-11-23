@@ -9,12 +9,12 @@ internal static class ProviderHoldRetry
         ProviderHoldEvidence.Read(verification).Confirmed;
 
     internal static bool TryRequeueInconclusiveCheck(Goal goal, TaskSpec task, TaskVerificationRecord verification,
-        DispatchOutcome outcome, DateTimeOffset now, IGoalLifecycleEventWriter eventWriter)
+        DispatchOutcome outcome, DateTimeOffset now, IGoalLifecycleEventWriter eventWriter, IReadOnlyCollection<Goal> scope)
     {
         if (outcome.Kind is DispatchOutcomeKind.VerifiedSuccess or DispatchOutcomeKind.DirtyWorktreeRecoverable ||
             TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt) == TaskOutcomeRules.WorkerSandboxRefused.Token ||
             task.LastDispatch is not { } dispatch ||
-            !ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch) ||
+            !ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch, scope) ||
             DispatchCompletionEvidence.HasWorkerEvidenceThatOutranksSubscriptionLimit(
                 verification, verification.WorkerResultPresent, verification.HasCommittedChanges) ||
             ProviderHoldEvidence.Read(verification).Confirmed) return false;
