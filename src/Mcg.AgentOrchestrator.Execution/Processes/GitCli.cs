@@ -130,6 +130,10 @@ internal static class GitCli
     [ThreadStatic]
     internal static Action<ProcessStartInfo>? StartInfoObserver;
 
+    // Synchronous test scopes use this to observe the argv of actual process starts.
+    [ThreadStatic]
+    internal static Action<ProcessStartInfo>? StartedInfoObserver;
+
     // 60 000 ms covers the longest observed per-call timeout in use across the codebase.
     internal const int DefaultTimeoutMilliseconds = 60_000;
 
@@ -341,6 +345,8 @@ internal static class GitCli
             completion?.Started();
             var observer = LaunchObserver;
             if (observer is not null) NotifyLaunch(observer, args);
+            try { StartedInfoObserver?.Invoke(startInfo); }
+            catch (Exception) { /* Launch telemetry must not change the git result. */ }
 
             // Drain on dedicated threads, never the thread pool. Under parallel test load the pool can be
             // fully blocked; a pool-dependent async read then never starts inside the drain window and
