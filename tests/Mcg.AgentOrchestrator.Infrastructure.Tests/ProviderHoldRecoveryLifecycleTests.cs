@@ -167,9 +167,9 @@ public sealed class ProviderHoldRecoveryLifecycleTests
     }
 
     [Theory]
-    [InlineData(null, WorkTaskStatus.Assigned)]
-    [InlineData("<provider-default>", WorkTaskStatus.Failed)]
-    public void LegacyProbeCompletion_RequiresTheRefusalBinding(string? credential, WorkTaskStatus expectedStatus)
+    [InlineData(null, true)]
+    [InlineData("<provider-default>", false)]
+    public void LegacyProbeCompletion_RequiresTheRefusalBinding(string? credential, bool admitted)
     {
         var clock = new ProviderHoldScenarioClock();
         var kernel = new AgentOrchestratorKernel(clock);
@@ -184,19 +184,18 @@ public sealed class ProviderHoldRecoveryLifecycleTests
             ProviderName: "Anthropic", ClaudeCredentialSourceDirectory: credential);
         Assert.Equal(schedule.Hold.BindingKey, ProviderHoldBinding.From(dispatch).Key);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        Assert.Equal(admitted, ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch, kernel.ProviderHoldScope));
 
         clock.UtcNow = clock.UtcNow.AddSeconds(1);
         RecordInconclusiveCompletion(kernel, goal, task, dispatch, clock.UtcNow);
 
-        Assert.Equal(expectedStatus, task.Status);
-        Assert.Equal(expectedStatus == WorkTaskStatus.Assigned,
-            task.VerificationHistory[^1].CompletionVerdictRule == TaskOutcomeRules.ProviderHoldCheckInconclusive.Token);
+        AssertIncompleteProbeAttempt(task, admitted);
     }
 
     [Theory]
-    [InlineData(false, WorkTaskStatus.Assigned)]
-    [InlineData(true, WorkTaskStatus.Failed)]
-    public void ProbeCompletion_RespectsRedelegationBeforeDispatch(bool redelegate, WorkTaskStatus expectedStatus)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProbeCompletion_RespectsRedelegationBeforeDispatch(bool redelegate)
     {
         using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
         var goal = fixture.NewGoal();
@@ -211,12 +210,12 @@ public sealed class ProviderHoldRecoveryLifecycleTests
         var dispatch = new TaskDispatchRecord("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory,
             fixture.Clock.UtcNow, ProviderName: "xAI");
         fixture.Kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        Assert.Equal(!redelegate, ProviderBudgetHoldSchedules.IsAdmittedProbe(goal, task, dispatch, fixture.Kernel.ProviderHoldScope));
 
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddSeconds(1);
         RecordInconclusiveCompletion(fixture.Kernel, goal, task, dispatch, fixture.Clock.UtcNow);
 
-        Assert.Equal(expectedStatus, task.Status);
-        Assert.Equal(!redelegate, task.VerificationHistory[^1].CompletionVerdictRule == TaskOutcomeRules.ProviderHoldCheckInconclusive.Token);
+        AssertIncompleteProbeAttempt(task, admitted: !redelegate);
     }
 
     [Fact]
@@ -432,6 +431,15 @@ public sealed class ProviderHoldRecoveryLifecycleTests
         TaskDispatchRecord dispatch, DateTimeOffset completedAt) =>
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new(dispatch.Command, dispatch.WorkingDirectory,
             1, "", "Provider process timed out", completedAt, DispatchStartedAt: dispatch.DispatchedAt));
+
+    private static void AssertIncompleteProbeAttempt(TaskSpec task, bool admitted)
+    {
+        // A missing Tester result also requeues via terminal-contract repair. The rule identifies which path ran.
+        var expectedRule = admitted ? TaskOutcomeRules.ProviderHoldCheckInconclusive.Token
+            : TaskOutcomeRules.VerificationTerminalContractIncomplete.Token;
+        Assert.Equal(expectedRule, task.VerificationHistory[^1].CompletionVerdictRule);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    }
 
     private sealed class TestProbe : IProviderHoldAvailabilityProbe
     {
