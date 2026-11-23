@@ -372,6 +372,9 @@ public sealed class SoloRepairReplayTests
         Assert.Equal(legacy, store.ResolveAttributionRequest(goal, finding, finding.Candidate, finding.Main));
         Assert.Null(store.ReadCheck(SoloBaselineRepairStore.AttributionKey(goal, finding, finding.Candidate, finding.Main)));
         Assert.Equal("unresolved", store.ReadVerifiedCheck(legacy.Key, identity)?.Outcome);
+        var completed = Assert.IsType<SoloRepairCheckReceipt>(store.ReadCheck(legacy.Key));
+        Assert.Equal(recorded.Proof, completed.Proof);
+        if (staged) Assert.Equal("unresolved", completed.Outcome);
         Assert.Null(store.ReadCheckExecution(legacy.Key));
         Assert.Equal(0, Count(path, "solo_repair_dependency"));
         Assert.Equal(2 + expectedRuns.Length, Count(path, "solo_repair_check")); // Includes the escalation.

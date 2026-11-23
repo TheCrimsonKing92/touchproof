@@ -324,9 +324,11 @@ internal sealed class SoloBaselineRepairCoordinator(
             // The mutex owns execution. Recover the verifier's terminal output before
             // treating a claim with no SQLite execution record as an interrupted run.
             var staged = _store.ReadCheckExecution(key);
+            // Keep the envelope reference so a replay can still bind a legacy charge to its selection.
             var result = staged?.Proof is { } proof
-                ? ReadSoloRepairResult(artifacts, proofIdentity, proof.Sha256) ??
-                    new SoloRepairCheckReceipt("unresolved", "The staged focused verifier result is missing.", [])
+                ? (ReadSoloRepairResult(artifacts, proofIdentity, proof.Sha256) ??
+                    new SoloRepairCheckReceipt("unresolved", "The staged focused verifier result is missing.", []))
+                    with { Proof = proof }
                 : staged ?? ReadSoloRepairResult(artifacts, proofIdentity);
             RemoveSoloRepairCheckout(workspace.ExecutionDirectory, checkout);
             if (result is null)
