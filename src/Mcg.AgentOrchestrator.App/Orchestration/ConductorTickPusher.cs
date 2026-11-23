@@ -8,6 +8,20 @@ public static class ConductorTickPusher
     internal const int MaxPersistedProgressLines = 32;
     internal const int MaxPersistedProgressLineChars = 240;
 
+    internal static void Publish(BatchTickSummary summary, GoalSnapshotByteAccounting snapshotBytes,
+        Action<BatchTickSummary>? onTick, bool pendingReadWork)
+    {
+        // The activation sweep can load worker-usage snapshots after receipt delivery.
+        var (deserialized, serialized) = snapshotBytes.Seal(pendingReadWork);
+        ConductorBatchLoop.EmitProgress(FormattableString.Invariant(
+            $"TICK_LOAD_COUNTERS tick={summary.Tick} {ConductorTickStepLedger.FormatSnapshotByteCounters(deserialized, serialized)}"));
+        onTick?.Invoke(summary with
+        {
+            GoalSnapshotDeserializedUtf8Bytes = deserialized,
+            GoalSnapshotSerializedUtf8Bytes = serialized
+        });
+    }
+
     public static Action<BatchTickSummary> CreateStoreCallback(string runEventStorePath)
     {
         return tick => TryRecord(runEventStorePath, tick);
@@ -48,6 +62,8 @@ public static class ConductorTickPusher
             tick.Retried,
             tick.Done,
             tick.WatchSleeping,
+            goal_snapshot_deserialized_utf8_bytes = tick.GoalSnapshotDeserializedUtf8Bytes,
+            goal_snapshot_serialized_utf8_bytes = tick.GoalSnapshotSerializedUtf8Bytes,
             progressLines,
             operatorDispositionCount = tick.OperatorDispositions?.Count ?? 0
         };
