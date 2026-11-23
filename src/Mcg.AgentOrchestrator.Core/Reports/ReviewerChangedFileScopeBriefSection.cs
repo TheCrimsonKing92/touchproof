@@ -40,8 +40,9 @@ internal static class ReviewerChangedFileScopeBriefSection
             return;
         }
 
+        // A captured Git path can be whitespace-only. Legacy lists can contain blank placeholders.
         var boundedChangedFiles = (changedFiles ?? [])
-            .Where(path => !string.IsNullOrEmpty(path))
+            .Where(path => pinnedScope is null ? !string.IsNullOrWhiteSpace(path) : !string.IsNullOrEmpty(path))
             .Take(ReviewerChangedFileScopeMaxLines)
             .ToArray();
         var total = Math.Max(totalChangedFileCount ?? boundedChangedFiles.Length, boundedChangedFiles.Length);
