@@ -358,7 +358,7 @@ public sealed class SoloRepairWorkflowTests
         fixture.Kernel.RecordDispatchResultCommit(goal.Id, goal.Tasks.Single().Id, candidate);
         var main = fixture.Git("rev-parse", "main");
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true };
+        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true, NormalCheckName = ManifestCheckName };
         if (fromAcceptance)
         {
             var interrupted = CreateCliContext(fixture.Kernel, workspace, goal, verifier, finalize: request =>

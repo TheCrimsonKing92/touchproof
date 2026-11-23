@@ -14,6 +14,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal const string Long = "Sample.Tests.SoloTests.Long";
     internal const string Unknown = "Sample.Tests.SoloTests.Unknown";
     internal const string Project = "tests/Sample.Tests/Sample.Tests.csproj";
+    internal const string ManifestCheckName = "solo tests";
     internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-solo-route", Guid.NewGuid().ToString("N"));
     internal string Repo => Path.Combine(Root, "repo");
     internal AgentOrchestratorKernel Kernel { get; private set; } = new();
@@ -38,7 +39,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                 [Xunit.Fact] public void Unknown() { }
             }
             """);
-        File.WriteAllText(Path.Combine(Repo, "config/acceptance-manifest.json"), """
+        File.WriteAllText(Path.Combine(Repo, "config/acceptance-manifest.json"), $$"""
             { "version": 1, "engine": {
               "slotCount": 1, "maxConcurrentShards": 1, "enforceStructuralCoverage": false,
               "mtpInvocations": [{
@@ -46,7 +47,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                 "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
                 "arguments": ["{executable}", "--results-directory", "{resultsDirectory}", "--report-trx", "--report-trx-filename", "{trxFileName}"]
               }] }, "checks": [
-              { "name": "solo tests", "type": "dotnet-test", "runner": "mtp",
+              { "name": "{{ManifestCheckName}}", "type": "dotnet-test", "runner": "mtp",
                 "project": "tests/Sample.Tests/Sample.Tests.csproj", "arguments": [] }
             ], "forbiddenChangedPathGlobs": [] }
             """);
