@@ -1,8 +1,11 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 // Stateless reads for fixture-owned repositories, including their private bare origins.
 // Unknown metadata and revision syntax retain Git's own resolution and failure behavior.
 internal static class FixtureRefFileReader
 {
     internal static string Read(string repository, string revision) =>
+        !GitPathQuery.RefusingEnvironmentVariables.Any(name => Environment.GetEnvironmentVariable(name) is not null) &&
         TryRead(repository, revision, out var value)
             ? value
             : LandingExecutorTests.ReadGit(repository, "rev-parse", revision);

@@ -379,8 +379,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
                 repo,
                 sibling,
                 "conductor:acceptance",
-                ReadGit(siblingWorktree, "rev-parse", "HEAD"),
-                ReadGit(repo, "rev-parse", "main"),
+                FixtureRefFileReader.Read(siblingWorktree, "HEAD"),
+                FixtureRefFileReader.Read(repo, "main"),
                 "passing acceptance for the sibling");
 
             var landed = LandingExecutor.Execute(siblingKernel, sibling, workspace);
@@ -412,8 +412,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
                 repo,
                 goal,
                 "conductor:acceptance",
-                ReadGit(worktree, "rev-parse", "HEAD"),
-                ReadGit(repo, "rev-parse", "main"),
+                FixtureRefFileReader.Read(worktree, "HEAD"),
+                FixtureRefFileReader.Read(repo, "main"),
                 "passing acceptance for the candidate");
             var wait = kernel.RequestHumanInput(
                 goal.Id,
@@ -496,8 +496,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
                 repo,
                 goal,
                 "conductor:acceptance",
-                ReadGit(worktree, "rev-parse", "HEAD"),
-                ReadGit(repo, "rev-parse", "main"),
+                FixtureRefFileReader.Read(worktree, "HEAD"),
+                FixtureRefFileReader.Read(repo, "main"),
                 "passing acceptance after the earlier refusal");
 
             var landed = LandingExecutor.Execute(kernel, goal, workspace);
@@ -572,8 +572,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-ancestor.txt");
-            var boundMain = ReadGit(repo, "rev-parse", "main");
-            var candidate = ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
+            var boundMain = FixtureRefFileReader.Read(repo, "main");
+            var candidate = FixtureRefFileReader.Read(repo, GoalWorktrees.BranchName(goal.Id));
             RunGit(repo, "update-ref", "refs/heads/main", candidate, boundMain);
             AppendCommit(repo, "src/sibling-after-recovery.txt", "newer sibling publication");
             GoalOperationJournal.RecordLandingIntent(
@@ -613,8 +613,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-drain-timeout.txt");
-            var boundMain = ReadGit(repo, "rev-parse", "main");
-            var candidate = ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
+            var boundMain = FixtureRefFileReader.Read(repo, "main");
+            var candidate = FixtureRefFileReader.Read(repo, GoalWorktrees.BranchName(goal.Id));
             RunGit(repo, "update-ref", "refs/heads/main", candidate, boundMain);
             GoalOperationJournal.RecordLandingIntent(
                 repo,
@@ -685,7 +685,7 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
             AppendCommit(repo, "baseline.txt", "baseline change");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
-            var boundMain = ReadGit(repo, "rev-parse", "main");
+            var boundMain = FixtureRefFileReader.Read(repo, "main");
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             RunGit(repo, "branch", goalBranch, boundMain);
             GoalOperationJournal.RecordLandingIntent(
@@ -723,7 +723,7 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-effect.txt");
-            var boundMain = ReadGit(repo, "rev-parse", "main");
+            var boundMain = FixtureRefFileReader.Read(repo, "main");
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             var goalWorktree = GoalWorktrees.Ensure(repo, goal.Id);
             Directory.CreateDirectory(Path.Combine(goalWorktree, ".orchestrator-proposals"));
@@ -736,7 +736,7 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
                 """.ReplaceLineEndings("\n"));
             RunGit(goalWorktree, "add", ".orchestrator-proposals/backlog-add-recovered.md");
             RunGit(goalWorktree, "commit", "-m", "Add recovered state effect");
-            var candidate = ReadGit(goalWorktree, "rev-parse", "HEAD");
+            var candidate = FixtureRefFileReader.Read(goalWorktree, "HEAD");
             RunGit(repo, "update-ref", "refs/heads/main", candidate, boundMain);
             GoalOperationJournal.RecordLandingIntent(
                 repo,
@@ -837,7 +837,7 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
                 repo,
                 goal,
                 "conductor:acceptance",
-                ReadGit(goalWorktree, "rev-parse", "HEAD"),
+                FixtureRefFileReader.Read(goalWorktree, "HEAD"),
                 mainBefore,
                 "passing acceptance for the candidate");
             var checks = 0;
@@ -1611,7 +1611,7 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
         var developer = goal.Tasks[0];
         var tester = goal.Tasks[1];
         var reviewer = goal.Tasks[2];
-        var baseCommit = ReadGit(repo, "rev-parse", "main");
+        var baseCommit = FixtureRefFileReader.Read(repo, "main");
         Dispatch(kernel, goal, developer, "developer");
         Dispatch(kernel, goal, tester, "tester");
         Dispatch(kernel, goal, reviewer, "reviewer");
@@ -1619,9 +1619,9 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
         var goalBranch = GoalWorktrees.BranchName(goal.Id);
         RunGit(repo, "checkout", "-b", goalBranch);
         AppendCommit(repo, approvalPath, "namespace TestInfra; internal sealed class OwnershipTouched;");
-        var developerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
+        var developerResultCommit = FixtureRefFileReader.Read(repo, "HEAD");
         AppendCommit(repo, nonApprovalPath, "namespace TestApp; internal sealed class NonApprovalTouched;");
-        var testerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
+        var testerResultCommit = FixtureRefFileReader.Read(repo, "HEAD");
         RunGit(repo, "checkout", "main");
         kernel.RecordDispatchResultCommit(goal.Id, developer.Id, developerResultCommit);
         kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, developerResultCommit);
@@ -1726,8 +1726,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
             setupTemplate.AddLandingCandidate(repo, goal.Id);
         else AddGoalBranchCommit(repo, goalBranch, fileName, "goal work");
         var worktree = GoalWorktrees.Ensure(repo, goal.Id);
-        var branchHead = ReadGit(worktree, "rev-parse", "HEAD");
-        var mainHead = ReadGit(repo, "rev-parse", "main");
+        var branchHead = FixtureRefFileReader.Read(worktree, "HEAD");
+        var mainHead = FixtureRefFileReader.Read(repo, "main");
         GoalOperationJournal.AcceptancePassed(
             repo,
             goal,
