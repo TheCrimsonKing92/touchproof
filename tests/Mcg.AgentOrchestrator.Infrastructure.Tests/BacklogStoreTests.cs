@@ -47,7 +47,14 @@ public sealed class BacklogStoreTests
         await store.AppendNoteAsync(item.Id, "Original note");
         var expected = ItemSnapshot((await store.GetByExactIdAsync(item.Id))!);
         using (var connection = OpenSetupDatabase(path))
-            RunSetupSql(connection, "ALTER TABLE backlog DROP COLUMN pinned_at; UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog'");
+        {
+            BoardFillSnapshotTestDatabase.RemoveSnapshotProof(connection);
+            RunSetupSql(connection, """
+                ALTER TABLE backlog DROP COLUMN pinned_at;
+                ALTER TABLE backlog DROP COLUMN bundled_reason;
+                UPDATE store_schema_versions SET version = 1 WHERE store_name = 'backlog';
+                """);
+        }
         const string oldColumns = "id, title, body, status, created_at, updated_at, source_goal_id, priority, tags, superseded_by, superseded_at";
         var rows = ReadSetupRows(path, $"SELECT {oldColumns} FROM backlog ORDER BY id");
         var history = ReadSetupRows(path, "SELECT * FROM backlog_history ORDER BY id");
@@ -55,7 +62,10 @@ public sealed class BacklogStoreTests
         BacklogStore.Setup(path);
 
         using (var current = OpenSetupDatabase(path))
+        {
             Assert.Equal(StoreSchemaRegistry.Backlog.CurrentVersion, StoreSchemaVersions.Read(current, "backlog"));
+            Assert.IsType<BacklogSnapshotRevision>(BacklogSnapshotRevision.TryRead(current));
+        }
         Assert.Single(ReadSetupRows(path, "SELECT name FROM pragma_table_info('backlog') WHERE name = 'pinned_at'"));
         Assert.Equal(rows, ReadSetupRows(path, $"SELECT {oldColumns} FROM backlog ORDER BY id"));
         Assert.Equal(history, ReadSetupRows(path, "SELECT * FROM backlog_history ORDER BY id"));
@@ -887,12 +897,84 @@ public sealed class BacklogStoreTests
 
         using var current = OpenSetupDatabase(path);
         Assert.Equal(StoreSchemaRegistry.Backlog.CurrentVersion, StoreSchemaVersions.Read(current, "backlog"));
-        Assert.Equal(schema, ReadSetupRows(path,
-            "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT IN ('backlog', 'store_schema_versions') ORDER BY type, name"));
+        Assert.Equal(schema, ReadSetupRows(path, """
+            SELECT type, name, tbl_name, sql FROM sqlite_schema
+            WHERE name NOT IN ('backlog', 'store_schema_versions') AND name NOT GLOB 'backlog_snapshot_revision*'
+            ORDER BY type, name
+            """));
         var item = Assert.Single(await BacklogStore.OpenReadOnly(path).ListAsync());
         Assert.Equal("legacy", item.Id);
         Assert.Equal("Existing item", item.Title);
         Assert.Equal("Original body", item.Body);
+    }
+
+    [Xunit.Fact]
+    public void Setup_V3_migrates_and_repair_rotates_proof_without_touching_backlog()
+    {
+        using var database = new BoardFillSnapshotTestDatabase();
+        using (var connection = database.Open())
+        {
+            BoardFillSnapshotTestDatabase.RemoveSnapshotProof(connection);
+            RunSetupSql(connection, "UPDATE store_schema_versions SET version = 3 WHERE store_name = 'backlog'");
+        }
+        var notes = ReadSetupRows(database.Path, "SELECT * FROM backlog_notes ORDER BY id");
+        var dependencies = ReadSetupRows(database.Path, "SELECT * FROM backlog_dependencies ORDER BY sequence");
+        database.Run("CREATE VIEW backlog_snapshot_revision AS SELECT 1 AS singleton");
+        Assert.Throws<SqliteException>(() => BacklogStore.Setup(database.Path));
+        using (var reader = new SqliteReadSession(database.Path))
+        {
+            Assert.Equal(3, StoreSchemaVersions.Read(reader.Connection, "backlog"));
+            Assert.Null(BacklogSnapshotRevision.TryRead(reader.Connection));
+        }
+        database.Run("DROP VIEW backlog_snapshot_revision");
+
+        BacklogStore.Setup(database.Path);
+        BacklogSnapshotRevision initial;
+        using (var reader = new SqliteReadSession(database.Path))
+            initial = Assert.IsType<BacklogSnapshotRevision>(BacklogSnapshotRevision.TryRead(reader.Connection));
+        database.Run($"DROP TRIGGER {BoardFillSnapshotTestDatabase.NoteTrigger}");
+        BacklogStore.Setup(database.Path);
+        using (var reader = new SqliteReadSession(database.Path))
+        {
+            var repaired = Assert.IsType<BacklogSnapshotRevision>(BacklogSnapshotRevision.TryRead(reader.Connection));
+            Assert.NotEqual(initial.StoreId, repaired.StoreId);
+            Assert.NotEqual(initial.Revision, repaired.Revision);
+        }
+        Assert.Equal(notes, ReadSetupRows(database.Path, "SELECT * FROM backlog_notes ORDER BY id"));
+        Assert.Equal(dependencies, ReadSetupRows(database.Path, "SELECT * FROM backlog_dependencies ORDER BY sequence"));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("INSERT INTO backlog (id,title,body,status,created_at,updated_at) VALUES ('new','New','','Open','2026-01-01','2026-01-01')")]
+    [Xunit.InlineData("UPDATE backlog SET title = 'Changed' WHERE id = 'item-000001'")]
+    [Xunit.InlineData("DELETE FROM backlog WHERE id = 'item-000001'")]
+    [Xunit.InlineData("INSERT INTO backlog_notes (backlog_item_id,created_at,text) VALUES ('item-000001','2026-01-01','New')")]
+    [Xunit.InlineData("UPDATE backlog_notes SET text = 'Changed' WHERE backlog_item_id = 'item-000001'")]
+    [Xunit.InlineData("DELETE FROM backlog_notes WHERE backlog_item_id = 'item-000001'")]
+    [Xunit.InlineData("INSERT INTO backlog_dependencies (dependent_id,prerequisite_id,prerequisite_kind,created_at) VALUES ('item-000001','new','Goal','2026-01-01')")]
+    [Xunit.InlineData("UPDATE backlog_dependencies SET prerequisite_id = 'changed' WHERE dependent_id = 'item-000001'")]
+    [Xunit.InlineData("DELETE FROM backlog_dependencies WHERE dependent_id = 'item-000001'")]
+    public void Snapshot_revision_tracks_independent_row_mutations_and_rolls_back_with_them(string mutation)
+    {
+        using var database = new BoardFillSnapshotTestDatabase();
+        using var snapshot = new SqliteReadSession(database.Path);
+        var before = Assert.IsType<BacklogSnapshotRevision>(BacklogSnapshotRevision.TryRead(snapshot.Connection));
+        using var writer = database.Open();
+        RunSetupSql(writer, $"BEGIN IMMEDIATE; {mutation};");
+        var pending = Assert.IsType<BacklogSnapshotRevision>(BacklogSnapshotRevision.TryRead(writer));
+        Assert.Equal(before.StoreId, pending.StoreId);
+        Assert.NotEqual(before.Revision, pending.Revision);
+        Assert.Equal(before, BacklogSnapshotRevision.TryRead(snapshot.Connection));
+        RunSetupSql(writer, "ROLLBACK");
+        Assert.Equal(before, BacklogSnapshotRevision.TryRead(writer));
+
+        RunSetupSql(writer, mutation);
+        Assert.Equal(before, BacklogSnapshotRevision.TryRead(snapshot.Connection));
+        using var next = new SqliteReadSession(database.Path);
+        var after = Assert.IsType<BacklogSnapshotRevision>(BacklogSnapshotRevision.TryRead(next.Connection));
+        Assert.Equal(before.StoreId, after.StoreId);
+        Assert.Equal(before.SchemaCookie, after.SchemaCookie);
+        Assert.NotEqual(before.Revision, after.Revision);
     }
 
     [Xunit.Theory]
