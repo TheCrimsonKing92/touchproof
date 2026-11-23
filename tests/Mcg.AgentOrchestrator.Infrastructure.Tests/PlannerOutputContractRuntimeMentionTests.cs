@@ -114,6 +114,20 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
         Xunit.Assert.Contains("'src/Other/settings.json'", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void BareRuntimeJsonMentionDoesNotResolveToAnUntrackedSourceFile()
+    {
+        var root = CreateFixtureRepository();
+        File.WriteAllText(Path.Combine(root, "settings.json.cs"), "// untracked source decoy");
+        const string excerpt = "  - Inspect `settings.json` for the runtime configuration.";
+
+        var result = PlannerOutputContract.Resolve(PlanWithExcerpt(excerpt), string.Empty, root);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains(excerpt.Trim(), result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("settings.json.cs", result.Plan, StringComparison.Ordinal);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("src/Present.cs:12-14")]
     [Xunit.InlineData("src/Present.cs#l12-l14")]

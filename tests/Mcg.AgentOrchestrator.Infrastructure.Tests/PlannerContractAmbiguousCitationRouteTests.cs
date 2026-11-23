@@ -5,15 +5,23 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchTestSupport
 {
     [Xunit.Theory]
-    [Xunit.InlineData("Program.cs")]
-    [Xunit.InlineData("Program.cs:472")]
-    [Xunit.InlineData("...gram.cs:472")]
-    public void Real_ambiguous_rejection_routes_to_both_full_paths(string citation)
+    [Xunit.InlineData("Program.cs", "src/First/Program.cs", "src/Second/Program.cs",
+        "'src/First/Program.cs', 'src/Second/Program.cs'")]
+    [Xunit.InlineData("Program.cs:472", "src/First/Program.cs", "src/Second/Program.cs",
+        "'src/First/Program.cs', 'src/Second/Program.cs'")]
+    [Xunit.InlineData("...gram.cs:472", "src/First/Program.cs", "src/Second/Program.cs",
+        "'src/First/Program.cs', 'src/Second/Program.cs'")]
+    [Xunit.InlineData("Duplicate.cs", "a;dir/Duplicate.cs", "z'dir/Duplicate.cs",
+        "'a;dir/Duplicate.cs', `z'dir/Duplicate.cs`")]
+    [Xunit.InlineData("Duplicate.cs", "Duplicate.cs", "src/Duplicate.cs",
+        "'./Duplicate.cs', 'src/Duplicate.cs'")]
+    public void Real_ambiguous_rejection_routes_to_both_full_paths(
+        string citation, string first, string second, string expectedAlternatives)
     {
         var root = CreateTempDirectory();
         try
         {
-            string[] candidates = ["src/First/Program.cs", "src/Second/Program.cs"];
+            string[] candidates = [first, second];
             foreach (var candidate in candidates)
             {
                 var path = Path.Combine(root, candidate);
@@ -47,12 +55,14 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
             Xunit.Assert.Equal("ContractClarification", route.Cause);
             Xunit.Assert.Equal(trigger.TaskId, route.TargetTaskId);
             Xunit.Assert.Contains($"Offending ambiguous target citation: '{citation}'", route.Text);
-            Xunit.Assert.Contains("Cite exactly one of these full repository-relative paths on the same mapping line:", route.Text);
+            Xunit.Assert.Contains(
+                $"Cite exactly one of these full repository-relative paths on the same mapping line: {expectedAlternatives}.",
+                route.Text);
             foreach (var candidate in candidates)
             {
-                Xunit.Assert.Contains($"'{candidate}'", route.Text);
+                var explicitPath = candidate.Contains('/') ? candidate : "./" + candidate;
                 Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(
-                    PlanWithTargetCitation(candidate), root, out _, out var diagnostic), diagnostic);
+                    PlanWithTargetCitation(explicitPath), root, out _, out var diagnostic), diagnostic);
             }
         }
         finally

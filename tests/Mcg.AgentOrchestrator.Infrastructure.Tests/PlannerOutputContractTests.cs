@@ -692,6 +692,62 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void IncompleteTrackedIndexRejectsAnApparentlyUniqueMatch()
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Target.cs"), "// matching prefix record");
+        using var reader = new FailingIndexReader("Target.cs\0");
+        var stdout = PipeDrain.Start(reader, "test-index-stdout");
+        var stderr = PipeDrain.Start(TextReader.Null, "test-index-stderr");
+        var deadline = Environment.TickCount64 + 30_000;
+        Xunit.Assert.True(stdout.Join(deadline), "The injected stdout read failure was not drained.");
+        Xunit.Assert.True(stderr.Join(deadline), "The empty stderr did not reach EOF.");
+        var git = GitCli.CompleteDrainedOutput(0, stdout, stderr);
+        Xunit.Assert.Equal("Target.cs\0", git.Output);
+        Xunit.Assert.Contains("git stdout read failed: IOException: injected index read failure", git.Error, StringComparison.Ordinal);
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols",
+            "- Inspect `Target.cs` for the concrete implementation seam.");
+
+        Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var diagnostic,
+            readTrackedIndex: () => git));
+        Xunit.Assert.Contains("the checkout's tracked file list was unavailable", diagnostic, StringComparison.Ordinal);
+    }
+
+    private sealed class FailingIndexReader(string prefix) : StringReader(prefix)
+    {
+        private bool _returnedPrefix;
+
+        public override int Read(char[] buffer, int index, int count)
+        {
+            if (_returnedPrefix)
+                throw new IOException("injected index read failure");
+            _returnedPrefix = true;
+            return base.Read(buffer, index, count);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FirstTrackedFilenameKeepsItsLeadingBomAndIgnoresTheDecoy()
+    {
+        var root = CreateTempDirectory();
+        const string tracked = "\uFEFFTarget.cs";
+        File.WriteAllText(Path.Combine(root, tracked), "// tracked fixture");
+        StagePlannerCitationFixtures(root, tracked);
+        File.WriteAllText(Path.Combine(root, "Target.cs"), "// untracked decoy");
+        const string suffix = "...Target.cs:43";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols",
+            $"- Inspect `{suffix}` for the concrete implementation seam.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, root);
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"Inspect `{tracked}:43`", result.Plan, StringComparison.Ordinal);
+        var decoy = PlannerOutputContract.Resolve(plan.Replace(suffix, "Target.cs:43", StringComparison.Ordinal),
+            string.Empty, root);
+        Xunit.Assert.False(decoy.Succeeded);
+        Xunit.Assert.Contains("No tracked file matches the short citation.", decoy.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_BareUniqueFilenameResolvesInIsolatedRepository()
     {
         var workingDirectory = CreateTempDirectory();

@@ -79,25 +79,33 @@ public sealed class PlannerDispatchCompletionTestsContractDiagnostic : WorkerDis
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("src/Contract.AttentionReads.cs:43", true)]
-    [Xunit.InlineData("...AttentionReads.cs:43", true)]
-    [Xunit.InlineData("...MissingReads.cs:43", false)]
-    public void TrackedShortCitationCompletionRecordsCanonicalReceiptOrTypedRejection(string citation, bool accepted)
+    [Xunit.InlineData("src/Contract.AttentionReads.cs:43", "src/Contract.AttentionReads.cs", "src/Contract.AttentionReads.cs:43", true)]
+    [Xunit.InlineData("...AttentionReads.cs:43", "src/Contract.AttentionReads.cs", "src/Contract.AttentionReads.cs:43", true)]
+    [Xunit.InlineData("...MissingReads.cs:43", "src/Contract.AttentionReads.cs", null, false)]
+    [Xunit.InlineData("OnlyGuide.md:43", "guides/OnlyGuide.md", "guides/OnlyGuide.md:43", true)]
+    [Xunit.InlineData("......Target.cs:43", "...Target.cs", "./...Target.cs:43", true)]
+    public void TrackedShortCitationCompletionRecordsCanonicalReceiptOrTypedRejection(
+        string citation, string trackedPath, string? canonicalCitation, bool accepted)
     {
-        const string canonicalPath = "src/Contract.AttentionReads.cs";
-        const string canonicalCitation = canonicalPath + ":43";
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
         Directory.CreateDirectory(Path.Combine(root, "src"));
-        File.WriteAllText(Path.Combine(root, canonicalPath), "// tracked citation fixture");
-        RunGit(root, ["add", "--", canonicalPath], clock.UtcNow);
+        var targetFile = Path.Combine(root, trackedPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
+        File.WriteAllText(targetFile, "// tracked citation fixture");
+        RunGit(root, ["add", "--", trackedPath], clock.UtcNow);
+        if (trackedPath == "...Target.cs")
+        {
+            File.WriteAllText(Path.Combine(root, "src/NestedTarget.cs"), "// second match on reparse");
+            RunGit(root, ["add", "--", "src/NestedTarget.cs"], clock.UtcNow);
+        }
         RunGit(root, ["commit", "-m", "Seed tracked Planner target"], clock.UtcNow);
-        var plan = PlannerContractPlanFixture().Replace("`./seed.txt`", $"`{citation}`", StringComparison.Ordinal);
+        var plan = PlanWithTargetBody($"Inspect repository evidence `{citation}` for the concrete implementation seam.");
         var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
             root, AgentRole.Planner, plan, string.Empty, clock, includePlannerContract: false);
         Xunit.Assert.Equal("0", File.ReadAllText(process.ExitCodePath).Trim());
         Xunit.Assert.Equal(plan, File.ReadAllText(process.StandardOutputPath));
-        Xunit.Assert.Equal(canonicalPath, ReadGit(process.WorkingDirectory, ["ls-files", "--", canonicalPath]));
+        Xunit.Assert.Equal(trackedPath, ReadGit(process.WorkingDirectory, ["ls-files", "--", trackedPath]));
         Xunit.Assert.Empty(ReadGit(process.WorkingDirectory, ["status", "--porcelain"]));
 
         new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
@@ -133,16 +141,20 @@ public sealed class PlannerDispatchCompletionTestsContractDiagnostic : WorkerDis
         var revalidated = PlannerOutputContract.Resolve(stdout, string.Empty, process.WorkingDirectory);
         Xunit.Assert.True(revalidated.Succeeded, revalidated.Diagnostic);
         Xunit.Assert.Equal(receipt, revalidated.Plan);
+        Xunit.Assert.True(WorkerArtifactWriter.TryResolveDurablePlannerPlan(task.LastVerification!,
+            out var retrieved, out var retrievalDiagnostic), retrievalDiagnostic);
+        Xunit.Assert.Equal(receipt, retrieved);
     }
 
-    private static string PlanWithNewTarget(string citation)
+    private static string PlanWithNewTarget(string citation) => PlanWithTargetBody(
+        $"Validate new file targets against the cited implementation path.\n- Inspect `{citation}` — new class.");
+
+    private static string PlanWithTargetBody(string body)
     {
         var plan = PlannerContractPlanFixture().ReplaceLineEndings("\n");
         const string heading = "## Target seams and symbols";
         var bodyStart = plan.IndexOf(heading, StringComparison.Ordinal) + heading.Length;
         var bodyEnd = plan.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
-        return plan[..bodyStart] +
-            $"\n\nValidate new file targets against the cited implementation path.\n- Inspect `{citation}` — new class.\n" +
-            plan[bodyEnd..];
+        return plan[..bodyStart] + $"\n\n{body}\n" + plan[bodyEnd..];
     }
 }

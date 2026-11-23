@@ -199,13 +199,15 @@ internal static class GitCli
         => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
 
     internal static GitResult RunWithUtf8Output(string workingDirectory, params string[] args) =>
-        RunWithUtf8Output(workingDirectory, false, args);
-
-    internal static GitResult RunWithUtf8Output(string workingDirectory, bool isolateRepository, params string[] args) =>
         RunExecutableCore("git", workingDirectory, null, null, args,
             Volatile.Read(ref CompletionObserver), TimeProvider.System,
-            isolateRepository: isolateRepository,
             configureStart: start => start.StandardOutputEncoding = Encoding.UTF8);
+
+    internal static GitResult RunWithRawUtf8Output(string workingDirectory, params string[] args) =>
+        RunExecutableCore("git", workingDirectory, null, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System,
+            isolateRepository: true, allowMetadataLookup: false,
+            rawOutputEncoding: new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
 
     // Explicit process boundary after an in-process proof declines, and for independent oracles.
     internal static GitResult RunDirect(string workingDirectory, params string[] args) =>
@@ -276,7 +278,8 @@ internal static class GitCli
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null,
         Action? lockContended = null, Action<HandleListLaunchedProcess>? startedObserver = null,
         GitIdleGapHistory? idleGapHistory = null, Action<GitProgressWatch.Observation>? sampled = null,
-        Action<ProcessStartInfo>? configureStart = null, bool allowMetadataLookup = true)
+        Action<ProcessStartInfo>? configureStart = null, bool allowMetadataLookup = true,
+        Encoding? rawOutputEncoding = null)
     {
         var processStarted = false;
         try
@@ -346,7 +349,8 @@ internal static class GitCli
             // Dedicated threads also keep WaitForExit's timeout real: a synchronous ReadToEnd on this
             // thread would block on an inherited pipe after git exits.
             var outputDrain = PipeDrain.Start(process.StandardOutput.BaseStream,
-                process.StandardOutput.CurrentEncoding, "git-stdout-drain");
+                rawOutputEncoding ?? process.StandardOutput.CurrentEncoding, "git-stdout-drain",
+                detectByteOrderMarks: rawOutputEncoding is null);
             var errorDrain = PipeDrain.Start(process.StandardError.BaseStream,
                 process.StandardError.CurrentEncoding, "git-stderr-drain");
             startedObserver?.Invoke(process);
@@ -420,12 +424,24 @@ internal static class GitCli
                     DrainTimedOut: true);
             }
 
-            return new GitResult(process.ExitCode, outputDrain.Text, errorDrain.Text);
+            return CompleteDrainedOutput(process.ExitCode, outputDrain, errorDrain);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
             return new GitResult(1, string.Empty, ex.Message, ProcessStarted: processStarted);
         }
+    }
+
+    internal static GitResult CompleteDrainedOutput(int exitCode, PipeDrain outputDrain, PipeDrain errorDrain)
+    {
+        var error = errorDrain.Text;
+        if (outputDrain.Failure is { } outputFailure)
+            error = PipeDrain.AppendDiagnostic(error, $"git stdout read failed: {outputFailure}");
+        if (errorDrain.Failure is { } errorFailure)
+            error = PipeDrain.AppendDiagnostic(error, $"git stderr read failed: {errorFailure}");
+
+        var readFailed = outputDrain.Failure is not null || errorDrain.Failure is not null;
+        return new GitResult(exitCode == 0 && readFailed ? 1 : exitCode, outputDrain.Text, error);
     }
 
     // Instance-scoped history and observations let real-process tests exercise the default branch

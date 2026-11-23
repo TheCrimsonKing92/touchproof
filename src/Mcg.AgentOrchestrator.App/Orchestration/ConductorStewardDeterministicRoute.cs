@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -123,18 +124,45 @@ internal sealed class ConductorStewardDeterministicRoute(
                     ? $"No tracked file matches the cited stem '{stem}'. That means the cited text is not a repository file: remove the backticks and describe it in prose, or mark it as a new file if the plan creates it."
                     : $"Tracked files matching the cited stem '{stem}': {string.Join(", ", matches)}."));
         }
+        foreach (var ambiguous in ReadAmbiguousCitations(evidence))
+        {
+            var alternatives = ambiguous.Candidates.Select(PlannerOutputContract.ExplicitCitationPath)
+                .Select(path => path.Contains('\'') ? $"`{path}`" : $"'{path}'");
+            corrections.Add($"Offending ambiguous target citation: '{ambiguous.Citation}'. " +
+                $"Cite exactly one of these full repository-relative paths on the same mapping line: {string.Join(", ", alternatives)}. " +
+                $"{ConcreteFileRule} {SameLineRule}");
+        }
+        return corrections.Count == 0 ? null : string.Join(" ", corrections);
+    }
+
+    private static IEnumerable<PlannerOutputContract.AmbiguousCitationEvidence> ReadAmbiguousCitations(string evidence)
+    {
+        var prefix = PlannerOutputContract.AmbiguousCitationEvidencePrefix;
+        var encoded = evidence.Split('\n').FirstOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal));
+        if (encoded is not null)
+        {
+            PlannerOutputContract.AmbiguousCitationEvidence? ambiguity;
+            try { ambiguity = JsonSerializer.Deserialize<PlannerOutputContract.AmbiguousCitationEvidence>(encoded[prefix.Length..]); }
+            catch (JsonException) { yield break; }
+
+            if (ambiguity is { Candidates.Length: > 0 } && !string.IsNullOrWhiteSpace(ambiguity.Citation) &&
+                ambiguity.Candidates.All(path => !string.IsNullOrWhiteSpace(path)))
+            {
+                yield return ambiguity;
+            }
+            yield break;
+        }
+
+        // Retained rejection notes written before the structured evidence line.
         foreach (Match ambiguous in AmbiguousCitation.Matches(evidence))
         {
             var candidates = QuotedCandidate.Matches(ambiguous.Groups["candidates"].Value)
                 .Select(match => match.Groups["path"].Value)
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .ToArray();
-            if (candidates.Length == 0) continue;
-            corrections.Add($"Offending ambiguous target citation: '{ambiguous.Groups["path"].Value}'. " +
-                $"Cite exactly one of these full repository-relative paths on the same mapping line: {string.Join(", ", candidates.Select(path => $"'{path}'"))}. " +
-                $"{ConcreteFileRule} {SameLineRule}");
+            if (candidates.Length > 0)
+                yield return new(ambiguous.Groups["path"].Value, candidates);
         }
-        return corrections.Count == 0 ? null : string.Join(" ", corrections);
     }
 
     private string? BuildCollectionText(ConductorStewardTrigger trigger, string worktree)
