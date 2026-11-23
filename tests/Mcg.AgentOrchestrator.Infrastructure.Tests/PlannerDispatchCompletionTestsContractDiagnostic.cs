@@ -79,13 +79,14 @@ public sealed class PlannerDispatchCompletionTestsContractDiagnostic : WorkerDis
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("src/Contract.AttentionReads.cs:43", "src/Contract.AttentionReads.cs", "src/Contract.AttentionReads.cs:43", true)]
-    [Xunit.InlineData("...AttentionReads.cs:43", "src/Contract.AttentionReads.cs", "src/Contract.AttentionReads.cs:43", true)]
-    [Xunit.InlineData("...MissingReads.cs:43", "src/Contract.AttentionReads.cs", null, false)]
-    [Xunit.InlineData("OnlyGuide.md:43", "guides/OnlyGuide.md", "guides/OnlyGuide.md:43", true)]
-    [Xunit.InlineData("......Target.cs:43", "...Target.cs", "./...Target.cs:43", true)]
+    [Xunit.InlineData("src/Contract.AttentionReads.cs:43", "src/Contract.AttentionReads.cs", "src/Contract.AttentionReads.cs:43", true, false)]
+    [Xunit.InlineData("...AttentionReads.cs:43", "src/Contract.AttentionReads.cs", "src/Contract.AttentionReads.cs:43", true, false)]
+    [Xunit.InlineData("...AttentionReads.cs:43", "src/Contract.AttentionReads.cs", "src/Contract.AttentionReads.cs:43", true, true)]
+    [Xunit.InlineData("...MissingReads.cs:43", "src/Contract.AttentionReads.cs", null, false, false)]
+    [Xunit.InlineData("OnlyGuide.md:43", "guides/OnlyGuide.md", "guides/OnlyGuide.md:43", true, false)]
+    [Xunit.InlineData("......Target.cs:43", "...Target.cs", "./...Target.cs:43", true, false)]
     public void TrackedShortCitationCompletionRecordsCanonicalReceiptOrTypedRejection(
-        string citation, string trackedPath, string? canonicalCitation, bool accepted)
+        string citation, string trackedPath, string? canonicalCitation, bool accepted, bool withNewFileDeclaration)
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
@@ -100,7 +101,13 @@ public sealed class PlannerDispatchCompletionTestsContractDiagnostic : WorkerDis
             RunGit(root, ["add", "--", "src/NestedTarget.cs"], clock.UtcNow);
         }
         RunGit(root, ["commit", "-m", "Seed tracked Planner target"], clock.UtcNow);
-        var plan = PlanWithTargetBody($"Inspect repository evidence `{citation}` for the concrete implementation seam.");
+        const string newFile = "NewReviewTarget.cs";
+        var sibling = withNewFileDeclaration ? $" and `{newFile}`" : string.Empty;
+        var plan = PlanWithTargetBody($"Inspect repository evidence `{citation}`{sibling} for the concrete implementation seam.");
+        if (withNewFileDeclaration)
+        {
+            plan = plan.Replace("The premise is valid", $"Create `future/{newFile}` (new file). The premise is valid", StringComparison.Ordinal);
+        }
         var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
             root, AgentRole.Planner, plan, string.Empty, clock, includePlannerContract: false);
         Xunit.Assert.Equal("0", File.ReadAllText(process.ExitCodePath).Trim());
@@ -135,7 +142,7 @@ public sealed class PlannerDispatchCompletionTestsContractDiagnostic : WorkerDis
         Xunit.Assert.DoesNotContain(goal.Timeline, item => item.Kind is ProgressKind.TaskFailed or ProgressKind.TaskRetried);
         Xunit.Assert.True(PlannerOutputContract.TryExtractDurablePlan(stdout, out var receipt, out var receiptDiagnostic),
             receiptDiagnostic);
-        Xunit.Assert.Contains($"Inspect repository evidence `{canonicalCitation}`", receipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Inspect repository evidence `{canonicalCitation}`{sibling}", receipt, StringComparison.Ordinal);
         var audit = $"Planner contract note: raw citation `{citation}` resolved to `{canonicalCitation}`.";
         Xunit.Assert.Equal(citation == canonicalCitation ? 0 : 1, receipt.Split(audit, StringSplitOptions.None).Length - 1);
         var revalidated = PlannerOutputContract.Resolve(stdout, string.Empty, process.WorkingDirectory);

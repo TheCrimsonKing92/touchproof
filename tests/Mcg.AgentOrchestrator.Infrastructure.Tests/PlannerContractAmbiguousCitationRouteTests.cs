@@ -71,20 +71,79 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         }
     }
 
-    [Xunit.Fact]
-    public void UnavailableTrackedMatchRoutesWithCanonicalPath()
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void AmbiguousRejectionPrescribesOnlyUsablePathsWithinTheCap(bool hasUsablePath)
     {
-        const string citation = "...Target.cs:43";
-        const string canonicalPath = "src/TrackedTarget.cs";
+        const string citation = "Duplicate.cs:43";
+        string[] candidates = ["a/Duplicate.cs", "b/Duplicate.cs", "c/Duplicate.cs"];
         var root = CreateTempDirectory();
-        Directory.CreateDirectory(Path.Combine(root, "src"));
-        var path = Path.Combine(root, canonicalPath);
-        File.WriteAllText(path, "// tracked citation fixture");
-        StagePlannerCitationFixtures(root, canonicalPath);
-        File.Delete(path);
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var file = Path.Combine(root, candidate);
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, "// citation fixture");
+            }
+            StagePlannerCitationFixtures(root, candidates);
+            foreach (var unavailable in hasUsablePath ? candidates[..2] : candidates)
+                File.Delete(Path.Combine(root, unavailable));
 
-        Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(
-            PlanWithTargetCitation(citation), root, out _, out var rejection));
+            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(
+                PlanWithTargetCitation(citation), root, out _, out var rejection));
+            Xunit.Assert.StartsWith($"target citation '{citation}' is ambiguous;", rejection);
+            var route = RoutePersistedRejection(root, rejection);
+            Xunit.Assert.Contains($"Offending ambiguous target citation: '{citation}'", route.Text);
+            if (hasUsablePath)
+            {
+                Xunit.Assert.Contains("'a/Duplicate.cs', 'c/Duplicate.cs'; source span", rejection);
+                Xunit.Assert.Contains("Cite exactly one of these full repository-relative paths on the same mapping line: 'c/Duplicate.cs'.", route.Text);
+                Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(
+                    PlanWithTargetCitation("c/Duplicate.cs:43"), root, out _, out var diagnostic), diagnostic);
+            }
+            else
+            {
+                Xunit.Assert.Contains("Check the tracked matches 'a/Duplicate.cs', 'b/Duplicate.cs'.", route.Text);
+                Xunit.Assert.DoesNotContain("Cite exactly one of these", route.Text);
+            }
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("...Target.cs:43", "src/TrackedTarget.cs", true)]
+    [Xunit.InlineData("...Target.cs:43", "src/has`tick/TrackedTarget.cs", false)]
+    [Xunit.InlineData("...Target's.cs:43", "src/TrackedTarget's.cs", true)]
+    public void UnavailableTrackedMatchRoutesWithCanonicalPath(string citation, string canonicalPath, bool deleteTrackedFile)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, canonicalPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "// tracked citation fixture");
+            StagePlannerCitationFixtures(root, canonicalPath);
+            if (deleteTrackedFile) File.Delete(path);
+
+            Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(
+                PlanWithTargetCitation(citation), root, out _, out var rejection));
+            var route = RoutePersistedRejection(root, rejection);
+            Xunit.Assert.Contains($"Offending target citation: '{citation}'", route.Text);
+            Xunit.Assert.Contains($"The tracked path '{canonicalPath}' is unavailable", route.Text);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
+    private static ConductorStewardAdjudication RoutePersistedRejection(string root, string rejection)
+    {
         var stderrPath = Path.Combine(root, "planner.stderr.txt");
         Xunit.Assert.True(PlannerOutputContract.TryPersistRejectionDiagnostic(
             stderrPath, rejection, out var persistenceDiagnostic), persistenceDiagnostic);
@@ -98,8 +157,7 @@ public sealed class PlannerContractAmbiguousCitationRouteTests : WorkerDispatchT
         Xunit.Assert.NotNull(output);
         var route = ConductorStewardAdjudicationParser.Parse(output);
         Xunit.Assert.Equal("ContractClarification", route.Cause);
-        Xunit.Assert.Contains($"Offending target citation: '{citation}'", route.Text);
-        Xunit.Assert.Contains($"The tracked path '{canonicalPath}' is unavailable", route.Text);
+        return route;
     }
 
     private static string PlanWithTargetCitation(string citation)

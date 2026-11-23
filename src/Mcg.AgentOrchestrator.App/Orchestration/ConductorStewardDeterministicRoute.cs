@@ -102,12 +102,13 @@ internal sealed class ConductorStewardDeterministicRoute(
             var number = missingPlan.Groups["number"].Value;
             corrections.Add($"Acceptance criterion {number} with disposition=planned must include a non-empty plan. {SameLineRule}");
         }
+        var resolved = ReadResolvedCitation(evidence);
         var citation = Citation.Match(evidence);
-        var trackedCitation = citation.Groups["tracked"];
-        if (trackedCitation.Success)
+        var tracked = citation.Groups["tracked"];
+        if (resolved is not null || tracked.Success)
         {
-            corrections.Add($"Offending target citation: '{citation.Groups["path"].Value}'. " +
-                $"The tracked path '{trackedCitation.Value}' is unavailable as an existing target in this checkout. " +
+            corrections.Add($"Offending target citation: '{resolved?.Citation ?? citation.Groups["path"].Value}'. " +
+                $"The tracked path '{resolved?.CanonicalPath ?? tracked.Value}' is unavailable as an existing target in this checkout. " +
                 $"Verify that path before citing it. {ConcreteFileRule} {SameLineRule}");
         }
         else if (citation.Success)
@@ -126,13 +127,31 @@ internal sealed class ConductorStewardDeterministicRoute(
         }
         foreach (var ambiguous in ReadAmbiguousCitations(evidence))
         {
-            var alternatives = ambiguous.Candidates.Select(PlannerOutputContract.ExplicitCitationPath)
+            var usable = ambiguous.UsableCandidates ?? ambiguous.Candidates;
+            var paths = usable.Length > 0 ? usable : ambiguous.Candidates;
+            var alternatives = paths.Select(PlannerOutputContract.ExplicitCitationPath)
                 .Select(path => path.Contains('\'') ? $"`{path}`" : $"'{path}'");
-            corrections.Add($"Offending ambiguous target citation: '{ambiguous.Citation}'. " +
-                $"Cite exactly one of these full repository-relative paths on the same mapping line: {string.Join(", ", alternatives)}. " +
-                $"{ConcreteFileRule} {SameLineRule}");
+            var listedPaths = string.Join(", ", alternatives);
+            var instruction = usable.Length > 0
+                ? $"Cite exactly one of these full repository-relative paths on the same mapping line: {listedPaths}."
+                : $"Check the tracked matches {listedPaths}. None can be cited as an existing target in this checkout.";
+            corrections.Add($"Offending ambiguous target citation: '{ambiguous.Citation}'. {instruction} {ConcreteFileRule} {SameLineRule}");
         }
         return corrections.Count == 0 ? null : string.Join(" ", corrections);
+    }
+
+    private static PlannerOutputContract.ResolvedCitationEvidence? ReadResolvedCitation(string evidence)
+    {
+        var prefix = PlannerOutputContract.ResolvedCitationEvidencePrefix;
+        var encoded = evidence.Split('\n').FirstOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal));
+        if (encoded is null) return null;
+
+        PlannerOutputContract.ResolvedCitationEvidence? resolved;
+        try { resolved = JsonSerializer.Deserialize<PlannerOutputContract.ResolvedCitationEvidence>(encoded[prefix.Length..]); }
+        catch (JsonException) { return null; }
+
+        return resolved is not null && !string.IsNullOrWhiteSpace(resolved.Citation) &&
+            !string.IsNullOrWhiteSpace(resolved.CanonicalPath) ? resolved : null;
     }
 
     private static IEnumerable<PlannerOutputContract.AmbiguousCitationEvidence> ReadAmbiguousCitations(string evidence)
@@ -146,7 +165,9 @@ internal sealed class ConductorStewardDeterministicRoute(
             catch (JsonException) { yield break; }
 
             if (ambiguity is { Candidates.Length: > 0 } && !string.IsNullOrWhiteSpace(ambiguity.Citation) &&
-                ambiguity.Candidates.All(path => !string.IsNullOrWhiteSpace(path)))
+                ambiguity.Candidates.All(path => !string.IsNullOrWhiteSpace(path)) &&
+                (ambiguity.UsableCandidates is null || ambiguity.UsableCandidates.All(path =>
+                    ambiguity.Candidates.Contains(path, StringComparer.Ordinal))))
             {
                 yield return ambiguity;
             }

@@ -562,7 +562,7 @@ internal static partial class PlannerOutputContract
             return false;
         }
 
-        if (!TryResolveCitedPaths(plan, workingDirectory, trackedFiles, out var resolvedPlan, out diagnostic))
+        if (!TryResolveCitedPaths(plan, workingDirectory, trackedFiles, revalidateDurablePlan, out var resolvedPlan, out diagnostic))
         {
             return false;
         }
@@ -814,6 +814,7 @@ internal static partial class PlannerOutputContract
         string plan,
         string workingDirectory,
         Lazy<string[]?> trackedFiles,
+        bool revalidateDurablePlan,
         out string resolvedPlan,
         out string diagnostic)
     {
@@ -835,8 +836,11 @@ internal static partial class PlannerOutputContract
         var precedingCitations = CollectExplicitCitations(
             plan[..targetHeading.Index],
             workingDirectory);
-        foreach (Match match in BacktickedCitation().Matches(targetSection))
+        var rewrittenTargets = revalidateDurablePlan ? ReadRewrittenTargetCitations(plan) : [];
+        var targetCitations = BacktickedCitation().Matches(targetSection);
+        for (var citationIndex = 0; citationIndex < targetCitations.Count; citationIndex++)
         {
+            var match = targetCitations[citationIndex];
             var lineStart = targetSection.LastIndexOf('\n', match.Index);
             if (lineStart != contextualLineStart)
             {
@@ -885,7 +889,8 @@ internal static partial class PlannerOutputContract
                 }
             }
 
-            if (hasExplicitDirectory)
+            // A normalized short citation did not set the directory for its original siblings.
+            if (hasExplicitDirectory && !rewrittenTargets.Contains((citationIndex, citation)))
             {
                 var citesDirectory = Directory.Exists(candidate) ||
                     citedPath.EndsWith('/') ||
@@ -932,26 +937,27 @@ internal static partial class PlannerOutputContract
             {
                 var paths = trackedFiles.Value;
                 string[] matches = paths is null ? [] : ResolveRepositoryFilesByName(paths, citedPath);
+                var location = citation[citedPath.Length..];
                 if (matches.Length == 1)
                 {
                     var canonicalPath = matches[0];
                     var canonicalCitationPath = NormalizedShortCitationPath(canonicalPath);
-                    var canonicalCitation = canonicalCitationPath + citation[citedPath.Length..];
-                    var canonicalFile = Path.Combine(workingDirectory, canonicalPath);
-                    if (canonicalPath.Contains('`') || NormalizeCitedPath(canonicalCitation) != canonicalCitationPath ||
-                        !File.Exists(canonicalFile) ||
-                        !PathExistsWithExactCasing(canonicalFile, workingDirectory))
+                    if (!CanUseTrackedCitation(workingDirectory, canonicalPath, canonicalCitationPath, location))
                     {
+                        var evidence = JsonSerializer.Serialize(new ResolvedCitationEvidence(citation, canonicalPath));
                         diagnostic = DescribeCitationFailure(plan, citation, citationStart,
                             "does not exist and is not marked as a new file",
-                            $" Tracked match `{canonicalPath}` is unavailable as an existing target citation in this checkout.");
+                            $" Tracked match `{canonicalPath}` is unavailable as an existing target citation in this checkout." +
+                            $"{Environment.NewLine}{ResolvedCitationEvidencePrefix}{evidence}");
                         return false;
                     }
 
+                    var canonicalCitation = canonicalCitationPath + location;
                     if (canonicalCitation != citation)
                     {
                         substitutions.Add(new CitationSubstitution(
-                            citationStart, citation.Length, citation, canonicalCitation));
+                            citationStart, citation.Length, citation, canonicalCitation,
+                            canonicalCitationPath.Contains('/') ? citationIndex : null));
                     }
 
                     continue;
@@ -959,8 +965,11 @@ internal static partial class PlannerOutputContract
 
                 if (matches.Length > 1)
                 {
-                    var candidates = string.Join(", ", matches.Select(QuoteDiagnosticPath));
-                    var evidence = JsonSerializer.Serialize(new AmbiguousCitationEvidence(citation, matches));
+                    var usable = matches.Where(path =>
+                        CanUseTrackedCitation(workingDirectory, path, ExplicitCitationPath(path), location)).Take(2).ToArray();
+                    var reported = usable.Concat(matches).Distinct(StringComparer.Ordinal).Take(2).Order(StringComparer.Ordinal).ToArray();
+                    var candidates = string.Join(", ", reported.Select(QuoteDiagnosticPath));
+                    var evidence = JsonSerializer.Serialize(new AmbiguousCitationEvidence(citation, reported, usable));
                     diagnostic = DescribeCitationFailure(plan, citation, citationStart,
                         $"is ambiguous; at least these repository files match: {candidates}",
                         $"{Environment.NewLine}{AmbiguousCitationEvidencePrefix}{evidence}");
@@ -1073,7 +1082,8 @@ internal static partial class PlannerOutputContract
         if (substitutions.Count > 0)
         {
             var notes = substitutions.Select(substitution =>
-                $"Planner contract note: raw citation `{substitution.RawCitation}` resolved to `{substitution.ResolvedCitation}`.");
+                $"Planner contract note: raw citation `{substitution.RawCitation}` resolved to `{substitution.ResolvedCitation}`." +
+                (substitution.TargetCitationIndex is int index ? $" Target citation index {index}." : string.Empty));
             var notesHeading = nextHeading.Success ? string.Empty : "### Citation normalization" + Environment.NewLine;
             resolvedPlan = resolvedPlan.TrimEnd() + Environment.NewLine + Environment.NewLine +
                 notesHeading + string.Join(Environment.NewLine, notes);
@@ -1104,12 +1114,24 @@ internal static partial class PlannerOutputContract
         !Path.IsPathFullyQualified(path) && CitedFilePath().IsMatch(citation);
 
     internal const string AmbiguousCitationEvidencePrefix = "Planner ambiguous citation evidence: ";
-    internal sealed record AmbiguousCitationEvidence(string Citation, string[] Candidates);
+    internal sealed record AmbiguousCitationEvidence(string Citation, string[] Candidates, string[]? UsableCandidates = null);
+
+    internal const string ResolvedCitationEvidencePrefix = "Planner resolved citation evidence: ";
+    internal sealed record ResolvedCitationEvidence(string Citation, string CanonicalPath);
 
     internal static string ExplicitCitationPath(string path) => path.Contains('/') ? path : "./" + path;
 
     private static string NormalizedShortCitationPath(string path) =>
         path.StartsWith("...", StringComparison.Ordinal) ? ExplicitCitationPath(path) : path;
+
+    private static bool CanUseTrackedCitation(
+        string workingDirectory, string trackedPath, string citationPath, string location)
+    {
+        var fullPath = Path.Combine(workingDirectory, trackedPath);
+        return trackedPath.IndexOfAny(['`', '\r', '\n']) < 0 &&
+            NormalizeCitedPath(citationPath + location) == citationPath &&
+            File.Exists(fullPath) && PathExistsWithExactCasing(fullPath, workingDirectory);
+    }
 
     private static string QuoteDiagnosticPath(string path) => path.Any(char.IsControl)
         ? JsonSerializer.Serialize(path)
@@ -1145,6 +1167,19 @@ internal static partial class PlannerOutputContract
         return false;
     }
 
+    private static HashSet<(int Index, string Citation)> ReadRewrittenTargetCitations(string plan)
+    {
+        var targets = new HashSet<(int, string)>();
+        foreach (Match note in CitationNormalizationNote().Matches(plan))
+        {
+            if (int.TryParse(note.Groups["index"].Value, out var index))
+            {
+                targets.Add((index, note.Groups["normalized"].Value));
+            }
+        }
+        return targets;
+    }
+
     private static string[] ResolveRepositoryFilesByName(string[] trackedPaths, string filename)
     {
         var suffixMatch = filename.StartsWith("...", StringComparison.Ordinal);
@@ -1155,7 +1190,6 @@ internal static partial class PlannerOutputContract
                 : string.Equals(Path.GetFileName(path), name, StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
-            .Take(2)
             .ToArray();
     }
 
@@ -1271,7 +1305,8 @@ internal static partial class PlannerOutputContract
         int Start,
         int Length,
         string RawCitation,
-        string ResolvedCitation);
+        string ResolvedCitation,
+        int? TargetCitationIndex = null);
 
     private static string? NormalizeCitedPath(string citation)
     {
@@ -1724,7 +1759,7 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
     private static partial Regex BacktickedCitation();
 
-    [GeneratedRegex(@"(?m)^Planner contract note: raw citation `(?<original>[^`\r\n]+)` resolved to `(?<normalized>[^`\r\n]+)`\.\r?$")]
+    [GeneratedRegex(@"(?m)^Planner contract note: raw citation `(?<original>[^`\r\n]+)` resolved to `(?<normalized>[^`\r\n]+)`\.(?: Target citation index (?<index>[0-9]+)\.)?\r?$")]
     private static partial Regex CitationNormalizationNote();
 
     [GeneratedRegex(@"(?i)^(?<path>.+?\.(?-i:cs|csproj|ps1|md|json|yml|yaml|props|targets|txt))(?:(?::\d+(?:-\d+)?)|(?:#L\d+(?:-L?\d+)?)|(?:::.+))?$")]
