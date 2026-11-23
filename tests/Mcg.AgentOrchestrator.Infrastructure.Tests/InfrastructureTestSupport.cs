@@ -68,6 +68,14 @@ public static string ResolveDotnetHostPath()
         : Path.GetFullPath(hostPath);
 }
 
+// Capture the Git for Windows preparation used by fixture commands without launching Git.
+internal static (string Executable, IDictionary<string, string?> Environment) CapturePreparedGitEnvironment()
+{
+    var startInfo = new ProcessStartInfo("git") { UseShellExecute = false, CreateNoWindow = true };
+    GitExecutable.Prepare(startInfo);
+    return (startInfo.FileName, startInfo.Environment);
+}
+
 // Compatibility helpers for the existing GoalWorktree fixture commit retry. New verdict paths use
 // the typed GitProbeResult directly so stderr, launch, exit, drain, and timeout evidence survive.
 public static string? TryGetGitHead(string workingDirectory)
