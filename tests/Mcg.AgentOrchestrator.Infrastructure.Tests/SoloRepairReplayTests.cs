@@ -255,10 +255,25 @@ public sealed class SoloRepairReplayTests
         await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
         var escalations = new List<string>();
         var coordinator = Coordinator(fixture, workspace, fixture.Kernel, escalations);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
         await fixture.Produce(baselineFails: inheritedFirst, singleRow: true, attemptId: "first");
         fixture.Record(fixture.Summary);
         var first = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
-        _ = Advance(coordinator, fixture.Goal);
+        Assert.Equal(inheritedFirst, first.Inherited);
+        Assert.Null(first.Reason);
+        if (inheritedFirst)
+        {
+            var waiting = Assert.IsType<ConductorAdvanceOutcome.Held>(Advance(coordinator, fixture.Goal)?.Outcome);
+            Assert.Equal(SoloHoldReasons.RepairPending, waiting.Decision?.DiscriminatingEvidence);
+            Assert.Equal(1, Count(path, "solo_repair_dependency"));
+        }
+        else
+        {
+            // Resume from a retained introduced proof before the Developer route was delivered.
+            store.Retain(fixture.Goal.Id.Value, [first]);
+            Assert.Equal(first.Proof, Assert.Single(store.ReadFindings(fixture.Goal.Id.Value, introduced: true)).Proof);
+        }
         await fixture.Produce(baselineFails: !inheritedFirst, singleRow: true, attemptId: "second");
         fixture.Record(fixture.Summary);
         var second = Assert.Single(SoloRepairEvidenceTests.Read(fixture).Findings);
@@ -270,8 +285,6 @@ public sealed class SoloRepairReplayTests
         var reopened = Coordinator(fixture, workspace, fixture.Kernel, escalations);
         _ = Advance(reopened, fixture.Goal);
 
-        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
-        var store = new SoloBaselineRepairStore(path);
         Assert.Empty(store.ReadFindings(fixture.Goal.Id.Value, introduced: true));
         var finding = Assert.Single(store.ReadFindings(fixture.Goal.Id.Value));
         Assert.True(finding.HasConflictingProofs);
