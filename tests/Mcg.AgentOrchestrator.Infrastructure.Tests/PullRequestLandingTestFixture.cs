@@ -42,7 +42,7 @@ internal sealed class PullRequestLandingTestFixture : IDisposable
 
         string ReadRef(string revision)
         {
-            if (setupTemplate is null) return LandingExecutorTests.ReadGit(Repository, "rev-parse", revision);
+            if (setupTemplate is null) return FixtureRefFileReader.Read(Repository, revision);
             Assert.True(GitRevisionReader.Shared.TryResolve(Repository, revision, out var value),
                 $"Prepared pull-request fixture must resolve {revision}.");
             return value;
