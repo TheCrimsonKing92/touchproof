@@ -13,6 +13,9 @@ internal sealed record SoloRepairFinding(string Candidate, string Main, string B
     internal string GroupKey => SoloBaselineRepairStore.Key(Baseline.ToLowerInvariant(), Check, Project,
         Request, BaselineCheck, Identity);
     internal string Key => SoloBaselineRepairStore.Key(Candidate, Main, Check, Identity);
+    internal bool HasSameSelection(SoloRepairFinding other) =>
+        Check == other.Check && Identity == other.Identity && Project == other.Project &&
+        Request == other.Request && BaselineCheck == other.BaselineCheck;
     internal bool MatchesAttributionPair(string candidate, string main) => Candidate == candidate && Main == main && Baseline == main;
     internal bool HasConflictingProofs => Reason == SoloBaselineRepairStore.ConflictingProofs;
 }
@@ -67,7 +70,8 @@ internal sealed class SoloBaselineRepairStore
             var finding = incoming;
             var rank = finding.Inherited ? 3 : finding.Reason is null ? 2 : finding.Request is not null ? 1 : 0;
             string? disputedGroup = null;
-            var prior = rank is 2 or 3 ? ReadFinding(db, transaction, goal, finding.Key) : null;
+            var (storageKey, stored) = ReadSelectionFinding(db, transaction, goal, finding);
+            var prior = rank is 2 or 3 ? stored : null;
             var replaceUnavailableProof = prior is { Reason: null } && prior.Proof != finding.Proof &&
                 isProofAvailable?.Invoke(prior) == false;
             if (replaceUnavailableProof && prior!.Inherited) disputedGroup = prior.GroupKey;
@@ -75,13 +79,13 @@ internal sealed class SoloBaselineRepairStore
             {
                 if (prior.HasConflictingProofs)
                 {
-                    RecordConflictingProof(db, transaction, goal, finding);
+                    RecordConflictingProof(db, transaction, goal, storageKey, finding);
                     continue;
                 }
                 if (prior.Reason is null && prior.Inherited != finding.Inherited)
                 {
-                    RecordConflictingProof(db, transaction, goal, prior);
-                    RecordConflictingProof(db, transaction, goal, finding);
+                    RecordConflictingProof(db, transaction, goal, storageKey, prior);
+                    RecordConflictingProof(db, transaction, goal, storageKey, finding);
                     if (prior.Inherited) disputedGroup = prior.GroupKey;
                     finding = prior with { Inherited = false, Reason = ConflictingProofs, Feedback = null };
                     rank = 4;
@@ -93,7 +97,7 @@ internal sealed class SoloBaselineRepairStore
                 INSERT INTO solo_repair_finding VALUES ($goal, $key, $rank, $finding)
                 ON CONFLICT (goal, identity_key) DO UPDATE SET rank = excluded.rank, finding = excluded.finding
                 WHERE excluded.rank > solo_repair_finding.rank OR $preferExactMain OR $replaceUnavailableProof
-                """, ("$goal", goal), ("$key", finding.Key), ("$rank", rank),
+                """, ("$goal", goal), ("$key", storageKey), ("$rank", rank),
                 ("$finding", JsonSerializer.Serialize(finding)), ("$preferExactMain", preferExactMain),
                 ("$replaceUnavailableProof", replaceUnavailableProof));
             command.Transaction = transaction;
@@ -113,10 +117,24 @@ internal sealed class SoloBaselineRepairStore
         transaction.Commit();
     }
 
-    internal bool HasConflictingProofs(string goal, string key)
+    internal bool HasConflictingProofs(string goal, SoloRepairFinding finding)
     {
         using var db = Open();
-        return ReadFinding(db, null, goal, key)?.HasConflictingProofs == true;
+        return ReadSelectionFinding(db, null, goal, finding).Finding?.HasConflictingProofs == true;
+    }
+
+    private static (string Key, SoloRepairFinding? Finding) ReadSelectionFinding(
+        SqliteConnection db, SqliteTransaction? transaction, string goal, SoloRepairFinding finding)
+    {
+        var prior = ReadFinding(db, transaction, goal, finding.Key);
+        if (prior is null || prior.HasSameSelection(finding) ||
+            (prior.Request is null || finding.Request is null) &&
+            (prior.Project == finding.Project || prior.Project is null || finding.Project is null))
+            return (finding.Key, prior);
+        // Focused attribution can move an older finding onto a pair that already
+        // has a finding for the same test label in a different selection.
+        var key = Key(finding.Key, finding.Project, finding.Request, finding.BaselineCheck);
+        return (key, ReadFinding(db, transaction, goal, key));
     }
 
     private static SoloRepairFinding? ReadFinding(SqliteConnection db, SqliteTransaction? transaction, string goal, string key)
@@ -128,10 +146,10 @@ internal sealed class SoloBaselineRepairStore
     }
 
     private static void RecordConflictingProof(SqliteConnection db, SqliteTransaction transaction, string goal,
-        SoloRepairFinding finding)
+        string key, SoloRepairFinding finding)
     {
         using var command = Command(db, "INSERT OR IGNORE INTO solo_repair_conflicting_proof VALUES ($goal, $key, $proof)",
-            ("$goal", goal), ("$key", finding.Key), ("$proof", JsonSerializer.Serialize(finding)));
+            ("$goal", goal), ("$key", key), ("$proof", JsonSerializer.Serialize(finding)));
         command.Transaction = transaction;
         command.ExecuteNonQuery();
     }
@@ -258,23 +276,70 @@ internal sealed class SoloBaselineRepairStore
 
     internal static string NormalGateKey(string goal, string candidate, string main) => Key("normal-gate", goal, candidate, main);
     internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main) =>
-        Key("attribution-current-pair", goal, finding.Check, finding.Identity, candidate, main);
+        Key("attribution-selection", goal, finding.Check, finding.Identity, candidate, main,
+            finding.Project, finding.Request, finding.BaselineCheck);
 
     internal static string PreviousAttributionKey(string goal, SoloRepairFinding finding, string candidate, string main) =>
         Key("attribution", goal, finding.Check, finding.Identity, candidate, main);
 
+    internal static (string Key, bool AllowCandidatePass)[] AttributionRequests(
+        string goal, SoloRepairFinding finding, string candidate, string main) =>
+        [(AttributionKey(goal, finding, candidate, main), true),
+         (Key("attribution-current-pair", goal, finding.Check, finding.Identity, candidate, main), true),
+         (PreviousAttributionKey(goal, finding, candidate, main), false)];
+
     internal (string Key, bool AllowCandidatePass) ResolveAttributionRequest(
         string goal, SoloRepairFinding finding, string candidate, string main)
     {
-        var key = AttributionKey(goal, finding, candidate, main);
-        var previous = PreviousAttributionKey(goal, finding, candidate, main);
+        var requests = AttributionRequests(goal, finding, candidate, main);
+        var current = requests[0];
         using var db = Open();
         using var command = Command(db, """
-            SELECT request_key FROM solo_repair_check WHERE request_key IN ($key, $previous)
-            ORDER BY request_key = $key DESC LIMIT 1
-            """, ("$key", key), ("$previous", previous));
-        // Preserve even an unacknowledged claim made before the two request keys were unified.
-        return command.ExecuteScalar() as string == previous ? (previous, false) : (key, true);
+            SELECT request_key, result FROM solo_repair_check WHERE request_key IN ($current, $pair, $previous)
+            """, ("$current", current.Key), ("$pair", requests[1].Key), ("$previous", requests[2].Key));
+        using var rows = command.ExecuteReader();
+        var claims = new Dictionary<string, SoloRepairCheckReceipt?>(StringComparer.Ordinal);
+        while (rows.Read())
+            claims.Add(rows.GetString(0), rows.IsDBNull(1) ? null : JsonSerializer.Deserialize<SoloRepairCheckReceipt>(rows.GetString(1)));
+        if (claims.ContainsKey(current.Key)) return current;
+        foreach (var legacy in requests.Skip(1))
+        {
+            if (!claims.TryGetValue(legacy.Key, out var completed)) continue;
+            var recorded = completed ?? ReadCheckExecution(legacy.Key);
+            var root = ResultDirectory(legacy.Key);
+            var path = Path.Combine(root, "focused-result.json");
+            var identity = FocusedProofIdentity(legacy.Key, finding, candidate, main, true, legacy.AllowCandidatePass);
+            if (recorded?.Proof is { } proof)
+            {
+                if (proof.Path == path && MatchesAttributionProof(path, root, identity, proof.Sha256)) return legacy;
+            }
+            else if (recorded is null)
+            {
+                if (File.Exists(path) || File.Exists(path + ".tmp"))
+                {
+                    var retained = File.Exists(path) ? path : path + ".tmp";
+                    if (MatchesAttributionProof(retained, root, identity, null)) return legacy;
+                }
+                // A bare claim can be resumed when the retained findings identify a single selection.
+                else if (ReadFindings(goal).All(other => other.Check != finding.Check || other.Identity != finding.Identity ||
+                    other.Request is null || other.HasSameSelection(finding)))
+                    return legacy;
+            }
+        }
+        return current;
+    }
+
+    private static bool MatchesAttributionProof(string path, string root, string identity, string? digest)
+    {
+        try
+        {
+            ReadVerifierResult(path, root, identity, digest);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
+        {
+            return false;
+        }
     }
     internal static string ValidationKey(SoloRepairFinding finding, string main) => Key("validation", finding.GroupKey, main);
 
@@ -284,7 +349,7 @@ internal sealed class SoloBaselineRepairStore
             (finding.Identity.Length == 0 && other.Identity.Length > 0 &&
                 other.Candidate == finding.Candidate && other.Main == finding.Main ||
              finding.Identity.Length > 0 && other.Key != finding.Key && other.Inherited &&
-                other.Identity == finding.Identity && other.Request == finding.Request &&
+                other.HasSameSelection(finding) &&
                 other.MatchesAttributionPair(candidate, main)));
 
     internal bool IsEvidenceCurrent(string goal, IReadOnlyList<SoloRepairFinding> findings, string? candidate, string? main)
@@ -296,7 +361,13 @@ internal sealed class SoloBaselineRepairStore
                 IsVerifiedPass(ValidationKey(finding, main), finding, main, main, attribution: false)
             : HasExactReplacement(finding, findings, candidate, main) ||
                 ((finding.Candidate != candidate || finding.Main != main) &&
-                 IsVerifiedPass(AttributionKey(goal, finding, candidate, main), finding, candidate, main, attribution: true)));
+                 IsVerifiedAttributionPass(goal, finding, candidate, main)));
+    }
+
+    private bool IsVerifiedAttributionPass(string goal, SoloRepairFinding finding, string candidate, string main)
+    {
+        var (key, allowCandidatePass) = ResolveAttributionRequest(goal, finding, candidate, main);
+        return allowCandidatePass && IsVerifiedPass(key, finding, candidate, main, attribution: true);
     }
 
     private bool IsVerifiedPass(string key, SoloRepairFinding finding, string checkout, string main, bool attribution) =>

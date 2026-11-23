@@ -226,6 +226,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                 ? exact?.Value.Outcome == "Passed" && rows.All(row => row.Value.Outcome == "Passed")
                 : (exact is null || exact.Value.Outcome == "Passed") && selected.Count(row => row.Key == identity) <= 1 &&
                   identity != selector && selected.All(row => row.Key != selector) &&
+                  !rows.Any(row => row.AmbiguousIdentities?.Contains(selector, StringComparer.Ordinal) == true) &&
                   selected.Any(row => row.Value.Outcome == "Failed");
             if (!introduced) return finding with { Reason = SoloHoldReasons.BaselineInheritedOrUncovered };
         }

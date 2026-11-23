@@ -201,9 +201,10 @@ internal static partial class LandingExecutor
         bool RepairAdmissionCurrent(string candidate, string main)
         {
             if (repairStore is null && File.Exists(repairStorePath)) repairStore = new SoloBaselineRepairStore(repairStorePath);
-            var findings = repairStore?.ReadFindings(goal.Id.Value);
-            return findings is not { Count: > 0 } ||
-                (repairStore!.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main) &&
+            if (repairStore is null) return true;
+            var findings = SoloBaselineRepairCoordinator.SoloRepairFindings(repairStore, goal, candidate, main);
+            return findings.Count == 0 ||
+                (repairStore.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main) &&
                  repairStore.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed" &&
                  ResolveRef(executionDirectory, goalBranch) == candidate &&
                  ResolveRef(executionDirectory, workspace.IntegrationBranch) == main);

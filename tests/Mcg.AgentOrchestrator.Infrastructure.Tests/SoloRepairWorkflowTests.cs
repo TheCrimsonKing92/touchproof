@@ -36,35 +36,85 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void PullRequestPublication_RejectsARefChangeAfterRepairAdmission(bool moveMain)
+    [InlineData(true, "main")]
+    [InlineData(true, "candidate")]
+    [InlineData(true, "envelope")]
+    [InlineData(true, "trx")]
+    [InlineData(false, "envelope")]
+    [InlineData(false, "trx")]
+    public void Publication_RechecksRepairEvidenceAfterAdmission(bool pullRequest, string invalidation)
     {
         using var fixture = new PullRequestLandingTestFixture();
-        var store = new SoloBaselineRepairStore(Path.Combine(fixture.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
-        var finding = SoloRepairReplayTests.Finding() with
-            { Candidate = fixture.Candidate, Main = fixture.Main, Baseline = fixture.Main };
+        var workspace = pullRequest ? fixture.Workspace : fixture.Workspace with { Delivery = ProjectDelivery.Direct };
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var finding = CapturePublicationFinding(fixture);
         store.Retain(fixture.Goal.Id.Value, [finding]);
         store.ReserveGroup(finding.GroupKey, "{}");
         store.AcknowledgeRepair(finding.GroupKey, Guid.NewGuid().ToString("N"));
         RecordPassedValidation(store, finding, fixture.Main);
-        store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main),
-            PullRequestLandingTestFixture.Attempt);
-        var changed = false;
+        var coordinator = new SoloBaselineRepairCoordinator(workspace, fixture.Kernel, new ControlledVerifier(fixture.Repository),
+            _ => new(fixture.Candidate, fixture.Main), _ => null, () => throw new InvalidOperationException(),
+            _ => throw new InvalidOperationException(), (_, _, _, _) => throw new InvalidOperationException(),
+            (_, _) => throw new InvalidOperationException());
+        var verification = new AcceptanceVerificationResult(true, false, 0, null) { AttemptId = PullRequestLandingTestFixture.Attempt };
+        var summary = AcceptanceVerificationSummary.FromVerification(verification, [], [], fixture.Candidate, fixture.Main,
+            null, null, null);
+        Assert.Null(coordinator.ObserveAcceptedPair(fixture.Goal, fixture.Goal.Id.Value[..8], Policy, summary));
+        var gateKey = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
+        Assert.Equal(PullRequestLandingTestFixture.Attempt, store.ReadCheck(gateKey)?.Detail);
+        var beforePublication = 0;
 
-        var result = LandingExecutor.Execute(fixture.Kernel, fixture.Goal, fixture.Workspace,
+        var result = LandingExecutor.Execute(fixture.Kernel, fixture.Goal, workspace,
             pullRequestPublisher: new GitHubPullRequestPublisher(fixture.Forge), mutationBlocker: () =>
             {
-                var branch = moveMain ? "main" : GoalWorktrees.BranchName(fixture.Goal.Id);
-                RunGit(fixture.Repository, "update-ref", "refs/heads/" + branch, moveMain ? fixture.Candidate : fixture.Main);
-                changed = true;
+                // Direct landing also calls this hook before preparing its candidate.
+                if (++beforePublication == (pullRequest ? 1 : 2))
+                {
+                    if (invalidation == "envelope")
+                        File.Delete(finding.Proof.Path);
+                    else if (invalidation == "trx")
+                        File.AppendAllText(Assert.Single(finding.CandidateArtifacts).Path, " ");
+                    else
+                    {
+                        var branch = invalidation == "main" ? "main" : GoalWorktrees.BranchName(fixture.Goal.Id);
+                        var revision = invalidation == "main" ? fixture.Candidate : fixture.Main;
+                        RunGit(fixture.Repository, "update-ref", "refs/heads/" + branch, revision);
+                    }
+                }
                 return null;
             });
 
-        Assert.True(changed);
+        Assert.Equal(pullRequest ? 1 : 2, beforePublication);
         Assert.Contains("revision pair changed after baseline repair validation or normal acceptance", result.Message);
         Assert.Empty(fixture.Forge.Calls);
         Assert.Null(fixture.Goal.DeliveredForReview);
+        Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+        Assert.Equal(invalidation == "main" ? fixture.Candidate : fixture.Main,
+            RunGit(fixture.Repository, "rev-parse", "main"));
+    }
+
+    private static SoloRepairFinding CapturePublicationFinding(PullRequestLandingTestFixture fixture)
+    {
+        var finding = SoloRepairReplayTests.Finding() with
+            { Candidate = fixture.Candidate, Main = fixture.Main, Baseline = fixture.Main };
+        var root = Path.Combine(fixture.Workspace.OrchestratorDirectory, "retained-solo-proof");
+        Directory.CreateDirectory(root);
+        var trx = Path.Combine(root, "failure.trx");
+        WriteTrx(trx, false, finding.Identity);
+        var candidate = new AcceptanceCheckResult(finding.Check, false, 1, null, TestResultPaths: [trx],
+            ExecutedTestCount: 1, FailingTestIdentities: [finding.Identity]);
+        var baseline = SoloRepairEvidenceTests.FocusedResult(finding, fixture.Main, trx, false, true, finding.Identity,
+            FindingEvidenceArm.Baseline);
+        var tree = RunGit(fixture.Repository, "rev-parse", fixture.Candidate + "^{tree}");
+        var receipt = SoloAcceptanceFailureEvidenceWriter.Capture(new(finding.Attempt, fixture.Goal.Id.Value,
+            fixture.Repository, tree, fixture.Main, fixture.Candidate, root, null, Environment.ProcessId, null),
+            fixture.Main, [candidate], Assert.Single(baseline.Arms!),
+            [new(finding.Check, finding.Identity, finding.BaselineCheck!)]);
+        Assert.Null(receipt.CaptureError);
+        var proof = Assert.IsType<SoloAcceptanceFailureEvidence>(
+            JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(File.ReadAllBytes(receipt.Evidence.Path)));
+        return finding with { Proof = receipt.Evidence, CandidateArtifacts = Assert.Single(proof.Checks).Artifacts,
+            BaselineArtifacts = Assert.Single(proof.BaselineChecks).Artifacts };
     }
 
     [Theory]
@@ -336,7 +386,7 @@ public sealed class SoloRepairWorkflowTests
             Bindings = proof.Bindings.Where(binding => binding.TestIdentity != Unknown).ToArray()
         });
         var request = $"{Project}: FullyQualifiedName~{Unknown}";
-        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequest = request };
+        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequests = [request] };
         var driver = Driver(fixture.Kernel, workspace, verifier);
         driver.FailureDiagnosis = null;
 
@@ -385,7 +435,7 @@ public sealed class SoloRepairWorkflowTests
         var receipt = completion.SoloFailureReceipt!;
         var invalid = completion with { SoloFailureReceipt = receipt with { ContractVersion = 0 } };
         var request = $"{Project}: FullyQualifiedName~{First}";
-        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequest = request };
+        var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequests = [request] };
 
         AssertHold(Complete(Driver(kernel, workspace, verifier), goal, invalid), SoloHoldReasons.RepairEvidenceRequired, "operator");
         await repository.SaveAsync(kernel);
@@ -644,7 +694,7 @@ public sealed class SoloRepairWorkflowTests
     internal sealed class ControlledVerifier(string root) : IGoalAcceptanceVerifier
     {
         internal SoloRepairFinding? Finding { get; set; }
-        internal string? UnresolvedAttributionRequest { get; init; }
+        internal IReadOnlyList<string> UnresolvedAttributionRequests { get; init; } = [];
         internal bool? AttributionBaselinePass { get; init; }
         internal bool AttributionCandidatePass { get; init; }
         internal bool RefreshedBaselinePass { get; init; } = true;
@@ -661,7 +711,7 @@ public sealed class SoloRepairWorkflowTests
             FocusedRuns.Add((request, sha));
             if (runBaselineArm && AttributionBaselinePass is null)
             {
-                Assert.Equal(UnresolvedAttributionRequest, request);
+                Assert.Contains(request, UnresolvedAttributionRequests);
                 return Task.FromResult(new FocusedEvidenceRunResult(request, false, false, "The focused test did not execute.", []));
             }
             var finding = Assert.IsType<SoloRepairFinding>(Finding);

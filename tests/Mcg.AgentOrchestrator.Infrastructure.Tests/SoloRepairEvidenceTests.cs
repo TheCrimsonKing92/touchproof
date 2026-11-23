@@ -259,6 +259,64 @@ public sealed class SoloRepairEvidenceTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IntroducedFallback_RequiresUnambiguousBaselineTheoryCoverage(bool ambiguousMethod)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(singleRow: true, firstCase: FirstCase);
+        var receipt = fixture.Summary.SoloFailureReceipt!;
+        var path = Path.Combine(receipt.ResultsRoot, "baseline-sibling.trx");
+        var sibling = First + "(value: 2)";
+        WriteTrx(path, false, sibling, First);
+        var trx = XDocument.Load(path);
+        var definitions = trx.Root!.Element("TestDefinitions")!;
+        var rows = trx.Root!.Element("Results")!;
+        var methodRow = rows.Elements().Single(row => (string?)row.Attribute("testName") == First);
+        var methodDefinition = definitions.Elements().Single(definition =>
+            (string?)definition.Attribute("id") == (string?)methodRow.Attribute("testId"));
+        if (!ambiguousMethod)
+            methodRow.Remove();
+        else
+        {
+            methodRow.SetAttributeValue("outcome", "Passed");
+            definitions.Add(new XElement(methodDefinition));
+        }
+        var artifact = fixture.WriteLiteralTrx("baseline-sibling.trx", trx.ToString());
+        fixture.ReplaceProof(proof =>
+        {
+            var baseline = Assert.Single(proof.BaselineChecks);
+            var red = baseline.Check with
+            {
+                Passed = false, ExitCode = 1, FailingTestIdentities = [sibling],
+                ExecutedTestCount = ambiguousMethod ? 2 : 1, DiscoveredTestCount = ambiguousMethod ? 2 : 1
+            };
+            return proof with
+            {
+                Baseline = proof.Baseline with { Passed = false, Disposition = FindingEvidenceArmDisposition.Red, Checks = [red] },
+                BaselineChecks = [baseline with { Check = red, Artifacts = [artifact] }]
+            };
+        });
+        fixture.Record(fixture.Summary);
+
+        var partition = Read(fixture);
+        var finding = Assert.Single(partition.Findings);
+        Assert.Equal(First + FirstCase, finding.Identity);
+        Assert.Equal($"{Project}: FullyQualifiedName~{First}", finding.Request);
+        Assert.False(finding.Inherited);
+        if (ambiguousMethod)
+        {
+            Assert.Null(partition.Introduced);
+            Assert.Equal(SoloHoldReasons.BaselineInheritedOrUncovered, finding.Reason);
+        }
+        else
+        {
+            Assert.Equal(finding.Identity, Assert.Single(partition.Introduced!.FailingTests));
+            Assert.Null(finding.Reason);
+        }
+    }
+
+    [Theory]
     [InlineData(false, false, false, "inherited")]
     [InlineData(false, true, false, "introduced")]
     [InlineData(true, false, false, "unresolved")]

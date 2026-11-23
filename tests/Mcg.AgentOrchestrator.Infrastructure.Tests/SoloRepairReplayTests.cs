@@ -244,9 +244,11 @@ public sealed class SoloRepairReplayTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task HistoricalAndCurrentUnresolvedRows_ShareAnAttributionAcrossRestart(bool previousClaim)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AttributionAcrossRestart_DeduplicatesOnlyEquivalentSelections(bool previousClaim, bool distinctSelection)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce(baselineFails: true, singleRow: true);
@@ -262,28 +264,57 @@ public sealed class SoloRepairReplayTests
         var candidate = fixture.Git("rev-parse", "HEAD");
         fixture.Context = fixture.Context with { CandidateSha = candidate };
         var current = original with { Candidate = candidate };
+        if (distinctSelection)
+            current = current with { Project = "Other.csproj", Request = "Other: FullyQualifiedName~" + original.Identity };
         store.Retain(fixture.Goal.Id.Value, [original, current]);
         Assert.Equal(2, store.ReadFindings(fixture.Goal.Id.Value).Count);
         if (previousClaim)
             Assert.True(store.TryClaimCheck(SoloBaselineRepairStore.PreviousAttributionKey(
                 fixture.Goal.Id.Value, current, candidate, current.Main)));
+        string[] expectedRequests = distinctSelection ? [original.Request!, current.Request!] : [original.Request!];
         var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
         {
-            UnresolvedAttributionRequest = original.Request
+            UnresolvedAttributionRequests = expectedRequests
         };
         var escalations = new List<string>();
         _ = Advance(Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier), fixture.Goal);
-        Assert.Equal((original.Request!, candidate), Assert.Single(verifier.FocusedRuns));
+        Assert.Equal(expectedRequests.Order(), verifier.FocusedRuns.Select(run => run.Request).Order());
+        Assert.All(verifier.FocusedRuns, run => Assert.Equal(candidate, run.Sha));
 
         var restarted = await repository.LoadAsync();
         _ = Advance(Coordinator(fixture, workspace, restarted, escalations, verifier), restarted.GetGoal(fixture.Goal.Id));
 
-        Assert.Single(verifier.FocusedRuns);
-        var request = store.ResolveAttributionRequest(fixture.Goal.Id.Value, current, candidate, current.Main);
-        Assert.Equal("unresolved", store.ReadCheck(request.Key)?.Outcome);
-        Assert.Equal(!previousClaim, request.AllowCandidatePass);
-        Assert.Equal(2, Count(path, "solo_repair_check")); // One attribution and one escalation.
+        Assert.Equal(expectedRequests.Length, verifier.FocusedRuns.Count);
+        var originalRequest = store.ResolveAttributionRequest(fixture.Goal.Id.Value, original, candidate, current.Main);
+        var currentRequest = store.ResolveAttributionRequest(fixture.Goal.Id.Value, current, candidate, current.Main);
+        Assert.Equal(!distinctSelection, originalRequest.Key == currentRequest.Key);
+        Assert.Equal("unresolved", store.ReadCheck(originalRequest.Key)?.Outcome);
+        Assert.Equal("unresolved", store.ReadCheck(currentRequest.Key)?.Outcome);
+        Assert.Equal(!previousClaim || distinctSelection, currentRequest.AllowCandidatePass);
+        var unboundLegacyClaim = previousClaim && distinctSelection ? 1 : 0;
+        Assert.Equal(expectedRequests.Length + unboundLegacyClaim + 1, Count(path, "solo_repair_check")); // Includes the escalation.
         Assert.Single(escalations);
+    }
+
+    [Fact]
+    public void CurrentPairProof_PreservesTheOtherSelectionWithTheSameTestLabel()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var store = new SoloBaselineRepairStore(Path.Combine(fixture.Root, SoloBaselineRepairStore.FileName));
+        var proof = Finding();
+        var unresolved = proof with
+        {
+            Project = "Other.csproj", Request = "Other: FullyQualifiedName~" + proof.Identity,
+            BaselineCheck = "other focused check", Inherited = false, Reason = "Requires attribution"
+        };
+
+        store.Retain("dependent", [unresolved]);
+        store.Retain("dependent", [proof]);
+
+        var findings = store.ReadFindings("dependent");
+        Assert.Equal(2, findings.Count);
+        Assert.True(Assert.Single(findings.Where(finding => finding.Request == proof.Request)).Inherited);
+        Assert.Equal(unresolved.Reason, Assert.Single(findings.Where(finding => finding.Request == unresolved.Request)).Reason);
     }
 
     [Theory]
@@ -315,7 +346,7 @@ public sealed class SoloRepairReplayTests
         var goal = restarted.GetGoal(fixture.Goal.Id);
         var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
         {
-            UnresolvedAttributionRequest = finding.Request
+            UnresolvedAttributionRequests = [finding.Request!]
         };
         var escalations = new List<string>();
         var coordinator = Coordinator(fixture, workspace, restarted, escalations, verifier);
