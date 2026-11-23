@@ -7,7 +7,6 @@ public sealed class WorkflowDecisionCoverageRatchetTests
     // any undecided sibling keeps its member here until the last site is decided.
     internal static readonly string[] AllowList =
     [
-        "AcceptanceCriterionEvidence.RefusedCarry.cs : DescribeRefusedCarryHold : Refused carry hold is returned without a policy decision.",
         "AcceptanceCriterionEvidence.cs : RecordAndCreateHold : Criterion evidence diagnostic becomes an undecided hold.",
         "ConductorAcceptanceCohorts.cs : CohortGateFaulted : Cohort fault creates held member results without decisions.",
         "ConductorBatchLoop.ActivationAdmissionProbe.cs : RecordActivationAdmissionWaitingForProbe : Name-only helper scanning treats the unrelated probe Waiting callback as an outcome helper.",
@@ -34,7 +33,6 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.PreTesterDeferredEvidence.cs : TryRunPreTesterDeferredEvidence : Pending focused evidence helper returns an undecided hold.",
         "ConductorDriver.cs : AdvanceCore : Awaiting verification and unknown lifecycle outcomes lack decisions.",
         "ConductorDriver.cs : ExecuteDispatchAndStart : Failed dispatch recovery escalates without a decision.",
-        "ConductorParallelAcceptanceAttempts.RefusedCarryRelaunch.cs : TryHoldRefusedCarryRelaunch : Refused carry helper result is held without a decision.",
         "ConductorParallelAcceptanceAttempts.cs : FromArtifact : Rehydrated held and escalated outcomes do not restore decisions.",
         "LandingExecutor.MergeTrains.cs : Hold : Merge train hold factory leaves attribution to callers.",
         "MultiRepositoryAcceptanceGate.cs : MultiRepositoryAcceptanceGate : Primary-constructor attribution covers repository receipt waiting holds without decisions."

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -33,12 +34,15 @@ internal static class ConductorAcceptanceCohortTerminalReceiptConsumption
     }
 
     internal static IReadOnlyList<Goal> PrepareAdmission(ConductorDriver driver, IReadOnlyList<Goal> eligible,
-        ISet<GoalId> changedGoalIds, int tick, List<string> changedGoalLines)
+        ISet<GoalId> changedGoalIds, int tick, List<string> changedGoalLines,
+        IReadOnlyDictionary<string, ParallelLandingOutcome>? admissionOutcomes = null)
     {
         var consumed = driver.ConsumeTerminalFailedCohortReceipts();
         foreach (var receipt in consumed)
             changedGoalIds.UnionWith(receipt.RecordedGoalIds);
-        return FilterEligible(eligible, consumed, tick, changedGoalLines.Add);
+        var remaining = FilterEligible(eligible, consumed, tick, changedGoalLines.Add);
+        return admissionOutcomes is null ? remaining
+            : PassedAcceptanceReceiptReplay.ExcludeRefusedCarryHolds(remaining, admissionOutcomes);
     }
 
     private static IReadOnlyList<Goal> FilterEligible(IReadOnlyList<Goal> eligible,
