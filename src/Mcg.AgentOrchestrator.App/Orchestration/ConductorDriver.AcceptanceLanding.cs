@@ -177,6 +177,7 @@ internal sealed partial class ConductorDriver
 
             var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
             if (early is not null) return early;
+            if (_soloBaselineRepair?.HoldIfUnprepared(goal, goalPrefix, policy) is { } repairHold) return repairHold;
 
             // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
             if (EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Verified, forGate: true) is { } environmentHold) return environmentHold;
@@ -550,7 +551,9 @@ internal sealed partial class ConductorDriver
             {
                 var early = RebaseBeforeAcceptance(candidate.Goal, candidate.GoalPrefix, policy,
                     applySideEffects: false, out var earlyOutcome);
-                return early is null ? null : ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+                if (early is not null) return ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+                return _soloBaselineRepair?.HoldIfUnprepared(candidate.Goal, candidate.GoalPrefix, policy) is { } hold
+                    ? ConductorParallelAcceptanceRunResult.Early(candidate, hold, null) : null;
             },
             () => RefreshParallelAcceptanceCandidate(candidate),
             effective => _runAcceptanceVerification(effective.Goal,

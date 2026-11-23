@@ -14,11 +14,13 @@ internal sealed class SoloAcceptanceFailureHandler(
     Func<Goal, string, ConductorAutonomyPolicy, AttributedFailureRouteDecision, ConductorAdvanceResult> routeFailure,
     Action<Goal, GoalLifecycleState, string> recordEscalation,
     Func<Goal, ConductorParallelAcceptanceAttempt?>? readAttempt = null,
-    Func<Goal, AttributedFailureRouteDecision, AttributedFailureRouteDecision>? diagnose = null)
+    Func<Goal, AttributedFailureRouteDecision, AttributedFailureRouteDecision>? diagnose = null,
+    Func<Goal, string, ConductorAutonomyPolicy, ConductorAdvanceResult?>? advanceRepair = null)
 {
     internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
         Record(goal, acceptance);
+        if (advanceRepair?.Invoke(goal, prefix, policy) is { } repair) return repair;
         var current = readContext(goal);
         return SoloFreshGateAdmission.TryConsume(kernelReader(), goal, prefix, policy,
             current is null ? null : new(current.CandidateSha, current.MainSha), recordEscalation)
@@ -96,7 +98,13 @@ internal sealed class SoloAcceptanceFailureHandler(
         }
         if (!route.IsRoute)
             return Hold(goal, prefix, policy, failure is null ? evidence.Reason : route.DeclineReason!);
-        if (SoloCorrectionRetryBudget.HoldReason(goal, failure!, policy.MaxCriterionRetries) is { } capReason)
+        return RouteIntroduced(goal, prefix, policy, failure!, route);
+    }
+
+    internal ConductorAdvanceResult RouteIntroduced(Goal goal, string prefix, ConductorAutonomyPolicy policy,
+        AttributedFailure failure, AttributedFailureRouteDecision route)
+    {
+        if (SoloCorrectionRetryBudget.HoldReason(goal, failure, policy.MaxCriterionRetries) is { } capReason)
             return Hold(goal, prefix, policy, capReason);
         route = diagnose?.Invoke(goal, route) ?? route;
         if (AttributedFailureDiagnosisTarget.TryHold(goal, prefix, policy, route, recordEscalation) is { } held) return held;

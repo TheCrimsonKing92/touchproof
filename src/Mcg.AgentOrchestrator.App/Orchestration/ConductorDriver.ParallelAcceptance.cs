@@ -64,8 +64,8 @@ internal sealed partial class ConductorDriver
             HasRoutableRecordedCohortAttributionFailure, GetFacts,
             subject => HasActiveApparatusHold(subject, out _) || HasActiveOwnerReviewHold(subject, out _, out _));
         if (reason is not null) return null;
-
         var acceptanceHeads = _resolveAcceptanceHeads(goal);
+        if (_soloBaselineRepair?.TryDeclineAdmission(goal, acceptanceHeads.BranchHeadSha, acceptanceHeads.MainHeadSha, out reason) == true) return null;
         ParallelAcceptanceEligibility.ValidateSlot(goal, slotIndex, _parallelAcceptanceAttemptCoordinator.HasLiveAttempt,
             TryGetActiveEvidenceMutationLease, GetAcceptanceSlotCount);
 
@@ -89,9 +89,9 @@ internal sealed partial class ConductorDriver
             return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
 
         if (HasActiveApparatusHold(goal, out _))
-        {
             return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
-        }
+        if (_soloBaselineRepair?.HasObligations(goal) == true)
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.LandingHeld);
 
         return GateReadyProjectionCache.ProjectUncached(goal, policy, GetFacts,
             _isVerificationGateSatisfied, _classifyChangeRisk, _gateReadyCandidateProjector);

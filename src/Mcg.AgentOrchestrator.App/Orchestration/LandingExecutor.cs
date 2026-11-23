@@ -195,6 +195,20 @@ internal static partial class LandingExecutor
 
         var evidenceCandidateSha = ResolveRef(executionDirectory, goalBranch);
         var boundMainRevision = ResolveRef(executionDirectory, workspace.IntegrationBranch);
+        var repairStorePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var repairStore = File.Exists(repairStorePath) ? new SoloBaselineRepairStore(repairStorePath) : null;
+        bool RepairAdmissionCurrent(string candidate, string main)
+        {
+            var findings = repairStore?.ReadFindings(goal.Id.Value);
+            return findings is not { Count: > 0 } ||
+                (repairStore!.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main) &&
+                 repairStore.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed" &&
+                 ResolveRef(executionDirectory, goalBranch) == candidate &&
+                 ResolveRef(executionDirectory, workspace.IntegrationBranch) == main);
+        }
+        if (!RepairAdmissionCurrent(evidenceCandidateSha, boundMainRevision))
+            return BuildMutationBlockedResult(goal, goalPrefix, "the current revision pair needs baseline repair validation and normal acceptance");
+
         if (MultiRepositoryGoal.Applies(goal))
         {
             var tupleReceipt = new MultiRepositoryAcceptanceReceiptStore(workspace.OrchestratorDirectory).TryRead(goal.Id);
@@ -373,6 +387,8 @@ internal static partial class LandingExecutor
         }
 
         var publicationBlockReason = mutationBlocker?.Invoke();
+        if (string.IsNullOrWhiteSpace(publicationBlockReason) && !RepairAdmissionCurrent(evidenceCandidateSha, boundMainRevision))
+            publicationBlockReason = "the revision pair changed after baseline repair validation or normal acceptance";
         if (string.IsNullOrWhiteSpace(publicationBlockReason))
             publicationBlockReason = EvaluatePendingHumanInput(
                 kernel, goal, workspace, evidenceCandidateSha).HoldDescription;

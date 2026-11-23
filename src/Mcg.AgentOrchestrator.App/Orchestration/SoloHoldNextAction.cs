@@ -13,6 +13,10 @@ internal static class SoloHoldNextAction
 
         return reason switch
         {
+            SoloHoldReasons.RepairPending =>
+                ("solo baseline repair", "conductor", "Wait for the repair or revision-bound check."),
+            SoloHoldReasons.RepairEvidenceRequired =>
+                ("solo baseline repair", "operator", "Resolve the evidence or ownership item named in the hold."),
             SoloHoldReasons.AwaitingConsumption =>
                 ("solo evidence consumption", "conductor", "wait for the next tick"),
             SoloHoldReasons.RetryCap =>

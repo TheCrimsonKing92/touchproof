@@ -1198,8 +1198,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             candidateWorktreePath, baselineSha, goalId, focusedChecks, coverage, stableSlotIndex,
             stableSlotLease, cancellationToken, classifyMissingSelectionsAsAbsent, executionOwner,
             partitionCandidateOnlySelections,
-            classifyMissingSelectionsAsAbsent && _executionContext is not null
-                ? Path.Combine(_executionContext.ResultsPrefix, "solo-baseline") : null);
+            SoloAcceptanceFailureEvidenceWriter.BaselineResultsRoot(_executionContext, executionOwner, classifyMissingSelectionsAsAbsent));
     }
 
     internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(

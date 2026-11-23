@@ -17,6 +17,13 @@ internal sealed record SoloAcceptanceFailureEvidence(
 
 internal static class SoloAcceptanceFailureEvidenceWriter
 {
+    internal static string? BaselineResultsRoot(IAcceptanceRunExecutionContext? context,
+        IAcceptanceRunExecutionContext? executionOwner, bool captureFailureAttribution) =>
+        context is not null && (captureFailureAttribution ||
+            executionOwner is AcceptanceFocusedVerificationOwner { RetainBaselineArtifacts: true })
+            ? Path.Combine(context.ResultsPrefix, "solo-baseline")
+            : null;
+
     // Called while baseline artifacts still exist. Each arm has its own owned
     // destination; baseline cleanup can then safely delete its environment.
     internal static FocusedEvidenceArmRunResult RetainBaseline(FocusedEvidenceArmRunResult arm, string root) =>

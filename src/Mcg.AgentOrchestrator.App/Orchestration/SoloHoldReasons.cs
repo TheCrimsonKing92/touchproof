@@ -3,6 +3,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Public refusal heads at the solo correction boundary; details belong after a colon.
 internal static class SoloHoldReasons
 {
+    internal const string RepairPending = "solo-baseline-repair-pending";
+    internal const string RepairEvidenceRequired = "solo-baseline-repair-evidence-required";
+    internal const string RepairValidated = "solo-baseline-repair-validated";
     internal const string AwaitingConsumption = "solo-evidence-awaiting-consumption";
     internal const string RetryCap = "solo-acceptance-retry-cap";
     internal const string CorrectionCeiling = "solo-acceptance-correction-ceiling";

@@ -252,6 +252,10 @@ internal sealed partial class ConductorDriver
         _cohortKernel = kernel;
         ConfigureCandidateIdentity(kernel, workspace);
         _cohortWorkspace = workspace;
+        _soloBaselineRepair = new(workspace, kernel, acceptanceVerifier, ReadCurrentCohortAttributionRevisions,
+            ReadSoloAcceptanceContext, () => SoloAcceptanceFailure, GetFacts, WriteEscalation,
+            (key, token) => CohortPartitionStableSlotLeaseSource?.Invoke(key, token) ??
+                _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token));
         _runDeveloperCompletionStructuralPreflight = path =>
             DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
         _cohortAcceptanceVerifier = acceptanceVerifier;
@@ -1240,12 +1244,6 @@ internal sealed partial class ConductorDriver
         DispatchStartClassifier.ClassifyRecordedStart(result);
 
     internal Func<Goal, SoloAcceptanceConsumptionContext?>? SoloAcceptanceContextReader { get; set; }
-    private SoloAcceptanceFailureHandler SoloAcceptanceFailure => new(
-        () => _cohortKernel ?? _conductorTickKernel, _recordAcceptanceFailure, _utcNow,
-        goal => SoloAcceptanceContextReader is { } reader ? reader(goal) :
-            SoloAcceptanceFailureHandler.ReadContext(goal, _executionDirectory, ReadCurrentCohortAttributionRevisions(goal)),
-        _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation, goal => _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), (goal, route) => FailureDiagnosis?.Enrich(goal, route) ?? route);
-
     internal EnvironmentContractGate? EnvironmentGate { get; set; }
     internal AttributedFailureDiagnosisCoordinator? FailureDiagnosis { get; set; }
 
@@ -1282,6 +1280,8 @@ internal sealed partial class ConductorDriver
         if (goal.CurrentHold?.State == EnvironmentHold.State && EnvironmentGate?.Check(goal, policy, state,
                 state is GoalLifecycleState.Verifying or GoalLifecycleState.Verified) is { } environmentHold) return environmentHold;
 
+        if (state is GoalLifecycleState.AcceptanceFailed or GoalLifecycleState.Verified or GoalLifecycleState.Verifying &&
+            _soloBaselineRepair?.TryAdvance(goal, goalPrefix, policy) is { } repairHold) return repairHold;
         if (AcceptanceAttributionPendingHandler.TryHoldRetained(goal, goalPrefix, policy, RecordEscalation) is { } pendingAttribution) return pendingAttribution;
         if (TryDecideLifecycleEntry(goal, goalPrefix, policy, state, out var lifecycleEntryResult, out var lifecycleEntryDecision))
             return lifecycleEntryResult;

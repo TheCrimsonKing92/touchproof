@@ -11,21 +11,6 @@ internal sealed partial class ConductorDriver
     private RecurringUnrelatedTestDisposition? RecurringUnrelatedHandler =>
         RecurringUnrelatedTests ??= RecurringUnrelatedTestDisposition.Create(_cohortWorkspace, _utcNow);
 
-    private sealed record AcceptanceRetryDisposition(
-        IReadOnlyList<AcceptanceCheckResult> ActionableCriteria,
-        IReadOnlyList<ExcludedAcceptanceFailure> ExcludedFailures);
-
-    private sealed record ExcludedAcceptanceFailure(
-        string Identity,
-        AcceptanceRetryExclusionKind Kind,
-        string? ReceiptPointer = null);
-
-    private enum AcceptanceRetryExclusionKind
-    {
-        Inherited,
-        UnconfirmedIntroduced
-    }
-
     private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
         failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced
             ? $"{failure.Identity} (candidate rerun passed; unconfirmed introduction; receipt: {failure.ReceiptPointer})"

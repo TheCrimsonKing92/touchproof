@@ -14,36 +14,15 @@ internal sealed record SoloAcceptanceFailureRead(AttributedFailure? Failure, str
 }
 
 // This reads retained evidence only. Attribution execution remains in the verifier.
-internal static class SoloAcceptanceFailureReceiptReader
+internal static partial class SoloAcceptanceFailureReceiptReader
 {
     internal static SoloAcceptanceFailureRead Read(Goal goal, SoloAcceptanceConsumptionContext? current)
     {
-        var summary = goal.LatestAcceptanceFailure;
-        if (summary?.SoloFailureReceipt is not { } receipt) return Refuse(SoloHoldReasons.ReceiptAbsent);
-        if (current is null) return Refuse(SoloHoldReasons.CurrentIdentityUnavailable);
-        if (receipt.ContractVersion != 1 || receipt.CaptureError is not null)
-            return Refuse(SoloHoldReasons.CaptureUnavailable + ": " + receipt.CaptureError);
-        if (receipt.GoalId != goal.Id.Value || string.IsNullOrWhiteSpace(receipt.AttemptId) ||
-            receipt.AttemptId != summary.AttemptId) return Refuse(SoloHoldReasons.GoalOrAttemptMismatch);
-        if (receipt.CandidateSha != summary.BranchHeadSha || receipt.MainSha != summary.MainHeadSha ||
-            receipt.CandidateSha != current.CandidateSha || receipt.MainSha != current.MainSha ||
-            receipt.CandidateTreeSha != current.CandidateTreeSha || receipt.BaselineSha != current.BaselineSha ||
-            new[] { receipt.CandidateSha, receipt.CandidateTreeSha, receipt.MainSha, receipt.BaselineSha }
-                .Any(string.IsNullOrWhiteSpace)) return Refuse(SoloHoldReasons.RevisionMismatch);
         try
         {
-            var proof = JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(ReadArtifact(receipt.Evidence, receipt.ResultsRoot))
-                ?? throw new InvalidDataException("solo-proof-null");
-            // The inner identity was written before the envelope digest existed.
-            if (proof.Identity != receipt with { Evidence = receipt.Evidence with { Sha256 = "" } })
-                return Refuse(SoloHoldReasons.ProofIdentityMismatch);
-            if (proof.Checks is null || proof.BaselineChecks is null || proof.Bindings is null || proof.Baseline is null ||
-                proof.Baseline.Sha != receipt.BaselineSha || proof.Baseline.Arm != FindingEvidenceArm.Baseline ||
-                !proof.Baseline.Accepted || proof.Baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)
-                return Refuse(SoloHoldReasons.BaselineUnavailable);
-            if (!SameNames(proof.Checks.Select(item => item.Check.Name), summary.FailedChecks) ||
-                !SameNames(proof.BaselineChecks.Select(item => item.Check.Name), proof.Baseline.Checks.Select(check => check.Name)))
-                return Refuse(SoloHoldReasons.CheckMismatch);
+            var (receipt, proof, reason) = ReadProof(goal, current);
+            if (receipt is null || proof is null) return Refuse(reason);
+            var summary = goal.LatestAcceptanceFailure!;
             var feedback = new SortedDictionary<string, string>(StringComparer.Ordinal);
             var checks = proof.Checks.Select(item => item.Check).ToArray();
             var candidateChecks = new List<(SoloAcceptanceCheckEvidence Evidence, SoloAcceptanceFlakePartition Partition)>();
@@ -148,6 +127,37 @@ internal static class SoloAcceptanceFailureReceiptReader
         {
             return Refuse(SoloHoldReasons.EvidenceInvalid + ": " + ex.GetType().Name + ": " + ex.Message);
         }
+    }
+
+    private static (SoloAcceptanceFailureReceipt? Receipt, SoloAcceptanceFailureEvidence? Proof, string Reason)
+        ReadProof(Goal goal, SoloAcceptanceConsumptionContext? current, bool retainUnresolvedIdentities = false)
+    {
+        var summary = goal.LatestAcceptanceFailure;
+        if (summary?.SoloFailureReceipt is not { } receipt) return (null, null, SoloHoldReasons.ReceiptAbsent);
+        if (current is null && !retainUnresolvedIdentities) return (null, null, SoloHoldReasons.CurrentIdentityUnavailable);
+        if (receipt.ContractVersion != 1 || receipt.CaptureError is not null)
+            return (null, null, SoloHoldReasons.CaptureUnavailable + ": " + receipt.CaptureError);
+        if (receipt.GoalId != goal.Id.Value || string.IsNullOrWhiteSpace(receipt.AttemptId) ||
+            receipt.AttemptId != summary.AttemptId) return (null, null, SoloHoldReasons.GoalOrAttemptMismatch);
+        if (receipt.CandidateSha != summary.BranchHeadSha || receipt.MainSha != summary.MainHeadSha ||
+            new[] { receipt.CandidateSha, receipt.CandidateTreeSha, receipt.MainSha, receipt.BaselineSha }
+                .Any(string.IsNullOrWhiteSpace)) return (null, null, SoloHoldReasons.RevisionMismatch);
+        var stale = current is null || receipt.CandidateSha != current.CandidateSha || receipt.MainSha != current.MainSha ||
+            receipt.CandidateTreeSha != current.CandidateTreeSha || receipt.BaselineSha != current.BaselineSha;
+        if (stale && !retainUnresolvedIdentities) return (null, null, SoloHoldReasons.RevisionMismatch);
+        var proof = JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(ReadArtifact(receipt.Evidence, receipt.ResultsRoot))
+            ?? throw new InvalidDataException("solo-proof-null");
+        // The inner identity was written before the envelope digest existed.
+        if (proof.Identity != receipt with { Evidence = receipt.Evidence with { Sha256 = "" } })
+            return (null, null, SoloHoldReasons.ProofIdentityMismatch);
+        if (proof.Checks is null || proof.BaselineChecks is null || proof.Bindings is null || proof.Baseline is null ||
+            proof.Baseline.Sha != receipt.BaselineSha || proof.Baseline.Arm != FindingEvidenceArm.Baseline ||
+            (!retainUnresolvedIdentities && (!proof.Baseline.Accepted || proof.Baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)))
+            return (null, null, SoloHoldReasons.BaselineUnavailable);
+        if (!SameNames(proof.Checks.Select(item => item.Check.Name), summary.FailedChecks) ||
+            !SameNames(proof.BaselineChecks.Select(item => item.Check.Name), proof.Baseline.Checks.Select(check => check.Name)))
+            return (null, null, SoloHoldReasons.CheckMismatch);
+        return (receipt, proof, stale ? SoloHoldReasons.RevisionMismatch : "");
     }
 
     private static SoloAcceptanceFailureRead NotIntroduced(string predicate, AcceptanceCheckResult check, string? detail = null) =>
