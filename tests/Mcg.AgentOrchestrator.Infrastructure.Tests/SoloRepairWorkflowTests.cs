@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -181,6 +182,68 @@ public sealed class SoloRepairWorkflowTests
             Assert.Empty(verifier.NormalRuns);
             Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
         }
+    }
+
+    [Theory]
+    [InlineData(GoalOperationStatus.Failed, "failed", true, false)]
+    [InlineData(GoalOperationStatus.Failed, "failed", false, true)]
+    [InlineData(GoalOperationStatus.Completed, "gate-passed", false, true)]
+    [InlineData(GoalOperationStatus.Failed, null, false, false)]
+    [InlineData(GoalOperationStatus.Begin, null, false, false)]
+    public async Task CliFastForward_NewerJournalRowsCanInvalidatePriorPass(
+        GoalOperationStatus status, string? outcome, bool abbreviateCandidate, bool abbreviateMain)
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var verifier = new ControlledVerifier(fixture.Repository);
+        var (context, store, finding) = PrepareCliRepair(fixture, verifier);
+        RecordPassedValidation(store, finding, fixture.Main);
+        var pair = new GateReadyCandidateRevisionPair(fixture.Candidate, fixture.Main);
+        GoalOperationJournal.AcceptanceGatePassed(fixture.Repository, fixture.Goal, "acceptance", fixture.Candidate,
+            fixture.Main, requiredChecksValidated: true);
+        var journal = GoalOperationJournal.ReadStrict(fixture.Repository, fixture.Goal.Id);
+        var pass = Assert.Single(journal.Entries, entry => entry.RequiredChecksValidated);
+        Assert.Equal(pass.IdempotencyKey,
+            CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, fixture.Goal, pair).RecoverableAttempt);
+
+        var begin = status == GoalOperationStatus.Begin;
+        var recordedCandidate = abbreviateCandidate ? fixture.Candidate[..12] : fixture.Candidate;
+        var recordedMain = abbreviateMain ? fixture.Main[..12] : fixture.Main;
+        var newer = new GoalOperationJournalEntry("newer-attempt", fixture.Goal.Id,
+            begin ? "conductor:acceptance" : "acceptance", status, pass.At.AddSeconds(1), null,
+            begin ? null : recordedCandidate, begin ? null : recordedMain, outcome)
+        {
+            RequiredChecksValidated = status == GoalOperationStatus.Completed
+        };
+        SharedJsonlFile.AppendLine(journal.Path, JsonSerializer.Serialize(newer, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Converters = { new JsonStringEnumConverter() }
+        }));
+
+        var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var restarted = await repository.LoadAsync();
+        var goal = restarted.GetGoal(fixture.Goal.Id);
+        var resumed = CreateCliContext(restarted, context.Workspace, goal, verifier);
+        var reloadedJournal = GoalOperationJournal.ReadStrict(fixture.Repository, goal.Id);
+        Assert.Equal(newer, reloadedJournal.Entries.Last());
+        Assert.Equal(begin ? pass.IdempotencyKey : null,
+            CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, goal, pair).RecoverableAttempt);
+
+        var key = SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, fixture.Candidate, fixture.Main);
+        store.AcknowledgeEffect(key, pass.IdempotencyKey);
+        var merge = CliWorkspaceMerge.MergeWithPublication(resumed, goal, out var publication,
+            () => null, out var repairBlock, pair);
+
+        Assert.Equal(begin, Assert.IsType<GoalWorktreeMergeResult>(merge).FastForwarded);
+        Assert.Equal(begin ? fixture.Candidate : fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+        if (!begin)
+        {
+            Assert.Contains("normal acceptance is pending", repairBlock);
+            Assert.Null(publication);
+        }
+        Assert.Empty(verifier.NormalRuns);
     }
 
     [Theory]

@@ -62,8 +62,15 @@ public sealed record GoalOperationJournalEntry(
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
 
     internal bool CouldMatchCandidate(string branchHeadSha, string mainHeadSha) =>
-        (string.IsNullOrWhiteSpace(BranchHeadSha) || ShaEquals(BranchHeadSha, branchHeadSha)) &&
-        (string.IsNullOrWhiteSpace(MainHeadSha) || ShaEquals(MainHeadSha, mainHeadSha));
+        !IsDifferentRevision(BranchHeadSha, branchHeadSha) && !IsDifferentRevision(MainHeadSha, mainHeadSha);
+
+    private static bool IsDifferentRevision(string? recordedSha, string currentSha)
+    {
+        var recorded = Normalize(recordedSha);
+        // The current object ID supplies the repository's full hash length.
+        return recorded is not null && recorded.Length == currentSha.Length && GitRevisionReader.IsBranchObjectId(recorded) &&
+            !string.Equals(recorded, currentSha, StringComparison.OrdinalIgnoreCase);
+    }
 
     public bool HasCandidatePair =>
         !string.IsNullOrWhiteSpace(BranchHeadSha) && !string.IsNullOrWhiteSpace(MainHeadSha);

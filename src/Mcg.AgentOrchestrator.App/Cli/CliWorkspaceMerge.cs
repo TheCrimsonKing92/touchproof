@@ -338,6 +338,7 @@ internal static class CliWorkspaceMerge
         string root, SoloBaselineRepairStore store, Goal goal, GateReadyCandidateRevisionPair pair)
     {
         if (pair is not { BranchRevision: { } candidate, MainRevision: { } main }) return default;
+        if (!GitRevisionReader.IsBranchObjectId(candidate) || !GitRevisionReader.IsBranchObjectId(main)) return default;
 
         GoalOperationJournalSummary journal;
         try
@@ -352,12 +353,15 @@ internal static class CliWorkspaceMerge
 
         // The strict reader keeps entries in chronological order, with file order breaking ties.
         var latest = journal.Entries.LastOrDefault(entry =>
-            !string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) && entry.CouldMatchCandidate(candidate, main));
+            (!string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) ||
+             (entry.Operation is "acceptance" or "conductor:acceptance" && entry.Status != GoalOperationStatus.Begin)) &&
+            entry.CouldMatchCandidate(candidate, main));
         if (latest is null) return default;
         if (!latest.HasCandidatePair)
             return (false, null, $"Normal acceptance outcome '{latest.IdempotencyKey}' has an incomplete revision pair " +
                 $"in '{journal.Path}'. Restore its recorded candidate and integration revisions before retrying acceptance");
-        if (latest.Status != GoalOperationStatus.Completed || latest.GoalId != goal.Id) return default;
+        if (latest.Status != GoalOperationStatus.Completed || latest.GoalId != goal.Id ||
+            !latest.HasCandidate(candidate, main)) return default;
 
         var passed = latest.Operation switch
         {
