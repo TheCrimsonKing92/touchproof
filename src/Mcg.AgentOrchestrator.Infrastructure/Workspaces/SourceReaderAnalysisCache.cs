@@ -32,6 +32,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
     internal long AnalysisCount => Interlocked.Read(ref _analysisCount);
     internal long SemanticFileCount => Interlocked.Read(ref _semanticFileCount);
     internal Action? BeforePublicationForTests { private get; init; }
+    internal Action? AfterWindowsDestinationClearedForTests { private get; init; }
     internal Action? BeforeEvictionForTests { private get; init; }
 
     // Test assemblies install this once during module initialization, before shared-cache access.
@@ -223,13 +224,14 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         }
     }
 
-    private static bool Publish(DirectoryInfo root, FileInfo destination, string temporary)
+    private bool Publish(DirectoryInfo root, FileInfo destination, string temporary)
     {
         // The staging file is closed and complete before either move. On Windows, remove an
         // existing owned entry by handle, then publish without clobbering a newly arrived name.
         if (OperatingSystem.IsWindows())
         {
             if (!WindowsGeneration.TryClearDestination(destination)) return false;
+            AfterWindowsDestinationClearedForTests?.Invoke();
             File.Move(temporary, destination.FullName);
             return true;
         }

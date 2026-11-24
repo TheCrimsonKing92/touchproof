@@ -81,6 +81,41 @@ public sealed class SourceReaderAnalysisCacheTests
     }
 
     [Fact]
+    public void PublishingPreservesForeignCaseAliasArrivingAfterDestinationIsCleared()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var key = 10.ToString("x64");
+        cache.Write(key, new SourceReaderAnalysisCache.Analysis(false, ["Original"]));
+        var destination = cache.EntryPath(key)!;
+        Assert.True(File.Exists(destination));
+        var foreign = Path.ChangeExtension(destination, ".JSON");
+        var stagedForeign = Path.Combine(storage.Path, "foreign.pending");
+        var foreignBytes = "foreign"u8.ToArray();
+        File.WriteAllBytes(stagedForeign, foreignBytes);
+        var aliasArrived = false;
+        var publisher = new SourceReaderAnalysisCache(storage.Path)
+        {
+            AfterWindowsDestinationClearedForTests = () =>
+            {
+                File.Move(stagedForeign, foreign);
+                aliasArrived = File.Exists(destination);
+            },
+        };
+
+        publisher.Write(key, new SourceReaderAnalysisCache.Analysis(false, ["Replacement"]));
+
+        Assert.True(aliasArrived, "The foreign file must resolve at the destination before the cache moves its entry.");
+        var names = Directory.EnumerateFiles(storage.Path).Select(Path.GetFileName).ToArray();
+        Assert.Contains(Path.GetFileName(foreign), names);
+        Assert.DoesNotContain(Path.GetFileName(destination), names);
+        Assert.Equal(foreignBytes, File.ReadAllBytes(foreign));
+        Assert.Empty(Directory.EnumerateFiles(storage.Path, "*.tmp"));
+    }
+
+    [Fact]
     public void PublishingKeepsNewEntryAndUsesOrdinalTiesForOtherOwnedGenerations()
     {
         using var storage = new CacheDirectory();
