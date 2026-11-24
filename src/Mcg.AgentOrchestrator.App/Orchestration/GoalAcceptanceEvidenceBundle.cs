@@ -141,6 +141,11 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         }
         foreach (var summaryBlocker in acceptance.Blockers)
         {
+            // A fresh verifier result is validated below before the CLI records a new gate pass.
+            if (verification is { Passed: true, Skipped: false } &&
+                summaryBlocker.Kind is GoalAcceptanceBlockerKind.AcceptanceFailed or GoalAcceptanceBlockerKind.AcceptanceAborted)
+                continue;
+
             AddBlocker(
                 blockers,
                 nextCommands,
