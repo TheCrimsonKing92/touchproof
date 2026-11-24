@@ -10,12 +10,16 @@ internal sealed record SoloRepairFinding(string Candidate, string Main, string B
     string Attempt, SoloAcceptanceArtifact? Proof, IReadOnlyList<SoloAcceptanceArtifact> CandidateArtifacts,
     IReadOnlyList<SoloAcceptanceArtifact> BaselineArtifacts, string? Reason, string? Feedback = null)
 {
+    // Keep existing group and attribution keys when the executable selection is qualified by path.
+    public string? LegacyRequest { get; init; }
+    public string? ProofBaselineCheck { get; init; }
+    internal string? RequestIdentity => LegacyRequest ?? Request;
     internal string GroupKey => SoloBaselineRepairStore.Key(Baseline.ToLowerInvariant(), Check, Project,
-        Request, BaselineCheck, Identity);
+        RequestIdentity, BaselineCheck, Identity);
     internal string Key => SoloBaselineRepairStore.Key(Candidate, Main, Check, Identity);
     internal bool HasSameSelection(SoloRepairFinding other) =>
         Check == other.Check && Identity == other.Identity && Project == other.Project &&
-        Request == other.Request && BaselineCheck == other.BaselineCheck;
+        RequestIdentity == other.RequestIdentity && BaselineCheck == other.BaselineCheck;
     internal bool MatchesAttributionPair(string candidate, string main) => Candidate == candidate && Main == main && Baseline == main;
     internal bool HasConflictingProofs => Reason == SoloBaselineRepairStore.ConflictingProofs;
 }
@@ -133,7 +137,7 @@ internal sealed class SoloBaselineRepairStore
             return (finding.Key, prior);
         // Focused attribution can move an older finding onto a pair that already
         // has a finding for the same test label in a different selection.
-        var key = Key(finding.Key, finding.Project, finding.Request, finding.BaselineCheck);
+        var key = Key(finding.Key, finding.Project, finding.RequestIdentity, finding.BaselineCheck);
         return (key, ReadFinding(db, transaction, goal, key));
     }
 
@@ -284,7 +288,7 @@ internal sealed class SoloBaselineRepairStore
     internal static string NormalGateKey(string goal, string candidate, string main) => Key("normal-gate", goal, candidate, main);
     internal static string AttributionKey(string goal, SoloRepairFinding finding, string candidate, string main) =>
         Key("attribution-selection", goal, finding.Check, finding.Identity, candidate, main,
-            finding.Project, finding.Request, finding.BaselineCheck);
+            finding.Project, finding.RequestIdentity, finding.BaselineCheck);
 
     internal static string PreviousAttributionKey(string goal, SoloRepairFinding finding, string candidate, string main) =>
         Key("attribution", goal, finding.Check, finding.Identity, candidate, main);
@@ -411,7 +415,7 @@ internal sealed class SoloBaselineRepairStore
 
     internal static string FocusedProofIdentity(string key, SoloRepairFinding finding, string checkout, string main,
         bool runBaseline, bool allowCandidatePass) => Key("focused-repair-result-v1", key, checkout, main,
-            runBaseline.ToString(), allowCandidatePass.ToString(), finding.Request, finding.Check, finding.Identity,
+            runBaseline.ToString(), allowCandidatePass.ToString(), finding.RequestIdentity, finding.Check, finding.Identity,
             finding.Project, finding.BaselineCheck);
 
     internal SoloRepairCheckReceipt? ReadVerifiedCheck(string key, string identity)

@@ -761,7 +761,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
             WriteSelectionProject(baselineRoot, includeCandidateOnlyMethod: false);
             var settings = AcceptanceGateEngineSettings.Load(candidateRoot);
             var candidate = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
-                "Infrastructure.Tests",
+                project,
                 [identity],
                 settings,
                 candidateRoot);
@@ -770,7 +770,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
             var baseline = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
                 "merge-base-sha",
                 candidate.Checks,
-                GoalAcceptanceVerifier.ProjectLabel,
                 settings,
                 baselineRoot);
 

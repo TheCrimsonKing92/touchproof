@@ -156,7 +156,7 @@ internal static class AcceptanceFailureAttributionPlanner
         .ToArray();
 
     internal static CandidateSelectionPlan BuildCandidateSelections(
-        string projectLabel,
+        string project,
         IReadOnlyList<string> selectors,
         AcceptanceGateEngineSettings engineSettings,
         string worktreePath)
@@ -166,7 +166,7 @@ internal static class AcceptanceFailureAttributionPlanner
         var checkNamesBySelector = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var selector in selectors.Distinct(StringComparer.Ordinal))
         {
-            var request = $"{projectLabel}: FullyQualifiedName~{selector}";
+            var request = $"{project}: FullyQualifiedName~{selector}";
             if (!GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
                     request,
                     engineSettings,
@@ -183,6 +183,8 @@ internal static class AcceptanceFailureAttributionPlanner
                 return Failed(
                     $"focused baseline selection produced {selectorChecks.Count} checks for exact identity '{selector}'");
             }
+            if (!string.Equals(selectorChecks[0].Project, AcceptancePolicyShardPlanner.NormalizePath(project), StringComparison.OrdinalIgnoreCase))
+                return Failed($"focused baseline selection did not resolve to the declared project '{project}'");
 
             checks.Add(selectorChecks[0]);
             coverageTargets.AddRange(coverage.TargetToChecks);
@@ -206,7 +208,6 @@ internal static class AcceptanceFailureAttributionPlanner
     internal static BaselineSourceSelectionPlan BuildBaselineSourceSelections(
         string baselineSha,
         IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> candidateChecks,
-        Func<string, string> projectLabel,
         AcceptanceGateEngineSettings engineSettings,
         string baselinePath)
     {
@@ -215,7 +216,7 @@ internal static class AcceptanceFailureAttributionPlanner
         foreach (var candidateCheck in candidateChecks)
         {
             var request = candidateCheck.Project is not null && candidateCheck.FocusedEvidenceTokens.Count > 0
-                ? $"{projectLabel(candidateCheck.Project)}: " +
+                ? $"{candidateCheck.Project}: " +
                   string.Join("|", candidateCheck.FocusedEvidenceTokens.Select(token => token.CanonicalToken))
                 : string.Empty;
             IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> resolvedChecks = [];
@@ -227,9 +228,10 @@ internal static class AcceptanceFailureAttributionPlanner
                 out resolvedChecks,
                 out _,
                 out rejection);
-            if (resolved && resolvedChecks.Count == 1)
+            if (resolved && resolvedChecks is [var exact] &&
+                exact.Project == candidateCheck.Project && exact.Name == candidateCheck.Name)
             {
-                executable.Add(resolvedChecks[0]);
+                executable.Add(exact);
                 continue;
             }
 

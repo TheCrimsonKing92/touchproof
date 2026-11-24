@@ -55,6 +55,9 @@ public sealed record GoalOperationJournalEntry(
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AuditProperties { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RequiredChecksValidated { get; init; }
+
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
 
@@ -409,8 +412,10 @@ internal static partial class GoalOperationJournal
         string? mainHeadSha,
         string? detail = null,
         DateTimeOffset? attemptStartedAt = null,
-        GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
-        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "gate-passed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null);
+        GoalAcceptanceAttemptReceipt? attemptReceipt = null,
+        bool requiredChecksValidated = false) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "gate-passed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null,
+            requiredChecksValidated: requiredChecksValidated);
 
     public static void AcceptanceFailed(
         string executionDirectory,
@@ -1153,7 +1158,8 @@ internal static partial class GoalOperationJournal
         string? detail,
         DateTimeOffset? attemptStartedAt,
         GoalAcceptanceAttemptReceipt? attemptReceipt,
-        IReadOnlyList<string>? failedCheckNames)
+        IReadOnlyList<string>? failedCheckNames,
+        bool requiredChecksValidated = false)
     {
         Append(
             executionDirectory,
@@ -1167,7 +1173,8 @@ internal static partial class GoalOperationJournal
             acceptanceOutcome,
             attemptStartedAt,
             attemptReceipt,
-            failedCheckNames: failedCheckNames);
+            failedCheckNames: failedCheckNames,
+            requiredChecksValidated: requiredChecksValidated);
     }
 
     private static void Append(
@@ -1189,7 +1196,8 @@ internal static partial class GoalOperationJournal
         IReadOnlyList<string>? failedCheckNames = null,
         string? operationInstanceId = null,
         string? leaseRecovery = null,
-        DateTimeOffset? ownerProcessStartedAtUtc = null)
+        DateTimeOffset? ownerProcessStartedAtUtc = null,
+        bool requiredChecksValidated = false)
     {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
@@ -1221,7 +1229,10 @@ internal static partial class GoalOperationJournal
             FailedCheckNames: failedCheckNames,
             OperationInstanceId: operationInstanceId,
             LeaseRecovery: leaseRecovery,
-            OwnerProcessStartedAtUtc: ownerProcessStartedAtUtc);
+            OwnerProcessStartedAtUtc: ownerProcessStartedAtUtc)
+        {
+            RequiredChecksValidated = requiredChecksValidated
+        };
         SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(entry, JsonOptions));
         TryAppendRunEvent(executionDirectory, entry);
     }

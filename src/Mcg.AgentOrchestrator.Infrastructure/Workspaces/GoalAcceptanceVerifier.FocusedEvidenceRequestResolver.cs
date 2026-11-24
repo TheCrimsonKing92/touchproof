@@ -48,6 +48,7 @@ internal static partial class FocusedEvidenceRequestResolver
             var project = InfrastructureTestsProject;
             var expression = rawItem;
             var hasExplicitProject = false;
+            var hasExactProject = false;
             var separator = rawItem.IndexOf(':', StringComparison.Ordinal);
             if (separator >= 0)
             {
@@ -62,6 +63,7 @@ internal static partial class FocusedEvidenceRequestResolver
                         $"unsupported evidence request project alias '{alias}'");
                     return false;
                 }
+                hasExactProject = string.Equals(NormalizePath(alias), project, StringComparison.OrdinalIgnoreCase);
             }
 
             IReadOnlyList<FocusedEvidenceFilter?> filters;
@@ -89,7 +91,7 @@ internal static partial class FocusedEvidenceRequestResolver
             totalTargets += targetCount;
             foreach (var filter in filters)
             {
-                if (filter is not null && ProjectMatches(project, InfrastructureTestsProject))
+                if (filter is not null && !hasExactProject && ProjectMatches(project, InfrastructureTestsProject))
                 {
                     IReadOnlyList<(string Project, FocusedEvidenceFilter Filter)> projectArms;
                     try
@@ -210,16 +212,22 @@ internal static partial class FocusedEvidenceRequestResolver
         }
 
         var budget = MeasureFocusedEvidenceBudget(worktreePath, validated, totalTargets);
+        var ambiguousProjectLabels = DeclaredTestProjectInventory.DeclaredProjects(engineSettings, engineSettings?.DeclaredDotnetTestChecks)
+            .GroupBy(GoalAcceptanceVerifier.ProjectLabel, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var built = new List<AcceptanceManifestCheck>();
         foreach (var item in planned)
         {
             var usesDeclaredVstestCheck = VstestFocusedEvidenceCheckShape.TryResolve(
                 item.Project, engineSettings, out var declaringCheck);
+            var label = GoalAcceptanceVerifier.ProjectLabel(item.Project);
+            if (ambiguousProjectLabels.Contains(label)) label = item.Project;
             var check = new AcceptanceManifestCheck
             {
                 Name = item.Filter is null
                     ? $"reviewer mapped project evidence: {GoalAcceptanceVerifier.ProjectLabel(item.Project)}"
-                    : $"reviewer focused evidence: {GoalAcceptanceVerifier.ProjectLabel(item.Project)} {item.Filter.CanonicalText}",
+                    : GoalAcceptanceVerifier.FocusedTestCheckName(label, item.Filter.CanonicalText),
                 Type = "dotnet-test",
                 Runner = usesDeclaredVstestCheck
                     ? "vstest"

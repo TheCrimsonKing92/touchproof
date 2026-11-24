@@ -133,6 +133,35 @@ public sealed class SoloRepairEvidenceTests
     }
 
     [Fact]
+    public async Task InheritedRowWithoutExecutedProject_RetainsUnresolvedSelection()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true, singleRow: true, firstCase: FirstCase);
+        fixture.Record(fixture.Summary);
+        Assert.True(Assert.Single(Read(fixture).Findings).Inherited);
+
+        fixture.ReplaceProof(proof => proof with
+        {
+            Baseline = proof.Baseline with
+            {
+                Checks = [Assert.Single(proof.Baseline.Checks) with { TestProjectPath = null }]
+            },
+            BaselineChecks = proof.BaselineChecks.Select(check => check with
+            {
+                Check = check.Check with { TestProjectPath = null }
+            }).ToArray()
+        });
+        fixture.Record(fixture.Summary);
+
+        var finding = Assert.Single(Read(fixture).Findings);
+        Assert.False(finding.Inherited);
+        Assert.Equal(SoloHoldReasons.BaselineResultMismatch, finding.Reason);
+        Assert.Equal(First + FirstCase, finding.Identity);
+        Assert.Equal(Project, finding.Project);
+        Assert.Equal($"{Project}: FullyQualifiedName~{First}", finding.Request);
+    }
+
+    [Fact]
     public async Task MixedCheck_PartitionsInheritedIntroducedAndUnresolvedRows()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();

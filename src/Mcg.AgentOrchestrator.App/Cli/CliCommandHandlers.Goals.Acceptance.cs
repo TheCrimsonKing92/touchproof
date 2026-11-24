@@ -436,18 +436,6 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         context.Kernel.ClearAcceptanceFailure(goal.Id);
     }
 
-    if (verification is { Passed: true, Skipped: false })
-    {
-        GoalOperationJournal.AcceptanceGatePassed(
-            context.Workspace.ExecutionDirectory,
-            goal,
-            "acceptance",
-            testedWorktreeHead,
-            testedMainHead,
-            $"Acceptance gate passed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}; merge pending.",
-            acceptanceAttemptStartedAt,
-            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
-    }
     var evidence = context.Worktrees.BuildAcceptanceEvidence(
         context.Kernel,
         goal,
@@ -527,6 +515,20 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed checks={FormatConductEventChecks(failedChecks)}");
         return false;
+    }
+
+    if (verification is { Passed: true, Skipped: false })
+    {
+        GoalOperationJournal.AcceptanceGatePassed(
+            context.Workspace.ExecutionDirectory,
+            goal,
+            "acceptance",
+            testedWorktreeHead,
+            testedMainHead,
+            $"Acceptance gate passed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}; merge pending.",
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
+            requiredChecksValidated: true);
     }
 
     if (verification is not null)

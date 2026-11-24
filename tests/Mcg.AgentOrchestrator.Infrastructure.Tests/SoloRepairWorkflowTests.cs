@@ -305,6 +305,7 @@ public sealed class SoloRepairWorkflowTests
         var journal = GoalOperationJournal.ReadActive(fixture.Repository, fixture.Goal.Id);
         var pass = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, fixture.Candidate, fixture.Main);
         Assert.Equal("gate-passed", pass?.AcceptanceOutcome);
+        Assert.True(pass?.RequiredChecksValidated);
         Assert.Null(CliWorkspaceMerge.FindRecoverableNormalGate(fixture.Repository, fixture.Goal,
             new(fixture.Candidate, fixture.Candidate)));
         Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
@@ -315,6 +316,43 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal((fixture.Goal.Id, fixture.Candidate), Assert.Single(verifier.NormalRuns));
         Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
         Assert.Equal(fixture.Candidate, RunGit(fixture.Repository, "rev-parse", "main"));
+    }
+
+    [Fact]
+    public async Task CliAcceptance_DoesNotRecoverLegacyPassWithMissingRequiredCheck()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var verifier = new ControlledVerifier(fixture.Repository) { NormalPass = true };
+        var (context, store, finding) = PrepareCliRepair(fixture, verifier);
+        RecordPassedValidation(store, finding, fixture.Main);
+        var worktree = GoalWorktrees.TryResolve(fixture.Repository, fixture.Goal.Id)!;
+        var coreFile = Path.Combine(worktree, "src/Mcg.AgentOrchestrator.Core/GateControl.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(coreFile)!);
+        File.WriteAllText(coreFile, "internal sealed class GateControl { }");
+        RunGit(worktree, "add", "src/Mcg.AgentOrchestrator.Core/GateControl.cs");
+        RunGit(worktree, "commit", "-m", "Change Core so policy requires its checks");
+        var candidate = RunGit(worktree, "rev-parse", "HEAD");
+        var result = new AcceptanceVerificationResult(true, false, 0, null,
+            Checks: [new(verifier.NormalCheckName, true, 0, null)]);
+        var bundle = context.Worktrees.BuildAcceptanceEvidence(context.Kernel, fixture.Goal, worktree, result, false,
+            fixture.Repository);
+        Assert.Contains(bundle.PolicyChecks, check => check.Required && check.Name == "core tests" && check.State == "missing");
+
+        GoalOperationJournal.AcceptanceGatePassed(fixture.Repository, fixture.Goal, "acceptance", candidate, fixture.Main);
+        var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var restarted = await repository.LoadAsync();
+        var goal = restarted.GetGoal(fixture.Goal.Id);
+        var resumed = CreateCliContext(restarted, context.Workspace, goal, verifier);
+
+        Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(resumed));
+        Assert.Equal((goal.Id, candidate), Assert.Single(verifier.NormalRuns));
+        Assert.Null(store.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, fixture.Main)));
+        var outcomes = GoalOperationJournal.AcceptanceOutcomesForCandidate(
+            GoalOperationJournal.ReadActive(fixture.Repository, goal.Id), candidate, fixture.Main);
+        Assert.Contains(outcomes, entry => entry.AcceptanceOutcome == "failed");
+        Assert.False(Assert.Single(outcomes.Where(entry => entry.AcceptanceOutcome == "gate-passed")).RequiredChecksValidated);
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
     }
 
     [Fact]
@@ -346,6 +384,40 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(fixture.Candidate, RunGit(fixture.Repository, "rev-parse", "main^2"));
         Assert.Equal(RunGit(fixture.Repository, "rev-parse", fixture.Candidate + "^{tree}"),
             RunGit(fixture.Repository, "rev-parse", "main^{tree}"));
+    }
+
+    [Fact]
+    public void DirectPublication_RejectsGoalRefMovementAtMainRefTransaction()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var (context, store, finding) = PrepareCliRepair(fixture, new ControlledVerifier(fixture.Repository));
+        RecordPassedValidation(store, finding, fixture.Main);
+        store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main),
+            PullRequestLandingTestFixture.Attempt);
+        var goalRef = "refs/heads/" + GoalWorktrees.BranchName(fixture.Goal.Id);
+        var alternate = RunGit(fixture.Repository, "commit-tree", fixture.Main + "^{tree}", "-p", fixture.Candidate,
+            "-m", "Unverified revision at publication");
+        RunGit(fixture.Repository, "branch", LandingExecutor.IntegrationBranchName, fixture.Main);
+        var reachedPublication = false;
+        using var runner = LandingExecutor.UseGitRunner(GitCli.Run, (directory, input, args) =>
+        {
+            Assert.Equal(new[] { "update-ref", "--stdin" }, args);
+            Assert.Contains($"verify {goalRef} {fixture.Candidate}", input, StringComparison.Ordinal);
+            Assert.NotEqual(fixture.Main, RunGit(directory, "rev-parse", LandingExecutor.IntegrationBranchName));
+            RunGit(directory, "update-ref", goalRef, alternate, fixture.Candidate);
+            reachedPublication = true;
+            return GitCli.RunWithStandardInput(directory, GitCli.DefaultTimeoutMilliseconds, input, args);
+        });
+
+        var landed = LandingExecutor.Execute(fixture.Kernel, fixture.Goal, context.Workspace);
+
+        Assert.True(reachedPublication);
+        Assert.False(landed.MainAdvanced);
+        Assert.True(LandingExecutor.IsMutationHoldEscalation(Assert.IsType<LandingDecision.Escalate>(landed.Decision).Reason));
+        Assert.Equal(alternate, RunGit(fixture.Repository, "rev-parse", goalRef));
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", LandingExecutor.IntegrationBranchName));
+        Assert.False(GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(fixture.Repository, fixture.Goal.Id)));
     }
 
     [Theory]
@@ -728,6 +800,64 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(delivered, Assert.Single(File.ReadLines(events).Where(line => line.Contains("\"eventType\":\"GoalEscalated\""))));
         Assert.Single(await collaboration.ListAsync(goal.Id.Value));
         Assert.Equal("passed", new SoloBaselineRepairStore(storePath).ReadCheck(deliveryId)?.Outcome);
+    }
+
+    [Fact]
+    public async Task SameProjectLabel_UsesSecondDeclaredProjectThroughRepairValidation()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture(collidingProjectLabels: true);
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var worktree = Worktree(fixture, goal);
+        var label = GoalAcceptanceVerifier.ProjectLabel(SecondCollisionProject);
+        Assert.Equal(label, GoalAcceptanceVerifier.ProjectLabel(FirstCollisionProject));
+        var settings = AcceptanceGateEngineSettings.Load(worktree);
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(label, settings, out var resolved));
+        Assert.Equal(FirstCollisionProject, resolved);
+
+        await ProduceFailure(fixture, goal);
+        var baselineCheck = Assert.Single(fixture.Proof().BaselineChecks).Check;
+        Assert.Equal(SecondCollisionProject, baselineCheck.TestProjectPath);
+        fixture.ReplaceProof(proof => proof with { Bindings = [] });
+        var failure = fixture.Summary;
+        fixture.Kernel.RecordAcceptanceFailure(goal.Id, failure.FailedChecks!, failure.BranchHeadSha, failure.MainHeadSha,
+            failure.CheckAttributions, failure.BaselineAttestation, failure.AttemptId, failure.SoloFailureReceipt);
+        fixture.Kernel.RouteRecordedAcceptanceFailure(goal.Id, "Hold the unresolved acceptance failure.");
+        var finding = Assert.Single(Assert.IsType<SoloRepairPartition>(
+            SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null, failure)).Findings);
+        var expectedRequest = $"{SecondCollisionProject}: FullyQualifiedName~{First}";
+        Assert.Equal(expectedRequest, finding.Request);
+        var selectedProjects = new List<(string Project, bool RunBaseline)>();
+        var verifier = new ControlledVerifier(fixture.Root)
+        {
+            Finding = finding, AttributionBaselinePass = false,
+            FocusedSelection = (path, request, runBaseline) =>
+            {
+                Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(request, settings, path,
+                    out var checks, out _, out var rejection), rejection?.Detail);
+                var selection = Assert.Single(checks);
+                selectedProjects.Add((selection.Project!, runBaseline));
+                return selection.Name;
+            }
+        };
+        var driver = Driver(fixture.Kernel, workspace, verifier);
+
+        AssertHold(driver.AdvanceOnce(goal, Policy), SoloHoldReasons.RepairPending);
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var inherited = Assert.Single(store.ReadFindings(goal.Id.Value));
+        Assert.True(inherited.Inherited, inherited.Reason);
+        var repairId = Assert.IsType<string>(store.ReadGroup(inherited.GroupKey)?.RepairGoal);
+        fixture.Git("commit", "--allow-empty", "-m", $"Integrate goal/{repairId}: repair the second project");
+        var refreshedMain = fixture.Git("rev-parse", "HEAD");
+        RunGit(worktree, "rebase", "main");
+
+        driver.AdvanceOnce(goal, Policy);
+
+        Assert.Equal(new[] { (SecondCollisionProject, true), (SecondCollisionProject, false) }, selectedProjects);
+        Assert.Equal((expectedRequest, refreshedMain), verifier.FocusedRuns.Last());
+        Assert.Equal("passed", store.ReadCheck(SoloBaselineRepairStore.ValidationKey(inherited, refreshedMain))?.Outcome);
     }
 
     [Fact]
@@ -1411,6 +1541,7 @@ public sealed class SoloRepairWorkflowTests
         internal List<(GoalId Goal, string Sha)> NormalRuns { get; } = [];
         internal bool NormalPass { get; set; }
         internal string NormalCheckName { get; init; } = "normal candidate acceptance";
+        internal Func<string, string, bool, string>? FocusedSelection { get; init; }
 
         public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(string worktreePath, GoalId? goalId,
             string request, IAcceptanceFocusedVerificationOwner executionOwner, int? stableSlotIndex = null,
@@ -1426,6 +1557,8 @@ public sealed class SoloRepairWorkflowTests
             }
             var finding = Assert.IsType<SoloRepairFinding>(Finding);
             Assert.Equal(finding.Request, request);
+            if (FocusedSelection is { } select)
+                finding = finding with { BaselineCheck = select(worktreePath, request, runBaselineArm) };
             var trx = Path.Combine(root, sha + "-candidate.trx");
             var candidatePass = runBaselineArm ? AttributionCandidatePass : RefreshedBaselinePass;
             WriteTrx(trx, candidatePass, finding.Identity);

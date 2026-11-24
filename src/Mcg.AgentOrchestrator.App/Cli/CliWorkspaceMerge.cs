@@ -305,7 +305,7 @@ internal static class CliWorkspaceMerge
         if (pair is not { BranchRevision: { } candidate, MainRevision: { } main }) return null;
         var journal = GoalOperationJournal.ReadActive(root, goal.Id);
         var latest = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, candidate, main);
-        return latest is { Operation: "acceptance", Status: GoalOperationStatus.Completed } &&
+        return latest is { Operation: "acceptance", Status: GoalOperationStatus.Completed, RequiredChecksValidated: true } &&
                latest.GoalId == goal.Id && GoalOperationJournalGatePassedOutcome.Matches(latest)
             ? latest
             : null;

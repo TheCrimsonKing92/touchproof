@@ -1010,7 +1010,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             var selectionPlan = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
-                ProjectLabel(manifestCheck.Project), selectors, engineSettings, worktreePath);
+                manifestCheck.Project, selectors, engineSettings, worktreePath);
             if (!selectionPlan.Succeeded)
             {
                 results[index] = AcceptanceFailureAttributionPlanner.Unattributed(check, identities, selectionPlan.FailureEvidence!);
@@ -1879,6 +1879,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static string ProjectLabel(string project) =>
         AcceptancePolicyShardPlanner.ProjectLabel(project);
+
+    internal static string FocusedTestCheckName(string projectLabel, string filter) =>
+        $"reviewer focused evidence: {projectLabel} {filter}";
 
     internal static List<AcceptanceManifestCheck> ExpandBroadInfrastructureChecks(
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,

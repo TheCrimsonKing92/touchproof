@@ -178,7 +178,7 @@ internal sealed class SoloBaselineRepairCoordinator(
                 {
                     Candidate = candidate, Main = main, Baseline = main,
                     Inherited = result.Outcome == "inherited",
-                    BaselineCheck = result.Outcome == "inherited" ? result.Detail : finding.BaselineCheck,
+                    BaselineCheck = finding.BaselineCheck ?? (result.Outcome == "inherited" ? result.Detail : null),
                     CandidateArtifacts = result.CandidateArtifacts!, BaselineArtifacts = result.Artifacts,
                     Reason = null, Feedback = result.Outcome == "introduced" ? result.Feedback : null,
                     Proof = result.Proof ?? finding.Proof
@@ -382,7 +382,8 @@ internal sealed class SoloBaselineRepairCoordinator(
                 var added = GitCli.Run(root, "worktree", "add", "--detach", "--quiet", checkout, checkoutSha);
                 if (!added.Succeeded || added.DrainTimedOut || GoalWorktrees.ResolveRequiredRef(checkout, "HEAD") != checkoutSha)
                     throw new InvalidOperationException($"Could not prepare exact revision {checkoutSha} for request {key}.");
-                AcceptanceExecutionRunner.RunFocusedVerification(verifier, checkout, goalId: null, finding.Request!,
+                var focusedFinding = SoloAcceptanceFailureReceiptReader.BindRetainedRepairRequest(finding);
+                AcceptanceExecutionRunner.RunFocusedVerification(verifier, checkout, goalId: null, focusedFinding.Request!,
                     lease.Environment.BuildPermitIndex, lease, runBaseline, CancellationToken.None, workspace.IntegrationBranch,
                     projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, retainFocusedBaselineArtifacts: runBaseline,
                     observeFocusedResult: result =>
@@ -393,9 +394,9 @@ internal sealed class SoloBaselineRepairCoordinator(
                         {
                             interpreted = runBaseline
                                 ? SoloAcceptanceFailureReceiptReader.ReadRepairAttribution(result, checkoutSha, baselineSha,
-                                    finding, artifacts, allowCandidatePass)
+                                    focusedFinding, artifacts, allowCandidatePass)
                                 : SoloAcceptanceFailureReceiptReader.ReadRepairCheck(result, FindingEvidenceArm.Candidate,
-                                    checkoutSha, finding, artifacts);
+                                    checkoutSha, focusedFinding, artifacts);
                         }
                         catch (Exception ex) when (SoloAcceptanceFailureReceiptReader.IsRepairEvidenceError(ex))
                         {

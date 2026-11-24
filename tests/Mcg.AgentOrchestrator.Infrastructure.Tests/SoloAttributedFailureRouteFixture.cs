@@ -14,6 +14,8 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal const string Long = "Sample.Tests.SoloTests.Long";
     internal const string Unknown = "Sample.Tests.SoloTests.Unknown";
     internal const string Project = "tests/Sample.Tests/Sample.Tests.csproj";
+    internal const string FirstCollisionProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/first/Mcg.AgentOrchestrator.Infrastructure.Collision.Tests.csproj";
+    internal const string SecondCollisionProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/second/Mcg.AgentOrchestrator.Infrastructure.Collision.Tests.csproj";
     internal const string ManifestCheckName = "solo tests";
     internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-solo-route", Guid.NewGuid().ToString("N"));
     internal string Repo => Path.Combine(Root, "repo");
@@ -26,29 +28,19 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal int CandidateRuns { get; private set; }
     internal Action? BeforeStart { get; set; }
 
-    internal SoloAttributedFailureRouteFixture(bool committed = true)
+    internal SoloAttributedFailureRouteFixture(bool committed = true, bool collidingProjectLabels = false)
     {
+        var project = collidingProjectLabels ? SecondCollisionProject : Project;
+        var shadowInvocation = collidingProjectLabels ? Invocation(FirstCollisionProject) + "," : "";
         Directory.CreateDirectory(Path.Combine(Repo, "config"));
-        Directory.CreateDirectory(Path.Combine(Repo, "tests", "Sample.Tests"));
-        File.WriteAllText(Path.Combine(Repo, Project), "<Project />");
-        File.WriteAllText(Path.Combine(Repo, "tests/Sample.Tests/SoloTests.cs"), """
-            namespace Sample.Tests;
-            public class SoloTests {
-                [Xunit.Fact] public void Fails() { }
-                [Xunit.Fact] public void Long() { }
-                [Xunit.Fact] public void Unknown() { }
-            }
-            """);
+        WriteProject(project);
+        if (collidingProjectLabels) WriteProject(FirstCollisionProject);
         File.WriteAllText(Path.Combine(Repo, "config/acceptance-manifest.json"), $$"""
             { "version": 1, "engine": {
               "slotCount": 1, "maxConcurrentShards": 1, "enforceStructuralCoverage": false,
-              "mtpInvocations": [{
-                "project": "tests/Sample.Tests/Sample.Tests.csproj",
-                "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
-                "arguments": ["{executable}", "--results-directory", "{resultsDirectory}", "--report-trx", "--report-trx-filename", "{trxFileName}"]
-              }] }, "checks": [
+              "mtpInvocations": [{{shadowInvocation}}{{Invocation(project)}}] }, "checks": [
               { "name": "{{ManifestCheckName}}", "type": "dotnet-test", "runner": "mtp",
-                "project": "tests/Sample.Tests/Sample.Tests.csproj", "arguments": [] }
+                "project": "{{project}}", "arguments": [] }
             ], "forbiddenChangedPathGlobs": [] }
             """);
         Git("init", "-b", "main");
@@ -63,6 +55,27 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Git("commit", "-m", "Candidate");
         Context = new(Git("rev-parse", "HEAD"), main, Git("rev-parse", "HEAD^{tree}"), main);
         Goal = CompletedGoal(Kernel, committed: committed);
+
+        static string Invocation(string path) => $$"""
+            {"project":"{{path}}",
+             "executablePathTemplate":"bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+             "arguments":["{executable}","--results-directory","{resultsDirectory}","--report-trx","--report-trx-filename","{trxFileName}"]}
+            """;
+
+        void WriteProject(string path)
+        {
+            var projectDirectory = Path.GetDirectoryName(Path.Combine(Repo, path))!;
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(Repo, path), "<Project />");
+            File.WriteAllText(Path.Combine(projectDirectory, "SoloTests.cs"), """
+                namespace Sample.Tests;
+                public class SoloTests {
+                    [Xunit.Fact] public void Fails() { }
+                    [Xunit.Fact] public void Long() { }
+                    [Xunit.Fact] public void Unknown() { }
+                }
+                """);
+        }
     }
 
     internal GoalAcceptanceVerifier CreateVerifier(string checkout, bool baselineThrows = false, bool baselineFails = false,

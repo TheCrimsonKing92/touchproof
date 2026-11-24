@@ -43,20 +43,24 @@ internal static partial class LandingExecutor
     private const string MutationHoldReasonPrefix = "landing mutation blocked:";
     private const string PostLandingConfirmationReasonPrefix =
         "goal landed previously, then post-landing confirmation failed:";
-    private static readonly AsyncLocal<Func<string, string[], GitCli.GitResult>?> GitRunnerOverride = new();
+    private static readonly AsyncLocal<LandingGitRunner?> GitRunnerOverride = new();
 
-    internal static Func<string, string[], GitCli.GitResult> GitRunner => GitRunnerOverride.Value ?? GitCli.Run;
+    internal static Func<string, string[], GitCli.GitResult> GitRunner => GitRunnerOverride.Value?.Run ?? GitCli.Run;
 
     // Scopes follow normal ExecutionContext inheritance and are disposed in reverse creation order in the owning flow.
-    internal static IDisposable UseGitRunner(Func<string, string[], GitCli.GitResult> runner)
+    internal static IDisposable UseGitRunner(Func<string, string[], GitCli.GitResult> runner,
+        Func<string, string, string[], GitCli.GitResult>? standardInputRunner = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
         var scope = new GitRunnerScope(GitRunnerOverride.Value);
-        GitRunnerOverride.Value = runner;
+        GitRunnerOverride.Value = new(runner, standardInputRunner);
         return scope;
     }
 
-    private sealed class GitRunnerScope(Func<string, string[], GitCli.GitResult>? previous) : IDisposable
+    private sealed record LandingGitRunner(Func<string, string[], GitCli.GitResult> Run,
+        Func<string, string, string[], GitCli.GitResult>? RunWithInput);
+
+    private sealed class GitRunnerScope(LandingGitRunner? previous) : IDisposable
     {
         private int disposed;
 
@@ -424,7 +428,9 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {reason}");
         }
 
-        var mainWrite = UpdateRef(executionDirectory, workspace.IntegrationBranch, candidateRevision!, boundMainRevision);
+        var publishRefs = $"verify refs/heads/{goalBranch} {evidenceCandidateSha}\n" +
+            $"update refs/heads/{workspace.IntegrationBranch} {candidateRevision} {boundMainRevision}\n";
+        var mainWrite = RunGitWithStandardInput(executionDirectory, publishRefs, "update-ref", "--stdin");
         if (mainWrite.ExitCode != 0)
         {
             var rollback = UpdateRef(executionDirectory, IntegrationBranchName, previousIntegrationRevision, candidateRevision!);
@@ -438,6 +444,10 @@ internal static partial class LandingExecutor
             if (rollback.ExitCode == 0)
             {
                 DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+                if (ResolveRef(executionDirectory, goalBranch) != evidenceCandidateSha ||
+                    ResolveRef(executionDirectory, workspace.IntegrationBranch) != boundMainRevision)
+                    return BuildMutationBlockedResult(goal, goalPrefix,
+                        "the revision pair changed after baseline repair validation or normal acceptance");
             }
             var reason = $"main ref update failed: {FormatGitFailure(mainWrite)}; {rollbackDetail}";
             OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName);
@@ -1339,9 +1349,12 @@ internal static partial class LandingExecutor
         path.Replace('\\', '/').Trim().TrimStart('/');
 
     private static GitCli.GitResult RunGit(string workingDirectory, params string[] args) =>
-        GitRunnerOverride.Value is { } runner
-            ? runner(workingDirectory, args)
-            : GitCli.Run(workingDirectory, args);
+        GitRunner(workingDirectory, args);
+
+    private static GitCli.GitResult RunGitWithStandardInput(string workingDirectory, string input, params string[] args) =>
+        GitRunnerOverride.Value?.RunWithInput is { } runner
+            ? runner(workingDirectory, input, args)
+            : GitCli.RunWithStandardInput(workingDirectory, GitCli.DefaultTimeoutMilliseconds, input, args);
 
     // Counts DISTINCT tasks with genuine verification failures. A task whose only failures were
     // transient empty-output dispatch flakes and whose latest verification passed was auto-recovered

@@ -66,7 +66,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                             if (strict.IntroducedRowFeedback?.TryGetValue((check.Name, identity), out var feedback) != true) continue;
                             var binding = proof.Bindings.Single(b => b.CheckName == check.Name && b.TestIdentity == identity);
                             var baseline = proof.BaselineChecks.Single(b => b.Check.Name == binding.BaselineCheckName);
-                            findings.Add(finding with { Reason = null, Feedback = feedback, BaselineCheck = binding.BaselineCheckName,
+                            findings.Add(finding with { Reason = null, Feedback = feedback,
+                                ProofBaselineCheck = binding.BaselineCheckName == finding.BaselineCheck ? null : binding.BaselineCheckName,
                                 CandidateArtifacts = item.Artifacts, BaselineArtifacts = baseline.Artifacts });
                         }
                         else if (!canPartition)
@@ -134,12 +135,39 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         var selector = AcceptanceFailureAttributionPlanner.NormalizeIdentity(finding.Identity);
         var selection = ConductorAcceptanceCohortFocusedAttribution.TrySelect([selector],
             [check with { FailingTestIdentities = [selector] }]);
+        var request = $"{finding.Project}: FullyQualifiedName~{selector}";
         return selection is null ? finding : finding with
         {
-            Request = selection.Request,
-            BaselineCheck = $"reviewer focused evidence: {GoalAcceptanceVerifier.ProjectLabel(finding.Project)} FullyQualifiedName~{selector}"
+            Request = request,
+            LegacyRequest = request == selection.Request ? null : selection.Request,
+            BaselineCheck = GoalAcceptanceVerifier.FocusedTestCheckName(GoalAcceptanceVerifier.ProjectLabel(finding.Project),
+                $"FullyQualifiedName~{selector}")
         };
     }
+
+    internal static SoloRepairFinding BindRetainedRepairRequest(SoloRepairFinding finding)
+    {
+        if (string.IsNullOrWhiteSpace(finding.Project)) return finding;
+        var selector = AcceptanceFailureAttributionPlanner.NormalizeIdentity(finding.Identity);
+        var filter = $"FullyQualifiedName~{selector}";
+        return finding.Request == $"{GoalAcceptanceVerifier.ProjectLabel(finding.Project)}: {filter}"
+            ? finding with { Request = $"{finding.Project}: {filter}" }
+            : finding;
+    }
+
+    private static bool RepairCheckNameMatches(SoloRepairFinding finding, string actual)
+    {
+        if (finding.BaselineCheck == actual) return true;
+        if (finding.Project is not { } project) return false;
+        var filter = $"FullyQualifiedName~{AcceptanceFailureAttributionPlanner.NormalizeIdentity(finding.Identity)}";
+        var shortName = GoalAcceptanceVerifier.FocusedTestCheckName(GoalAcceptanceVerifier.ProjectLabel(project), filter);
+        var pathName = GoalAcceptanceVerifier.FocusedTestCheckName(project.Replace('\\', '/'), filter);
+        return (finding.BaselineCheck == shortName && actual == pathName) ||
+            (finding.BaselineCheck == pathName && actual == shortName);
+    }
+
+    private static bool MatchesRepairProject(string? expected, string? executed) =>
+        !string.IsNullOrWhiteSpace(expected) && executed?.Replace('\\', '/') == expected.Replace('\\', '/');
 
     internal static AttributedFailure? RestoreIntroduced(IEnumerable<SoloRepairFinding> findings)
     {
@@ -165,7 +193,9 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
 
         var check = proof!.Checks.Single(item => item.Check.Name == finding.Check);
-        var baseline = proof.BaselineChecks.Single(item => item.Check.Name == finding.BaselineCheck);
+        var baseline = proof.BaselineChecks.Single(item => item.Check.Name == (finding.ProofBaselineCheck ?? finding.BaselineCheck));
+        if (finding.Inherited && !MatchesRepairProject(finding.Project, baseline.Check.TestProjectPath))
+            throw new InvalidDataException(SoloHoldReasons.BaselineResultMismatch);
         if (!check.Artifacts.SequenceEqual(finding.CandidateArtifacts) ||
             !baseline.Artifacts.SequenceEqual(finding.BaselineArtifacts))
             throw new InvalidDataException(SoloHoldReasons.ProofIdentityMismatch);
@@ -206,11 +236,12 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         var baseline = baselines[0];
         var armCheck = proof.Baseline.Checks.Single(b => b.Name == baselineName);
         if (JsonSerializer.Serialize(armCheck) != JsonSerializer.Serialize(baseline.Check) ||
-            baselineName != finding.BaselineCheck ||
-            (baseline.Check.TestProjectPath is { } baselineProject && baselineProject != project))
+            !RepairCheckNameMatches(finding, baselineName) ||
+            (baseline.Check.TestProjectPath is { } baselineProject && !MatchesRepairProject(project, baselineProject)))
             return finding with { Reason = SoloHoldReasons.BaselineResultMismatch };
 
-        finding = finding with { BaselineCheck = baselineName, BaselineArtifacts = baseline.Artifacts };
+        finding = finding with { ProofBaselineCheck = baselineName == finding.BaselineCheck ? null : baselineName,
+            BaselineArtifacts = baseline.Artifacts };
         if (baseline.Check.Advisory || baseline.Check.TestResultIsExplicitCrossAttemptReuse)
             return finding with { Reason = SoloHoldReasons.BaselineApparatusOrUnknown };
         var origin = attributions[0].Origin;
@@ -233,6 +264,9 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             try { rows = baselineRows[baselineName].Value; }
             catch (Exception ex) when (IsRepairEvidenceError(ex)) { return finding with { Reason = ex.Message }; }
             var exact = ReadExactRow(rows, identity);
+            if (origin == AcceptanceTestFailureOrigin.Inherited &&
+                !MatchesRepairProject(project, baseline.Check.TestProjectPath))
+                return finding with { Reason = SoloHoldReasons.BaselineResultMismatch };
             if (origin == AcceptanceTestFailureOrigin.Inherited && receipt.BaselineSha == receipt.MainSha &&
                 proof.Baseline.Disposition == FindingEvidenceArmDisposition.Red && !proof.Baseline.Passed &&
                 !baseline.Check.Passed && exact?.Value.Outcome == "Failed")
@@ -276,11 +310,10 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             return new("unresolved", "The verifier did not execute a conclusive selection on " + revision, []);
         var check = arms[0].Checks is [var selected] ? selected : null;
         if (check is null || !Usable(check) || check.Advisory || check.TestResultIsExplicitCrossAttemptReuse ||
-            (finding.BaselineCheck is not null && finding.BaselineCheck != check.Name) ||
+            (finding.BaselineCheck is not null && !RepairCheckNameMatches(finding, check.Name)) ||
             check.TestResultPaths is not { Count: > 0 } paths)
             return new("unresolved", "The executed selection or its result artifacts are unavailable.", []);
-        if (string.IsNullOrWhiteSpace(finding.Project) ||
-            check.TestProjectPath?.Replace('\\', '/') != finding.Project.Replace('\\', '/'))
+        if (!MatchesRepairProject(finding.Project, check.TestProjectPath))
             return new("unresolved", "The focused execution does not identify the original test project.", []);
 
         var artifacts = paths.Select(path =>
