@@ -138,6 +138,27 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
             root, out _, out var diagnostic), diagnostic);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("Global.json:43", "No tracked file matches the short citation.", new[] { "config/global.json" })]
+    [Xunit.InlineData("global.json:43", "is ambiguous", new[] { "config/global.json", "other/global.json" })]
+    public void ValidatePlan_UnavailableIndexRejectsBareJsonCitation(
+        string citation, string expectedHealthyDiagnostic, string[] trackedPaths)
+    {
+        var root = CreateFixtureRepository();
+        var plan = PlanWithExcerpt($"  - Inspect `{citation}` for configuration.");
+        var healthyIndex = new GitCli.GitResult(0, string.Join('\0', trackedPaths) + '\0', string.Empty);
+
+        Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var healthyDiagnostic,
+            readTrackedIndex: () => healthyIndex));
+        Xunit.Assert.Contains(expectedHealthyDiagnostic, healthyDiagnostic, StringComparison.Ordinal);
+
+        var failedIndex = healthyIndex with { ExitCode = 1, Error = "injected index read failure" };
+        Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var failedDiagnostic,
+            readTrackedIndex: () => failedIndex));
+        Xunit.Assert.Contains("the checkout's tracked file list was unavailable", failedDiagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Offending citation: '{citation}'", failedDiagnostic, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public void BareRuntimeJsonMentionDoesNotResolveToAnUntrackedSourceFile()
     {

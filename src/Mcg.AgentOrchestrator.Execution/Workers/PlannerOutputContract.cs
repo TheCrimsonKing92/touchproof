@@ -1015,11 +1015,12 @@ internal static partial class PlannerOutputContract
                 }
 
                 string? casingSuggestion = null;
-                if (IsRuntimeJsonArtifactMention(citedPath) && !citedPath.StartsWith("...", StringComparison.Ordinal))
+                if (paths is not null && IsRuntimeJsonArtifactMention(citedPath) &&
+                    !citedPath.StartsWith("...", StringComparison.Ordinal))
                 {
                     var casingMatches = paths
-                        ?.Where(path => string.Equals(Path.GetFileName(path), citedPath, StringComparison.OrdinalIgnoreCase))
-                        .Distinct(StringComparer.Ordinal).Take(2).ToArray() ?? [];
+                        .Where(path => string.Equals(Path.GetFileName(path), citedPath, StringComparison.OrdinalIgnoreCase))
+                        .Distinct(StringComparer.Ordinal).Take(2).ToArray();
                     if (casingMatches.Length == 0)
                         continue;
 
