@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.Json.Serialization.Metadata;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -66,19 +65,20 @@ internal static class ProviderHoldSeedEvidenceReader
         var store = new GoalTaskHistoryStore(options);
         var fields = row.IsMetadataOnly ? [] : row.Tasks ?? [];
         var histories = await store.ReadProjectionAsync(connection, id, fields.Select(task =>
-            (task.Id, task.VerificationEntries, task.DispatchEntries, task.HistoryInTable)).ToArray(), cancellationToken);
+            (task.Id, task.HistoryInTable)).ToArray(), cancellationToken);
         for (var index = 0; index < fields.Count; index++)
         {
             var task = fields[index];
             var history = histories[index];
             tasks.Add(new ProviderUsageTaskEvidence(
                 task.Id, task.RequiredRole, task.Status, task.AssignedAgentId,
-                history.LatestDispatch.ValueKind != JsonValueKind.Undefined
-                    ? history.LatestDispatch.Deserialize<DispatchFields>(options)!.Snapshot() : task.LastDispatch?.Snapshot(),
-                history.Dispatch.Entries.Select(dispatch => dispatch.Deserialize<DispatchFields>(options)!.Snapshot()).ToArray(),
-                history.LatestVerification.ValueKind != JsonValueKind.Undefined
-                    ? history.LatestVerification.Deserialize<TaskVerificationSnapshot>(options) : task.LastVerification,
-                history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray(),
+                history is { LatestDispatchInTable: true }
+                    ? ProjectDispatch(history.Dispatches[^1]) : task.LastDispatch?.Snapshot(),
+                history is null ? (task.DispatchHistory ?? []).Select(dispatch => dispatch.Snapshot()).ToArray()
+                    : history.Dispatches.Select(ProjectDispatch).ToArray(),
+                history is { LatestVerificationInTable: true }
+                    ? history.Verifications[^1] : task.LastVerification,
+                history?.Verifications ?? task.VerificationHistory ?? [],
                 task.LatestProviderBudgetRecoveryAt) { LastProcess = task.LastProcess });
         }
         var timeline = row.IsMetadataOnly ? [] : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
@@ -93,6 +93,12 @@ internal static class ProviderHoldSeedEvidenceReader
                 evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
                 OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray());
     }
+
+    private static TaskDispatchSnapshot ProjectDispatch(TaskDispatchSnapshot dispatch) =>
+        new(dispatch.WorkerName, dispatch.Command, dispatch.WorkingDirectory, dispatch.DispatchedAt,
+            ProviderName: dispatch.ProviderName, ModelName: dispatch.ModelName,
+            ClaudeCredentialSourceDirectory: dispatch.ClaudeCredentialSourceDirectory,
+            ClaudeApiHoldIdentity: dispatch.ClaudeApiHoldIdentity);
 
     private static readonly ProgressKind[] ReplayTransitions =
         [ProgressKind.TaskRedelegated, ProgressKind.ProviderHoldSubstituted, ProgressKind.ProviderCapabilitySubstituted, ProgressKind.TaskCancelled];
@@ -118,9 +124,9 @@ internal static class ProviderHoldSeedEvidenceReader
     // enrichment. Stripping their identity/enrichment fields could merge different observations.
     private sealed record TaskFields(string Id, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
         DispatchFields? LastDispatch,
-        [property: JsonPropertyName(GoalTaskHistoryStore.DispatchProperty)] JsonElement DispatchEntries,
+        IReadOnlyList<DispatchFields>? DispatchHistory,
         TaskVerificationSnapshot? LastVerification,
-        [property: JsonPropertyName(GoalTaskHistoryStore.VerificationProperty)] JsonElement VerificationEntries,
+        IReadOnlyList<TaskVerificationSnapshot>? VerificationHistory,
         JsonElement HistoryInTable,
         DateTimeOffset? LatestProviderBudgetRecoveryAt, TaskProcessSnapshot? LastProcess);
 
@@ -137,8 +143,6 @@ internal static class ProviderHoldSeedEvidenceReader
     // cannot be a refusal, and authoritative text is outside its same-round identity.
     private sealed class ArchiveVerificationConverter(JsonSerializerOptions options) : JsonConverter<TaskVerificationSnapshot>
     {
-        private readonly JsonSerializerOptions _zeroExitOptions = CreateZeroExitOptions(options);
-
         public override TaskVerificationSnapshot? Read(ref Utf8JsonReader reader, Type typeToConvert,
             JsonSerializerOptions serializerOptions)
         {
@@ -151,11 +155,11 @@ internal static class ProviderHoldSeedEvidenceReader
                     probe.TryGetInt32(out var exitCode) && exitCode == 0)
                 {
                     var compact = reader;
-                    var verification = JsonSerializer.Deserialize<TaskVerificationSnapshot>(ref compact, _zeroExitOptions);
+                    var verification = JsonSerializer.Deserialize<AvailabilityFields>(ref compact, options);
                     if (verification is { ExitCode: 0 })
                     {
                         reader = compact;
-                        return verification;
+                        return verification.Snapshot();
                     }
                     break;
                 }
@@ -166,28 +170,26 @@ internal static class ProviderHoldSeedEvidenceReader
 
         public override void Write(Utf8JsonWriter writer, TaskVerificationSnapshot value,
             JsonSerializerOptions serializerOptions) => JsonSerializer.Serialize(writer, value, options);
-
-        private static JsonSerializerOptions CreateZeroExitOptions(JsonSerializerOptions options)
-        {
-            var resolver = new DefaultJsonTypeInfoResolver();
-            resolver.Modifiers.Add(info =>
-            {
-                if (info.Type != typeof(TaskVerificationSnapshot)) return;
-                foreach (var property in info.Properties)
-                    if (property.Name is nameof(TaskVerificationSnapshot.AuthoritativeStandardOutput) or
-                        nameof(TaskVerificationSnapshot.AuthoritativeStandardError))
-                        property.CustomConverter = new IgnoredTextConverter();
-            });
-            return new JsonSerializerOptions(options) { TypeInfoResolver = resolver };
-        }
     }
 
-    private sealed class IgnoredTextConverter : JsonConverter<string>
+    // Keep the round identity, dispatch match, and verdict of a zero-exit receipt.
+    // Finding-evidence receipts also protect the round when TaskSpec caps its history.
+    private sealed record AvailabilityFields(
+        string Command, string WorkingDirectory, int ExitCode, string StandardOutput, string StandardError,
+        DateTimeOffset CompletedAt, string? StandardOutputPath, string? StandardErrorPath,
+        ProviderFailureKind ProviderFailureKind, string? ReviewedCommit, bool WorkerResultPresent,
+        DateTimeOffset? DispatchStartedAt, int? ChildProcessId, int? ChildExitCode,
+        IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts,
+        bool CompletionVerdictVerifiedSuccess, string? CompletionVerdictRule,
+        VerificationEvidenceSource EvidenceSource, DateTimeOffset? DispatchAttemptAt, string? OrchestratorFailureReason)
     {
-        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert,
-            JsonSerializerOptions options) => null;
-
-        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
-            writer.WriteStringValue(value);
+        internal TaskVerificationSnapshot Snapshot() =>
+            new(Command, WorkingDirectory, ExitCode, StandardOutput, StandardError, CompletedAt,
+                StandardOutputPath: StandardOutputPath, StandardErrorPath: StandardErrorPath,
+                ProviderFailureKind: ProviderFailureKind, ReviewedCommit: ReviewedCommit, WorkerResultPresent: WorkerResultPresent,
+                DispatchStartedAt: DispatchStartedAt, ChildProcessId: ChildProcessId, ChildExitCode: ChildExitCode,
+                FindingEvidenceReceipts: FindingEvidenceReceipts,
+                CompletionVerdictVerifiedSuccess: CompletionVerdictVerifiedSuccess, CompletionVerdictRule: CompletionVerdictRule,
+                EvidenceSource: EvidenceSource, DispatchAttemptAt: DispatchAttemptAt, OrchestratorFailureReason: OrchestratorFailureReason);
     }
 }

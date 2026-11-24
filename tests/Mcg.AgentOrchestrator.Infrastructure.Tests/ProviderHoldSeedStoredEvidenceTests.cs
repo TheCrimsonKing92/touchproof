@@ -406,9 +406,11 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
     }
 
     [Theory]
-    [InlineData("C:/primary", true)]
-    [InlineData("C:/alternate", false)]
-    public async Task Seed_CompressedArchives_ReuseEvidenceAndPreserveScopedRecovery(string credential, bool clears)
+    [InlineData("C:/primary", true, true)]
+    [InlineData("C:/alternate", true, false)]
+    [InlineData("C:/primary", false, false)]
+    public async Task Seed_CompressedArchives_ReuseEvidenceAndPreserveScopedRecovery(string credential,
+        bool sameAttempt, bool clears)
     {
         using var fixture = new Fixture();
         var source = WithCredential(Snapshot(0, false), "C:/primary");
@@ -422,7 +424,17 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         source = source with { Tasks = [sourceTask with { LastVerification = refusal, VerificationHistory = [refusal] }] };
         var witness = WithCredential(Snapshot(1, true), credential);
         var witnessTask = witness.Tasks[0];
-        var success = witnessTask.LastVerification! with { AuthoritativeStandardOutput = new string('x', 100_000) };
+        var attempt = witnessTask.LastDispatch!.DispatchedAt.AddSeconds(sameAttempt ? 0 : -1);
+        var receipt = new FindingEvidenceReceipt("fixture-receipt", "fixture-sha", new FindingEvidenceRequest([]),
+            true, true, "fixture");
+        var success = witnessTask.LastVerification! with
+        {
+            AuthoritativeStandardOutput = new string('x', 100_000),
+            ModelFitNote = new string('y', 100_000),
+            FindingEvidenceReceipts = [receipt],
+            EvidenceSource = VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt = attempt
+        };
         witness = witness with { Tasks = [witnessTask with { LastVerification = success, VerificationHistory = [success] }] };
         await fixture.Insert(source, witness);
         var token = TestContext.Current.CancellationToken;
@@ -435,11 +447,23 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         var reader = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Path, observations.Add);
         var history = await reader.ReadProviderHoldSeedHistoryAsync(token);
         Assert.Equal(source.Id, Assert.Single(history.Attempts).GoalId);
-        Assert.Equal(witness.Id, Assert.Single(history.Recoveries).GoalId);
+        if (sameAttempt)
+            Assert.Equal(witness.Id, Assert.Single(history.Recoveries).GoalId);
+        else
+            Assert.Empty(history.Recoveries);
         Assert.Equal(refusal.AuthoritativeStandardError,
             Assert.Single(history.Evidence.Single(row => row.GoalId == source.Id).Tasks).LastVerification!.AuthoritativeStandardError);
-        Assert.Null(Assert.Single(history.Evidence.Single(row => row.GoalId == witness.Id).Tasks)
-            .LastVerification!.AuthoritativeStandardOutput);
+        if (sameAttempt)
+        {
+            var projected = Assert.Single(history.Evidence.Single(row => row.GoalId == witness.Id).Tasks).LastVerification!;
+            Assert.Equal(attempt, projected.DispatchAttemptAt);
+            Assert.True(projected.CompletionVerdictVerifiedSuccess);
+            Assert.Equal(receipt.ReceiptId, Assert.Single(projected.FindingEvidenceReceipts!).ReceiptId);
+            Assert.Null(projected.AuthoritativeStandardOutput);
+            Assert.Null(projected.ModelFitNote);
+        }
+        else
+            Assert.DoesNotContain(history.Evidence, row => row.GoalId == witness.Id);
 
         observations.Clear();
         var kernel = new AgentOrchestratorKernel();

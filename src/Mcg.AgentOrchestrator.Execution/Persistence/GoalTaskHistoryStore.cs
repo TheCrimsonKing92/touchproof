@@ -336,19 +336,33 @@ internal sealed partial class GoalTaskHistoryStore
             SelectHistory(rows?.GetValueOrDefault((taskId, "dispatch")), Elements(dispatch)));
     }
 
-    internal async Task<TaskHistory[]> ReadProjectionAsync(SqliteConnection? connection, string goalId,
-        IReadOnlyList<(string Id, JsonElement Verification, JsonElement Dispatch, JsonElement Marker)> tasks,
-        CancellationToken token)
+    internal sealed record ProjectedHistory(TaskVerificationSnapshot[] Verifications, TaskDispatchSnapshot[] Dispatches,
+        bool LatestVerificationInTable, bool LatestDispatchInTable);
+
+    internal async Task<ProjectedHistory?[]> ReadProjectionAsync(SqliteConnection? connection, string goalId,
+        IReadOnlyList<(string Id, JsonElement Marker)> tasks, CancellationToken token)
     {
         var markers = tasks.Select(task => ReadMarker(task.Marker, goalId, task.Id)).ToArray();
         var required = Array.FindIndex(markers, marker => marker is not null);
-        if (required >= 0 && connection is null)
+        var result = new ProjectedHistory?[tasks.Count];
+        if (required < 0) return result;
+        if (connection is null)
             throw HistoryError(goalId, tasks[required].Id, "both", "no history connection");
-        var rows = required < 0 ? null : await ReadRowsAsync(connection!, goalId, null, token, tasks[required].Id);
-        return tasks.Select((task, index) => markers[index] is { } marker
-            ? StrictHistory(rows!, goalId, task.Id, marker)
-            // An unmarked sidecar can only repeat the authoritative inline entries.
-            : new TaskHistory(new(Elements(task.Verification), false), new(Elements(task.Dispatch), false))).ToArray();
+        var rows = await ReadRowsAsync(connection, goalId, null, token, tasks[required].Id);
+        for (var index = required; index < tasks.Count; index++)
+        {
+            if (markers[index] is not { } marker) continue;
+            var taskId = tasks[index].Id;
+            var verification = ReadStrictEntries(rows.GetValueOrDefault((taskId, "verification")),
+                marker.Verification, goalId, taskId, "verification", json => DeserializeEntry<TaskVerificationSnapshot>(json));
+            var dispatch = ReadStrictEntries(rows.GetValueOrDefault((taskId, "dispatch")),
+                marker.Dispatch, goalId, taskId, "dispatch", json => DeserializeEntry<TaskDispatchSnapshot>(json));
+            result[index] = new(verification, dispatch, marker.LatestVerificationInTable, marker.LatestDispatchInTable);
+        }
+        return result;
+
+        T DeserializeEntry<T>(string json) where T : class =>
+            JsonSerializer.Deserialize<T>(json, options) ?? throw new JsonException("History entry must be an object.");
     }
 
     private sealed record StoredEntry(long Sequence, string Json);
@@ -485,28 +499,37 @@ internal sealed partial class GoalTaskHistoryStore
 
     private HistoryEntries StrictEntries<T>(IReadOnlyList<StoredEntry>? rows, int? count,
         string goalId, string taskId, string kind)
+        => new(ReadStrictEntries(rows, count, goalId, taskId, kind, ReadElement<T>), true, count is null);
+
+    private JsonElement ReadElement<T>(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            document.RootElement.Deserialize<T>(options) is null)
+            throw new JsonException("History entry must be an object.");
+        return document.RootElement.Clone();
+    }
+
+    private static T[] ReadStrictEntries<T>(IReadOnlyList<StoredEntry>? rows, int? count,
+        string goalId, string taskId, string kind, Func<string, T> read)
     {
         if ((rows?.Count ?? 0) != (count ?? 0))
             throw HistoryError(goalId, taskId, kind, $"expected {count ?? 0} rows, found {rows?.Count ?? 0}");
-        var entries = new JsonElement[count ?? 0];
+        var entries = new T[count ?? 0];
         for (var index = 0; index < entries.Length; index++)
         {
             if (rows![index].Sequence != index)
                 throw HistoryError(goalId, taskId, kind, $"sequence gap at {index}");
             try
             {
-                using var document = JsonDocument.Parse(rows[index].Json);
-                if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                    document.RootElement.Deserialize<T>(options) is null)
-                    throw new JsonException("History entry must be an object.");
-                entries[index] = document.RootElement.Clone();
+                entries[index] = read(rows[index].Json);
             }
             catch (JsonException ex)
             {
                 throw HistoryError(goalId, taskId, kind, $"unparseable entry at {index}", ex);
             }
         }
-        return new(entries, true, count is null);
+        return entries;
     }
 
     private static async Task<Dictionary<(string TaskId, string Kind), List<StoredEntry>>> ReadRowsAsync(

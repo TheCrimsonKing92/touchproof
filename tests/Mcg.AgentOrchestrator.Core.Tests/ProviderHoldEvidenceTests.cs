@@ -12,6 +12,8 @@ public sealed class ProviderHoldEvidenceTests
     [InlineData(1, "", "ERROR: weekly usage limit reached", ProviderFailureKind.BudgetExhausted, null)]
     [InlineData(1, "ERROR: You've hit your usage limit.", "", ProviderFailureKind.BudgetExhausted, null)]
     [InlineData(1, "", "API error (status 402 Payment Required): usage balance exhausted", ProviderFailureKind.BudgetExhausted, null)]
+    [InlineData(1, "", "preamble [invalid]\n{\n\"status\": 402,\n\"detail\": {\"balance \\u0065xhausted\": true}\n}", ProviderFailureKind.BudgetExhausted, null)]
+    [InlineData(1, "", "{\"status\": 402}\n{\"detail\": \"balance exhausted\"}", ProviderFailureKind.Unknown, null)]
     [InlineData(1, "", "ERROR: 401 invalid credentials", ProviderFailureKind.AuthenticationRequired, null)]
     [InlineData(1, "", "ERROR: 429 retry after 30s", ProviderFailureKind.Unknown, null)]
     [InlineData(1, "", "ERROR: 403 Forbidden", ProviderFailureKind.Unknown, null)]
