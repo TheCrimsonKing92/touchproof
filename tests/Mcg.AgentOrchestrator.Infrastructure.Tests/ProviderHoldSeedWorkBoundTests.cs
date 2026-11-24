@@ -762,6 +762,22 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         return SaveAsync([goal with { Tasks = [task, orphan] }]);
     }
 
+    internal Task PopulateRecoveredRefusalAsync()
+    {
+        var goal = MakeHold(0);
+        var recovery = Make(0, At.AddMinutes(2), Credentials[0], success: true);
+        var refused = goal.Tasks[0];
+        var completed = recovery.Tasks[0];
+        return SaveAsync([goal with
+        {
+            Tasks = [completed with
+            {
+                DispatchHistory = [refused.LastDispatch!, completed.LastDispatch!],
+                VerificationHistory = [refused.LastVerification!, completed.LastVerification!]
+            }]
+        }]);
+    }
+
     internal int CountDispatchGoals()
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder

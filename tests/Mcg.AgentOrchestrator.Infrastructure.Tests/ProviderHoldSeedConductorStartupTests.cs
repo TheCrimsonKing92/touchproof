@@ -35,10 +35,12 @@ public sealed class ProviderHoldSeedConductorStartupTests(ITestOutputHelper test
     public async Task ShadowStart_InvalidNonReplayTimelineEntry_FailsBeforeReadyAndLoop()
     {
         using var fixture = new ProviderHoldSeedFixture();
-        // This goal supplies qualifying refusals, but recovery clears its binding before
-        // canonical hold hydration. Startup must validate the row during sparse discovery.
-        await fixture.PopulateLegacyRefusalCaseAsync(recovered: true);
-        var goalId = ProviderHoldSeedFixture.Id(808);
+        await fixture.PopulateRecoveredRefusalAsync();
+        // Initial state hydration reads only the archived goal's stub. Recovery clears its
+        // hold, so discovering the refusal is the only reason the seed needs its timeline.
+        Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(
+            ProviderHoldSeedFixture.At.AddDays(1), cancellationToken: TestContext.Current.CancellationToken));
+        var goalId = ProviderHoldSeedFixture.Id(0);
         using (var connection = new SqliteConnection($"Data Source={fixture.Database};Pooling=False"))
         {
             connection.Open();
@@ -47,7 +49,8 @@ public sealed class ProviderHoldSeedConductorStartupTests(ITestOutputHelper test
                 UPDATE goal_timeline SET entry_json = json_set(entry_json,
                     '$.Kind', 'GoalPolicyDecision', '$.OccurredAt', 'invalid date')
                 WHERE goal_id = $id AND sequence = 0 AND EXISTS (
-                    SELECT 1 FROM goals WHERE id = $id AND json_extract(snapshot_json, '$.TimelineInTable') = 1)
+                    SELECT 1 FROM goal_snapshot_archive
+                    WHERE goal_id = $id AND json_extract(snapshot_json, '$.TimelineInTable') = 1)
                 """;
             command.Parameters.AddWithValue("$id", goalId);
             Assert.Equal(1, command.ExecuteNonQuery());
@@ -60,6 +63,7 @@ public sealed class ProviderHoldSeedConductorStartupTests(ITestOutputHelper test
              "--startup-ceiling-seconds", "60", "--budget-seconds", "120"], output, error);
 
         var receipt = output.ToString() + error;
+        testOutput.WriteLine(receipt);
         Assert.Contains("SHADOW_START result=fail assertion=loop-start", receipt, StringComparison.Ordinal);
         Assert.Contains("PROVIDER_HOLD_HISTORY seed-failed: InvalidDataException:", receipt, StringComparison.Ordinal);
         Assert.Contains($"Goal '{goalId}' timeline: unparseable entry at 0.", receipt, StringComparison.Ordinal);
