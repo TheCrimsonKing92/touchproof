@@ -15,6 +15,8 @@ internal static class BoardFillBacklogSnapshot
     private const string ItemOrder = "rowid";
     private const string NoteOrder = "created_at, id";
     private const string DependencyOrder = "sequence";
+    // The exclusion also lets the existing enum parser handle legacy encodings of Open.
+    private const string CandidateFilter = " WHERE status NOT IN ('Done', 'Superseded')";
 
     private static readonly string ContentSql = $"""
         SELECT {JsonProjection("backlog", $"{ItemColumns}, pinned_at", ItemOrder)},
@@ -81,7 +83,15 @@ internal static class BoardFillBacklogSnapshot
     }
 
     internal static IReadOnlyList<BacklogItem> ReadCore(SqliteConnection connection, string[]? ids = null,
-        CancellationToken cancellationToken = default, bool retain = false)
+        CancellationToken cancellationToken = default, bool retain = false) =>
+        ReadRows(connection, ids, cancellationToken, retain, candidatesOnly: false, null);
+
+    internal static IReadOnlyList<BacklogItem> ReadSchedulingCandidates(SqliteConnection connection,
+        Action<string, SqliteCommand>? observeQuery) =>
+        ReadRows(connection, null, CancellationToken.None, retain: false, candidatesOnly: true, observeQuery);
+
+    private static IReadOnlyList<BacklogItem> ReadRows(SqliteConnection connection, string[]? ids,
+        CancellationToken cancellationToken, bool retain, bool candidatesOnly, Action<string, SqliteCommand>? observeQuery)
     {
         var items = new Dictionary<string, BacklogItem>(StringComparer.Ordinal);
         using var probe = connection.CreateCommand();
@@ -92,8 +102,9 @@ internal static class BoardFillBacklogSnapshot
             cancellationToken.ThrowIfCancellationRequested();
             command.CommandText = $"SELECT {ItemColumns}, {pinColumn} FROM backlog";
             command.CommandText += ids is null
-                ? $" ORDER BY {ItemOrder}"
+                ? $"{(candidatesOnly ? CandidateFilter : "")} ORDER BY {ItemOrder}"
                 : $" WHERE id IN ({SqliteReadSession.BindIds(command, ids)})";
+            observeQuery?.Invoke("candidate", command);
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -103,7 +114,8 @@ internal static class BoardFillBacklogSnapshot
                     Parse(reader.GetString(5)), reader.IsDBNull(6) ? null : reader.GetString(6),
                     reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetString(8),
                     PinnedAt: reader.IsDBNull(9) ? null : Parse(reader.GetString(9)));
-                items.Add(item.Id, item);
+                if (!candidatesOnly || item.Status == BacklogItemStatus.Open)
+                    items.Add(item.Id, item);
             }
         }
         var notes = new Dictionary<string, List<BacklogNote>>(StringComparer.Ordinal);
@@ -113,7 +125,9 @@ internal static class BoardFillBacklogSnapshot
             cancellationToken.ThrowIfCancellationRequested();
             command.CommandText = $"SELECT {NoteColumns} FROM backlog_notes";
             if (ids is not null) command.CommandText += $" WHERE backlog_item_id IN ({SqliteReadSession.BindIds(command, ids)})";
+            if (candidatesOnly) command.CommandText += $" WHERE backlog_item_id IN (SELECT id FROM backlog{CandidateFilter})";
             command.CommandText += $" ORDER BY {NoteOrder}";
+            observeQuery?.Invoke("note", command);
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -128,7 +142,9 @@ internal static class BoardFillBacklogSnapshot
             cancellationToken.ThrowIfCancellationRequested();
             command.CommandText = $"SELECT {DependencyColumns} FROM backlog_dependencies";
             if (ids is not null) command.CommandText += $" WHERE dependent_id IN ({SqliteReadSession.BindIds(command, ids)})";
+            if (candidatesOnly) command.CommandText += $" WHERE dependent_id IN (SELECT id FROM backlog{CandidateFilter})";
             command.CommandText += $" ORDER BY {DependencyOrder}";
+            observeQuery?.Invoke("dependency", command);
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {

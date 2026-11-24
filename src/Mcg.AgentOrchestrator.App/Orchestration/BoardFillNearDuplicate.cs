@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record BoardFillNearDuplicateReference(string Kind, string Id, string Name);
+internal sealed record BoardFillDuplicateSource(string Id, string Title, string Body);
 
 // A lexical match requires both candidate-title coverage and a shared repository file.
 internal static class BoardFillNearDuplicate
@@ -27,17 +28,27 @@ internal static class BoardFillNearDuplicate
         @"^(?:[\p{L}\p{N}_@.\-]+/)*[\p{L}\p{N}_@.\-][\p{L}\p{N}_@.\-]*\.[\p{L}][\p{L}\p{N}_\-]*$",
         RegexOptions.CultureInvariant);
 
+    internal static HashSet<string> RecentItemIds(IReadOnlyList<BoardFillDraftRound> rounds, DateTimeOffset now) =>
+        rounds.Where(round => round.StartedAt >= now.AddHours(-24) && round.StartedAt <= now)
+            .Select(round => round.BacklogItemId).ToHashSet(StringComparer.Ordinal);
+
     internal static Func<BacklogItem, BoardFillNearDuplicateReference?> Lookup(
         IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals,
         IReadOnlyList<BoardFillDraftRound> rounds, DateTimeOffset now)
     {
-        var recentIds = rounds.Where(round => round.StartedAt >= now.AddHours(-24) && round.StartedAt <= now)
-            .Select(round => round.BacklogItemId).ToHashSet(StringComparer.Ordinal);
+        var recentIds = RecentItemIds(rounds, now);
+        return LookupSources(items.Where(item => recentIds.Contains(item.Id))
+            .Select(item => new BoardFillDuplicateSource(item.Id, item.Title, item.Body)), goals);
+    }
+
+    internal static Func<BacklogItem, BoardFillNearDuplicateReference?> LookupSources(
+        IEnumerable<BoardFillDuplicateSource> sources, IReadOnlyList<Goal> goals)
+    {
         var references = goals.Where(goal => !goal.IsTerminal)
             .Select(goal => (Reference: new BoardFillNearDuplicateReference("goal", goal.Id.Value, GoalTitle(goal.Objective)),
                 Text: goal.Objective))
             .OrderBy(entry => entry.Reference.Id, StringComparer.Ordinal)
-            .Concat(items.Where(item => recentIds.Contains(item.Id))
+            .Concat(sources
                 .DistinctBy(item => item.Id, StringComparer.Ordinal)
                 .OrderBy(item => item.Id, StringComparer.Ordinal)
                 .Select(item => (Reference: new BoardFillNearDuplicateReference("item", item.Id, item.Title),

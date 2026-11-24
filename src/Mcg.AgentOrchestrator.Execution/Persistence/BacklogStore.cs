@@ -86,10 +86,14 @@ public sealed class BacklogStore
 {
     private readonly string _dbPath;
     private readonly bool _readOnly;
+    private readonly Action<SqliteConnection>? _observe;
 
-    public BacklogStore(string dbPath) : this(dbPath, readOnly: false)
+    public BacklogStore(string dbPath) : this(dbPath, observe: null) { }
+
+    internal BacklogStore(string dbPath, Action<SqliteConnection>? observe) : this(dbPath, readOnly: false)
     {
-        Setup(dbPath);
+        _observe = observe;
+        Setup(dbPath, observe);
     }
 
     private BacklogStore(string dbPath, bool readOnly)
@@ -146,7 +150,7 @@ public sealed class BacklogStore
     // busy_timeout cannot wait out. Without it a backlog write concurrent with a reader could fail.
     private SqliteConnection OpenConnection() => SqliteStoreConnectionPolicy.Open(
         _dbPath, _readOnly, SqliteStoreDurability.Strict, foreignKeys: false,
-        operationTag: "BacklogStore.OpenConnection");
+        operationTag: "BacklogStore.OpenConnection", observe: _observe);
 
     public static void Setup(string dbPath) => Setup(dbPath, observe: null);
 
