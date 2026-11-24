@@ -202,19 +202,27 @@ internal static partial class LandingExecutor
         var boundMainRevision = ResolveRef(executionDirectory, workspace.IntegrationBranch);
         var repairStorePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
         SoloBaselineRepairStore? repairStore = null;
-        bool RepairAdmissionCurrent(string candidate, string main)
+        const string staleRepairEvidence = "the revision pair changed after baseline repair validation or normal acceptance";
+        string? RepairAdmissionBlocker(string staleEvidenceReason)
         {
             if (repairStore is null && File.Exists(repairStorePath)) repairStore = new SoloBaselineRepairStore(repairStorePath);
-            if (repairStore is null) return true;
-            var findings = SoloBaselineRepairCoordinator.SoloRepairFindings(repairStore, goal, candidate, main);
-            return findings.Count == 0 ||
-                (repairStore.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main) &&
-                 repairStore.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed" &&
-                 ResolveRef(executionDirectory, goalBranch) == candidate &&
-                 ResolveRef(executionDirectory, workspace.IntegrationBranch) == main);
+            if (repairStore is null) return null;
+            var findings = SoloBaselineRepairCoordinator.SoloRepairFindings(repairStore, goal, evidenceCandidateSha, boundMainRevision);
+            if (findings.Count == 0) return null;
+            if (!repairStore.IsEvidenceCurrent(goal.Id.Value, findings, evidenceCandidateSha, boundMainRevision))
+                return staleEvidenceReason;
+
+            var normalGate = SoloBaselineRepairCoordinator.ReadNormalGate(executionDirectory, repairStore, goal,
+                new(evidenceCandidateSha, boundMainRevision));
+            if (!normalGate.Acknowledged)
+                return normalGate.Blocker ?? "normal acceptance is pending for the current revision pair";
+
+            return ResolveRef(executionDirectory, goalBranch) == evidenceCandidateSha &&
+                ResolveRef(executionDirectory, workspace.IntegrationBranch) == boundMainRevision
+                ? null : staleEvidenceReason;
         }
-        if (!RepairAdmissionCurrent(evidenceCandidateSha, boundMainRevision))
-            return BuildMutationBlockedResult(goal, goalPrefix, "the current revision pair needs baseline repair validation and normal acceptance");
+        if (RepairAdmissionBlocker("the current revision pair needs baseline repair validation and normal acceptance") is { } repairBlocker)
+            return BuildMutationBlockedResult(goal, goalPrefix, repairBlocker);
 
         if (MultiRepositoryGoal.Applies(goal))
         {
@@ -289,8 +297,7 @@ internal static partial class LandingExecutor
             return PullRequestLandingDelivery.Deliver(kernel, goal, workspace, evidenceCandidateSha,
                 pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()), eventWriter, mutationBlocker,
                 promotionClock ?? new SystemClock(),
-                () => RepairAdmissionCurrent(evidenceCandidateSha, boundMainRevision)
-                    ? null : "the revision pair changed after baseline repair validation or normal acceptance");
+                () => RepairAdmissionBlocker(staleRepairEvidence));
 
         var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
         var integrationDiverged = previousIntegrationRevision is not null &&
@@ -398,8 +405,8 @@ internal static partial class LandingExecutor
         }
 
         var publicationBlockReason = mutationBlocker?.Invoke();
-        if (string.IsNullOrWhiteSpace(publicationBlockReason) && !RepairAdmissionCurrent(evidenceCandidateSha, boundMainRevision))
-            publicationBlockReason = "the revision pair changed after baseline repair validation or normal acceptance";
+        if (string.IsNullOrWhiteSpace(publicationBlockReason))
+            publicationBlockReason = RepairAdmissionBlocker(staleRepairEvidence);
         if (string.IsNullOrWhiteSpace(publicationBlockReason))
             publicationBlockReason = EvaluatePendingHumanInput(
                 kernel, goal, workspace, evidenceCandidateSha).HoldDescription;

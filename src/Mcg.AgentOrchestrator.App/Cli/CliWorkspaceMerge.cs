@@ -265,7 +265,7 @@ internal static class CliWorkspaceMerge
             return false;
         }
 
-        var normalGate = ReadNormalGate(context.Workspace.ExecutionDirectory, store, goal, pair);
+        var normalGate = SoloBaselineRepairCoordinator.ReadNormalGate(context.Workspace.ExecutionDirectory, store, goal, pair);
         if (normalGate.Blocker is { } blocker)
         {
             Console.WriteLine($"Acceptance blocked: {blocker}.");
@@ -308,7 +308,7 @@ internal static class CliWorkspaceMerge
 
         if (requireNormalAcceptance)
         {
-            var normalGate = ReadNormalGate(root, store, goal, pair);
+            var normalGate = SoloBaselineRepairCoordinator.ReadNormalGate(root, store, goal, pair);
             if (normalGate.Blocker is not null) return normalGate.Blocker;
             if (!normalGate.Acknowledged) return "normal acceptance is pending for the current revision pair";
         }
@@ -332,47 +332,6 @@ internal static class CliWorkspaceMerge
         return null;
 
         GateReadyCandidateRevisionPair ReadPair() => new(ReadRef(root, candidateRef), ReadRef(root, mainRef));
-    }
-
-    internal static (bool Acknowledged, string? RecoverableAttempt, string? Blocker) ReadNormalGate(
-        string root, SoloBaselineRepairStore store, Goal goal, GateReadyCandidateRevisionPair pair)
-    {
-        if (pair is not { BranchRevision: { } candidate, MainRevision: { } main }) return default;
-        if (!GitRevisionReader.IsBranchObjectId(candidate) || !GitRevisionReader.IsBranchObjectId(main)) return default;
-
-        GoalOperationJournalSummary journal;
-        try
-        {
-            journal = GoalOperationJournal.ReadStrict(root, goal.Id);
-        }
-        catch (Exception error) when (error is FormatException or InvalidDataException or IOException or UnauthorizedAccessException)
-        {
-            return (false, null, $"Cannot read normal acceptance evidence for goal {goal.Id.Value}. {error.Message} " +
-                "Restore a readable goal operation journal before retrying acceptance");
-        }
-
-        // The strict reader keeps entries in chronological order, with file order breaking ties.
-        var latest = journal.Entries.LastOrDefault(entry =>
-            (!string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) ||
-             (entry.Operation is "acceptance" or "conductor:acceptance" && entry.Status != GoalOperationStatus.Begin)) &&
-            entry.CouldMatchCandidate(candidate, main));
-        if (latest is null) return default;
-        if (!latest.HasCandidatePair)
-            return (false, null, $"Normal acceptance outcome '{latest.IdempotencyKey}' has an incomplete revision pair " +
-                $"in '{journal.Path}'. Restore its recorded candidate and integration revisions before retrying acceptance");
-        if (latest.Status != GoalOperationStatus.Completed || latest.GoalId != goal.Id ||
-            !latest.HasCandidate(candidate, main)) return default;
-
-        var passed = latest.Operation switch
-        {
-            "acceptance" => latest.RequiredChecksValidated && GoalOperationJournalGatePassedOutcome.Matches(latest),
-            "conductor:acceptance" => latest.AcceptanceOutcome == "passed",
-            _ => false
-        };
-        if (!passed) return default;
-
-        var acknowledged = store.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed";
-        return (acknowledged, latest.Operation == "acceptance" ? latest.IdempotencyKey : null, null);
     }
 
     private static string? ReadRef(string directory, string reference) =>

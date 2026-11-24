@@ -500,6 +500,52 @@ internal sealed class SoloBaselineRepairCoordinator(
         return null;
     }
 
+    internal static (bool Acknowledged, string? RecoverableAttempt, string? Blocker) ReadNormalGate(
+        string root, SoloBaselineRepairStore store, Goal goal, GateReadyCandidateRevisionPair pair)
+    {
+        if (pair is not { BranchRevision: { } candidate, MainRevision: { } main }) return default;
+        if (!GitRevisionReader.IsBranchObjectId(candidate) || !GitRevisionReader.IsBranchObjectId(main)) return default;
+
+        GoalOperationJournalSummary journal;
+        try
+        {
+            journal = GoalOperationJournal.ReadStrict(root, goal.Id);
+        }
+        catch (Exception error) when (error is FormatException or InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return (false, null, $"Cannot read normal acceptance evidence for goal {goal.Id.Value}. {error.Message} " +
+                "Restore a readable goal operation journal before retrying acceptance");
+        }
+
+        // The strict reader keeps entries in chronological order, with file order breaking ties.
+        var latest = journal.Entries.LastOrDefault(entry =>
+            (!string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) ||
+             (entry.Status != GoalOperationStatus.Begin &&
+              (IsCliAcceptance(entry) || IsConductorAcceptance(entry)))) &&
+            entry.CouldMatchCandidate(candidate, main));
+        if (latest is null) return default;
+        if (!latest.HasCandidatePair)
+            return (false, null, $"Normal acceptance outcome '{latest.IdempotencyKey}' has an incomplete revision pair " +
+                $"in '{journal.Path}'. Restore its recorded candidate and integration revisions before retrying acceptance");
+        if (latest.Status != GoalOperationStatus.Completed || latest.GoalId != goal.Id ||
+            !latest.HasCandidate(candidate, main)) return default;
+
+        var cliAcceptance = IsCliAcceptance(latest);
+        var passed = cliAcceptance
+            ? latest.RequiredChecksValidated && GoalOperationJournalGatePassedOutcome.Matches(latest)
+            : IsConductorAcceptance(latest) && latest.AcceptanceOutcome == "passed";
+        if (!passed) return default;
+
+        var acknowledged = store.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed";
+        return (acknowledged, cliAcceptance ? latest.IdempotencyKey : null, null);
+
+        static bool IsCliAcceptance(GoalOperationJournalEntry entry) =>
+            string.Equals(entry.Operation, "acceptance", StringComparison.OrdinalIgnoreCase);
+
+        static bool IsConductorAcceptance(GoalOperationJournalEntry entry) =>
+            string.Equals(entry.Operation, "conductor:acceptance", StringComparison.OrdinalIgnoreCase);
+    }
+
     private ConductorAdvanceResult SoloRepairHold(Goal goal, string prefix, ConductorAutonomyPolicy policy, string reason, string detail)
     {
         var hold = CreateSoloRepairHold(GoalLifecycle.ResolveState(goal, getFacts(goal)), reason, detail);

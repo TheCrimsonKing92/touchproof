@@ -43,6 +43,12 @@ public sealed class SoloRepairWorkflowTests
     [InlineData(true, "trx")]
     [InlineData(false, "envelope")]
     [InlineData(false, "trx")]
+    [InlineData(true, "abbreviated failure")]
+    [InlineData(false, "abbreviated failure")]
+    [InlineData(true, "outcomeless failure")]
+    [InlineData(false, "outcomeless failure")]
+    [InlineData(true, "unreadable journal")]
+    [InlineData(false, "unreadable journal")]
     public void Publication_RechecksRepairEvidenceAfterAdmission(bool pullRequest, string invalidation)
     {
         using var fixture = new PullRequestLandingTestFixture();
@@ -63,6 +69,8 @@ public sealed class SoloRepairWorkflowTests
         Assert.Null(coordinator.ObserveAcceptedPair(fixture.Goal, fixture.Goal.Id.Value[..8], Policy, summary));
         var gateKey = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
         Assert.Equal(PullRequestLandingTestFixture.Attempt, store.ReadCheck(gateKey)?.Detail);
+        var journal = GoalOperationJournal.ReadStrict(fixture.Repository, fixture.Goal.Id);
+        var pass = Assert.Single(journal.Entries, entry => entry.AcceptanceOutcome == "passed");
         var beforePublication = 0;
 
         var result = LandingExecutor.Execute(fixture.Kernel, fixture.Goal, workspace,
@@ -75,6 +83,14 @@ public sealed class SoloRepairWorkflowTests
                         File.Delete(Assert.IsType<SoloAcceptanceArtifact>(finding.Proof).Path);
                     else if (invalidation == "trx")
                         File.AppendAllText(Assert.Single(finding.CandidateArtifacts).Path, " ");
+                    else if (invalidation == "abbreviated failure")
+                        GoalOperationJournal.AcceptanceFailed(fixture.Repository, fixture.Goal, "conductor:acceptance",
+                            fixture.Candidate[..12], fixture.Main, attemptStartedAt: pass.At.AddSeconds(1));
+                    else if (invalidation == "outcomeless failure")
+                        AppendJournalEntry(journal.Path, new("newer-failed-attempt", fixture.Goal.Id, "Acceptance",
+                            GoalOperationStatus.Failed, pass.At.AddSeconds(1), null, fixture.Candidate, fixture.Main));
+                    else if (invalidation == "unreadable journal")
+                        SharedJsonlFile.AppendLine(journal.Path, """{"operation":"acceptance" """);
                     else
                     {
                         var branch = invalidation == "main" ? "main" : GoalWorktrees.BranchName(fixture.Goal.Id);
@@ -86,7 +102,14 @@ public sealed class SoloRepairWorkflowTests
             });
 
         Assert.Equal(pullRequest ? 1 : 2, beforePublication);
-        Assert.Contains("revision pair changed after baseline repair validation or normal acceptance", result.Message);
+        var expectedBlocker = invalidation switch
+        {
+            "abbreviated failure" or "outcomeless failure" => "normal acceptance is pending for the current revision pair",
+            "unreadable journal" => "Restore a readable goal operation journal before retrying acceptance",
+            _ => "revision pair changed after baseline repair validation or normal acceptance"
+        };
+        Assert.Contains(expectedBlocker, result.Message);
+        Assert.False(result.MainAdvanced);
         Assert.Empty(fixture.Forge.Calls);
         Assert.Null(fixture.Goal.DeliveredForReview);
         Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
@@ -185,13 +208,16 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Theory]
-    [InlineData(GoalOperationStatus.Failed, "failed", true, false)]
-    [InlineData(GoalOperationStatus.Failed, "failed", false, true)]
-    [InlineData(GoalOperationStatus.Completed, "gate-passed", false, true)]
-    [InlineData(GoalOperationStatus.Failed, null, false, false)]
-    [InlineData(GoalOperationStatus.Begin, null, false, false)]
+    [InlineData("acceptance", GoalOperationStatus.Failed, "failed", true, false)]
+    [InlineData("acceptance", GoalOperationStatus.Failed, "failed", false, true)]
+    [InlineData("acceptance", GoalOperationStatus.Completed, "gate-passed", false, true)]
+    [InlineData("acceptance", GoalOperationStatus.Failed, null, false, false)]
+    [InlineData("Acceptance", GoalOperationStatus.Failed, null, false, false)]
+    [InlineData("Conductor:Acceptance", GoalOperationStatus.Failed, null, false, false)]
+    [InlineData("conductor:acceptance", GoalOperationStatus.Begin, null, false, false)]
+    [InlineData("Acceptance", GoalOperationStatus.Begin, null, false, false)]
     public async Task CliFastForward_NewerJournalRowsCanInvalidatePriorPass(
-        GoalOperationStatus status, string? outcome, bool abbreviateCandidate, bool abbreviateMain)
+        string operation, GoalOperationStatus status, string? outcome, bool abbreviateCandidate, bool abbreviateMain)
     {
         using var fixture = new PullRequestLandingTestFixture();
         var verifier = new ControlledVerifier(fixture.Repository);
@@ -203,23 +229,18 @@ public sealed class SoloRepairWorkflowTests
         var journal = GoalOperationJournal.ReadStrict(fixture.Repository, fixture.Goal.Id);
         var pass = Assert.Single(journal.Entries, entry => entry.RequiredChecksValidated);
         Assert.Equal(pass.IdempotencyKey,
-            CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, fixture.Goal, pair).RecoverableAttempt);
+            SoloBaselineRepairCoordinator.ReadNormalGate(fixture.Repository, store, fixture.Goal, pair).RecoverableAttempt);
 
         var begin = status == GoalOperationStatus.Begin;
         var recordedCandidate = abbreviateCandidate ? fixture.Candidate[..12] : fixture.Candidate;
         var recordedMain = abbreviateMain ? fixture.Main[..12] : fixture.Main;
         var newer = new GoalOperationJournalEntry("newer-attempt", fixture.Goal.Id,
-            begin ? "conductor:acceptance" : "acceptance", status, pass.At.AddSeconds(1), null,
+            operation, status, pass.At.AddSeconds(1), null,
             begin ? null : recordedCandidate, begin ? null : recordedMain, outcome)
         {
             RequiredChecksValidated = status == GoalOperationStatus.Completed
         };
-        SharedJsonlFile.AppendLine(journal.Path, JsonSerializer.Serialize(newer, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            Converters = { new JsonStringEnumConverter() }
-        }));
+        AppendJournalEntry(journal.Path, newer);
 
         var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel);
@@ -229,7 +250,7 @@ public sealed class SoloRepairWorkflowTests
         var reloadedJournal = GoalOperationJournal.ReadStrict(fixture.Repository, goal.Id);
         Assert.Equal(newer, reloadedJournal.Entries.Last());
         Assert.Equal(begin ? pass.IdempotencyKey : null,
-            CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, goal, pair).RecoverableAttempt);
+            SoloBaselineRepairCoordinator.ReadNormalGate(fixture.Repository, store, goal, pair).RecoverableAttempt);
 
         var key = SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, fixture.Candidate, fixture.Main);
         store.AcknowledgeEffect(key, pass.IdempotencyKey);
@@ -260,7 +281,7 @@ public sealed class SoloRepairWorkflowTests
         GoalOperationJournal.AcceptanceGatePassed(fixture.Repository, fixture.Goal, "acceptance", fixture.Candidate,
             fixture.Main, requiredChecksValidated: true);
         if (acknowledged) store.AcknowledgeEffect(key, "prior-attempt");
-        var prior = CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, fixture.Goal, pair);
+        var prior = SoloBaselineRepairCoordinator.ReadNormalGate(fixture.Repository, store, fixture.Goal, pair);
         Assert.Equal(acknowledged, prior.Acknowledged);
         Assert.NotNull(prior.RecoverableAttempt);
         Assert.Null(prior.Blocker);
@@ -485,7 +506,7 @@ public sealed class SoloRepairWorkflowTests
         var pass = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, fixture.Candidate, fixture.Main);
         Assert.Equal("gate-passed", pass?.AcceptanceOutcome);
         Assert.True(pass?.RequiredChecksValidated);
-        Assert.Null(CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, fixture.Goal,
+        Assert.Null(SoloBaselineRepairCoordinator.ReadNormalGate(fixture.Repository, store, fixture.Goal,
             new(fixture.Candidate, fixture.Candidate)).RecoverableAttempt);
         Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
 
@@ -920,6 +941,14 @@ public sealed class SoloRepairWorkflowTests
             return Task.FromResult(outcome);
         }
     }
+
+    private static void AppendJournalEntry(string path, GoalOperationJournalEntry entry) =>
+        SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(entry, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Converters = { new JsonStringEnumConverter() }
+        }));
 
     private static SoloRepairFinding CapturePublicationFinding(PullRequestLandingTestFixture fixture)
     {
