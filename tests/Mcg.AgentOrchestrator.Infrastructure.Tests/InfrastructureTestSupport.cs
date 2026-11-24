@@ -273,7 +273,6 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
                 };
         }
 
-        HostCapacitySlotGitCensus.RecordProbeLaunch(arguments.Count > 0 ? arguments[0] : string.Empty);
         childProcessId = process.Id;
         try
         {
@@ -283,6 +282,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         {
             childStartedAt = null;
         }
+        HostCapacitySlotGitCensus.RecordProbeLaunch(
+            arguments.Count > 0 ? arguments[0] : string.Empty, childProcessId, childStartedAt, arguments);
 
         process.StandardInput.Close();
         var outputTask = CaptureStreamAsync(seam?.CaptureStream?.Invoke(process.StandardOutput.BaseStream)
@@ -434,10 +435,6 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
             standardErrorPath);
         process = launch.Process;
         processStarted = true;
-        HostCapacitySlotGitCensus.RecordProbeLaunch(subcommand);
-        standardOutputStream = OpenRetainedCaptureStream(standardOutputPath);
-        standardErrorStream = OpenRetainedCaptureStream(standardErrorPath);
-        command = FormatCommand(startInfo.FileName, startInfo.ArgumentList);
         childProcessId = process.Id;
         try
         {
@@ -447,6 +444,10 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
         {
             childStartedAt = null;
         }
+        HostCapacitySlotGitCensus.RecordProbeLaunch(subcommand, childProcessId, childStartedAt, startInfo.ArgumentList);
+        standardOutputStream = OpenRetainedCaptureStream(standardOutputPath);
+        standardErrorStream = OpenRetainedCaptureStream(standardErrorPath);
+        command = FormatCommand(startInfo.FileName, startInfo.ArgumentList);
 
         launch.Resume();
         timedOut = observation.Wait(() => launch.WaitForOwnedExit(TimeSpan.FromSeconds(60))) == false;

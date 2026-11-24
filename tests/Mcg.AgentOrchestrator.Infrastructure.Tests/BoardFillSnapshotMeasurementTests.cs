@@ -1,8 +1,13 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using static BoardFillSnapshotTestDatabase;
+using HostFixture = BoardFillSchedulingComparison.HostFixture;
 
 public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
 {
@@ -10,6 +15,406 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
     private const int SeedItems = 2600;
     private const int TimedPairs = 5;
     private static readonly HashSet<string> NoExclusions = [];
+
+    [Fact(Skip = "Requires the Windows SQLite VFS and per-thread CPU accounting.", SkipUnless = nameof(IsWindows))]
+    public void Three_arms_report_cost_through_the_first_matching_scheduling_decision()
+    {
+        const string full = "current-full";
+        const string historical = "integrated-49238cad";
+        const string projection = "experimental-projection";
+        string[] arms = [full, historical, projection];
+        var quantum = ObserveCpuQuantum();
+        output.WriteLine($"scheduling-comparison full=f122e81ebc7cfabc50e1c21ceef176474e4bb7ad " +
+            $"historical=534b124943c796e126195fc31d70aba611ee5dda baseline_tree=28088178ff2b9bc564e45efc161381d055948a36 " +
+            $"candidate_module_mvid={typeof(BoardFillSchedulingSnapshot).Module.ModuleVersionId} " +
+            $"runtime={RuntimeInformation.FrameworkDescription} os={RuntimeInformation.OSDescription} " +
+            $"arch={RuntimeInformation.ProcessArchitecture} processors={Environment.ProcessorCount} cpu={Environment.GetEnvironmentVariable("PROCESSOR_IDENTIFIER")} " +
+            $"configuration={typeof(BoardFillSchedulingSnapshot).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyConfigurationAttribute), false)
+                .OfType<System.Reflection.AssemblyConfigurationAttribute>().SingleOrDefault()?.Configuration} " +
+            $"stopwatch_hz={Stopwatch.Frequency} observed_thread_cpu_quantum_us={CpuMicroseconds(quantum)} " +
+            "cache=warm-process-and-filesystem,non-pooled-sqlite,cold-new-reader " +
+            "boundary=default-shadow-host-tick-entry-through-persisted-draft-selection " +
+            "writer=common-revision-schema sql_payload=utf8-text-blob,8-byte-numeric,0-byte-null " +
+            "host_note_payload=utf8-text wal_growth=scripted-commit-plus-host-tick-physical-file-length-delta");
+
+        foreach (var (count, open) in new[] { (2618, 687), (2618, 1374) })
+        {
+            using var fixture = BoardFillSchedulingComparison.Create(count, open);
+            using var documentedFixture = new HostFixture(fixture, open);
+            ReportFixture(documentedFixture.Workspace.BacklogStorePath);
+            _ = MeasureSchedulingArm(fixture, open, full, "cold", trace: false);
+            _ = MeasureSchedulingArm(fixture, open, historical, "quiet", trace: false);
+            _ = MeasureSchedulingArm(fixture, open, projection, "changed", trace: false);
+
+            foreach (var scenario in new[] { "cold", "quiet", "changed", "first-after-commit" })
+            {
+                var samples = arms.ToDictionary(arm => arm, _ => new List<SchedulingSample>());
+                for (var pair = 0; pair < TimedPairs; pair++)
+                {
+                    var index = pair;
+                    var pairOrder = Enumerable.Range(0, arms.Length)
+                        .Select(offset => arms[(index + (index % 2 == 0 ? offset : arms.Length - offset)) % arms.Length]);
+                    var sample = pairOrder.ToDictionary(arm => arm, arm => MeasureSchedulingArm(fixture, open, arm, scenario, trace: false));
+                    foreach (var arm in arms)
+                    {
+                        Assert.Equal(sample[full].Decisions, sample[arm].Decisions);
+                        samples[arm].Add(sample[arm]);
+                    }
+                }
+
+                var traced = arms.ToDictionary(arm => arm, arm => MeasureSchedulingArm(fixture, open, arm, scenario, trace: true));
+                foreach (var arm in arms)
+                {
+                    Assert.Equal(traced[full].Decisions, traced[arm].Decisions);
+                    var counts = traced[arm];
+                    Assert.True(counts.ReadPayload > 0, $"No backlog read payload for {arm} ({open} open, {scenario}).");
+                    Assert.Equal(arm == projection, counts.ProjectionReadPayload > 0);
+                    output.WriteLine($"scheduling-cost open={open} scenario={scenario} arm={arm} repetitions={TimedPairs} " +
+                        $"decisions={counts.Decisions.Length} read_statements={counts.ReadStatements} read_rows={counts.ReadRows} " +
+                        $"read_payload_bytes={counts.ReadPayload} projection_read_statements={counts.ProjectionReadStatements} " +
+                        $"projection_read_rows={counts.ProjectionReadRows} projection_read_payload_bytes={counts.ProjectionReadPayload} " +
+                        $"write_statements={counts.WriteStatements} " +
+                        $"write_rows={counts.WriteRows} write_payload_bytes={counts.WritePayload} " +
+                        $"trigger_steps={counts.TriggerSteps} host_note_writes={counts.HostNoteWrites} " +
+                        $"host_note_statements={counts.HostNoteStatements} host_note_rows={counts.HostNoteRows} " +
+                        $"host_note_result_payload_bytes={counts.HostNoteResultPayload} host_note_trigger_steps={counts.HostNoteTriggerSteps} " +
+                        $"host_note_utf8_bytes={counts.HostNoteBytes} {ReportTotals(samples[arm].Select(sample => sample.Totals))}");
+                }
+                foreach (var baseline in new[] { full, historical })
+                {
+                    var deltas = samples[baseline].Zip(samples[projection], (a, b) => a.Totals - b.Totals);
+                    var baselineTrace = traced[baseline];
+                    var projectionTrace = traced[projection];
+                    var payloadSavings = baselineTrace.ReadPayload - projectionTrace.ReadPayload;
+                    var totalPayloadSavings = payloadSavings + baselineTrace.WritePayload - projectionTrace.WritePayload;
+                    output.WriteLine($"scheduling-savings open={open} scenario={scenario} baseline={baseline} " +
+                        $"versus={projection} read_payload_bytes={payloadSavings} total_result_payload_bytes={totalPayloadSavings} {ReportTotals(deltas)} " +
+                        $"decision_cpu_resolution={CpuResolution(deltas.Select(delta => delta.DecisionCpu), quantum)}");
+                }
+            }
+            ReportProjectionPlans(documentedFixture);
+        }
+    }
+
+    private void ReportFixture(string path)
+    {
+        using var session = new SqliteReadSession(path);
+        using var command = session.Connection.CreateCommand();
+        command.CommandText = "SELECT sqlite_version(), (SELECT journal_mode FROM pragma_journal_mode), " +
+            "(SELECT page_size FROM pragma_page_size), (SELECT version FROM store_schema_versions WHERE store_name='backlog')";
+        using (var reader = command.ExecuteReader())
+        {
+            Assert.True(reader.Read());
+            output.WriteLine($"scheduling-schema provider={typeof(SqliteConnection).Assembly.GetName().Version} " +
+                $"sqlite={reader.GetString(0)} journal={reader.GetString(1)} page_bytes={reader.GetInt64(2)} backlog_version={reader.GetInt64(3)}");
+        }
+        command.CommandText = """
+            SELECT name, coalesce(sql, '(implicit)') FROM sqlite_schema
+            WHERE tbl_name IN ('backlog', 'backlog_notes', 'backlog_dependencies')
+                AND type IN ('table', 'index') ORDER BY type, name
+            """;
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                output.WriteLine($"scheduling-schema-object name={reader.GetString(0)} sql={reader.GetString(1).ReplaceLineEndings(" ")}");
+        }
+        var snapshot = BoardFillBacklogSnapshot.Read(path);
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Contents(snapshot))));
+        foreach (var group in snapshot.GroupBy(item => item.Status))
+            output.WriteLine($"scheduling-fixture id={digest} source_backlog=4447ad6b69eb4f2c9c083b05dc5c87cd status={group.Key} " +
+                $"items={group.Count()} dependencies={group.Sum(item => item.Dependencies.Count)} " +
+                $"notes={group.Sum(item => item.Notes.Count)} body_utf8_bytes={group.Sum(item => Encoding.UTF8.GetByteCount(item.Body))} " +
+                $"note_utf8_bytes={group.Sum(item => item.Notes.Sum(note => Encoding.UTF8.GetByteCount(note.Text)))}");
+    }
+
+    private void ReportProjectionPlans(HostFixture fixture)
+    {
+        using var planSession = new SqliteReadSession(fixture.Workspace.BacklogStorePath);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        fixture.ObserveProjectionQueries((kind, executed) =>
+        {
+            if (!seen.Add(kind)) return;
+            using var explain = planSession.Connection.CreateCommand();
+            explain.CommandText = "EXPLAIN QUERY PLAN " + executed.CommandText;
+            foreach (SqliteParameter parameter in executed.Parameters)
+                explain.Parameters.AddWithValue(parameter.ParameterName, parameter.Value);
+            using var reader = explain.ExecuteReader();
+            var details = new List<string>();
+            while (reader.Read()) details.Add(reader.GetString(3));
+            Assert.NotEmpty(details);
+            output.WriteLine($"scheduling-plan query={kind} bindings={executed.Parameters.Count} sql={executed.CommandText} plan={string.Join(" | ", details)}");
+        });
+        Assert.Equal(new[] { "candidate", "dependency", "historical", "note", "prerequisite" }, seen.Order(StringComparer.Ordinal));
+    }
+
+    private static SchedulingSample MeasureSchedulingArm(BoardFillSnapshotTestDatabase fixture, int open, string arm, string scenario, bool trace)
+    {
+        using var hostFixture = new HostFixture(fixture, open);
+        var path = hostFixture.Workspace.BacklogStorePath;
+        BoardFillSnapshotSqlTrace? fullReadTrace = null;
+        BoardFillSnapshotSqlTrace? projectionReadTrace = null;
+        BoardFillSnapshotSqlTrace? noteTrace = null;
+        Action<SqliteConnection>? observeNote = null;
+        var writeTrace = trace ? new BoardFillSnapshotSqlTrace(measureResultPayload: true) : null;
+        Action<string, SqliteConnection>? observeFull = trace
+            ? (source, connection) => fullReadTrace?.Attach(source, connection) : null;
+        Action<string, SqliteConnection>? observeProjection = trace
+            ? (source, connection) => projectionReadTrace?.Attach(source, connection) : null;
+        using var cache = new BoardFillBacklogSnapshotCache(path, observeFull);
+        using var writer = HostFixture.Connect(path);
+        Execute(writer, "PRAGMA wal_autocheckpoint=0");
+
+        var totals = new SchedulingTotals();
+        var noteWrites = 0;
+        long noteBytes = 0;
+        void AppendNote(string id, string text)
+        {
+            var cpu = ThreadCpu();
+            var allocated = GC.GetAllocatedBytesForCurrentThread();
+            var started = Stopwatch.GetTimestamp();
+            new BacklogStore(path, observeNote).AppendNoteAsync(id, text).GetAwaiter().GetResult();
+            var finished = Stopwatch.GetTimestamp();
+            totals = totals with
+            {
+                NoteCpu = totals.NoteCpu + ThreadCpu() - cpu,
+                NoteAllocated = totals.NoteAllocated + GC.GetAllocatedBytesForCurrentThread() - allocated,
+                NoteElapsed = totals.NoteElapsed + finished - started
+            };
+            noteWrites++;
+            noteBytes += Encoding.UTF8.GetByteCount(text);
+        }
+
+        Func<IReadOnlyList<BacklogItem>> readBacklog = arm switch
+        {
+            "current-full" => () => BoardFillBacklogSnapshot.Read(path, observeFull),
+            "integrated-49238cad" or "experimental-projection" => cache.Read,
+            _ => throw new ArgumentOutOfRangeException(nameof(arm))
+        };
+        var host = hostFixture.CreateHost(readBacklog, arm == "experimental-projection"
+            ? (rounds, now, questionIds) =>
+                BoardFillSchedulingSnapshot.ReadHostProjection(path, rounds, now, questionIds, observeProjection)
+            : null, AppendNote);
+        try
+        {
+            if (scenario != "cold")
+            {
+                host.ServiceTick(hostFixture.Kernel);
+                var baseline = hostFixture.ReadDecision(writer);
+                Assert.Equal(BoardFillSchedulingComparison.Dependent, baseline.Selected);
+                WaitForDraft(host);
+                totals = default;
+                noteWrites = 0;
+                noteBytes = 0;
+            }
+            if (trace)
+            {
+                fullReadTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+                noteTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+                observeNote = connection => noteTrace.Attach(path, connection);
+                if (arm == "experimental-projection")
+                    projectionReadTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+            }
+
+            // Keep SQL tracing off the connection used to inspect receipts.
+            using var edits = HostFixture.Connect(path);
+            Execute(edits, "PRAGMA wal_autocheckpoint=0");
+            writeTrace?.Attach(path, edits);
+            var steps = scenario switch
+            {
+                "cold" or "first-after-commit" => 1,
+                "quiet" => 16,
+                "changed" => 5,
+                _ => throw new ArgumentOutOfRangeException(nameof(scenario))
+            };
+            var receipts = new string[steps];
+            for (var step = 0; step < steps; step++)
+            {
+                var walBefore = WalLength(path);
+                long? committed = null;
+                var changed = scenario is "changed" or "first-after-commit";
+                if (changed)
+                {
+                    hostFixture.MainHead = HostFixture.ChangedHead;
+                    var sql = SchedulingMutation(step);
+                    var writeCpu = ThreadCpu();
+                    var writeAlloc = GC.GetAllocatedBytesForCurrentThread();
+                    var writeStarted = Stopwatch.GetTimestamp();
+                    Execute(edits, sql);
+                    committed = Stopwatch.GetTimestamp();
+                    totals = totals with
+                    {
+                        WriteCpu = totals.WriteCpu + ThreadCpu() - writeCpu,
+                        WriteAllocated = totals.WriteAllocated + GC.GetAllocatedBytesForCurrentThread() - writeAlloc,
+                        WriteElapsed = totals.WriteElapsed + committed.Value - writeStarted
+                    };
+                }
+
+                var decisionCpu = ThreadCpu();
+                var decisionAlloc = GC.GetAllocatedBytesForCurrentThread();
+                var decisionStarted = Stopwatch.GetTimestamp();
+                host.ServiceTick(hostFixture.Kernel);
+                var decided = Stopwatch.GetTimestamp();
+                totals = totals with
+                {
+                    DecisionCpu = totals.DecisionCpu + ThreadCpu() - decisionCpu,
+                    DecisionAllocated = totals.DecisionAllocated + GC.GetAllocatedBytesForCurrentThread() - decisionAlloc,
+                    DecisionElapsed = totals.DecisionElapsed + decided - decisionStarted,
+                    CommitToDecision = totals.CommitToDecision + (committed is { } commitTime ? decided - commitTime : 0),
+                    WalGrowth = totals.WalGrowth + WalLength(path) - walBefore
+                };
+                var decision = hostFixture.ReadDecision(writer);
+                Assert.Contains("source already claimed or unresolved", decision.Readiness);
+                Assert.Single(decision.Notes, note => note.StartsWith(
+                    $"{BoardFillNearDuplicate.NotePrefix}goal id={HostFixture.DuplicateGoal}]", StringComparison.Ordinal));
+                Assert.DoesNotContain(decision.Notes, note =>
+                    note.StartsWith($"{BoardFillNearDuplicate.NotePrefix}item id=", StringComparison.Ordinal));
+                if (scenario == "cold")
+                    Assert.Equal(BoardFillSchedulingComparison.Dependent, decision.Selected);
+                if (changed && step == 0)
+                {
+                    Assert.Equal(BoardFillSchedulingComparison.Held, decision.Selected);
+                    Assert.Contains("waiting on open prerequisite closed-p", decision.Readiness);
+                    Assert.Single(decision.Notes, note => note == HostFixture.ReleaseText);
+                    Assert.True(decision.SelectedReleaseStamp, "The selected round must capture the committed release note and item stamp.");
+                }
+                if ((scenario == "quiet" && step == 1) || (changed && step == 2))
+                    Assert.Equal(HostFixture.LandedDependent, decision.Selected);
+                receipts[step] = decision.Receipt();
+                WaitForDraft(host);
+            }
+
+            Assert.Equal(scenario == "quiet" ? 0 : 1, noteWrites);
+            Assert.Null(fullReadTrace?.Failure);
+            Assert.Null(projectionReadTrace?.Failure);
+            Assert.Null(writeTrace?.Failure);
+            Assert.Null(noteTrace?.Failure);
+            var noteStatements = noteTrace?.Statements ?? 0;
+            var noteRows = noteTrace?.Rows ?? 0;
+            var noteResultPayload = noteTrace?.ResultPayloadBytes ?? 0;
+            var noteTriggerSteps = noteTrace?.TriggerSteps ?? 0;
+            if (noteTrace is not null)
+            {
+                Assert.Equal(noteWrites, noteTrace.ImmediateTransactions);
+                Assert.Equal(noteWrites > 0, noteStatements > 0);
+                Assert.Equal(noteWrites > 0, noteRows > 0);
+                Assert.Equal(noteWrites > 0, noteResultPayload > noteBytes);
+                Assert.Equal(noteWrites > 0, noteTriggerSteps > 0);
+            }
+            var projectionStatements = projectionReadTrace?.Statements ?? 0;
+            var projectionRows = projectionReadTrace?.Rows ?? 0;
+            var projectionPayload = projectionReadTrace?.ResultPayloadBytes ?? 0;
+            return new(totals, receipts, (fullReadTrace?.Statements ?? 0) + projectionStatements,
+                (fullReadTrace?.Rows ?? 0) + projectionRows, (fullReadTrace?.ResultPayloadBytes ?? 0) + projectionPayload,
+                projectionStatements, projectionRows, projectionPayload,
+                (writeTrace?.Statements ?? 0) + noteStatements, (writeTrace?.Rows ?? 0) + noteRows,
+                (writeTrace?.ResultPayloadBytes ?? 0) + noteResultPayload, (writeTrace?.TriggerSteps ?? 0) + noteTriggerSteps,
+                noteWrites, noteBytes, noteStatements, noteRows, noteResultPayload, noteTriggerSteps);
+        }
+        finally { host.Stop(); }
+
+        static void WaitForDraft(ConductorBoardFillHost host) =>
+            PanelTestHarness.Signal(Assert.IsAssignableFrom<Task>(host.CurrentRound), "measured host draft completed")
+                .GetAwaiter().GetResult();
+    }
+
+    private static long WalLength(string path) => File.Exists(path + "-wal") ? new FileInfo(path + "-wal").Length : 0;
+
+    private static string SchedulingMutation(int step) => step switch
+    {
+        0 => $"""
+            UPDATE backlog
+            SET status = CASE WHEN id='{BoardFillSchedulingComparison.Prerequisite}' THEN 'Superseded' ELSE status END,
+                updated_at = CASE WHEN id='{BoardFillSchedulingComparison.Dependent}'
+                    THEN '{BoardFillSchedulingComparison.Now:O}' ELSE updated_at END
+            WHERE id IN ('{BoardFillSchedulingComparison.Prerequisite}', '{BoardFillSchedulingComparison.Dependent}')
+            """,
+        1 => $"UPDATE backlog SET body='See src/Other.cs' WHERE id='{BoardFillSchedulingComparison.Historical}'",
+        2 => "UPDATE backlog_notes SET text='New archive evidence' WHERE backlog_item_id='item-002000'",
+        3 => $"UPDATE backlog SET body='Unrelated archive edit' WHERE id='{BoardFillSchedulingComparison.Irrelevant}'",
+        4 => $"UPDATE backlog SET tags='owner-gated' WHERE id='{BoardFillSchedulingComparison.Duplicate}'",
+        _ => throw new ArgumentOutOfRangeException(nameof(step))
+    };
+
+    private static string ReportTotals(IEnumerable<SchedulingTotals> samples)
+    {
+        var series = samples.ToArray();
+        string Report(string name, Func<SchedulingTotals, long> metric, double scale = 1)
+        {
+            var values = series.Select(metric).Order().ToArray();
+            return FormattableString.Invariant($"{name}_median_min_max={values[values.Length / 2] * scale:F1},{values[0] * scale:F1},{values[^1] * scale:F1}");
+        }
+        var elapsedScale = 1_000_000d / Stopwatch.Frequency;
+        return string.Join(' ', Report("decision_cpu_us", sample => sample.DecisionCpu, 0.1),
+            Report("decision_elapsed_us", sample => sample.DecisionElapsed, elapsedScale),
+            Report("decision_allocated_bytes", sample => sample.DecisionAllocated),
+            Report("writer_cpu_us", sample => sample.WriteCpu, 0.1),
+            Report("writer_elapsed_us", sample => sample.WriteElapsed, elapsedScale),
+            Report("writer_allocated_bytes", sample => sample.WriteAllocated),
+            Report("host_note_cpu_us", sample => sample.NoteCpu, 0.1),
+            Report("host_note_elapsed_us", sample => sample.NoteElapsed, elapsedScale),
+            Report("host_note_allocated_bytes", sample => sample.NoteAllocated),
+            Report("writer_plus_decision_elapsed_us", sample => sample.WriteElapsed + sample.DecisionElapsed, elapsedScale),
+            Report("commit_to_decision_elapsed_us", sample => sample.CommitToDecision, elapsedScale),
+            Report("wal_growth_bytes", sample => sample.WalGrowth));
+    }
+
+    private readonly record struct SchedulingTotals(long DecisionCpu, long DecisionAllocated, long DecisionElapsed,
+        long WriteCpu, long WriteAllocated, long WriteElapsed, long WalGrowth, long CommitToDecision,
+        long NoteCpu, long NoteAllocated, long NoteElapsed)
+    {
+        public static SchedulingTotals operator -(SchedulingTotals a, SchedulingTotals b) =>
+            new(a.DecisionCpu - b.DecisionCpu, a.DecisionAllocated - b.DecisionAllocated,
+                a.DecisionElapsed - b.DecisionElapsed, a.WriteCpu - b.WriteCpu, a.WriteAllocated - b.WriteAllocated,
+                a.WriteElapsed - b.WriteElapsed, a.WalGrowth - b.WalGrowth, a.CommitToDecision - b.CommitToDecision,
+                a.NoteCpu - b.NoteCpu, a.NoteAllocated - b.NoteAllocated, a.NoteElapsed - b.NoteElapsed);
+    }
+
+    private sealed record SchedulingSample(SchedulingTotals Totals, string[] Decisions, int ReadStatements, int ReadRows,
+        long ReadPayload, int ProjectionReadStatements, int ProjectionReadRows, long ProjectionReadPayload,
+        int WriteStatements, int WriteRows, long WritePayload, int TriggerSteps,
+        int HostNoteWrites, long HostNoteBytes, int HostNoteStatements, int HostNoteRows, long HostNoteResultPayload,
+        int HostNoteTriggerSteps);
+
+    [Fact]
+    public async Task Default_shadow_projection_matches_full_read_when_a_closed_item_is_assigned()
+    {
+        using var database = BoardFillSchedulingComparison.Create(total: 50, open: 16);
+        var full = await Run(useDefault: false);
+        var projected = await Run(useDefault: true);
+        Assert.Equal(full.Decision, projected.Decision);
+        Assert.InRange(projected.Rows, 1, full.Rows - 1);
+
+        async Task<(string Decision, int Rows)> Run(bool useDefault)
+        {
+            using var fixture = new HostFixture(database, open: 16);
+            var path = fixture.Workspace.BacklogStorePath;
+            using var reader = HostFixture.Connect(path);
+            var attention = CollaborationItemStore.ForDirectory(fixture.Workspace.OrchestratorDirectory);
+            var host = useDefault ? fixture.CreateHost() : fixture.CreateHost(() => BoardFillBacklogSnapshot.Read(path));
+            try
+            {
+                host.ServiceTick(fixture.Kernel);
+                await PanelTestHarness.Signal(Assert.IsAssignableFrom<Task>(host.CurrentRound), "initial shadow draft completed");
+                Assert.Equal(CollaborationItemStatus.Raised, await QuestionStatus());
+                await fixture.CloseAndAssignAsync();
+
+                // A new host must recover the open question from durable attention state.
+                host.Stop();
+                host = useDefault ? fixture.CreateHost() : fixture.CreateHost(() => BoardFillBacklogSnapshot.Read(path));
+                var ledger = new ConductorTickStepLedger(() => TimeSpan.Zero);
+                using (ledger.Activate()) host.ServiceTick(fixture.Kernel);
+                var decision = fixture.ReadDecision(reader);
+                Assert.Equal(CollaborationItemStatus.Resolved, await QuestionStatus());
+                const string countPrefix = "backlog_rows_read=";
+                var count = Assert.Single(ledger.FormatCounters().Split(','), value => value.StartsWith(countPrefix, StringComparison.Ordinal));
+                return (decision.Receipt(), int.Parse(count[countPrefix.Length..], System.Globalization.CultureInfo.InvariantCulture));
+            }
+            finally { host.Stop(); }
+
+            async Task<CollaborationItemStatus> QuestionStatus() => Assert.Single(await attention.ListAsync(),
+                item => item.CorrelationKey == $"board-fill-epic-missing:{HostFixture.Unassigned}").Status;
+        }
+    }
 
     [Fact]
     public void Sql_trace_counts_result_payload_by_storage_class()
