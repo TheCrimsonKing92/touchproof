@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,6 +12,8 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
     // Bump for serialized shape OR analysis semantics changes in SourceReadingGuardTestClasses
     // or WholeTreeSourceReaderDetector.
     internal const int FormatVersion = 10;
+    private const int RetainedGenerations = 8;
+    private const string PublicationLeaseFileName = ".publication.lock";
     private static string? _defaultDirectoryOverride;
     private static readonly Lazy<SourceReaderAnalysisCache> Shared = new(() => new(_defaultDirectoryOverride ?? DefaultDirectory()));
     private static readonly AsyncLocal<SourceReaderAnalysisCache?> Scoped = new();
@@ -141,8 +144,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
             SourceReaderFileFacts[]? best = null;
             var bestOverlap = 0;
             // Bound JSON reads; newest wins ties. No store or caller changes are needed for baseline discovery.
-            foreach (var path in new DirectoryInfo(directory).EnumerateFiles("*.json")
-                         .OrderByDescending(file => file.LastWriteTimeUtc).ThenBy(file => file.Name, StringComparer.Ordinal).Take(8))
+            foreach (var path in NewestFirst(new DirectoryInfo(directory).EnumerateFiles("*.json")).Take(RetainedGenerations))
             {
                 try
                 {
@@ -191,13 +193,17 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         try
         {
             if (EntryPath(key) is not { } destination) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            var root = Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(temporary, JsonSerializer.Serialize(new Envelope(FormatVersion, key,
                 analysis.ReaderOwners.ToArray(), analysis.DeclaresSnapshotCache, analysis.AssemblyScans.ToArray(), files,
                 files is null ? null : Digest(key, files))));
+            // Keep the eviction snapshot valid across processes and directory aliases. Staging and
+            // serialization stay outside the lease because temporary files are never pruned.
+            using var lease = AcquirePublicationLease(root);
             // Publish a closed, complete entry by renaming within the destination filesystem.
             File.Move(temporary, destination, overwrite: true);
+            PruneOlderGenerations(root, new FileInfo(destination));
         }
         catch (Exception error) when (error is not OutOfMemoryException) { }
         finally
@@ -207,6 +213,46 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
                 try { File.Delete(temporary); }
                 catch (Exception error) when (error is not OutOfMemoryException) { }
             }
+        }
+    }
+
+    private static FileStream AcquirePublicationLease(DirectoryInfo root)
+    {
+        // The lease file stays in place so competing opens always refer to the same file.
+        var path = Path.Combine(root.FullName, PublicationLeaseFileName);
+        var start = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            try { return File.Open(path, FileMode.OpenOrCreate, FileAccess.Read, FileShare.None); }
+            catch (IOException) when (Stopwatch.GetElapsedTime(start) < TimeSpan.FromSeconds(2))
+            {
+                Thread.Sleep(25);
+            }
+        }
+    }
+
+    private static IOrderedEnumerable<FileInfo> NewestFirst(IEnumerable<FileInfo> files) =>
+        files.OrderByDescending(file => file.LastWriteTimeUtc).ThenBy(file => file.Name, StringComparer.Ordinal);
+
+    private static bool IsOwnedGeneration(FileInfo file) =>
+        file.Name.Length == 69 && file.Name.EndsWith(".json", StringComparison.Ordinal)
+        && file.Name.AsSpan(0, 64).IndexOfAnyExcept("0123456789abcdef") < 0
+        && (file.Attributes & FileAttributes.ReparsePoint) == 0;
+
+    private static void PruneOlderGenerations(DirectoryInfo root, FileInfo published)
+    {
+        // A missing entry is always a cache miss. Only evict completed entries in our key namespace.
+        if ((root.Attributes & FileAttributes.ReparsePoint) != 0) return;
+        // Reserve a slot for this publication even if older writes have future or tied timestamps.
+        var otherSlots = IsOwnedGeneration(published) ? RetainedGenerations - 1 : RetainedGenerations;
+        var otherGenerations = root.EnumerateFiles("*.json")
+            .Where(file => file.Name != published.Name && IsOwnedGeneration(file));
+        var expired = NewestFirst(otherGenerations).Skip(otherSlots).ToArray();
+        foreach (var file in expired)
+        {
+            try { file.Delete(); }
+            catch (IOException) { /* Concurrent writer or reader. Retry on the next publication. */ }
+            catch (UnauthorizedAccessException) { /* A locked entry must not prevent other evictions. */ }
         }
     }
 

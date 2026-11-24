@@ -10,6 +10,104 @@ public sealed class SourceReaderAnalysisCacheTests
     private static readonly AcceptanceTestClassDescriptor[] Classes =
     [new("Sample.FirstTests", null), new("Sample.SecondTests", null), new("Sample.ThirdTests", null)];
 
+    [Fact]
+    public void PublishingEvictsOldGenerationsAndPreservesUnownedFiles()
+    {
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var unrelated = Path.Combine(storage.Path, "receipt.json");
+        File.WriteAllText(unrelated, "keep");
+        var temporary = cache.EntryPath(99.ToString("x64")) + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(temporary, "keep");
+
+        var analysis = new SourceReaderAnalysisCache.Analysis(false, ["Example"]);
+        for (int index = 0; index < 12; index++)
+        {
+            var key = index.ToString("x64");
+            cache.Write(key, analysis);
+            File.SetLastWriteTimeUtc(cache.EntryPath(key)!, DateTime.UtcNow.AddDays(-12 + index));
+        }
+
+        Assert.Equal(8, Directory.GetFiles(storage.Path, "*.json").Length - 1);
+        Assert.False(cache.TryRead(0.ToString("x64"), out _));
+        Assert.True(cache.TryRead(11.ToString("x64"), out _));
+        Assert.Equal("keep", File.ReadAllText(unrelated));
+        Assert.Equal("keep", File.ReadAllText(temporary));
+    }
+
+    [Fact]
+    public void PublishingKeepsNewEntryAndUsesOrdinalTiesForOtherOwnedGenerations()
+    {
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var analysis = new SourceReaderAnalysisCache.Analysis(false, ["Example"]);
+        var tiedTimestamp = DateTime.UtcNow.AddDays(1);
+        for (int index = 0; index < 8; index++)
+        {
+            var key = index.ToString("x64");
+            cache.Write(key, analysis);
+            File.SetLastWriteTimeUtc(cache.EntryPath(key)!, tiedTimestamp);
+        }
+
+        var foreign = Path.Combine(storage.Path, 98.ToString("x64") + ".JSON");
+        File.WriteAllText(foreign, "keep");
+        File.SetLastWriteTimeUtc(foreign, tiedTimestamp.AddDays(-2));
+        var newKey = 99.ToString("x64");
+        cache.Write(newKey, analysis);
+
+        Assert.True(cache.TryRead(newKey, out _));
+        for (int index = 0; index < 7; index++)
+            Assert.True(cache.TryRead(index.ToString("x64"), out _));
+        Assert.False(File.Exists(cache.EntryPath(7.ToString("x64"))));
+        Assert.Equal("keep", File.ReadAllText(foreign));
+    }
+
+    [Fact]
+    public void ConcurrentPublishersLeaveEightCompleteGenerations()
+    {
+        using var storage = new CacheDirectory();
+        var keys = Enumerable.Range(0, 24).Select(index => index.ToString("x64")).ToArray();
+        Parallel.ForEach(keys, key =>
+        {
+            var cache = new SourceReaderAnalysisCache(storage.Path);
+            cache.Write(key, new SourceReaderAnalysisCache.Analysis(false, [key]));
+        });
+
+        var retained = Directory.GetFiles(storage.Path, "*.json");
+        Assert.Equal(8, retained.Length);
+        var reader = new SourceReaderAnalysisCache(storage.Path);
+        foreach (var path in retained)
+        {
+            var key = Path.GetFileNameWithoutExtension(path);
+            Assert.Contains(key, keys);
+            Assert.True(reader.TryRead(key, out var analysis));
+            Assert.Equal(new[] { key }, analysis.ReaderOwners);
+        }
+        Assert.Empty(Directory.GetFiles(storage.Path, "*.tmp"));
+    }
+
+    [Fact]
+    public void EvictedAnalysisRegeneratesTheSameReportAndEntry()
+    {
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        using var scope = SourceReaderAnalysisCache.Use(cache);
+        var sources = Sources(Snapshot, Reader("SecondTests"), Reader("FirstTests"));
+        var entry = cache.EntryPath(SourceReaderAnalysisCache.Key(sources))!;
+        var before = SourceReadingGuardTestClasses.Read(sources, Classes);
+        Assert.Equal(new[] { "Sample.FirstTests", "Sample.SecondTests" },
+            Assert.IsType<ImpactReplaySourceGuardReport>(before).Classes);
+        var originalBytes = File.ReadAllBytes(entry);
+        File.SetLastWriteTimeUtc(entry, DateTime.UtcNow.AddDays(-1));
+        for (int index = 0; index < 8; index++)
+            cache.Write(index.ToString("x64"), new SourceReaderAnalysisCache.Analysis(false, []));
+        Assert.False(File.Exists(entry));
+
+        AssertReport(before, SourceReadingGuardTestClasses.Read(sources, Classes));
+        Assert.Equal(2, cache.AnalysisCount);
+        Assert.Equal(originalBytes, File.ReadAllBytes(entry));
+    }
+
     [Theory]
     [InlineData("readers")]
     [InlineData("null")]
