@@ -75,12 +75,13 @@ internal static class ProviderUsageHoldReader
             index.RequiredGoals.Contains(goal.Id.Value))).ToArray(), now);
     }
 
-    internal static IReadOnlyList<ProviderUsageHoldRow> ReadWorkspace(OrchestratorWorkspace workspace, DateTimeOffset now)
+    internal static IReadOnlyList<ProviderUsageHoldRow> ReadWorkspace(OrchestratorWorkspace workspace, DateTimeOffset now,
+        Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         try
         {
             if (!File.Exists(workspace.SqliteStatePath)) return [];
-            var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+            var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath, readObserver);
             var metadata = repository.ListGoalMetadataAsync().GetAwaiter().GetResult();
             var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) &&
                     status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))

@@ -45,11 +45,12 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     byte[] bytes => bytes.Length,
                     _ => 0
                 }));
-                if (payload is byte[] && await discovery.TryProjectArchiveAsync(connection, id, payload,
+                var archivedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
+                if (archivedAt is not null && await discovery.TryProjectArchiveAsync(connection, id, payload,
                     replayOptions, token, observe) is { } hasReplayEvidence)
                 {
-                    if (backfillArchiveDiscovery && !hasReplayEvidence && !reader.IsDBNull(2))
-                        emptyArchives.Add(id, reader.GetString(2));
+                    if (backfillArchiveDiscovery && !hasReplayEvidence)
+                        emptyArchives.Add(id, archivedAt);
                     continue;
                 }
                 remaining.Add(id);
@@ -118,7 +119,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
             : "g.snapshot_json";
         // Sidecar row presence cannot establish authority over an archived inline timeline.
-        // Only a negative projection from the archive's authoritative evidence can skip its blob.
+        // Only a negative projection from the archive's authoritative evidence can exclude it.
         var textCandidates = filterTextCandidates ? $"""
             AND CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
                 {SidecarCandidatesSql(hasTimeline, hasHistory)}
@@ -129,15 +130,15 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     EXISTS (SELECT 1 FROM json_each(t.value, '$.VerificationHistory') v
                         WHERE {VerificationPredicate("v.value")}))) END
             """ : "";
-        // Project text in SQLite so large unrelated graphs never cross the managed
-        // boundary. Status also checks archives that may carry inline timelines.
+        // Keep hot documents sparse. Archives need the original document to distinguish
+        // authoritative inline data from histories stored in the sidecar tables.
         return $"""
             WITH documents(id, payload, archived_at, empty_version) AS NOT MATERIALIZED (
                 SELECT g.id, {document}, {archivedAt}, {archiveVersion} FROM goals g {goalIndex}
                 {archiveJoin}
                 {goalFilter}
             )
-            SELECT id, CASE WHEN typeof(payload) = 'text' THEN json_object(
+            SELECT id, CASE WHEN archived_at IS NULL AND typeof(payload) = 'text' THEN json_object(
                 'Id', json_extract(payload, '$.Id'),
                 'IsMetadataOnly', json(CASE WHEN json_extract(payload, '$.IsMetadataOnly') = 1 THEN 'true' ELSE 'false' END),
                 'Timeline', CASE WHEN json_extract(payload, '$.TimelineInTable') IS NULL THEN (

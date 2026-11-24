@@ -185,18 +185,28 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(0L, await command.ExecuteScalarAsync(token));
     }
 
-    [Fact]
-    public async Task SeedAndStatus_SkipClassifiedLegacyArchivesAfterStartupBackfill()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SeedAndViews_SkipClassifiedLegacyArchivesAfterStartup(bool compressed)
     {
         using var fixture = new ProviderHoldSeedFixture();
         const int unrelatedArchives = 128;
-        await fixture.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: unrelatedArchives);
+        await fixture.PopulateResetCaseAsync(compressed, unrelatedArchives: unrelatedArchives, archiveRecovery: true);
         var unrelatedIds = Enumerable.Range(1000, unrelatedArchives).Select(ProviderHoldSeedFixture.Id).ToHashSet();
+        var resetId = ProviderHoldSeedFixture.Id(805);
+        var recoveryId = ProviderHoldSeedFixture.Id(806);
+        var now = ProviderHoldSeedFixture.At.AddDays(2);
         var observations = new List<GoalSnapshotReadObservation>();
         var writer = new SqliteOrchestratorStateRepository(fixture.Database, statementObserver: null,
             telemetryOptions: null, readObserver: observations.Add);
-        var seeded = Seed(writer, new());
-        Assert.Equal("fixture-reset", Assert.Single(seeded.Index.Evaluations).Value.Schedule?.ResetIntentId);
+        var kernel = new AgentOrchestratorKernel();
+        var seeded = Seed(writer, kernel);
+        Assert.Equal(new[] { recoveryId }, seeded.Selection.Dependencies);
+        var expected = Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, now));
+        Assert.Equal(ProviderHoldSeedFixture.Id(799), expected.Hold.SourceGoalId.Value);
+        Assert.Equal("fixture-reset", expected.Schedule?.ResetIntentId);
+        Assert.Equal(now, expected.Schedule?.NextProbeAt);
         Assert.Equal(unrelatedArchives, observations.Count(item => item.Operation == "provider-seed-archive-projection" &&
             item.GoalId is { } id && unrelatedIds.Contains(id)));
 
@@ -206,34 +216,43 @@ public sealed class ProviderHoldSeedWorkBoundTests
         var replayed = Seed(restarted, new());
         Assert.Equal(seeded.Selection.Sources.Order(StringComparer.Ordinal),
             replayed.Selection.Sources.Order(StringComparer.Ordinal));
-        Assert.Equal(Assert.Single(seeded.Index.Evaluations).Value.Schedule,
-            Assert.Single(replayed.Index.Evaluations).Value.Schedule);
-        Assert.Contains(observations, item => item.Operation == "provider-seed-archive-projection" &&
-            item.GoalId == ProviderHoldSeedFixture.Id(805));
-        Assert.DoesNotContain(observations, item => item.GoalId is { } id && unrelatedIds.Contains(id));
+        Assert.Equal(new[] { recoveryId }, replayed.Selection.Dependencies);
+        Assert.Equal(expected.Schedule, Assert.Single(replayed.Index.Evaluations.Values
+            .Where(evaluation => evaluation.Schedule is not null)).Schedule);
+        AssertOnlyWitnessArchives();
 
         observations.Clear();
         var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database, observations.Add);
-        var row = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], ProviderHoldSeedFixture.At.AddDays(2)));
-        Assert.Equal("fixture-reset", row.Schedule?.ResetIntentId);
-        Assert.Contains(observations, item => item.Operation == "provider-seed-archive-projection" &&
-            item.GoalId == ProviderHoldSeedFixture.Id(805));
-        Assert.DoesNotContain(observations, item => item.GoalId is { } id && unrelatedIds.Contains(id));
+        Assert.Equal(expected, Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now)));
+        AssertOnlyWitnessArchives();
+
+        observations.Clear();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
+        Assert.Equal(expected, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now, observations.Add)));
+        AssertOnlyWitnessArchives();
 
         using var smaller = new ProviderHoldSeedFixture();
-        await smaller.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: 8);
+        await smaller.PopulateResetCaseAsync(compressed, unrelatedArchives: 8, archiveRecovery: true);
         Seed(smaller, new());
         var small = MeasureStatusDiscovery(smaller.Database);
         var large = MeasureStatusDiscovery(fixture.Database);
-        Assert.Equal(2, large.Candidates);
+        Assert.Equal(4, large.Candidates);
         Assert.Equal(small, large);
-        Assert.InRange(large.ScanSteps, 0, 2);
+        Assert.InRange(large.ScanSteps, 0, 4);
 
         // Both plans return the same candidates. The old join still walks every stub.
         var unindexed = MeasureStatusDiscovery(fixture.Database, indexed: false);
         Assert.Equal(large.Candidates, unindexed.Candidates);
         Assert.True(unindexed.ScanSteps >= unrelatedArchives);
         Assert.True(unindexed.VmSteps > large.VmSteps);
+
+        void AssertOnlyWitnessArchives()
+        {
+            Assert.Equal(new[] { resetId, recoveryId }, observations
+                .Where(item => item.Operation == "provider-seed-archive-projection")
+                .Select(item => item.GoalId).Order(StringComparer.Ordinal));
+            Assert.DoesNotContain(observations, item => item.GoalId is { } id && unrelatedIds.Contains(id));
+        }
     }
 
     [Fact]
@@ -784,14 +803,21 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         }]);
     }
 
-    internal async Task PopulateResetCaseAsync(bool? legacyArchive, bool staleTimeline = false, int unrelatedArchives = 0)
+    internal async Task PopulateResetCaseAsync(bool? legacyArchive, bool staleTimeline = false, int unrelatedArchives = 0,
+        bool archiveRecovery = false)
     {
         var goal = MakeUnrelated(805);
         var marker = ProviderBudgetHoldSchedules.FormatReset(new(
             "anthropic::c:/profiles/held", At.AddDays(2), "fixture-reset"));
         goal = goal with { Timeline = [new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, marker, At.AddDays(1))] };
-        var archives = Enumerable.Range(1000, unrelatedArchives).Select(MakeUnrelated).Prepend(goal).ToArray();
-        await SaveAsync([MakeHold(799), .. archives]);
+        List<GoalSnapshot> archives = [goal, .. Enumerable.Range(1000, unrelatedArchives).Select(MakeUnrelated)];
+        List<GoalSnapshot> sources = [MakeHold(799)];
+        if (archiveRecovery)
+        {
+            sources.Add(MakeHold(0));
+            archives.Add(Make(806, At.AddDays(1), Credentials[0], success: true));
+        }
+        await SaveAsync([.. sources, .. archives]);
         if (legacyArchive is not { } compressed) return;
 
         // Write pre-projection archives with an authoritative inline timeline and no sidecars.
@@ -817,6 +843,13 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
             archive.Value = compressed ? GoalSnapshotArchiveCodec.Encode(archivedJson) : (object)archivedJson;
             stub.Value = JsonSerializer.Serialize(archived with { Tasks = [], Timeline = [], IsMetadataOnly = true }, options);
             Assert.True(command.ExecuteNonQuery() >= 2);
+        }
+        if (archiveRecovery)
+        {
+            using var removeIndexedSuccess = connection.CreateCommand();
+            removeIndexedSuccess.CommandText = "DELETE FROM model_fit_history WHERE goal_id = $id";
+            removeIndexedSuccess.Parameters.AddWithValue("$id", Id(806));
+            removeIndexedSuccess.ExecuteNonQuery();
         }
         if (!staleTimeline) return;
         command.Parameters.Clear();
