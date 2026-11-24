@@ -82,9 +82,10 @@ public sealed class ProviderUsageHoldJsonTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task UnrelatedCompressedArchive_IsSkippedByStatusAndPreservesHistoricalHold(bool corrupt)
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task Status_PreservesHistoricalHoldWithClassifiedOrUnreadableArchive(bool corrupt, bool classified)
     {
         using var fixture = new Fixture();
         var unrelated = fixture.NewGoal();
@@ -112,22 +113,35 @@ public sealed class ProviderUsageHoldJsonTests
             Assert.Equal("blob", await command.ExecuteScalarAsync(token));
             if (corrupt)
             {
-                command.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = X'00' WHERE goal_id = $id";
+                command.CommandText = """
+                    UPDATE goal_snapshot_archive SET snapshot_json = X'00',
+                        provider_hold_empty_version = CASE WHEN $classified THEN provider_hold_empty_version END
+                    WHERE goal_id = $id
+                    """;
+                command.Parameters.AddWithValue("$classified", classified);
                 Assert.Equal(1, await command.ExecuteNonQueryAsync(token));
             }
         }
 
         var reader = SqliteOrchestratorStateRepository.OpenReadOnly(path);
-        if (corrupt)
+        if (!classified)
             await Assert.ThrowsAsync<InvalidDataException>(() => reader.ReadProviderHoldSeedHistoryAsync(token));
+        else
+            Assert.Contains((await reader.ReadProviderHoldSeedHistoryAsync(token)).Rows, row =>
+                row.GoalId == source.Id.Value && row.OutcomeRule == TaskOutcomeRules.ProviderBudgetExhausted.Token);
         Assert.Contains(await reader.ListModelFitHistoryAsync(token), row =>
             row.GoalId == source.Id.Value && row.OutcomeRule == TaskOutcomeRules.ProviderBudgetExhausted.Token);
         var observations = new List<GoalSnapshotReadObservation>();
         using var status = JsonDocument.Parse(fixture.Status(json: true, observer: observations.Add));
         var row = Assert.Single(status.RootElement.GetProperty("payload").GetProperty("providerHolds").EnumerateArray());
         Assert.Equal(source.Id.Value, row.GetProperty("sourceGoalId").GetString());
-        Assert.Contains(observations, read => read.Operation == "provider-evidence-decoded" && read.GoalId == source.Id.Value);
-        Assert.DoesNotContain(observations, read => read.GoalId == unrelated.Id.Value);
+        if (classified)
+        {
+            Assert.Contains(observations, read => read.Operation == "provider-evidence-decoded" && read.GoalId == source.Id.Value);
+            Assert.DoesNotContain(observations, read => read.GoalId == unrelated.Id.Value);
+        }
+        else
+            Assert.Contains(observations, read => read.Operation == "provider-seed-discovery" && read.GoalId == unrelated.Id.Value);
         Assert.Equal(source.Id, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, Start.AddMinutes(2))).Hold.SourceGoalId);
     }
 

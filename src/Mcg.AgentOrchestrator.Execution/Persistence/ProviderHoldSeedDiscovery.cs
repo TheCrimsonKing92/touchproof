@@ -17,7 +17,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null,
-        bool limitArchiveReads = false, bool backfillArchiveDiscovery = false)
+        bool filterTextCandidates = false, bool backfillArchiveDiscovery = false)
     {
         var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, token);
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, token);
@@ -39,9 +39,8 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             : "g.snapshot_json";
         // Sidecar row presence cannot establish authority over an archived inline timeline.
         // Only a negative projection from the archive's authoritative evidence can skip its blob.
-        var candidates = limitArchiveReads ? $"""
-            WHERE CASE WHEN empty_version = {GoalSnapshotArchive.ProviderHoldEmptyVersion} THEN 0
-                WHEN typeof(payload) = 'blob' THEN 1 ELSE (
+        var textCandidates = filterTextCandidates ? $"""
+            AND CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
                 {SidecarCandidatesSql(hasTimeline, hasHistory)}
                 EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
                     WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
@@ -74,9 +73,10 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     'DispatchHistory', (SELECT json_group_array(json({DispatchSql("d.value")}))
                         FROM json_each(t.value, '$.DispatchHistory') d)))
                     FROM json_each(payload, '$.Tasks') t)
-                ) ELSE payload END, archived_at, empty_version
+                ) ELSE payload END, archived_at
             FROM documents
-            {candidates}
+            WHERE empty_version IS NOT {GoalSnapshotArchive.ProviderHoldEmptyVersion}
+            {textCandidates}
             """;
         using (var reader = await command.ExecuteReaderAsync(token))
         {
@@ -93,8 +93,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                 if (payload is byte[] && await discovery.TryProjectArchiveAsync(connection, id, payload,
                     replayOptions, token, observe) is { } hasReplayEvidence)
                 {
-                    if (backfillArchiveDiscovery && !hasReplayEvidence && !reader.IsDBNull(2) &&
-                        (reader.IsDBNull(3) || reader.GetInt64(3) != GoalSnapshotArchive.ProviderHoldEmptyVersion))
+                    if (backfillArchiveDiscovery && !hasReplayEvidence && !reader.IsDBNull(2))
                         emptyArchives.Add(id, reader.GetString(2));
                     continue;
                 }
@@ -178,12 +177,13 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             var key = (id, task.TaskId);
             foreach (var verification in task.VerificationHistory.Append(task.LastVerification))
                 hasReplayEvidence |= ObserveVerification(key, verification);
+            if (!_successes.ContainsKey(key)) continue;
             var providers = task.DispatchHistory.Append(task.LastDispatch)
                 .Select(dispatch => dispatch?.ProviderName ?? dispatch?.WorkerName).OfType<string>()
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (providers.Length > 0) _inlineProviders[key] = providers;
         }
-        ArchiveEvidence.Add(new(id), evidence);
+        if (hasReplayEvidence) ArchiveEvidence.Add(new(id), evidence);
         observe?.Invoke(new("provider-seed-archive-projection", id));
         return hasReplayEvidence;
     }

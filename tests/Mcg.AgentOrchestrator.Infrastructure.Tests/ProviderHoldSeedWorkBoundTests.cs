@@ -145,16 +145,33 @@ public sealed class ProviderHoldSeedWorkBoundTests
     }
 
     [Fact]
-    public async Task Status_StartupBackfillsUnrelatedCompressedLegacyArchives()
+    public async Task SeedAndStatus_SkipClassifiedLegacyArchivesAfterStartupBackfill()
     {
         using var fixture = new ProviderHoldSeedFixture();
         const int unrelatedArchives = 128;
         await fixture.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: unrelatedArchives);
         var unrelatedIds = Enumerable.Range(1000, unrelatedArchives).Select(ProviderHoldSeedFixture.Id).ToHashSet();
-        var seeded = Seed(fixture, new());
-        Assert.Equal("fixture-reset", Assert.Single(seeded.Index.Evaluations).Value.Schedule?.ResetIntentId);
-
         var observations = new List<GoalSnapshotReadObservation>();
+        var writer = new SqliteOrchestratorStateRepository(fixture.Database, statementObserver: null,
+            telemetryOptions: null, readObserver: observations.Add);
+        var seeded = Seed(writer, new());
+        Assert.Equal("fixture-reset", Assert.Single(seeded.Index.Evaluations).Value.Schedule?.ResetIntentId);
+        Assert.Equal(unrelatedArchives, observations.Count(item => item.Operation == "provider-seed-archive-projection" &&
+            item.GoalId is { } id && unrelatedIds.Contains(id)));
+
+        observations.Clear();
+        var restarted = new SqliteOrchestratorStateRepository(fixture.Database, statementObserver: null,
+            telemetryOptions: null, readObserver: observations.Add);
+        var replayed = Seed(restarted, new());
+        Assert.Equal(seeded.Selection.Sources.Order(StringComparer.Ordinal),
+            replayed.Selection.Sources.Order(StringComparer.Ordinal));
+        Assert.Equal(Assert.Single(seeded.Index.Evaluations).Value.Schedule,
+            Assert.Single(replayed.Index.Evaluations).Value.Schedule);
+        Assert.Contains(observations, item => item.Operation == "provider-seed-archive-projection" &&
+            item.GoalId == ProviderHoldSeedFixture.Id(805));
+        Assert.DoesNotContain(observations, item => item.GoalId is { } id && unrelatedIds.Contains(id));
+
+        observations.Clear();
         var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database, observations.Add);
         var row = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], ProviderHoldSeedFixture.At.AddDays(2)));
         Assert.Equal("fixture-reset", row.Schedule?.ResetIntentId);
