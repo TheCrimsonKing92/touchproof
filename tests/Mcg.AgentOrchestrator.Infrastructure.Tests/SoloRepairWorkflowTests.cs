@@ -326,10 +326,21 @@ public sealed class SoloRepairWorkflowTests
         var (context, store, finding) = PrepareCliRepair(fixture, verifier);
         RecordPassedValidation(store, finding, fixture.Main);
         var worktree = GoalWorktrees.TryResolve(fixture.Repository, fixture.Goal.Id)!;
-        var coreFile = Path.Combine(worktree, "src/Mcg.AgentOrchestrator.Core/GateControl.cs");
+        const string coreSource = "src/Mcg.AgentOrchestrator.Core/GateControl.cs";
+        const string coreTestProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
+        const string acceptanceManifest = "config/acceptance-manifest.json";
+        var coreFile = Path.Combine(worktree, coreSource);
         Directory.CreateDirectory(Path.GetDirectoryName(coreFile)!);
         File.WriteAllText(coreFile, "internal sealed class GateControl { }");
-        RunGit(worktree, "add", "src/Mcg.AgentOrchestrator.Core/GateControl.cs");
+        var projectFile = Path.Combine(worktree, coreTestProject);
+        Directory.CreateDirectory(Path.GetDirectoryName(projectFile)!);
+        File.WriteAllText(projectFile, "<Project />");
+        var manifestFile = Path.Combine(worktree, acceptanceManifest);
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestFile)!);
+        File.WriteAllText(manifestFile, $$"""
+            { "checks": [{ "name": "core tests", "type": "dotnet-test", "project": "{{coreTestProject}}" }] }
+            """);
+        RunGit(worktree, "add", coreSource, coreTestProject, acceptanceManifest);
         RunGit(worktree, "commit", "-m", "Change Core so policy requires its checks");
         var candidate = RunGit(worktree, "rev-parse", "HEAD");
         var result = new AcceptanceVerificationResult(true, false, 0, null,
