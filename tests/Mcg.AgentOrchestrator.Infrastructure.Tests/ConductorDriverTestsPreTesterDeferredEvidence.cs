@@ -431,7 +431,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                     scenario.Root, request, CandidateSha);
             }, role => order.Add(role.ToString()), changedPaths: [source]);
             var id = Guid.NewGuid();
-            var workspace = OrchestratorWorkspace.ForDirectory(scenario.Root);
+            var workspace = InfrastructureTestSupport.CreateSetUpWorkspace(scenario.Root);
             using var staged = new PreTesterResolverObservationTests.StagedProducerRevision();
             var policy = ConductorAutonomyPolicy.Conservative with { PreTesterResolverObservationWindowId = observe ? id : null };
             Directory.CreateDirectory(workspace.OrchestratorDirectory);
@@ -441,6 +441,10 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                 Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"), id);
             var child = new ResolverChildHost(request =>
             {
+                var binding = WorkspaceInvocationBinding.Parse(request.Arguments);
+                var projectSelection = OrchestratorProjectSelection.FromArgs(binding.CommandArgs, environmentProject: null);
+                var tenantSelection = OrchestratorTenantSelection.FromArgs(projectSelection.CommandArgs, environmentTenant: null);
+                var commandArgs = CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
                 using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
                 var context = new CliExecutionContext(scenario.Kernel, workspace, new InMemoryModelProviderRegistry([]),
                     [], WorkerProfileCatalog.Default(), scenario.Goal)
@@ -459,13 +463,17 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                         }
                     }
                 };
-                Assert.True(CliCommandHandlers.Execute(request.Arguments.ToArray(), context));
-                Assert.NotNull(ConductorContinuityExitArtifact.TryRead(request.ExitArtifactPath));
+                Assert.True(CliCommandHandlers.Execute(commandArgs, context));
+                var artifact = ConductorContinuityExitArtifact.TryRead(request.ExitArtifactPath);
+                Assert.NotNull(artifact);
+                Assert.Equal(1, artifact.Ticks);
+                Assert.False(artifact.RestartRequested);
             });
-            var supervisor = new ConductorContinuitySupervisor(child,
-                new Mcg.AgentOrchestrator.Infrastructure.Tests.SupervisorHandoffFixture.RecordingEvents(), maxUnexpectedRestarts: 0);
-            Assert.Equal(0, await supervisor.RunAsync(["conduct", "--loop", "--watch", "--max-iterations", "1"],
-                scenario.Root, workspace.OrchestratorDirectory, "default", "default"));
+            var events = new Mcg.AgentOrchestrator.Infrastructure.Tests.SupervisorHandoffFixture.RecordingEvents();
+            var supervisor = new ConductorContinuitySupervisor(child, events, maxUnexpectedRestarts: 0);
+            var exitCode = await supervisor.RunAsync(["conduct", "--loop", "--watch", "--max-iterations", "1"],
+                scenario.Root, workspace.OrchestratorDirectory, workspace.ProjectName, workspace.TenantName);
+            Assert.True(exitCode == 0, $"Supervisor exited with {exitCode}. {string.Join(Environment.NewLine, events.Events.Select(entry => entry.Detail))}");
             Assert.Equal(1, child.Launches);
             if (observe)
             {
@@ -484,7 +492,8 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             {
                 Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
             }
-            return (order.ToArray(), scenario.Goal.Timeline.Select(evt => PreTesterEvidenceIndexLines.Parse(evt.Message))
+            var currentGoal = scenario.Kernel.GetGoal(scenario.Goal.Id);
+            return (order.ToArray(), currentGoal.Timeline.Select(evt => PreTesterEvidenceIndexLines.Parse(evt.Message))
                 .OfType<PreTesterEvidenceEntry>().Select(entry => entry.Outcome).ToArray());
         }
     }
