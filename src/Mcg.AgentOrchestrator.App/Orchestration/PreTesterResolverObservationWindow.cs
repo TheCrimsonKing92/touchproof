@@ -103,6 +103,17 @@ internal sealed class PreTesterResolverObservationWindow(
         }
     }
 
+    internal void ObserveDrainPass(Guid? request)
+    {
+        if (_writer is not null && request != _handledWindow)
+            Interrupt("window-disabled-or-replaced");
+        if (request is null)
+        {
+            _handoff = null;
+            _handledWindow = null;
+        }
+    }
+
     internal string? CloseForRenewal(Func<DateTimeOffset> utcNow)
     {
         if (_writer is not { } writer) return null;

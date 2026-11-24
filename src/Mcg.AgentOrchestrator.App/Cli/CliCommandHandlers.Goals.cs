@@ -1409,10 +1409,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 }
 
                 Action<BatchTickSummary>? onTick = ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath);
+                onTick += context.ConductorTickObserver;
 
                 var agentRoster = AgentRosterReloader.ForConductLoop(context.Workspace, context.Agents);
                 context.Agents = agentRoster.View;
-                var loopDriver = new ConductorDriver(
+                var loopDriver = context.ConductLoopDriverForTests ?? new ConductorDriver(
                     context.Kernel,
                     context.Workspace,
                     context.AcceptanceVerifier,
@@ -1428,9 +1429,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
                     cleanupHooks: context.CleanupHooks)
                 {
-                    MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains,
-                    PreTesterResolverObservation = CliConductLoopStartup.CreateResolverObservation(parts, noDispatch, context.Workspace)
+                    MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains
                 };
+                loopDriver.PreTesterResolverObservation = CliConductLoopStartup.CreateResolverObservation(parts, noDispatch, context.Workspace);
                 if (!noDispatch) loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
                 if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
                     loopDriver.EnableOwnedGroupedGateAttempts();
@@ -1660,6 +1661,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         Path.GetFileName(conductorOutputLogPath).EndsWith(".out.log", StringComparison.OrdinalIgnoreCase)
                             ? Path.GetFileName(conductorOutputLogPath)[..^8] + ".crash.log"
                             : Path.GetFileName(conductorOutputLogPath) + ".crash.log");
+                BatchLoopSummary loopSummary;
                 try
                 {
                     ProcessErrorModeRepairLog.Observer = processErrorModeObserver.Observe;
@@ -1715,7 +1717,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             () => terminalSweepCache.ObservedMainSha))
                         .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace, loopPolicy.Features.Author))
                         .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace));
-                    var loopSummary = batchLoop.WithGitCensus(gitCensus).Run(
+                    loopSummary = batchLoop.WithGitCensus(gitCensus).Run(
                         context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                         watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                         persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1743,15 +1745,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             _ = context.ReloadKernel(context.Kernel.Goals.Select(goal => goal.Id.Value).ToArray());
                             _ = loopDriver.CountLiveGroupedGateAttempts();
                         } : null);
-                    if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
-                    {
-                        ConductorContinuityExitArtifact.Write(
-                            continuityExitArtifactPath,
-                            ConductorContinuityExitArtifactFactory.FromLoopSummary(
-                                loopSummary, supervisorSetup.DelegateSelfRelaunchToSupervisor));
-                    }
-                    Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
-                    return loopSummary.Escalated == 0;
                 }
                 finally
                 {
@@ -1760,6 +1753,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         maintenanceCadence, stateLogCheck, failureClustersDaily,
                         conductEventLogWriter).GetAwaiter().GetResult();
                 }
+                if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
+                {
+                    ConductorContinuityExitArtifact.Write(
+                        continuityExitArtifactPath,
+                        ConductorContinuityExitArtifactFactory.FromLoopSummary(
+                            loopSummary, supervisorSetup.DelegateSelfRelaunchToSupervisor));
+                }
+                Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
+                return loopSummary.Escalated == 0;
             }
             if (noDispatch) throw new ArgumentException("--no-dispatch requires conduct --loop.");
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");

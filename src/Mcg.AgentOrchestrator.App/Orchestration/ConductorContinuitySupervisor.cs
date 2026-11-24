@@ -336,6 +336,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 homeBuildFollower is not null ? blockedActivationCommit : null,
                 requireCurrentStores: activeChild is null && pendingSuccessor is not null,
                 resolverObservationHandoff: resolverObservationHandoff);
+            var launchCheckpoint = resolverObservationHandoff;
             resolverObservationHandoff = null;
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
@@ -376,6 +377,20 @@ internal sealed partial class ConductorContinuitySupervisor(
                         [ProtectedProcessIdentity.PidVariable] = identity.ProcessId.ToString(CultureInfo.InvariantCulture),
                         [ProtectedProcessIdentity.StartTicksVariable] = identity.StartTimeUtcTicks.ToString(CultureInfo.InvariantCulture)
                     } : null);
+            ConductorResolverObservationLaunch? resolverLaunch = null;
+            if (activeChild is null && launchCheckpoint is not null && supervisorHandoff is { } launchAuthority)
+            {
+                try
+                {
+                    resolverLaunch = ConductorResolverObservationLaunch.Authorize(artifactPath, launchAuthority.Seam,
+                        commandPrefix?[1] ?? typeof(ConductorContinuitySupervisor).Assembly.Location, launchCheckpoint);
+                }
+                catch (Exception error) when (PreTesterReverseDependencyObservation.IsObservationFailure(error))
+                {
+                    TryAppendConductEvent($"SUPERVISOR_RESOLVER_CONTINUATION_UNAVAILABLE attempt={attempt} reason={Sanitize(error.Message)}");
+                }
+            }
+            using var launchGrant = resolverLaunch;
             try
             {
                 if (activeChild is not null)
@@ -721,8 +736,9 @@ internal sealed partial class ConductorContinuitySupervisor(
 
             if (stallFailure is null && (observedCleanExit || inheritedArtifactOnly) && artifact is { RestartRequested: false })
             {
-                Record("stopped", "completed", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
-                return 0;
+                Record("stopped", observedCleanExit ? "completed" : "exit-unobserved", attempt,
+                    artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
+                return observedCleanExit ? 0 : 1;
             }
 
             if (artifact is { RestartRequested: true } &&
@@ -745,7 +761,7 @@ internal sealed partial class ConductorContinuitySupervisor(
 
                 Record("restart", "planned", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
                 if (stallFailure is null && observedCleanExit &&
-                    artifact.StopReason == "max-duration")
+                    artifact.StopReason is "max-duration" or "self-relaunch-handoff")
                     resolverObservationHandoff = artifact.ResolverObservationHandoff;
                 Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor?>? prepareWithHook = followingHome
                     ? (hook, token) => homeBuildFollower!.Prepare(artifact.HomeBuildTarget!,

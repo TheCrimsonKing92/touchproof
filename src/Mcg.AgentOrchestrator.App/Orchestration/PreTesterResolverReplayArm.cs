@@ -1,7 +1,12 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.App.Orchestration.PreTesterResolverCorpus;
@@ -25,9 +30,9 @@ internal sealed class PreTesterResolverReplayArm : IDisposable
     internal Guid ModuleVersionId { get; }
     internal string? InformationalVersion { get; }
 
-    internal PreTesterResolverReplayArm(string path, Stream verifiedApp)
+    internal PreTesterResolverReplayArm(ReplayBuild build, Stream verifiedApp)
     {
-        _context = new ReplayLoadContext(Path.GetFullPath(path));
+        _context = new ReplayLoadContext(Path.GetFullPath(build.AppPath), build.DependencySha256);
         try
         {
             var app = _context.LoadFromStream(verifiedApp);
@@ -48,6 +53,34 @@ internal sealed class PreTesterResolverReplayArm : IDisposable
         {
             _context.Unload();
             throw;
+        }
+    }
+
+    internal bool HasEmbeddedResolverSource(Stream appBytes, string resolverPath, string sha256)
+    {
+        appBytes.Position = 0;
+        using var pe = new PEReader(appBytes, PEStreamOptions.LeaveOpen);
+        var entries = pe.ReadDebugDirectory().Where(entry => entry.Type == DebugDirectoryEntryType.EmbeddedPortablePdb).ToArray();
+        if (entries.Length != 1)
+            return false;
+        using var provider = pe.ReadEmbeddedPortablePdbDebugDirectoryData(entries[0]);
+        var metadata = provider.GetMetadataReader();
+        return MatchesSource(_resolve) && MatchesSource(_complete);
+
+        bool MatchesSource(MethodInfo method)
+        {
+            var handle = MetadataTokens.MethodDefinitionHandle(method.MetadataToken & 0x00ffffff);
+            var debug = metadata.GetMethodDebugInformation(handle.ToDebugInformationHandle());
+            return debug.GetSequencePoints().Any(point => !point.IsHidden) &&
+                debug.GetSequencePoints().Where(point => !point.IsHidden).All(point =>
+                {
+                    var documentHandle = point.Document.IsNil ? debug.Document : point.Document;
+                    if (documentHandle.IsNil) return false;
+                    var document = metadata.GetDocument(documentHandle);
+                    var name = metadata.GetString(document.Name).Replace('\\', '/');
+                    return (name == resolverPath || name.EndsWith("/" + resolverPath, StringComparison.Ordinal))
+                        && Convert.ToHexString(metadata.GetBlobBytes(document.Hash)).Equals(sha256, StringComparison.OrdinalIgnoreCase);
+                });
         }
     }
 
@@ -78,20 +111,64 @@ internal sealed class PreTesterResolverReplayArm : IDisposable
 
     public void Dispose() => _context.Unload();
 
-    private sealed class ReplayLoadContext(string appPath) : AssemblyLoadContext(isCollectible: true)
+    private sealed class ReplayLoadContext : AssemblyLoadContext
     {
-        private readonly AssemblyDependencyResolver _dependencies = new(appPath);
+        private readonly AssemblyDependencyResolver _dependencies;
+        private readonly string _appDirectory;
+        private readonly Dictionary<string, string> _hashes;
+
+        internal ReplayLoadContext(string appPath, Dictionary<string, string>? hashes) : base(isCollectible: true)
+        {
+            _appDirectory = Path.GetDirectoryName(appPath)!;
+            _hashes = new(StringComparer.OrdinalIgnoreCase);
+            if (hashes is null)
+                throw new InvalidDataException("Replay build has no dependency hashes.");
+            foreach (var (file, hash) in hashes)
+            {
+                if (file != Path.GetFileName(file) || !file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                    file.Equals(Path.GetFileName(appPath), StringComparison.OrdinalIgnoreCase) ||
+                    hash is not { Length: 64 } || !hash.All(Uri.IsHexDigit) || !_hashes.TryAdd(file, hash))
+                    throw new InvalidDataException($"Invalid replay dependency identity for {file}.");
+                using var dependency = OpenVerifiedDependency(Path.Combine(_appDirectory, file), hash);
+            }
+            _dependencies = new(appPath);
+        }
 
         protected override Assembly? Load(AssemblyName name)
         {
+            var file = name.Name + ".dll";
             var path = _dependencies.ResolveAssemblyToPath(name);
-            if (path is null && name.Name?.StartsWith("Mcg.AgentOrchestrator.", StringComparison.Ordinal) == true)
-                path = Path.Combine(Path.GetDirectoryName(appPath)!, name.Name + ".dll");
-            if (path is null) return null;
+            if (path is null && File.Exists(Path.Combine(_appDirectory, file)))
+                path = Path.Combine(_appDirectory, file);
+            if (path is null && File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), file)))
+                return null;
+            if (path is null || !_hashes.TryGetValue(file, out var hash) ||
+                !string.Equals(Path.GetFullPath(path), Path.Combine(_appDirectory, file), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Replay dependency is outside the staged identity: {name}.");
 
-            // Collectible unload is deferred. Stream loads release the input files immediately.
-            using var dependency = File.OpenRead(path);
+            // Verify and load from the same read handle so replacement cannot change the bytes used.
+            using var dependency = OpenVerifiedDependency(path, hash);
             return LoadFromStream(dependency);
+        }
+
+        protected override IntPtr LoadUnmanagedDll(string unmanagedDllName) =>
+            throw new InvalidDataException($"Unexpected native replay dependency: {unmanagedDllName}.");
+
+        private static FileStream OpenVerifiedDependency(string path, string hash)
+        {
+            var dependency = File.OpenRead(path);
+            try
+            {
+                if (!Convert.ToHexString(SHA256.HashData(dependency)).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"Replay dependency digest does not match: {Path.GetFileName(path)}.");
+                dependency.Position = 0;
+                return dependency;
+            }
+            catch
+            {
+                dependency.Dispose();
+                throw;
+            }
         }
     }
 }

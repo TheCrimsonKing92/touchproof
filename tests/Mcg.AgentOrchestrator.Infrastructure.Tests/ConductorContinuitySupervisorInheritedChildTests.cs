@@ -31,6 +31,7 @@ public sealed class ConductorContinuitySupervisorInheritedChildTests
     [Xunit.InlineData(true, false, false, false, false)]
     [Xunit.InlineData(false, true, false, false, true)]
     [Xunit.InlineData(false, false, true, false, true)]
+    [Xunit.InlineData(false, false, true, false, false)]
     [Xunit.InlineData(false, false, false, true, true)]
     public async Task InheritedChildUsesNormalExitHandling(
         bool plannedRestart, bool missingBeforeAttach, bool deliberateStop, bool tickStall, bool exitCodeObserved)
@@ -85,13 +86,15 @@ public sealed class ConductorContinuitySupervisorInheritedChildTests
             var exit = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
                 directory, "default", "default");
 
-            Assert.Equal(0, exit);
+            Assert.Equal(deliberateStop && !exitCodeObserved ? 1 : 0, exit);
             Assert.Equal(1, seam.InheritedChildObservations);
             Assert.Equal(deliberateStop ? 0 : 1, host.Launches);
             Assert.Equal(plannedRestart && exitCodeObserved,
                 host.Arguments.Contains(ConductorContinuitySupervisor.ResolverObservationHandoffPrefix + checkpoint));
             Assert.Contains(events.Events, evt => evt.Operation == (deliberateStop ? "stopped" : "restart") &&
-                evt.Status == (deliberateStop ? "completed" : plannedRestart ? "planned" : "unexpected"));
+                evt.Status == (deliberateStop
+                    ? exitCodeObserved ? "completed" : "exit-unobserved"
+                    : plannedRestart ? "planned" : "unexpected"));
             if (tickStall)
                 Assert.Contains(events.Events, evt => evt.Operation == "tick-stall" &&
                     evt.Status == "detected");

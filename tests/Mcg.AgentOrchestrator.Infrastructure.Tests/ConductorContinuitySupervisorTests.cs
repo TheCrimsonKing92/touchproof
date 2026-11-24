@@ -267,8 +267,10 @@ public sealed class ConductorContinuitySupervisorTests
         Assert.Contains("renewal-cap count=3 max=2", store.Events[^1].Detail, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public async Task ResolverObservationCheckpointReachesOnlyTheNextCleanRenewalChild()
+    [Xunit.Theory]
+    [Xunit.InlineData("max-duration")]
+    [Xunit.InlineData("self-relaunch-handoff")]
+    public async Task ResolverObservationCheckpointReachesOnlyTheNextCleanRenewalChild(string renewalReason)
     {
         using var fixture = new PreTesterReverseDependencySelectionFixture();
         const string checkpoint = "window:token:digest";
@@ -276,7 +278,7 @@ public sealed class ConductorContinuitySupervisorTests
         var host = new ScriptedSupervisorProcessHost((request, index) =>
         {
             ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
-                new(index < 2 ? "max-duration" : "stop-file", 1, 1, RestartRequested: index < 2,
+                new(index < 2 ? renewalReason : "stop-file", 1, 1, RestartRequested: index < 2,
                     ResolverObservationHandoff: index == 0 ? checkpoint : null));
             return new(0, 300 + index);
         });

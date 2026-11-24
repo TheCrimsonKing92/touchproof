@@ -35,8 +35,11 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
             ReplayOracleRevision,
             ["Extract the original matching loop and selection completion.", "Add supervised observation and offline corpus replay."]);
         var receipt = Path.Combine(fixture.Root, "staged-replay.json");
-        Dotnet(fixture.Root, fixture.Root, oracle.AppPath, PreTesterResolverReplayCommand.Name, corpus, digest, receipt,
-            WriteBuild(candidate, fixture.Root, "candidate"), WriteBuild(oracle, fixture.Root, "oracle"));
+        using var error = new StringWriter();
+        var exit = PreTesterResolverReplayCommand.Run(
+            [PreTesterResolverReplayCommand.Name, corpus, digest, receipt, WriteBuild(candidate, fixture.Root, "candidate"),
+                WriteBuild(oracle, fixture.Root, "oracle")], error);
+        Assert.True(exit == 0, error.ToString());
 
         var result = JsonSerializer.Deserialize<PreTesterResolverCorpus.ReplayReceipt>(File.ReadAllBytes(receipt))!;
         Assert.Equal(digest, result.CorpusSha256);
@@ -51,7 +54,7 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
         Assert.NotEqual(result.Candidate.AppSha256, result.Oracle.AppSha256);
         Assert.NotEqual(producer.AppSha256, result.Candidate.AppSha256);
         Assert.NotEqual(producer.AppSha256, result.Oracle.AppSha256);
-        Assert.Equal(PreTesterResolverCorpus.OracleResolverBlob, result.OracleBlob);
+        Assert.Equal(ReplayOracleResolverBlob, result.OracleBlob);
         Assert.Equal([1, 2, 3, 4], result.Comparisons.Select(comparison => comparison.Ordinal));
         Assert.All(result.Comparisons, comparison =>
         {
@@ -61,6 +64,24 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
         Assert.Equal(["A", "A", null, null], result.Comparisons.Select(comparison => comparison.Candidate.UnresolvedName));
         Assert.Contains("kind=reverse-dependency-skipped-cost", Assert.Single(result.Comparisons[2].Candidate.Diagnostics));
         Assert.Equal(["B", "A"], result.Comparisons[3].Candidate.Selections.Select(selection => selection.TestClass));
+
+        var rejected = Path.Combine(fixture.Root, "rejected-replay.json");
+        var optimizedOracle = candidate with
+        {
+            StartingRevision = PreTesterResolverCorpus.OracleRevision,
+            Amendments = ["Claim the optimized descendant is the oracle."]
+        };
+        var wrongSource = Assert.Throws<InvalidDataException>(() =>
+            PreTesterResolverCorpus.Replay(corpus, digest, rejected, candidate, optimizedOracle));
+        Assert.Contains("does not contain an approved original resolver", wrongSource.Message);
+        Assert.False(File.Exists(rejected));
+
+        File.AppendAllText(Path.Combine(Path.GetDirectoryName(candidate.AppPath)!, "Mcg.AgentOrchestrator.Infrastructure.dll"), "tampered");
+        Assert.Equal(candidate.AppSha256, Sha256(candidate.AppPath));
+        var wrongDependency = Assert.Throws<InvalidDataException>(() =>
+            PreTesterResolverCorpus.Replay(corpus, digest, rejected, candidate, oracle));
+        Assert.Contains("Replay dependency digest does not match: Mcg.AgentOrchestrator.Infrastructure.dll", wrongDependency.Message);
+        Assert.False(File.Exists(rejected));
         output.WriteLine($"Staged replay corpus={digest} receipt={Sha256(receipt)} window={result.WindowId} rows={result.Comparisons.Length}");
         output.WriteLine($"Candidate {result.Candidate.Revision} App={result.Candidate.AppSha256}");
         output.WriteLine($"Oracle {result.Oracle.Revision} App={result.Oracle.AppSha256}");
@@ -78,12 +99,13 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
             Assert.Equal(revision, actualRevision);
             Assert.Empty(Git(checkout, "status", "--porcelain", "--untracked-files=all"));
             Dotnet(checkout, root, "build", AppProject, "--output", stage, "--verbosity", "quiet",
-                "--disable-build-servers", "-p:UseAppHost=false", "-p:IncludeSourceRevisionInInformationalVersion=true");
+                "--disable-build-servers", "-p:UseAppHost=false", "-p:IncludeSourceRevisionInInformationalVersion=true",
+                "-p:DebugType=embedded", "-p:ChecksumAlgorithm=SHA256");
             Assert.Empty(Git(checkout, "status", "--porcelain", "--untracked-files=all"));
 
             var app = Path.Combine(stage, "Mcg.AgentOrchestrator.App.dll");
             File.WriteAllText(app + ".git-head", actualRevision);
-            return new(startingRevision, actualRevision, app, Sha256(app), amendments, repository);
+            return new(startingRevision, actualRevision, app, Sha256(app), amendments, repository, DependencyHashes(app));
         }
         finally
         {
@@ -129,13 +151,7 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
         var corpus = PreTesterResolverCorpus.Read(path, seal.Sha256!);
         Assert.Equal(["A", "B", "A"], corpus.Cases[0].Inventory.Select(descriptor => descriptor.FullName));
         Assert.Equal(["A", "B", "A"], corpus.Cases[1].Invocation.Names);
-        var candidatePath = WriteBuild(candidate, fixture.Root, "candidate");
-        var oraclePath = WriteBuild(oracle, fixture.Root, "oracle");
-        using var error = new StringWriter();
-        var exitCode = PreTesterResolverReplayCommand.Run(
-            [PreTesterResolverReplayCommand.Name, path, seal.Sha256!, receipt, candidatePath, oraclePath], error);
-        Assert.True(exitCode == 0, error.ToString());
-        Assert.Equal("", error.ToString());
+        Assert.True(ReplayFixture(path, seal.Sha256!, receipt, candidate, oracle));
 
         var result = JsonSerializer.Deserialize<PreTesterResolverCorpus.ReplayReceipt>(File.ReadAllBytes(receipt))!;
         Assert.Equal(seal.Sha256, result.CorpusSha256);
@@ -200,7 +216,7 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
                 break;
         }
 
-        Assert.Throws<InvalidDataException>(() => PreTesterResolverCorpus.Replay(path, seal.Sha256!, receipt,
+        Assert.Throws<InvalidDataException>(() => ReplayFixture(path, seal.Sha256!, receipt,
             candidate, oracle));
         Assert.False(File.Exists(receipt));
     }
@@ -215,7 +231,7 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
         var oracle = Build(fixture.Root, PreTesterResolverCorpus.OracleRevision);
         var receipt = Path.Combine(fixture.Root, "replay.json");
 
-        Assert.False(PreTesterResolverCorpus.Replay(corpus, digest, receipt, candidate, oracle));
+        Assert.False(ReplayFixture(corpus, digest, receipt, candidate, oracle));
 
         var result = JsonSerializer.Deserialize<PreTesterResolverCorpus.ReplayReceipt>(File.ReadAllBytes(receipt))!;
         Assert.Equal(digest, result.CorpusSha256);
@@ -234,10 +250,34 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
         File.WriteAllText(candidate.AppPath, "this is not an executable");
 
         var receipt = Path.Combine(fixture.Root, "replay.json");
-        Assert.Throws<BadImageFormatException>(() => PreTesterResolverCorpus.Replay(path, Receipt(path).Sha256!,
+        Assert.Throws<BadImageFormatException>(() => ReplayFixture(path, Receipt(path).Sha256!,
             receipt, candidate with { AppSha256 = Sha256(candidate.AppPath) }, oracle));
         Assert.False(File.Exists(receipt));
     }
+
+    [Fact]
+    public void SelfDeclaredOracleRevisionCannotReplaceBuildSourceProof()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var corpus = MakeCorpus(fixture.Root);
+        var receipt = Path.Combine(fixture.Root, "replay.json");
+        var candidate = Build(fixture.Root, PreTesterResolverCorpus.CandidateRevision);
+        var oracle = Build(fixture.Root, PreTesterResolverCorpus.OracleRevision) with { RepositoryPath = VerifiedRepositoryRoot.Find() };
+        var error = Assert.Throws<InvalidDataException>(() =>
+            PreTesterResolverCorpus.Replay(corpus, Receipt(corpus).Sha256!, receipt, candidate, oracle));
+        Assert.Contains("does not bind both replay operations", error.Message);
+        Assert.False(File.Exists(receipt));
+    }
+
+    private static bool ReplayFixture(string corpus, string digest, string receipt,
+        PreTesterResolverCorpus.ReplayBuild candidate, PreTesterResolverCorpus.ReplayBuild oracle) =>
+        PreTesterResolverCorpus.Replay(corpus, digest, receipt, candidate, oracle,
+            (_, _, _) => PreTesterResolverCorpus.OracleResolverBlob);
+
+    private static Dictionary<string, string> DependencyHashes(string app) =>
+        Directory.EnumerateFiles(Path.GetDirectoryName(app)!, "*.dll")
+            .Where(path => path != app)
+            .ToDictionary(path => Path.GetFileName(path)!, path => Sha256(path), StringComparer.OrdinalIgnoreCase);
 
     private static string MakeCorpus(string root)
     {
@@ -311,7 +351,7 @@ public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
             """;
         File.WriteAllBytes(app, DependencyIndexFixtureAssembly.Compile(source, appName));
         File.WriteAllText(app + ".git-head", revision);
-        return new(revision, revision, app, Sha256(app), []);
+        return new(revision, revision, app, Sha256(app), [], DependencySha256: DependencyHashes(app));
     }
 
     // The two hermetic fixture builds exercise the matching loops from the pinned resolver sources.

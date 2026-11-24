@@ -801,7 +801,6 @@ internal sealed partial class ConductorBatchLoop
                 }
             }
 
-            using var resolverTick = resolverObservation?.BeginTick(policy.PreTesterResolverObservationWindowId, _utcNow);
             var preTickTimingLines = new List<string>();
             if (checkpointGoalTick is not null && checkpointHeldGoals.Count > 0)
             {
@@ -881,13 +880,16 @@ internal sealed partial class ConductorBatchLoop
                             escalatedGoals, completedGoals, reapedGoals, goalProjectionCache);
                         foreach (var line in drainIntentBoundary.Lines) EmitProgress(line);
                     }
+                    resolverObservation?.ObserveDrainPass(policy.PreTesterResolverObservationWindowId);
                     continue;
                 }
                 if (drainOutcome.Disposition == SelfRelaunchDrainDisposition.BreakLoop)
                 {
+                    resolverObservation?.ObserveDrainPass(policy.PreTesterResolverObservationWindowId);
                     break;
                 }
             }
+            using var resolverTick = resolverObservation?.BeginTick(policy.PreTesterResolverObservationWindowId, _utcNow);
             RunJanitorialPhase("readmit-resolved-set-aside-goals", nextTick, () =>
             {
                 var decisions = ReadmitResolvedSetAsideGoals(
@@ -1905,12 +1907,14 @@ internal sealed partial class ConductorBatchLoop
         }
         if (stopReason == ConductorDrainSignal.DrainedReason)
             EmitProgress(drain.FormatDrained(totalTicks));
-        if (!maxDurationReached)
+        var observationRenewal = maxDurationReached || selfRelaunchHandoff is
+            { Started: true, Reason: ConductorSelfRelaunch.SupervisorDelegatedReason };
+        if (!observationRenewal)
             resolverObservation?.CloseOrderly(_utcNow);
         return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds))
         {
             HomeBuildTarget = handedOffHomeBuild,
-            ResolverObservationHandoff = maxDurationReached ? resolverObservation?.CloseForRenewal(_utcNow) : null
+            ResolverObservationHandoff = observationRenewal ? resolverObservation?.CloseForRenewal(_utcNow) : null
         };
         }
         catch (Exception ex)

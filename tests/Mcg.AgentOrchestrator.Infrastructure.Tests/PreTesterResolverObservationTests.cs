@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -31,6 +32,34 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
         Assert.NotNull(supervised);
         Assert.Null(supervised!.BeginTick(null, () => throw new InvalidOperationException("Disabled policy read the clock.")));
         Assert.False(Directory.Exists(Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation")));
+    }
+
+    [Fact]
+    public void ChildArgumentsAndMatchingCorpusCannotAuthorizeContinuation()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        using var staged = new StagedProducerRevision();
+        var id = Guid.NewGuid();
+        var directory = Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation");
+        var path = CorpusPath(directory, id);
+        string checkpoint;
+        using (var first = PreTesterResolverObservationWindow.ForConductLoop(true, false, workspace)!)
+        {
+            using var tick = Assert.IsType<Tick>(first.BeginTick(id, () => Start));
+            tick.Complete();
+            checkpoint = Assert.IsType<string>(first.CloseForRenewal(() => Start.AddHours(1)));
+        }
+        var originalHash = Sha256(path);
+        var args = ConductorContinuitySupervisor.ComposeChildArguments(["conduct", "--loop"], "default", "default",
+            Path.Combine(workspace.OrchestratorDirectory, "continuity", $"conduct-{Guid.NewGuid():N}.json"),
+            null, requireCurrentStores: false, resolverObservationHandoff: checkpoint);
+
+        using var child = CliConductLoopStartup.CreateResolverObservation(args, noDispatch: false, workspace)!;
+        Assert.Null(child.BeginTick(id, () => Start.AddHours(2)));
+        Assert.Equal(originalHash, Sha256(path));
+        Assert.False(File.Exists(path + ".receipt.json"));
     }
 
     [Fact]

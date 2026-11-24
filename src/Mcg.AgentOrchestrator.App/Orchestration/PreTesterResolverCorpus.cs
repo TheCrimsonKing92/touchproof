@@ -107,20 +107,26 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
     }
 
     internal static bool Replay(string corpusPath, string expectedSha256, string receiptPath,
-        ReplayBuild candidate, ReplayBuild oracle)
+        ReplayBuild candidate, ReplayBuild oracle) =>
+        Replay(corpusPath, expectedSha256, receiptPath, candidate, oracle, VerifyOracleSource);
+
+    internal static bool Replay(string corpusPath, string expectedSha256, string receiptPath,
+        ReplayBuild candidate, ReplayBuild oracle, Func<ReplayBuild, Stream, PreTesterResolverReplayArm, string> verifyOracleSource)
     {
         var corpus = Read(corpusPath, expectedSha256);
         using var candidateBytes = File.OpenRead(candidate.AppPath);
         using var oracleBytes = File.OpenRead(oracle.AppPath);
         VerifyBuild(candidate, CandidateRevision, candidateBytes);
         VerifyBuild(oracle, OracleRevision, oracleBytes);
+        using var oracleArm = new PreTesterResolverReplayArm(oracle, oracleBytes);
+        Require(HasEmbeddedRevision(oracleArm, oracle.Revision), "Replay executable revision does not match the staged revision.");
+        var oracleBlob = verifyOracleSource(oracle, oracleBytes, oracleArm);
         Require(!candidate.Revision.Equals(oracle.Revision, StringComparison.OrdinalIgnoreCase) &&
             !candidate.AppSha256.Equals(oracle.AppSha256, StringComparison.OrdinalIgnoreCase),
             "Candidate and oracle identities must be distinct.");
 
-        using var candidateArm = new PreTesterResolverReplayArm(candidate.AppPath, candidateBytes);
-        using var oracleArm = new PreTesterResolverReplayArm(oracle.AppPath, oracleBytes);
-        Require(HasEmbeddedRevision(candidateArm, candidate.Revision) && HasEmbeddedRevision(oracleArm, oracle.Revision),
+        using var candidateArm = new PreTesterResolverReplayArm(candidate, candidateBytes);
+        Require(HasEmbeddedRevision(candidateArm, candidate.Revision),
             "Replay executable revision does not match the staged revision.");
         Require(candidateArm.ModuleVersionId != oracleArm.ModuleVersionId,
             "Candidate and oracle must use distinct compiled modules.");
@@ -138,7 +144,7 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
                 expected.Diagnostics.SequenceEqual(actual.Diagnostics, StringComparer.Ordinal));
         }).ToArray();
         JsonSerializer.Serialize(output, new ReplayReceipt(corpus.Sha256, corpus.Header.WindowId,
-            corpus.Producers, candidate, oracle, OracleResolverBlob, comparisons));
+            corpus.Producers, candidate, oracle, oracleBlob, comparisons));
         output.Flush(flushToDisk: true);
         return comparisons.All(comparison => comparison.Equivalent);
     }
@@ -166,6 +172,26 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
     private static bool HasEmbeddedRevision(PreTesterResolverReplayArm arm, string revision) =>
         arm.InformationalVersion is { } version && version.IndexOf('+') is var metadata && metadata >= 0 &&
         version[(metadata + 1)..].Split('.')[^1].Equals(revision, StringComparison.OrdinalIgnoreCase);
+
+    private static string VerifyOracleSource(ReplayBuild oracle, Stream appBytes, PreTesterResolverReplayArm arm)
+    {
+        const string resolverPath = "src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterReverseDependencySelections.cs";
+        Require(oracle.RepositoryPath is not null && Path.IsPathFullyQualified(oracle.RepositoryPath) &&
+            Directory.Exists(oracle.RepositoryPath), "Oracle replay requires the repository containing its staged revision.");
+        var source = GitCli.RunForRepository(oracle.RepositoryPath, "rev-parse", "--verify", $"{oracle.Revision}:{resolverPath}");
+        var blob = source.Output.Trim();
+        // The observer port extracts the original loop for replay. Its approved source has a different blob.
+        var checksum = blob switch
+        {
+            OracleResolverBlob => "d7e222d4e61e3ac7a488bdb0cc99780a57f41fa134b2b1d6b7047ff93d43f162",
+            "23f9044420b64de6750682f80404e8d51c618779" => "928cbd382aeb8386b723f73bc995186a3c989ed90d2801bc5d09e05c4d1a2b0f",
+            _ => null
+        };
+        Require(source.Succeeded && checksum is not null, "Oracle revision does not contain an approved original resolver.");
+        Require(arm.HasEmbeddedResolverSource(appBytes, resolverPath, checksum),
+            "Oracle executable does not bind both replay operations to the approved resolver source.");
+        return blob;
+    }
 
     private static bool WorkloadsMatch(Workload[]? rows, Dictionary<string, int> counts)
     {
@@ -198,7 +224,7 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
     internal sealed record ReplayCase(Guid SessionId, Invocation Invocation, AcceptanceTestClassDescriptor[] Inventory);
 
     internal sealed record ReplayBuild(string StartingRevision, string Revision, string AppPath, string AppSha256,
-        string[] Amendments, string? RepositoryPath = null);
+        string[] Amendments, string? RepositoryPath = null, Dictionary<string, string>? DependencySha256 = null);
 
     internal sealed record ReplayDecision(string? UnresolvedName, FindingEvidenceSelection[] Selections,
         Provenance[] Provenance, string[] Diagnostics);

@@ -436,21 +436,18 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             var policy = ConductorAutonomyPolicy.Conservative with { PreTesterResolverObservationWindowId = observe ? id : null };
             Directory.CreateDirectory(workspace.OrchestratorDirectory);
             var policyPath = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
-            File.WriteAllText(policyPath, ConductorAutonomyPolicy.Conservative.ToJson());
+            File.WriteAllText(policyPath, policy.ToJson());
             var path = PreTesterResolverObservationTests.CorpusPath(
                 Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"), id);
             var child = new ResolverChildHost(request =>
             {
                 using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
-                var preset = CliCommandHandlers.GetFlagValue(request.Arguments, "--policy");
-                var initial = CliConductLoopStartup.PrepareConductLoopPolicy(workspace.OrchestratorDirectory, preset, TextWriter.Null)!;
-                Assert.Equal($"file:{policyPath}", initial.Source);
-                driver.PreTesterResolverObservation = CliConductLoopStartup.CreateResolverObservation(request.Arguments, noDispatch: false, workspace);
-                File.WriteAllText(policyPath, policy.ToJson());
-                var summary = new ConductorBatchLoop(utcNow: () => PreTesterResolverObservationTests.Start).Run(
-                    scenario.Kernel, driver, initial.Policy, Path.Combine(scenario.Root, ".conduct-stop"), maxIterations: 1, quiet: true,
-                    policySource: initial.Source, reloadPolicy: () => CliConductLoopStartup.ResolveConductorPolicy(preset, workspace.OrchestratorDirectory),
-                    onTick: _ =>
+                var context = new CliExecutionContext(scenario.Kernel, workspace, new InMemoryModelProviderRegistry([]),
+                    [], WorkerProfileCatalog.Default(), scenario.Goal)
+                {
+                    ConductLoopDriverForTests = driver,
+                    RunInjectedAcceptanceVerifierInCurrentProcess = true,
+                    ConductorTickObserver = _ =>
                     {
                         if (observe)
                         {
@@ -460,13 +457,14 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                             Assert.NotNull(reader.ReadLine());
                             Assert.Null(reader.ReadLine());
                         }
-                    });
-                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
-                    ConductorContinuityExitArtifactFactory.FromLoopSummary(summary, delegateSelfRelaunchToSupervisor: true));
+                    }
+                };
+                Assert.True(CliCommandHandlers.Execute(request.Arguments.ToArray(), context));
+                Assert.NotNull(ConductorContinuityExitArtifact.TryRead(request.ExitArtifactPath));
             });
             var supervisor = new ConductorContinuitySupervisor(child,
                 new Mcg.AgentOrchestrator.Infrastructure.Tests.SupervisorHandoffFixture.RecordingEvents(), maxUnexpectedRestarts: 0);
-            Assert.Equal(0, await supervisor.RunAsync(["conduct", "--loop", "--watch"],
+            Assert.Equal(0, await supervisor.RunAsync(["conduct", "--loop", "--watch", "--max-iterations", "1"],
                 scenario.Root, workspace.OrchestratorDirectory, "default", "default"));
             Assert.Equal(1, child.Launches);
             if (observe)
