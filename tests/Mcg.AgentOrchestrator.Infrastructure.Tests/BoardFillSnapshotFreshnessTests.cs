@@ -6,6 +6,64 @@ using static BoardFillSnapshotTestDatabase;
 
 public sealed class BoardFillSnapshotFreshnessTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Scoped_decision_matches_full_read_and_keeps_only_required_closed_facts(bool legacy)
+    {
+        using var database = BoardFillSchedulingComparison.Create(32, 9);
+        if (legacy)
+        {
+            using var connection = database.Open();
+            BoardFillSnapshotTestDatabase.RemoveSnapshotProof(connection);
+            BoardFillSnapshotTestDatabase.Execute(connection, "ALTER TABLE backlog DROP COLUMN pinned_at");
+        }
+
+        var fileBefore = File.ReadAllBytes(database.Path);
+        var initial = Compare();
+        Assert.Equal(BoardFillSchedulingComparison.Dependent, initial.Selected);
+        Assert.Equal([BoardFillSchedulingComparison.Dependent, BoardFillSchedulingComparison.Alternate], initial.Preferred);
+        Assert.Equal(BoardFillSchedulingComparison.Historical, Assert.Single(initial.Duplicates).Reference.Id);
+        Assert.NotNull(Assert.Single(initial.Duplicates).Annotation);
+        Assert.Contains(initial.Holds, hold => hold.Id == BoardFillSchedulingComparison.Held && hold.Contradicted);
+        Assert.Contains(initial.Candidates, row => row.Id == "item-000006" &&
+            row.Readiness.Suffix == " [Blocked: waiting on open prerequisite missing-]");
+        Assert.Contains("item-000007", initial.MissingMembers);
+        Assert.Equal(fileBefore, File.ReadAllBytes(database.Path));
+
+        var snapshot = BoardFillSchedulingComparison.ReadProjection(database.Path);
+        Assert.All(snapshot.Candidates, item => Assert.Equal(BacklogItemStatus.Open, item.Status));
+        Assert.Equal(9, snapshot.Candidates.Count);
+        Assert.Equal(BacklogItemStatus.Done, snapshot.Statuses[BoardFillSchedulingComparison.Prerequisite]);
+        Assert.Equal(BacklogItemStatus.Superseded, snapshot.Statuses[BoardFillSchedulingComparison.ClosedPlanSource]);
+        Assert.False(snapshot.Statuses.ContainsKey(BoardFillSchedulingComparison.Missing));
+        Assert.False(snapshot.Statuses.ContainsKey(BoardFillSchedulingComparison.Irrelevant));
+        Assert.Equal(BoardFillSchedulingComparison.Historical, Assert.Single(snapshot.RecentSources).Id);
+
+        BoardFillSchedulingComparison.SetNote(database, BoardFillSchedulingComparison.Duplicate,
+            Assert.Single(initial.Duplicates).Annotation!);
+        Assert.Null(Assert.Single(Compare().Duplicates).Annotation);
+
+        database.Run($"UPDATE backlog SET status = 'Superseded' WHERE id = '{BoardFillSchedulingComparison.Prerequisite}'");
+        var changedPrerequisite = Compare();
+        Assert.Equal(BoardFillSchedulingComparison.Alternate, changedPrerequisite.Selected);
+        Assert.False(Assert.Single(changedPrerequisite.Candidates,
+            row => row.Id == BoardFillSchedulingComparison.Dependent).Readiness.Eligible);
+
+        BoardFillSchedulingComparison.SetNote(database, BoardFillSchedulingComparison.Held, "Updated marker evidence");
+        Assert.Contains(Compare().Holds, hold => hold.Id == BoardFillSchedulingComparison.Held && !hold.Contradicted);
+        database.Run($"UPDATE backlog SET body = 'See src/Other.cs' WHERE id = '{BoardFillSchedulingComparison.Historical}'");
+        Assert.Empty(Compare().Duplicates);
+
+        BoardFillSchedulingComparison.Decision Compare()
+        {
+            var full = BoardFillSchedulingComparison.DecideFull(BoardFillBacklogSnapshot.Read(database.Path));
+            var projection = BoardFillSchedulingComparison.DecideProjected(BoardFillSchedulingComparison.ReadProjection(database.Path));
+            Assert.Equal(full.Receipt(), projection.Receipt());
+            return projection;
+        }
+    }
+
     public static bool IsWindows => OperatingSystem.IsWindows();
     private const string WindowsFileIdentity = "Verified snapshot hits require the Windows SQLite VFS.";
 
@@ -101,13 +159,16 @@ public sealed class BoardFillSnapshotFreshnessTests
     [Fact(Skip = WindowsFileIdentity, SkipUnless = nameof(IsWindows))]
     public async Task A_same_tick_note_commit_is_visible_to_draft_selection()
     {
-        var baseline = await Exercise(false);
-        var candidate = await Exercise(true);
+        var baseline = await Exercise("full");
+        var candidate = await Exercise("cache");
+        var projection = await Exercise("projection");
         Assert.Equal(ItemId, Assert.Single(baseline.Actions));
         Assert.Equal(baseline.Actions, candidate.Actions);
         Assert.Equal(baseline.Acquired, candidate.Acquired);
+        Assert.Equal(baseline.Actions, projection.Actions);
+        Assert.Equal(baseline.Acquired, projection.Acquired);
 
-        static async Task<(string[] Actions, string[] Acquired)> Exercise(bool reuse)
+        static async Task<(string[] Actions, string[] Acquired)> Exercise(string reader)
         {
             using var database = new BoardFillSnapshotTestDatabase();
             using var drafts = new BoardFillAssessmentTestFixture();
@@ -128,8 +189,14 @@ public sealed class BoardFillSnapshotFreshnessTests
                 return new("failed", 1, null, null, null, [], "recorded fixture draft");
             }, () =>
             {
-                var result = reuse ? cache.Read() : BoardFillBacklogSnapshot.Read(database.Path);
-                if (reuse && captures.Count == 0) Assert.Same(warm, result);
+                var result = reader switch
+                {
+                    "full" => BoardFillBacklogSnapshot.Read(database.Path),
+                    "cache" => cache.Read(),
+                    "projection" => BoardFillSchedulingSnapshot.Read(database.Path, [], at.AddHours(1), []).Candidates,
+                    _ => throw new ArgumentOutOfRangeException(nameof(reader))
+                };
+                if (reader == "cache" && captures.Count == 0) Assert.Same(warm, result);
                 captures.Add(Contents(result));
                 return result;
             }, (_, _) => BoardFillAssessmentTestFixture.Ready,
