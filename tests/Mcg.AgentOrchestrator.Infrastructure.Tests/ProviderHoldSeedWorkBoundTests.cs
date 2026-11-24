@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using SQLitePCL;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -218,6 +219,112 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Contains(observations, item => item.Operation == "provider-seed-archive-projection" &&
             item.GoalId == ProviderHoldSeedFixture.Id(805));
         Assert.DoesNotContain(observations, item => item.GoalId is { } id && unrelatedIds.Contains(id));
+
+        using var smaller = new ProviderHoldSeedFixture();
+        await smaller.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: 8);
+        Seed(smaller, new());
+        var small = MeasureStatusDiscovery(smaller.Database);
+        var large = MeasureStatusDiscovery(fixture.Database);
+        Assert.Equal(2, large.Candidates);
+        Assert.Equal(small, large);
+        Assert.InRange(large.ScanSteps, 0, 2);
+
+        // Both plans return the same candidates. The old join still walks every stub.
+        var unindexed = MeasureStatusDiscovery(fixture.Database, indexed: false);
+        Assert.Equal(large.Candidates, unindexed.Candidates);
+        Assert.True(unindexed.ScanSteps >= unrelatedArchives);
+        Assert.True(unindexed.VmSteps > large.VmSteps);
+    }
+
+    [Fact]
+    public async Task StatusAndFleet_SeeNewResetAfterClassifiedArchiveWrites()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: 8);
+        Seed(fixture, new());
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
+        var now = ProviderHoldSeedFixture.At.AddDays(2);
+        Assert.Equal("fixture-reset", Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now))
+            .Schedule?.ResetIntentId);
+
+        // Re-saving a classified archive's goal makes the full hot document authoritative.
+        var restored = WithReset(ProviderHoldSeedFixture.MakeUnrelated(1000), "fixture-reset-restored",
+            now.AddHours(-2), now.AddDays(1));
+        var token = TestContext.Current.CancellationToken;
+        await fixture.Repository.SaveGoalSnapshotsAsync([restored], token);
+        Assert.Equal("fixture-reset-restored", Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now))
+            .Schedule?.ResetIntentId);
+
+        var reset = WithReset(ClosedGoal(2000), "fixture-reset-archived", now.AddHours(-1), now.AddDays(2));
+        var unrelated = ClosedGoal(2001);
+        await fixture.Repository.SaveGoalSnapshotsAsync([reset, unrelated], token);
+        Assert.Equal(2, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(now, cancellationToken: token,
+            compressSnapshots: true));
+
+        using var connection = new SqliteConnection($"Data Source={fixture.Database};Mode=ReadOnly;Pooling=False");
+        await connection.OpenAsync(token);
+        using var version = connection.CreateCommand();
+        version.CommandText = "PRAGMA data_version";
+        var before = await version.ExecuteScalarAsync(token);
+        var status = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
+        var fleet = Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now));
+        foreach (var row in new[] { status, fleet })
+        {
+            Assert.Equal(ProviderHoldSeedFixture.Id(799), row.Hold.SourceGoalId.Value);
+            Assert.Equal("fixture-reset-archived", row.Schedule?.ResetIntentId);
+            Assert.Equal(now.AddDays(2), row.Schedule?.NextProbeAt);
+        }
+        Assert.Equal(before, await version.ExecuteScalarAsync(token));
+        Assert.Equal(4, MeasureStatusDiscovery(fixture.Database).Candidates);
+
+        GoalSnapshot ClosedGoal(int index)
+        {
+            var goal = ProviderHoldSeedFixture.MakeUnrelated(index);
+            return goal with
+            {
+                Tasks = [goal.Tasks.Single() with { Status = WorkTaskStatus.Cancelled }],
+                Timeline = [new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, "Fixture outcome.", now.AddHours(-3))]
+            };
+        }
+
+        static GoalSnapshot WithReset(GoalSnapshot goal, string id, DateTimeOffset recordedAt, DateTimeOffset retryAt)
+        {
+            var message = ProviderBudgetHoldSchedules.FormatReset(new("anthropic::c:/profiles/held", retryAt, id));
+            return goal with
+            {
+                Timeline = [new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, message, recordedAt)]
+            };
+        }
+    }
+
+    private static (int Candidates, int ScanSteps, int VmSteps) MeasureStatusDiscovery(string database, bool indexed = true)
+    {
+        using var connection = new SqliteConnection($"Data Source={database};Mode=ReadOnly;Pooling=False");
+        connection.Open();
+        var sql = ProviderHoldSeedDiscovery.DocumentDiscoverySql(hasArchive: true, hasTimeline: true, hasHistory: true,
+            hasArchiveDiscovery: !indexed, indexed: indexed, filterTextCandidates: true);
+        using var explain = connection.CreateCommand();
+        explain.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        using (var reader = explain.ExecuteReader())
+        {
+            Assert.True(reader.Read());
+            Assert.StartsWith(indexed
+                ? "SCAN g USING INDEX " + GoalSnapshotArchive.ProviderHoldDiscoveryIndex
+                : "SCAN g", reader.GetString(3));
+        }
+
+        Assert.Equal(raw.SQLITE_OK, raw.sqlite3_prepare_v2(connection.Handle!, sql, out var statement));
+        using (statement)
+        {
+            var candidates = 0;
+            int result;
+            while ((result = raw.sqlite3_step(statement)) == raw.SQLITE_ROW)
+                candidates++;
+            Assert.Equal(raw.SQLITE_DONE, result);
+            return (candidates, raw.sqlite3_stmt_status(statement, raw.SQLITE_STMTSTATUS_FULLSCAN_STEP, 0),
+                raw.sqlite3_stmt_status(statement, raw.SQLITE_STMTSTATUS_VM_STEP, 0));
+        }
     }
 
     [Fact]

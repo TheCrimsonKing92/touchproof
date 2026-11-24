@@ -28,56 +28,11 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var remainingTimelines = new List<string>();
         var emptyArchives = new Dictionary<string, string>(StringComparer.Ordinal);
         using var command = connection.CreateCommand();
-        var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
-        var hasArchiveDiscovery = hasArchive && await GoalSnapshotArchive.HasProviderHoldDiscoveryColumnAsync(connection, token);
-        var archiveVersion = hasArchiveDiscovery
-            ? "CASE WHEN json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.provider_hold_empty_version END"
-            : "NULL";
-        var archivedAt = hasArchive ? "a.archived_at" : "NULL";
-        var document = hasArchive
-            ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
-            : "g.snapshot_json";
-        // Sidecar row presence cannot establish authority over an archived inline timeline.
-        // Only a negative projection from the archive's authoritative evidence can skip its blob.
-        var textCandidates = filterTextCandidates ? $"""
-            AND CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
-                {SidecarCandidatesSql(hasTimeline, hasHistory)}
-                EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
-                    WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
-                EXISTS (SELECT 1 FROM json_each(payload, '$.Tasks') t
-                    WHERE {VerificationPredicate("json_extract(t.value, '$.LastVerification')")} OR
-                    EXISTS (SELECT 1 FROM json_each(t.value, '$.VerificationHistory') v
-                        WHERE {VerificationPredicate("v.value")}))) END
-            """ : "";
-        // Project text in SQLite so large unrelated graphs never cross the managed
-        // boundary. Status also checks archives that may carry inline timelines.
-        command.CommandText = $"""
-            WITH documents(id, payload, archived_at, empty_version) AS NOT MATERIALIZED (
-                SELECT g.id, {document}, {archivedAt}, {archiveVersion} FROM goals g
-                {archiveJoin}
-            )
-            SELECT id, CASE WHEN typeof(payload) = 'text' THEN json_object(
-                'Id', json_extract(payload, '$.Id'),
-                'IsMetadataOnly', json(CASE WHEN json_extract(payload, '$.IsMetadataOnly') = 1 THEN 'true' ELSE 'false' END),
-                'Timeline', CASE WHEN json_extract(payload, '$.TimelineInTable') IS NULL THEN (
-                    SELECT json_group_array(json_object('Message', json_extract(e.value, '$.Message')))
-                    FROM json_each(payload, '$.Timeline') e
-                    WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') END,
-                'TimelineInTable', json_extract(payload, '$.TimelineInTable'),
-                'Tasks', (SELECT json_group_array(json_object(
-                    'Id', json_extract(t.value, '$.Id'),
-                    'LastVerification', json({VerificationSql("json_extract(t.value, '$.LastVerification')")}),
-                    'VerificationHistory', (SELECT json_group_array(json({VerificationSql("v.value")}))
-                        FROM json_each(t.value, '$.VerificationHistory') v WHERE {VerificationPredicate("v.value")}),
-                    'LastDispatch', json({DispatchSql("json_extract(t.value, '$.LastDispatch')")}),
-                    'DispatchHistory', (SELECT json_group_array(json({DispatchSql("d.value")}))
-                        FROM json_each(t.value, '$.DispatchHistory') d)))
-                    FROM json_each(payload, '$.Tasks') t)
-                ) ELSE payload END, archived_at
-            FROM documents
-            WHERE empty_version IS NOT {GoalSnapshotArchive.ProviderHoldEmptyVersion}
-            {textCandidates}
-            """;
+        var indexed = hasArchive && await GoalSnapshotArchive.HasProviderHoldDiscoveryIndexAsync(connection, token);
+        var hasArchiveDiscovery = !indexed && hasArchive &&
+            await GoalSnapshotArchive.HasProviderHoldDiscoveryColumnAsync(connection, token);
+        command.CommandText = DocumentDiscoverySql(hasArchive, hasTimeline, hasHistory, hasArchiveDiscovery, indexed,
+            filterTextCandidates);
         using (var reader = await command.ExecuteReaderAsync(token))
         {
             while (await reader.ReadAsync(token))
@@ -142,8 +97,68 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                 discovery.ObserveVerification((reader.GetString(0), reader.GetString(1)),
                     JsonSerializer.Deserialize<TaskVerificationSnapshot>(reader.GetString(2), options));
         }
-        await GoalSnapshotArchive.BackfillProviderHoldDiscoveryAsync(connection, emptyArchives, token);
+        if (hasArchive && backfillArchiveDiscovery)
+            await GoalSnapshotArchive.BackfillProviderHoldDiscoveryAsync(connection, emptyArchives, token);
         return discovery;
+    }
+
+    internal static string DocumentDiscoverySql(bool hasArchive, bool hasTimeline, bool hasHistory,
+        bool hasArchiveDiscovery, bool indexed, bool filterTextCandidates)
+    {
+        var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
+        var goalIndex = indexed ? $"INDEXED BY {GoalSnapshotArchive.ProviderHoldDiscoveryIndex}" : "";
+        var goalFilter = indexed ? $"WHERE {GoalSnapshotArchive.ProviderHoldDiscoveryPredicate("g.")}" : "";
+        var archiveVersion = hasArchiveDiscovery
+            ? "CASE WHEN json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.provider_hold_empty_version END"
+            : "NULL";
+        var archivedAt = hasArchive
+            ? "CASE WHEN json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.archived_at END"
+            : "NULL";
+        var document = hasArchive
+            ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
+            : "g.snapshot_json";
+        // Sidecar row presence cannot establish authority over an archived inline timeline.
+        // Only a negative projection from the archive's authoritative evidence can skip its blob.
+        var textCandidates = filterTextCandidates ? $"""
+            AND CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
+                {SidecarCandidatesSql(hasTimeline, hasHistory)}
+                EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
+                    WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
+                EXISTS (SELECT 1 FROM json_each(payload, '$.Tasks') t
+                    WHERE {VerificationPredicate("json_extract(t.value, '$.LastVerification')")} OR
+                    EXISTS (SELECT 1 FROM json_each(t.value, '$.VerificationHistory') v
+                        WHERE {VerificationPredicate("v.value")}))) END
+            """ : "";
+        // Project text in SQLite so large unrelated graphs never cross the managed
+        // boundary. Status also checks archives that may carry inline timelines.
+        return $"""
+            WITH documents(id, payload, archived_at, empty_version) AS NOT MATERIALIZED (
+                SELECT g.id, {document}, {archivedAt}, {archiveVersion} FROM goals g {goalIndex}
+                {archiveJoin}
+                {goalFilter}
+            )
+            SELECT id, CASE WHEN typeof(payload) = 'text' THEN json_object(
+                'Id', json_extract(payload, '$.Id'),
+                'IsMetadataOnly', json(CASE WHEN json_extract(payload, '$.IsMetadataOnly') = 1 THEN 'true' ELSE 'false' END),
+                'Timeline', CASE WHEN json_extract(payload, '$.TimelineInTable') IS NULL THEN (
+                    SELECT json_group_array(json_object('Message', json_extract(e.value, '$.Message')))
+                    FROM json_each(payload, '$.Timeline') e
+                    WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') END,
+                'TimelineInTable', json_extract(payload, '$.TimelineInTable'),
+                'Tasks', (SELECT json_group_array(json_object(
+                    'Id', json_extract(t.value, '$.Id'),
+                    'LastVerification', json({VerificationSql("json_extract(t.value, '$.LastVerification')")}),
+                    'VerificationHistory', (SELECT json_group_array(json({VerificationSql("v.value")}))
+                        FROM json_each(t.value, '$.VerificationHistory') v WHERE {VerificationPredicate("v.value")}),
+                    'LastDispatch', json({DispatchSql("json_extract(t.value, '$.LastDispatch')")}),
+                    'DispatchHistory', (SELECT json_group_array(json({DispatchSql("d.value")}))
+                        FROM json_each(t.value, '$.DispatchHistory') d)))
+                    FROM json_each(payload, '$.Tasks') t)
+                ) ELSE payload END, archived_at
+            FROM documents
+            WHERE empty_version IS NOT {GoalSnapshotArchive.ProviderHoldEmptyVersion}
+            {textCandidates}
+            """;
     }
 
     private static string SidecarCandidatesSql(bool hasTimeline, bool hasHistory) =>
