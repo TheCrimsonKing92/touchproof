@@ -36,6 +36,25 @@ public sealed class SourceReaderAnalysisCacheTests
     }
 
     [Fact]
+    public void PublishingPreservesForeignCaseAliasOfDestination()
+    {
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var key = 10.ToString("x64");
+        var destination = cache.EntryPath(key)!;
+        var foreign = Path.ChangeExtension(destination, ".JSON");
+        File.WriteAllText(foreign, "foreign");
+        var aliasesDestination = File.Exists(destination);
+
+        cache.Write(key, new SourceReaderAnalysisCache.Analysis(false, ["Example"]));
+
+        Assert.Contains(Path.GetFileName(foreign), Directory.EnumerateFiles(storage.Path).Select(Path.GetFileName));
+        Assert.Equal("foreign", File.ReadAllText(foreign));
+        Assert.Equal(!aliasesDestination, cache.TryRead(key, out _));
+        Assert.Empty(Directory.EnumerateFiles(storage.Path, "*.tmp"));
+    }
+
+    [Fact]
     public void PublishingKeepsNewEntryAndUsesOrdinalTiesForOtherOwnedGenerations()
     {
         using var storage = new CacheDirectory();
@@ -84,6 +103,47 @@ public sealed class SourceReaderAnalysisCacheTests
             Assert.Equal(new[] { key }, analysis.ReaderOwners);
         }
         Assert.Empty(Directory.GetFiles(storage.Path, "*.tmp"));
+    }
+
+    [Fact]
+    public void EvictionPreservesSameTimestampReplacementFromUnleasedPublisher()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var analysis = new SourceReaderAnalysisCache.Analysis(false, ["Original"]);
+        for (int index = 0; index < 8; index++)
+        {
+            var key = index.ToString("x64");
+            cache.Write(key, analysis);
+            File.SetLastWriteTimeUtc(cache.EntryPath(key)!, DateTime.UtcNow.AddDays(index - 8));
+        }
+
+        var oldKey = 0.ToString("x64");
+        var oldPath = cache.EntryPath(oldKey)!;
+        var timestamp = File.GetLastWriteTimeUtc(oldPath);
+        var replacement = JsonNode.Parse(File.ReadAllText(oldPath))!.AsObject();
+        replacement["ReaderOwners"] = new JsonArray(JsonValue.Create("Replacement"));
+        var stagedPath = oldPath + ".legacy.tmp";
+        File.WriteAllText(stagedPath, replacement.ToJsonString());
+        File.SetLastWriteTimeUtc(stagedPath, timestamp);
+
+        var publisher = new SourceReaderAnalysisCache(storage.Path)
+        {
+            BeforeEvictionForTests = () => File.Move(stagedPath, oldPath, overwrite: true),
+        };
+        var newKey = 8.ToString("x64");
+        publisher.Write(newKey, analysis);
+
+        Assert.False(File.Exists(stagedPath));
+        Assert.Equal(timestamp, File.GetLastWriteTimeUtc(oldPath));
+        Assert.True(cache.TryRead(oldKey, out var retained));
+        Assert.Equal(new[] { "Replacement" }, retained.ReaderOwners);
+        Assert.True(cache.TryRead(newKey, out _));
+
+        cache.Write(9.ToString("x64"), analysis);
+        Assert.Equal(8, Directory.GetFiles(storage.Path, "*.json").Length);
     }
 
     [Fact]
