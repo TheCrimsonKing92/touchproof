@@ -13,10 +13,8 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
     internal static readonly Boundary BeforeTester = new("goal", "tester", "source-under-test");
 
     [Fact]
-    public void PolicyRoundTripsOneWindowAndOnlySupervisedDispatchingLoopsHaveAnObserver()
+    public void PolicyRoundTripsOneWindowAndDefaultsToDisabled()
     {
-        using var fixture = new PreTesterReverseDependencySelectionFixture();
-        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
         var policy = ConductorAutonomyPolicy.Conservative;
         var id = Guid.NewGuid();
         var json = (policy with { PreTesterResolverObservationWindowId = id }).ToJson();
@@ -26,12 +24,40 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
             .PreTesterResolverObservationWindowId);
         Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(
             json.Replace(id.ToString("D"), "../invalid")));
-        Assert.Null(PreTesterResolverObservationWindow.ForConductLoop(false, false, workspace));
-        Assert.Null(PreTesterResolverObservationWindow.ForConductLoop(true, true, workspace));
-        using var supervised = PreTesterResolverObservationWindow.ForConductLoop(true, false, workspace);
-        Assert.NotNull(supervised);
-        Assert.Null(supervised!.BeginTick(null, () => throw new InvalidOperationException("Disabled policy read the clock.")));
-        Assert.False(Directory.Exists(Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation")));
+    }
+
+    [Fact]
+    public void FreshWindowRequiresSingleUseGrantFromLiveSupervisorParent()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        using var staged = new StagedProducerRevision();
+        var supervisor = AcquireSupervisor(workspace);
+        var args = ChildArguments(workspace, out var artifactPath);
+        var directory = Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation");
+        int? ReadParent(int _) => supervisor.Self.ProcessId;
+
+        Assert.Null(CliConductLoopStartup.CreateResolverObservation(args, false, workspace, ReadParent));
+        Assert.False(Directory.Exists(directory));
+
+        using var grant = ConductorResolverObservationLaunch.Authorize(artifactPath, supervisor,
+            typeof(PreTesterReverseDependencyObservation).Assembly.Location, checkpoint: null);
+        Assert.Null(CliConductLoopStartup.CreateResolverObservation(["conduct", "--loop"], false, workspace, ReadParent));
+        Assert.Null(CliConductLoopStartup.CreateResolverObservation(args, true, workspace, ReadParent));
+        Assert.Null(CliConductLoopStartup.CreateResolverObservation(args, false, workspace, _ => null));
+        using var window = Assert.IsType<PreTesterResolverObservationWindow>(
+            CliConductLoopStartup.CreateResolverObservation(args, false, workspace, ReadParent));
+        Assert.Null(CliConductLoopStartup.CreateResolverObservation(args, false, workspace, ReadParent));
+        Assert.Null(window.BeginTick(null, () => throw new InvalidOperationException("Disabled policy read the clock.")));
+        Assert.False(Directory.Exists(directory));
+
+        var id = Guid.NewGuid();
+        using var tick = Assert.IsType<Tick>(window.BeginTick(id, () => Start));
+        tick.Complete();
+        Assert.NotNull(window.CloseForRenewal(() => Start.AddHours(1)));
+        var header = JsonSerializer.Deserialize<WindowHeader>(File.ReadLines(CorpusPath(directory, id)).First())!;
+        Assert.Equal(supervisor.Self, header.Producer.Supervisor);
     }
 
     [Fact]
@@ -41,23 +67,64 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
         var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
         using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
         using var staged = new StagedProducerRevision();
+        var supervisor = AcquireSupervisor(workspace);
+        int? ReadParent(int _) => supervisor.Self.ProcessId;
         var id = Guid.NewGuid();
         var directory = Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation");
         var path = CorpusPath(directory, id);
         string checkpoint;
-        using (var first = PreTesterResolverObservationWindow.ForConductLoop(true, false, workspace)!)
+        var firstArgs = ChildArguments(workspace, out var firstArtifact);
+        using (ConductorResolverObservationLaunch.Authorize(firstArtifact, supervisor,
+            typeof(PreTesterReverseDependencyObservation).Assembly.Location, checkpoint: null))
+        using (var first = Assert.IsType<PreTesterResolverObservationWindow>(
+            CliConductLoopStartup.CreateResolverObservation(firstArgs, false, workspace, ReadParent)))
         {
             using var tick = Assert.IsType<Tick>(first.BeginTick(id, () => Start));
             tick.Complete();
             checkpoint = Assert.IsType<string>(first.CloseForRenewal(() => Start.AddHours(1)));
         }
         var originalHash = Sha256(path);
-        var args = ConductorContinuitySupervisor.ComposeChildArguments(["conduct", "--loop"], "default", "default",
-            Path.Combine(workspace.OrchestratorDirectory, "continuity", $"conduct-{Guid.NewGuid():N}.json"),
-            null, requireCurrentStores: false, resolverObservationHandoff: checkpoint);
+        var args = ChildArguments(workspace, out var artifactPath, checkpoint);
 
-        using var child = CliConductLoopStartup.CreateResolverObservation(args, noDispatch: false, workspace)!;
-        Assert.Null(child.BeginTick(id, () => Start.AddHours(2)));
+        Assert.Null(CliConductLoopStartup.CreateResolverObservation(args, false, workspace, ReadParent));
+        Assert.Equal(originalHash, Sha256(path));
+        Assert.False(File.Exists(path + ".receipt.json"));
+
+        using var grant = ConductorResolverObservationLaunch.Authorize(artifactPath, supervisor,
+            typeof(PreTesterReverseDependencyObservation).Assembly.Location, checkpoint);
+        using var child = Assert.IsType<PreTesterResolverObservationWindow>(
+            CliConductLoopStartup.CreateResolverObservation(args, false, workspace, ReadParent));
+        using var resumed = Assert.IsType<Tick>(child.BeginTick(id, () => Start.AddHours(2)));
+        resumed.Complete();
+        Assert.NotNull(child.CloseForRenewal(() => Start.AddHours(3)));
+        var session = JsonSerializer.Deserialize<SessionStart>(File.ReadLines(path).ElementAt(3))!;
+        Assert.Equal(supervisor.Self, session.Producer.Supervisor);
+        Assert.NotEqual(session.PreviousSessionId, session.Producer.SessionId);
+    }
+
+    [Fact]
+    public void VerifiedSuccessorCannotQualifyWindowStartedWithoutSupervisorProvenance()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        using var staged = new StagedProducerRevision();
+        var supervisor = AcquireSupervisor(workspace);
+        var id = Guid.NewGuid();
+        var directory = Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation");
+        var path = CorpusPath(directory, id);
+        using var first = Window(directory);
+        using var tick = Assert.IsType<Tick>(first.BeginTick(id, () => Start));
+        tick.Complete();
+        var checkpoint = Assert.IsType<string>(first.CloseForRenewal(() => Start.AddHours(1)));
+        var originalHash = Sha256(path);
+        var args = ChildArguments(workspace, out var artifactPath, checkpoint);
+        using var grant = ConductorResolverObservationLaunch.Authorize(artifactPath, supervisor,
+            typeof(PreTesterReverseDependencyObservation).Assembly.Location, checkpoint);
+        using var successor = Assert.IsType<PreTesterResolverObservationWindow>(
+            CliConductLoopStartup.CreateResolverObservation(args, false, workspace, _ => supervisor.Self.ProcessId));
+
+        Assert.Null(successor.BeginTick(id, () => Start.AddHours(2)));
         Assert.Equal(originalHash, Sha256(path));
         Assert.False(File.Exists(path + ".receipt.json"));
     }
@@ -240,6 +307,13 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
         var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
         using var appRevision = new StagedProducerRevision();
         using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        var supervisor = AcquireSupervisor(workspace);
+        ChildArguments(workspace, out var artifactPath);
+        using var grant = ConductorResolverObservationLaunch.Authorize(artifactPath, supervisor,
+            typeof(PreTesterReverseDependencyObservation).Assembly.Location, checkpoint: null);
+        var launch = Assert.IsType<ConductorResolverObservationLaunch.VerifiedLaunch>(
+            ConductorResolverObservationLaunch.Claim(workspace.OrchestratorDirectory, artifactPath, null,
+                _ => supervisor.Self.ProcessId));
         var orderedWorkloads = new[]
         {
             new[] { "ConsumerTests", "SecondTests" },
@@ -262,7 +336,7 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
         {
             var id = Guid.NewGuid();
             var now = Start;
-            using var window = PreTesterResolverObservationWindow.ForConductLoop(true, false, workspace)!;
+            using var window = PreTesterResolverObservationWindow.ForConductLoop(workspace, launch);
             var started = Environment.CpuUsage.TotalTime;
             using var tick = window.BeginTick(enabled ? id : null, () => now);
             for (var repeat = 0; repeat < repetitions; repeat++)
@@ -290,6 +364,7 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
                 Assert.Equal(appRevision.Revision, corpus.Header.Producer.Revision);
                 Assert.Equal(appRevision.AppSha256, corpus.Header.Producer.AppSha256);
                 Assert.NotNull(corpus.Header.Producer.LeaseAcquiredAt);
+                Assert.Equal(supervisor.Self, corpus.Header.Producer.Supervisor);
             }
             else
             {
@@ -350,6 +425,20 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
         string? handoff = null) =>
         new(root, session => new(session, new string('1', 40), new string('2', 64), 1, Start, root),
             report ?? (_ => { }), handoff);
+
+    private static SystemConductorSupervisorHandoffSeam AcquireSupervisor(OrchestratorWorkspace workspace)
+    {
+        var supervisor = new SystemConductorSupervisorHandoffSeam(Path.Combine(workspace.OrchestratorDirectory, "continuity"));
+        supervisor.Acquire(SystemConductorSupervisorHandoffSeam.ReadOwnBuild());
+        return supervisor;
+    }
+
+    private static string[] ChildArguments(OrchestratorWorkspace workspace, out string artifactPath, string? checkpoint = null)
+    {
+        artifactPath = Path.Combine(workspace.OrchestratorDirectory, "continuity", $"conduct-{Guid.NewGuid():N}.json");
+        return ConductorContinuitySupervisor.ComposeChildArguments(["conduct", "--loop"], "default", "default",
+            artifactPath, null, requireCurrentStores: false, resolverObservationHandoff: checkpoint).ToArray();
+    }
 
     internal static void Record(Tick tick, int ordinal, string[] names) =>
         tick.Record(ordinal, BeforeTester, "project.csproj", names, [new("A", null), new("B", null), new("A", null)],

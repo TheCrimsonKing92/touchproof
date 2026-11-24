@@ -9,19 +9,24 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliConductLoopStartup
 {
     internal static PreTesterResolverObservationWindow? CreateResolverObservation(
-        IReadOnlyList<string> parts, bool noDispatch, OrchestratorWorkspace workspace)
+        IReadOnlyList<string> parts, bool noDispatch, OrchestratorWorkspace workspace,
+        Func<int, int?>? readParentProcessId = null)
     {
         var supervisedChild = parts.Contains(ConductorContinuitySupervisor.ChildFlag, StringComparer.OrdinalIgnoreCase);
         if (!supervisedChild || noDispatch)
             return null;
         var prefix = ConductorContinuitySupervisor.ResolverObservationHandoffPrefix;
         var checkpoint = parts.FirstOrDefault(part => part.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))?[prefix.Length..];
-        var handoff = checkpoint is null ? null : ConductorResolverObservationLaunch.Claim(
+        var launch = ConductorResolverObservationLaunch.Claim(
             workspace.OrchestratorDirectory,
-            CliCommandHandlers.GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag), checkpoint);
-        if (checkpoint is not null && handoff is null)
-            Console.WriteLine("PRE_TESTER_RESOLVER_WINDOW status=continuation-unverified");
-        return PreTesterResolverObservationWindow.ForConductLoop(supervisedChild, noDispatch, workspace, handoff);
+            CliCommandHandlers.GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag), checkpoint, readParentProcessId);
+        if (launch is null)
+        {
+            if (checkpoint is not null)
+                Console.WriteLine("PRE_TESTER_RESOLVER_WINDOW status=continuation-unverified");
+            return null;
+        }
+        return PreTesterResolverObservationWindow.ForConductLoop(workspace, launch);
     }
 
     internal static ConductLoopHandoffOptions CreateHandoffOptions(CliExecutionContext context,

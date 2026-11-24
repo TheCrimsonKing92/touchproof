@@ -439,6 +439,8 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             File.WriteAllText(policyPath, policy.ToJson());
             var path = PreTesterResolverObservationTests.CorpusPath(
                 Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"), id);
+            var continuity = Path.Combine(workspace.OrchestratorDirectory, "continuity");
+            var supervisorSeam = new SystemConductorSupervisorHandoffSeam(continuity);
             var child = new ResolverChildHost(request =>
             {
                 var binding = WorkspaceInvocationBinding.Parse(request.Arguments);
@@ -450,6 +452,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                     [], WorkerProfileCatalog.Default(), scenario.Goal)
                 {
                     ConductLoopDriverForTests = driver,
+                    ResolverObservationParentProcessIdForTests = _ => supervisorSeam.Self.ProcessId,
                     RunInjectedAcceptanceVerifierInCurrentProcess = true,
                     ConductorTickObserver = _ =>
                     {
@@ -470,9 +473,12 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                 Assert.False(artifact.RestartRequested);
             });
             var events = new Mcg.AgentOrchestrator.Infrastructure.Tests.SupervisorHandoffFixture.RecordingEvents();
-            var supervisor = new ConductorContinuitySupervisor(child, events, maxUnexpectedRestarts: 0);
+            var supervisor = new ConductorContinuitySupervisor(child, events, maxUnexpectedRestarts: 0,
+                supervisorHandoff: new(supervisorSeam, SystemConductorSupervisorHandoffSeam.ReadOwnBuild(),
+                    TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)),
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             var exitCode = await supervisor.RunAsync(["conduct", "--loop", "--watch", "--max-iterations", "1"],
-                scenario.Root, workspace.OrchestratorDirectory, workspace.ProjectName, workspace.TenantName);
+                scenario.Root, continuity, workspace.ProjectName, workspace.TenantName);
             Assert.True(exitCode == 0, $"Supervisor exited with {exitCode}. {string.Join(Environment.NewLine, events.Events.Select(entry => entry.Detail))}");
             Assert.Equal(1, child.Launches);
             if (observe)
@@ -482,6 +488,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                 var tick = System.Text.Json.JsonSerializer.Deserialize<PreTesterReverseDependencyObservation.CompletedTick>(lines[1])!;
                 Assert.Equal(2, lines.Length);
                 Assert.Equal(staged.AppSha256, producer.AppSha256);
+                Assert.Equal(supervisorSeam.Self, producer.Supervisor);
                 var invocation = Assert.Single(tick.Rows);
                 Assert.Equal(scenario.Goal.Id.Value, invocation.Boundary.GoalId);
                 Assert.Equal(scenario.Tester.Id.Value, invocation.Boundary.TesterTaskId);

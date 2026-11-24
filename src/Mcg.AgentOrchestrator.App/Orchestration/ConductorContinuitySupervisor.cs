@@ -378,7 +378,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         [ProtectedProcessIdentity.StartTicksVariable] = identity.StartTimeUtcTicks.ToString(CultureInfo.InvariantCulture)
                     } : null);
             ConductorResolverObservationLaunch? resolverLaunch = null;
-            if (activeChild is null && launchCheckpoint is not null && supervisorHandoff is { } launchAuthority)
+            if (activeChild is null && supervisorHandoff is { } launchAuthority)
             {
                 try
                 {
@@ -387,7 +387,8 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
                 catch (Exception error) when (PreTesterReverseDependencyObservation.IsObservationFailure(error))
                 {
-                    TryAppendConductEvent($"SUPERVISOR_RESOLVER_CONTINUATION_UNAVAILABLE attempt={attempt} reason={Sanitize(error.Message)}");
+                    var kind = launchCheckpoint is null ? "LAUNCH" : "CONTINUATION";
+                    TryAppendConductEvent($"SUPERVISOR_RESOLVER_{kind}_UNAVAILABLE attempt={attempt} reason={Sanitize(error.Message)}");
                 }
             }
             using var launchGrant = resolverLaunch;

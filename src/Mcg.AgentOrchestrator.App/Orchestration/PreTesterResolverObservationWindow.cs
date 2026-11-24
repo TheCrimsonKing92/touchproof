@@ -13,12 +13,10 @@ internal sealed class PreTesterResolverObservationWindow(
 
     internal Tick? ActiveTick { get; private set; }
 
-    internal static PreTesterResolverObservationWindow? ForConductLoop(bool supervisedChild, bool noDispatch,
-        OrchestratorWorkspace workspace, string? handoff = null) =>
-        supervisedChild && !noDispatch
-            ? new(Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"),
-                session => CurrentProducer(workspace, session), Console.WriteLine, handoff)
-            : null;
+    internal static PreTesterResolverObservationWindow ForConductLoop(OrchestratorWorkspace workspace,
+        ConductorResolverObservationLaunch.VerifiedLaunch launch) =>
+        new(Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"),
+            session => CurrentProducer(workspace, session, launch), Console.WriteLine, launch.Checkpoint);
 
     internal Tick? BeginTick(Guid? request, Func<DateTimeOffset> utcNow)
     {

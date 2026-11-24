@@ -181,6 +181,8 @@ public Action<BatchTickSummary>? ConductorTickObserver { get; init; }
 
 internal ConductorDriver? ConductLoopDriverForTests { get; init; }
 
+internal Func<int, int?>? ResolverObservationParentProcessIdForTests { get; init; }
+
     private ICliGoalWorktreeService? worktrees;
 
     public ICliGoalWorktreeService Worktrees

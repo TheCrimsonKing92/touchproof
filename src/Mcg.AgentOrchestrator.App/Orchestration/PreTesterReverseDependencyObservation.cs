@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -65,6 +66,8 @@ internal sealed class PreTesterReverseDependencyObservation : IDisposable
                 throw new InvalidDataException("Invalid resolver observation continuation checkpoint.");
 
             _producer = identify();
+            if (_producer.Supervisor is not null && Header.Producer?.Supervisor is null)
+                throw new InvalidDataException("Resolver observation continuation requires verified supervision at window start.");
             foreach (var workload in checkpoint.Workloads)
                 _mix.Add(WorkloadKey(workload.Project, workload.Names), workload);
             _written = checkpoint.InvocationCount;
@@ -143,7 +146,8 @@ internal sealed class PreTesterReverseDependencyObservation : IDisposable
         return Convert.ToHexString(SHA256.HashData(input));
     }
 
-    internal static Producer CurrentProducer(OrchestratorWorkspace workspace, Guid sessionId)
+    internal static Producer CurrentProducer(OrchestratorWorkspace workspace, Guid sessionId,
+        ConductorResolverObservationLaunch.VerifiedLaunch launch)
     {
         using var process = Process.GetCurrentProcess();
         var started = new DateTimeOffset(process.StartTime.ToUniversalTime());
@@ -154,7 +158,8 @@ internal sealed class PreTesterReverseDependencyObservation : IDisposable
         var revision = File.ReadAllText(app + ".git-head").Trim();
         if (!IsRevision(revision))
             throw new InvalidDataException("Resolver observation requires a staged App revision.");
-        return new(sessionId, revision, Sha256(app), process.Id, started, workspace.OrchestratorDirectory, owner.AcquiredAt);
+        return new(sessionId, revision, Sha256(app), process.Id, started, workspace.OrchestratorDirectory,
+            owner.AcquiredAt, launch.Supervisor);
     }
 
     internal static bool IsRevision(string value) => value is { Length: 40 } && value.All(Uri.IsHexDigit);
@@ -235,7 +240,8 @@ internal sealed class PreTesterReverseDependencyObservation : IDisposable
     }
 
     internal sealed record Producer(Guid SessionId, string Revision, string AppSha256, int ProcessId,
-        DateTimeOffset ProcessStartedAt, string AuthorityDirectory, DateTimeOffset? LeaseAcquiredAt = null);
+        DateTimeOffset ProcessStartedAt, string AuthorityDirectory, DateTimeOffset? LeaseAcquiredAt = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ConductorSupervisorProcessIdentity? Supervisor = null);
 
     internal sealed record WindowHeader(int Version, Guid WindowId, DateTimeOffset Started, DateTimeOffset Deadline,
         Producer Producer);

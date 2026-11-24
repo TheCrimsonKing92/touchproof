@@ -1431,7 +1431,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 {
                     MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains
                 };
-                loopDriver.PreTesterResolverObservation = CliConductLoopStartup.CreateResolverObservation(parts, noDispatch, context.Workspace);
+                loopDriver.PreTesterResolverObservation = CliConductLoopStartup.CreateResolverObservation(
+                    parts, noDispatch, context.Workspace, context.ResolverObservationParentProcessIdForTests);
                 if (!noDispatch) loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
                 if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
                     loopDriver.EnableOwnedGroupedGateAttempts();

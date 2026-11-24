@@ -8,10 +8,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // claims its associated grant once, while the parent still holds the supervisor lease.
 internal sealed class ConductorResolverObservationLaunch(string path) : IDisposable
 {
-    private sealed record Grant(ConductorSupervisorProcessIdentity Supervisor, string AppPath, string Checkpoint);
+    private sealed record Grant(ConductorSupervisorProcessIdentity Supervisor, string AppPath, string? Checkpoint);
+
+    internal sealed record VerifiedLaunch(ConductorSupervisorProcessIdentity Supervisor, string? Checkpoint);
 
     internal static ConductorResolverObservationLaunch Authorize(
-        string exitArtifactPath, IConductorSupervisorHandoffSeam authority, string appPath, string checkpoint)
+        string exitArtifactPath, IConductorSupervisorHandoffSeam authority, string appPath, string? checkpoint)
     {
         if (!authority.IsOwner(authority.Self))
             throw new InvalidOperationException("The continuity supervisor no longer owns the launch lease.");
@@ -21,7 +23,8 @@ internal sealed class ConductorResolverObservationLaunch(string path) : IDisposa
         return new(path);
     }
 
-    internal static string? Claim(string stateDirectory, string? exitArtifactPath, string checkpoint)
+    internal static VerifiedLaunch? Claim(string stateDirectory, string? exitArtifactPath, string? checkpoint,
+        Func<int, int?>? readParentProcessId = null)
     {
         var continuity = Path.GetFullPath(Path.Combine(stateDirectory, "continuity"));
         try
@@ -33,7 +36,7 @@ internal sealed class ConductorResolverObservationLaunch(string path) : IDisposa
                 !Path.GetExtension(exitArtifactPath).Equals(".json", StringComparison.Ordinal))
                 return null;
             var owner = SupervisedSelfRelaunchGuard.Probe(continuity, new ConductLockPidProbe()).Owner;
-            if (owner is null || ProcessParentIdResolver.TryGetParentProcessId(Environment.ProcessId) != owner.ProcessId)
+            if (owner is null || (readParentProcessId ?? ProcessParentIdResolver.TryGetParentProcessId)(Environment.ProcessId) != owner.ProcessId)
                 return null;
             var path = exitArtifactPath + ".resolver-launch";
             var claimed = path + ".claimed";
@@ -44,7 +47,7 @@ internal sealed class ConductorResolverObservationLaunch(string path) : IDisposa
             return grant is not null && grant.Supervisor == owner && grant.Checkpoint == checkpoint &&
                 string.Equals(grant.AppPath, typeof(ConductorResolverObservationLaunch).Assembly.Location,
                     StringComparison.OrdinalIgnoreCase)
-                ? checkpoint : null;
+                ? new(owner, checkpoint) : null;
         }
         catch (Exception error) when (IsObservationFailure(error))
         {
