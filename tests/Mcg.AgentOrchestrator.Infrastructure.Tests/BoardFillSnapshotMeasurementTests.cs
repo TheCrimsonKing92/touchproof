@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using static BoardFillSnapshotTestDatabase;
@@ -75,14 +76,19 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
                         $"write_statements={counts.WriteStatements} " +
                         $"write_rows={counts.WriteRows} write_payload_bytes={counts.WritePayload} " +
                         $"trigger_steps={counts.TriggerSteps} host_note_writes={counts.HostNoteWrites} " +
+                        $"host_note_statements={counts.HostNoteStatements} host_note_rows={counts.HostNoteRows} " +
+                        $"host_note_result_payload_bytes={counts.HostNoteResultPayload} host_note_trigger_steps={counts.HostNoteTriggerSteps} " +
                         $"host_note_utf8_bytes={counts.HostNoteBytes} {ReportTotals(samples[arm].Select(sample => sample.Totals))}");
                 }
                 foreach (var baseline in new[] { full, historical })
                 {
                     var deltas = samples[baseline].Zip(samples[projection], (a, b) => a.Totals - b.Totals);
-                    var payloadSavings = traced[baseline].ReadPayload - traced[projection].ReadPayload;
+                    var baselineTrace = traced[baseline];
+                    var projectionTrace = traced[projection];
+                    var payloadSavings = baselineTrace.ReadPayload - projectionTrace.ReadPayload;
+                    var totalPayloadSavings = payloadSavings + baselineTrace.WritePayload - projectionTrace.WritePayload;
                     output.WriteLine($"scheduling-savings open={open} scenario={scenario} baseline={baseline} " +
-                        $"versus={projection} read_payload_bytes={payloadSavings} {ReportTotals(deltas)} " +
+                        $"versus={projection} read_payload_bytes={payloadSavings} total_result_payload_bytes={totalPayloadSavings} {ReportTotals(deltas)} " +
                         $"decision_cpu_resolution={CpuResolution(deltas.Select(delta => delta.DecisionCpu), quantum)}");
                 }
             }
@@ -147,6 +153,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
         var path = hostFixture.Workspace.BacklogStorePath;
         BoardFillSnapshotSqlTrace? fullReadTrace = null;
         BoardFillSnapshotSqlTrace? projectionReadTrace = null;
+        BoardFillSnapshotSqlTrace? noteTrace = null;
+        Action<SqliteConnection>? observeNote = null;
         var writeTrace = trace ? new BoardFillSnapshotSqlTrace(measureResultPayload: true) : null;
         Action<string, SqliteConnection>? observeFull = trace
             ? (source, connection) => fullReadTrace?.Attach(source, connection) : null;
@@ -164,7 +172,7 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             var cpu = ThreadCpu();
             var allocated = GC.GetAllocatedBytesForCurrentThread();
             var started = Stopwatch.GetTimestamp();
-            new BacklogStore(path).AppendNoteAsync(id, text).GetAwaiter().GetResult();
+            new BacklogStore(path, observeNote).AppendNoteAsync(id, text).GetAwaiter().GetResult();
             var finished = Stopwatch.GetTimestamp();
             totals = totals with
             {
@@ -183,7 +191,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             _ => throw new ArgumentOutOfRangeException(nameof(arm))
         };
         var host = hostFixture.CreateHost(readBacklog, arm == "experimental-projection"
-            ? (rounds, now) => HostFixture.ReadHostProjection(path, rounds, now, observeProjection)
+            ? (rounds, now, questionIds) =>
+                BoardFillSchedulingSnapshot.ReadHostProjection(path, rounds, now, questionIds, observeProjection)
             : null, AppendNote);
         try
         {
@@ -200,6 +209,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             if (trace)
             {
                 fullReadTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+                noteTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+                observeNote = connection => noteTrace.Attach(path, connection);
                 if (arm == "experimental-projection")
                     projectionReadTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
             }
@@ -276,13 +287,28 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             Assert.Null(fullReadTrace?.Failure);
             Assert.Null(projectionReadTrace?.Failure);
             Assert.Null(writeTrace?.Failure);
+            Assert.Null(noteTrace?.Failure);
+            var noteStatements = noteTrace?.Statements ?? 0;
+            var noteRows = noteTrace?.Rows ?? 0;
+            var noteResultPayload = noteTrace?.ResultPayloadBytes ?? 0;
+            var noteTriggerSteps = noteTrace?.TriggerSteps ?? 0;
+            if (noteTrace is not null)
+            {
+                Assert.Equal(noteWrites, noteTrace.ImmediateTransactions);
+                Assert.Equal(noteWrites > 0, noteStatements > 0);
+                Assert.Equal(noteWrites > 0, noteRows > 0);
+                Assert.Equal(noteWrites > 0, noteResultPayload > noteBytes);
+                Assert.Equal(noteWrites > 0, noteTriggerSteps > 0);
+            }
             var projectionStatements = projectionReadTrace?.Statements ?? 0;
             var projectionRows = projectionReadTrace?.Rows ?? 0;
             var projectionPayload = projectionReadTrace?.ResultPayloadBytes ?? 0;
             return new(totals, receipts, (fullReadTrace?.Statements ?? 0) + projectionStatements,
                 (fullReadTrace?.Rows ?? 0) + projectionRows, (fullReadTrace?.ResultPayloadBytes ?? 0) + projectionPayload,
-                projectionStatements, projectionRows, projectionPayload, writeTrace?.Statements ?? 0, writeTrace?.Rows ?? 0,
-                writeTrace?.ResultPayloadBytes ?? 0, writeTrace?.TriggerSteps ?? 0, noteWrites, noteBytes);
+                projectionStatements, projectionRows, projectionPayload,
+                (writeTrace?.Statements ?? 0) + noteStatements, (writeTrace?.Rows ?? 0) + noteRows,
+                (writeTrace?.ResultPayloadBytes ?? 0) + noteResultPayload, (writeTrace?.TriggerSteps ?? 0) + noteTriggerSteps,
+                noteWrites, noteBytes, noteStatements, noteRows, noteResultPayload, noteTriggerSteps);
         }
         finally { host.Stop(); }
 
@@ -346,7 +372,49 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
     private sealed record SchedulingSample(SchedulingTotals Totals, string[] Decisions, int ReadStatements, int ReadRows,
         long ReadPayload, int ProjectionReadStatements, int ProjectionReadRows, long ProjectionReadPayload,
         int WriteStatements, int WriteRows, long WritePayload, int TriggerSteps,
-        int HostNoteWrites, long HostNoteBytes);
+        int HostNoteWrites, long HostNoteBytes, int HostNoteStatements, int HostNoteRows, long HostNoteResultPayload,
+        int HostNoteTriggerSteps);
+
+    [Fact]
+    public async Task Default_shadow_projection_matches_full_read_when_a_closed_item_is_assigned()
+    {
+        using var database = BoardFillSchedulingComparison.Create(total: 50, open: 16);
+        var full = await Run(useDefault: false);
+        var projected = await Run(useDefault: true);
+        Assert.Equal(full.Decision, projected.Decision);
+        Assert.InRange(projected.Rows, 1, full.Rows - 1);
+
+        async Task<(string Decision, int Rows)> Run(bool useDefault)
+        {
+            using var fixture = new HostFixture(database, open: 16);
+            var path = fixture.Workspace.BacklogStorePath;
+            using var reader = HostFixture.Connect(path);
+            var attention = CollaborationItemStore.ForDirectory(fixture.Workspace.OrchestratorDirectory);
+            var host = useDefault ? fixture.CreateHost() : fixture.CreateHost(() => BoardFillBacklogSnapshot.Read(path));
+            try
+            {
+                host.ServiceTick(fixture.Kernel);
+                await PanelTestHarness.Signal(Assert.IsAssignableFrom<Task>(host.CurrentRound), "initial shadow draft completed");
+                Assert.Equal(CollaborationItemStatus.Raised, await QuestionStatus());
+                await fixture.CloseAndAssignAsync();
+
+                // A new host must recover the open question from durable attention state.
+                host.Stop();
+                host = useDefault ? fixture.CreateHost() : fixture.CreateHost(() => BoardFillBacklogSnapshot.Read(path));
+                var ledger = new ConductorTickStepLedger(() => TimeSpan.Zero);
+                using (ledger.Activate()) host.ServiceTick(fixture.Kernel);
+                var decision = fixture.ReadDecision(reader);
+                Assert.Equal(CollaborationItemStatus.Resolved, await QuestionStatus());
+                const string countPrefix = "backlog_rows_read=";
+                var count = Assert.Single(ledger.FormatCounters().Split(','), value => value.StartsWith(countPrefix, StringComparison.Ordinal));
+                return (decision.Receipt(), int.Parse(count[countPrefix.Length..], System.Globalization.CultureInfo.InvariantCulture));
+            }
+            finally { host.Stop(); }
+
+            async Task<CollaborationItemStatus> QuestionStatus() => Assert.Single(await attention.ListAsync(),
+                item => item.CorrelationKey == $"board-fill-epic-missing:{HostFixture.Unassigned}").Status;
+        }
+    }
 
     [Fact]
     public void Sql_trace_counts_result_payload_by_storage_class()

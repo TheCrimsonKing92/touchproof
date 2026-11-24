@@ -156,12 +156,14 @@ internal sealed class BoardFillSchedulingComparison
     internal sealed class HostFixture : IDisposable
     {
         internal const string Claimed = "item-000005";
+        internal const string Unassigned = "item-000007";
         internal const string LandedDependent = "item-000008";
         private const string LandedPrerequisite = "item-000009";
         internal const string DuplicateGoal = "11111111111111111111111111111111";
         internal const string ChangedHead = "new-head";
         private readonly string _root;
         private readonly ConductorBoardFillDraftStore _drafts;
+        private readonly string _epicId;
         internal OrchestratorWorkspace Workspace { get; }
         internal AgentOrchestratorKernel Kernel { get; }
         internal string MainHead { get; set; } = Head;
@@ -185,6 +187,7 @@ internal sealed class BoardFillSchedulingComparison
 
             var portfolio = new PortfolioStore(Workspace.PortfolioStorePath);
             var epic = portfolio.AddEpicAsync("Scheduling comparison").GetAwaiter().GetResult();
+            _epicId = epic.Id;
             var plans = new EpicPlanStore(Workspace.PortfolioStorePath);
             foreach (var id in PlanSources) plans.AddSliceAsync(epic.Id, id).GetAwaiter().GetResult();
             using (var connection = Connect(Workspace.PortfolioStorePath))
@@ -224,9 +227,9 @@ internal sealed class BoardFillSchedulingComparison
             _drafts.MarkReported(round.Id);
         }
 
-        internal ConductorBoardFillHost CreateHost(Func<IReadOnlyList<BacklogItem>> readBacklog,
-            Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? readSchedulingBacklog,
-            Action<string, string> appendNote) =>
+        internal ConductorBoardFillHost CreateHost(Func<IReadOnlyList<BacklogItem>>? readBacklog = null,
+            Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<string>, IReadOnlyList<BacklogItem>>? readSchedulingBacklog = null,
+            Action<string, string>? appendNote = null) =>
             ConductorBoardFillHost.CreateDefault(Workspace, () => ConductorAutonomyPolicy.Permissive with
             {
                 BoardFillMode = ConductorBoardFillMode.Shadow, BoardFillTargetActiveGoals = 10
@@ -270,26 +273,15 @@ internal sealed class BoardFillSchedulingComparison
         internal static string ReleaseText =>
             new BoardFillContradictionHold(Head, Now, [], "").ReleaseNote(ChangedHead);
 
-        internal static IReadOnlyList<BacklogItem> ReadHostProjection(string path, IReadOnlyList<BoardFillDraftRound> rounds,
-            DateTimeOffset now, Action<string, SqliteConnection>? observe,
-            Action<string, SqliteCommand>? observeQuery = null)
+        internal async Task CloseAndAssignAsync()
         {
-            var projection = BoardFillSchedulingSnapshot.Read(path, rounds, now, PlanSources, observe, observeQuery);
-            var references = projection.RecentSources.ToDictionary(source => source.Id, StringComparer.Ordinal);
-            var open = projection.Candidates.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
-            // The common host accepts BacklogItem. Its closed-row consumers use only identity, status
-            // and recent duplicate text. Closed rows never enter candidate readiness or draft stamps.
-            var closed = projection.Statuses.Keys.Concat(references.Keys).Except(open, StringComparer.Ordinal);
-            return [.. projection.Candidates, .. closed.Select(id =>
-            {
-                var reference = references.GetValueOrDefault(id);
-                return new BacklogItem(id, reference?.Title ?? "", reference?.Body ?? "",
-                    projection.Statuses.GetValueOrDefault(id, BacklogItemStatus.Done), default, default, null);
-            })];
+            await new BacklogStore(Workspace.BacklogStorePath).CloseAsync(Unassigned);
+            await new PortfolioStore(Workspace.PortfolioStorePath).AssignBacklogItemToEpicAsync(Unassigned, _epicId);
         }
 
         internal void ObserveProjectionQueries(Action<string, SqliteCommand> observeQuery) =>
-            _ = ReadHostProjection(Workspace.BacklogStorePath, _drafts.ReadAll(), Now, null, observeQuery);
+            _ = BoardFillSchedulingSnapshot.ReadHostProjection(Workspace.BacklogStorePath, _drafts.ReadAll(), Now,
+                [Unassigned], observeQuery: observeQuery);
 
         internal static SqliteConnection Connect(string path)
         {

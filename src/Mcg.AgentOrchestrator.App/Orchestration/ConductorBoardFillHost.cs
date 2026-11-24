@@ -10,7 +10,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly ConductorBoardFillDraftStore _store;
     private readonly Func<string, CancellationToken, AuthorBriefDraftOutcome> _draft;
     private readonly Func<IReadOnlyList<BacklogItem>> _backlog;
-    private readonly Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? _schedulingBacklog;
+    private readonly Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<string>, IReadOnlyList<BacklogItem>>? _schedulingBacklog;
     private BoardFillBacklogSnapshotCache? BacklogSnapshotCache { get; init; }
     internal readonly Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> _readiness;
     private readonly Func<ConductorAutonomyPolicy> _policy;
@@ -57,7 +57,7 @@ internal sealed partial class ConductorBoardFillHost
         Action<string, string>? appendBacklogNote = null,
         Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
         ICollaborationItemStore? epicAttention = null,
-        Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? schedulingBacklog = null)
+        Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<string>, IReadOnlyList<BacklogItem>>? schedulingBacklog = null)
     {
         _store = store;
         _draft = draft;
@@ -121,10 +121,10 @@ internal sealed partial class ConductorBoardFillHost
         var schedulingBacklog = policy.BoardFillMode == ConductorBoardFillMode.Shadow ? _schedulingBacklog : null;
         var newestFirst = schedulingBacklog is null ? null : _store.ReadAll(newestFirst: true);
         IReadOnlyList<BacklogItem> AcquireItems() => ConductorTickStepLedger.CountBacklogRows(
-            schedulingBacklog?.Invoke(newestFirst!, now) ?? _backlog());
+            schedulingBacklog?.Invoke(newestFirst!, now, _epicMembership.QuestionIds()) ?? _backlog());
         var items = AcquireItems();
         var epicMembers = _epicMembership.Read(items, now);
-        if (epicMembers is not null) ServiceFiling(items, epicMembers);
+        if (epicMembers is not null) ServiceFiling(items, epicMembers, allowStart: schedulingBacklog is null);
         newestFirst ??= _store.ReadAll(newestFirst: true);
         var rounds = newestFirst.Reverse().ToArray();
         var goals = kernel.Goals.ToArray();

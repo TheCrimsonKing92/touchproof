@@ -11,12 +11,15 @@ internal sealed partial class ConductorBoardFillHost
         Func<ConductorAutonomyPolicy> policy, Func<string?>? mainHead = null,
         Func<string, CancellationToken, AuthorBriefDraftOutcome>? draft = null,
         Func<IReadOnlyList<BacklogItem>>? readBacklog = null,
-        Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? schedulingBacklog = null,
+        Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<string>, IReadOnlyList<BacklogItem>>? schedulingBacklog = null,
         Func<DateTimeOffset>? utcNow = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
         Action<string, string>? appendBacklogNote = null)
     {
         changedFiles ??= CreateChangedFilesSeam(workspace);
         var snapshot = readBacklog is null ? new BoardFillBacklogSnapshotCache(workspace.BacklogStorePath) : null;
+        if (snapshot is not null)
+            schedulingBacklog ??= (rounds, now, questionIds) =>
+                BoardFillSchedulingSnapshot.ReadHostProjection(workspace.BacklogStorePath, rounds, now, questionIds);
         readBacklog ??= snapshot!.Read;
         return new(
         new(ConductorBoardFillDraftStore.DefaultPath(workspace)),

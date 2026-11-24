@@ -4,15 +4,32 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// Experimental acquisition. The retained full-content cache is still the default host path
-// until the paired measurements and decision parity have been reviewed.
+// One read-only snapshot for the board-fill scheduling decision.
 internal sealed record BoardFillSchedulingSnapshot(
     IReadOnlyList<BacklogItem> Candidates,
     IReadOnlyDictionary<string, BacklogItemStatus> Statuses,
     IReadOnlyList<BoardFillDuplicateSource> RecentSources)
 {
+    internal static IReadOnlyList<BacklogItem> ReadHostProjection(string path,
+        IReadOnlyList<BoardFillDraftRound> rounds, DateTimeOffset now, IReadOnlyList<string> membershipQuestionIds,
+        Action<string, SqliteConnection>? observe = null, Action<string, SqliteCommand>? observeQuery = null)
+    {
+        var projection = Read(path, rounds, now, membershipQuestionIds, observe, observeQuery);
+        var references = projection.RecentSources.ToDictionary(source => source.Id, StringComparer.Ordinal);
+        var open = projection.Candidates.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        // Closed rows can satisfy prerequisites, match recent drafts or resolve membership questions.
+        // A closed plan source cannot rank, and every open plan source is already a candidate.
+        var closed = projection.Statuses.Keys.Union(references.Keys, StringComparer.Ordinal).Except(open, StringComparer.Ordinal);
+        return [.. projection.Candidates, .. closed.Select(id =>
+        {
+            var reference = references.GetValueOrDefault(id);
+            return new BacklogItem(id, reference?.Title ?? "", reference?.Body ?? "",
+                projection.Statuses.GetValueOrDefault(id, BacklogItemStatus.Done), default, default, null);
+        })];
+    }
+
     internal static BoardFillSchedulingSnapshot Read(string path, IReadOnlyList<BoardFillDraftRound> rounds,
-        DateTimeOffset now, IEnumerable<string> planSources, Action<string, SqliteConnection>? observe = null,
+        DateTimeOffset now, IEnumerable<string> additionalStatusIds, Action<string, SqliteConnection>? observe = null,
         Action<string, SqliteCommand>? observeQuery = null)
     {
         if (!File.Exists(path)) return new([], new Dictionary<string, BacklogItemStatus>(), []);
@@ -23,7 +40,7 @@ internal sealed record BoardFillSchedulingSnapshot(
         var statusIds = candidates.SelectMany(item => item.Dependencies)
             .Where(dependency => dependency.TargetKind == BacklogDependencyTargetKind.Backlog)
             .Select(dependency => dependency.PrerequisiteId)
-            .Concat(planSources)
+            .Concat(additionalStatusIds)
             .Except(statuses.Keys, StringComparer.Ordinal);
         // Materialize the key set before adding to the status dictionary.
         foreach (var batch in statusIds.ToArray().Chunk(400))
