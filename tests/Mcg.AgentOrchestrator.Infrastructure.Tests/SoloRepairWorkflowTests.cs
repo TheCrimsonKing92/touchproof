@@ -144,16 +144,16 @@ public sealed class SoloRepairWorkflowTests
         RecordPassedValidation(store, finding, fixture.Main);
         var pair = new GateReadyCandidateRevisionPair(fixture.Candidate, fixture.Main);
         var key = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
-        var passedAt = DateTimeOffset.UnixEpoch.AddMinutes(1);
+        var initialJournal = GoalOperationJournal.ReadStrict(fixture.Repository, fixture.Goal.Id);
+        var initialPass = Assert.Single(initialJournal.Entries, entry =>
+            entry.AcceptanceOutcome == "passed" && entry.HasCandidate(fixture.Candidate, fixture.Main));
         GoalOperationJournal.AcceptanceFailed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate,
-            null, attemptStartedAt: passedAt.AddSeconds(-1));
-        GoalOperationJournal.AcceptancePassed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate,
-            fixture.Main, attemptStartedAt: passedAt);
+            null, attemptStartedAt: initialPass.At.AddSeconds(-1));
         store.AcknowledgeEffect(key, "prior-attempt");
         var failureCandidate = failureCandidateMatches switch { true => fixture.Candidate, false => fixture.Main, _ => null };
         var failureMain = failureMainMatches switch { true => fixture.Main, false => fixture.Candidate, _ => null };
         GoalOperationJournal.AcceptanceFailed(fixture.Repository, fixture.Goal, "conductor:acceptance", failureCandidate,
-            failureMain, attemptStartedAt: passedAt.AddSeconds(1));
+            failureMain, attemptStartedAt: initialPass.At.AddSeconds(1));
 
         var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel);
