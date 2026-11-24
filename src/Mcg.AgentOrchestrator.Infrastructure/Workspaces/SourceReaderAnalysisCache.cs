@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Win32.SafeHandles;
@@ -30,6 +31,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
     internal static SourceReaderAnalysisCache Current => Scoped.Value ?? Shared.Value;
     internal long AnalysisCount => Interlocked.Read(ref _analysisCount);
     internal long SemanticFileCount => Interlocked.Read(ref _semanticFileCount);
+    internal Action? BeforePublicationForTests { private get; init; }
     internal Action? BeforeEvictionForTests { private get; init; }
 
     // Test assemblies install this once during module initialization, before shared-cache access.
@@ -206,18 +208,8 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
             // serialization stay outside the lease because temporary files are never pruned.
             using var lease = AcquirePublicationLease(root);
             var published = new FileInfo(destination);
-            var overwrite = false;
-            if (File.Exists(destination))
-            {
-                // FileInfo created from the requested path would report its spelling even for a
-                // case-insensitive alias. Check the actual directory entry before replacing it.
-                overwrite = root.EnumerateFiles(published.Name)
-                    .Any(file => file.Name == published.Name && IsOwnedGeneration(file));
-                if (!overwrite) return;
-            }
-
-            // Publish a closed, complete entry by renaming within the destination filesystem.
-            File.Move(temporary, destination, overwrite);
+            BeforePublicationForTests?.Invoke();
+            if (!Publish(root, published, temporary)) return;
             PruneOlderGenerations(root, published);
         }
         catch (Exception error) when (error is not OutOfMemoryException) { }
@@ -229,6 +221,24 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
                 catch (Exception error) when (error is not OutOfMemoryException) { }
             }
         }
+    }
+
+    private static bool Publish(DirectoryInfo root, FileInfo destination, string temporary)
+    {
+        // The staging file is closed and complete before either move. On Windows, remove an
+        // existing owned entry by handle, then publish without clobbering a newly arrived name.
+        if (OperatingSystem.IsWindows())
+        {
+            if (!WindowsGeneration.TryClearDestination(destination)) return false;
+            File.Move(temporary, destination.FullName);
+            return true;
+        }
+
+        var overwrite = File.Exists(destination.FullName);
+        if (overwrite && !root.EnumerateFiles(destination.Name)
+            .Any(file => file.Name == destination.Name && IsOwnedGeneration(file))) return false;
+        File.Move(temporary, destination.FullName, overwrite);
+        return true;
     }
 
     private static FileStream AcquirePublicationLease(DirectoryInfo root)
@@ -251,9 +261,11 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         entries.OrderByDescending(lastWriteTime).ThenBy(name, StringComparer.Ordinal);
 
     private static bool IsOwnedGeneration(FileInfo file) =>
-        file.Name.Length == 69 && file.Name.EndsWith(".json", StringComparison.Ordinal)
-        && file.Name.AsSpan(0, 64).IndexOfAnyExcept("0123456789abcdef") < 0
-        && (file.Attributes & FileAttributes.ReparsePoint) == 0;
+        IsGenerationName(file.Name) && (file.Attributes & FileAttributes.ReparsePoint) == 0;
+
+    private static bool IsGenerationName(string name) =>
+        name.Length == 69 && name.EndsWith(".json", StringComparison.Ordinal)
+        && name.AsSpan(0, 64).IndexOfAnyExcept("0123456789abcdef") < 0;
 
     private void PruneOlderGenerations(DirectoryInfo root, FileInfo published)
     {
@@ -266,7 +278,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         if (otherGenerations.Length <= otherSlots) return;
 
         var snapshots = OperatingSystem.IsWindows()
-            ? otherGenerations.Select(WindowsEviction.Capture).OfType<GenerationSnapshot>()
+            ? otherGenerations.Select(WindowsGeneration.Capture).OfType<GenerationSnapshot>()
             : otherGenerations.Select(file => new GenerationSnapshot(file, file.LastWriteTimeUtc, null));
         var expired = NewestFirst(snapshots, entry => entry.LastWriteTimeUtc, entry => entry.File.Name)
             .Skip(otherSlots).ToArray();
@@ -277,7 +289,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         {
             try
             {
-                if (entry.FileId is { } fileId) WindowsEviction.DeleteIfCurrent(entry, fileId);
+                if (entry.FileId is { } fileId) WindowsGeneration.DeleteIfCurrent(entry, fileId);
                 else entry.File.Delete();
             }
             catch (IOException) { /* Concurrent writer or reader. Retry on the next publication. */ }
@@ -290,14 +302,22 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct GenerationFileId(ulong VolumeSerialNumber, ulong Low, ulong High);
 
-    private static class WindowsEviction
+    private static class WindowsGeneration
     {
         private const uint ReadAttributes = 0x80;
         private const uint DeleteAccess = 0x10000;
         private const uint OpenReparsePoint = 0x200000;
         private const int FileDispositionInfo = 4;
         private const int FileIdInfo = 18;
+        private const int FileNotFound = 2;
         private static readonly uint FileIdInfoSize = (uint)Marshal.SizeOf<GenerationFileId>();
+
+        internal static bool TryClearDestination(FileInfo destination)
+        {
+            using var handle = OpenForDeletion(destination.FullName);
+            if (handle.IsInvalid) return Marshal.GetLastPInvokeError() == FileNotFound;
+            return IsCurrentOwnedEntry(handle, destination.Name) && MarkForDeletion(handle);
+        }
 
         internal static GenerationSnapshot? Capture(FileInfo file)
         {
@@ -311,20 +331,49 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         {
             // Older builds do not take the publication lease. Revalidate the identity under a
             // delete-capable handle and mark that object for deletion without reopening its path.
-            using var handle = Open(entry.File.FullName, ReadAttributes | DeleteAccess, FileShare.Read);
+            using var handle = OpenForDeletion(entry.File.FullName);
             if (handle.IsInvalid || !GetFileInformationByHandleEx(handle, FileIdInfo, out var actualId, FileIdInfoSize)
-                || actualId != expectedId || (File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0
+                || actualId != expectedId || !IsCurrentOwnedEntry(handle, entry.File.Name)
                 || File.GetLastWriteTimeUtc(handle) != entry.LastWriteTimeUtc) return;
-            byte deleteFile = 1;
-            _ = SetFileInformationByHandle(handle, FileDispositionInfo, ref deleteFile, sizeof(byte));
+            MarkForDeletion(handle);
         }
+
+        private static bool IsCurrentOwnedEntry(SafeFileHandle handle, string expectedName)
+        {
+            if (!IsGenerationName(expectedName) || (File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0)
+                return false;
+
+            // Windows can open a case alias under the requested spelling. Query the filesystem's
+            // spelling while the handle denies rename and delete, then act on that same handle.
+            var path = new StringBuilder(260);
+            var length = GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0);
+            if (length >= path.Capacity)
+            {
+                path.EnsureCapacity(checked((int)length + 1));
+                length = GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0);
+            }
+            return length > 0 && length < path.Capacity
+                && string.Equals(Path.GetFileName(path.ToString()), expectedName, StringComparison.Ordinal);
+        }
+
+        private static bool MarkForDeletion(SafeFileHandle handle)
+        {
+            byte deleteFile = 1;
+            return SetFileInformationByHandle(handle, FileDispositionInfo, ref deleteFile, sizeof(byte));
+        }
+
+        private static SafeFileHandle OpenForDeletion(string path) =>
+            Open(path, ReadAttributes | DeleteAccess, FileShare.Read);
 
         private static SafeFileHandle Open(string path, uint access, FileShare share) =>
             CreateFileW(path, access, share, IntPtr.Zero, FileMode.Open, OpenReparsePoint, IntPtr.Zero);
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
         private static extern SafeFileHandle CreateFileW(string path, uint access, FileShare share,
             IntPtr securityAttributes, FileMode mode, uint flags, IntPtr templateFile);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint capacity, uint flags);
 
         [DllImport("kernel32.dll", ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.Bool)]

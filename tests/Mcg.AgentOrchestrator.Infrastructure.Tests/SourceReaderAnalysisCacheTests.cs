@@ -55,6 +55,32 @@ public sealed class SourceReaderAnalysisCacheTests
     }
 
     [Fact]
+    public void PublishingPreservesDestinationRenamedToForeignCaseBeforeMove()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var key = 10.ToString("x64");
+        cache.Write(key, new SourceReaderAnalysisCache.Analysis(false, ["Original"]));
+        var destination = cache.EntryPath(key)!;
+        var original = File.ReadAllBytes(destination);
+        var foreign = Path.ChangeExtension(destination, ".JSON");
+        var publisher = new SourceReaderAnalysisCache(storage.Path)
+        {
+            BeforePublicationForTests = () => File.Move(destination, foreign),
+        };
+
+        publisher.Write(key, new SourceReaderAnalysisCache.Analysis(false, ["Replacement"]));
+
+        var names = Directory.EnumerateFiles(storage.Path).Select(Path.GetFileName).ToArray();
+        Assert.Contains(Path.GetFileName(foreign), names);
+        Assert.DoesNotContain(Path.GetFileName(destination), names);
+        Assert.Equal(original, File.ReadAllBytes(foreign));
+        Assert.Empty(Directory.EnumerateFiles(storage.Path, "*.tmp"));
+    }
+
+    [Fact]
     public void PublishingKeepsNewEntryAndUsesOrdinalTiesForOtherOwnedGenerations()
     {
         using var storage = new CacheDirectory();
@@ -144,6 +170,42 @@ public sealed class SourceReaderAnalysisCacheTests
 
         cache.Write(9.ToString("x64"), analysis);
         Assert.Equal(8, Directory.GetFiles(storage.Path, "*.json").Length);
+    }
+
+    [Fact]
+    public void EvictionPreservesSelectedEntryRenamedToForeignCase()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var analysis = new SourceReaderAnalysisCache.Analysis(false, ["Original"]);
+        for (int index = 0; index < 8; index++)
+        {
+            var key = index.ToString("x64");
+            cache.Write(key, analysis);
+            File.SetLastWriteTimeUtc(cache.EntryPath(key)!, DateTime.UtcNow.AddDays(index - 8));
+        }
+
+        var oldest = cache.EntryPath(0.ToString("x64"))!;
+        var original = File.ReadAllBytes(oldest);
+        var timestamp = File.GetLastWriteTimeUtc(oldest);
+        var foreign = Path.ChangeExtension(oldest, ".JSON");
+        var publisher = new SourceReaderAnalysisCache(storage.Path)
+        {
+            BeforeEvictionForTests = () => File.Move(oldest, foreign),
+        };
+
+        var newKey = 8.ToString("x64");
+        publisher.Write(newKey, analysis);
+
+        var names = Directory.EnumerateFiles(storage.Path).Select(Path.GetFileName).ToArray();
+        Assert.Contains(Path.GetFileName(foreign), names);
+        Assert.DoesNotContain(Path.GetFileName(oldest), names);
+        Assert.Equal(original, File.ReadAllBytes(foreign));
+        Assert.Equal(timestamp, File.GetLastWriteTimeUtc(foreign));
+        Assert.True(cache.TryRead(newKey, out _));
+        Assert.Equal(8, names.Count(name => name?.EndsWith(".json", StringComparison.Ordinal) == true));
     }
 
     [Fact]
