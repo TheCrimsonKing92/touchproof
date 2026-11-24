@@ -53,9 +53,9 @@ public sealed class EnvMutationLaneAuditGuardTestsForLaneA
                     "Environment.SetEnvironmentVariable(variableName, previousValue)",
                     "Environment.SetEnvironmentVariable(secondVariableName, secondPreviousValue)")),
             new("UseFixtureIsolatedDotnetRoot",
-                new Citation(DispatchSupport, 2065, 2065,
+                new Citation(DispatchSupport, 2071, 2071,
                     "Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root)"),
-                new Citation(DispatchSupport, 2070, 2070,
+                new Citation(DispatchSupport, 2076, 2076,
                     "Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previousValue)")),
         ]),
         // none. The class file and its dispatch, repository, and lifecycle paths were read.
