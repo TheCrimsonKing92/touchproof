@@ -43,6 +43,8 @@ public static class HostCapacitySlotTimingWriter
                     .Take(GitCallerLimit).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
                 callers["other"] = git.Launches - callers.Values.Sum();
                 row["git_callers"] = callers;
+                if (git.FixtureProbeLaunches is { } fixtureProbeLaunches)
+                    row["git_fixture_probe_launches"] = fixtureProbeLaunches;
                 if (git.Timing is { Processes: > 0 } timing)
                 {
                     row["git_start_ms"] = timing.StartMs;
