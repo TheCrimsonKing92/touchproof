@@ -420,7 +420,7 @@ internal sealed class SoloBaselineRepairCoordinator(
     {
         var path = Path.Combine(resultsRoot, "focused-result.json");
         var temporary = path + ".tmp";
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new SoloRepairVerifierResult(identity, result));
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new SoloRepairVerifierResult(identity, result, ProjectBound: true));
         using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
         {
             stream.Write(bytes);

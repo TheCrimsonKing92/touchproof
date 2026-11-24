@@ -102,6 +102,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     DateTimeOffset? acceptanceAttemptStartedAt = null;
     AcceptanceMergeGuardSnapshot? expectedMergeGuard = null;
     var reuseNormalGate = false;
+    string? recoveredNormalGate = null;
     var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
     if (pendingFastForward is not null)
     {
@@ -177,6 +178,11 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         preparedPair = new(testedWorktreeHead, testedMainHead);
         if (CliWorkspaceMerge.ReportRepairHold(context, goal, preparedPair, worktreePath, skipVerify, out var admissionStore)) return false;
         reuseNormalGate = CliWorkspaceMerge.HasPassedNormalGate(admissionStore, goal, preparedPair);
+        if (!skipVerify && !reuseNormalGate && admissionStore is not null)
+        {
+            recoveredNormalGate = CliWorkspaceMerge.FindRecoverableNormalGate(root, goal, preparedPair)?.IdempotencyKey;
+            reuseNormalGate = recoveredNormalGate is not null;
+        }
         if (reuseNormalGate && !skipVerify) Console.WriteLine("Verification: reused the recorded normal acceptance pass for the current revision pair.");
 
         if (CliWorkspaceMerge.ClearSupersededAcceptanceFailureForCandidate(context, goal, testedWorktreeHead, testedMainHead))
@@ -425,9 +431,13 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         expectedMergeGuard = AcceptanceMergeGuard.Capture(context.Kernel, goal.Id);
     }
 
-    if (verification is { Passed: true })
+    if (verification is { Passed: true } || skipVerify)
     {
         context.Kernel.ClearAcceptanceFailure(goal.Id);
+    }
+
+    if (verification is { Passed: true, Skipped: false })
+    {
         GoalOperationJournal.AcceptanceGatePassed(
             context.Workspace.ExecutionDirectory,
             goal,
@@ -438,11 +448,6 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             acceptanceAttemptStartedAt,
             GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
     }
-    else if (skipVerify)
-    {
-        context.Kernel.ClearAcceptanceFailure(goal.Id);
-    }
-
     var evidence = context.Worktrees.BuildAcceptanceEvidence(
         context.Kernel,
         goal,
@@ -530,12 +535,15 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         Console.WriteLine($"Verification artifacts: {verification.ArtifactsPath}");
     }
 
-    if (verification is { Passed: true, Skipped: false } passedGate)
+    var normalGateAcknowledgement = verification is { Passed: true, Skipped: false } passedGate
+        ? passedGate.AttemptId ?? "inline-gate"
+        : recoveredNormalGate;
+    if (normalGateAcknowledgement is not null)
     {
         if (CliWorkspaceMerge.ReportRepairHold(context, goal, preparedPair, worktreePath, false, out var repairStore)) return false;
         if (repairStore is not null)
             repairStore.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, testedWorktreeHead!, testedMainHead!),
-                passedGate.AttemptId ?? "inline-gate");
+                normalGateAcknowledgement);
     }
 
     var hostStop = context.StopAcceptanceHosts(new AcceptanceHostStopRequest(

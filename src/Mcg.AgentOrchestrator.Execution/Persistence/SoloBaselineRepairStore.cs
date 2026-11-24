@@ -24,7 +24,7 @@ internal sealed record SoloRepairGroup(string Key, string IntakePayload, string?
 internal sealed record SoloRepairCheckReceipt(string Outcome, string Detail, IReadOnlyList<SoloAcceptanceArtifact> Artifacts,
     IReadOnlyList<SoloAcceptanceArtifact>? CandidateArtifacts = null, string? Feedback = null,
     SoloAcceptanceArtifact? Proof = null);
-internal sealed record SoloRepairVerifierResult(string Identity, SoloRepairCheckReceipt Receipt);
+internal sealed record SoloRepairVerifierResult(string Identity, SoloRepairCheckReceipt Receipt, bool ProjectBound = false);
 
 internal sealed class SoloBaselineRepairStore
 {
@@ -449,7 +449,10 @@ internal sealed class SoloBaselineRepairStore
             if (Digest(File.ReadAllBytes(artifact.Path)) != artifact.Sha256)
                 throw new InvalidDataException("solo-artifact-digest-mismatch");
         }
-        return result.Receipt with { Proof = new(path, digest) };
+        var receipt = result.ProjectBound || result.Receipt.Outcome == "unresolved"
+            ? result.Receipt
+            : new SoloRepairCheckReceipt("unresolved", "The retained focused result predates test-project binding.", []);
+        return receipt with { Proof = new(path, digest) };
     }
 
     private static (SoloRepairVerifierResult Result, string Digest) ReadVerifierEnvelope(string path, string? expectedDigest)

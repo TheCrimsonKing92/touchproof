@@ -299,6 +299,18 @@ internal static class CliWorkspaceMerge
         pair is { BranchRevision: { } candidate, MainRevision: { } main } &&
         store?.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed";
 
+    internal static GoalOperationJournalEntry? FindRecoverableNormalGate(
+        string root, Goal goal, GateReadyCandidateRevisionPair pair)
+    {
+        if (pair is not { BranchRevision: { } candidate, MainRevision: { } main }) return null;
+        var journal = GoalOperationJournal.ReadActive(root, goal.Id);
+        var latest = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, candidate, main);
+        return latest is { Operation: "acceptance", Status: GoalOperationStatus.Completed } &&
+               latest.GoalId == goal.Id && GoalOperationJournalGatePassedOutcome.Matches(latest)
+            ? latest
+            : null;
+    }
+
     private static string? ReadRef(string directory, string reference) =>
         GitRevisionReader.Shared.TryResolve(directory, reference, out var revision) ? revision : null;
 

@@ -337,6 +337,7 @@ internal static partial class LandingExecutor
                     executionDirectory,
                     tempPath,
                     boundMainRevision,
+                    evidenceCandidateSha,
                     goalBranch,
                     out candidateRevision,
                     out var preparationFailure))
@@ -1077,7 +1078,8 @@ internal static partial class LandingExecutor
         string executionDirectory,
         string tempPath,
         string boundMainRevision,
-        string goalBranch,
+        string acceptedCandidateRevision,
+        string integrationSubject,
         out string? candidateRevision,
         out string? failure)
     {
@@ -1090,7 +1092,7 @@ internal static partial class LandingExecutor
             return false;
         }
 
-        var mergeArgs = new List<string> { "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}" };
+        var mergeArgs = new List<string> { "merge", "--no-ff", acceptedCandidateRevision, "-m", $"Integrate {integrationSubject}" };
         var goalTitleBody = OrchestratorCommitMessage.GoalTitleBody(goal);
         if (goalTitleBody is not null)
         {

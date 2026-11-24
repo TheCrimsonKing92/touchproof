@@ -268,28 +268,84 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(1, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
     }
 
-    [Fact]
-    public async Task CliAcceptance_ReusesAcknowledgedNormalGateAfterRestart()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CliAcceptance_ReusesNormalGateAfterRestart(bool beforeAcknowledgement)
     {
         using var fixture = new PullRequestLandingTestFixture();
         var verifier = new ControlledVerifier(fixture.Repository) { NormalPass = true };
         var (context, store, finding) = PrepareCliRepair(fixture, verifier,
-            _ => throw new IOException("Stopped after normal acceptance acknowledgement."));
+            beforeAcknowledgement ? null : _ => throw new IOException("Stopped after normal acceptance acknowledgement."));
         RecordPassedValidation(store, finding, fixture.Main);
         var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel);
 
-        Assert.Equal("Stopped after normal acceptance acknowledgement.",
-            Assert.Throws<IOException>(() => CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context)).Message);
         var key = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
-        Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
+        if (beforeAcknowledgement)
+        {
+            var storePath = Path.Combine(context.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+            SoloRepairReplayTests.ExecuteSql(storePath, $"""
+                CREATE TRIGGER stop_gate_ack BEFORE INSERT ON solo_repair_check
+                WHEN NEW.request_key = '{key}'
+                BEGIN SELECT RAISE(ABORT, 'lost normal gate acknowledgement'); END
+                """);
+            Assert.Contains("lost normal gate acknowledgement",
+                Assert.Throws<SqliteException>(() => CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context)).Message);
+            Assert.Null(store.ReadCheck(key));
+            SoloRepairReplayTests.ExecuteSql(storePath, "DROP TRIGGER stop_gate_ack");
+        }
+        else
+        {
+            Assert.Equal("Stopped after normal acceptance acknowledgement.",
+                Assert.Throws<IOException>(() => CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context)).Message);
+            Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
+        }
+
+        var journal = GoalOperationJournal.ReadActive(fixture.Repository, fixture.Goal.Id);
+        var pass = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, fixture.Candidate, fixture.Main);
+        Assert.Equal("gate-passed", pass?.AcceptanceOutcome);
+        Assert.Null(CliWorkspaceMerge.FindRecoverableNormalGate(fixture.Repository, fixture.Goal,
+            new(fixture.Candidate, fixture.Candidate)));
         Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
 
         var restarted = await repository.LoadAsync();
         var resumed = CreateCliContext(restarted, context.Workspace, restarted.GetGoal(fixture.Goal.Id), verifier);
         Assert.True(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(resumed));
         Assert.Equal((fixture.Goal.Id, fixture.Candidate), Assert.Single(verifier.NormalRuns));
+        Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
         Assert.Equal(fixture.Candidate, RunGit(fixture.Repository, "rev-parse", "main"));
+    }
+
+    [Fact]
+    public void DirectPublication_PreparesTheAcceptedCommitWhenTheGoalRefMovesAndReturns()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var (context, store, finding) = PrepareCliRepair(fixture, new ControlledVerifier(fixture.Repository));
+        RecordPassedValidation(store, finding, fixture.Main);
+        store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main),
+            PullRequestLandingTestFixture.Attempt);
+        var goalRef = "refs/heads/" + GoalWorktrees.BranchName(fixture.Goal.Id);
+        var alternate = RunGit(fixture.Repository, "commit-tree", fixture.Main + "^{tree}", "-p", fixture.Candidate,
+            "-m", "Alternate unverified tree");
+        var movedDuringPreparation = false;
+        using var runner = LandingExecutor.UseGitRunner((directory, args) =>
+        {
+            if (args is not ["merge", "--no-ff", ..]) return GitCli.Run(directory, args);
+
+            RunGit(fixture.Repository, "update-ref", goalRef, alternate, fixture.Candidate);
+            movedDuringPreparation = true;
+            try { return GitCli.Run(directory, args); }
+            finally { RunGit(fixture.Repository, "update-ref", goalRef, fixture.Candidate, alternate); }
+        });
+
+        var landed = LandingExecutor.Execute(fixture.Kernel, fixture.Goal, context.Workspace);
+
+        Assert.True(movedDuringPreparation);
+        Assert.True(landed.MainAdvanced, landed.Message);
+        Assert.Equal(fixture.Candidate, RunGit(fixture.Repository, "rev-parse", "main^2"));
+        Assert.Equal(RunGit(fixture.Repository, "rev-parse", fixture.Candidate + "^{tree}"),
+            RunGit(fixture.Repository, "rev-parse", "main^{tree}"));
     }
 
     [Theory]
@@ -612,7 +668,7 @@ public sealed class SoloRepairWorkflowTests
         var trx = Path.Combine(root, "failure.trx");
         WriteTrx(trx, false, finding.Identity);
         var candidate = new AcceptanceCheckResult(finding.Check, false, 1, null, TestResultPaths: [trx],
-            ExecutedTestCount: 1, FailingTestIdentities: [finding.Identity]);
+            ExecutedTestCount: 1, FailingTestIdentities: [finding.Identity], TestProjectPath: finding.Project);
         var baseline = SoloRepairEvidenceTests.FocusedResult(finding, fixture.Main, trx, false, true, finding.Identity,
             FindingEvidenceArm.Baseline);
         var tree = RunGit(fixture.Repository, "rev-parse", fixture.Candidate + "^{tree}");
@@ -1237,7 +1293,8 @@ public sealed class SoloRepairWorkflowTests
         return workspace;
     }
 
-    internal static SoloRepairCheckReceipt RecordPassedValidation(SoloBaselineRepairStore store, SoloRepairFinding finding, string main)
+    internal static SoloRepairCheckReceipt RecordPassedValidation(SoloBaselineRepairStore store, SoloRepairFinding finding,
+        string main, bool projectBound = true)
     {
         var key = SoloBaselineRepairStore.ValidationKey(finding, main);
         var root = store.ResultDirectory(key);
@@ -1249,7 +1306,7 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal("passed", validation.Outcome);
         var proof = Path.Combine(root, "focused-result.json");
         var identity = SoloBaselineRepairStore.FocusedProofIdentity(key, finding, main, main, false, false);
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new SoloRepairVerifierResult(identity, validation));
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new SoloRepairVerifierResult(identity, validation, projectBound));
         File.WriteAllBytes(proof, bytes);
         var receipt = validation with { Proof = new(proof, SoloBaselineRepairStore.Digest(bytes)) };
         Assert.True(store.TryClaimCheck(key));

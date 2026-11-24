@@ -368,12 +368,43 @@ public sealed class SoloRepairEvidenceTests
         else Assert.Empty(validation.Artifacts);
     }
 
+    [Theory]
+    [InlineData("candidate", "other/Sample.Tests/Sample.Tests.csproj")]
+    [InlineData("baseline", "other/Sample.Tests/Sample.Tests.csproj")]
+    [InlineData("validation", "other/Sample.Tests/Sample.Tests.csproj")]
+    [InlineData("validation", null)]
+    public void FocusedRepairProof_RequiresTheOriginalProject(string wrongArm, string? observedProject)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var finding = SoloRepairReplayTests.Finding();
+        var trx = Path.Combine(fixture.Root, "same-identity.trx");
+        var validating = wrongArm == "validation";
+        WriteTrx(trx, validating, finding.Identity);
+        var candidate = FocusedResult(finding, validating ? finding.Main : finding.Candidate, trx, validating, true, finding.Identity);
+        var baseline = FocusedResult(finding, finding.Main, trx, false, true, finding.Identity, FindingEvidenceArm.Baseline);
+        FocusedEvidenceArmRunResult WrongProject(FocusedEvidenceArmRunResult arm) =>
+            arm with { Checks = [Assert.Single(arm.Checks) with { TestProjectPath = observedProject }] };
+        var candidateArm = Assert.Single(candidate.Arms!);
+        var baselineArm = Assert.Single(baseline.Arms!);
+
+        var result = validating
+            ? SoloAcceptanceFailureReceiptReader.ReadRepairCheck(candidate with { Arms = [WrongProject(candidateArm)] },
+                FindingEvidenceArm.Candidate, finding.Main, finding, fixture.Root)
+            : SoloAcceptanceFailureReceiptReader.ReadRepairAttribution(candidate with
+            {
+                Arms = [wrongArm == "candidate" ? WrongProject(candidateArm) : candidateArm,
+                    wrongArm == "baseline" ? WrongProject(baselineArm) : baselineArm]
+            }, finding.Candidate, finding.Main, finding, fixture.Root);
+
+        Assert.Equal("unresolved", result.Outcome);
+    }
+
     internal static FocusedEvidenceRunResult FocusedResult(SoloRepairFinding finding, string sha, string trx,
         bool passed, bool executed, string observedIdentity, FindingEvidenceArm arm = FindingEvidenceArm.Candidate)
     {
         var check = new AcceptanceCheckResult(finding.BaselineCheck!, passed, passed ? 0 : 1, null,
             TestResultPaths: [trx], ExecutedTestCount: executed ? 1 : 0,
-            FailingTestIdentities: passed ? [] : [observedIdentity]);
+            FailingTestIdentities: passed ? [] : [observedIdentity], TestProjectPath: finding.Project);
         return new(finding.Request!, true, passed, "focused test receipt", [check], Arms:
             [new(arm, sha, passed ? FindingEvidenceArmDisposition.Green : FindingEvidenceArmDisposition.Red,
                 true, passed, "focused test arm", [check])]);

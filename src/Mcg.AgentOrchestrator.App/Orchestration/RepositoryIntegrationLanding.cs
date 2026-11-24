@@ -6,13 +6,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 /// <summary>Repository-scoped adapter to the existing executor's merge and ref publication operations.</summary>
 internal static class RepositoryIntegrationLanding
 {
-    internal static string Execute(Goal goal, RepositoryLandingTarget target, string goalBranch)
+    internal static string Execute(Goal goal, RepositoryLandingTarget target, string acceptedCandidateRevision)
     {
         var temporary = Path.Combine(OrchestratorTempRoot.GetParent(), "mcg-tuple-land-" + Guid.NewGuid().ToString("N"));
         try
         {
             if (!LandingExecutor.TryPrepareCandidateFromBoundMain(goal, target.Root, temporary, target.Tip,
-                    goalBranch, out var candidate, out var error))
+                    acceptedCandidateRevision, acceptedCandidateRevision, out var candidate, out var error))
                 throw new InvalidOperationException(error);
             Publish(target, candidate!);
             return candidate!;

@@ -38,6 +38,25 @@ public sealed class SoloRepairReplayTests
     }
 
     [Fact]
+    public void CompletedValidation_RejectsLegacyProofWithoutProjectBinding()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        var goal = fixture.Goal.Id.Value;
+        var finding = Finding();
+        store.Retain(goal, [finding]);
+        store.ReserveGroup(finding.GroupKey, "{}");
+        store.AcknowledgeRepair(finding.GroupKey, GoalId.New().Value);
+        SoloRepairWorkflowTests.RecordPassedValidation(store, finding, finding.Main, projectBound: false);
+
+        var reloaded = new SoloBaselineRepairStore(path);
+        Assert.False(reloaded.IsEvidenceCurrent(goal, reloaded.ReadFindings(goal), finding.Candidate, finding.Main));
+        Assert.Equal(1, Count(path, "solo_repair_check"));
+    }
+
+    [Fact]
     public void Grouping_UsesExactBaselineScopeAndDataCase()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();

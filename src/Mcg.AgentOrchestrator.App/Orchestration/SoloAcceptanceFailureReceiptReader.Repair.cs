@@ -279,6 +279,10 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             (finding.BaselineCheck is not null && finding.BaselineCheck != check.Name) ||
             check.TestResultPaths is not { Count: > 0 } paths)
             return new("unresolved", "The executed selection or its result artifacts are unavailable.", []);
+        if (string.IsNullOrWhiteSpace(finding.Project) ||
+            check.TestProjectPath?.Replace('\\', '/') != finding.Project.Replace('\\', '/'))
+            return new("unresolved", "The focused execution does not identify the original test project.", []);
+
         var artifacts = paths.Select(path =>
         {
             var bytes = File.ReadAllBytes(path);
