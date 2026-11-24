@@ -129,9 +129,14 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task CliFastForward_UsesLatestNormalOutcomeAfterRestart(bool failureMatchesPair)
+    [InlineData(true, true, "normal acceptance is pending")]
+    [InlineData(true, false, null)]
+    [InlineData(true, null, "incomplete revision pair")]
+    [InlineData(null, true, "incomplete revision pair")]
+    [InlineData(null, null, "incomplete revision pair")]
+    [InlineData(false, null, null)]
+    public async Task CliFastForward_UsesLatestNormalOutcomeAfterRestart(
+        bool? failureCandidateMatches, bool? failureMainMatches, string? expectedBlocker)
     {
         using var fixture = new PullRequestLandingTestFixture();
         var verifier = new ControlledVerifier(fixture.Repository);
@@ -139,10 +144,16 @@ public sealed class SoloRepairWorkflowTests
         RecordPassedValidation(store, finding, fixture.Main);
         var pair = new GateReadyCandidateRevisionPair(fixture.Candidate, fixture.Main);
         var key = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
-        GoalOperationJournal.AcceptancePassed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate, fixture.Main);
-        store.AcknowledgeEffect(key, "prior-attempt");
+        var passedAt = DateTimeOffset.UnixEpoch.AddMinutes(1);
         GoalOperationJournal.AcceptanceFailed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate,
-            failureMatchesPair ? fixture.Main : fixture.Candidate);
+            null, attemptStartedAt: passedAt.AddSeconds(-1));
+        GoalOperationJournal.AcceptancePassed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate,
+            fixture.Main, attemptStartedAt: passedAt);
+        store.AcknowledgeEffect(key, "prior-attempt");
+        var failureCandidate = failureCandidateMatches switch { true => fixture.Candidate, false => fixture.Main, _ => null };
+        var failureMain = failureMainMatches switch { true => fixture.Main, false => fixture.Candidate, _ => null };
+        GoalOperationJournal.AcceptanceFailed(fixture.Repository, fixture.Goal, "conductor:acceptance", failureCandidate,
+            failureMain, attemptStartedAt: passedAt.AddSeconds(1));
 
         var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel);
@@ -150,18 +161,21 @@ public sealed class SoloRepairWorkflowTests
         var goal = restarted.GetGoal(fixture.Goal.Id);
         var resumed = CreateCliContext(restarted, context.Workspace, goal, verifier);
         var journal = GoalOperationJournal.ReadActive(fixture.Repository, goal.Id);
+        var failure = journal.Entries.Last(entry => entry.AcceptanceOutcome == "failed");
+        Assert.Equal(failureCandidate, failure.BranchHeadSha);
+        Assert.Equal(failureMain, failure.MainHeadSha);
         var current = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, fixture.Candidate, fixture.Main);
-        Assert.Equal(failureMatchesPair ? "failed" : "passed", current?.AcceptanceOutcome);
+        Assert.Equal(failureCandidateMatches == true && failureMainMatches == true ? "failed" : "passed", current?.AcceptanceOutcome);
         Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
 
         var merge = CliWorkspaceMerge.MergeWithPublication(resumed, goal, out var publication,
             () => null, out var repairBlock, pair);
 
-        Assert.Equal(!failureMatchesPair, Assert.IsType<GoalWorktreeMergeResult>(merge).FastForwarded);
-        Assert.Equal(failureMatchesPair ? fixture.Main : fixture.Candidate, RunGit(fixture.Repository, "rev-parse", "main"));
-        if (failureMatchesPair)
+        Assert.Equal(expectedBlocker is null, Assert.IsType<GoalWorktreeMergeResult>(merge).FastForwarded);
+        Assert.Equal(expectedBlocker is null ? fixture.Candidate : fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+        if (expectedBlocker is not null)
         {
-            Assert.Contains("normal acceptance is pending", repairBlock);
+            Assert.Contains(expectedBlocker, repairBlock);
             Assert.Null(publication);
             Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(resumed, skipVerify: true));
             Assert.Empty(verifier.NormalRuns);
@@ -169,8 +183,10 @@ public sealed class SoloRepairWorkflowTests
         }
     }
 
-    [Fact]
-    public async Task CliFastForward_UnreadableNormalOutcomeBlocksAfterRestart()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CliFastForward_UnreadableNormalOutcomeBlocksAfterRestart(bool acknowledged)
     {
         using var fixture = new PullRequestLandingTestFixture();
         var verifier = new ControlledVerifier(fixture.Repository);
@@ -180,9 +196,11 @@ public sealed class SoloRepairWorkflowTests
         var key = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
         GoalOperationJournal.AcceptanceGatePassed(fixture.Repository, fixture.Goal, "acceptance", fixture.Candidate,
             fixture.Main, requiredChecksValidated: true);
-        store.AcknowledgeEffect(key, "prior-attempt");
-        Assert.True(CliWorkspaceMerge.HasPassedNormalGate(fixture.Repository, store, fixture.Goal, pair));
-        Assert.NotNull(CliWorkspaceMerge.FindRecoverableNormalGate(fixture.Repository, fixture.Goal, pair));
+        if (acknowledged) store.AcknowledgeEffect(key, "prior-attempt");
+        var prior = CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, fixture.Goal, pair);
+        Assert.Equal(acknowledged, prior.Acknowledged);
+        Assert.NotNull(prior.RecoverableAttempt);
+        Assert.Null(prior.Blocker);
 
         GoalOperationJournal.AcceptanceFailed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate,
             fixture.Main);
@@ -198,19 +216,28 @@ public sealed class SoloRepairWorkflowTests
         var restarted = await repository.LoadAsync();
         var goal = restarted.GetGoal(fixture.Goal.Id);
         var resumed = CreateCliContext(restarted, context.Workspace, goal, verifier);
-        Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
+        Assert.Equal(acknowledged ? "passed" : null, store.ReadCheck(key)?.Outcome);
         Assert.Throws<FormatException>(() => GoalOperationJournal.ReadStrict(fixture.Repository, goal.Id));
 
         var merge = CliWorkspaceMerge.MergeWithPublication(resumed, goal, out var publication,
             () => null, out var repairBlock, pair);
 
         Assert.False(Assert.IsType<GoalWorktreeMergeResult>(merge).FastForwarded);
-        Assert.Contains("normal acceptance is pending", repairBlock);
+        Assert.Contains("Restore a readable goal operation journal", repairBlock);
         Assert.Null(publication);
-        Assert.Null(CliWorkspaceMerge.FindRecoverableNormalGate(fixture.Repository, goal, pair));
         Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(resumed, skipVerify: true));
-        Assert.Empty(verifier.NormalRuns);
-        Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var reloaded = await repository.LoadAsync();
+            var retry = CreateCliContext(reloaded, context.Workspace, reloaded.GetGoal(goal.Id), verifier);
+            var output = CaptureConsole(() => Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(retry)));
+            Assert.Contains("Restore a readable goal operation journal", output);
+            Assert.Contains(journal.Path, output);
+            Assert.Empty(verifier.NormalRuns);
+            Assert.Equal(lines, File.ReadAllLines(journal.Path));
+            Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+        }
+        Assert.Equal(acknowledged ? "passed" : null, store.ReadCheck(key)?.Outcome);
     }
 
     [Fact]
@@ -395,8 +422,8 @@ public sealed class SoloRepairWorkflowTests
         var pass = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, fixture.Candidate, fixture.Main);
         Assert.Equal("gate-passed", pass?.AcceptanceOutcome);
         Assert.True(pass?.RequiredChecksValidated);
-        Assert.Null(CliWorkspaceMerge.FindRecoverableNormalGate(fixture.Repository, fixture.Goal,
-            new(fixture.Candidate, fixture.Candidate)));
+        Assert.Null(CliWorkspaceMerge.ReadNormalGate(fixture.Repository, store, fixture.Goal,
+            new(fixture.Candidate, fixture.Candidate)).RecoverableAttempt);
         Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
 
         var restarted = await repository.LoadAsync();

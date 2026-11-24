@@ -250,6 +250,33 @@ internal static class CliWorkspaceMerge
         }
     }
 
+    internal static bool ReportRepairHoldBeforeVerification(CliExecutionContext context, Goal goal,
+        GateReadyCandidateRevisionPair pair, string worktreePath, bool skipVerify,
+        out bool reuseNormalGate, out string? recoveredNormalGate)
+    {
+        reuseNormalGate = false;
+        recoveredNormalGate = null;
+        if (ReportRepairHold(context, goal, pair, worktreePath, skipVerify, out var store)) return true;
+        if (store is null) return false;
+        if (skipVerify)
+        {
+            // Repair admission already required an acknowledged pass for this pair.
+            reuseNormalGate = true;
+            return false;
+        }
+
+        var normalGate = ReadNormalGate(context.Workspace.ExecutionDirectory, store, goal, pair);
+        if (normalGate.Blocker is { } blocker)
+        {
+            Console.WriteLine($"Acceptance blocked: {blocker}.");
+            return true;
+        }
+
+        recoveredNormalGate = normalGate.Acknowledged ? null : normalGate.RecoverableAttempt;
+        reuseNormalGate = normalGate.Acknowledged || recoveredNormalGate is not null;
+        return false;
+    }
+
     internal static bool ReportRepairHold(CliExecutionContext context, Goal goal, GateReadyCandidateRevisionPair? pair,
         string? worktreePath, bool requireNormalAcceptance, out SoloBaselineRepairStore? repairStore)
     {
@@ -279,8 +306,12 @@ internal static class CliWorkspaceMerge
             !store.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main))
             return "baseline repair and original-selection validation are pending for the current revision pair";
 
-        if (requireNormalAcceptance && !HasPassedNormalGate(root, store, goal, pair))
-            return "normal acceptance is pending for the current revision pair";
+        if (requireNormalAcceptance)
+        {
+            var normalGate = ReadNormalGate(root, store, goal, pair);
+            if (normalGate.Blocker is not null) return normalGate.Blocker;
+            if (!normalGate.Acknowledged) return "normal acceptance is pending for the current revision pair";
+        }
 
         if (worktreePath is not null)
         {
@@ -303,22 +334,11 @@ internal static class CliWorkspaceMerge
         GateReadyCandidateRevisionPair ReadPair() => new(ReadRef(root, candidateRef), ReadRef(root, mainRef));
     }
 
-    internal static bool HasPassedNormalGate(
-        string root, SoloBaselineRepairStore? store, Goal goal, GateReadyCandidateRevisionPair? pair) =>
-        pair is { BranchRevision: { } candidate, MainRevision: { } main } &&
-        store?.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed" &&
-        ReadCurrentNormalGate(root, goal, candidate, main) is not null;
-
-    internal static GoalOperationJournalEntry? FindRecoverableNormalGate(
-        string root, Goal goal, GateReadyCandidateRevisionPair pair) =>
-        pair is { BranchRevision: { } candidate, MainRevision: { } main } &&
-        ReadCurrentNormalGate(root, goal, candidate, main) is { Operation: "acceptance" } latest
-            ? latest
-            : null;
-
-    private static GoalOperationJournalEntry? ReadCurrentNormalGate(string root, Goal goal, string candidate, string main)
+    internal static (bool Acknowledged, string? RecoverableAttempt, string? Blocker) ReadNormalGate(
+        string root, SoloBaselineRepairStore store, Goal goal, GateReadyCandidateRevisionPair pair)
     {
-        // An unreadable row could contain the outcome that superseded the acknowledgement.
+        if (pair is not { BranchRevision: { } candidate, MainRevision: { } main }) return default;
+
         GoalOperationJournalSummary journal;
         try
         {
@@ -326,19 +346,29 @@ internal static class CliWorkspaceMerge
         }
         catch (Exception error) when (error is FormatException or InvalidDataException or IOException or UnauthorizedAccessException)
         {
-            Console.WriteLine($"Cannot read normal acceptance evidence for goal {goal.Id.Value}. {error.Message}");
-            return null;
+            return (false, null, $"Cannot read normal acceptance evidence for goal {goal.Id.Value}. {error.Message} " +
+                "Restore a readable goal operation journal before retrying acceptance");
         }
 
-        var latest = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, candidate, main);
-        if (latest is not { Status: GoalOperationStatus.Completed } || latest.GoalId != goal.Id) return null;
+        // The strict reader keeps entries in chronological order, with file order breaking ties.
+        var latest = journal.Entries.LastOrDefault(entry =>
+            !string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) && entry.CouldMatchCandidate(candidate, main));
+        if (latest is null) return default;
+        if (!latest.HasCandidatePair)
+            return (false, null, $"Normal acceptance outcome '{latest.IdempotencyKey}' has an incomplete revision pair " +
+                $"in '{journal.Path}'. Restore its recorded candidate and integration revisions before retrying acceptance");
+        if (latest.Status != GoalOperationStatus.Completed || latest.GoalId != goal.Id) return default;
 
-        return latest.Operation switch
+        var passed = latest.Operation switch
         {
-            "acceptance" when latest.RequiredChecksValidated && GoalOperationJournalGatePassedOutcome.Matches(latest) => latest,
-            "conductor:acceptance" when latest.AcceptanceOutcome == "passed" => latest,
-            _ => null
+            "acceptance" => latest.RequiredChecksValidated && GoalOperationJournalGatePassedOutcome.Matches(latest),
+            "conductor:acceptance" => latest.AcceptanceOutcome == "passed",
+            _ => false
         };
+        if (!passed) return default;
+
+        var acknowledged = store.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed";
+        return (acknowledged, latest.Operation == "acceptance" ? latest.IdempotencyKey : null, null);
     }
 
     private static string? ReadRef(string directory, string reference) =>

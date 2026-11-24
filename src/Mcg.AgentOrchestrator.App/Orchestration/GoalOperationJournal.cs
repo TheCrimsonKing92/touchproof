@@ -61,6 +61,10 @@ public sealed record GoalOperationJournalEntry(
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
 
+    internal bool CouldMatchCandidate(string branchHeadSha, string mainHeadSha) =>
+        (string.IsNullOrWhiteSpace(BranchHeadSha) || ShaEquals(BranchHeadSha, branchHeadSha)) &&
+        (string.IsNullOrWhiteSpace(MainHeadSha) || ShaEquals(MainHeadSha, mainHeadSha));
+
     public bool HasCandidatePair =>
         !string.IsNullOrWhiteSpace(BranchHeadSha) && !string.IsNullOrWhiteSpace(MainHeadSha);
 
