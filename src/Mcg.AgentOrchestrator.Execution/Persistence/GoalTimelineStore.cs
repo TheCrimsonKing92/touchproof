@@ -203,13 +203,25 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
         var entries = new List<JsonElement>();
         var seen = 0;
         using var command = connection.CreateCommand();
-        // Only repository-owned predicates can be supplied. Count every sequence
-        // even when a sparse reader does not need its event payload.
-        var payload = includeSql is null ? "entry_json" : $"""
-            CASE WHEN NOT json_valid(entry_json) THEN entry_json
-                 WHEN json_type(entry_json) <> 'object' OR ({includeSql}) THEN entry_json END
+        // Validate every row. For excluded events, elide text that can deserialize as a
+        // string without error. Keep surrogate escapes so the serializer can check them.
+        command.CommandText = includeSql is null
+            ? "SELECT sequence, entry_json, 1 FROM goal_timeline WHERE goal_id = $id ORDER BY sequence"
+            : $"""
+            WITH selection AS (
+                SELECT sequence, entry_json, CASE
+                    WHEN NOT json_valid(entry_json) THEN 1
+                    WHEN json_type(entry_json) <> 'object' OR ({includeSql}) THEN 1
+                    ELSE 0 END AS included
+                FROM goal_timeline WHERE goal_id = $id
+            )
+            SELECT sequence, CASE
+                WHEN included THEN entry_json
+                WHEN json_type(entry_json, '$.Message') = 'text' AND entry_json NOT GLOB '*\u[dD][89a-fA-F]*'
+                    THEN json_replace(entry_json, '$.Message', '')
+                ELSE entry_json END, included
+            FROM selection ORDER BY sequence
             """;
-        command.CommandText = $"SELECT sequence, {payload} FROM goal_timeline WHERE goal_id = $id ORDER BY sequence";
         command.Parameters.AddWithValue("$id", id);
         try
         {
@@ -218,7 +230,6 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
             {
                 var sequence = seen++;
                 if (reader.GetInt64(0) != sequence) throw Error(id, $"sequence gap at {sequence}");
-                if (reader.IsDBNull(1) && includeSql is not null) continue;
                 try
                 {
                     var json = reader.GetString(1);
@@ -227,7 +238,7 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
                     if (document.RootElement.ValueKind != JsonValueKind.Object ||
                         document.RootElement.Deserialize<ProgressEventSnapshot>(options) is null)
                         throw new JsonException("Timeline entry must be an object.");
-                    entries.Add(document.RootElement.Clone());
+                    if (reader.GetBoolean(2)) entries.Add(document.RootElement.Clone());
                 }
                 catch (JsonException ex) { throw Error(id, $"unparseable entry at {sequence}", ex); }
             }

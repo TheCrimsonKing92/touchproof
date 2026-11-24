@@ -384,9 +384,13 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         Assert.Equal(2, observations.Count(row => row.Operation == "provider-seed-discovery"));
         Assert.All(observations.Where(row => row.Operation == "provider-seed-discovery"),
             row => Assert.InRange(row.MaterializedCharacters, 1, irrelevant.Length - 1));
-        var payload = Assert.Single(observations.Where(row => row.Operation == "provider-seed-timeline-entry"));
-        Assert.Equal(source.Id, payload.GoalId);
-        Assert.InRange(payload.MaterializedCharacters, 1, irrelevant.Length - 1);
+        var payloads = observations.Where(row => row.Operation == "provider-seed-timeline-entry").ToArray();
+        Assert.Equal(2, payloads.Length);
+        Assert.All(payloads, payload =>
+        {
+            Assert.Equal(source.Id, payload.GoalId);
+            Assert.InRange(payload.MaterializedCharacters, 1, irrelevant.Length - 1);
+        });
         var projected = Assert.Single(history.Evidence, row => row.GoalId == source.Id);
         Assert.Equal(reset, Assert.Single(projected.Timeline).Message);
         var canonical = await repository.LoadGoalsAsync([new(source.Id), new(witness.Id)], token);

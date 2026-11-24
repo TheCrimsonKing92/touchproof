@@ -1,5 +1,6 @@
 using System.Globalization;
 using Mcg.AgentOrchestrator.App.Cli;
+using Microsoft.Data.Sqlite;
 
 // Parallel-safe. Shadow startup owns the database copy, candidate process group and stop file.
 public sealed class ProviderHoldSeedConductorStartupTests(ITestOutputHelper testOutput)
@@ -28,6 +29,44 @@ public sealed class ProviderHoldSeedConductorStartupTests(ITestOutputHelper test
         var rejection = Reject(exit, receipt);
         Assert.True(rejection is null, $"Rejected {rejection}{Environment.NewLine}{receipt}");
         testOutput.WriteLine($"Candidate={candidate} fixture_dispatch_goals={dispatchGoals}{Environment.NewLine}{receipt}");
+    }
+
+    [Fact]
+    public async Task ShadowStart_InvalidNonReplayTimelineEntry_FailsBeforeReadyAndLoop()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        // This goal supplies qualifying refusals, but recovery clears its binding before
+        // canonical hold hydration. Startup must validate the row during sparse discovery.
+        await fixture.PopulateLegacyRefusalCaseAsync(recovered: true);
+        var goalId = ProviderHoldSeedFixture.Id(808);
+        using (var connection = new SqliteConnection($"Data Source={fixture.Database};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE goal_timeline SET entry_json = json_set(entry_json,
+                    '$.Kind', 'GoalPolicyDecision', '$.OccurredAt', 'invalid date')
+                WHERE goal_id = $id AND sequence = 0 AND EXISTS (
+                    SELECT 1 FROM goals WHERE id = $id AND json_extract(snapshot_json, '$.TimelineInTable') = 1)
+                """;
+            command.Parameters.AddWithValue("$id", goalId);
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        using var output = new StringWriter(CultureInfo.InvariantCulture);
+        using var error = new StringWriter(CultureInfo.InvariantCulture);
+        var exit = CliShadowStartCommand.Run(
+            ["shadow-start", "--source", fixture.Source, "--scratch", fixture.Scratch,
+             "--startup-ceiling-seconds", "60", "--budget-seconds", "120"], output, error);
+
+        var receipt = output.ToString() + error;
+        Assert.Contains("SHADOW_START result=fail assertion=loop-start", receipt, StringComparison.Ordinal);
+        Assert.Contains("PROVIDER_HOLD_HISTORY seed-failed: InvalidDataException:", receipt, StringComparison.Ordinal);
+        Assert.Contains($"Goal '{goalId}' timeline: unparseable entry at 0.", receipt, StringComparison.Ordinal);
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain(ProviderHoldHistoryStartupSeed.CompletedLinePrefix, receipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("LOOP_READY ", receipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("LOOP_START ", receipt, StringComparison.Ordinal);
     }
 
     [Theory]
