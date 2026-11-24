@@ -318,8 +318,18 @@ internal static class CliWorkspaceMerge
 
     private static GoalOperationJournalEntry? ReadCurrentNormalGate(string root, Goal goal, string candidate, string main)
     {
-        // The insert-once acknowledgement can outlive the outcome that authorized it.
-        var journal = GoalOperationJournal.ReadActive(root, goal.Id);
+        // An unreadable row could contain the outcome that superseded the acknowledgement.
+        GoalOperationJournalSummary journal;
+        try
+        {
+            journal = GoalOperationJournal.ReadStrict(root, goal.Id);
+        }
+        catch (Exception error) when (error is FormatException or InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine($"Cannot read normal acceptance evidence for goal {goal.Id.Value}. {error.Message}");
+            return null;
+        }
+
         var latest = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, candidate, main);
         if (latest is not { Status: GoalOperationStatus.Completed } || latest.GoalId != goal.Id) return null;
 
