@@ -65,6 +65,13 @@ internal static class BoardFillReadyItemSelector
     internal static BacklogItem? SelectReady(IEnumerable<(BacklogItem Item, BacklogReadiness Ready)> candidates,
         IReadOnlyList<string>? preferredOrder, IReadOnlySet<string>? epicMembers, Action<BacklogItem>? epicMissing,
         Func<BacklogItem, BoardFillNearDuplicateReference?>? nearDuplicate,
+        Action<BacklogItem, BoardFillNearDuplicateReference>? nearDuplicateSkipped) =>
+        OrderReady(candidates, preferredOrder, epicMembers, epicMissing, nearDuplicate, nearDuplicateSkipped)
+            .FirstOrDefault();
+
+    internal static IEnumerable<BacklogItem> OrderReady(IEnumerable<(BacklogItem Item, BacklogReadiness Ready)> candidates,
+        IReadOnlyList<string>? preferredOrder, IReadOnlySet<string>? epicMembers, Action<BacklogItem>? epicMissing,
+        Func<BacklogItem, BoardFillNearDuplicateReference?>? nearDuplicate,
         Action<BacklogItem, BoardFillNearDuplicateReference>? nearDuplicateSkipped)
     {
         var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -94,6 +101,6 @@ internal static class BoardFillReadyItemSelector
         .ThenByDescending(candidate => candidate.Ready.HasLandedDependency)
         .ThenByDescending(candidate => candidate.Item.UpdatedAt)
         .ThenBy(candidate => candidate.Item.Id, StringComparer.Ordinal)
-        .Select(candidate => candidate.Item).FirstOrDefault();
+            .Select(candidate => candidate.Item);
     }
 }
