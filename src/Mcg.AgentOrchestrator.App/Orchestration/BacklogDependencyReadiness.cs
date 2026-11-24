@@ -10,11 +10,21 @@ internal sealed record BacklogPrerequisiteOwner(Goal? Goal, bool Ambiguous = fal
 internal static class BacklogDependencyReadiness
 {
     internal static bool IsSatisfiedWithoutGoal(BacklogItem? prerequisite, BacklogPrerequisiteOwner owner) =>
-        prerequisite is { Status: BacklogItemStatus.Done } && owner is { Goal: null, Ambiguous: false };
+        IsSatisfiedWithoutGoal(prerequisite?.Status, owner);
+
+    private static bool IsSatisfiedWithoutGoal(BacklogItemStatus? status, BacklogPrerequisiteOwner owner) =>
+        status == BacklogItemStatus.Done && owner is { Goal: null, Ambiguous: false };
 
     internal static BacklogReadiness Evaluate(BacklogItem item, Func<string, Goal?> findGoal,
         Func<string, BacklogItem?> findBacklog, Func<string, BacklogPrerequisiteOwner> findOwner,
-        Func<Goal, string> landingState)
+        Func<Goal, string> landingState) =>
+        EvaluateWithPrerequisites(item, findGoal,
+            id => findBacklog(id) is { } prerequisite ? (prerequisite.Id, prerequisite.Status) : null,
+            findOwner, landingState);
+
+    internal static BacklogReadiness EvaluateWithPrerequisites(BacklogItem item, Func<string, Goal?> findGoal,
+        Func<string, (string Id, BacklogItemStatus Status)?> findBacklog,
+        Func<string, BacklogPrerequisiteOwner> findOwner, Func<Goal, string> landingState)
     {
         BacklogReadiness Blocked(string suffix) => new(false, false, suffix);
         foreach (var dependency in item.Dependencies)
@@ -25,11 +35,11 @@ internal static class BacklogDependencyReadiness
             else
             {
                 var prerequisite = findBacklog(dependency.PrerequisiteId);
-                var owner = prerequisite is null ? new BacklogPrerequisiteOwner(null) : findOwner(prerequisite.Id);
+                var owner = prerequisite is { } found ? findOwner(found.Id) : new BacklogPrerequisiteOwner(null);
                 goal = owner.Goal;
                 if (owner.Ambiguous)
                     return Blocked($" [Blocked: reason=legacy-owner-ambiguous prerequisite {ShortId(dependency.PrerequisiteId)}]");
-                if (IsSatisfiedWithoutGoal(prerequisite, owner)) continue;
+                if (IsSatisfiedWithoutGoal(prerequisite?.Status, owner)) continue;
                 if (goal is null)
                     return Blocked($" [Blocked: waiting on open prerequisite {ShortId(dependency.PrerequisiteId)}]");
             }

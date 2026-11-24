@@ -15,6 +15,15 @@ internal sealed class BoardFillEpicMissingQuestion(
     private bool _attentionLoaded;
     private string? _lastReadFailure;
 
+    internal string[] QuestionIds()
+    {
+        lock (_gate)
+        {
+            LoadOpenQuestions();
+            return _openQuestions.Union(_announced, StringComparer.Ordinal).ToArray();
+        }
+    }
+
     internal IReadOnlySet<string>? Read(IReadOnlyList<BacklogItem> items, DateTimeOffset now)
     {
         lock (_gate)
@@ -29,14 +38,7 @@ internal sealed class BoardFillEpicMissingQuestion(
                 return null;
             }
             _lastReadFailure = null;
-            if (attention is not null && !_attentionLoaded)
-            {
-                foreach (var question in attention.ListAsync().GetAwaiter().GetResult().Where(question =>
-                    !CollaborationItemLifecycle.IsTerminal(question.Status) &&
-                    question.CorrelationKey?.StartsWith(Prefix, StringComparison.Ordinal) == true))
-                    _openQuestions.Add(question.CorrelationKey![Prefix.Length..]);
-                _attentionLoaded = true;
-            }
+            LoadOpenQuestions();
             foreach (var id in members)
             {
                 if (_openQuestions.Contains(id))
@@ -48,6 +50,16 @@ internal sealed class BoardFillEpicMissingQuestion(
             }
             return members;
         }
+    }
+
+    private void LoadOpenQuestions()
+    {
+        if (attention is null || _attentionLoaded) return;
+        foreach (var question in attention.ListAsync().GetAwaiter().GetResult().Where(question =>
+            !CollaborationItemLifecycle.IsTerminal(question.Status) &&
+            question.CorrelationKey?.StartsWith(Prefix, StringComparison.Ordinal) == true))
+            _openQuestions.Add(question.CorrelationKey![Prefix.Length..]);
+        _attentionLoaded = true;
     }
 
     internal void Ask(BacklogItem item, DateTimeOffset now)

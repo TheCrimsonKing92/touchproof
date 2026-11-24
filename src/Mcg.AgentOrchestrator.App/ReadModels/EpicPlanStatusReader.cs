@@ -105,12 +105,15 @@ internal static class EpicPlanStatusReader
 
     internal static IReadOnlyList<EpicPlanItemStatus> Compute(EpicPlan plan,
         IReadOnlyDictionary<string, BacklogItem> backlog, IReadOnlyDictionary<string, GoalSummary> goals,
-        EpicPlanGoalClaims claims, IReadOnlyDictionary<string, string>? reasons = null) =>
-        plan.Items.OrderBy(item => item.Position).Select(item => ComputeItem(item, backlog, goals, claims, reasons)).ToArray();
+        EpicPlanGoalClaims claims, IReadOnlyDictionary<string, string>? reasons = null,
+        Func<string, BacklogItemStatus?>? findPrerequisiteStatus = null) =>
+        plan.Items.OrderBy(item => item.Position)
+            .Select(item => ComputeItem(item, backlog, goals, claims, reasons, findPrerequisiteStatus)).ToArray();
 
     private static EpicPlanItemStatus ComputeItem(EpicPlanItem item,
         IReadOnlyDictionary<string, BacklogItem> backlog, IReadOnlyDictionary<string, GoalSummary> goals,
-        EpicPlanGoalClaims claims, IReadOnlyDictionary<string, string>? reasons)
+        EpicPlanGoalClaims claims, IReadOnlyDictionary<string, string>? reasons,
+        Func<string, BacklogItemStatus?>? findPrerequisiteStatus)
     {
         if (item.Kind == EpicPlanItemKind.Step) return new(item, null, item.Text!);
         var id = item.BacklogItemId!;
@@ -146,7 +149,9 @@ internal static class EpicPlanStatusReader
         foreach (var dependency in source.Dependencies)
         {
             var open = dependency.TargetKind == BacklogDependencyTargetKind.Backlog
-                ? !backlog.TryGetValue(dependency.PrerequisiteId, out var prerequisite) || prerequisite.Status == BacklogItemStatus.Open
+                ? (findPrerequisiteStatus is null
+                    ? backlog.GetValueOrDefault(dependency.PrerequisiteId)?.Status
+                    : findPrerequisiteStatus(dependency.PrerequisiteId)) is null or BacklogItemStatus.Open
                 : !goals.TryGetValue(dependency.PrerequisiteId, out var prerequisiteGoal) || prerequisiteGoal.Status != nameof(GoalStatus.Completed);
             if (open) return Result(EpicPlanSliceStatus.Blocked, $"blocked on {dependency.PrerequisiteId}");
         }
