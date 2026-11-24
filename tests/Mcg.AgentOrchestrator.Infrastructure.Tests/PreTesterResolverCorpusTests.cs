@@ -1,11 +1,120 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.App.Orchestration.PreTesterReverseDependencyObservation;
 using static PreTesterResolverObservationTests;
 
-public sealed class PreTesterResolverCorpusTests
+public sealed class PreTesterResolverCorpusTests(ITestOutputHelper output)
 {
+    private const string ReplayOracleRevision = "98f6d646e8c2bfb524e6e9a3d6bd7915a0ad114f";
+    private const string ReplayOracleResolverBlob = "23f9044420b64de6750682f80404e8d51c618779";
+    private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
+    private const string ResolverPath = "src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterReverseDependencySelections.cs";
+
+    // Each checkout, build output and corpus is test-owned. Git worktree registration uses Git's own locks.
+    [Fact]
+    public void ReplaysSealedCorpusWithIndependentlyStagedFullApps()
+    {
+        var repository = VerifiedRepositoryRoot.Find();
+        Assert.Equal(PreTesterResolverCorpus.OracleResolverBlob,
+            Git(repository, "rev-parse", $"{PreTesterResolverCorpus.OracleRevision}:{ResolverPath}"));
+        Assert.Equal(ReplayOracleResolverBlob, Git(repository, "rev-parse", $"{ReplayOracleRevision}:{ResolverPath}"));
+        Git(repository, "merge-base", "--is-ancestor", PreTesterResolverCorpus.OracleRevision, ReplayOracleRevision);
+
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var corpus = MakeCorpus(fixture.Root);
+        var seal = Receipt(corpus);
+        var digest = Assert.IsType<string>(seal.Sha256);
+        File.Delete(Path.Combine(fixture.Root, PreTesterReverseDependencySelectionFixture.Project));
+
+        var candidate = StageApp(repository, fixture.Root, "candidate", PreTesterResolverCorpus.CandidateRevision,
+            PreTesterResolverCorpus.CandidateRevision, []);
+        var oracle = StageApp(repository, fixture.Root, "oracle", PreTesterResolverCorpus.OracleRevision,
+            ReplayOracleRevision,
+            ["Extract the original matching loop and selection completion.", "Add supervised observation and offline corpus replay."]);
+        var receipt = Path.Combine(fixture.Root, "staged-replay.json");
+        Dotnet(fixture.Root, fixture.Root, oracle.AppPath, PreTesterResolverReplayCommand.Name, corpus, digest, receipt,
+            WriteBuild(candidate, fixture.Root, "candidate"), WriteBuild(oracle, fixture.Root, "oracle"));
+
+        var result = JsonSerializer.Deserialize<PreTesterResolverCorpus.ReplayReceipt>(File.ReadAllBytes(receipt))!;
+        Assert.Equal(digest, result.CorpusSha256);
+        Assert.Equal(digest, Sha256(corpus));
+        Assert.Equal(seal.WindowId, result.WindowId);
+        var producer = Assert.Single(result.Producers);
+        Assert.Equal(seal.SessionId, producer.SessionId);
+        Assert.Equal(candidate.Revision, result.Candidate.Revision);
+        Assert.Equal(candidate.AppSha256, result.Candidate.AppSha256);
+        Assert.Equal(oracle.Revision, result.Oracle.Revision);
+        Assert.Equal(oracle.AppSha256, result.Oracle.AppSha256);
+        Assert.NotEqual(result.Candidate.AppSha256, result.Oracle.AppSha256);
+        Assert.NotEqual(producer.AppSha256, result.Candidate.AppSha256);
+        Assert.NotEqual(producer.AppSha256, result.Oracle.AppSha256);
+        Assert.Equal(PreTesterResolverCorpus.OracleResolverBlob, result.OracleBlob);
+        Assert.Equal([1, 2, 3, 4], result.Comparisons.Select(comparison => comparison.Ordinal));
+        Assert.All(result.Comparisons, comparison =>
+        {
+            Assert.Equal(seal.SessionId, comparison.SessionId);
+            Assert.True(comparison.Equivalent);
+        });
+        Assert.Equal(["A", "A", null, null], result.Comparisons.Select(comparison => comparison.Candidate.UnresolvedName));
+        Assert.Contains("kind=reverse-dependency-skipped-cost", Assert.Single(result.Comparisons[2].Candidate.Diagnostics));
+        Assert.Equal(["B", "A"], result.Comparisons[3].Candidate.Selections.Select(selection => selection.TestClass));
+        output.WriteLine($"Staged replay corpus={digest} receipt={Sha256(receipt)} window={result.WindowId} rows={result.Comparisons.Length}");
+        output.WriteLine($"Candidate {result.Candidate.Revision} App={result.Candidate.AppSha256}");
+        output.WriteLine($"Oracle {result.Oracle.Revision} App={result.Oracle.AppSha256}");
+    }
+
+    private static PreTesterResolverCorpus.ReplayBuild StageApp(
+        string repository, string root, string arm, string startingRevision, string revision, string[] amendments)
+    {
+        var checkout = Path.Combine(root, arm + "-checkout");
+        var stage = Path.Combine(root, arm + "-stage");
+        Git(repository, "worktree", "add", "--quiet", "--detach", checkout, revision);
+        try
+        {
+            var actualRevision = Git(checkout, "rev-parse", "HEAD");
+            Assert.Equal(revision, actualRevision);
+            Assert.Empty(Git(checkout, "status", "--porcelain", "--untracked-files=all"));
+            Dotnet(checkout, root, "build", AppProject, "--output", stage, "--verbosity", "quiet",
+                "--disable-build-servers", "-p:UseAppHost=false", "-p:IncludeSourceRevisionInInformationalVersion=true");
+            Assert.Empty(Git(checkout, "status", "--porcelain", "--untracked-files=all"));
+
+            var app = Path.Combine(stage, "Mcg.AgentOrchestrator.App.dll");
+            File.WriteAllText(app + ".git-head", actualRevision);
+            return new(startingRevision, actualRevision, app, Sha256(app), amendments, repository);
+        }
+        finally
+        {
+            Git(repository, "worktree", "remove", "--force", checkout);
+        }
+    }
+
+    private static string Git(string repository, params string[] args)
+    {
+        var result = GitCli.RunForRepository(repository, 120_000, ["-c", "core.hooksPath=", .. args]);
+        Assert.True(result.Succeeded, $"git {args[0]} exited {result.ExitCode}. {result.Error}");
+        return result.Output.Trim();
+    }
+
+    private static void Dotnet(string directory, string root, params string[] args)
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = directory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var argument in args) start.ArgumentList.Add(argument);
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(start.Environment, directory,
+            Path.Combine(root, "build-environment"));
+        var result = TestChildProcessCapture.Run(start, hangBound: TimeSpan.FromMinutes(5));
+        Assert.True(result.ExitCode == 0, $"dotnet {args[0]} exited {result.ExitCode}.\n{result.Stdout}\n{result.Stderr}");
+    }
+
     [Fact]
     public void ReconstructsInventoryAndRunsBothIdentifiedArmsInRecordedOrder()
     {
