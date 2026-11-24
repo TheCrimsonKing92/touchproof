@@ -131,6 +131,38 @@ public sealed class ProviderHoldSeedWorkBoundTests
     }
 
     [Fact]
+    public async Task Seed_CrossGoalReset_FailsWhenMarkerOwnerArchiveIsMissing()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateResetCaseAsync(null);
+        var markerOwner = new GoalId(ProviderHoldSeedFixture.Id(805));
+        using var connection = new SqliteConnection($"Data Source={fixture.Database};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.Parameters.AddWithValue("$id", markerOwner.Value);
+        command.CommandText = """
+            INSERT INTO goal_snapshot_archive (goal_id, snapshot_json, archived_at)
+            SELECT id, snapshot_json, updated_at FROM goals WHERE id = $id;
+            UPDATE goals SET snapshot_json = json_remove(
+                json_set(snapshot_json, '$.IsMetadataOnly', json('true'), '$.Tasks', json('[]'), '$.Timeline', json('[]')),
+                '$.TimelineInTable') WHERE id = $id;
+            """;
+        Assert.Equal(2, command.ExecuteNonQuery());
+        var intact = Seed(fixture, new());
+        Assert.Equal("fixture-reset", Assert.Single(intact.Index.Evaluations).Value.Schedule?.ResetIntentId);
+
+        command.CommandText = "DELETE FROM goal_snapshot_archive WHERE goal_id = $id";
+        Assert.Equal(1, command.ExecuteNonQuery());
+        var history = await fixture.Repository.ReadProviderHoldSeedHistoryAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(markerOwner, Assert.Single(history.MarkerGoals));
+
+        var diagnostics = new List<string>();
+        Assert.Null(ProviderHoldHistoryStartupSeed.Apply(new(), fixture.Repository, diagnostics.Add));
+        Assert.Equal("PROVIDER_HOLD_HISTORY seed-failed: InvalidDataException: Required provider hold history is unavailable.",
+            Assert.Single(diagnostics));
+    }
+
+    [Fact]
     public async Task Seed_PersistedProbesAndReplayedResets_HaveBoundedHistoryVisits()
     {
         using var fixture = new ProviderHoldSeedFixture();

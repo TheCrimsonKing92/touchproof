@@ -52,7 +52,8 @@ internal static class ProviderHoldHistoryStartupSeed
             var requestedIds = candidates.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
             bool RequiresDispatchHistory(string id) => selection.Sources.Contains(id) || selection.Dependencies.Contains(id);
             var projected = history.Evidence.Concat(evidence ?? []).Where(row => requestedIds.Contains(row.GoalId) &&
-                    (row.Tasks.Count != 0 || !RequiresDispatchHistory(row.GoalId)))
+                    (row.Tasks.Count != 0 || !RequiresDispatchHistory(row.GoalId)) &&
+                    (row.Timeline.Count != 0 || !markerGoals.Contains(new GoalId(row.GoalId))))
                 .GroupBy(row => row.GoalId, StringComparer.Ordinal).Where(group => group.Count() == 1)
                 .ToDictionary(group => group.Key, group => ProviderHoldSeedPruning.Adapt(group.Single()), StringComparer.Ordinal);
             var canonical = Load(candidates.Where(id => !projected.ContainsKey(id.Value)).ToArray());
