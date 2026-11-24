@@ -11,7 +11,7 @@ internal sealed partial class ConductorBoardFillHost
     private Task<BoardFillFilingAttempt>? _filing;
     internal Task? CurrentFiling => _filing;
 
-    private void ServiceFiling(IReadOnlyList<BacklogItem> backlog, IReadOnlySet<string> epicMembers)
+    private void ServiceFiling(IReadOnlyList<BacklogItem> backlog, IReadOnlySet<string> epicMembers, bool allowStart)
     {
         if (_filing is { IsCompleted: true })
         {
@@ -20,7 +20,7 @@ internal sealed partial class ConductorBoardFillHost
         }
         ReportFilings();
         var policy = _policy();
-        if (_filingSeams is null || _filing is not null || policy.BoardFillMode != ConductorBoardFillMode.File) return;
+        if (!allowStart || _filingSeams is null || _filing is not null || policy.BoardFillMode != ConductorBoardFillMode.File) return;
         var now = _utcNow();
         var admissionOpen = _kernel!.Goals.Count(goal => !goal.IsTerminal) < policy.BoardFillTargetActiveGoals &&
             (policy.BoardFillMaxDraftsPerDay is not { } cap || _store.FiledOnUtcDay(now) < cap);
