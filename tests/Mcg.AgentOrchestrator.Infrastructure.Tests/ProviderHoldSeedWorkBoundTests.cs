@@ -125,8 +125,20 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(new[] { 799, 805 }.Select(ProviderHoldSeedFixture.Id),
             kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id.Value));
 
+        var now = schedule.NextProbeAt;
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
+        var status = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
+        var fleet = Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now));
+        foreach (var row in new[] { status, fleet })
+        {
+            Assert.Equal(ProviderHoldSeedFixture.Id(799), row.Hold.SourceGoalId.Value);
+            Assert.Equal(schedule.ResetIntentId, row.Schedule?.ResetIntentId);
+            Assert.Equal(schedule.NextProbeAt, row.Schedule?.NextProbeAt);
+        }
+
         Assert.Equal(1, kernel.EvictTerminalGoalAggregates([new GoalId(unrelated.Id)]));
-        Assert.Equal(schedule, Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, schedule.NextProbeAt)).Schedule);
+        Assert.Equal(schedule, Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, now)).Schedule);
         Assert.Contains(kernel.ProviderHoldHistory.Retained, goal => goal.Id.Value == ProviderHoldSeedFixture.Id(805));
     }
 

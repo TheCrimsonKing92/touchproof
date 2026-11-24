@@ -17,7 +17,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null,
-        bool indexedArchivesOnly = false)
+        bool limitArchiveReads = false)
     {
         var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, token);
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, token);
@@ -27,19 +27,24 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var remaining = new List<string>();
         using var command = connection.CreateCommand();
         var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
-        if (hasArchive && indexedArchivesOnly)
+        if (hasArchive && limitArchiveReads)
         {
-            archiveJoin += """
+            // An unindexed legacy archive can own a reset for another goal. Inline
+            // timelines may be the only record when there are no sidecar rows.
+            var legacyArchive = hasTimeline
+                ? "NOT EXISTS (SELECT 1 FROM goal_timeline t WHERE t.goal_id = g.id)"
+                : "1";
+            archiveJoin += $"""
 
-                AND g.id IN (SELECT goal_id FROM model_fit_history
-                    WHERE outcome_rule IN (SELECT value FROM json_each($holdRules)))
+                AND (g.id IN (SELECT goal_id FROM model_fit_history
+                    WHERE outcome_rule IN (SELECT value FROM json_each($holdRules))) OR {legacyArchive})
                 """;
             command.Parameters.AddWithValue("$holdRules", JsonSerializer.Serialize(ProviderHoldHistory.HoldOutcomeRules));
         }
         var document = hasArchive
             ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
             : "g.snapshot_json";
-        var candidates = indexedArchivesOnly ? $"""
+        var candidates = limitArchiveReads ? $"""
             WHERE CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
                 {SidecarCandidatesSql(hasTimeline, hasHistory)}
                 EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
@@ -50,7 +55,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                         WHERE {VerificationPredicate("v.value")}))) END
             """ : "";
         // Project text in SQLite so large unrelated graphs never cross the managed
-        // boundary. Status uses indexed archives and evidence visible without decoding other archives.
+        // boundary. Status also checks archives that may carry inline timelines.
         command.CommandText = $"""
             WITH documents(id, payload) AS NOT MATERIALIZED (
                 SELECT g.id, {document} FROM goals g
