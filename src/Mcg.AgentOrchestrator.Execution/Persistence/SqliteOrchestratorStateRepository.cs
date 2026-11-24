@@ -2380,12 +2380,18 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(
         CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(ProviderHoldHistory.HoldOutcomeRules, cancellationToken);
 
-    public async Task<ProviderHoldSeedHistory> ReadProviderHoldSeedHistoryAsync(
-        CancellationToken cancellationToken = default)
+    public Task<ProviderHoldSeedHistory> ReadProviderHoldSeedHistoryAsync(CancellationToken cancellationToken = default) =>
+        ReadProviderHoldHistoryAsync(indexedArchivesOnly: false, cancellationToken);
+
+    internal Task<ProviderHoldSeedHistory> ReadProviderHoldStatusHistoryAsync(CancellationToken cancellationToken = default) =>
+        ReadProviderHoldHistoryAsync(indexedArchivesOnly: true, cancellationToken);
+
+    private async Task<ProviderHoldSeedHistory> ReadProviderHoldHistoryAsync(
+        bool indexedArchivesOnly, CancellationToken cancellationToken)
     {
         await using var connection = OpenConnection();
         var candidates = await ProviderHoldSeedDiscovery.ReadAsync(
-            connection, SerializerOptions, cancellationToken, _readObserver);
+            connection, SerializerOptions, cancellationToken, _readObserver, indexedArchivesOnly);
         var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
         var failureHistory = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals).ToArray();
         var dispatchMatchingVisits = 0;

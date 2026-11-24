@@ -18,7 +18,9 @@ internal static class ProviderUsageHoldReader
         IReadOnlyCollection<Goal> working = loaded;
         try
         {
-            var history = repository.ReadProviderHoldSeedHistoryAsync().GetAwaiter().GetResult();
+            var history = (repository is SqliteOrchestratorStateRepository sqlite
+                ? sqlite.ReadProviderHoldStatusHistoryAsync()
+                : repository.ReadProviderHoldSeedHistoryAsync()).GetAwaiter().GetResult();
             var selection = ProviderHoldHistory.SelectSeedEvidence(history.Rows, history.Attempts, workingIds, history.Recoveries);
             var ids = selection.Sources.Concat(selection.Dependencies).Select(id => new GoalId(id))
                 .Concat(history.MarkerGoals).Concat(failedIds).Where(id => !loadedIds.Contains(id)).ToHashSet();

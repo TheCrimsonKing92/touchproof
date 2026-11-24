@@ -365,9 +365,10 @@ internal sealed class ProviderHoldBindingHistory(string key, ProviderBindingKey?
 
     internal static void Populate(IEnumerable<Goal> goals, Func<ProviderBindingKey, ProviderHoldBindingHistory?> getHistory,
         Action<Goal>? visit = null, Action<Observation>? observe = null, Action<int>? recordDispatchVisits = null,
-        Action<string, ProviderBindingKey?, Note>? addNote = null)
+        Action<string, ProviderBindingKey?, Note>? addNote = null,
+        Action<Goal, IEnumerable<Goal>>? preserveAmbiguity = null)
     {
-        var bindingsByText = new Dictionary<string, HashSet<ProviderBindingKey>>(StringComparer.OrdinalIgnoreCase);
+        var bindingsByText = new Dictionary<string, Dictionary<ProviderBindingKey, Goal>>(StringComparer.OrdinalIgnoreCase);
         var pendingNotes = new List<(string Text, ProviderBindingKey? Identity, Note Note,
             Dictionary<ProviderBindingKey, DateTimeOffset>? TaskBindings)>();
         foreach (var goal in goals)
@@ -410,7 +411,7 @@ internal sealed class ProviderHoldBindingHistory(string key, ProviderBindingKey?
                         var text = binding.RenderedKey;
                         if (!bindingsByText.TryGetValue(text, out var matches))
                             bindingsByText.Add(text, matches = []);
-                        matches.Add(binding);
+                        matches.TryAdd(binding, goal);
                         if (sourceTasks.TryGetValue(task.Id, out var taskBindings) &&
                             (!taskBindings.TryGetValue(binding, out var first) || verification.CompletedAt < first))
                             taskBindings[binding] = verification.CompletedAt;
@@ -438,9 +439,11 @@ internal sealed class ProviderHoldBindingHistory(string key, ProviderBindingKey?
             var local = taskBindings?.Where(pair => pair.Value <= note.Event.OccurredAt &&
                     pair.Key.RenderedKey.Equals(text, StringComparison.OrdinalIgnoreCase))
                 .Select(pair => pair.Key).Take(2).ToArray() ?? [];
+            var matches = bindingsByText.GetValueOrDefault(text);
             var identity = local.Length == 1 ? local[0] :
-                local.Length == 0 && bindingsByText.TryGetValue(text, out var matches) && matches.Count == 1
-                    ? matches.Single() : null;
+                local.Length == 0 && matches is { Count: 1 } ? matches.Keys.Single() : null;
+            if (local.Length == 0 && matches is { Count: > 1 })
+                preserveAmbiguity?.Invoke(note.Goal, matches.Values.Take(2));
             addNote!(text, identity, note);
         }
 

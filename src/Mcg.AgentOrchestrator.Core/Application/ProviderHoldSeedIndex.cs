@@ -33,6 +33,7 @@ internal static class ProviderHoldSeedIndex
             return bucket;
         }
         var bindings = new HashSet<ProviderBindingKey>();
+        var ambiguityWitnesses = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var dispatchMatchingVisits = 0;
         ProviderHoldBindingHistory.Populate(scope, Bucket, _ => indexedGoals++, observation =>
         {
@@ -42,6 +43,11 @@ internal static class ProviderHoldSeedIndex
         }, visits => dispatchMatchingVisits += visits, addNote: (_, key, note) =>
         {
             if (key is not null && buckets.TryGetValue(key, out var bucket)) bucket.Notes.Add(note);
+        }, preserveAmbiguity: (owner, witnesses) =>
+        {
+            if (!ambiguityWitnesses.TryGetValue(owner.Id.Value, out var ids))
+                ambiguityWitnesses.Add(owner.Id.Value, ids = new(StringComparer.Ordinal));
+            ids.UnionWith(witnesses.Select(goal => goal.Id.Value));
         });
 
         var evaluations = new Dictionary<ProviderBindingKey, ProviderHoldSeedEvaluation>();
@@ -91,12 +97,20 @@ internal static class ProviderHoldSeedIndex
         required.UnionWith(workingIds);
         var queue = new Queue<string>(required);
         while (queue.TryDequeue(out var goalId))
+        {
+            if (ambiguityWitnesses.TryGetValue(goalId, out var ambiguous)) Keep(ambiguous);
             if (clearedBindingsBySource.TryGetValue(goalId, out var keys))
                 foreach (var key in keys)
                     if (clearingEvidence.Remove(key, out var witnesses))
-                        foreach (var witness in witnesses)
-                            if (required.Add(witness)) queue.Enqueue(witness);
+                        Keep(witnesses);
+        }
         required.ExceptWith(workingIds);
         return new(required, evaluations, indexedGoals, dispatchMatchingVisits);
+
+        void Keep(IEnumerable<string> ids)
+        {
+            foreach (var id in ids)
+                if (required.Add(id)) queue.Enqueue(id);
+        }
     }
 }

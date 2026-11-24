@@ -16,7 +16,8 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
     internal Dictionary<GoalId, ProviderUsageGoalEvidence> ArchiveEvidence { get; } = [];
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
-        JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null)
+        JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null,
+        bool indexedArchivesOnly = false)
     {
         var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, token);
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, token);
@@ -25,15 +26,35 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var replayOptions = ProviderHoldSeedEvidenceReader.ArchiveReplayOptions(options);
         var remaining = new List<string>();
         using var command = connection.CreateCommand();
+        var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
+        if (hasArchive && indexedArchivesOnly)
+        {
+            archiveJoin += """
+
+                AND g.id IN (SELECT goal_id FROM model_fit_history
+                    WHERE outcome_rule IN (SELECT value FROM json_each($holdRules)))
+                """;
+            command.Parameters.AddWithValue("$holdRules", JsonSerializer.Serialize(ProviderHoldHistory.HoldOutcomeRules));
+        }
         var document = hasArchive
             ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
             : "g.snapshot_json";
+        var candidates = indexedArchivesOnly ? $"""
+            WHERE CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
+                {SidecarCandidatesSql(hasTimeline, hasHistory)}
+                EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
+                    WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
+                EXISTS (SELECT 1 FROM json_each(payload, '$.Tasks') t
+                    WHERE {VerificationPredicate("json_extract(t.value, '$.LastVerification')")} OR
+                    EXISTS (SELECT 1 FROM json_each(t.value, '$.VerificationHistory') v
+                        WHERE {VerificationPredicate("v.value")}))) END
+            """ : "";
         // Project text in SQLite so large unrelated graphs never cross the managed
-        // boundary. Compressed legacy archives have to be decoded once here.
+        // boundary. Status uses indexed archives and evidence visible without decoding other archives.
         command.CommandText = $"""
             WITH documents(id, payload) AS NOT MATERIALIZED (
                 SELECT g.id, {document} FROM goals g
-                {(hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "")}
+                {archiveJoin}
             )
             SELECT id, CASE WHEN typeof(payload) = 'text' THEN json_object(
                 'Id', json_extract(payload, '$.Id'),
@@ -53,6 +74,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     FROM json_each(payload, '$.Tasks') t)
                 ) ELSE payload END
             FROM documents
+            {candidates}
             """;
         using (var reader = await command.ExecuteReaderAsync(token))
         {
@@ -113,6 +135,16 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         }
         return discovery;
     }
+
+    private static string SidecarCandidatesSql(bool hasTimeline, bool hasHistory) =>
+        (hasTimeline ? """
+            EXISTS (SELECT 1 FROM goal_timeline t WHERE t.goal_id = documents.id
+                AND instr(t.entry_json, 'PROVIDER_BUDGET_') > 0
+                AND json_extract(t.entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
+            """ + "\n" : "") + (hasHistory ? $"""
+            EXISTS (SELECT 1 FROM goal_task_history h WHERE h.goal_id = documents.id
+                AND h.kind = 'verification' AND {VerificationPredicate("h.entry_json")}) OR
+            """ : "");
 
     private async Task<bool> TryProjectArchiveAsync(SqliteConnection connection, string id, object payload,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe)

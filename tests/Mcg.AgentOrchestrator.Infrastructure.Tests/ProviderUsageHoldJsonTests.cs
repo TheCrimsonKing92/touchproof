@@ -81,8 +81,10 @@ public sealed class ProviderUsageHoldJsonTests
         Assert.Equal(source.Id, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, Start.AddMinutes(2))).Hold.SourceGoalId);
     }
 
-    [Fact]
-    public async Task UnreadableUnrelatedArchive_PreservesHistoricalHoldInStatusAndFleet()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnrelatedCompressedArchive_IsSkippedByStatusAndPreservesHistoricalHold(bool corrupt)
     {
         using var fixture = new Fixture();
         var unrelated = fixture.NewGoal();
@@ -99,23 +101,33 @@ public sealed class ProviderUsageHoldJsonTests
         var path = fixture.Workspace.SqliteStatePath;
         var token = TestContext.Current.CancellationToken;
         var writer = new SqliteOrchestratorStateRepository(path);
-        Assert.Equal(1, await writer.ArchiveTerminalGoalSnapshotsAsync(Start.AddSeconds(30), cancellationToken: token));
+        Assert.Equal(1, await writer.ArchiveTerminalGoalSnapshotsAsync(Start.AddSeconds(30), cancellationToken: token,
+            compressSnapshots: true));
         using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
         {
             await connection.OpenAsync(token);
             using var command = connection.CreateCommand();
-            command.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = X'00' WHERE goal_id = $id";
+            command.CommandText = "SELECT typeof(snapshot_json) FROM goal_snapshot_archive WHERE goal_id = $id";
             command.Parameters.AddWithValue("$id", unrelated.Id.Value);
-            Assert.Equal(1, await command.ExecuteNonQueryAsync(token));
+            Assert.Equal("blob", await command.ExecuteScalarAsync(token));
+            if (corrupt)
+            {
+                command.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = X'00' WHERE goal_id = $id";
+                Assert.Equal(1, await command.ExecuteNonQueryAsync(token));
+            }
         }
 
         var reader = SqliteOrchestratorStateRepository.OpenReadOnly(path);
-        await Assert.ThrowsAsync<InvalidDataException>(() => reader.ReadProviderHoldSeedHistoryAsync(token));
+        if (corrupt)
+            await Assert.ThrowsAsync<InvalidDataException>(() => reader.ReadProviderHoldSeedHistoryAsync(token));
         Assert.Contains(await reader.ListModelFitHistoryAsync(token), row =>
             row.GoalId == source.Id.Value && row.OutcomeRule == TaskOutcomeRules.ProviderBudgetExhausted.Token);
-        using var status = JsonDocument.Parse(fixture.Status(json: true));
+        var observations = new List<GoalSnapshotReadObservation>();
+        using var status = JsonDocument.Parse(fixture.Status(json: true, observer: observations.Add));
         var row = Assert.Single(status.RootElement.GetProperty("payload").GetProperty("providerHolds").EnumerateArray());
         Assert.Equal(source.Id.Value, row.GetProperty("sourceGoalId").GetString());
+        Assert.Contains(observations, read => read.Operation == "provider-evidence-decoded" && read.GoalId == source.Id.Value);
+        Assert.DoesNotContain(observations, read => read.GoalId == unrelated.Id.Value);
         Assert.Equal(source.Id, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, Start.AddMinutes(2))).Hold.SourceGoalId);
     }
 
@@ -229,13 +241,13 @@ public sealed class ProviderUsageHoldJsonTests
         internal Task Save() => InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath)
             .SaveAsync(Kernel, Xunit.TestContext.Current.CancellationToken);
         internal OperatorInboxReport Inbox(Goal goal) => OperatorInbox.Build(Kernel, [_agent], WorkerProfileCatalog.Default(), Workspace, goal.Id.Value[..8]);
-        internal string Status(bool json = false)
+        internal string Status(bool json = false, Action<GoalSnapshotReadObservation>? observer = null)
         {
             using var output = new StringWriter();
             using var error = new StringWriter();
             Assert.Equal(0, CliConductorCommand.Run(json ? ["conductor", "status", "--json"] : ["conductor", "status"], Workspace,
                 lockProbe: new ConductorVerbStartTests.FixedProbe(null), bootTime: () => Start.AddDays(-1),
-                mainCommit: () => "fixture", output: output, error: error, time: new FixedTime()));
+                mainCommit: () => "fixture", output: output, error: error, time: new FixedTime(), readObserver: observer));
             Assert.Equal("", error.ToString());
             return output.ToString();
         }

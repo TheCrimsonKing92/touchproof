@@ -460,6 +460,35 @@ public sealed class ProviderHoldSeedWorkBoundTests
             .OrderBy(row => row.Hold.SourceGoalId.Value, StringComparer.Ordinal).Select(row => row.Schedule));
     }
 
+    [Fact]
+    public async Task Seed_AmbiguousCrossGoalReset_StaysAmbiguousWhenOneScopeIsCleared()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        await fixture.PopulateAmbiguousCrossGoalResetAsync();
+        var unrelated = ProviderHoldSeedFixture.MakeUnrelated(4);
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new([unrelated], []));
+        var seeded = Seed(fixture, kernel);
+        var at = ProviderHoldSeedFixture.At;
+        var survivor = new ProviderHoldBinding("Anthropic", null, null);
+        var cleared = new ProviderHoldBinding("Anthropic", "<provider-default>", null);
+        Assert.Equal(survivor.Key, cleared.Key);
+        Assert.Null(seeded.Index.Evaluations[cleared.ScopedKey].Schedule);
+        var expected = Assert.IsType<ProviderBudgetHoldSchedule>(seeded.Index.Evaluations[survivor.ScopedKey].Schedule);
+        Assert.Equal(at.AddMinutes(30), expected.NextProbeAt);
+        Assert.Null(expected.ResetIntentId);
+
+        var snapshot = await fixture.Repository.LoadGoalsAsync(Enumerable.Range(0, 4)
+            .Select(index => new GoalId(ProviderHoldSeedFixture.Id(index))).ToArray(), TestContext.Current.CancellationToken);
+        Assert.Equal(4, snapshot.Goals.Count);
+        var canonical = ProviderUsageHoldView.Read(snapshot.Goals, at);
+        Assert.Equal(2, canonical.Count);
+        Assert.Contains(canonical, row => row.Schedule == expected);
+        Assert.Equal(canonical, ProviderUsageHoldView.Read(kernel.ProviderHoldScope, at));
+
+        Assert.Equal(1, kernel.EvictTerminalGoalAggregates([new GoalId(unrelated.Id)]));
+        Assert.Equal(canonical, ProviderUsageHoldView.Read(kernel.ProviderHoldScope, at));
+    }
+
     private static ProviderHoldHistoryStartupSeed.Result Seed(ProviderHoldSeedFixture fixture, AgentOrchestratorKernel kernel) =>
         Seed(fixture.Repository, kernel);
 
@@ -537,6 +566,24 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         return SaveAsync([first, second with
         {
             Timeline = [.. second.Timeline, new(second.Id, second.Tasks[0].Id, ProgressKind.TaskNote, marker, At.AddMinutes(2))]
+        }]);
+    }
+
+    internal Task PopulateAmbiguousCrossGoalResetAsync()
+    {
+        const string refusal = "ERROR: weekly usage limit reached";
+        const string clearedCredential = "<provider-default>";
+        var survivor = Make(0, At, null, rule: Rules[0], kind: ProviderFailureKind.BudgetExhausted, stderr: refusal);
+        var cleared = Make(1, At.AddMinutes(1), null, rule: Rules[0], kind: ProviderFailureKind.BudgetExhausted,
+            stderr: refusal, apiIdentity: clearedCredential);
+        var recovery = Make(2, At.AddMinutes(2), null, success: true, apiIdentity: clearedCredential);
+        var owner = Make(3, At.AddMinutes(3), "marker-owner", rule: Rules[0], kind: ProviderFailureKind.BudgetExhausted,
+            stderr: refusal);
+        var binding = new ProviderHoldBinding("Anthropic", null, null);
+        var reset = ProviderBudgetHoldSchedules.FormatReset(new(binding.Key, At.AddHours(3), "ambiguous-reset"));
+        return SaveAsync([survivor, cleared, recovery, owner with
+        {
+            Timeline = [.. owner.Timeline, new(owner.Id, owner.Tasks[0].Id, ProgressKind.TaskNote, reset, At.AddMinutes(4))]
         }]);
     }
 

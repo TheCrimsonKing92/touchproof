@@ -178,10 +178,14 @@ public sealed class ProviderHoldHistory
         var dispatches = goal.Tasks.SelectMany(task => task.DispatchHistory).ToArray();
         var markers = goal.Timeline.Select(ProviderBudgetHoldSchedules.ReadMarkerBinding)
             .Where(marker => marker.HasValue).Select(marker => marker.GetValueOrDefault()).ToArray();
+        // Removing a dispatch can make a legacy marker resolve to a different scope with the same text.
+        var affectedTexts = exhaustedBindings.Where(binding => dispatches.Any(dispatch =>
+                ProviderHoldBinding.Matches(dispatch, binding.ScopedKey)))
+            .Select(binding => binding.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var binding in exhaustedBindings)
         {
             var identity = binding.ScopedKey;
-            if (!dispatches.Any(dispatch => ProviderHoldBinding.Matches(dispatch, identity)) &&
+            if (!affectedTexts.Contains(binding.Key) &&
                 !markers.Any(marker => marker.Identity is { } scoped ? scoped == identity :
                     marker.Text.Equals(binding.Key, StringComparison.OrdinalIgnoreCase))) continue;
             if (!answers.TryGetValue(identity, out var answer))
