@@ -150,6 +150,18 @@ public sealed class ProviderHoldSeedWorkBoundTests
         using var fixture = new ProviderHoldSeedFixture();
         const int unrelatedArchives = 128;
         await fixture.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: unrelatedArchives);
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fixture.Database,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString());
+        var token = TestContext.Current.CancellationToken;
+        await connection.OpenAsync(token);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM pragma_table_info('goal_snapshot_archive') WHERE name = 'provider_hold_empty_version'";
+        Assert.Equal(0L, await command.ExecuteScalarAsync(token));
+
         var observations = new List<GoalSnapshotReadObservation>();
         var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database, observations.Add);
         var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
@@ -169,16 +181,6 @@ public sealed class ProviderHoldSeedWorkBoundTests
             .Where(item => item.Operation == "provider-seed-archive-projection")
             .Select(item => item.GoalId).Order(StringComparer.Ordinal));
 
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = fixture.Database,
-            Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false
-        }.ToString());
-        var token = TestContext.Current.CancellationToken;
-        await connection.OpenAsync(token);
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(provider_hold_empty_version) FROM goal_snapshot_archive";
         Assert.Equal(0L, await command.ExecuteScalarAsync(token));
     }
 
