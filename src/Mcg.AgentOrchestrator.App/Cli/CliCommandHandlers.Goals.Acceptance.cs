@@ -177,7 +177,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
         preparedPair = new(testedWorktreeHead, testedMainHead);
         if (CliWorkspaceMerge.ReportRepairHold(context, goal, preparedPair, worktreePath, skipVerify, out var admissionStore)) return false;
-        reuseNormalGate = CliWorkspaceMerge.HasPassedNormalGate(admissionStore, goal, preparedPair);
+        reuseNormalGate = CliWorkspaceMerge.HasPassedNormalGate(root, admissionStore, goal, preparedPair);
         if (!skipVerify && !reuseNormalGate && admissionStore is not null)
         {
             recoveredNormalGate = CliWorkspaceMerge.FindRecoverableNormalGate(root, goal, preparedPair)?.IdempotencyKey;

@@ -279,7 +279,7 @@ internal static class CliWorkspaceMerge
             !store.IsEvidenceCurrent(goal.Id.Value, findings, candidate, main))
             return "baseline repair and original-selection validation are pending for the current revision pair";
 
-        if (requireNormalAcceptance && !HasPassedNormalGate(store, goal, pair))
+        if (requireNormalAcceptance && !HasPassedNormalGate(root, store, goal, pair))
             return "normal acceptance is pending for the current revision pair";
 
         if (worktreePath is not null)
@@ -303,20 +303,32 @@ internal static class CliWorkspaceMerge
         GateReadyCandidateRevisionPair ReadPair() => new(ReadRef(root, candidateRef), ReadRef(root, mainRef));
     }
 
-    internal static bool HasPassedNormalGate(SoloBaselineRepairStore? store, Goal goal, GateReadyCandidateRevisionPair? pair) =>
+    internal static bool HasPassedNormalGate(
+        string root, SoloBaselineRepairStore? store, Goal goal, GateReadyCandidateRevisionPair? pair) =>
         pair is { BranchRevision: { } candidate, MainRevision: { } main } &&
-        store?.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed";
+        store?.ReadCheck(SoloBaselineRepairStore.NormalGateKey(goal.Id.Value, candidate, main))?.Outcome == "passed" &&
+        ReadCurrentNormalGate(root, goal, candidate, main) is not null;
 
     internal static GoalOperationJournalEntry? FindRecoverableNormalGate(
-        string root, Goal goal, GateReadyCandidateRevisionPair pair)
-    {
-        if (pair is not { BranchRevision: { } candidate, MainRevision: { } main }) return null;
-        var journal = GoalOperationJournal.ReadActive(root, goal.Id);
-        var latest = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, candidate, main);
-        return latest is { Operation: "acceptance", Status: GoalOperationStatus.Completed, RequiredChecksValidated: true } &&
-               latest.GoalId == goal.Id && GoalOperationJournalGatePassedOutcome.Matches(latest)
+        string root, Goal goal, GateReadyCandidateRevisionPair pair) =>
+        pair is { BranchRevision: { } candidate, MainRevision: { } main } &&
+        ReadCurrentNormalGate(root, goal, candidate, main) is { Operation: "acceptance" } latest
             ? latest
             : null;
+
+    private static GoalOperationJournalEntry? ReadCurrentNormalGate(string root, Goal goal, string candidate, string main)
+    {
+        // The insert-once acknowledgement can outlive the outcome that authorized it.
+        var journal = GoalOperationJournal.ReadActive(root, goal.Id);
+        var latest = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, candidate, main);
+        if (latest is not { Status: GoalOperationStatus.Completed } || latest.GoalId != goal.Id) return null;
+
+        return latest.Operation switch
+        {
+            "acceptance" when latest.RequiredChecksValidated && GoalOperationJournalGatePassedOutcome.Matches(latest) => latest,
+            "conductor:acceptance" when latest.AcceptanceOutcome == "passed" => latest,
+            _ => null
+        };
     }
 
     private static string? ReadRef(string directory, string reference) =>

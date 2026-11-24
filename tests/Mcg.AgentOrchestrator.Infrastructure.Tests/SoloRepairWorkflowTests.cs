@@ -106,6 +106,8 @@ public sealed class SoloRepairWorkflowTests
         if (pending == "moved candidate")
         {
             testedPair = new(fixture.Candidate, fixture.Main);
+            GoalOperationJournal.AcceptanceGatePassed(fixture.Repository, fixture.Goal, "acceptance", fixture.Candidate,
+                fixture.Main, requiredChecksValidated: true);
             store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main), "prior-attempt");
         }
 
@@ -124,6 +126,47 @@ public sealed class SoloRepairWorkflowTests
         Assert.Contains(expectedReason, repairBlock);
         Assert.Null(publication);
         Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CliFastForward_UsesLatestNormalOutcomeAfterRestart(bool failureMatchesPair)
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var verifier = new ControlledVerifier(fixture.Repository);
+        var (context, store, finding) = PrepareCliRepair(fixture, verifier);
+        RecordPassedValidation(store, finding, fixture.Main);
+        var pair = new GateReadyCandidateRevisionPair(fixture.Candidate, fixture.Main);
+        var key = SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main);
+        GoalOperationJournal.AcceptancePassed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate, fixture.Main);
+        store.AcknowledgeEffect(key, "prior-attempt");
+        GoalOperationJournal.AcceptanceFailed(fixture.Repository, fixture.Goal, "conductor:acceptance", fixture.Candidate,
+            failureMatchesPair ? fixture.Main : fixture.Candidate);
+
+        var repository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var restarted = await repository.LoadAsync();
+        var goal = restarted.GetGoal(fixture.Goal.Id);
+        var resumed = CreateCliContext(restarted, context.Workspace, goal, verifier);
+        var journal = GoalOperationJournal.ReadActive(fixture.Repository, goal.Id);
+        var current = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(journal, fixture.Candidate, fixture.Main);
+        Assert.Equal(failureMatchesPair ? "failed" : "passed", current?.AcceptanceOutcome);
+        Assert.Equal("passed", store.ReadCheck(key)?.Outcome);
+
+        var merge = CliWorkspaceMerge.MergeWithPublication(resumed, goal, out var publication,
+            () => null, out var repairBlock, pair);
+
+        Assert.Equal(!failureMatchesPair, Assert.IsType<GoalWorktreeMergeResult>(merge).FastForwarded);
+        Assert.Equal(failureMatchesPair ? fixture.Main : fixture.Candidate, RunGit(fixture.Repository, "rev-parse", "main"));
+        if (failureMatchesPair)
+        {
+            Assert.Contains("normal acceptance is pending", repairBlock);
+            Assert.Null(publication);
+            Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(resumed, skipVerify: true));
+            Assert.Empty(verifier.NormalRuns);
+            Assert.Equal(fixture.Main, RunGit(fixture.Repository, "rev-parse", "main"));
+        }
     }
 
     [Fact]
@@ -157,6 +200,8 @@ public sealed class SoloRepairWorkflowTests
         using var fixture = new PullRequestLandingTestFixture();
         var (context, store, finding) = PrepareCliRepair(fixture, new ControlledVerifier(fixture.Repository));
         RecordPassedValidation(store, finding, fixture.Main);
+        GoalOperationJournal.AcceptanceGatePassed(fixture.Repository, fixture.Goal, "acceptance", fixture.Candidate,
+            fixture.Main, requiredChecksValidated: true);
         store.AcknowledgeEffect(SoloBaselineRepairStore.NormalGateKey(fixture.Goal.Id.Value, fixture.Candidate, fixture.Main), "prior-attempt");
         var mutationPath = moved == "main" ? fixture.Repository : GoalWorktrees.TryResolve(fixture.Repository, fixture.Goal.Id)!;
         var thread = Environment.CurrentManagedThreadId;
