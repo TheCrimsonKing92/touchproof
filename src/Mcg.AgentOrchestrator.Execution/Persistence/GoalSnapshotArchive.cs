@@ -47,6 +47,8 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
                 candidates.Add((reader.GetString(0), reader.GetInt64(2)));
         }
 
+        if (candidates.Count != 0)
+            await EnsureProviderHoldDiscoveryColumnAsync(connection, cancellationToken);
         var archived = 0;
         long archivedBytes = 0;
         var archivedAt = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
@@ -78,8 +80,8 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             if (compress)
             {
                 copy.CommandText = """
-                    INSERT INTO goal_snapshot_archive (goal_id, snapshot_json, archived_at)
-                    VALUES ($id, $snapshot, $archived_at)
+                    INSERT INTO goal_snapshot_archive (goal_id, snapshot_json, archived_at, provider_hold_empty_version)
+                    VALUES ($id, $snapshot, $archived_at, $providerHoldEmpty)
                     ON CONFLICT(goal_id) DO NOTHING
                     """;
                 copy.Parameters.Add("$snapshot", SqliteType.Blob).Value = GoalSnapshotArchiveCodec.Encode(json);
@@ -87,13 +89,15 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             else
             {
                 copy.CommandText = """
-                INSERT INTO goal_snapshot_archive (goal_id, snapshot_json, archived_at)
-                SELECT id, snapshot_json, $archived_at FROM goals WHERE id = $id
+                INSERT INTO goal_snapshot_archive (goal_id, snapshot_json, archived_at, provider_hold_empty_version)
+                SELECT id, snapshot_json, $archived_at, $providerHoldEmpty FROM goals WHERE id = $id
                 ON CONFLICT(goal_id) DO NOTHING
                 """;
             }
             copy.Parameters.AddWithValue("$id", id);
             copy.Parameters.AddWithValue("$archived_at", archivedAt);
+            copy.Parameters.AddWithValue("$providerHoldEmpty", ProviderHoldSeedDiscovery.HasReplayEvidence(snapshot)
+                ? (object)DBNull.Value : ProviderHoldEmptyVersion);
             if (await copy.ExecuteNonQueryAsync(cancellationToken) == 0)
                 continue;
 
@@ -110,6 +114,52 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             }
         }
         return archived;
+    }
+
+    // A versioned negative projection of the authoritative archived document and its histories.
+    // NULL covers legacy archives and archives that still need provider-hold replay.
+    internal const int ProviderHoldEmptyVersion = 1;
+
+    internal static async Task<bool> HasProviderHoldDiscoveryColumnAsync(SqliteConnection connection, CancellationToken token)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandTimeout = 1;
+        command.CommandText = "SELECT count(*) FROM pragma_table_info('goal_snapshot_archive') WHERE name = 'provider_hold_empty_version'";
+        return (long)(await command.ExecuteScalarAsync(token))! != 0;
+    }
+
+    internal static async Task EnsureProviderHoldDiscoveryColumnAsync(SqliteConnection connection, CancellationToken token)
+    {
+        if (await HasProviderHoldDiscoveryColumnAsync(connection, token)) return;
+        using var command = connection.CreateCommand();
+        command.CommandTimeout = 1;
+        command.CommandText = "ALTER TABLE goal_snapshot_archive ADD COLUMN provider_hold_empty_version INTEGER";
+        await command.ExecuteNonQueryAsync(token);
+    }
+
+    internal static async Task BackfillProviderHoldDiscoveryAsync(SqliteConnection connection,
+        IReadOnlyDictionary<string, string> emptyArchives, CancellationToken token)
+    {
+        if (emptyArchives.Count == 0) return;
+        try
+        {
+            await EnsureProviderHoldDiscoveryColumnAsync(connection, token);
+            using var command = connection.CreateCommand();
+            command.CommandTimeout = 1;
+            command.CommandText = """
+                UPDATE goal_snapshot_archive SET provider_hold_empty_version = $version
+                FROM json_each($archives) archived
+                WHERE goal_id = archived.key AND archived_at = archived.value
+                    AND provider_hold_empty_version IS NOT $version
+                """;
+            command.Parameters.AddWithValue("$version", ProviderHoldEmptyVersion);
+            command.Parameters.AddWithValue("$archives", JsonSerializer.Serialize(emptyArchives));
+            await command.ExecuteNonQueryAsync(token);
+        }
+        catch (SqliteException)
+        {
+            // A legacy archive without a projection remains eligible for discovery.
+        }
     }
 
     public async Task<GoalSnapshot?> HydrateAsync(

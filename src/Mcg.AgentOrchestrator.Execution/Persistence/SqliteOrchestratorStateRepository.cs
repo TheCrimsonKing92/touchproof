@@ -2391,7 +2391,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     {
         await using var connection = OpenConnection();
         var candidates = await ProviderHoldSeedDiscovery.ReadAsync(
-            connection, SerializerOptions, cancellationToken, _readObserver, limitArchiveReads);
+            connection, SerializerOptions, cancellationToken, _readObserver, limitArchiveReads,
+            backfillArchiveDiscovery: !limitArchiveReads && _connectionProfile == StateDbConnectionProfile.ReadWrite);
         var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
         var failureHistory = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals).ToArray();
         var dispatchMatchingVisits = 0;

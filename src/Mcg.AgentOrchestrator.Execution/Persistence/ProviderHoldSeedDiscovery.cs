@@ -17,7 +17,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null,
-        bool limitArchiveReads = false)
+        bool limitArchiveReads = false, bool backfillArchiveDiscovery = false)
     {
         var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, token);
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, token);
@@ -25,27 +25,23 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var discovery = new ProviderHoldSeedDiscovery(hasHistory);
         var replayOptions = ProviderHoldSeedEvidenceReader.ArchiveReplayOptions(options);
         var remaining = new List<string>();
+        var remainingTimelines = new List<string>();
+        var emptyArchives = new Dictionary<string, string>(StringComparer.Ordinal);
         using var command = connection.CreateCommand();
         var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
-        if (hasArchive && limitArchiveReads)
-        {
-            // An unindexed legacy archive can own a reset for another goal. Inline
-            // timelines may be the only record when there are no sidecar rows.
-            var legacyArchive = hasTimeline
-                ? "NOT EXISTS (SELECT 1 FROM goal_timeline t WHERE t.goal_id = g.id)"
-                : "1";
-            archiveJoin += $"""
-
-                AND (g.id IN (SELECT goal_id FROM model_fit_history
-                    WHERE outcome_rule IN (SELECT value FROM json_each($holdRules))) OR {legacyArchive})
-                """;
-            command.Parameters.AddWithValue("$holdRules", JsonSerializer.Serialize(ProviderHoldHistory.HoldOutcomeRules));
-        }
+        var hasArchiveDiscovery = hasArchive && await GoalSnapshotArchive.HasProviderHoldDiscoveryColumnAsync(connection, token);
+        var archiveVersion = hasArchiveDiscovery
+            ? "CASE WHEN json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.provider_hold_empty_version END"
+            : "NULL";
+        var archivedAt = hasArchive ? "a.archived_at" : "NULL";
         var document = hasArchive
             ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
             : "g.snapshot_json";
+        // Sidecar row presence cannot establish authority over an archived inline timeline.
+        // Only a negative projection from the archive's authoritative evidence can skip its blob.
         var candidates = limitArchiveReads ? $"""
-            WHERE CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
+            WHERE CASE WHEN empty_version = {GoalSnapshotArchive.ProviderHoldEmptyVersion} THEN 0
+                WHEN typeof(payload) = 'blob' THEN 1 ELSE (
                 {SidecarCandidatesSql(hasTimeline, hasHistory)}
                 EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
                     WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
@@ -57,12 +53,13 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         // Project text in SQLite so large unrelated graphs never cross the managed
         // boundary. Status also checks archives that may carry inline timelines.
         command.CommandText = $"""
-            WITH documents(id, payload) AS NOT MATERIALIZED (
-                SELECT g.id, {document} FROM goals g
+            WITH documents(id, payload, archived_at, empty_version) AS NOT MATERIALIZED (
+                SELECT g.id, {document}, {archivedAt}, {archiveVersion} FROM goals g
                 {archiveJoin}
             )
             SELECT id, CASE WHEN typeof(payload) = 'text' THEN json_object(
                 'Id', json_extract(payload, '$.Id'),
+                'IsMetadataOnly', json(CASE WHEN json_extract(payload, '$.IsMetadataOnly') = 1 THEN 'true' ELSE 'false' END),
                 'Timeline', CASE WHEN json_extract(payload, '$.TimelineInTable') IS NULL THEN (
                     SELECT json_group_array(json_object('Message', json_extract(e.value, '$.Message')))
                     FROM json_each(payload, '$.Timeline') e
@@ -77,7 +74,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     'DispatchHistory', (SELECT json_group_array(json({DispatchSql("d.value")}))
                         FROM json_each(t.value, '$.DispatchHistory') d)))
                     FROM json_each(payload, '$.Tasks') t)
-                ) ELSE payload END
+                ) ELSE payload END, archived_at, empty_version
             FROM documents
             {candidates}
             """;
@@ -94,13 +91,20 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     _ => 0
                 }));
                 if (payload is byte[] && await discovery.TryProjectArchiveAsync(connection, id, payload,
-                    replayOptions, token, observe)) continue;
+                    replayOptions, token, observe) is { } hasReplayEvidence)
+                {
+                    if (backfillArchiveDiscovery && !hasReplayEvidence && !reader.IsDBNull(2) &&
+                        (reader.IsDBNull(3) || reader.GetInt64(3) != GoalSnapshotArchive.ProviderHoldEmptyVersion))
+                        emptyArchives.Add(id, reader.GetString(2));
+                    continue;
+                }
                 remaining.Add(id);
                 using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
                 var goal = await JsonSerializer.DeserializeAsync<DiscoveryGoal>(stream, options, token);
                 if (goal?.Id != id) throw new InvalidDataException("Provider seed discovery goal identity mismatch.");
-                if (goal.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null &&
-                    goal.Timeline?.Any(evt => evt.Message?.StartsWith("PROVIDER_BUDGET_", StringComparison.Ordinal) == true) == true)
+                if (goal.IsMetadataOnly is true || goal.TimelineInTable.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+                    remainingTimelines.Add(id);
+                else if (goal.Timeline?.Any(evt => IsMarker(evt.Message)) == true)
                     discovery.MarkerGoals.Add(new(id));
                 foreach (var task in goal.Tasks ?? [])
                 {
@@ -116,13 +120,14 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         }
 
         command.Parameters.AddWithValue("$remaining", JsonSerializer.Serialize(remaining));
-        if (hasTimeline && remaining.Count != 0)
+        if (hasTimeline && remainingTimelines.Count != 0)
         {
             command.CommandText = """
-                SELECT DISTINCT t.goal_id FROM json_each($remaining) candidate CROSS JOIN goal_timeline t
+                SELECT DISTINCT t.goal_id FROM json_each($remainingTimelines) candidate CROSS JOIN goal_timeline t
                 WHERE t.goal_id = candidate.value AND instr(t.entry_json, 'PROVIDER_BUDGET_') > 0
                     AND json_extract(t.entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*'
                 """;
+            command.Parameters.AddWithValue("$remainingTimelines", JsonSerializer.Serialize(remainingTimelines));
             using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token)) discovery.MarkerGoals.Add(new(reader.GetString(0)));
         }
@@ -138,6 +143,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                 discovery.ObserveVerification((reader.GetString(0), reader.GetString(1)),
                     JsonSerializer.Deserialize<TaskVerificationSnapshot>(reader.GetString(2), options));
         }
+        await GoalSnapshotArchive.BackfillProviderHoldDiscoveryAsync(connection, emptyArchives, token);
         return discovery;
     }
 
@@ -151,7 +157,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                 AND h.kind = 'verification' AND {VerificationPredicate("h.entry_json")}) OR
             """ : "");
 
-    private async Task<bool> TryProjectArchiveAsync(SqliteConnection connection, string id, object payload,
+    private async Task<bool?> TryProjectArchiveAsync(SqliteConnection connection, string id, object payload,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe)
     {
         ProviderUsageGoalEvidence evidence;
@@ -164,13 +170,14 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         {
             // Discovery requires less than replay. A selected goal with unusable evidence
             // will still use the normal sparse and canonical fallback paths.
-            return false;
+            return null;
         }
+        var hasReplayEvidence = MarkerGoals.Contains(new(id));
         foreach (var task in evidence.Tasks)
         {
             var key = (id, task.TaskId);
             foreach (var verification in task.VerificationHistory.Append(task.LastVerification))
-                ObserveVerification(key, verification);
+                hasReplayEvidence |= ObserveVerification(key, verification);
             var providers = task.DispatchHistory.Append(task.LastDispatch)
                 .Select(dispatch => dispatch?.ProviderName ?? dispatch?.WorkerName).OfType<string>()
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -178,7 +185,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         }
         ArchiveEvidence.Add(new(id), evidence);
         observe?.Invoke(new("provider-seed-archive-projection", id));
-        return true;
+        return hasReplayEvidence;
     }
 
     internal async Task<HashSet<GoalId>> FindRecoveryCandidatesAsync(SqliteConnection connection,
@@ -220,15 +227,29 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             selection.LowerBounds.TryGetValue(provider, out var first) && at >= first;
     }
 
-    private void ObserveVerification((string Goal, string Task) key, TaskVerificationSnapshot? verification)
+    private bool ObserveVerification((string Goal, string Task) key, TaskVerificationSnapshot? verification)
     {
-        if (verification is { ExitCode: 0, CompletionVerdictVerifiedSuccess: true } &&
-            (!_successes.TryGetValue(key, out var previous) || verification.CompletedAt > previous))
-            _successes[key] = verification.CompletedAt;
-        if (verification is { ExitCode: not 0 } && !FailureGoals.Contains(new(key.Goal)) &&
-            ProviderHoldEvidence.Read(TaskSpec.RestoreVerification(verification)).Confirmed)
-            FailureGoals.Add(new(key.Goal));
+        if (verification is { ExitCode: 0, CompletionVerdictVerifiedSuccess: true })
+        {
+            if (!_successes.TryGetValue(key, out var previous) || verification.CompletedAt > previous)
+                _successes[key] = verification.CompletedAt;
+            return true;
+        }
+        if (verification is not { ExitCode: not 0 }) return false;
+        var goal = new GoalId(key.Goal);
+        if (FailureGoals.Contains(goal)) return true;
+        return IsRefusal(verification) && FailureGoals.Add(goal);
     }
+
+    internal static bool HasReplayEvidence(GoalSnapshot goal) =>
+        goal.Timeline.Any(evt => IsMarker(evt.Message)) ||
+        goal.Tasks.Any(task => (task.VerificationHistory ?? []).Append(task.LastVerification)
+            .Any(verification => verification is { ExitCode: 0, CompletionVerdictVerifiedSuccess: true } || IsRefusal(verification)));
+
+    private static bool IsRefusal(TaskVerificationSnapshot? verification) =>
+        verification is { ExitCode: not 0 } && ProviderHoldEvidence.Read(TaskSpec.RestoreVerification(verification)).Confirmed;
+
+    private static bool IsMarker(string? message) => message?.StartsWith("PROVIDER_BUDGET_", StringComparison.Ordinal) == true;
 
     private static string VerificationPredicate(string value) =>
         $"(json_extract({value}, '$.ExitCode') <> 0 OR json_extract({value}, '$.CompletionVerdictVerifiedSuccess') = 1)";
@@ -249,7 +270,8 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             json_extract({value}, '$.WorkerName')))
         """;
 
-    private sealed record DiscoveryGoal(string Id, DiscoveryTask[]? Tasks, Marker[]? Timeline, JsonElement TimelineInTable);
+    private sealed record DiscoveryGoal(string Id, DiscoveryTask[]? Tasks, Marker[]? Timeline,
+        JsonElement TimelineInTable, bool IsMetadataOnly);
     private sealed record DiscoveryTask(string Id, TaskVerificationSnapshot? LastVerification,
         TaskVerificationSnapshot?[]? VerificationHistory, DispatchProvider? LastDispatch, DispatchProvider?[]? DispatchHistory);
     private sealed record DispatchProvider(string? ProviderName, string? WorkerName);

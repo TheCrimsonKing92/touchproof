@@ -105,13 +105,20 @@ public sealed class ProviderHoldSeedWorkBoundTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Seed_CrossGoalReset_KeepsMarkerWithoutPromotingItsGoalToSource(bool? legacyArchive)
+    [InlineData(null, false)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Seed_CrossGoalReset_KeepsMarkerWithoutPromotingItsGoalToSource(bool? legacyArchive, bool staleTimeline)
     {
         using var fixture = new ProviderHoldSeedFixture();
-        await fixture.PopulateResetCaseAsync(legacyArchive);
+        await fixture.PopulateResetCaseAsync(legacyArchive, staleTimeline);
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
+        var now = ProviderHoldSeedFixture.At.AddDays(2);
+        var status = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
+        var fleet = Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now));
         var unrelated = ProviderHoldSeedFixture.MakeUnrelated(806);
         var kernel = AgentOrchestratorKernel.FromSnapshot(new([unrelated], []));
         var seeded = Seed(fixture, kernel);
@@ -125,11 +132,6 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(new[] { 799, 805 }.Select(ProviderHoldSeedFixture.Id),
             kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id.Value));
 
-        var now = schedule.NextProbeAt;
-        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database);
-        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
-        var status = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
-        var fleet = Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now));
         foreach (var row in new[] { status, fleet })
         {
             Assert.Equal(ProviderHoldSeedFixture.Id(799), row.Hold.SourceGoalId.Value);
@@ -140,6 +142,25 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(1, kernel.EvictTerminalGoalAggregates([new GoalId(unrelated.Id)]));
         Assert.Equal(schedule, Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, now)).Schedule);
         Assert.Contains(kernel.ProviderHoldHistory.Retained, goal => goal.Id.Value == ProviderHoldSeedFixture.Id(805));
+    }
+
+    [Fact]
+    public async Task Status_StartupBackfillsUnrelatedCompressedLegacyArchives()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        const int unrelatedArchives = 128;
+        await fixture.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: unrelatedArchives);
+        var unrelatedIds = Enumerable.Range(1000, unrelatedArchives).Select(ProviderHoldSeedFixture.Id).ToHashSet();
+        var seeded = Seed(fixture, new());
+        Assert.Equal("fixture-reset", Assert.Single(seeded.Index.Evaluations).Value.Schedule?.ResetIntentId);
+
+        var observations = new List<GoalSnapshotReadObservation>();
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database, observations.Add);
+        var row = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], ProviderHoldSeedFixture.At.AddDays(2)));
+        Assert.Equal("fixture-reset", row.Schedule?.ResetIntentId);
+        Assert.Contains(observations, item => item.Operation == "provider-seed-archive-projection" &&
+            item.GoalId == ProviderHoldSeedFixture.Id(805));
+        Assert.DoesNotContain(observations, item => item.GoalId is { } id && unrelatedIds.Contains(id));
     }
 
     [Fact]
@@ -599,33 +620,48 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         }]);
     }
 
-    internal async Task PopulateResetCaseAsync(bool? legacyArchive)
+    internal async Task PopulateResetCaseAsync(bool? legacyArchive, bool staleTimeline = false, int unrelatedArchives = 0)
     {
         var goal = MakeUnrelated(805);
         var marker = ProviderBudgetHoldSchedules.FormatReset(new(
             "anthropic::c:/profiles/held", At.AddDays(2), "fixture-reset"));
         goal = goal with { Timeline = [new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, marker, At.AddDays(1))] };
-        await SaveAsync([MakeHold(799), goal]);
+        var archives = Enumerable.Range(1000, unrelatedArchives).Select(MakeUnrelated).Prepend(goal).ToArray();
+        await SaveAsync([MakeHold(799), .. archives]);
         if (legacyArchive is not { } compressed) return;
 
-        // Replace the marker owner's sidecar timeline with a legacy inline archive.
+        // Write pre-projection archives with an authoritative inline timeline and no sidecars.
         var options = new JsonSerializerOptions();
         options.Converters.Add(new JsonStringEnumConverter());
-        var json = JsonSerializer.Serialize(goal, options);
         using var connection = new SqliteConnection($"Data Source={Database};Pooling=False");
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO goal_snapshot_archive(goal_id, snapshot_json, archived_at) VALUES ($id, $archive, $at);
             DELETE FROM goal_timeline WHERE goal_id = $id;
+            DELETE FROM goal_task_history WHERE goal_id = $id;
             UPDATE goals SET snapshot_json = $stub WHERE id = $id;
             """;
-        command.Parameters.AddWithValue("$id", goal.Id);
-        command.Parameters.AddWithValue("$archive", compressed ? GoalSnapshotArchiveCodec.Encode(json) : (object)json);
-        command.Parameters.AddWithValue("$stub",
-            JsonSerializer.Serialize(goal with { Tasks = [], Timeline = [], IsMetadataOnly = true }, options));
+        var id = command.Parameters.Add("$id", SqliteType.Text);
+        var archive = command.Parameters.Add("$archive", compressed ? SqliteType.Blob : SqliteType.Text);
+        var stub = command.Parameters.Add("$stub", SqliteType.Text);
         command.Parameters.AddWithValue("$at", At.AddDays(2).ToString("O"));
-        Assert.Equal(3, command.ExecuteNonQuery());
+        foreach (var archived in archives)
+        {
+            id.Value = archived.Id;
+            var archivedJson = JsonSerializer.Serialize(archived, options);
+            archive.Value = compressed ? GoalSnapshotArchiveCodec.Encode(archivedJson) : (object)archivedJson;
+            stub.Value = JsonSerializer.Serialize(archived with { Tasks = [], Timeline = [], IsMetadataOnly = true }, options);
+            Assert.True(command.ExecuteNonQuery() >= 2);
+        }
+        if (!staleTimeline) return;
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("$id", goal.Id);
+        command.CommandText = """
+            INSERT INTO goal_timeline(goal_id, sequence, entry_json)
+            VALUES ($id, 0, json_object('Message', 'Ordinary stale sidecar row'))
+            """;
+        Assert.Equal(1, command.ExecuteNonQuery());
     }
 
     internal Task PopulateProbeCaseAsync()
