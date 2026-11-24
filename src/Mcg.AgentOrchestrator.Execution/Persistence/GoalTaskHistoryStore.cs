@@ -37,7 +37,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// both prefix lookups, LoadGoalSnapshotAndVersionAsync (snapshot transaction/merge save), and
 /// LoadGoalStateAndVersionAsync (state transactions). Selected/archive loads resolve original markers.
 /// Bypass readers and handling (all source entries under Persistence):
-/// - AttentionReads and ProviderHoldSeedEvidenceReader: ReadAsync supplies marked latest elements,
+/// - AttentionReads and ProviderHoldSeedEvidenceReader: the sparse readers supply marked latest elements,
 ///   decoded with each reader's existing sparse shape; cached provider evidence stores resolved values.
 /// - ProviderConnections: ReadMetadataAsync shares marker validation and latest authority while
 ///   projecting only attribution/status fields, excluding invocation output and command text.
@@ -334,6 +334,21 @@ internal sealed partial class GoalTaskHistoryStore
         return new(
             SelectHistory(rows?.GetValueOrDefault((taskId, "verification")), Elements(verification)),
             SelectHistory(rows?.GetValueOrDefault((taskId, "dispatch")), Elements(dispatch)));
+    }
+
+    internal async Task<TaskHistory[]> ReadProjectionAsync(SqliteConnection? connection, string goalId,
+        IReadOnlyList<(string Id, JsonElement Verification, JsonElement Dispatch, JsonElement Marker)> tasks,
+        CancellationToken token)
+    {
+        var markers = tasks.Select(task => ReadMarker(task.Marker, goalId, task.Id)).ToArray();
+        var required = Array.FindIndex(markers, marker => marker is not null);
+        if (required >= 0 && connection is null)
+            throw HistoryError(goalId, tasks[required].Id, "both", "no history connection");
+        var rows = required < 0 ? null : await ReadRowsAsync(connection!, goalId, null, token, tasks[required].Id);
+        return tasks.Select((task, index) => markers[index] is { } marker
+            ? StrictHistory(rows!, goalId, task.Id, marker)
+            // An unmarked sidecar can only repeat the authoritative inline entries.
+            : new TaskHistory(new(Elements(task.Verification), false), new(Elements(task.Dispatch), false))).ToArray();
     }
 
     private sealed record StoredEntry(long Sequence, string Json);

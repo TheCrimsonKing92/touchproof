@@ -350,6 +350,57 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         Assert.Single(Assert.Single(warm!).Timeline);
     }
 
+    [Fact]
+    public async Task Seed_ColdDiscoveryAndProjection_SkipUnrelatedPayloadsAndReplayMixedHistory()
+    {
+        using var fixture = new Fixture();
+        var source = Snapshot(0, false);
+        var irrelevant = new string('x', 100_000);
+        var witness = Snapshot(1, true) with { Objective = irrelevant };
+        var taskId = witness.Tasks[0].Id;
+        var reset = ProviderBudgetHoldSchedules.FormatReset(new("xai::<provider-default>", At, "intent"));
+        source = source with { Timeline = [new(source.Id, null, ProgressKind.GoalPolicyDecision, irrelevant, At),
+            new(source.Id, null, ProgressKind.TaskNote, reset, At, OperatorIntentCreatedAt: At)] };
+        await fixture.Insert(source, witness);
+        fixture.Execute($$"""
+            INSERT INTO goal_timeline (goal_id, sequence, entry_json)
+            SELECT goals.id, e.key, e.value FROM goals JOIN json_each(snapshot_json, '$.Timeline') e WHERE goals.id = '{{source.Id}}';
+            UPDATE goals SET snapshot_json = json_remove(json_set(snapshot_json, '$.TimelineInTable', 2), '$.Timeline')
+            WHERE id = '{{source.Id}}';
+            INSERT INTO goal_task_history (goal_id, task_id, kind, sequence, entry_json)
+            SELECT id, '{{taskId}}', 'verification', 0, json_extract(snapshot_json, '$.Tasks[0].LastVerification')
+            FROM goals WHERE id = '{{witness.Id}}';
+            UPDATE goals SET snapshot_json = json_remove(json_set(snapshot_json, '$.Tasks[0].HistoryInTable',
+                json('{"Verification":1,"Dispatch":null,"LatestVerificationInTable":true}')),
+                '$.Tasks[0].LastVerification', '$.Tasks[0].VerificationHistory')
+            WHERE id = '{{witness.Id}}';
+            """);
+        var observations = new List<GoalSnapshotReadObservation>();
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Path, observations.Add);
+        var token = TestContext.Current.CancellationToken;
+        var history = await repository.ReadProviderHoldSeedHistoryAsync(token);
+        Assert.Equal(source.Id, Assert.Single(history.Attempts).GoalId);
+        Assert.Equal(witness.Id, Assert.Single(history.Recoveries).GoalId);
+        Assert.Equal(2, observations.Count(row => row.Operation == "provider-seed-discovery"));
+        Assert.All(observations.Where(row => row.Operation == "provider-seed-discovery"),
+            row => Assert.InRange(row.MaterializedCharacters, 1, irrelevant.Length - 1));
+        var payload = Assert.Single(observations.Where(row => row.Operation == "provider-seed-timeline-entry"));
+        Assert.Equal(source.Id, payload.GoalId);
+        Assert.InRange(payload.MaterializedCharacters, 1, irrelevant.Length - 1);
+        var projected = Assert.Single(history.Evidence, row => row.GoalId == source.Id);
+        Assert.Equal(reset, Assert.Single(projected.Timeline).Message);
+        var canonical = await repository.LoadGoalsAsync([new(source.Id), new(witness.Id)], token);
+        var kernel = new AgentOrchestratorKernel();
+        Assert.NotNull(ProviderHoldHistoryStartupSeed.Apply(kernel, repository, _ => { }));
+        Assert.Equal(ProviderUsageHoldView.Read(canonical.Goals, At.AddHours(1)).ToArray(),
+            ProviderUsageHoldView.Read(kernel.ProviderHoldScope, At.AddHours(1)).ToArray());
+
+        fixture.Execute($"DELETE FROM goal_timeline WHERE goal_id = '{source.Id}' AND sequence = 0");
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            repository.ReadProviderHoldSeedEvidenceAsync([new(source.Id)], token));
+        Assert.Contains("sequence gap", failure.Message, StringComparison.Ordinal);
+    }
+
     private static readonly DateTimeOffset At = DateTimeOffset.Parse("2026-10-17T11:07:00Z");
     private static readonly JsonSerializerOptions Options = new() { Converters = { new JsonStringEnumConverter() } };
 

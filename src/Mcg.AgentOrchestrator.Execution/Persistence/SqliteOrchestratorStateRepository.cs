@@ -2384,8 +2384,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         CancellationToken cancellationToken = default)
     {
         await using var connection = OpenConnection();
-        var candidates = await ProviderHoldSeedEvidenceReader.FindCandidatesAsync(
-            connection, SerializerOptions, cancellationToken);
+        var candidates = await ProviderHoldSeedDiscovery.ReadAsync(
+            connection, SerializerOptions, cancellationToken, _readObserver);
         var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
         var failureHistory = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals).ToArray();
         var dispatchMatchingVisits = 0;
@@ -2395,8 +2395,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
             cancellationToken, attempts);
         var selection = ProviderHoldHistory.SelectSeedEvidence(rows, attempts, new HashSet<string>(StringComparer.Ordinal));
-        var recoveryIds = await ProviderHoldSeedEvidenceReader.FindRecoveryCandidatesAsync(
-            connection, candidates, selection, cancellationToken);
+        var recoveryIds = await candidates.FindRecoveryCandidatesAsync(connection, selection, cancellationToken);
         recoveryIds.ExceptWith(candidates.FailureGoals);
         var (recoveryEvidence, recoveryGoals) = await ReadAttemptsAsync(recoveryIds);
         // An orphan refusal may have selected a goal that supplies an unindexed recovery.
