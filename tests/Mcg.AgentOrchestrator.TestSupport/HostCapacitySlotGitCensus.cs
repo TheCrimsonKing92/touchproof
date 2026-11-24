@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Tests")]
@@ -17,6 +19,8 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
     private readonly Dictionary<string, List<UnslottedWatch>> unslottedWatches = new(StringComparer.Ordinal);
     [ThreadStatic] private static long stackWalks;
     private static readonly ConcurrentDictionary<MethodBase, CallerFrame> callerFrames = new();
+    private static readonly string? fixtureProbeTrace =
+        Environment.GetEnvironmentVariable("MCG_TEST_INPUT_FIXTURE_GIT_PROBE_TRACE");
 
     private readonly record struct CallerFrame(string? Caller, bool IsLaunchBoundary = false);
 
@@ -33,7 +37,10 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
     public static HostCapacitySlotGitCensus Shared { get; } = new(HostCapacitySlotTimingWriter.CurrentTestName);
 
     public sealed record GitLaunchDelta(int Launches, IReadOnlyDictionary<string, int> Subcommands,
-        IReadOnlyDictionary<string, int>? Callers = null, GitTimingDelta? Timing = null);
+        IReadOnlyDictionary<string, int>? Callers = null, GitTimingDelta? Timing = null)
+    {
+        internal int? FixtureProbeLaunches { get; init; }
+    }
 
     public sealed record GitTimingDelta(int Processes, double StartMs, double WallMs, double? CpuMs,
         int CpuUnavailable, IReadOnlyDictionary<string, double> WallMsBySubcommand);
@@ -118,10 +125,56 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         catch (Exception error) { Diagnose(error); return false; }
     }
 
-    public static void RecordProbeLaunch(string subcommand)
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void RecordProbeLaunch(string subcommand, int? processId, DateTimeOffset? startedAt,
+        IReadOnlyList<string> arguments)
     {
-        try { Volatile.Read(ref GitCli.LaunchObserver)?.Invoke(subcommand); }
+        try
+        {
+            Volatile.Read(ref GitCli.LaunchObserver)?.Invoke(subcommand);
+            if (!string.IsNullOrEmpty(fixtureProbeTrace))
+            {
+                var testName = HostCapacitySlotTimingWriter.CurrentTestName();
+                lock (Shared.sync)
+                {
+                    if (Shared.openWindows.TryGetValue(testName, out var windows))
+                        foreach (var window in windows)
+                            window.FixtureProbeLaunches++;
+                }
+                var row = new
+                {
+                    test_name = testName,
+                    process_id = Environment.ProcessId,
+                    child_process_id = processId,
+                    child_start_filetime = startedAt?.ToFileTime(),
+                    caller = ResolveCaller(new StackTrace(fNeedFileInfo: false)),
+                    subcommand,
+                    arguments,
+                };
+                SharedJsonlFile.AppendLine(fixtureProbeTrace, JsonSerializer.Serialize(row));
+            }
+        }
         catch (Exception error) { Diagnose(error); }
+    }
+
+    public static IDisposable? ObserveUnslottedTest()
+    {
+        if (string.IsNullOrEmpty(fixtureProbeTrace)) return null;
+
+        var destination = Environment.GetEnvironmentVariable(HostCapacitySlotTimingWriter.VariableName);
+        if (string.IsNullOrEmpty(destination)) return null;
+
+        var testName = HostCapacitySlotTimingWriter.CurrentTestName();
+        EnsureInstalled(destination);
+        return Shared.Open(testName) is { } window
+            ? new UnslottedTestWindow(window, destination, testName)
+            : null;
+    }
+
+    private sealed class UnslottedTestWindow(Window window, string destination, string testName) : IDisposable
+    {
+        public void Dispose() =>
+            HostCapacitySlotTimingWriter.TryAppend(destination, testName, 0, 0, 0, window.Close(), unslotted: true);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -248,6 +301,7 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         private double? cpuMs;
         private bool closed;
         private GitLaunchDelta? result;
+        internal int FixtureProbeLaunches { get; set; }
 
         internal void RecordTiming(GitCli.GitProcessTiming timing)
         {
@@ -309,9 +363,13 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
                             var difference = count - initialCallers.GetValueOrDefault(source);
                             if (difference != 0) callerDelta[source] = difference;
                         }
-                    return result = new(total, delta, callerDelta, processes == 0 ? null :
-                        new(processes, startMs, wallMs, cpuMs, cpuUnavailable,
-                            new Dictionary<string, double>(wallBySubcommand, StringComparer.Ordinal)));
+                    var timing = processes == 0 ? null : new GitTimingDelta(
+                        processes, startMs, wallMs, cpuMs, cpuUnavailable,
+                        new Dictionary<string, double>(wallBySubcommand, StringComparer.Ordinal));
+                    return result = new(total, delta, callerDelta, timing)
+                    {
+                        FixtureProbeLaunches = string.IsNullOrEmpty(fixtureProbeTrace) ? null : FixtureProbeLaunches
+                    };
                 }
             }
             catch (Exception error) { Diagnose(error); return null; }
