@@ -61,6 +61,71 @@ public sealed class PreTesterResolverObservationTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void FirstAdoptionWithoutGrantReportsRequestUntilVerifiedChildLaunch()
+    {
+        using var fixture = new PreTesterReverseDependencySelectionFixture();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        using var staged = new StagedProducerRevision();
+        var supervisor = AcquireSupervisor(workspace);
+        var windowId = Guid.NewGuid();
+        var policyPath = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+        var corpus = CorpusPath(Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"), windowId);
+        int? ReadParent(int _) => supervisor.Self.ProcessId;
+
+        // The legacy supervisor launches the adopted build without a grant. The child
+        // retains this startup result when the supervisory lease moves to the new build.
+        var inheritedArgs = ChildArguments(workspace, out _);
+        var inherited = CliConductLoopStartup.CreateResolverObservation(inheritedArgs, false, workspace, ReadParent);
+        Assert.Null(inherited);
+        var inheritedLog = RunWithPolicyReload(inherited, "inherited");
+        Assert.Contains($"pid={Environment.ProcessId} resolverObservationLaunch=unverified", inheritedLog, StringComparison.Ordinal);
+        Assert.Contains("POLICY_RELOAD ", inheritedLog, StringComparison.Ordinal);
+        var warning = $"window={windowId:D} message=pretester-resolver-launch-unverified";
+        Assert.Contains(warning, inheritedLog, StringComparison.Ordinal);
+        Assert.False(File.Exists(corpus));
+
+        var successorArgs = ChildArguments(workspace, out var successorArtifact);
+        using var grant = ConductorResolverObservationLaunch.Authorize(successorArtifact, supervisor,
+            typeof(PreTesterReverseDependencyObservation).Assembly.Location, checkpoint: null);
+        var successor = Assert.IsType<PreTesterResolverObservationWindow>(
+            CliConductLoopStartup.CreateResolverObservation(successorArgs, false, workspace, ReadParent));
+        var successorLog = RunWithPolicyReload(successor, "successor");
+        Assert.Contains($"pid={Environment.ProcessId} resolverObservationLaunch=verified", successorLog, StringComparison.Ordinal);
+        Assert.Contains("POLICY_RELOAD ", successorLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(warning, successorLog, StringComparison.Ordinal);
+        var header = JsonSerializer.Deserialize<WindowHeader>(File.ReadLines(corpus).First())!;
+        Assert.Equal(windowId, header.WindowId);
+        Assert.Equal(supervisor.Self, header.Producer.Supervisor);
+
+        string RunWithPolicyReload(PreTesterResolverObservationWindow? observation, string child)
+        {
+            var policy = ConductorAutonomyPolicy.Conservative;
+            File.WriteAllText(policyPath, policy.ToJson());
+            var initial = CliCommandHandlers.ResolveConductorPolicy(null, workspace.OrchestratorDirectory);
+            var driver = ConductorDriverTests.MakeDriver(executionDirectory: fixture.Root);
+            driver.PreTesterResolverObservation = observation;
+            var logPath = Path.Combine(fixture.Root, child, ConductEventLogWriter.CurrentFileName);
+            var sleeps = 0;
+            var result = new ConductorBatchLoop(utcNow: () => Start,
+                conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
+                new AgentOrchestratorKernel(), driver, initial.Policy, workspace.ConductorStopFilePath,
+                watchInterval: TimeSpan.FromMinutes(1), keepAliveWhenIdle: true, sleepFunc: _ =>
+                {
+                    if (sleeps++ != 0) return true;
+                    File.WriteAllText(policyPath, (policy with { PreTesterResolverObservationWindowId = windowId }).ToJson());
+                    return false;
+                },
+                policySource: initial.Source,
+                reloadPolicy: () => CliCommandHandlers.ResolveConductorPolicy(null, workspace.OrchestratorDirectory));
+
+            Assert.Equal("stop-while-idle", result.StopReason);
+            Assert.Equal(2, sleeps);
+            return File.ReadAllText(logPath);
+        }
+    }
+
+    [Fact]
     public void ChildArgumentsAndMatchingCorpusCannotAuthorizeContinuation()
     {
         using var fixture = new PreTesterReverseDependencySelectionFixture();

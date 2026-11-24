@@ -442,7 +442,14 @@ internal sealed partial class ConductorBatchLoop
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
             $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
             $"acceptanceWidth={policy.AcceptanceWidth} adoptedBuildPushEnabled={policy.AdoptedBuildPushEnabled} buildRootReapIntervalSeconds={policy.BuildRootReapIntervalSeconds} {policy.Features.ToLogFields()} gitPath={SanitizeReason(ConductorGitResolution.Current.LogValue)}" +
-            (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
+            (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}") +
+            $" pid={Environment.ProcessId} resolverObservationLaunch={(resolverObservation is null ? "unverified" : "verified")}");
+        void ReportUnverifiedResolverObservationRequest(Guid? request, int tick, Guid? previousRequest = null)
+        {
+            if (resolverObservation is null && request is { } windowId && request != previousRequest)
+                EmitProgress($"POLICY_WARNING tick={tick} window={windowId:D} message=pretester-resolver-launch-unverified");
+        }
+        ReportUnverifiedResolverObservationRequest(policy.PreTesterResolverObservationWindowId, tick: 0);
         SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)
         {
             if (pendingSelfRelaunch?.HomeBuildTarget is { } homeTarget)
@@ -789,6 +796,8 @@ internal sealed partial class ConductorBatchLoop
                         }
 
                         EmitProgress(reloaded.FormatReload(nextTick, policy));
+                        ReportUnverifiedResolverObservationRequest(reloaded.Policy.PreTesterResolverObservationWindowId, nextTick,
+                            policy.PreTesterResolverObservationWindowId);
                         policy = reloaded.Policy;
                         policySource = reloaded.Source;
                     }
