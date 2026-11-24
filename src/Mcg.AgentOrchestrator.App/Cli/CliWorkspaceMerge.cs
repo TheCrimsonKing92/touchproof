@@ -221,6 +221,14 @@ internal static class CliWorkspaceMerge
             () => SoloAcceptanceFailureHandler.ReadContext(goal, root, ReadCurrent()), ReadCurrent, completion);
     }
 
+    internal static void RecordValidatedGatePass(
+        CliExecutionContext context, Goal goal, string? testedWorktreeHead, string? testedMainHead,
+        string detail, DateTimeOffset? acceptanceAttemptStartedAt, AcceptanceVerificationResult verification) =>
+        GoalOperationJournal.AcceptanceGatePassed(
+            context.Workspace.ExecutionDirectory, goal, "acceptance", testedWorktreeHead, testedMainHead,
+            detail, acceptanceAttemptStartedAt, GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
+            requiredChecksValidated: true);
+
     internal static void RetainVerificationFailure(
         CliExecutionContext context, Goal goal, IReadOnlyList<string> failedChecks,
         string? testedWorktreeHead, string? testedMainHead, AcceptanceVerificationResult? verification)

@@ -1880,9 +1880,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string ProjectLabel(string project) =>
         AcceptancePolicyShardPlanner.ProjectLabel(project);
 
-    internal static string FocusedTestCheckName(string projectLabel, string filter) =>
-        $"reviewer focused evidence: {projectLabel} {filter}";
-
     internal static List<AcceptanceManifestCheck> ExpandBroadInfrastructureChecks(
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes, bool keepUnshardedInfrastructure = false) =>

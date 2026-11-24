@@ -212,44 +212,9 @@ internal static partial class FocusedEvidenceRequestResolver
         }
 
         var budget = MeasureFocusedEvidenceBudget(worktreePath, validated, totalTargets);
-        var ambiguousProjectLabels = DeclaredTestProjectInventory.DeclaredProjects(engineSettings, engineSettings?.DeclaredDotnetTestChecks)
-            .GroupBy(GoalAcceptanceVerifier.ProjectLabel, StringComparer.OrdinalIgnoreCase)
-            .Where(group => group.Count() > 1)
-            .Select(group => group.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var built = new List<AcceptanceManifestCheck>();
-        foreach (var item in planned)
-        {
-            var usesDeclaredVstestCheck = VstestFocusedEvidenceCheckShape.TryResolve(
-                item.Project, engineSettings, out var declaringCheck);
-            var label = GoalAcceptanceVerifier.ProjectLabel(item.Project);
-            if (ambiguousProjectLabels.Contains(label)) label = item.Project;
-            var check = new AcceptanceManifestCheck
-            {
-                Name = item.Filter is null
-                    ? $"reviewer mapped project evidence: {GoalAcceptanceVerifier.ProjectLabel(item.Project)}"
-                    : GoalAcceptanceVerifier.FocusedTestCheckName(label, item.Filter.CanonicalText),
-                Type = "dotnet-test",
-                Runner = usesDeclaredVstestCheck
-                    ? "vstest"
-                    : GoalAcceptanceVerifier.ResolveDotnetTestRunner(worktreePath, item.Project),
-                Project = item.Project,
-                Arguments = usesDeclaredVstestCheck
-                    ? VstestFocusedEvidenceCheckShape.Arguments(declaringCheck, item.Filter?.CanonicalText)
-                    : item.Filter is null
-                    ? ["--verbosity", "minimal"]
-                    : ["--verbosity", "minimal", "--filter", item.Filter.CanonicalText],
-                FocusedEvidenceTokens = item.Filter?.Tokens ?? [],
-                FocusedEvidenceSelections = item.SelectionFilters
-                    .Select(filter => filter.Tokens)
-                    .ToArray(),
-                IsFocusedEvidenceSelection = item.Filter is not null,
-                FocusedEvidenceMatchedClasses = budget.For(item.Project, item.SelectionFilters),
-                TimeoutMinutes = usesDeclaredVstestCheck
-                    ? declaringCheck.TimeoutMinutes
-                    : budget.TargetCount <= GoalAcceptanceVerifier.FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
-            };
-            built.Add(check);
-        }
+        var manifestChecks = new FocusedEvidenceManifestChecks(engineSettings, worktreePath);
+        var built = planned.Select(item => manifestChecks.Create(
+            item, budget.For(item.Project, item.SelectionFilters), budget.TargetCount)).ToArray();
 
         var targetToChecks = planned
             .SelectMany((item, index) => item.Targets.Select(target => (Target: target, CheckName: built[index].Name)))

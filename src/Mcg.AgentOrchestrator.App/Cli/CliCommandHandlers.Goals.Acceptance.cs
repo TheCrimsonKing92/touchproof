@@ -519,16 +519,9 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
 
     if (verification is { Passed: true, Skipped: false })
     {
-        GoalOperationJournal.AcceptanceGatePassed(
-            context.Workspace.ExecutionDirectory,
-            goal,
-            "acceptance",
-            testedWorktreeHead,
-            testedMainHead,
+        CliWorkspaceMerge.RecordValidatedGatePass(context, goal, testedWorktreeHead, testedMainHead,
             $"Acceptance gate passed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}; merge pending.",
-            acceptanceAttemptStartedAt,
-            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
-            requiredChecksValidated: true);
+            acceptanceAttemptStartedAt, verification);
     }
 
     if (verification is not null)

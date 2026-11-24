@@ -140,7 +140,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         {
             Request = request,
             LegacyRequest = request == selection.Request ? null : selection.Request,
-            BaselineCheck = GoalAcceptanceVerifier.FocusedTestCheckName(GoalAcceptanceVerifier.ProjectLabel(finding.Project),
+            BaselineCheck = FocusedEvidenceManifestChecks.FocusedTestCheckName(GoalAcceptanceVerifier.ProjectLabel(finding.Project),
                 $"FullyQualifiedName~{selector}")
         };
     }
@@ -160,8 +160,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         if (finding.BaselineCheck == actual) return true;
         if (finding.Project is not { } project) return false;
         var filter = $"FullyQualifiedName~{AcceptanceFailureAttributionPlanner.NormalizeIdentity(finding.Identity)}";
-        var shortName = GoalAcceptanceVerifier.FocusedTestCheckName(GoalAcceptanceVerifier.ProjectLabel(project), filter);
-        var pathName = GoalAcceptanceVerifier.FocusedTestCheckName(project.Replace('\\', '/'), filter);
+        var shortName = FocusedEvidenceManifestChecks.FocusedTestCheckName(GoalAcceptanceVerifier.ProjectLabel(project), filter);
+        var pathName = FocusedEvidenceManifestChecks.FocusedTestCheckName(project.Replace('\\', '/'), filter);
         return (finding.BaselineCheck == shortName && actual == pathName) ||
             (finding.BaselineCheck == pathName && actual == shortName);
     }
