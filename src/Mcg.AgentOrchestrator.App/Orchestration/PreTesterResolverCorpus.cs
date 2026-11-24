@@ -120,6 +120,10 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
 
         using var candidateArm = new PreTesterResolverReplayArm(candidate.AppPath, candidateBytes);
         using var oracleArm = new PreTesterResolverReplayArm(oracle.AppPath, oracleBytes);
+        Require(HasEmbeddedRevision(candidateArm, candidate.Revision) && HasEmbeddedRevision(oracleArm, oracle.Revision),
+            "Replay executable revision does not match the staged revision.");
+        Require(candidateArm.ModuleVersionId != oracleArm.ModuleVersionId,
+            "Candidate and oracle must use distinct compiled modules.");
         // Reserve a separate destination before invoking either resolver. CreateNew also protects the corpus itself.
         using var output = new FileStream(receiptPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         var comparisons = corpus.Cases.Select(row =>
@@ -141,14 +145,27 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
 
     private static void VerifyBuild(ReplayBuild build, string startingRevision, Stream bytes)
     {
-        Require(build.StartingRevision.Equals(startingRevision, StringComparison.OrdinalIgnoreCase) &&
+        var amended = !string.Equals(build.Revision, startingRevision, StringComparison.OrdinalIgnoreCase);
+        Require(string.Equals(build.StartingRevision, startingRevision, StringComparison.OrdinalIgnoreCase) &&
             IsRevision(build.Revision) && IsSha256(build.AppSha256) &&
-            (build.Revision.Equals(startingRevision, StringComparison.OrdinalIgnoreCase) == (build.Amendments.Length == 0)) &&
+            build.Amendments is not null && amended == (build.Amendments.Length != 0) &&
+            build.Amendments.All(amendment => !string.IsNullOrWhiteSpace(amendment)) &&
             File.ReadAllText(build.AppPath + ".git-head").Trim().Equals(build.Revision, StringComparison.OrdinalIgnoreCase) &&
             Convert.ToHexString(SHA256.HashData(bytes)).Equals(build.AppSha256, StringComparison.OrdinalIgnoreCase),
             "Replay build revision or executable identity does not match.");
+        if (amended)
+        {
+            Require(build.RepositoryPath is not null && Path.IsPathFullyQualified(build.RepositoryPath) &&
+                Directory.Exists(build.RepositoryPath) &&
+                GitCli.Run(build.RepositoryPath, "merge-base", "--is-ancestor", startingRevision, build.Revision).ExitCode == 0,
+                "Replay build ancestry could not be verified in the supplied repository.");
+        }
         bytes.Position = 0;
     }
+
+    private static bool HasEmbeddedRevision(PreTesterResolverReplayArm arm, string revision) =>
+        arm.InformationalVersion is { } version && version.IndexOf('+') is var metadata && metadata >= 0 &&
+        version[(metadata + 1)..].Split('.')[^1].Equals(revision, StringComparison.OrdinalIgnoreCase);
 
     private static bool WorkloadsMatch(Workload[]? rows, Dictionary<string, int> counts)
     {
@@ -181,7 +198,7 @@ internal sealed record PreTesterResolverCorpus(string Sha256, WindowHeader Heade
     internal sealed record ReplayCase(Guid SessionId, Invocation Invocation, AcceptanceTestClassDescriptor[] Inventory);
 
     internal sealed record ReplayBuild(string StartingRevision, string Revision, string AppPath, string AppSha256,
-        string[] Amendments);
+        string[] Amendments, string? RepositoryPath = null);
 
     internal sealed record ReplayDecision(string? UnresolvedName, FindingEvidenceSelection[] Selections,
         Provenance[] Provenance, string[] Diagnostics);

@@ -453,7 +453,13 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                     onTick: _ =>
                     {
                         if (observe)
-                            Assert.Single(File.ReadLines(path)); // The tick has not finished publishing yet.
+                        {
+                            // The writer is still open while the tick is being published.
+                            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                            using var reader = new StreamReader(stream);
+                            Assert.NotNull(reader.ReadLine());
+                            Assert.Null(reader.ReadLine());
+                        }
                     });
                 ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
                     ConductorContinuityExitArtifactFactory.FromLoopSummary(summary, delegateSelfRelaunchToSupervisor: true));

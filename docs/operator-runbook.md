@@ -311,7 +311,11 @@ Package both files with the digest from a `complete` receipt, the healthy adopti
 dotnet <observer-App.dll> pretester-resolver-replay <corpus.jsonl> <expected-sha256> <new-receipt.json> <candidate-build.json> <oracle-build.json>
 ```
 
-Each build JSON supplies `StartingRevision`, `Revision`, `AppPath` (absolute path to a staged App with its dependencies and `.git-head`), `AppSha256`, and `Amendments` (an array). Use optimization candidate `e0042d3f51c90944ec03ff5f0055850762505ea7` and original starting revision `08f295076eae4d1c14660a846e3c917de32d7a9d`. For the oracle use an identified descendant exposing the original matching loop and selection operation, such as the adopted observer App. Record its actual revision, App hash, and amendments. The command exits 0 for equivalent results, 1 for mismatches, and 2 for invalid inputs or failed execution. The parent acceptance still owns the paired optimization CPU evidence. Associate the package with goal `85288928` before applying its current authoritative resume transition.
+Each build JSON supplies `StartingRevision`, `Revision`, `AppPath` (absolute path to a staged App with its dependencies and `.git-head`), `AppSha256`, and `Amendments` (an array). Use optimization candidate `e0042d3f51c90944ec03ff5f0055850762505ea7` and original starting revision `08f295076eae4d1c14660a846e3c917de32d7a9d`. Use an oracle descendant that exposes the original matching loop and selection operation, such as the revision that supplied the adopted observer.
+
+Stage each replay App from its own clean checkout. Build with `-p:IncludeSourceRevisionInInformationalVersion=true` so the SDK embeds the checkout revision. Record that revision in the staged `.git-head` and calculate `AppSha256` from the staged DLL. For an amended build, enumerate the amendments and supply `RepositoryPath` as the absolute path to a local checkout containing both revisions. Replay checks Git ancestry, the embedded revision, the App digest, and that the two compiled modules are distinct.
+
+The command exits 0 for equivalent results, 1 for mismatches, and 2 for invalid inputs or failed execution. The parent acceptance still owns the paired optimization CPU evidence. Associate the package with goal `85288928` before applying its current authoritative resume transition.
 
 ### Manual bounce fallback after loop-affecting code lands
 

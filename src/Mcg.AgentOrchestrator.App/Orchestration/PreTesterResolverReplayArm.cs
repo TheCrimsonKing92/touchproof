@@ -22,13 +22,18 @@ internal sealed class PreTesterResolverReplayArm : IDisposable
     private readonly Type _costType;
     private readonly Type _costReaderType;
 
+    internal Guid ModuleVersionId { get; }
+    internal string? InformationalVersion { get; }
+
     internal PreTesterResolverReplayArm(string path, Stream verifiedApp)
     {
         _context = new ReplayLoadContext(Path.GetFullPath(path));
         try
         {
-            var resolver = _context.LoadFromStream(verifiedApp)
-                .GetType(typeof(PreTesterReverseDependencySelections).FullName!, throwOnError: true)!;
+            var app = _context.LoadFromStream(verifiedApp);
+            ModuleVersionId = app.ManifestModule.ModuleVersionId;
+            InformationalVersion = app.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            var resolver = app.GetType(typeof(PreTesterReverseDependencySelections).FullName!, throwOnError: true)!;
             _project = resolver.GetField("Project", ResolverMembers)?.GetRawConstantValue() as string
                 ?? throw new InvalidDataException("Replay build has no resolver project.");
             _resolve = resolver.GetMethod("FirstUnresolvedClass", ResolverMembers)
@@ -80,10 +85,13 @@ internal sealed class PreTesterResolverReplayArm : IDisposable
         protected override Assembly? Load(AssemblyName name)
         {
             var path = _dependencies.ResolveAssemblyToPath(name);
-            if (path is not null) return LoadFromAssemblyPath(path);
-            if (name.Name?.StartsWith("Mcg.AgentOrchestrator.", StringComparison.Ordinal) != true) return null;
-            // A test build can sit alongside its dependencies without an App deps file.
-            return LoadFromAssemblyPath(Path.Combine(Path.GetDirectoryName(appPath)!, name.Name + ".dll"));
+            if (path is null && name.Name?.StartsWith("Mcg.AgentOrchestrator.", StringComparison.Ordinal) == true)
+                path = Path.Combine(Path.GetDirectoryName(appPath)!, name.Name + ".dll");
+            if (path is null) return null;
+
+            // Collectible unload is deferred. Stream loads release the input files immediately.
+            using var dependency = File.OpenRead(path);
+            return LoadFromStream(dependency);
         }
     }
 }
