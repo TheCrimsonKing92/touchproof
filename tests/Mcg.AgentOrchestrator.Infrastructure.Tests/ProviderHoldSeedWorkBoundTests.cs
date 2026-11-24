@@ -145,12 +145,14 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Contains(kernel.ProviderHoldHistory.Retained, goal => goal.Id.Value == ProviderHoldSeedFixture.Id(805));
     }
 
-    [Fact]
-    public async Task StatusAndFleet_ReplayUnclassifiedCompressedLegacyArchives()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StatusAndFleet_ReplayUnclassifiedLegacyArchives(bool compressed)
     {
         using var fixture = new ProviderHoldSeedFixture();
         const int unrelatedArchives = 128;
-        await fixture.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: unrelatedArchives);
+        await fixture.PopulateResetCaseAsync(compressed, unrelatedArchives: unrelatedArchives, archiveRecovery: true);
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = fixture.Database,
@@ -168,21 +170,27 @@ public sealed class ProviderHoldSeedWorkBoundTests
         var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
         var now = ProviderHoldSeedFixture.At.AddDays(2);
 
-        var status = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
-        var fleet = Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now));
-
-        foreach (var row in new[] { status, fleet })
+        for (var read = 0; read < 2; read++)
         {
+            AssertColdReplay(() => ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
+            AssertColdReplay(() => ProviderUsageHoldReader.ReadWorkspace(workspace, now, observations.Add));
+        }
+
+        Assert.Equal(0L, await command.ExecuteScalarAsync(token));
+
+        void AssertColdReplay(Func<IReadOnlyList<ProviderUsageHoldRow>> read)
+        {
+            observations.Clear();
+            // The archived recovery clears the other credential's hold, leaving just the reset witness.
+            var row = Assert.Single(read());
             Assert.Equal(ProviderHoldSeedFixture.Id(799), row.Hold.SourceGoalId.Value);
             Assert.Equal("fixture-reset", row.Schedule?.ResetIntentId);
             Assert.Equal(now, row.Schedule?.NextProbeAt);
+            Assert.Contains(observations, item => item.Operation == "provider-seed-archive-projection" &&
+                item.GoalId == ProviderHoldSeedFixture.Id(805));
+            Assert.Contains(observations, item => item.Operation == "provider-seed-archive-projection" &&
+                item.GoalId == ProviderHoldSeedFixture.Id(806));
         }
-        var archivedIds = Enumerable.Range(1000, unrelatedArchives).Prepend(805).Select(ProviderHoldSeedFixture.Id);
-        Assert.Equal(archivedIds.Order(StringComparer.Ordinal), observations
-            .Where(item => item.Operation == "provider-seed-archive-projection")
-            .Select(item => item.GoalId).Order(StringComparer.Ordinal));
-
-        Assert.Equal(0L, await command.ExecuteScalarAsync(token));
     }
 
     [Theory]
@@ -255,13 +263,16 @@ public sealed class ProviderHoldSeedWorkBoundTests
         }
     }
 
-    [Fact]
-    public async Task StatusAndFleet_SeeNewResetAfterClassifiedArchiveWrites()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StatusAndFleet_SeeNewResetAfterClassifiedArchiveWrites(bool compressed)
     {
         using var fixture = new ProviderHoldSeedFixture();
-        await fixture.PopulateResetCaseAsync(legacyArchive: true, unrelatedArchives: 8);
+        await fixture.PopulateResetCaseAsync(compressed, unrelatedArchives: 8, archiveRecovery: true);
         Seed(fixture, new());
-        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database);
+        var observations = new List<GoalSnapshotReadObservation>();
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Database, observations.Add);
         var workspace = OrchestratorWorkspace.ForDirectory(fixture.Source) with { SqliteStatePath = fixture.Database };
         var now = ProviderHoldSeedFixture.At.AddDays(2);
         Assert.Equal("fixture-reset", Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now))
@@ -279,23 +290,30 @@ public sealed class ProviderHoldSeedWorkBoundTests
         var unrelated = ClosedGoal(2001);
         await fixture.Repository.SaveGoalSnapshotsAsync([reset, unrelated], token);
         Assert.Equal(2, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(now, cancellationToken: token,
-            compressSnapshots: true));
+            compressSnapshots: compressed));
 
         using var connection = new SqliteConnection($"Data Source={fixture.Database};Mode=ReadOnly;Pooling=False");
         await connection.OpenAsync(token);
         using var version = connection.CreateCommand();
         version.CommandText = "PRAGMA data_version";
         var before = await version.ExecuteScalarAsync(token);
-        var status = Assert.Single(ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
-        var fleet = Assert.Single(ProviderUsageHoldReader.ReadWorkspace(workspace, now));
-        foreach (var row in new[] { status, fleet })
+        AssertClassifiedReplay(() => ProviderUsageHoldReader.ReadStatus(readOnly, [], [], now));
+        AssertClassifiedReplay(() => ProviderUsageHoldReader.ReadWorkspace(workspace, now, observations.Add));
+        Assert.Equal(before, await version.ExecuteScalarAsync(token));
+        Assert.Equal(6, MeasureStatusDiscovery(fixture.Database).Candidates);
+
+        void AssertClassifiedReplay(Func<IReadOnlyList<ProviderUsageHoldRow>> read)
         {
+            observations.Clear();
+            var row = Assert.Single(read());
             Assert.Equal(ProviderHoldSeedFixture.Id(799), row.Hold.SourceGoalId.Value);
             Assert.Equal("fixture-reset-archived", row.Schedule?.ResetIntentId);
             Assert.Equal(now.AddDays(2), row.Schedule?.NextProbeAt);
+            Assert.Equal(new[] { 805, 806, 2000 }.Select(ProviderHoldSeedFixture.Id), observations
+                .Where(item => item.Operation == "provider-seed-archive-projection")
+                .Select(item => item.GoalId).Order(StringComparer.Ordinal));
+            Assert.DoesNotContain(observations, item => item.GoalId == unrelated.Id);
         }
-        Assert.Equal(before, await version.ExecuteScalarAsync(token));
-        Assert.Equal(4, MeasureStatusDiscovery(fixture.Database).Candidates);
 
         GoalSnapshot ClosedGoal(int index)
         {
