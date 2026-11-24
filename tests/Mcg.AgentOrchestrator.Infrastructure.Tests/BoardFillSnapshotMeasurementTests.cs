@@ -66,14 +66,17 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
                 {
                     Assert.Equal(traced[full].Decisions, traced[arm].Decisions);
                     var counts = traced[arm];
+                    Assert.True(counts.ReadPayload > 0, $"No backlog read payload for {arm} ({open} open, {scenario}).");
+                    Assert.Equal(arm == projection, counts.ProjectionReadPayload > 0);
                     output.WriteLine($"scheduling-cost open={open} scenario={scenario} arm={arm} repetitions={TimedPairs} " +
                         $"decisions={counts.Decisions.Length} read_statements={counts.ReadStatements} read_rows={counts.ReadRows} " +
-                        $"read_payload_bytes={counts.ReadPayload} write_statements={counts.WriteStatements} " +
+                        $"read_payload_bytes={counts.ReadPayload} projection_read_statements={counts.ProjectionReadStatements} " +
+                        $"projection_read_rows={counts.ProjectionReadRows} projection_read_payload_bytes={counts.ProjectionReadPayload} " +
+                        $"write_statements={counts.WriteStatements} " +
                         $"write_rows={counts.WriteRows} write_payload_bytes={counts.WritePayload} " +
                         $"trigger_steps={counts.TriggerSteps} host_note_writes={counts.HostNoteWrites} " +
                         $"host_note_utf8_bytes={counts.HostNoteBytes} {ReportTotals(samples[arm].Select(sample => sample.Totals))}");
                 }
-                Assert.True(traced[projection].ReadPayload < traced[full].ReadPayload);
                 foreach (var baseline in new[] { full, historical })
                 {
                     var deltas = samples[baseline].Zip(samples[projection], (a, b) => a.Totals - b.Totals);
@@ -142,10 +145,14 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
     {
         using var hostFixture = new HostFixture(fixture, open);
         var path = hostFixture.Workspace.BacklogStorePath;
-        var readTrace = trace ? new BoardFillSnapshotSqlTrace(measureResultPayload: true) : null;
+        BoardFillSnapshotSqlTrace? fullReadTrace = null;
+        BoardFillSnapshotSqlTrace? projectionReadTrace = null;
         var writeTrace = trace ? new BoardFillSnapshotSqlTrace(measureResultPayload: true) : null;
-        Action<string, SqliteConnection>? observe = trace ? (source, connection) => readTrace!.Attach(source, connection) : null;
-        using var cache = new BoardFillBacklogSnapshotCache(path, observe);
+        Action<string, SqliteConnection>? observeFull = trace
+            ? (source, connection) => fullReadTrace?.Attach(source, connection) : null;
+        Action<string, SqliteConnection>? observeProjection = trace
+            ? (source, connection) => projectionReadTrace?.Attach(source, connection) : null;
+        using var cache = new BoardFillBacklogSnapshotCache(path, observeFull);
         using var writer = HostFixture.Connect(path);
         Execute(writer, "PRAGMA wal_autocheckpoint=0");
 
@@ -171,12 +178,12 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
 
         Func<IReadOnlyList<BacklogItem>> readBacklog = arm switch
         {
-            "current-full" => () => BoardFillBacklogSnapshot.Read(path, observe),
+            "current-full" => () => BoardFillBacklogSnapshot.Read(path, observeFull),
             "integrated-49238cad" or "experimental-projection" => cache.Read,
             _ => throw new ArgumentOutOfRangeException(nameof(arm))
         };
         var host = hostFixture.CreateHost(readBacklog, arm == "experimental-projection"
-            ? (rounds, now) => HostFixture.ReadHostProjection(path, rounds, now, observe)
+            ? (rounds, now) => HostFixture.ReadHostProjection(path, rounds, now, observeProjection)
             : null, AppendNote);
         try
         {
@@ -189,8 +196,12 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
                 totals = default;
                 noteWrites = 0;
                 noteBytes = 0;
-                if (trace)
-                    readTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+            }
+            if (trace)
+            {
+                fullReadTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
+                if (arm == "experimental-projection")
+                    projectionReadTrace = new BoardFillSnapshotSqlTrace(measureResultPayload: true);
             }
 
             // Keep SQL tracing off the connection used to inspect receipts.
@@ -262,10 +273,15 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
             }
 
             Assert.Equal(scenario == "quiet" ? 0 : 1, noteWrites);
-            Assert.Null(readTrace?.Failure);
+            Assert.Null(fullReadTrace?.Failure);
+            Assert.Null(projectionReadTrace?.Failure);
             Assert.Null(writeTrace?.Failure);
-            return new(totals, receipts, readTrace?.Statements ?? 0, readTrace?.Rows ?? 0,
-                readTrace?.ResultPayloadBytes ?? 0, writeTrace?.Statements ?? 0, writeTrace?.Rows ?? 0,
+            var projectionStatements = projectionReadTrace?.Statements ?? 0;
+            var projectionRows = projectionReadTrace?.Rows ?? 0;
+            var projectionPayload = projectionReadTrace?.ResultPayloadBytes ?? 0;
+            return new(totals, receipts, (fullReadTrace?.Statements ?? 0) + projectionStatements,
+                (fullReadTrace?.Rows ?? 0) + projectionRows, (fullReadTrace?.ResultPayloadBytes ?? 0) + projectionPayload,
+                projectionStatements, projectionRows, projectionPayload, writeTrace?.Statements ?? 0, writeTrace?.Rows ?? 0,
                 writeTrace?.ResultPayloadBytes ?? 0, writeTrace?.TriggerSteps ?? 0, noteWrites, noteBytes);
         }
         finally { host.Stop(); }
@@ -328,7 +344,8 @@ public sealed class BoardFillSnapshotMeasurementTests(ITestOutputHelper output)
     }
 
     private sealed record SchedulingSample(SchedulingTotals Totals, string[] Decisions, int ReadStatements, int ReadRows,
-        long ReadPayload, int WriteStatements, int WriteRows, long WritePayload, int TriggerSteps,
+        long ReadPayload, int ProjectionReadStatements, int ProjectionReadRows, long ProjectionReadPayload,
+        int WriteStatements, int WriteRows, long WritePayload, int TriggerSteps,
         int HostNoteWrites, long HostNoteBytes);
 
     [Fact]
