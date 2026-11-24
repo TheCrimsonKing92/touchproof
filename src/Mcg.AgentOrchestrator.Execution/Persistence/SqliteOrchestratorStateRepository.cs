@@ -2407,8 +2407,13 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 selection.LowerBounds.TryGetValue(attempt.ProviderName, out var first) && attempt.Timestamp >= first)
             .Distinct().ToArray();
         var witnesses = recoveries.Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
-        return new(rows, attempts, candidates.MarkerGoals,
-            evidence.Concat(recoveryEvidence.Where(row => witnesses.Contains(row.GoalId))).ToArray())
+        var replay = evidence.Concat(recoveryEvidence.Where(row => witnesses.Contains(row.GoalId)))
+            .ToDictionary(row => row.GoalId, StringComparer.Ordinal);
+        foreach (var id in selection.Sources.Concat(selection.Dependencies).Concat(witnesses)
+            .Concat(candidates.MarkerGoals.Select(id => id.Value)))
+            if (candidates.ArchiveEvidence.TryGetValue(new GoalId(id), out var archived))
+                replay.TryAdd(id, archived);
+        return new(rows, attempts, candidates.MarkerGoals, replay.Values.ToArray())
         {
             Recoveries = recoveries,
             DispatchMatchingVisits = dispatchMatchingVisits
@@ -2421,7 +2426,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             IReadOnlyList<ProviderUsageGoalEvidence> projected = [];
             try
             {
-                projected = await ReadProviderHoldSeedEvidenceAsync(ids, cancellationToken) ?? [];
+                projected = ids.Where(candidates.ArchiveEvidence.ContainsKey)
+                    .Select(id => candidates.ArchiveEvidence[id]).ToArray();
+                var remaining = ids.Where(id => !candidates.ArchiveEvidence.ContainsKey(id)).ToArray();
+                if (remaining.Length != 0)
+                    projected = projected.Concat(await ReadProviderHoldSeedEvidenceAsync(remaining, cancellationToken) ?? []).ToArray();
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

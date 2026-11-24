@@ -405,6 +405,62 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         Assert.Contains("sequence gap", failure.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("C:/primary", true)]
+    [InlineData("C:/alternate", false)]
+    public async Task Seed_CompressedArchives_ReuseEvidenceAndPreserveScopedRecovery(string credential, bool clears)
+    {
+        using var fixture = new Fixture();
+        var source = WithCredential(Snapshot(0, false), "C:/primary");
+        var sourceTask = source.Tasks[0];
+        var refusal = sourceTask.LastVerification! with
+        {
+            StandardError = "", AuthoritativeStandardError = "ERROR: weekly usage limit reached",
+            ProviderFailureKind = ProviderFailureKind.Unknown, EvidenceSource = VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt = sourceTask.LastDispatch!.DispatchedAt
+        };
+        source = source with { Tasks = [sourceTask with { LastVerification = refusal, VerificationHistory = [refusal] }] };
+        var witness = WithCredential(Snapshot(1, true), credential);
+        var witnessTask = witness.Tasks[0];
+        var success = witnessTask.LastVerification! with { AuthoritativeStandardOutput = new string('x', 100_000) };
+        witness = witness with { Tasks = [witnessTask with { LastVerification = success, VerificationHistory = [success] }] };
+        await fixture.Insert(source, witness);
+        var token = TestContext.Current.CancellationToken;
+        var writer = new SqliteOrchestratorStateRepository(fixture.Path);
+        await writer.EnsureTerminalOpenWorkIndexAsync(token);
+        Assert.Equal(2, await writer.ArchiveTerminalGoalSnapshotsAsync(At.AddDays(2), compressSnapshots: true));
+        Assert.Equal(2L, fixture.Scalar("SELECT count(*) FROM goal_snapshot_archive WHERE typeof(snapshot_json) = 'blob'"));
+
+        var observations = new List<GoalSnapshotReadObservation>();
+        var reader = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Path, observations.Add);
+        var history = await reader.ReadProviderHoldSeedHistoryAsync(token);
+        Assert.Equal(source.Id, Assert.Single(history.Attempts).GoalId);
+        Assert.Equal(witness.Id, Assert.Single(history.Recoveries).GoalId);
+        Assert.Equal(refusal.AuthoritativeStandardError,
+            Assert.Single(history.Evidence.Single(row => row.GoalId == source.Id).Tasks).LastVerification!.AuthoritativeStandardError);
+        Assert.Null(Assert.Single(history.Evidence.Single(row => row.GoalId == witness.Id).Tasks)
+            .LastVerification!.AuthoritativeStandardOutput);
+
+        observations.Clear();
+        var kernel = new AgentOrchestratorKernel();
+        Assert.NotNull(ProviderHoldHistoryStartupSeed.Apply(kernel, reader, _ => { }));
+        Assert.Equal(new[] { source.Id, witness.Id }, observations.Where(row => row.Operation == "provider-seed-archive-projection")
+            .Select(row => row.GoalId).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(observations, row => row.Operation == "provider-seed-snapshot-decode");
+
+        var canonical = await reader.LoadGoalsAsync([new(source.Id), new(witness.Id)], token);
+        var expected = ProviderUsageHoldView.Read(canonical.Goals, At.AddHours(1));
+        Assert.Equal(clears ? 0 : 1, expected.Count);
+        Assert.Equal(expected.ToArray(), ProviderUsageHoldView.Read(kernel.ProviderHoldScope, At.AddHours(1)).ToArray());
+
+        static GoalSnapshot WithCredential(GoalSnapshot snapshot, string credential)
+        {
+            var task = snapshot.Tasks[0];
+            var dispatch = task.LastDispatch! with { ClaudeCredentialSourceDirectory = credential };
+            return snapshot with { Tasks = [task with { LastDispatch = dispatch, DispatchHistory = [dispatch] }] };
+        }
+    }
+
     private static readonly DateTimeOffset At = DateTimeOffset.Parse("2026-10-17T11:07:00Z");
     private static readonly JsonSerializerOptions Options = new() { Converters = { new JsonStringEnumConverter() } };
 

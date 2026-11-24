@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -9,6 +10,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// by the streaming serializer, including briefs, execution output and acceptance evidence.</summary>
 internal static class ProviderHoldSeedEvidenceReader
 {
+    internal static JsonSerializerOptions ArchiveReplayOptions(JsonSerializerOptions options)
+    {
+        var replay = new JsonSerializerOptions(options);
+        replay.Converters.Insert(0, new ArchiveVerificationConverter(options));
+        return replay;
+    }
+
     internal static async Task<IReadOnlyList<ProviderUsageGoalEvidence>> ReadAsync(SqliteConnection connection,
         IReadOnlyCollection<GoalId> ids, JsonSerializerOptions options, CancellationToken cancellationToken)
         => await ReadSnapshotsAsync(connection, ids, options, cancellationToken);
@@ -48,7 +56,7 @@ internal static class ProviderHoldSeedEvidenceReader
 
     internal static async Task<ProviderUsageGoalEvidence> ProjectAsync(string id, object payload,
         JsonSerializerOptions options, CancellationToken cancellationToken = default, SqliteConnection? connection = null,
-        Action<GoalSnapshotReadObservation>? observer = null)
+        Action<GoalSnapshotReadObservation>? observer = null, Action? foundMarker = null)
     {
         using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
         var row = await GoalSnapshotByteAccounting.DeserializeAsync<GoalFields>(stream, options, cancellationToken)
@@ -78,6 +86,8 @@ internal static class ProviderHoldSeedEvidenceReader
                 connection, id, default, row.TimelineInTable, cancellationToken, TimelineSelectionSql,
                 observer is null ? null : size => observer(new("provider-seed-timeline-entry", id, size))))
                 .Select(entry => entry.Deserialize<EventFields>(options)!).ToArray();
+        if (foundMarker is not null && timeline.Any(evt => evt.Message?.StartsWith("PROVIDER_BUDGET_", StringComparison.Ordinal) == true))
+            foundMarker();
         return new(id, row.Status, tasks,
             timeline.Select(evt => new ProgressEvent(new GoalId(id),
                 evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
@@ -121,5 +131,63 @@ internal static class ProviderHoldSeedEvidenceReader
         internal TaskDispatchSnapshot Snapshot() => new(WorkerName, Command, WorkingDirectory, DispatchedAt,
             ProviderName: ProviderName, ModelName: ModelName, ClaudeCredentialSourceDirectory: ClaudeCredentialSourceDirectory,
             ClaudeApiHoldIdentity: ClaudeApiHoldIdentity);
+    }
+
+    // Availability replay uses the verdict and attempt identity. A zero-exit receipt
+    // cannot be a refusal, and authoritative text is outside its same-round identity.
+    private sealed class ArchiveVerificationConverter(JsonSerializerOptions options) : JsonConverter<TaskVerificationSnapshot>
+    {
+        private readonly JsonSerializerOptions _zeroExitOptions = CreateZeroExitOptions(options);
+
+        public override TaskVerificationSnapshot? Read(ref Utf8JsonReader reader, Type typeToConvert,
+            JsonSerializerOptions serializerOptions)
+        {
+            var probe = reader;
+            while (probe.Read() && probe.TokenType == JsonTokenType.PropertyName)
+            {
+                var isExitCode = probe.ValueTextEquals(nameof(TaskVerificationSnapshot.ExitCode));
+                if (!probe.Read()) break;
+                if (isExitCode && probe.TokenType == JsonTokenType.Number &&
+                    probe.TryGetInt32(out var exitCode) && exitCode == 0)
+                {
+                    var compact = reader;
+                    var verification = JsonSerializer.Deserialize<TaskVerificationSnapshot>(ref compact, _zeroExitOptions);
+                    if (verification is { ExitCode: 0 })
+                    {
+                        reader = compact;
+                        return verification;
+                    }
+                    break;
+                }
+                if (isExitCode || !probe.TrySkip()) break;
+            }
+            return JsonSerializer.Deserialize<TaskVerificationSnapshot>(ref reader, options);
+        }
+
+        public override void Write(Utf8JsonWriter writer, TaskVerificationSnapshot value,
+            JsonSerializerOptions serializerOptions) => JsonSerializer.Serialize(writer, value, options);
+
+        private static JsonSerializerOptions CreateZeroExitOptions(JsonSerializerOptions options)
+        {
+            var resolver = new DefaultJsonTypeInfoResolver();
+            resolver.Modifiers.Add(info =>
+            {
+                if (info.Type != typeof(TaskVerificationSnapshot)) return;
+                foreach (var property in info.Properties)
+                    if (property.Name is nameof(TaskVerificationSnapshot.AuthoritativeStandardOutput) or
+                        nameof(TaskVerificationSnapshot.AuthoritativeStandardError))
+                        property.CustomConverter = new IgnoredTextConverter();
+            });
+            return new JsonSerializerOptions(options) { TypeInfoResolver = resolver };
+        }
+    }
+
+    private sealed class IgnoredTextConverter : JsonConverter<string>
+    {
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert,
+            JsonSerializerOptions options) => null;
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value);
     }
 }

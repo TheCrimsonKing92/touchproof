@@ -13,6 +13,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
 
     internal HashSet<GoalId> FailureGoals { get; } = [];
     internal HashSet<GoalId> MarkerGoals { get; } = [];
+    internal Dictionary<GoalId, ProviderUsageGoalEvidence> ArchiveEvidence { get; } = [];
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null)
@@ -21,6 +22,8 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, token);
         var hasHistory = await GoalTaskHistoryStore.HasTableAsync(connection, token);
         var discovery = new ProviderHoldSeedDiscovery(hasHistory);
+        var replayOptions = ProviderHoldSeedEvidenceReader.ArchiveReplayOptions(options);
+        var remaining = new List<string>();
         using var command = connection.CreateCommand();
         var document = hasArchive
             ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
@@ -63,6 +66,9 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     byte[] bytes => bytes.Length,
                     _ => 0
                 }));
+                if (payload is byte[] && await discovery.TryProjectArchiveAsync(connection, id, payload,
+                    replayOptions, token, observe)) continue;
+                remaining.Add(id);
                 using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
                 var goal = await JsonSerializer.DeserializeAsync<DiscoveryGoal>(stream, options, token);
                 if (goal?.Id != id) throw new InvalidDataException("Provider seed discovery goal identity mismatch.");
@@ -82,22 +88,23 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             }
         }
 
-        if (hasTimeline)
+        command.Parameters.AddWithValue("$remaining", JsonSerializer.Serialize(remaining));
+        if (hasTimeline && remaining.Count != 0)
         {
             command.CommandText = """
-                SELECT DISTINCT t.goal_id FROM goal_timeline t JOIN goals g ON g.id = t.goal_id
-                WHERE instr(t.entry_json, 'PROVIDER_BUDGET_') > 0
+                SELECT DISTINCT t.goal_id FROM json_each($remaining) candidate CROSS JOIN goal_timeline t
+                WHERE t.goal_id = candidate.value AND instr(t.entry_json, 'PROVIDER_BUDGET_') > 0
                     AND json_extract(t.entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*'
                 """;
             using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token)) discovery.MarkerGoals.Add(new(reader.GetString(0)));
         }
-        if (hasHistory)
+        if (hasHistory && remaining.Count != 0)
         {
             command.CommandText = $"""
                 SELECT h.goal_id, h.task_id, {VerificationSql("h.entry_json")}
-                FROM goal_task_history h JOIN goals g ON g.id = h.goal_id
-                WHERE h.kind = 'verification' AND {VerificationPredicate("h.entry_json")}
+                FROM json_each($remaining) candidate CROSS JOIN goal_task_history h
+                WHERE h.goal_id = candidate.value AND h.kind = 'verification' AND {VerificationPredicate("h.entry_json")}
                 """;
             using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token))
@@ -105,6 +112,36 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     JsonSerializer.Deserialize<TaskVerificationSnapshot>(reader.GetString(2), options));
         }
         return discovery;
+    }
+
+    private async Task<bool> TryProjectArchiveAsync(SqliteConnection connection, string id, object payload,
+        JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe)
+    {
+        ProviderUsageGoalEvidence evidence;
+        try
+        {
+            evidence = await ProviderHoldSeedEvidenceReader.ProjectAsync(id, payload, options, token, connection,
+                observe, () => MarkerGoals.Add(new(id)));
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or SqliteException)
+        {
+            // Discovery requires less than replay. A selected goal with unusable evidence
+            // will still use the normal sparse and canonical fallback paths.
+            return false;
+        }
+        foreach (var task in evidence.Tasks)
+        {
+            var key = (id, task.TaskId);
+            foreach (var verification in task.VerificationHistory.Append(task.LastVerification))
+                ObserveVerification(key, verification);
+            var providers = task.DispatchHistory.Append(task.LastDispatch)
+                .Select(dispatch => dispatch?.ProviderName ?? dispatch?.WorkerName).OfType<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (providers.Length > 0) _inlineProviders[key] = providers;
+        }
+        ArchiveEvidence.Add(new(id), evidence);
+        observe?.Invoke(new("provider-seed-archive-projection", id));
+        return true;
     }
 
     internal async Task<HashSet<GoalId>> FindRecoveryCandidatesAsync(SqliteConnection connection,

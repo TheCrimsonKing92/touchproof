@@ -61,12 +61,12 @@ internal static class ProviderHoldHistoryStartupSeed
             var pruneStarted = time.GetTimestamp();
             var index = ProviderHoldSeedIndex.Evaluate(working, existing, inputs, selection.Sources);
             var pruneMs = Elapsed(pruneStarted);
-            // Historical witnesses feed the read-only hold scope. Keep full snapshots for
-            // selected hold sources, current indexed hold owners, and operator/probe marker owners.
+            // The sparse inputs preserve historical refusals and recovery witnesses. Keep full
+            // snapshots for current hold owners and operator/probe marker owners.
             var holdOwners = index.Evaluations.Values.Select(entry => entry.Schedule?.Hold.SourceGoalId)
                 .OfType<GoalId>().ToHashSet();
             var hydrate = index.RequiredGoals.Where(projected.ContainsKey).Select(id => new GoalId(id))
-                .Where(id => selection.Sources.Contains(id.Value) || holdOwners.Contains(id) || markerGoals.Contains(id))
+                .Where(id => holdOwners.Contains(id) || markerGoals.Contains(id))
                 .ToArray();
             foreach (var (id, goal) in Load(hydrate)) canonical.Add(id, goal);
             var byId = existing.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
