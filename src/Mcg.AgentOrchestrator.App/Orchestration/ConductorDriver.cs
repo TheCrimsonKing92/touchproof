@@ -222,7 +222,8 @@ internal sealed partial class ConductorDriver
         bool runAcceptanceAttemptsInCurrentProcess = false,
         Action<GoalSnapshot>? recordDurableGoalBaseline = null,
         GoalWorktreeCleanupHooks? cleanupHooks = null, Func<DateTimeOffset>? utcNow = null,
-        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null)
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
+        ISoloBaselineRepairIntake? repairIntake = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -255,7 +256,7 @@ internal sealed partial class ConductorDriver
         _soloBaselineRepair = new(workspace, kernel, acceptanceVerifier, ReadCurrentCohortAttributionRevisions,
             ReadSoloAcceptanceContext, () => SoloAcceptanceFailure, GetFacts, WriteEscalation,
             (key, token) => CohortPartitionStableSlotLeaseSource?.Invoke(key, token) ??
-                _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token), PrepareSoloRepairAttribution);
+                _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token), PrepareSoloRepairAttribution, repairIntake);
         _runDeveloperCompletionStructuralPreflight = path =>
             DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
         _cohortAcceptanceVerifier = acceptanceVerifier;

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -346,7 +347,8 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         {
             _driver = new ConductorDriver(Kernel, Workspace, _verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
-                cleanupHooks: CreateIsolatedCleanupContext(Repo).Hooks);
+                cleanupHooks: CreateIsolatedCleanupContext(Repo).Hooks,
+                repairIntake: new CliSoloBaselineRepairIntake(Workspace));
         }
 
         internal AcceptanceVerificationSummary Summary(int index, string[] tests,

@@ -1266,7 +1266,7 @@ public sealed class SoloRepairWorkflowTests
             cleanupHooks: new GoalWorktreeCleanupHooks
             {
                 BuildStorageRoot = new DotnetBuildStorageRoot(Path.Combine(workspace.OrchestratorDirectory, "build"))
-            })
+            }, repairIntake: new CliSoloBaselineRepairIntake(workspace))
         {
             CohortPartitionStableSlotLeaseSource = (_, _) =>
                 AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory),

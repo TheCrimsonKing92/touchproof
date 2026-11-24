@@ -1,10 +1,15 @@
 using System.Text.Json;
-using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal interface ISoloBaselineRepairIntake
+{
+    GoalCreationOperatorIntentPayload PrepareRepair(string requestKey, string objective, string epicId);
+    void ApplyReservedRepair(AgentOrchestratorKernel kernel, GoalCreationOperatorIntentPayload payload);
+}
 
 internal sealed class SoloBaselineRepairCoordinator(
     OrchestratorWorkspace workspace,
@@ -16,10 +21,14 @@ internal sealed class SoloBaselineRepairCoordinator(
     Func<Goal, GoalLifecycleFacts> getFacts,
     Func<Goal, GoalLifecycleState, string, string, LandingEscalationWriteResult> writeEscalation,
     Func<string, CancellationToken, DotnetBuildEnvironmentLease> acquireStableSlot,
-    Func<Goal, string, ConductorAutonomyPolicy, ConductorAdvanceResult?>? prepareAttribution = null)
+    Func<Goal, string, ConductorAutonomyPolicy, ConductorAdvanceResult?>? prepareAttribution = null,
+    ISoloBaselineRepairIntake? repairIntake = null)
 {
     private readonly SoloBaselineRepairStore _store = new(
         Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+
+    private ISoloBaselineRepairIntake RepairIntake => repairIntake
+        ?? throw new InvalidOperationException("This conductor host cannot create a baseline repair goal.");
 
     internal ConductorAdvanceResult? TryAdvance(Goal goal, string prefix, ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary? completion = null)
@@ -237,11 +246,7 @@ internal sealed class SoloBaselineRepairCoordinator(
                 return (null, false, $"Designate one baseline-maintenance epic for {finding.Check}, {finding.Identity} on {finding.Baseline}.");
             var objective = $"Repair baseline test failure {finding.Identity} in {finding.Check} on revision {finding.Baseline}. " +
                 $"Reproduce using {finding.Request} and make the original exact case pass on the integration branch.";
-            IReadOnlyList<string> arguments = ["goal", objective, "--epic", owners[0].Id, "--request-key", requestKey];
-            var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
-            var request = GoalIntakeRequestMapper.Map(arguments, workspace, agents)!;
-            var payload = new GoalCreationOperatorIntentPayload(requestKey, request.Fingerprint, request.Mode, objective,
-                owners[0].Id, arguments, null, agents, false);
+            var payload = RepairIntake.PrepareRepair(requestKey, objective, owners[0].Id);
             group = _store.ReserveGroup(finding.GroupKey, JsonSerializer.Serialize(payload, OperatorIntentJson.Options));
         }
 
@@ -253,8 +258,7 @@ internal sealed class SoloBaselineRepairCoordinator(
                 var payload = JsonSerializer.Deserialize<GoalCreationOperatorIntentPayload>(group.IntakePayload, OperatorIntentJson.Options)
                     ?? throw new InvalidOperationException("Canonical repair intake payload is missing.");
                 _ = intake.Reserve(requestKey, payload.Fingerprint);
-                _ = new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction())
-                    .Apply(kernel, payload, out _);
+                RepairIntake.ApplyReservedRepair(kernel, payload);
                 var created = intake.Get(requestKey)?.GoalId ?? throw new InvalidOperationException("Keyed repair intake returned no goal ID.");
                 // CLI intake retries epic assignment during replay. Confirm it before acknowledging
                 // the group because the CLI can return after recording an assignment failure.

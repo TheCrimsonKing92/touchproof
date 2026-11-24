@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -586,7 +587,8 @@ public sealed class SoloRepairReplayTests
             },
             acquireSlot ?? ((_, _) => verifier is not null
                 ? AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
-                : throw new InvalidOperationException("A repair must land before validation.")));
+                : throw new InvalidOperationException("A repair must land before validation.")),
+            repairIntake: new CliSoloBaselineRepairIntake(workspace));
 
     private static ConductorAdvanceResult? Advance(SoloBaselineRepairCoordinator coordinator, Goal goal) =>
         coordinator.TryAdvance(goal, goal.Id.Value[..8], ConductorAutonomyPolicy.Permissive);
