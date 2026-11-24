@@ -10,6 +10,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly ConductorBoardFillDraftStore _store;
     private readonly Func<string, CancellationToken, AuthorBriefDraftOutcome> _draft;
     private readonly Func<IReadOnlyList<BacklogItem>> _backlog;
+    private readonly Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? _schedulingBacklog;
     private BoardFillBacklogSnapshotCache? BacklogSnapshotCache { get; init; }
     internal readonly Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> _readiness;
     private readonly Func<ConductorAutonomyPolicy> _policy;
@@ -19,7 +20,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?> _mainHead;
     private readonly Func<string?> _staleMainHead;
-    private readonly Func<IReadOnlyList<string>>? _preferredOrder;
+    private readonly Func<IReadOnlyList<BacklogItem>, IReadOnlyList<string>>? _preferredOrder;
     private readonly StalledEpicAttention? _stalledEpics;
     private readonly BoardFillTrackedEditsHold _trackedEditsHold;
     private readonly IBoardFillPremiseVerifier? _verifier;
@@ -50,16 +51,18 @@ internal sealed partial class ConductorBoardFillHost
         Func<IReadOnlyList<BacklogItem>, IReadOnlySet<string>> epicMembership, Func<DateTimeOffset>? utcNow = null,
         IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null,
         Func<string?>? mainHead = null, Func<(bool Clean, AuthorDraftTrackedEdits? Edits)>? trackedEdits = null,
-        Func<string?>? staleMainHead = null, Func<IReadOnlyList<string>>? preferredOrder = null,
+        Func<string?>? staleMainHead = null, Func<IReadOnlyList<BacklogItem>, IReadOnlyList<string>>? preferredOrder = null,
         StalledEpicAttention? stalledEpics = null,
         Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? revise = null,
         Action<string, string>? appendBacklogNote = null,
         Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
-        ICollaborationItemStore? epicAttention = null)
+        ICollaborationItemStore? epicAttention = null,
+        Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? schedulingBacklog = null)
     {
         _store = store;
         _draft = draft;
         _backlog = backlog;
+        _schedulingBacklog = schedulingBacklog;
         _readiness = readiness;
         _policy = policy;
         _events = events;
@@ -115,10 +118,14 @@ internal sealed partial class ConductorBoardFillHost
         }
         var held = Harvest(now);
         ReportFinished();
-        var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
+        var schedulingBacklog = policy.BoardFillMode == ConductorBoardFillMode.Shadow ? _schedulingBacklog : null;
+        var newestFirst = schedulingBacklog is null ? null : _store.ReadAll(newestFirst: true);
+        IReadOnlyList<BacklogItem> AcquireItems() => ConductorTickStepLedger.CountBacklogRows(
+            schedulingBacklog?.Invoke(newestFirst!, now) ?? _backlog());
+        var items = AcquireItems();
         var epicMembers = _epicMembership.Read(items, now);
         if (epicMembers is not null) ServiceFiling(items, epicMembers);
-        var newestFirst = _store.ReadAll(newestFirst: true);
+        newestFirst ??= _store.ReadAll(newestFirst: true);
         var rounds = newestFirst.Reverse().ToArray();
         var goals = kernel.Goals.ToArray();
         var admission = epicMembers is null ? (Allowed: false, Reason: (string?)null)
@@ -127,7 +134,12 @@ internal sealed partial class ConductorBoardFillHost
         try { observedMain = _staleMainHead(); }
         catch { observedMain = null; }
         // Record evidence releases before selection so a new round captures the durable item stamp.
-        if (admission.Allowed) items = ReleaseContradictionHolds(items, observedMain);
+        if (admission.Allowed && ReleaseContradictionHolds(items, observedMain))
+        {
+            items = AcquireItems();
+            epicMembers = _epicMembership.Read(items, now);
+            if (epicMembers is null) admission = (false, null);
+        }
         var stopped = BoardFillConsecutiveNonDraftRounds.StoppedItems(rounds, now);
         var excluded = ConductorBoardFillDraftStore.AlreadyDrafted(items, observedMain, newestFirst);
         excluded.UnionWith(stopped.Keys);
@@ -137,7 +149,7 @@ internal sealed partial class ConductorBoardFillHost
         ReportReadiness(candidates, now);
         if (!admission.Allowed) return admission.Reason;
 
-        var preferredOrder = ReadPreferredOrder(now);
+        var preferredOrder = ReadPreferredOrder(items, now);
         ReportStoppedItems(items, stopped, now);
         if (BoardFillFailureBreaker.Evaluate(rounds, now) is { } backoff)
         {
@@ -229,9 +241,9 @@ internal sealed partial class ConductorBoardFillHost
         }
     }
 
-    private IReadOnlyList<BacklogItem> ReleaseContradictionHolds(IReadOnlyList<BacklogItem> items, string? head)
+    private bool ReleaseContradictionHolds(IReadOnlyList<BacklogItem> items, string? head)
     {
-        if (_appendBacklogNote is null || string.IsNullOrWhiteSpace(head)) return items;
+        if (_appendBacklogNote is null || string.IsNullOrWhiteSpace(head)) return false;
         var wrote = false;
         foreach (var item in items.Where(item => item.Status == BacklogItemStatus.Open))
         {
@@ -245,14 +257,14 @@ internal sealed partial class ConductorBoardFillHost
             }
             catch (Exception) { } // The marker continues to hold when its release cannot be recorded.
         }
-        return wrote ? _backlog() : items;
+        return wrote;
     }
 
-    private IReadOnlyList<string> ReadPreferredOrder(DateTimeOffset now)
+    private IReadOnlyList<string> ReadPreferredOrder(IReadOnlyList<BacklogItem> items, DateTimeOffset now)
     {
         try
         {
-            var order = _preferredOrder?.Invoke() ?? [];
+            var order = _preferredOrder?.Invoke(items) ?? [];
             _lastPlanReadFailure = null;
             return order;
         }

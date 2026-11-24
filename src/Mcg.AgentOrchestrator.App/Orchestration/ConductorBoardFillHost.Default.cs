@@ -9,17 +9,22 @@ internal sealed partial class ConductorBoardFillHost
 {
     internal static ConductorBoardFillHost CreateDefault(OrchestratorWorkspace workspace,
         Func<ConductorAutonomyPolicy> policy, Func<string?>? mainHead = null,
-        Func<string, CancellationToken, AuthorBriefDraftOutcome>? draft = null)
+        Func<string, CancellationToken, AuthorBriefDraftOutcome>? draft = null,
+        Func<IReadOnlyList<BacklogItem>>? readBacklog = null,
+        Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? schedulingBacklog = null,
+        Func<DateTimeOffset>? utcNow = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
+        Action<string, string>? appendBacklogNote = null)
     {
-        var changedFiles = CreateChangedFilesSeam(workspace);
-        var snapshot = new BoardFillBacklogSnapshotCache(workspace.BacklogStorePath);
+        changedFiles ??= CreateChangedFilesSeam(workspace);
+        var snapshot = readBacklog is null ? new BoardFillBacklogSnapshotCache(workspace.BacklogStorePath) : null;
+        readBacklog ??= snapshot!.Read;
         return new(
         new(ConductorBoardFillDraftStore.DefaultPath(workspace)),
         draft ?? ((id, token) => AuthorBriefDraftService.Run(id, workspace,
             new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch),
                 ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
             TextWriter.Null, TextWriter.Null, token, "board-fill-drafts", includeBoardFillMetadata: true)),
-        snapshot.Read,
+        readBacklog,
         (kernel, items) =>
         {
             var byId = items.DistinctBy(item => item.Id, StringComparer.Ordinal)
@@ -56,20 +61,20 @@ internal sealed partial class ConductorBoardFillHost
                 goal => LandingState(workspace, goal));
             };
         }, policy, new(workspace.ConductEventsLogPath),
-        items => BoardFillEpicMissingQuestion.ReadMemberships(workspace.PortfolioStorePath, items),
+        items => BoardFillEpicMissingQuestion.ReadMemberships(workspace.PortfolioStorePath, items), utcNow,
         verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch), workspace.ExecutionDirectory),
         filing: CreateFilingSeams(workspace, changedFiles), mainHead: mainHead,
         trackedEdits: () => GitTrackedEditsProbe.Probe(workspace.ExecutionDirectory),
         staleMainHead: mainHead ?? (() => BoardFillStaleItemRule.ReadMainHead(workspace.ExecutionDirectory, workspace.IntegrationBranch)),
-        preferredOrder: () => EpicPlanReadySliceSelector.Read(workspace, snapshot.Read),
-        stalledEpics: new StalledEpicAttention(() => StalledEpicAttention.ReadCandidates(workspace, snapshot.Read),
+        preferredOrder: items => EpicPlanReadySliceSelector.Read(workspace, () => items),
+        stalledEpics: new StalledEpicAttention(() => StalledEpicAttention.ReadCandidates(workspace, readBacklog),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory), new(workspace.ConductEventsLogPath)),
         revise: CreateRevisionSeam(workspace),
-        appendBacklogNote: (id, text) => new BacklogStore(workspace.BacklogStorePath)
-            .AppendNoteAsync(id, text).GetAwaiter().GetResult(), changedFiles: changedFiles,
-        epicAttention: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory))
+        appendBacklogNote: appendBacklogNote ?? ((id, text) => new BacklogStore(workspace.BacklogStorePath)
+            .AppendNoteAsync(id, text).GetAwaiter().GetResult()), changedFiles: changedFiles,
+        epicAttention: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory), schedulingBacklog: schedulingBacklog)
         {
             BacklogSnapshotCache = snapshot
         };

@@ -258,6 +258,45 @@ public sealed class ConductorBoardFillHostPlanOrderTests
     }
 
     [Fact]
+    public async Task Prerequisite_commit_between_acquisition_and_ranking_waits_until_next_tick()
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var first = await fixture.Store.AddAsync("First plan slice");
+        var second = await fixture.Store.AddAsync("Second plan slice");
+        await fixture.Store.UpdateAsync(fixture.Item.Id, new(Status: BacklogItemStatus.Done));
+        await fixture.Store.AddDependencyAsync(first.Id, new(fixture.Item.Id, BacklogDependencyTargetKind.Backlog));
+        var epic = await new PortfolioStore(fixture.Workspace.PortfolioStorePath).AddEpicAsync("Coherent plan");
+        var plans = new EpicPlanStore(fixture.Workspace.PortfolioStorePath);
+        await plans.AddSliceAsync(epic.Id, first.Id);
+        await plans.AddSliceAsync(epic.Id, second.Id);
+        var store = new ConductorBoardFillDraftStore(ConductorBoardFillDraftStore.DefaultPath(fixture.Workspace));
+        var kernel = new AgentOrchestratorKernel();
+        var committed = false;
+        var host = ConductorBoardFillHost.CreateDefault(fixture.Workspace, Policy, () =>
+        {
+            // The host resolves the head after acquiring the candidates and before ranking the plan.
+            if (!committed)
+            {
+                fixture.Store.ReopenAsync(fixture.Item.Id).GetAwaiter().GetResult();
+                committed = true;
+            }
+            return CliAuthorDraftCommandTests.Fixture.MainSha;
+        }, (_, _) => new("failed", 1, null, null, null, [], "stub draft failure"));
+        try
+        {
+            host.ServiceTick(kernel);
+            Assert.True(committed);
+            Assert.Equal(first.Id, Assert.Single(store.ReadAll()).BacklogItemId);
+            await PanelTestHarness.Signal(host.CurrentRound!, "first coherent decision completed");
+
+            host.ServiceTick(kernel);
+            Assert.Equal(second.Id, Assert.Single(store.ReadAll(), round => round.Outcome is null).BacklogItemId);
+            Assert.Contains("waiting on open prerequisite", File.ReadAllText(fixture.Workspace.ConductEventsLogPath));
+        }
+        finally { host.Stop(); }
+    }
+
+    [Fact]
     public async Task Unavailable_authoritative_claim_store_prevents_automatic_drafting()
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();

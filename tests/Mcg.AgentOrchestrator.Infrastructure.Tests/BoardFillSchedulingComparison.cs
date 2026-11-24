@@ -2,6 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.ReadModels;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -149,4 +150,162 @@ internal sealed class BoardFillSchedulingComparison
     internal sealed record HoldObservation(string Id, bool OwnerGated, bool AuthorRefused, bool Contradicted,
         DateTimeOffset ChangeStamp);
     internal sealed record DuplicateObservation(string Id, BoardFillNearDuplicateReference Reference, string? Annotation);
+
+    // Keep the synthetic decision comparison for detailed ordering and legacy fixtures.
+    // The host comparison crosses the real portfolio, claim, landing and note stores.
+    internal sealed class HostFixture : IDisposable
+    {
+        internal const string Claimed = "item-000005";
+        internal const string LandedDependent = "item-000008";
+        private const string LandedPrerequisite = "item-000009";
+        internal const string DuplicateGoal = "11111111111111111111111111111111";
+        internal const string ChangedHead = "new-head";
+        private readonly string _root;
+        private readonly ConductorBoardFillDraftStore _drafts;
+        internal OrchestratorWorkspace Workspace { get; }
+        internal AgentOrchestratorKernel Kernel { get; }
+        internal string MainHead { get; set; } = Head;
+
+        internal HostFixture(BoardFillSnapshotTestDatabase source, int open)
+        {
+            _root = source.At($"host-{Guid.NewGuid():N}");
+            Workspace = OrchestratorWorkspace.ForDirectory(_root);
+            Directory.CreateDirectory(Workspace.OrchestratorDirectory);
+            File.Copy(source.Path, Workspace.BacklogStorePath);
+            using (var backlog = Connect(Workspace.BacklogStorePath))
+                BoardFillSnapshotTestDatabase.Execute(backlog, $"""
+                    UPDATE backlog SET tags='', pinned_at='{BoardFillSnapshotTestDatabase.Timestamp}' WHERE id='{Claimed}';
+                    UPDATE backlog SET priority='high' WHERE id='{LandedDependent}';
+                    UPDATE backlog SET updated_at='2000-01-01T00:00:00.0000000+00:00' WHERE id='{Held}';
+                    UPDATE backlog_notes SET created_at='2000-01-01T00:00:00.0000000+00:00' WHERE backlog_item_id='{Held}';
+                    DELETE FROM backlog_dependencies WHERE dependent_id IN ('{Claimed}', '{LandedPrerequisite}');
+                    INSERT INTO backlog_dependencies (dependent_id, prerequisite_id, prerequisite_kind, created_at)
+                    VALUES ('{LandedDependent}', '{LandedPrerequisite}', 'Backlog', '{BoardFillSnapshotTestDatabase.Timestamp}');
+                    """);
+
+            var portfolio = new PortfolioStore(Workspace.PortfolioStorePath);
+            var epic = portfolio.AddEpicAsync("Scheduling comparison").GetAwaiter().GetResult();
+            var plans = new EpicPlanStore(Workspace.PortfolioStorePath);
+            foreach (var id in PlanSources) plans.AddSliceAsync(epic.Id, id).GetAwaiter().GetResult();
+            using (var connection = Connect(Workspace.PortfolioStorePath))
+                BoardFillSnapshotTestDatabase.Execute(connection, $"""
+                    WITH RECURSIVE ids(n) AS (VALUES (1) UNION ALL SELECT n+1 FROM ids WHERE n < {open})
+                    INSERT OR IGNORE INTO backlog_epic_memberships (backlog_item_id, epic_id, created_at, created_by)
+                    SELECT printf('item-%06d', n), '{epic.Id}', '{BoardFillSnapshotTestDatabase.Timestamp}', 'test'
+                    FROM ids WHERE n <> 7
+                    """);
+
+            var kernel = new AgentOrchestratorKernel();
+            var liveGoal = kernel.CreateGoal(new GoalId(DuplicateGoal), "Repair board scheduling\n\nSee src/Board.cs");
+            var owner = kernel.CreateGoal(new GoalId("22222222222222222222222222222222"), "Delivered dependency");
+            kernel.SetGoalSourceBacklogItemLink(owner.Id, LandedPrerequisite, SourceBacklogCoverage.Slice);
+            var snapshot = kernel.ExportSnapshot();
+            Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Select(goal => goal.Id == owner.Id.Value
+                    ? goal with { Status = GoalStatus.Completed } : goal).ToArray()
+            });
+            owner = Kernel.Goals.Single(goal => goal.Id == owner.Id);
+            GoalOperationJournal.Completed(Workspace.ExecutionDirectory, owner, "conductor:land", "Landed prerequisite fixture");
+            _ = StateDbMigrations.EnsureUpToDate(Workspace.SqliteStatePath);
+            new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
+            using (var connection = Connect(Workspace.SqliteStatePath))
+                BoardFillSnapshotTestDatabase.Execute(connection, $"""
+                    INSERT INTO source_backlog_claims (backlog_item_id, owner_goal_id, coverage, version, updated_at)
+                    VALUES ('{Claimed}', '{liveGoal.Id.Value}', 'Full', 1, '{BoardFillSnapshotTestDatabase.Timestamp}')
+                    """);
+
+            _drafts = new(ConductorBoardFillDraftStore.DefaultPath(Workspace));
+            var historical = new BacklogItem(Historical, "Repair board scheduling", "See src/Board.cs",
+                BacklogItemStatus.Superseded, Now.AddDays(-2), Now.AddDays(-2), null);
+            var round = _drafts.Begin(historical, Now.AddHours(-24));
+            _drafts.Finish(round, new("draft", 0, Head, null, null, []), Now.AddHours(-24));
+            _drafts.Assess(round.Id, new(new("unavailable", 0, []), [], new("none", []), false, []));
+            _drafts.MarkReported(round.Id);
+        }
+
+        internal ConductorBoardFillHost CreateHost(Func<IReadOnlyList<BacklogItem>> readBacklog,
+            Func<IReadOnlyList<BoardFillDraftRound>, DateTimeOffset, IReadOnlyList<BacklogItem>>? readSchedulingBacklog,
+            Action<string, string> appendNote) =>
+            ConductorBoardFillHost.CreateDefault(Workspace, () => ConductorAutonomyPolicy.Permissive with
+            {
+                BoardFillMode = ConductorBoardFillMode.Shadow, BoardFillTargetActiveGoals = 10
+            }, () => MainHead, (_, _) => new("draft", 0, MainHead, null, null, []),
+                readBacklog, readSchedulingBacklog, () => Now,
+                (_, _) => ["src/Board.cs"], appendNote);
+
+        internal HostDecision ReadDecision(SqliteConnection connection)
+        {
+            var selection = _drafts.ReadAll().SingleOrDefault(round => round.Outcome is null);
+            var notes = new List<string>();
+            var releasedStamp = false;
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = $"""
+                    SELECT n.backlog_item_id, n.text, n.created_at, b.updated_at
+                    FROM backlog_notes n JOIN backlog b ON b.id=n.backlog_item_id
+                    WHERE n.backlog_item_id IN ('{Held}', '{Duplicate}') ORDER BY n.id
+                    """;
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    var text = reader.GetString(1);
+                    if (text.StartsWith(BoardFillNearDuplicate.NotePrefix, StringComparison.Ordinal)
+                        || text == ReleaseText)
+                        notes.Add(text);
+                    if (text == ReleaseText && selection is { } selected && selected.BacklogItemId == reader.GetString(0))
+                        releasedStamp = selected.ItemNewestNoteAt == DateTimeOffset.Parse(reader.GetString(2)) &&
+                            selected.ItemUpdatedAt == DateTimeOffset.Parse(reader.GetString(3));
+                }
+            }
+            var readiness = File.ReadLines(Workspace.ConductEventsLogPath).Select(line =>
+            {
+                using var entry = JsonDocument.Parse(line);
+                return entry.RootElement.GetProperty("eventKind").GetString() == "BOARD_FILL_READINESS"
+                    ? entry.RootElement.GetProperty("detail").GetString() : null;
+            }).Last(detail => detail is not null);
+            return new(selection?.BacklogItemId, readiness!, notes.ToArray(), releasedStamp);
+        }
+
+        internal static string ReleaseText =>
+            new BoardFillContradictionHold(Head, Now, [], "").ReleaseNote(ChangedHead);
+
+        internal static IReadOnlyList<BacklogItem> ReadHostProjection(string path, IReadOnlyList<BoardFillDraftRound> rounds,
+            DateTimeOffset now, Action<string, SqliteConnection>? observe,
+            Action<string, SqliteCommand>? observeQuery = null)
+        {
+            var projection = BoardFillSchedulingSnapshot.Read(path, rounds, now, PlanSources, observe, observeQuery);
+            var references = projection.RecentSources.ToDictionary(source => source.Id, StringComparer.Ordinal);
+            var open = projection.Candidates.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+            // The common host accepts BacklogItem. Its closed-row consumers use only identity, status
+            // and recent duplicate text. Closed rows never enter candidate readiness or draft stamps.
+            var closed = projection.Statuses.Keys.Concat(references.Keys).Except(open, StringComparer.Ordinal);
+            return [.. projection.Candidates, .. closed.Select(id =>
+            {
+                var reference = references.GetValueOrDefault(id);
+                return new BacklogItem(id, reference?.Title ?? "", reference?.Body ?? "",
+                    projection.Statuses.GetValueOrDefault(id, BacklogItemStatus.Done), default, default, null);
+            })];
+        }
+
+        internal void ObserveProjectionQueries(Action<string, SqliteCommand> observeQuery) =>
+            _ = ReadHostProjection(Workspace.BacklogStorePath, _drafts.ReadAll(), Now, null, observeQuery);
+
+        internal static SqliteConnection Connect(string path)
+        {
+            var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false
+            }.ToString());
+            connection.Open();
+            return connection;
+        }
+
+        public void Dispose() => Directory.Delete(_root, recursive: true);
+    }
+
+    internal sealed record HostDecision(string? Selected, string Readiness, string[] Notes, bool SelectedReleaseStamp)
+    {
+        internal string Receipt() => JsonSerializer.Serialize(this);
+    }
 }
