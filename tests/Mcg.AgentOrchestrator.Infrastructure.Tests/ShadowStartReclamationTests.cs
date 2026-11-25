@@ -17,6 +17,7 @@ public sealed class ShadowStartReclamationTests
         Assert.True(success.Exit == 0, success.Output + success.Error);
         Assert.Contains("cleanup=reclaimed", success.Output);
         AssertReclaimed(fixture, "success", expectedRuns: 1);
+        Assert.Single(Directory.EnumerateFiles(fixture.Registry, "*.settlement.json"));
         var path = Assert.Single(Directory.EnumerateFiles(fixture.Registry, "*.receipt.json"));
         using (var receipt = JsonDocument.Parse(File.ReadAllText(path)))
         {
@@ -28,6 +29,8 @@ public sealed class ShadowStartReclamationTests
             Assert.Contains("startup-first-tick", root.GetProperty("journal_tail").GetProperty("conduct-events.log").GetString());
         }
 
+        File.WriteAllBytes(Path.Combine(fixture.Source, "state.db-journal"), []);
+        File.WriteAllBytes(Path.Combine(fixture.Source, "cohort-acceptance.db-journal"), []);
         var copies = 0;
         var partial = fixture.Hooks with
         {
@@ -37,7 +40,7 @@ public sealed class ShadowStartReclamationTests
                 Assert.True(File.Exists(store.Staged));
                 if (++copies == 2)
                 {
-                    File.WriteAllText(store.Staged + "-journal", "partial staged sidecar");
+                    Assert.True(File.Exists(store.Staged + "-journal"));
                     throw new IOException("Injected failure after one completed backup.");
                 }
             }

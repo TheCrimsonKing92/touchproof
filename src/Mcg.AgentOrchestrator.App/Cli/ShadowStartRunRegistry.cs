@@ -13,7 +13,8 @@ internal sealed record ShadowStartRun(Guid Id, ShadowScratchRetention Intent, st
     string State, string Staging, string[] Databases, int OwnerPid, DateTimeOffset OwnerStarted,
     ShadowStartPhase Phase, ShadowFileIdentity? ScratchIdentity = null, ShadowFileIdentity? StateIdentity = null,
     ShadowFileIdentity? StagingIdentity = null, string? CleanupReason = null,
-    int? CandidatePid = null, DateTimeOffset? CandidateStarted = null)
+    int? CandidatePid = null, DateTimeOffset? CandidateStarted = null,
+    Dictionary<string, ShadowFileIdentity>? StoreIdentities = null, string? CandidateImagePath = null)
 {
     internal string JobName => $@"Global\McgShadowStart-{Id:N}";
 }
@@ -38,6 +39,7 @@ internal sealed class ShadowStartRunRegistry : IDisposable
 
     internal string RecordPath(Guid id) => Path.Combine(_directory, $"{id:N}.run.json");
     internal string ReceiptPath(Guid id) => Path.Combine(_directory, $"{id:N}.receipt.json");
+    internal string SettlementPath(Guid id) => Path.Combine(_directory, $"{id:N}.settlement.json");
     internal void Save(ShadowStartRun run) => WriteJson(RecordPath(run.Id), run);
 
     internal void Recover(string protectedSource, TextWriter diagnostics)
@@ -60,11 +62,7 @@ internal sealed class ShadowStartRunRegistry : IDisposable
                     var owner = pidProbe.Probe(run.OwnerPid, run.OwnerStarted);
                     if (owner != ConductLockProbeOutcome.Gone)
                         reason = "supervisor-live-or-unverifiable";
-                    else if (run.Phase != ShadowStartPhase.Copying &&
-                             (run.Phase != ShadowStartPhase.Running ||
-                              run.CandidatePid is not > 0 || run.CandidateStarted is null ||
-                              pidProbe.Probe(run.CandidatePid.Value, run.CandidateStarted) != ConductLockProbeOutcome.Gone ||
-                              !OwnedProcessGroup.IsNamedJobConfirmedEmpty(run.JobName)))
+                    else if (run.Phase != ShadowStartPhase.Copying && !HasCandidateSettlement(run))
                         reason = "process-group-unconfirmed";
                 }
 
@@ -78,6 +76,12 @@ internal sealed class ShadowStartRunRegistry : IDisposable
             }
         }
     }
+
+    private bool HasCandidateSettlement(ShadowStartRun run) =>
+        run is { CandidatePid: { } pid, CandidateStarted: { } started, CandidateImagePath: { } image } &&
+        pid > 0 && Path.IsPathFullyQualified(image) &&
+        DurableAcceptanceJob.HasSettlementReceipt(SettlementPath(run.Id), run.JobName,
+            new SpawnProcessIdentity(pid, started, image));
 
     internal ShadowStartCleanup Cleanup(ShadowStartRun run, string? reason, ShadowStartMeasurement? measurement,
         IReadOnlyList<ShadowStartCapacity>? capacity, string? candidate)

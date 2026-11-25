@@ -37,14 +37,14 @@ public sealed class ShadowStartDisposableModeTests
     }
 
     [Fact]
-    public void DisposablePersistsOwnershipBeforeBackupAndStartsOnlyNoDispatchCandidate()
+    public void DisposablePersistsOwnershipBeforeCopyAndStartsOnlyNoDispatchCandidate()
     {
         using var fixture = new ShadowStartCommandTests.Fixture();
         fixture.CreateDatabase("state.db");
         var registered = Guid.Empty;
         var hooks = fixture.Hooks with
         {
-            BeforeBackup = store =>
+            BeforeCopy = store =>
             {
                 var path = Assert.Single(Directory.EnumerateFiles(fixture.Registry, "*.run.json"));
                 var record = JsonSerializer.Deserialize<ShadowStartRun>(File.ReadAllText(path));
@@ -53,6 +53,8 @@ public sealed class ShadowStartDisposableModeTests
                 Assert.Equal(ShadowStartPhase.Copying, record.Phase);
                 Assert.Equal("state.db", Assert.Single(record.Databases));
                 Assert.Equal(Path.Combine(record.State, "state.db"), store.Destination);
+                Assert.False(File.Exists(store.Destination));
+                Assert.False(File.Exists(store.Staged));
                 registered = record.Id;
             }
         };

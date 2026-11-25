@@ -12,7 +12,8 @@ internal sealed record ShadowStartHooks(
     string? StagingParent = null,
     Func<string, ShadowStartVolume>? MapVolume = null,
     Func<ShadowStartVolume, long>? AvailableBytes = null,
-    Action<ShadowStartStore>? BeforeBackup = null);
+    Action<ShadowStartStore>? BeforeBackup = null,
+    Action<ShadowStartStore>? BeforeCopy = null);
 
 internal sealed record ShadowStartStore(string Source, string Destination, string Staged);
 internal sealed record ShadowStartVolume(string Identity, string Root);

@@ -11,8 +11,12 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class DurableAcceptanceJob : IDisposable
 {
     internal SpawnProcessIdentity CustodianIdentity { get; }
-    private DurableAcceptanceJob(SpawnProcessIdentity custodianIdentity)
-    { CustodianIdentity = custodianIdentity; }
+    internal Task CustodianCompletion { get; }
+    private DurableAcceptanceJob(SpawnProcessIdentity custodianIdentity, Task custodianCompletion)
+    {
+        CustodianIdentity = custodianIdentity;
+        CustodianCompletion = custodianCompletion;
+    }
 
     internal static DurableAcceptanceJob AttachCurrent(string name,
         AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null)
@@ -42,8 +46,7 @@ internal sealed class DurableAcceptanceJob : IDisposable
             custodian.Attached();
             // Transfer sole handle custody only after the child verified actual membership.
             handle.Dispose();
-            custodian.Release();
-            return new DurableAcceptanceJob(custodianIdentity);
+            return new DurableAcceptanceJob(custodianIdentity, custodian.Release());
         }
         catch
         {
@@ -97,7 +100,7 @@ internal sealed class DurableAcceptanceJob : IDisposable
     // The independent owner survives the holder and conductor. Cancellation uses exact-job Observe.
     public void Dispose() { }
 
-    private static bool HasSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
+    internal static bool HasSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
     {
         if (path is null) return false;
         try

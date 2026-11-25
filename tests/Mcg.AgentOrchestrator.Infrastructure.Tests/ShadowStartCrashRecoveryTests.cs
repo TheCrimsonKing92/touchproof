@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ShadowStartCrashRecoveryTests
@@ -60,23 +61,47 @@ public sealed class ShadowStartCrashRecoveryTests
     }
 
     [Fact]
-    public void RecoveryCanReclaimWhenTheExactLaunchedJobStillReportsZeroActiveProcesses()
+    public async Task RecoveryUsesSettlementAfterTheOuterJobClosesAndCustodianExits()
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new ShadowStartCommandTests.Fixture();
         var run = Seed(fixture, "settled-job", phase: ShadowStartPhase.Running);
-        using var group = OwnedProcessGroup.CreateNamedContained(run.JobName);
-        var start = new ProcessStartInfo("cmd.exe")
+        var start = new ProcessStartInfo("powershell.exe")
         {
             WorkingDirectory = run.Scratch, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            ArgumentList = { "/d", "/c", "exit", "0" }
+            ArgumentList = { "-NoProfile", "-NonInteractive", "-Command",
+                "[Console]::WriteLine('ready');[void][Console]::ReadLine()" }
         };
-        using var candidate = group.StartRedirected(start);
-        var candidateStarted = candidate.StartTime.ToUniversalTime();
-        Assert.True(candidate.WaitForExit(TimeSpan.FromSeconds(15)), "The settled-job fixture candidate did not exit.");
         using var registry = new ShadowStartRunRegistry(fixture.Registry);
-        registry.Save(run with { CandidatePid = candidate.Id, CandidateStarted = candidateStarted });
+        using var candidate = OwnedProcessGroup.StartSuspendedContainedRedirected(start);
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(candidate.Process).Identity;
+        Assert.NotNull(identity);
+        using var custody = DurableAcceptanceJob.Attach(candidate.Process, run.JobName,
+            AcceptanceJobCustodianHost.BindShadowStart(run.Scratch, run.State), registry.SettlementPath(run.Id));
+        using var observer = Process.GetProcessById(custody.CustodianIdentity.ProcessId);
+        _ = observer.SafeHandle;
+        candidate.Resume();
+        Assert.Equal("ready", await candidate.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+
+        // Closing the sole outer-job handle exercises the kill-on-close path used on supervisor death.
+        candidate.Group.Dispose();
+        Assert.True(observer.WaitForExit(15000), "The job custodian did not settle and exit.");
+        Assert.Equal(0, observer.ExitCode);
+        Assert.True(File.Exists(registry.SettlementPath(run.Id)));
+        var recorded = run with
+        {
+            CandidatePid = identity.ProcessId,
+            CandidateStarted = identity.StartedAt,
+            CandidateImagePath = identity.ImagePath
+        };
+        registry.Save(recorded with { CandidateStarted = identity.StartedAt.AddMinutes(-1) });
+        var mismatch = new StringWriter();
+        registry.Recover(fixture.Source, mismatch);
+        Assert.Contains("cleanup_reason=process-group-unconfirmed", mismatch.ToString());
+        Assert.True(File.Exists(Path.Combine(run.State, "state.db")));
+
+        registry.Save(recorded);
         var diagnostics = new StringWriter();
 
         registry.Recover(fixture.Source, diagnostics);
@@ -84,6 +109,26 @@ public sealed class ShadowStartCrashRecoveryTests
         Assert.Empty(diagnostics.ToString());
         Assert.False(File.Exists(Path.Combine(run.State, "state.db")));
         Assert.False(Directory.Exists(run.Staging));
+    }
+
+    [Fact]
+    public void SamePathReplacementDefersBeforeDeletingAnyRegisteredStore()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new ShadowStartCommandTests.Fixture();
+        var run = Seed(fixture, "replacement-file");
+        var replaced = Path.Combine(run.State, "state.db-wal");
+        File.Move(replaced, Path.Combine(run.State, "original-wal"));
+        File.WriteAllText(replaced, "replacement");
+        using var registry = new ShadowStartRunRegistry(fixture.Registry);
+        var diagnostics = new StringWriter();
+
+        registry.Recover(fixture.Source, diagnostics);
+
+        Assert.Contains("Store file identity mismatch", diagnostics.ToString());
+        Assert.Equal("replacement", File.ReadAllText(replaced));
+        Assert.True(File.Exists(Path.Combine(run.State, "state.db")));
+        Assert.True(File.Exists(Path.Combine(run.Staging, "state.db")));
     }
 
     [Fact]
@@ -117,15 +162,18 @@ public sealed class ShadowStartCrashRecoveryTests
         var scratch = fixture.Scratch(name);
         var state = Path.Combine(scratch, ".orchestrator");
         var staging = Path.Combine(fixture.Staging, id.ToString("N"));
-        foreach (var suffix in ShadowStartCopyPlan.Suffixes)
-            Put(state, "state.db" + suffix);
-        Put(staging, "state.db");
+        var stores = ShadowStartCopyPlan.Suffixes.Select(suffix => Put(state, "state.db" + suffix))
+            .Append(Put(staging, "state.db")).ToDictionary(path => path, path =>
+            {
+                using var file = File.OpenRead(path);
+                return ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle);
+            });
         using var owner = Process.GetCurrentProcess();
         var run = new ShadowStartRun(id, ShadowScratchRetention.Disposable, fixture.Source, scratch, state, staging,
             ["state.db"], liveOwner ? owner.Id : int.MaxValue, owner.StartTime.ToUniversalTime(), phase,
             ShadowStartReclaimer.CaptureDirectory(scratch), ShadowStartReclaimer.CaptureDirectory(state),
             ShadowStartReclaimer.CaptureDirectory(staging), CandidatePid: int.MaxValue - 1,
-            CandidateStarted: owner.StartTime.ToUniversalTime());
+            CandidateStarted: owner.StartTime.ToUniversalTime(), StoreIdentities: stores);
         using var registry = new ShadowStartRunRegistry(fixture.Registry);
         registry.Save(run);
         return run;

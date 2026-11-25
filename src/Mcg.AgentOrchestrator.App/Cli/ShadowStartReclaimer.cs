@@ -79,8 +79,13 @@ internal static class ShadowStartReclaimer
             foreach (var name in run.Databases)
             foreach (var suffix in ShadowStartCopyPlan.Suffixes)
             {
-                var handle = Open(Path.Combine(root, name + suffix), directory: false, delete: true);
-                if (handle is not null) files.Add(handle);
+                var path = Path.Combine(root, name + suffix);
+                var handle = Open(path, directory: false, delete: true);
+                if (handle is null) continue;
+                files.Add(handle);
+                if (run.StoreIdentities is null || !run.StoreIdentities.TryGetValue(path, out var identity) ||
+                    ReadIdentity(handle) != identity)
+                    throw new IOException($"Store file identity mismatch: {path}.");
             }
         }
     }
@@ -118,7 +123,7 @@ internal static class ShadowStartReclaimer
         }
     }
 
-    private static ShadowFileIdentity ReadIdentity(SafeFileHandle handle) =>
+    internal static ShadowFileIdentity ReadIdentity(SafeFileHandle handle) =>
         GetFileInformationByHandleEx(handle, 18, out var identity, (uint)Marshal.SizeOf<ShadowFileIdentity>())
             ? identity
             : throw new Win32Exception(Marshal.GetLastWin32Error());

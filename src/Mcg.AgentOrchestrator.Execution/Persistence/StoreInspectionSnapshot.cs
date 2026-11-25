@@ -19,7 +19,8 @@ internal sealed class StoreInspectionSnapshot : IDisposable
     internal SqliteConnection Connection { get; }
 
     internal StoreInspectionSnapshot(string source, TimeProvider? timeProvider = null,
-        Action<TimeSpan>? waitForLockRetry = null, string? stagingDirectory = null)
+        Action<TimeSpan>? waitForLockRetry = null, string? stagingDirectory = null,
+        Func<string, FileStream>? createStagedFile = null)
     {
         _ownsDirectory = stagingDirectory is null;
         try
@@ -81,8 +82,9 @@ internal sealed class StoreInspectionSnapshot : IDisposable
                 }
                 foreach (var handle in _handles)
                 {
-                    using var destination = new FileStream(Path.Combine(_directory, Path.GetFileName(handle.Name)),
-                        FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    var path = Path.Combine(_directory, Path.GetFileName(handle.Name));
+                    using var destination = createStagedFile?.Invoke(path) ??
+                        new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                     handle.CopyTo(destination);
                 }
             }

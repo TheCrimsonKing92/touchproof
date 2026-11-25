@@ -18,11 +18,11 @@ internal sealed class OwnedProcessGroup : IDisposable
     private int? _processGroupId;
     private bool _disposed;
 
-    private OwnedProcessGroup(bool allowBreakaway, string? name = null)
+    private OwnedProcessGroup(bool allowBreakaway)
     {
         if (OperatingSystem.IsWindows())
         {
-            _jobHandle = WindowsJob.CreateKillOnCloseJob(allowBreakaway, name);
+            _jobHandle = WindowsJob.CreateKillOnCloseJob(allowBreakaway);
         }
     }
 
@@ -57,19 +57,6 @@ internal sealed class OwnedProcessGroup : IDisposable
     public static OwnedProcessGroup Create() => new(allowBreakaway: true);
 
     internal static OwnedProcessGroup CreateContained() => new(allowBreakaway: false);
-
-    internal static OwnedProcessGroup CreateNamedContained(string name) => new(allowBreakaway: false, name);
-
-    internal static bool IsNamedJobConfirmedEmpty(string name)
-    {
-        if (!OperatingSystem.IsWindows()) return false;
-        using var job = OpenJobObjectW(0x0004, false, name); // JOB_OBJECT_QUERY
-        return !job.IsInvalid && WindowsJob.TryGetTotalProcesses(job, out var total) && total > 0 &&
-            WindowsJob.TryGetActiveProcessCount(job, out var active) && active == 0;
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
-    private static extern SafeFileHandle OpenJobObjectW(uint access, bool inherit, string name);
 
     internal static OwnedProcessGroup Attach(HandleListLaunchedProcess process)
     {

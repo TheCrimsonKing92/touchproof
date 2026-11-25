@@ -42,7 +42,7 @@ public sealed class ShadowStartCapacityPreflightTests
         {
             MapVolume = path => path.StartsWith(fixture.Staging, StringComparison.Ordinal) ? new("temp", "T:") : new("copy", "S:"),
             AvailableBytes = volume => volume.Identity == "temp" ? 0 : long.MaxValue,
-            BeforeBackup = _ => throw new InvalidOperationException("Copy ran before capacity admission.")
+            BeforeCopy = _ => throw new InvalidOperationException("Copy ran before capacity admission.")
         };
 
         var result = fixture.Run("normal", "scratch", extra: ["--scratch-retention", "disposable"], hooks: hooks, marker: marker);

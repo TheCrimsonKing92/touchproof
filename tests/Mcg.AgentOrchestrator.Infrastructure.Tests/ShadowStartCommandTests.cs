@@ -109,7 +109,7 @@ public sealed class ShadowStartCommandTests
                  "--candidate-arg=-NoProfile", "--candidate-arg=-NonInteractive",
                  "--candidate-arg=-ExecutionPolicy", "--candidate-arg=Bypass",
                  "--candidate-arg=-File", $"--candidate-arg={_script}", $"--candidate-arg={mode}",
-                 $"--candidate-arg={marker ?? "-"}",
+                 $"--candidate-arg={marker ?? "no-marker"}",
                  "--startup-ceiling-seconds", startupSeconds, "--budget-seconds", "60", .. (extra ?? [])],
                 output, error, hooks ?? Hooks, cancellationToken);
             return (exit, output.ToString(), error.ToString());
@@ -133,7 +133,7 @@ public sealed class ShadowStartCommandTests
             $rootIndex -lt 0 -or $args[$rootIndex + 1] -ne $root -or
             $stateIndex -lt 0 -or $args[$stateIndex + 1] -ne $state -or
             $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -ne $root) { exit 3 }
-        if ($args[1] -ne '-') { [IO.File]::WriteAllText($args[1], 'started') }
+        if ($args[1] -ne 'no-marker') { [IO.File]::WriteAllText($args[1], 'started') }
         [IO.File]::WriteAllLines((Join-Path $root 'received.txt'), [string[]]($args + @(
             $root, $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT,
             "project=$env:MCG_ORCHESTRATOR_PROJECT", "tenant=$env:MCG_ORCHESTRATOR_TENANT")))
