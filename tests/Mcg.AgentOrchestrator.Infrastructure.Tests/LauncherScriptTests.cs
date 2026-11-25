@@ -2686,6 +2686,7 @@ public sealed class LauncherScriptTests
         startInfo.Environment["TEMP"] = tempPath;
         startInfo.Environment["TMP"] = tempPath;
         startInfo.Environment["DOTNET_CLI_HOME"] = Path.Combine(repositoryRoot, "dotnet-home");
+        startInfo.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
         startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = repositoryRoot;
         startInfo.Environment[OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = Path.Combine(repositoryRoot, "registry");
         startInfo.Environment[OrchestratorDataRoot.EnvironmentVariable] = Path.Combine(repositoryRoot, "data");

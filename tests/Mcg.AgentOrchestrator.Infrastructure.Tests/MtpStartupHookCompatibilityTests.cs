@@ -13,6 +13,19 @@ public sealed class MtpStartupHookCompatibilityTests
     private const string HostBoundHook = "host-bound-hook.dll";
 
     [Fact]
+    public void SetChildEnvironmentSuppressesGlobalToolsPathPersistence()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Skip("Windows startup hook.");
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        var start = new ProcessStartInfo { UseShellExecute = false };
+        start.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "1";
+
+        SetChildEnvironment(start, sandbox);
+
+        Assert.Equal("0", start.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"]);
+    }
+
+    [Fact]
     public void PwshHookReferencesMscorlibOnlyOfTheTwoContracts()
     {
         if (!OperatingSystem.IsWindows()) Assert.Skip("Windows PowerShell compiler contract.");
@@ -238,6 +251,8 @@ public sealed class MtpStartupHookCompatibilityTests
         var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         var temp = Directory.CreateDirectory(Path.Combine(sandbox.Root, "temp")).FullName;
         start.Environment.Clear();
+        // Keep the SDK from persisting the sandbox tools directory in the user PATH.
+        start.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
         start.Environment["SystemDrive"] = Path.GetPathRoot(windows)!.TrimEnd('\\');
         start.Environment["SystemRoot"] = windows;
         start.Environment["WINDIR"] = windows;
