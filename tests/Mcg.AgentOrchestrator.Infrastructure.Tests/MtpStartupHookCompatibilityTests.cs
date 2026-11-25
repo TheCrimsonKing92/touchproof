@@ -17,7 +17,7 @@ public sealed class MtpStartupHookCompatibilityTests
     {
         if (!OperatingSystem.IsWindows()) Assert.Skip("Windows startup hook.");
         using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
-        var start = new ProcessStartInfo { UseShellExecute = false };
+        var start = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
         start.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "1";
 
         SetChildEnvironment(start, sandbox);
