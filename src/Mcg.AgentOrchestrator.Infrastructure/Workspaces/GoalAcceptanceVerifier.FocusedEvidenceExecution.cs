@@ -315,6 +315,9 @@ internal static class FocusedEvidenceExecution
             worktreePath, focusedChecks, goalId, stableSlotIndex, stableSlotLease,
             executionEnvironment, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false));
         var checksByName = focusedChecks.ToLookup(check => check.Name, StringComparer.Ordinal);
+        checks = checks.Select(check => !check.Passed && check.LaneToolResolution?.MissingTool is { } tool
+            ? AcceptanceMissingToolClassifier.AttachLaneFailure(check, tool)
+            : check).ToArray();
         checks = checks.Select(check =>
             check.TestProjectPath is null && checksByName[check.Name].ToArray() is [{ Project: { } project }]
                 ? check with { TestProjectPath = project }
@@ -470,6 +473,7 @@ internal static class FocusedEvidenceExecution
         if (checks.Any(check => check.FailureClassification is
                 AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
                 AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
+                AcceptanceFailureClassifications.MissingTool or
                 AcceptanceFailureClassifications.BuildPhaseTimeout))
         {
             return FindingEvidenceArmDisposition.ApparatusFailure;

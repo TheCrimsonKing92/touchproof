@@ -15,6 +15,93 @@ public sealed class SoloRepairWorkflowTests
     private static readonly ConductorAutonomyPolicy Policy = ConductorAutonomyPolicy.Permissive with { MaxCriterionRetries = 0 };
     private const string LandingBlocker = "fixture stops at landing mutation";
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MatchingRedArms_RequireHealthyLaneToolsBeforeRoutingRepair(bool healthy)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var labeler = new PreparedGateIntegrity();
+        using var labels = AcceptanceGateIntegrityNormalizer.PushIntegrityLabelerForTests(labeler);
+        using var fixture = new SoloAttributedFailureRouteFixture { BaselineIntegrityLabeler = labeler };
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var checkout = Worktree(fixture, goal);
+        var bin = Directory.CreateDirectory(Path.Combine(fixture.Root, "System32")).FullName;
+        var powershell = Directory.CreateDirectory(Path.Combine(bin, "WindowsPowerShell", "v1.0")).FullName;
+        foreach (var tool in new[] { "chcp.com", "cmd.exe", "git.exe", "dotnet.exe" })
+            File.WriteAllText(Path.Combine(bin, tool), "");
+        File.WriteAllText(Path.Combine(powershell, "powershell.exe"), "");
+        var environment = new Dictionary<string, string?>
+        {
+            ["PATH"] = healthy ? bin + Path.PathSeparator + powershell : bin,
+            ["PATHEXT"] = ".COM;.EXE"
+        };
+
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        await fixture.Produce(baselineFails: true, attemptId: goal.Id.Value, candidateWorktree: checkout,
+            goal: goal, singleRow: true, laneEnvironment: environment);
+        var failure = fixture.Summary;
+        var check = Assert.Single(failure.RequiredUnmetCriteria);
+        Assert.Equal(First, Assert.Single(check.FailingTestIdentities!));
+        var baseline = Assert.Single(fixture.Proof().BaselineChecks).Check;
+        Assert.False(baseline.Passed);
+        Assert.Equal(First, Assert.Single(baseline.FailingTestIdentities!));
+
+        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true, NormalCheckName = check.Name };
+        var outcome = Complete(Driver(fixture.Kernel, workspace, verifier), goal, failure);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        var context = CreateCliContext(fixture.Kernel, workspace, goal, verifier);
+        var pair = new GateReadyCandidateRevisionPair(failure.BranchHeadSha, failure.MainHeadSha);
+        if (healthy)
+        {
+            Assert.Equal(AcceptanceTestFailureOrigin.Inherited, Assert.Single(check.FailingTestAttributions!).Origin);
+            AssertHold(outcome, SoloHoldReasons.RepairPending);
+            Assert.True(Assert.Single(store.ReadFindings(goal.Id.Value)).Inherited);
+            Assert.Equal(1, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+            Assert.True(CliWorkspaceMerge.ReportRepairHoldBeforeVerification(context, goal, pair, checkout, false, out _, out _));
+        }
+        else
+        {
+            Assert.Equal(AcceptanceFailureClassifications.MissingTool, check.FailureClassification);
+            var cause = Assert.IsType<AcceptanceFailureCauseEvidence>(check.FailureCauseEvidence);
+            Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, cause.Cause);
+            Assert.Contains("powershell.exe", cause.Evidence);
+            Assert.Null(check.FailingTestAttributions);
+            Assert.Empty(store.ReadFindings(goal.Id.Value));
+            Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_group"));
+            Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+            Assert.False(CliWorkspaceMerge.ReportRepairHoldBeforeVerification(context, goal, pair, checkout, false, out _, out _));
+            Assert.True(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+            Assert.Equal(failure.BranchHeadSha, fixture.Git("rev-parse", "main"));
+        }
+    }
+
+    [Fact]
+    public void CliFastForwardSynchronization_PreservesUntrackedRootFile()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var goal = NewCandidate(fixture, fixture.Kernel);
+        var main = fixture.Git("rev-parse", "main");
+        var candidate = RunGit(Worktree(fixture, goal), "rev-parse", "HEAD");
+        var untracked = Path.Combine(fixture.Repo, "operator-notes.txt");
+        File.WriteAllText(untracked, "keep this untracked file");
+
+        var advanced = GoalWorktrees.TryAdvanceFastForwardRefs(fixture.Repo, goal.Id, "refs/heads/main",
+            main, candidate, () => null, new SystemClock(), fromAcceptance: true);
+        var receipt = Assert.IsType<CliFastForwardReceipt>(advanced.FastForwardReceipt);
+        var synced = GoalWorktrees.SynchronizeCliFastForward(fixture.Repo, goal.Id, receipt);
+
+        Assert.True(synced.FastForwarded, synced.Message);
+        Assert.Equal(candidate, fixture.Git("rev-parse", "main"));
+        Assert.Equal(goal.Id.Value, File.ReadAllText(Path.Combine(fixture.Repo, "README.md")));
+        Assert.Equal("keep this untracked file", File.ReadAllText(untracked));
+        Assert.Contains("?? operator-notes.txt", fixture.Git("status", "--short"));
+    }
+
     [Fact]
     public void PullRequestRepair_UsesTheReachableSquashPromotion()
     {
@@ -931,6 +1018,15 @@ public sealed class SoloRepairWorkflowTests
             StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
         };
 
+    private sealed class PreparedGateIntegrity : IWorkerIntegrityLabeler
+    {
+        public bool SetIntegrity(string path, string level, bool recursive) => true;
+
+        public IntegrityLabelState Query(string path) =>
+            new(Exists: File.Exists(path) || Directory.Exists(path), Low: false,
+                Inheritable: Directory.Exists(path), Medium: true);
+    }
+
     private sealed class LandingCanaryRunner(PostLandingCanaryOutcome outcome) : IPostLandingCanaryRunner
     {
         internal List<PostLandingCanaryRequest> Runs { get; } = [];
@@ -959,7 +1055,8 @@ public sealed class SoloRepairWorkflowTests
         var trx = Path.Combine(root, "failure.trx");
         WriteTrx(trx, false, finding.Identity);
         var candidate = new AcceptanceCheckResult(finding.Check, false, 1, null, TestResultPaths: [trx],
-            ExecutedTestCount: 1, FailingTestIdentities: [finding.Identity], TestProjectPath: finding.Project);
+            ExecutedTestCount: 1, FailingTestIdentities: [finding.Identity], TestProjectPath: finding.Project)
+            { LaneToolResolution = new() };
         var baseline = SoloRepairEvidenceTests.FocusedResult(finding, fixture.Main, trx, false, true, finding.Identity,
             FindingEvidenceArm.Baseline);
         var tree = RunGit(fixture.Repository, "rev-parse", fixture.Candidate + "^{tree}");

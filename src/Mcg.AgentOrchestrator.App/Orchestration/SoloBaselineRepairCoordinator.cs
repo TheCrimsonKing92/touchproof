@@ -34,8 +34,8 @@ internal sealed class SoloBaselineRepairCoordinator(
         AcceptanceVerificationSummary? completion = null)
     {
         RetainSoloRepairPartition(_store, goal, () => readContext(goal), () => readCurrentRevisions(goal), completion);
-        var retained = _store.ReadFindings(goal.Id.Value);
-        var introducedFindings = _store.ReadFindings(goal.Id.Value, introduced: true);
+        var retained = ReadVerifiedLaneFindings(_store, goal);
+        var introducedFindings = ReadVerifiedLaneFindings(_store, goal, introduced: true);
         if (retained.Count == 0 && introducedFindings.Count == 0) return null;
         var current = readCurrentRevisions(goal);
         var currentIntroduced = CurrentIntroduced(_store, goal, introducedFindings, current?.BranchRevision, current?.MainRevision);
@@ -53,7 +53,7 @@ internal sealed class SoloBaselineRepairCoordinator(
 
     private AttributedFailure? ReadIntroduced(Goal goal, GateReadyCandidateRevisionPair? current) =>
         SoloAcceptanceFailureReceiptReader.RestoreIntroduced(CurrentIntroduced(_store, goal,
-            _store.ReadFindings(goal.Id.Value, introduced: true), current?.BranchRevision, current?.MainRevision));
+            ReadVerifiedLaneFindings(_store, goal, introduced: true), current?.BranchRevision, current?.MainRevision));
 
     private static SoloRepairFinding[] CurrentIntroduced(SoloBaselineRepairStore store, Goal goal, IReadOnlyList<SoloRepairFinding> findings,
         string? candidate, string? main) => findings.Where(finding => finding.Candidate == candidate && finding.Main == main)
@@ -79,8 +79,16 @@ internal sealed class SoloBaselineRepairCoordinator(
         if (partition is not null) RetainFindings(store, goal, partition.Findings);
     }
 
-    private static void RetainFindings(SoloBaselineRepairStore store, Goal goal, IReadOnlyList<SoloRepairFinding> findings) =>
-        store.Retain(goal.Id.Value, findings, proof => CheckRetainedProof(store, goal, proof).Reason is null);
+    private static void RetainFindings(SoloBaselineRepairStore store, Goal goal, IReadOnlyList<SoloRepairFinding> findings)
+    {
+        var verified = findings.Where(finding => finding.LaneEnvironmentVerified).ToArray();
+        if (verified.Length > 0)
+            store.Retain(goal.Id.Value, verified, proof => CheckRetainedProof(store, goal, proof).Reason is null);
+    }
+
+    private static IReadOnlyList<SoloRepairFinding> ReadVerifiedLaneFindings(
+        SoloBaselineRepairStore store, Goal goal, bool introduced = false) =>
+        store.ReadFindings(goal.Id.Value, introduced).Where(finding => finding.LaneEnvironmentVerified).ToArray();
 
     private static SoloRepairFinding CheckRetainedProof(SoloBaselineRepairStore store, Goal goal, SoloRepairFinding finding)
     {
@@ -115,8 +123,8 @@ internal sealed class SoloBaselineRepairCoordinator(
 
     internal static IReadOnlyList<SoloRepairFinding> SoloRepairFindings(
         SoloBaselineRepairStore store, Goal goal, string? candidate, string? main) =>
-        store.ReadFindings(goal.Id.Value).Select(finding => CheckRetainedProof(store, goal, finding))
-            .Concat(CurrentIntroduced(store, goal, store.ReadFindings(goal.Id.Value, introduced: true), candidate, main)
+        ReadVerifiedLaneFindings(store, goal).Select(finding => CheckRetainedProof(store, goal, finding))
+            .Concat(CurrentIntroduced(store, goal, ReadVerifiedLaneFindings(store, goal, introduced: true), candidate, main)
                 .Where(finding => finding.Reason is not null)).ToArray();
 
     private ConductorAdvanceResult? ReconcileSoloRepairs(Goal goal, string prefix, ConductorAutonomyPolicy policy,
@@ -465,7 +473,7 @@ internal sealed class SoloBaselineRepairCoordinator(
             throw new InvalidOperationException($"Could not remove solo repair checkout {checkout}.");
     }
 
-    internal bool HasObligations(Goal goal) => _store.ReadFindings(goal.Id.Value).Count > 0;
+    internal bool HasObligations(Goal goal) => ReadVerifiedLaneFindings(_store, goal).Count > 0;
 
     internal bool TryDeclineAdmission(Goal goal, string? candidate, string? main, out string? reason)
     {
@@ -476,7 +484,7 @@ internal sealed class SoloBaselineRepairCoordinator(
 
     internal ConductorAdvanceResult? HoldIfUnprepared(Goal goal, string prefix, ConductorAutonomyPolicy policy)
     {
-        if (!HasObligations(goal) && _store.ReadFindings(goal.Id.Value, introduced: true).Count == 0) return null;
+        if (!HasObligations(goal) && ReadVerifiedLaneFindings(_store, goal, introduced: true).Count == 0) return null;
         var current = readCurrentRevisions(goal);
         var findings = SoloRepairFindings(_store, goal, current?.BranchRevision, current?.MainRevision);
         return _store.IsEvidenceCurrent(goal.Id.Value, findings, current?.BranchRevision, current?.MainRevision)

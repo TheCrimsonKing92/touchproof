@@ -363,7 +363,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                     "candidate rerun passed", new("Passed", "candidate-rerun-receipt")));
             var check = new AcceptanceCheckResult("solo inherited tests", false, 1, "inherited failure",
                 FailingTestIdentities: attributions.Select(item => item.TestIdentity).ToArray(),
-                FailingTestAttributions: attributions);
+                FailingTestAttributions: attributions) { LaneToolResolution = new() };
             return new(false, [check], FailedChecks: [check.Name],
                 BranchHeadSha: Candidates[index].BranchHeadSha, MainHeadSha: main);
         }

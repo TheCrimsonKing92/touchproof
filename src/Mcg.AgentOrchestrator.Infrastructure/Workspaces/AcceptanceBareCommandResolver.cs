@@ -1,12 +1,37 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
+
+public sealed record AcceptanceLaneToolResolution(string? MissingTool = null);
+
+public sealed partial record AcceptanceCheckResult
+{
+    // A missing observation cannot attest the environment used by an older attempt.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AcceptanceLaneToolResolution? LaneToolResolution { get; init; }
+}
 
 // Resolves only bare Windows command names, using the environment and directory of the child.
 internal static class AcceptanceBareCommandResolver
 {
+    internal static AcceptanceLaneToolResolution ResolveLaneTools(
+        IEnumerable<KeyValuePair<string, string?>> environment, string workingDirectory)
+    {
+        if (!OperatingSystem.IsWindows()) return new();
+        foreach (var (command, extension) in new[] {
+            ("powershell", ".exe"), ("chcp", ".com"), ("cmd", ".exe"), ("git", ""), ("dotnet", "") })
+        {
+            if (Resolve(command, environment, workingDirectory, extension) is null)
+                return new(command + extension);
+        }
+        return new();
+    }
+
     internal static string? Resolve(
         string command,
         IEnumerable<KeyValuePair<string, string?>> environment,
-        string workingDirectory)
+        string workingDirectory,
+        string requiredExtension = "")
     {
         if (string.IsNullOrEmpty(command) || command.Contains('/') || command.Contains('\\') ||
             Path.HasExtension(command))
@@ -21,7 +46,8 @@ internal static class AcceptanceBareCommandResolver
         }
         if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(pathExt)) return null;
 
-        var extensions = pathExt.Split(';').Where(extension => extension.Length > 0).ToArray();
+        var extensions = pathExt.Split(';').Where(extension => extension.Length > 0 &&
+            (requiredExtension.Length == 0 || extension.Equals(requiredExtension, StringComparison.OrdinalIgnoreCase))).ToArray();
         foreach (var entry in path.Split(';'))
         {
             var directory = entry;

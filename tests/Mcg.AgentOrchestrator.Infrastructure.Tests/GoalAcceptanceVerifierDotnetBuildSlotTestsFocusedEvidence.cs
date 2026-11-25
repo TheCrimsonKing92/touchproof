@@ -372,7 +372,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                     1,
                     "existing failure",
                     FailingTestIdentities: [inherited],
-                    ExecutedTestCount: 1),
+                    ExecutedTestCount: 1) { LaneToolResolution = new() },
                 new AcceptanceCheckResult(
                     ambiguousCheck,
                     false,

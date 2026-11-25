@@ -13,6 +13,7 @@ internal sealed record SoloRepairFinding(string Candidate, string Main, string B
     // Keep existing group and attribution keys when the executable selection is qualified by path.
     public string? LegacyRequest { get; init; }
     public string? ProofBaselineCheck { get; init; }
+    public bool LaneEnvironmentVerified { get; init; }
     internal string? RequestIdentity => LegacyRequest ?? Request;
     internal string GroupKey => SoloBaselineRepairStore.Key(Baseline.ToLowerInvariant(), Check, Project,
         RequestIdentity, BaselineCheck, Identity);
@@ -27,7 +28,10 @@ internal sealed record SoloRepairFinding(string Candidate, string Main, string B
 internal sealed record SoloRepairGroup(string Key, string IntakePayload, string? RepairGoal);
 internal sealed record SoloRepairCheckReceipt(string Outcome, string Detail, IReadOnlyList<SoloAcceptanceArtifact> Artifacts,
     IReadOnlyList<SoloAcceptanceArtifact>? CandidateArtifacts = null, string? Feedback = null,
-    SoloAcceptanceArtifact? Proof = null);
+    SoloAcceptanceArtifact? Proof = null)
+{
+    public bool LaneEnvironmentVerified { get; init; }
+}
 internal sealed record SoloRepairVerifierResult(string Identity, SoloRepairCheckReceipt Receipt, bool ProjectBound = false);
 
 internal sealed class SoloBaselineRepairStore
@@ -75,7 +79,9 @@ internal sealed class SoloBaselineRepairStore
             var rank = finding.Inherited ? 3 : finding.Reason is null ? 2 : finding.Request is not null ? 1 : 0;
             string? disputedGroup = null;
             var (storageKey, stored) = ReadSelectionFinding(db, transaction, goal, finding);
-            var prior = rank is 2 or 3 ? stored : null;
+            var replacesUnverified = finding.LaneEnvironmentVerified && stored is { LaneEnvironmentVerified: false };
+            if (replacesUnverified && stored is { Inherited: true }) disputedGroup = stored.GroupKey;
+            var prior = rank is 2 or 3 && !replacesUnverified ? stored : null;
             var replaceUnavailableProof = prior is { Reason: null } && prior.Proof != finding.Proof &&
                 isProofAvailable?.Invoke(prior) == false;
             if (replaceUnavailableProof && prior!.Inherited) disputedGroup = prior.GroupKey;
@@ -100,10 +106,10 @@ internal sealed class SoloBaselineRepairStore
             using var command = Command(db, """
                 INSERT INTO solo_repair_finding VALUES ($goal, $key, $rank, $finding)
                 ON CONFLICT (goal, identity_key) DO UPDATE SET rank = excluded.rank, finding = excluded.finding
-                WHERE excluded.rank > solo_repair_finding.rank OR $preferExactMain OR $replaceUnavailableProof
+                WHERE excluded.rank > solo_repair_finding.rank OR $preferExactMain OR $replaceUnavailableProof OR $replacesUnverified
                 """, ("$goal", goal), ("$key", storageKey), ("$rank", rank),
                 ("$finding", JsonSerializer.Serialize(finding)), ("$preferExactMain", preferExactMain),
-                ("$replaceUnavailableProof", replaceUnavailableProof));
+                ("$replaceUnavailableProof", replaceUnavailableProof), ("$replacesUnverified", replacesUnverified));
             command.Transaction = transaction;
             var changed = command.ExecuteNonQuery() != 0;
             if (disputedGroup is not null) RemoveConflictingDependency(db, transaction, goal, disputedGroup);
@@ -456,6 +462,8 @@ internal sealed class SoloBaselineRepairStore
         var receipt = result.ProjectBound || result.Receipt.Outcome == "unresolved"
             ? result.Receipt
             : new SoloRepairCheckReceipt("unresolved", "The retained focused result predates test-project binding.", []);
+        if (receipt.Outcome != "unresolved" && !receipt.LaneEnvironmentVerified)
+            receipt = new("unresolved", "The retained focused result predates lane environment verification.", []);
         return receipt with { Proof = new(path, digest) };
     }
 

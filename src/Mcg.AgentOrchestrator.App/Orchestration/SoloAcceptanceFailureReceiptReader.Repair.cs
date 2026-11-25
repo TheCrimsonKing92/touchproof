@@ -46,6 +46,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             foreach (var item in proof.Checks)
             {
                 var check = item.Check;
+                if (check.LaneToolResolution?.MissingTool is not null) continue;
                 if (SoloCoveredCheckInheritance.CoveredChecks(check, checks) is not null) continue;
                 var canPartition = !introducedOnly || checkAttributions[check.Name].ToArray() is
                     [{ Origin: AcceptanceFailureOrigin.Introduced, Cause: AcceptanceFailureCause.NotClassified }];
@@ -56,6 +57,10 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                 var identities = (check.FailingTestIdentities ?? []).DefaultIfEmpty("").Distinct(StringComparer.Ordinal);
                 foreach (var identity in identities)
                 {
+                    if (proof.Bindings.Any(binding => binding.CheckName == check.Name && binding.TestIdentity == identity &&
+                        proof.BaselineChecks.Any(baseline => baseline.Check.Name == binding.BaselineCheckName &&
+                            baseline.Check.LaneToolResolution?.MissingTool is not null)))
+                        continue;
                     var finding = BindRepairSelection(NewUnresolvedFinding(receipt.CandidateSha, receipt.MainSha,
                         receipt.BaselineSha, receipt.AttemptId, receipt.Evidence, check.Name, identity, check.TestProjectPath,
                         SoloHoldReasons.BaselineInheritedOrUncovered), check);
@@ -130,6 +135,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
     private static SoloRepairFinding BindRepairSelection(SoloRepairFinding finding, AcceptanceCheckResult check)
     {
+        finding = finding with { LaneEnvironmentVerified = check.LaneToolResolution is { MissingTool: null } };
         if (string.IsNullOrWhiteSpace(finding.Identity) || finding.Identity != finding.Identity.Trim() ||
             string.IsNullOrWhiteSpace(finding.Project)) return finding;
         var selector = AcceptanceFailureAttributionPlanner.NormalizeIdentity(finding.Identity);
@@ -194,6 +200,9 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
         var check = proof!.Checks.Single(item => item.Check.Name == finding.Check);
         var baseline = proof.BaselineChecks.Single(item => item.Check.Name == (finding.ProofBaselineCheck ?? finding.BaselineCheck));
+        if (finding.Inherited && (check.Check.LaneToolResolution is not { MissingTool: null } ||
+            baseline.Check.LaneToolResolution is not { MissingTool: null }))
+            throw new InvalidDataException("The retained repair proof does not attest a healthy lane environment.");
         if (finding.Inherited && !MatchesRepairProject(finding.Project, baseline.Check.TestProjectPath))
             throw new InvalidDataException(SoloHoldReasons.BaselineResultMismatch);
         if (!check.Artifacts.SequenceEqual(finding.CandidateArtifacts) ||
@@ -267,7 +276,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             if (origin == AcceptanceTestFailureOrigin.Inherited &&
                 !MatchesRepairProject(project, baseline.Check.TestProjectPath))
                 return finding with { Reason = SoloHoldReasons.BaselineResultMismatch };
-            if (origin == AcceptanceTestFailureOrigin.Inherited && receipt.BaselineSha == receipt.MainSha &&
+            if (origin == AcceptanceTestFailureOrigin.Inherited && finding.LaneEnvironmentVerified &&
+                baseline.Check.LaneToolResolution is { MissingTool: null } && receipt.BaselineSha == receipt.MainSha &&
                 proof.Baseline.Disposition == FindingEvidenceArmDisposition.Red && !proof.Baseline.Passed &&
                 !baseline.Check.Passed && exact?.Value.Outcome == "Failed")
                 return finding with { Inherited = true, Reason = null };
@@ -304,12 +314,15 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         string revision, SoloRepairFinding finding, string resultsRoot)
     {
         var arms = result.Arms?.Where(item => item.Arm == arm).ToArray();
+        if (arms is [{ Checks: [var executed] }] && executed.LaneToolResolution?.MissingTool is { } missingTool)
+            return new("unresolved", $"Acceptance lane environment cannot resolve {missingTool}.", []);
         if (!result.Accepted || result.Request != finding.Request || arms is not { Length: 1 } || arms[0].Sha != revision ||
             !arms[0].Accepted || arms[0].Disposition != (arms[0].Passed
                 ? FindingEvidenceArmDisposition.Green : FindingEvidenceArmDisposition.Red))
             return new("unresolved", "The verifier did not execute a conclusive selection on " + revision, []);
         var check = arms[0].Checks is [var selected] ? selected : null;
-        if (check is null || !Usable(check) || check.Advisory || check.TestResultIsExplicitCrossAttemptReuse ||
+        if (check is null || check.LaneToolResolution is not { MissingTool: null } ||
+            !Usable(check) || check.Advisory || check.TestResultIsExplicitCrossAttemptReuse ||
             (finding.BaselineCheck is not null && !RepairCheckNameMatches(finding, check.Name)) ||
             check.TestResultPaths is not { Count: > 0 } paths)
             return new("unresolved", "The executed selection or its result artifacts are unavailable.", []);
@@ -328,14 +341,14 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         var exact = ReadExactRow(rows, finding.Identity);
         if (arms[0].Passed && check.Passed && exact?.Value.Outcome == "Passed" &&
             rows.All(row => row.Value.Outcome != "Failed"))
-            return new("passed", "The original exact identity passed.", artifacts);
+            return new("passed", "The original exact identity passed.", artifacts) { LaneEnvironmentVerified = true };
         if (!arms[0].Passed && !check.Passed && exact?.Value.Outcome == "Failed")
         {
             var selector = AcceptanceFailureAttributionPlanner.NormalizeIdentity(finding.Identity);
             var classified = AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures([finding.Identity], [selector],
                 new Dictionary<string, string>(StringComparer.Ordinal) { [selector] = check.Name }, arms[0]);
             if (classified.Single().Origin == AcceptanceTestFailureOrigin.Inherited)
-                return new("failed", check.Name, artifacts, Feedback: RepairFeedback(exact));
+                return new("failed", check.Name, artifacts, Feedback: RepairFeedback(exact)) { LaneEnvironmentVerified = true };
         }
         return new("unresolved", "The verifier did not produce a unique executed row for the original identity.", artifacts);
     }

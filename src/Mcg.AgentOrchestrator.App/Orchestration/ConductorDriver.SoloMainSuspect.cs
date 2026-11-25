@@ -13,7 +13,8 @@ internal sealed partial class ConductorDriver
     {
         if (_cohortWorkspace is not { } workspace || _cohortAcceptanceStore is not { } store ||
             excluded.Count == 0 || excluded.Any(failure => failure.Kind != AcceptanceRetryExclusionKind.Inherited) ||
-            string.IsNullOrWhiteSpace(candidateSha) || string.IsNullOrWhiteSpace(mainSha) || changedPaths is null)
+            string.IsNullOrWhiteSpace(candidateSha) || string.IsNullOrWhiteSpace(mainSha) || changedPaths is null ||
+            acceptance.RequiredUnmetCriteria.Any(check => check.LaneToolResolution is not { MissingTool: null }))
             return;
 
         ConductEventLogWriter? writer = null;

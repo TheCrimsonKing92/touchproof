@@ -206,13 +206,8 @@ internal static class CliWorkspaceMerge
         AcceptanceVerificationSummary? completion = null)
     {
         var workspace = context.Workspace;
-        if (goal.LatestAcceptanceFailure?.SoloFailureReceipt is null)
-        {
-            if (completion?.RequiresSoloFailureReceipt == true &&
-                SoloAcceptanceFailureReceiptReader.ReadRepairPartition(goal, null, completion) is { } unresolved)
-                OpenRepairStore(workspace, retain: true)!.Retain(goal.Id.Value, unresolved.Findings);
+        if (goal.LatestAcceptanceFailure?.SoloFailureReceipt is null && completion?.RequiresSoloFailureReceipt != true)
             return;
-        }
 
         var root = workspace.ExecutionDirectory;
         GateReadyCandidateRevisionPair ReadCurrent() => new(ReadRef(root, $"refs/heads/{context.Worktrees.BranchName(goal.Id)}"),

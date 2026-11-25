@@ -282,6 +282,34 @@ internal static class AcceptanceFailureAttributionPlanner
         };
     }
 
+    internal static AcceptanceCheckResult AttachBaselineFailures(
+        AcceptanceCheckResult candidate,
+        BoundedIdentitySelection identities,
+        IReadOnlyList<string> selectors,
+        IReadOnlyDictionary<string, string> checkNamesBySelector,
+        FocusedEvidenceArmRunResult baseline,
+        int identityLimit)
+    {
+        var missingTool = candidate.LaneToolResolution?.MissingTool ??
+            baseline.Checks.FirstOrDefault(check => check.LaneToolResolution?.MissingTool is not null &&
+                checkNamesBySelector.Values.Contains(check.Name, StringComparer.Ordinal))?.LaneToolResolution?.MissingTool;
+        if (missingTool is not null)
+            return candidate.FailureClassification == AcceptanceFailureClassifications.MissingTool
+                ? candidate : AcceptanceMissingToolClassifier.AttachLaneFailure(candidate, missingTool);
+
+        var attributions = IncludeOmittedAsUnattributed(
+            ClassifyBaselineFailures(identities.Selected, selectors, checkNamesBySelector, baseline),
+            identities.Omitted, identityLimit);
+        if (candidate.LaneToolResolution is not { MissingTool: null })
+        {
+            attributions = attributions.Select(attribution => attribution.Origin == AcceptanceTestFailureOrigin.Inherited
+                ? Attribution(attribution.TestIdentity, AcceptanceTestFailureOrigin.Unattributed,
+                    "The candidate lane did not attest tool resolution.")
+                : attribution).ToArray();
+        }
+        return candidate with { FailingTestAttributions = attributions };
+    }
+
     internal static IReadOnlyList<AcceptanceTestFailureAttribution> ClassifyBaselineFailures(
         IReadOnlyList<string> identities,
         IReadOnlyList<string> selectors,
@@ -308,7 +336,8 @@ internal static class AcceptanceFailureAttributionPlanner
             }
 
             if (check.FailureClassification is AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
-                AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable)
+                AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or AcceptanceFailureClassifications.MissingTool ||
+                check.LaneToolResolution?.MissingTool is not null)
             {
                 return Attribution(identity, AcceptanceTestFailureOrigin.Unattributed,
                     $"focused baseline apparatus was unavailable at merge-base {baseline.Sha}");
@@ -319,8 +348,11 @@ internal static class AcceptanceFailureAttributionPlanner
                 .ToHashSet(StringComparer.Ordinal);
             if (!check.Passed && baselineFailures.Contains(identity.Trim()))
             {
-                return Attribution(identity, AcceptanceTestFailureOrigin.Inherited,
-                    $"same focused identity failed at merge-base {baseline.Sha}");
+                return check.LaneToolResolution is { MissingTool: null }
+                    ? Attribution(identity, AcceptanceTestFailureOrigin.Inherited,
+                        $"same focused identity failed at merge-base {baseline.Sha}")
+                    : Attribution(identity, AcceptanceTestFailureOrigin.Unattributed,
+                        $"focused baseline did not attest lane tool resolution at merge-base {baseline.Sha}");
             }
 
             var sameSelectorFailures = baselineFailures

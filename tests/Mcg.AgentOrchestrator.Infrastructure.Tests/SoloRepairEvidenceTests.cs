@@ -433,7 +433,8 @@ public sealed class SoloRepairEvidenceTests
     {
         var check = new AcceptanceCheckResult(finding.BaselineCheck!, passed, passed ? 0 : 1, null,
             TestResultPaths: [trx], ExecutedTestCount: executed ? 1 : 0,
-            FailingTestIdentities: passed ? [] : [observedIdentity], TestProjectPath: finding.Project);
+            FailingTestIdentities: passed ? [] : [observedIdentity], TestProjectPath: finding.Project)
+            { LaneToolResolution = new() };
         return new(finding.Request!, true, passed, "focused test receipt", [check], Arms:
             [new(arm, sha, passed ? FindingEvidenceArmDisposition.Green : FindingEvidenceArmDisposition.Red,
                 true, passed, "focused test arm", [check])]);

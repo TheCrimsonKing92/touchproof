@@ -620,7 +620,7 @@ public sealed class SoloRepairReplayTests
             SoloAttributedFailureRouteFixture.Project, $"Sample.Tests FullyQualifiedName~{first}",
             $"reviewer focused evidence: Sample.Tests FullyQualifiedName~{first}", true, "attempt",
             new("proof.json", "proof-digest"), [new("candidate.trx", "candidate-digest")],
-            [new("baseline.trx", "baseline-digest")], null);
+            [new("baseline.trx", "baseline-digest")], null) { LaneEnvironmentVerified = true };
     }
 
     internal static long Count(string path, string table)

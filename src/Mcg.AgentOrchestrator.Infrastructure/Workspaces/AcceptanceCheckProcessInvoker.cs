@@ -53,6 +53,9 @@ internal static class AcceptanceCheckProcessInvoker
             forceUtf8ConsoleOutput,
             request,
             out var resolvedCommandPath);
+        var laneToolResolution = heartbeatContext?.RequiresAcceptanceLease == true
+            ? AcceptanceBareCommandResolver.ResolveLaneTools(startInfo.Environment, startInfo.WorkingDirectory)
+            : null;
         CancellationTokenSource? captureDrainCts = null;
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
@@ -338,7 +341,7 @@ internal static class AcceptanceCheckProcessInvoker
                 captureLimited ? engineSettings.OutputCaptureLimitBytes : null,
                 LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
                 LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary())
-            { StandardOutput = stdout, ResolvedCommandPath = resolvedCommandPath };
+            { StandardOutput = stdout, ResolvedCommandPath = resolvedCommandPath, LaneToolResolution = laneToolResolution };
         }
         catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
         {
