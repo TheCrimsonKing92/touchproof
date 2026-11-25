@@ -69,6 +69,26 @@ public sealed class ShadowStartReclamationTests
     }
 
     [Fact]
+    public void ForeignWalBeforeCandidateLaunchDefersCleanupAndRefusesLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new ShadowStartCommandTests.Fixture();
+        fixture.CreateDatabase("state.db");
+        var marker = fixture.Scratch("candidate-started");
+        var database = Path.Combine(fixture.Scratch("foreign-wal"), ".orchestrator", "state.db");
+        var hooks = fixture.Hooks with { BeforeBackup = store => File.WriteAllText(store.Destination + "-wal", "foreign WAL") };
+
+        var result = fixture.Run("normal", "foreign-wal", extra: Disposable, hooks: hooks, marker: marker);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Contains("assertion=database-backup", result.Error);
+        Assert.Contains("cleanup=deferred", result.Error);
+        Assert.False(File.Exists(marker));
+        Assert.True(File.Exists(database));
+        Assert.Equal("foreign WAL", File.ReadAllText(database + "-wal"));
+    }
+
+    [Fact]
     public async Task CancellationAfterAdmissionReclaimsCopies()
     {
         if (!OperatingSystem.IsWindows()) return;

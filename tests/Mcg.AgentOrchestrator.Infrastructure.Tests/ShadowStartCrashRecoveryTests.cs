@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -66,7 +67,7 @@ public sealed class ShadowStartCrashRecoveryTests
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new ShadowStartCommandTests.Fixture();
         fixture.CreateDatabase("state.db");
-        var run = Seed(fixture, "settled-job", phase: ShadowStartPhase.Running, reserveRuntimeSidecars: true);
+        var run = Seed(fixture, "settled-job", phase: ShadowStartPhase.Running, useRealDatabase: true);
         var database = Path.Combine(run.State, "state.db");
         var start = new ProcessStartInfo("powershell.exe")
         {
@@ -94,6 +95,11 @@ public sealed class ShadowStartCrashRecoveryTests
         Assert.True(observer.WaitForExit(15000), "The job custodian did not settle and exit.");
         Assert.Equal(0, observer.ExitCode);
         Assert.True(File.Exists(registry.SettlementPath(run.Id)));
+        foreach (var path in new[] { database + "-wal", database + "-shm" })
+        {
+            using var sidecar = File.OpenRead(path);
+            Assert.Equal(run.CreatedSidecarIdentities![path], ShadowStartReclaimer.ReadIdentity(sidecar.SafeFileHandle));
+        }
         var recorded = run with
         {
             CandidatePid = identity.ProcessId,
@@ -117,6 +123,47 @@ public sealed class ShadowStartCrashRecoveryTests
         Assert.False(File.Exists(database + "-wal"));
         Assert.False(File.Exists(database + "-shm"));
         Assert.False(Directory.Exists(run.Staging));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LegacySidecarEvidenceCannotAuthorizeDeletingForeignWal(bool previouslyAdopted)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new ShadowStartCommandTests.Fixture();
+        var run = Seed(fixture, "legacy-sidecar");
+        var wal = Path.Combine(run.State, "state.db-wal");
+        foreach (var sidecar in run.CreatedSidecarIdentities!.Keys)
+            File.Delete(sidecar);
+        using var registry = new ShadowStartRunRegistry(fixture.Registry);
+        var legacy = JsonSerializer.SerializeToNode(run with
+        {
+            Phase = previouslyAdopted ? ShadowStartPhase.Released : ShadowStartPhase.Copying,
+            CreatedSidecarIdentities = null
+        })!.AsObject();
+        if (!previouslyAdopted)
+            legacy["SidecarSlots"] = new JsonArray(JsonValue.Create(wal));
+        var record = registry.RecordPath(run.Id);
+        File.WriteAllText(record, legacy.ToJsonString());
+
+        File.WriteAllText(wal, "foreign WAL");
+        if (previouslyAdopted)
+        {
+            // An older reclaimer could save a foreign identity before a failed deletion.
+            using (var foreign = File.OpenRead(wal))
+                legacy["StoreIdentities"]![wal] = JsonSerializer.SerializeToNode(
+                    ShadowStartReclaimer.ReadIdentity(foreign.SafeFileHandle));
+            File.WriteAllText(record, legacy.ToJsonString());
+        }
+        var diagnostics = new StringWriter();
+
+        registry.Recover(fixture.Source, diagnostics);
+
+        Assert.Contains($"Store file identity mismatch: {wal}", diagnostics.ToString());
+        Assert.Equal("foreign WAL", File.ReadAllText(wal));
+        Assert.Equal("fixture", File.ReadAllText(Path.Combine(run.State, "state.db")));
+        Assert.Equal("fixture", File.ReadAllText(Path.Combine(run.Staging, "state.db")));
     }
 
     [Fact]
@@ -182,32 +229,38 @@ public sealed class ShadowStartCrashRecoveryTests
     }
 
     internal static ShadowStartRun Seed(ShadowStartCommandTests.Fixture fixture, string name, bool liveOwner = false,
-        ShadowStartPhase phase = ShadowStartPhase.Copying, bool reserveRuntimeSidecars = false)
+        ShadowStartPhase phase = ShadowStartPhase.Copying, bool useRealDatabase = false)
     {
         var id = Guid.NewGuid();
         var scratch = fixture.Scratch(name);
         var state = Path.Combine(scratch, ".orchestrator");
         var staging = Path.Combine(fixture.Staging, id.ToString("N"));
-        var stateFiles = reserveRuntimeSidecars ? [Put(state, "state.db")] :
-            ShadowStartCopyPlan.Suffixes.Select(suffix => Put(state, "state.db" + suffix)).ToArray();
-        if (reserveRuntimeSidecars)
-            File.Copy(Path.Combine(fixture.Source, "state.db"), stateFiles[0], overwrite: true);
-        var stores = stateFiles
-            .Append(Put(staging, "state.db")).ToDictionary(path => path, path =>
-            {
-                using var file = File.OpenRead(path);
-                return ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle);
-            });
+        var database = Put(state, "state.db");
+        if (useRealDatabase)
+            File.Copy(Path.Combine(fixture.Source, "state.db"), database, overwrite: true);
+        var stores = new[] { database, Put(staging, "state.db") }.ToDictionary(path => path, ReadIdentity);
+        var sidecars = ShadowStartCopyPlan.Suffixes.Skip(1).ToDictionary(suffix => database + suffix, suffix =>
+        {
+            using var file = new FileStream(database + suffix, FileMode.CreateNew);
+            if (!useRealDatabase) file.Write("fixture"u8);
+            return ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle);
+        });
         using var owner = Process.GetCurrentProcess();
         var run = new ShadowStartRun(id, ShadowScratchRetention.Disposable, fixture.Source, scratch, state, staging,
             ["state.db"], liveOwner ? owner.Id : int.MaxValue, owner.StartTime.ToUniversalTime(), phase,
             ShadowStartReclaimer.CaptureDirectory(scratch), ShadowStartReclaimer.CaptureDirectory(state),
             ShadowStartReclaimer.CaptureDirectory(staging), CandidatePid: int.MaxValue - 1,
             CandidateStarted: owner.StartTime.ToUniversalTime(), StoreIdentities: stores,
-            SidecarSlots: reserveRuntimeSidecars ? ShadowStartReclaimer.ReserveSidecarSlots(stateFiles[0]) : null);
+            CreatedSidecarIdentities: sidecars);
         using var registry = new ShadowStartRunRegistry(fixture.Registry);
         registry.Save(run);
         return run;
+
+        static ShadowFileIdentity ReadIdentity(string path)
+        {
+            using var file = File.OpenRead(path);
+            return ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle);
+        }
     }
 
     private static string Put(string directory, string name)

@@ -20,7 +20,7 @@ internal sealed class StoreInspectionSnapshot : IDisposable
 
     internal StoreInspectionSnapshot(string source, TimeProvider? timeProvider = null,
         Action<TimeSpan>? waitForLockRetry = null, string? stagingDirectory = null,
-        Func<string, FileStream>? createStagedFile = null)
+        Func<string, FileStream>? createStagedFile = null, Action<string>? prepareStagedDatabase = null)
     {
         _ownsDirectory = stagingDirectory is null;
         try
@@ -90,7 +90,9 @@ internal sealed class StoreInspectionSnapshot : IDisposable
             }
             finally { sourceHandle.Unlock(LockOffset, LockLength); }
             ReleaseHandles();
-            Connection = Open(Path.Combine(_directory, Path.GetFileName(source)));
+            var stagedDatabase = Path.Combine(_directory, Path.GetFileName(source));
+            prepareStagedDatabase?.Invoke(stagedDatabase);
+            Connection = Open(stagedDatabase);
         }
         catch
         {

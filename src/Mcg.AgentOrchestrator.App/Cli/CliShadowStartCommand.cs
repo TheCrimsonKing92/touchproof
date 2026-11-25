@@ -128,8 +128,9 @@ internal static class CliShadowStartCommand
                     if (OperatingSystem.IsWindows())
                         UpdateRun(run with { StagingIdentity = ShadowStartReclaimer.CaptureDirectory(staging) });
                 }
-                CopyStateDatabases(plan, hooks, run is not null && OperatingSystem.IsWindows() ? CreateOwnedStore : null,
-                    cancellationToken);
+                var trackCopies = run is not null && OperatingSystem.IsWindows();
+                CopyStateDatabases(plan, hooks, trackCopies ? CreateOwnedStore : null,
+                    trackCopies ? PrepareStagedDatabase : null, cancellationToken);
                 assertion = "candidate-launch";
                 measurement = await SuperviseAsync(options, scratch, state, run,
                     run is null ? null : registry.SettlementPath(run.Id), SetPhase, cancellationToken)
@@ -175,13 +176,13 @@ internal static class CliShadowStartCommand
                 try
                 {
                     var current = run!;
-                    var identities = current.StoreIdentities is null ? new Dictionary<string, ShadowFileIdentity>() :
-                        new Dictionary<string, ShadowFileIdentity>(current.StoreIdentities);
+                    var isDatabase = current.Databases.Contains(Path.GetFileName(path), StringComparer.Ordinal);
+                    var recorded = isDatabase ? current.StoreIdentities : current.CreatedSidecarIdentities;
+                    var identities = recorded is null ? new Dictionary<string, ShadowFileIdentity>() :
+                        new Dictionary<string, ShadowFileIdentity>(recorded);
                     identities.Add(path, ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle));
-                    var sidecarSlots = current.SidecarSlots;
-                    if (current.Databases.Contains(Path.GetFileName(path), StringComparer.Ordinal))
-                        sidecarSlots = [.. (sidecarSlots ?? []), .. ShadowStartReclaimer.ReserveSidecarSlots(path)];
-                    UpdateRun(current with { StoreIdentities = identities, SidecarSlots = sidecarSlots });
+                    UpdateRun(isDatabase ? current with { StoreIdentities = identities } :
+                        current with { CreatedSidecarIdentities = identities });
                     return file;
                 }
                 catch
@@ -189,6 +190,14 @@ internal static class CliShadowStartCommand
                     file.Dispose();
                     throw;
                 }
+            }
+
+            void PrepareStagedDatabase(string database)
+            {
+                // A read-only SQLite open can still initialize WAL and shared memory in staging.
+                foreach (var path in new[] { database + "-wal", database + "-shm" })
+                    if (run!.CreatedSidecarIdentities?.ContainsKey(path) != true)
+                        CreateOwnedStore(path).Dispose();
             }
 
             ShadowStartRunRegistry OpenRegistry(string path)
@@ -320,7 +329,8 @@ internal static class CliShadowStartCommand
     }
 
     private static void CopyStateDatabases(ShadowStartCopyPlan plan, ShadowStartHooks hooks,
-        Func<string, FileStream>? createOwnedStore, CancellationToken cancellationToken)
+        Func<string, FileStream>? createOwnedStore, Action<string>? prepareStagedDatabase,
+        CancellationToken cancellationToken)
     {
         foreach (var store in plan.Stores)
         {
@@ -329,15 +339,33 @@ internal static class CliShadowStartCommand
             // A direct read-only open of a quiet WAL database can create source sidecars.
             using var snapshot = new StoreInspectionSnapshot(store.Source,
                 stagingDirectory: plan.Retention == ShadowScratchRetention.Disposable ? Path.GetDirectoryName(store.Staged) : null,
-                createStagedFile: createOwnedStore);
+                createStagedFile: createOwnedStore, prepareStagedDatabase: prepareStagedDatabase);
             createOwnedStore?.Invoke(store.Destination).Dispose();
-            using var copy = new SqliteConnection(new SqliteConnectionStringBuilder
+            using (var copy = new SqliteConnection(new SqliteConnectionStringBuilder
             {
                 DataSource = store.Destination, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
-            }.ToString());
-            copy.Open();
-            hooks.BeforeBackup?.Invoke(store);
-            snapshot.Connection.BackupDatabase(copy);
+            }.ToString()))
+            {
+                copy.Open();
+                if (createOwnedStore is not null)
+                {
+                    // This fresh destination will be discarded after a failed backup.
+                    // Keep its rollback journal in memory so an interrupted backup leaves only registered files.
+                    using var journal = copy.CreateCommand();
+                    journal.CommandText = "PRAGMA journal_mode=MEMORY";
+                    if (!string.Equals(journal.ExecuteScalar() as string, "memory", StringComparison.OrdinalIgnoreCase))
+                        throw new IOException($"Cannot configure the private backup journal: {store.Destination}.");
+                }
+                hooks.BeforeBackup?.Invoke(store);
+                snapshot.Connection.BackupDatabase(copy);
+            }
+            if (createOwnedStore is not null)
+            {
+                // SQLite can open these files in place. Cleanup can only recognize these exact
+                // objects, even if SQLite later removes a file and something recreates its name.
+                foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
+                    createOwnedStore(store.Destination + suffix).Dispose();
+            }
         }
     }
 
