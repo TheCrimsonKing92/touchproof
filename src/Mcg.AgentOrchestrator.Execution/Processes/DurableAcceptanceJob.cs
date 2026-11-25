@@ -27,7 +27,17 @@ internal sealed class DurableAcceptanceJob : IDisposable
 
     internal static DurableAcceptanceJob Attach(Process holder, string name,
         AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null,
-        AcceptanceJobCustodianBounds? bounds = null)
+        AcceptanceJobCustodianBounds? bounds = null) =>
+        Attach(holder, () => SpawnProcessIdentityReader.ReadForRegistration(holder).Identity
+            ?? throw new InvalidOperationException("Acceptance holder identity is unavailable."),
+            name, launch, settlementPath, bounds);
+
+    internal static DurableAcceptanceJob Attach(OwnedProcessGroup.SuspendedRedirectedProcessStart holder, string name,
+        AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null) =>
+        Attach(holder.Process, holder.ReadSuspendedIdentity, name, launch, settlementPath, bounds: null);
+
+    private static DurableAcceptanceJob Attach(Process holder, Func<SpawnProcessIdentity> readIdentity, string name,
+        AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath, AcceptanceJobCustodianBounds? bounds)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Durable acceptance containment requires Windows.");
@@ -35,8 +45,7 @@ internal sealed class DurableAcceptanceJob : IDisposable
         AcceptanceJobCustodian? custodian = null;
         try
         {
-            var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity
-                ?? throw new InvalidOperationException("Acceptance holder identity is unavailable.");
+            var identity = readIdentity();
             // Start before assignment: the custodian must not be a member of the job it owns.
             // Its final handle retains kill-on-close, so custody loss terminates that exact job.
             custodian = AcceptanceJobCustodian.Start(launch, name, identity, settlementPath, bounds);

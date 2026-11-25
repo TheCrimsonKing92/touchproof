@@ -79,9 +79,15 @@ public sealed class ShadowStartReclamationTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ready.Created += (_, _) => started.TrySetResult();
         ready.EnableRaisingEvents = true;
-        var run = Task.Run(() => fixture.Run("no-first-tick", "cancelled", extra: Disposable,
+        var run = Task.Run(() => fixture.Run("hold-wal", "cancelled", extra: Disposable,
             marker: fixture.Scratch("ready"), cancellationToken: cancel.Token));
-        try { await started.Task.WaitAsync(TimeSpan.FromSeconds(15)); }
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            var database = Path.Combine(fixture.Scratch("cancelled"), ".orchestrator", "state.db");
+            Assert.True(new FileInfo(database + "-wal").Length > 32);
+            Assert.True(new FileInfo(database + "-shm").Length > 0);
+        }
         finally
         {
             cancel.Cancel();

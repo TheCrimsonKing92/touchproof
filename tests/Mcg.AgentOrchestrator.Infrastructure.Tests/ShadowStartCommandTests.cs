@@ -81,6 +81,7 @@ public sealed class ShadowStartCommandTests
         }
 
         internal string Scratch(string name) => Path.Combine(_root, name);
+        internal string CandidateScriptPath => _script;
 
         internal void CreateDatabase(string relativePath, string journalMode = "delete", string marker = "fixture")
         {
@@ -133,6 +134,34 @@ public sealed class ShadowStartCommandTests
             $rootIndex -lt 0 -or $args[$rootIndex + 1] -ne $root -or
             $stateIndex -lt 0 -or $args[$stateIndex + 1] -ne $state -or
             $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -ne $root) { exit 3 }
+        if ($mode -eq 'hold-wal') {
+            Add-Type -TypeDefinition @'
+        using System;
+        using System.Runtime.InteropServices;
+        using System.Text;
+
+        public static class ShadowFixtureSqlite {
+            [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+            private static extern int sqlite3_open(byte[] path, out IntPtr database);
+            [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+            private static extern int sqlite3_exec(IntPtr database, string sql, IntPtr callback, IntPtr state, IntPtr error);
+
+            public static void HoldWal(string path) {
+                IntPtr database;
+                int result = sqlite3_open(Encoding.UTF8.GetBytes(path + "\0"), out database);
+                if (result == 0) {
+                    result = sqlite3_exec(database,
+                        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO grouped_attempts VALUES ('wal-fixture', NULL);",
+                        IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                }
+                if (result != 0) throw new InvalidOperationException("SQLite error: " + result);
+                // Keep this connection open until the containing job terminates.
+            }
+        }
+        '@
+            [ShadowFixtureSqlite]::HoldWal((Join-Path $state 'state.db'))
+            [Console]::WriteLine('wal-ready')
+        }
         if ($args[1] -ne 'no-marker') { [IO.File]::WriteAllText($args[1], 'started') }
         [IO.File]::WriteAllLines((Join-Path $root 'received.txt'), [string[]]($args + @(
             $root, $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT,
@@ -154,7 +183,7 @@ public sealed class ShadowStartCommandTests
             }
         }
         if ($mode -eq 'slow') { Start-Sleep -Seconds 30 }
-        if ($mode -eq 'no-first-tick') {
+        if ($mode -eq 'no-first-tick' -or $mode -eq 'hold-wal') {
             Wait-Event -SourceIdentifier 'fixture-release'
             exit 4
         }

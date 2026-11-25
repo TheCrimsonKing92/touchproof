@@ -466,8 +466,7 @@ internal static class SpawnProcessIdentityReader
     {
         return ReadForRegistration(
             process,
-            // A suspended process has an image before its loader has initialized MainModule.
-            static candidate => TryRead(candidate, out var identity) ? identity : TryReadNativeLifecycleIdentity(candidate),
+            static candidate => TryRead(candidate, out var identity) ? identity : null,
             static delayMilliseconds => Thread.Sleep(delayMilliseconds),
             RegistrationReadAttempts,
             RegistrationReadDelayMilliseconds);

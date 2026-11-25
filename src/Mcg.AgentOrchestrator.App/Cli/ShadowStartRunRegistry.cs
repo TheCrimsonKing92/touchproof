@@ -14,7 +14,8 @@ internal sealed record ShadowStartRun(Guid Id, ShadowScratchRetention Intent, st
     ShadowStartPhase Phase, ShadowFileIdentity? ScratchIdentity = null, ShadowFileIdentity? StateIdentity = null,
     ShadowFileIdentity? StagingIdentity = null, string? CleanupReason = null,
     int? CandidatePid = null, DateTimeOffset? CandidateStarted = null,
-    Dictionary<string, ShadowFileIdentity>? StoreIdentities = null, string? CandidateImagePath = null)
+    Dictionary<string, ShadowFileIdentity>? StoreIdentities = null, string? CandidateImagePath = null,
+    string[]? SidecarSlots = null)
 {
     internal string JobName => $@"Global\McgShadowStart-{Id:N}";
 }
@@ -122,7 +123,11 @@ internal sealed class ShadowStartRunRegistry : IDisposable
                     // Save the proof first so a crash during deletion can retry without a vanished job handle.
                     run = run with { Phase = ShadowStartPhase.Released };
                     Save(run);
-                    ShadowStartReclaimer.DeleteStores(run);
+                    ShadowStartReclaimer.DeleteStores(run, updated =>
+                    {
+                        Save(updated);
+                        run = updated;
+                    });
                     run = run with { Phase = ShadowStartPhase.Reclaimed };
                 }
             }
@@ -188,7 +193,20 @@ internal sealed class ShadowStartRunRegistry : IDisposable
         !Overlaps(run.Scratch, run.Staging) && !Overlaps(_directory, run.Scratch) &&
         !Overlaps(_directory, run.Staging) && !Overlaps(_directory, run.Source) &&
         run.Databases is not null && run.Databases.Distinct(StringComparer.OrdinalIgnoreCase).Count() == run.Databases.Length &&
-        run.Databases.All(name => ShadowStartCopyPlan.DatabaseNames.Contains(name, StringComparer.Ordinal));
+        run.Databases.All(name => ShadowStartCopyPlan.DatabaseNames.Contains(name, StringComparer.Ordinal)) &&
+        HasValidSidecarSlots(run);
+
+    private static bool HasValidSidecarSlots(ShadowStartRun run)
+    {
+        if (run.SidecarSlots is not { Length: > 0 } slots) return true;
+        if (run.StoreIdentities is null) return false;
+        var allowed = new[] { run.State, run.Staging }
+            .SelectMany(root => run.Databases.Select(name => Path.Combine(root, name)))
+            .Where(run.StoreIdentities.ContainsKey)
+            .SelectMany(database => ShadowStartCopyPlan.Suffixes.Skip(1).Select(suffix => database + suffix))
+            .ToHashSet(StringComparer.Ordinal);
+        return slots.Distinct(StringComparer.Ordinal).Count() == slots.Length && slots.All(allowed.Contains);
+    }
 
     private static bool IsCanonical(string? path) => path is not null && Path.IsPathFullyQualified(path) &&
         !path.StartsWith(@"\\?\", StringComparison.Ordinal) && !path.StartsWith(@"\\.\", StringComparison.Ordinal) &&

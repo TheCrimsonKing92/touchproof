@@ -178,7 +178,10 @@ internal static class CliShadowStartCommand
                     var identities = current.StoreIdentities is null ? new Dictionary<string, ShadowFileIdentity>() :
                         new Dictionary<string, ShadowFileIdentity>(current.StoreIdentities);
                     identities.Add(path, ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle));
-                    UpdateRun(current with { StoreIdentities = identities });
+                    var sidecarSlots = current.SidecarSlots;
+                    if (current.Databases.Contains(Path.GetFileName(path), StringComparer.Ordinal))
+                        sidecarSlots = [.. (sidecarSlots ?? []), .. ShadowStartReclaimer.ReserveSidecarSlots(path)];
+                    UpdateRun(current with { StoreIdentities = identities, SidecarSlots = sidecarSlots });
                     return file;
                 }
                 catch
@@ -399,12 +402,11 @@ internal static class CliShadowStartCommand
                 child = group.StartRedirected(info);
             else
             {
-                var candidate = SpawnProcessIdentityReader.ReadForRegistration(suspended.Process).Identity
-                    ?? throw new InvalidOperationException("Shadow-start candidate identity is unavailable.");
+                var candidate = suspended.ReadSuspendedIdentity();
                 setPhase(ShadowStartPhase.LaunchPending, candidate);
                 // The outer job still kills on supervisor death. The independent custodian holds
                 // only the nested job, so it can prove release after that death.
-                custody = DurableAcceptanceJob.Attach(suspended.Process, run!.JobName,
+                custody = DurableAcceptanceJob.Attach(suspended, run!.JobName,
                     AcceptanceJobCustodianHost.BindShadowStart(scratch, state), settlementPath);
                 setPhase(ShadowStartPhase.Running, candidate);
                 cancellationToken.ThrowIfCancellationRequested();

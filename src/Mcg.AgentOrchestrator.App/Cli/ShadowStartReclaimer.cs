@@ -20,10 +20,25 @@ internal static class ShadowStartReclaimer
         return ReadIdentity(handle);
     }
 
-    internal static void DeleteStores(ShadowStartRun run)
+    internal static string[] ReserveSidecarSlots(string database)
+    {
+        // This run created the directory and database. Reserve only vacant SQLite names
+        // beside that database before SQLite can create or remove any sidecars.
+        var paths = ShadowStartCopyPlan.Suffixes.Skip(1).Select(suffix => database + suffix).ToArray();
+        foreach (var path in paths)
+        {
+            using var existing = Open(path, directory: false);
+            if (existing is not null)
+                throw new IOException($"Cannot reserve an existing store sidecar: {path}.");
+        }
+        return paths;
+    }
+
+    internal static void DeleteStores(ShadowStartRun run, Action<ShadowStartRun> save)
     {
         var directories = new Dictionary<string, SafeFileHandle>(StringComparer.OrdinalIgnoreCase);
         var files = new List<SafeFileHandle>();
+        var discoveredSidecars = new Dictionary<string, ShadowFileIdentity>();
         try
         {
             Pin(run.Scratch, run.ScratchIdentity);
@@ -32,6 +47,16 @@ internal static class ShadowStartReclaimer
             var staging = Pin(run.Staging, run.StagingIdentity, delete: true);
             if (staging is not null)
                 OpenStores(run.Staging);
+
+            if (run.SidecarSlots is { Length: > 0 })
+            {
+                // Close the reservations before the first deletion. Any retry checks the
+                // durable identities even if a previous pass already deleted the database.
+                var identities = new Dictionary<string, ShadowFileIdentity>(run.StoreIdentities!);
+                foreach (var (path, identity) in discoveredSidecars)
+                    identities.Add(path, identity);
+                save(run with { StoreIdentities = identities, SidecarSlots = null });
+            }
 
             // Check every file before marking any for deletion. These exact, exclusively held
             // handles remain in force through deletion, including between failed and retried runs.
@@ -77,16 +102,30 @@ internal static class ShadowStartReclaimer
         void OpenStores(string root)
         {
             foreach (var name in run.Databases)
-            foreach (var suffix in ShadowStartCopyPlan.Suffixes)
             {
-                var path = Path.Combine(root, name + suffix);
-                var handle = Open(path, directory: false, delete: true);
-                if (handle is null) continue;
-                files.Add(handle);
-                if (run.StoreIdentities is null || !run.StoreIdentities.TryGetValue(path, out var identity) ||
-                    ReadIdentity(handle) != identity)
-                    throw new IOException($"Store file identity mismatch: {path}.");
+                var database = Path.Combine(root, name);
+                var databaseVerified = OpenStore(database, allowReservedSidecar: false);
+                foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
+                    OpenStore(database + suffix, allowReservedSidecar: databaseVerified);
             }
+        }
+
+        bool OpenStore(string path, bool allowReservedSidecar)
+        {
+            var handle = Open(path, directory: false, delete: true);
+            if (handle is null) return false;
+            files.Add(handle);
+            var observed = ReadIdentity(handle);
+            if (run.StoreIdentities is not null && run.StoreIdentities.TryGetValue(path, out var recorded))
+            {
+                if (observed == recorded) return true;
+            }
+            else if (allowReservedSidecar && run.SidecarSlots?.Contains(path, StringComparer.Ordinal) == true)
+            {
+                discoveredSidecars.Add(path, observed);
+                return true;
+            }
+            throw new IOException($"Store file identity mismatch: {path}.");
         }
     }
 
