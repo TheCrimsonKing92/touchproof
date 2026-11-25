@@ -5,6 +5,8 @@ using static GateObligationSelectorPreAdmissionTests;
 // Parallel-safe: the kernel and acceptance evidence directory belong to each fixture.
 public sealed class GateObligationSelectorDeveloperRoutingTests
 {
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
+
     [Theory]
     [InlineData("Unmatched", "A.OtherTests, Z.OtherTests")]
     [InlineData("Ambiguous", "A.PlannedTestsA, Z.PlannedTestsB")]
@@ -26,7 +28,7 @@ public sealed class GateObligationSelectorDeveloperRoutingTests
         Assert.Contains($"Candidate classes considered: {considered}.", feedback);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void RepeatedEvaluations_CountEachCandidateOnceEvenAfterKindChanges()
     {
