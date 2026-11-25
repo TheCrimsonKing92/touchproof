@@ -16,7 +16,7 @@ public sealed class CliAppCommandTimeoutReportTests
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Run_ChildOutlivesDeadline_ReportsIdentityAndCappedStreamTails()
     {
-        var start = ShellStart(FloodCommand(wait: true));
+        var (start, _) = ShellStart(FloodCommand(wait: true));
         var readiness = new CliAppCommandTimeoutReport.Readiness(OutputSentinel, ErrorSentinel);
         await AssertTimeoutFixtureAsync(start, readiness);
     }
@@ -24,7 +24,7 @@ public sealed class CliAppCommandTimeoutReportTests
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Run_FirstOutputAfterNominalDeadline_ReportsIdentityAndCappedStreamTails()
     {
-        var start = ShellStart(FloodCommand(wait: true, delayFirstOutput: true));
+        var (start, _) = ShellStart(FloodCommand(wait: true, delayFirstOutput: true));
         var readiness = new CliAppCommandTimeoutReport.Readiness(OutputSentinel, ErrorSentinel);
         await AssertTimeoutFixtureAsync(start, readiness);
     }
@@ -106,8 +106,8 @@ public sealed class CliAppCommandTimeoutReportTests
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public void Run_ChildExitsWithLargeOutput_PreservesExitCodeAndFullStreams()
     {
-        var start = ShellStart(FloodCommand(wait: false));
-        var result = CliAppCommandTimeoutReport.Run(start, start.ArgumentList.ToArray(), 60000);
+        var (start, arguments) = ShellStart(FloodCommand(wait: false));
+        var result = CliAppCommandTimeoutReport.Run(start, arguments, 60000);
         var lines = string.Concat(Enumerable.Repeat(FloodLine + Environment.NewLine, FloodLines));
 
         Assert.Equal(3, result.ExitCode);
@@ -164,7 +164,8 @@ public sealed class CliAppCommandTimeoutReportTests
         if (OperatingSystem.IsWindows())
         {
             // Child-owned delays work with redirected input and need no network access.
-            const string sleep = "powershell.exe -NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds";
+            var powerShell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+            var sleep = $"\"{powerShell}\" -NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds";
             // Isolate IF so a successful delay still executes the following flood.
             var delay = delayFirstOutput
                 ? $"{sleep} {FirstOutputDelaySeconds} & (if errorlevel 1 exit /b 97) & "
@@ -182,9 +183,10 @@ public sealed class CliAppCommandTimeoutReportTests
             $"printf '%s\\n' '{ErrorSentinel}' >&2; {ending}";
     }
 
-    private static ProcessStartInfo ShellStart(string command)
+    private static (ProcessStartInfo Start, string[] CommandArguments) ShellStart(string command)
     {
-        var start = new ProcessStartInfo(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh")
+        var isWindows = OperatingSystem.IsWindows();
+        var start = new ProcessStartInfo(isWindows ? "cmd.exe" : "/bin/sh")
         {
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -192,17 +194,17 @@ public sealed class CliAppCommandTimeoutReportTests
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        if (OperatingSystem.IsWindows())
+        if (isWindows)
         {
-            start.ArgumentList.Add("/d");
-            start.ArgumentList.Add("/s");
-            start.ArgumentList.Add("/c");
+            // cmd /s removes the outer quotes and needs the executable's inner quotes verbatim.
+            start.Arguments = $"/d /s /c \"{command}\"";
+            // Exercise executable resolution without a PATH in the cmd child.
+            start.Environment["PATH"] = "";
+            return (start, ["/d", "/s", "/c", command]);
         }
-        else
-        {
-            start.ArgumentList.Add("-c");
-        }
+
+        start.ArgumentList.Add("-c");
         start.ArgumentList.Add(command);
-        return start;
+        return (start, start.ArgumentList.ToArray());
     }
 }
