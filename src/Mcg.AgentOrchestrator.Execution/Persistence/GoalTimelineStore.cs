@@ -137,6 +137,29 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
         command.ExecuteNonQuery();
     }
 
+    private const string ProviderHoldMarkerPredicate = """
+        CASE WHEN json_valid(entry_json)
+            THEN json_extract(entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*'
+            ELSE 1 END
+        """;
+
+    internal const string ProviderHoldMarkerGoalsSql =
+        "SELECT DISTINCT goal_id FROM goal_timeline WHERE " + ProviderHoldMarkerPredicate;
+
+    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTimelineStore.cs")]
+    internal static async Task EnsureProviderHoldMarkerIndexAsync(SqliteConnection connection, CancellationToken token)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandTimeout = 1;
+        command.CommandText = "CREATE INDEX IF NOT EXISTS ix_goal_timeline_provider_hold_marker " +
+            "ON goal_timeline(goal_id) WHERE " + ProviderHoldMarkerPredicate;
+        try { await command.ExecuteNonQueryAsync(token); }
+        catch (SqliteException)
+        {
+            // The same query remains authoritative while the optional index is unavailable.
+        }
+    }
+
     private static InvalidDataException Error(string id, string defect, Exception? inner = null) =>
         new($"Goal '{id}' timeline: {defect}.", inner);
 

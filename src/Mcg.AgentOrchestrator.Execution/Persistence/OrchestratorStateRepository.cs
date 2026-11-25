@@ -193,6 +193,7 @@ public sealed record ProviderHoldSeedHistory(IReadOnlyList<ModelFitHistoryRow> R
 {
     internal IReadOnlyList<ProviderHoldSeedAttempt> Recoveries { get; init; } = [];
     internal int DispatchMatchingVisits { get; init; }
+    internal IReadOnlyDictionary<string, long> Timings { get; init; } = new Dictionary<string, long>();
 }
 
 internal static class ConductLoopGoalStatus

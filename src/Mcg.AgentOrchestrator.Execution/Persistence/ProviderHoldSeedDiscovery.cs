@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -17,11 +18,25 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null,
-        bool filterTextCandidates = false, bool backfillArchiveDiscovery = false)
+        bool filterTextCandidates = false, bool backfillArchiveDiscovery = false,
+        Dictionary<string, long>? timings = null, bool sparseArchiveTimelines = false)
     {
+        var started = Stopwatch.GetTimestamp();
+        long archiveTicks = 0;
+        long archiveDecodeTicks = 0;
+        long documentTicks = 0;
         var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, token);
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, token);
         var hasHistory = await GoalTaskHistoryStore.HasTableAsync(connection, token);
+        // Legacy archives need a first decode. Overlap a small number of in-memory
+        // decodes while retaining one ordered reader for SQLite and replay attribution.
+        var archiveBatchSize = sparseArchiveTimelines ? Math.Clamp(Environment.ProcessorCount, 1, 4) : 1;
+        var pending = new List<(string Id, object Payload, string ArchivedAt, bool ValidateTimeline)>(archiveBatchSize);
+        var markerIndexStarted = Stopwatch.GetTimestamp();
+        sparseArchiveTimelines &= hasArchive && hasTimeline;
+        if (sparseArchiveTimelines && backfillArchiveDiscovery)
+            await GoalTimelineStore.EnsureProviderHoldMarkerIndexAsync(connection, token);
+        var markerIndexTicks = Stopwatch.GetTimestamp() - markerIndexStarted;
         var discovery = new ProviderHoldSeedDiscovery(hasHistory);
         var replayOptions = ProviderHoldSeedEvidenceReader.ArchiveReplayOptions(options);
         var remaining = new List<string>();
@@ -32,7 +47,9 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var hasArchiveDiscovery = !indexed && hasArchive &&
             await GoalSnapshotArchive.HasProviderHoldDiscoveryColumnAsync(connection, token);
         command.CommandText = DocumentDiscoverySql(hasArchive, hasTimeline, hasHistory, hasArchiveDiscovery, indexed,
-            filterTextCandidates);
+            filterTextCandidates, sparseArchiveTimelines);
+        if (sparseArchiveTimelines)
+            command.Parameters.AddWithValue("$holdRules", JsonSerializer.Serialize(ProviderHoldHistory.HoldOutcomeRules));
         using (var reader = await command.ExecuteReaderAsync(token))
         {
             while (await reader.ReadAsync(token))
@@ -46,33 +63,19 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     _ => 0
                 }));
                 var archivedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
-                if (archivedAt is not null && await discovery.TryProjectArchiveAsync(connection, id, payload,
-                    replayOptions, token, observe) is { } hasReplayEvidence)
+                if (archivedAt is not null)
                 {
-                    if (backfillArchiveDiscovery && !hasReplayEvidence)
-                        emptyArchives.Add(id, archivedAt);
+                    pending.Add((id, payload, archivedAt, reader.GetBoolean(3)));
+                    if (pending.Count == archiveBatchSize) await ProjectArchivesAsync();
                     continue;
                 }
-                remaining.Add(id);
-                using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
-                var goal = await JsonSerializer.DeserializeAsync<DiscoveryGoal>(stream, options, token);
-                if (goal?.Id != id) throw new InvalidDataException("Provider seed discovery goal identity mismatch.");
-                if (goal.IsMetadataOnly is true || goal.TimelineInTable.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
-                    remainingTimelines.Add(id);
-                else if (goal.Timeline?.Any(evt => IsMarker(evt.Message)) == true)
-                    discovery.MarkerGoals.Add(new(id));
-                foreach (var task in goal.Tasks ?? [])
-                {
-                    var key = (id, task.Id);
-                    foreach (var verification in (task.VerificationHistory ?? []).Append(task.LastVerification))
-                        discovery.ObserveVerification(key, verification);
-                    var providers = (task.DispatchHistory ?? []).Append(task.LastDispatch)
-                        .Select(dispatch => dispatch?.ProviderName ?? dispatch?.WorkerName).OfType<string>()
-                        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                    if (providers.Length > 0) discovery._inlineProviders[key] = providers;
-                }
+                await ProjectArchivesAsync();
+                await ObserveDocumentAsync(id, payload);
             }
+            await ProjectArchivesAsync();
         }
+        var documentScanTicks = Stopwatch.GetTimestamp() - started;
+        started = Stopwatch.GetTimestamp();
 
         command.Parameters.AddWithValue("$remaining", JsonSerializer.Serialize(remaining));
         if (hasTimeline && remainingTimelines.Count != 0)
@@ -98,13 +101,79 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                 discovery.ObserveVerification((reader.GetString(0), reader.GetString(1)),
                     JsonSerializer.Deserialize<TaskVerificationSnapshot>(reader.GetString(2), options));
         }
+        var sidecarTicks = Stopwatch.GetTimestamp() - started;
+        started = Stopwatch.GetTimestamp();
         if (hasArchive && backfillArchiveDiscovery)
             await GoalSnapshotArchive.BackfillProviderHoldDiscoveryAsync(connection, emptyArchives, token);
+        if (timings is not null)
+        {
+            timings["historyDocumentReadMs"] = Milliseconds(documentScanTicks - archiveTicks - archiveDecodeTicks - documentTicks - markerIndexTicks);
+            timings["historyDocumentDecodeMs"] = Milliseconds(documentTicks);
+            timings["historyArchiveProjectionMs"] = Milliseconds(archiveTicks + archiveDecodeTicks);
+            timings["historyArchiveDecodeWaitMs"] = Milliseconds(archiveDecodeTicks);
+            timings["historySidecarReadMs"] = Milliseconds(sidecarTicks);
+            timings["historyMarkerIndexMs"] = Milliseconds(markerIndexTicks);
+            timings["historyDiscoveryWriteMs"] = Milliseconds(Stopwatch.GetTimestamp() - started);
+        }
         return discovery;
+
+        async Task ProjectArchivesAsync()
+        {
+            if (pending.Count == 0) return;
+            var decodeStarted = Stopwatch.GetTimestamp();
+            var decoded = pending.Count == 1
+                ? [ReadArchive(pending[0].Payload)]
+                : await Task.WhenAll(pending.Select(archive => Task.Run(() => ReadArchive(archive.Payload), token)));
+            archiveDecodeTicks += Stopwatch.GetTimestamp() - decodeStarted;
+            for (var index = 0; index < pending.Count; index++)
+            {
+                var (id, payload, archivedAt, validateTimeline) = pending[index];
+                var archiveStarted = Stopwatch.GetTimestamp();
+                var replay = decoded[index] is { } document
+                    ? await discovery.TryProjectArchiveAsync(connection, id, document, replayOptions, token,
+                        observe, validateTimeline)
+                    : null;
+                archiveTicks += Stopwatch.GetTimestamp() - archiveStarted;
+                if (replay is null)
+                    await ObserveDocumentAsync(id, payload);
+                else if (backfillArchiveDiscovery && replay == false)
+                    emptyArchives.Add(id, archivedAt);
+            }
+            pending.Clear();
+
+            ProviderHoldSeedEvidenceReader.GoalFields? ReadArchive(object payload) =>
+                ProviderHoldSeedEvidenceReader.TryReadArchiveDocument(payload, replayOptions, token);
+        }
+
+        async Task ObserveDocumentAsync(string id, object payload)
+        {
+            var documentStarted = Stopwatch.GetTimestamp();
+            remaining.Add(id);
+            using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
+            var goal = await JsonSerializer.DeserializeAsync<DiscoveryGoal>(stream, options, token);
+            if (goal?.Id != id) throw new InvalidDataException("Provider seed discovery goal identity mismatch.");
+            if (goal.IsMetadataOnly || goal.TimelineInTable.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+                remainingTimelines.Add(id);
+            else if (goal.Timeline?.Any(evt => IsMarker(evt.Message)) == true)
+                discovery.MarkerGoals.Add(new(id));
+            foreach (var task in goal.Tasks ?? [])
+            {
+                var key = (id, task.Id);
+                foreach (var verification in (task.VerificationHistory ?? []).Append(task.LastVerification))
+                    discovery.ObserveVerification(key, verification);
+                var providers = (task.DispatchHistory ?? []).Append(task.LastDispatch)
+                    .Select(dispatch => dispatch?.ProviderName ?? dispatch?.WorkerName).OfType<string>()
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                if (providers.Length > 0) discovery._inlineProviders[key] = providers;
+            }
+            documentTicks += Stopwatch.GetTimestamp() - documentStarted;
+        }
+
+        static long Milliseconds(long ticks) => (long)Stopwatch.GetElapsedTime(0, ticks).TotalMilliseconds;
     }
 
     internal static string DocumentDiscoverySql(bool hasArchive, bool hasTimeline, bool hasHistory,
-        bool hasArchiveDiscovery, bool indexed, bool filterTextCandidates)
+        bool hasArchiveDiscovery, bool indexed, bool filterTextCandidates, bool sparseArchiveTimelines = false)
     {
         var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
         var goalIndex = indexed ? $"INDEXED BY {GoalSnapshotArchive.ProviderHoldDiscoveryIndex}" : "";
@@ -130,6 +199,12 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     EXISTS (SELECT 1 FROM json_each(t.value, '$.VerificationHistory') v
                         WHERE {VerificationPredicate("v.value")}))) END
             """ : "";
+        // Resolve sidecar marker and model-fit source membership in the same read as the
+        // archive document. A separate candidate read could race a concurrent writer.
+        var requiresTimeline = sparseArchiveTimelines ? $"""
+            (id IN ({GoalTimelineStore.ProviderHoldMarkerGoalsSql}) OR id IN (
+                SELECT goal_id FROM model_fit_history WHERE outcome_rule IN (SELECT value FROM json_each($holdRules))))
+            """ : "1";
         // Keep hot documents sparse. Archives need the original document to distinguish
         // authoritative inline data from histories stored in the sidecar tables.
         return $"""
@@ -155,7 +230,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     'DispatchHistory', (SELECT json_group_array(json({DispatchSql("d.value")}))
                         FROM json_each(t.value, '$.DispatchHistory') d)))
                     FROM json_each(payload, '$.Tasks') t)
-                ) ELSE payload END, archived_at
+                ) ELSE payload END, archived_at, {requiresTimeline}
             FROM documents
             WHERE empty_version IS NOT {GoalSnapshotArchive.ProviderHoldEmptyVersion}
             {textCandidates}
@@ -172,14 +247,16 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                 AND h.kind = 'verification' AND {VerificationPredicate("h.entry_json")}) OR
             """ : "");
 
-    private async Task<bool?> TryProjectArchiveAsync(SqliteConnection connection, string id, object payload,
-        JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe)
+    private async Task<bool?> TryProjectArchiveAsync(SqliteConnection connection, string id,
+        ProviderHoldSeedEvidenceReader.GoalFields document,
+        JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe,
+        bool validateTimeline)
     {
         ProviderUsageGoalEvidence evidence;
         try
         {
-            evidence = await ProviderHoldSeedEvidenceReader.ProjectAsync(id, payload, options, token, connection,
-                observe, () => MarkerGoals.Add(new(id)));
+            evidence = await ProviderHoldSeedEvidenceReader.ProjectDocumentAsync(id, document, options, token, connection,
+                observe, () => MarkerGoals.Add(new(id)), validateTimeline);
         }
         catch (Exception exception) when (exception is InvalidDataException or JsonException or SqliteException)
         {
@@ -262,7 +339,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         goal.Tasks.Any(task => (task.VerificationHistory ?? []).Append(task.LastVerification)
             .Any(verification => verification is { ExitCode: 0, CompletionVerdictVerifiedSuccess: true } || IsRefusal(verification)));
 
-    private static bool IsRefusal(TaskVerificationSnapshot? verification) =>
+    internal static bool IsRefusal(TaskVerificationSnapshot? verification) =>
         verification is { ExitCode: not 0 } && ProviderHoldEvidence.Read(TaskSpec.RestoreVerification(verification)).Confirmed;
 
     private static bool IsMarker(string? message) => message?.StartsWith("PROVIDER_BUDGET_", StringComparison.Ordinal) == true;

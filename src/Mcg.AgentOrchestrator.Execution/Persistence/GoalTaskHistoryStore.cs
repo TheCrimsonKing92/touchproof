@@ -348,7 +348,10 @@ internal sealed partial class GoalTaskHistoryStore
         if (required < 0) return result;
         if (connection is null)
             throw HistoryError(goalId, tasks[required].Id, "both", "no history connection");
-        var rows = await ReadRowsAsync(connection, goalId, null, token, tasks[required].Id);
+        // SQLite stores the JSON as UTF-8. Keep those bytes through the sparse
+        // reader so the serializer can skip unneeded receipt text without transcoding it.
+        var rows = await ReadRowsAsync(connection, goalId, null, token, tasks[required].Id,
+            "CAST(entry_json AS BLOB)", reader => reader.GetFieldValue<byte[]>(3));
         for (var index = required; index < tasks.Count; index++)
         {
             if (markers[index] is not { } marker) continue;
@@ -361,11 +364,11 @@ internal sealed partial class GoalTaskHistoryStore
         }
         return result;
 
-        T DeserializeEntry<T>(string json) where T : class =>
+        T DeserializeEntry<T>(byte[] json) where T : class =>
             JsonSerializer.Deserialize<T>(json, options) ?? throw new JsonException("History entry must be an object.");
     }
 
-    private sealed record StoredEntry(long Sequence, string Json);
+    private sealed record StoredEntry<T>(long Sequence, T Json);
 
     // SQL projections are repository-owned, never CLI/provider input. Unmarked documents
     // already supply authoritative inline metadata; no table mirror can override it.
@@ -375,7 +378,7 @@ internal sealed partial class GoalTaskHistoryStore
     {
         var counts = ReadMarker(marker, goalId, taskId);
         if (counts is null) return new(new(Elements(verification), false), new(Elements(dispatch), false));
-        var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry>>();
+        var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry<string>>>();
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT kind, sequence, CASE kind WHEN 'verification' THEN {projectVerification("entry_json")}
@@ -449,7 +452,7 @@ internal sealed partial class GoalTaskHistoryStore
         return new(verification, dispatch, latestVerification, latestDispatch);
     }
 
-    private TaskHistory StrictHistory(Dictionary<(string TaskId, string Kind), List<StoredEntry>> rows,
+    private TaskHistory StrictHistory(Dictionary<(string TaskId, string Kind), List<StoredEntry<string>>> rows,
         string goalId, string taskId, HistoryMarker counts)
     {
         var verification = StrictEntries<TaskVerificationSnapshot>(rows.GetValueOrDefault((taskId, "verification")),
@@ -497,7 +500,7 @@ internal sealed partial class GoalTaskHistoryStore
             """;
     }
 
-    private HistoryEntries StrictEntries<T>(IReadOnlyList<StoredEntry>? rows, int? count,
+    private HistoryEntries StrictEntries<T>(IReadOnlyList<StoredEntry<string>>? rows, int? count,
         string goalId, string taskId, string kind)
         => new(ReadStrictEntries(rows, count, goalId, taskId, kind, ReadElement<T>), true, count is null);
 
@@ -510,8 +513,8 @@ internal sealed partial class GoalTaskHistoryStore
         return document.RootElement.Clone();
     }
 
-    private static T[] ReadStrictEntries<T>(IReadOnlyList<StoredEntry>? rows, int? count,
-        string goalId, string taskId, string kind, Func<string, T> read)
+    private static T[] ReadStrictEntries<TJson, T>(IReadOnlyList<StoredEntry<TJson>>? rows, int? count,
+        string goalId, string taskId, string kind, Func<TJson, T> read)
     {
         if ((rows?.Count ?? 0) != (count ?? 0))
             throw HistoryError(goalId, taskId, kind, $"expected {count ?? 0} rows, found {rows?.Count ?? 0}");
@@ -532,14 +535,19 @@ internal sealed partial class GoalTaskHistoryStore
         return entries;
     }
 
-    private static async Task<Dictionary<(string TaskId, string Kind), List<StoredEntry>>> ReadRowsAsync(
+    private static Task<Dictionary<(string TaskId, string Kind), List<StoredEntry<string>>>> ReadRowsAsync(
         SqliteConnection connection, string goalId, string? taskId, CancellationToken token,
-        string? requiredTaskId = null)
+        string? requiredTaskId = null) =>
+        ReadRowsAsync(connection, goalId, taskId, token, requiredTaskId, "entry_json", reader => reader.GetString(3));
+
+    private static async Task<Dictionary<(string TaskId, string Kind), List<StoredEntry<T>>>> ReadRowsAsync<T>(
+        SqliteConnection connection, string goalId, string? taskId, CancellationToken token,
+        string? requiredTaskId, string entrySql, Func<SqliteDataReader, T> readEntry)
     {
-        var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry>>();
+        var rows = new Dictionary<(string TaskId, string Kind), List<StoredEntry<T>>>();
         using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT task_id, kind, sequence, entry_json FROM goal_task_history
+        command.CommandText = $"""
+            SELECT task_id, kind, sequence, {entrySql} FROM goal_task_history
             WHERE goal_id = $goal
             """ + (taskId is null ? "" : " AND task_id = $task") + " ORDER BY task_id, kind, sequence";
         command.Parameters.AddWithValue("$goal", goalId);
@@ -551,7 +559,7 @@ internal sealed partial class GoalTaskHistoryStore
             {
                 var key = (reader.GetString(0), reader.GetString(1));
                 if (!rows.TryGetValue(key, out var entries)) rows.Add(key, entries = []);
-                entries.Add(new(reader.GetInt64(2), reader.GetString(3)));
+                entries.Add(new(reader.GetInt64(2), readEntry(reader)));
             }
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
@@ -564,7 +572,7 @@ internal sealed partial class GoalTaskHistoryStore
         return rows;
     }
 
-    private static HistoryEntries SelectHistory(IReadOnlyList<StoredEntry>? rows, JsonElement[] inline)
+    private static HistoryEntries SelectHistory(IReadOnlyList<StoredEntry<string>>? rows, JsonElement[] inline)
     {
         if (rows is null || rows.Count == 0 || rows.Count != inline.Length) return new(inline, false);
         for (var index = 0; index < rows.Count; index++)

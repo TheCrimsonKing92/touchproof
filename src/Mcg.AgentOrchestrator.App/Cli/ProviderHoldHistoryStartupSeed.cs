@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -32,7 +33,11 @@ internal static class ProviderHoldHistoryStartupSeed
         try
         {
             var historyStarted = time.GetTimestamp();
+            using var process = Process.GetCurrentProcess();
+            var historyCpuStarted = process.TotalProcessorTime;
             var history = repository.ReadProviderHoldSeedHistoryAsync().GetAwaiter().GetResult();
+            process.Refresh();
+            var historyCpuMs = (long)(process.TotalProcessorTime - historyCpuStarted).TotalMilliseconds;
             var working = kernel.Goals;
             var existing = kernel.ProviderHoldHistory.Retained;
             var workingIds = working.Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal);
@@ -76,7 +81,9 @@ internal static class ProviderHoldHistoryStartupSeed
             var elapsedMs = Elapsed(started);
             var line = $"PROVIDER_HOLD_HISTORY candidates={candidates.Length} retained={retained.Length} goals={string.Join(",", retained.Select(goal => goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]))} elapsedMs={elapsedMs.ToString(CultureInfo.InvariantCulture)} loaded={canonical.Count} historyMs={historyMs.ToString(CultureInfo.InvariantCulture)} evidenceMs={evidenceMs.ToString(CultureInfo.InvariantCulture)} pruneMs={pruneMs.ToString(CultureInfo.InvariantCulture)}";
             // Emission is part of seeding: a throwing sink must leave the kernel unchanged too.
-            if (candidates.Length > 0 || existing.Count > 0) emit(line);
+            if (candidates.Length > 0 || existing.Count > 0)
+                emit(line + FormattableString.Invariant($" historyCpuMs={historyCpuMs}") + string.Concat(history.Timings.Select(
+                    timing => FormattableString.Invariant($" {timing.Key}={timing.Value}"))));
             kernel.ProviderHoldHistory.Replace(retained);
             return new(selection, index, candidates.Length, Elapsed(started));
         }

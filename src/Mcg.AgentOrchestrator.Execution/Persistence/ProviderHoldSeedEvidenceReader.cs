@@ -55,11 +55,33 @@ internal static class ProviderHoldSeedEvidenceReader
 
     internal static async Task<ProviderUsageGoalEvidence> ProjectAsync(string id, object payload,
         JsonSerializerOptions options, CancellationToken cancellationToken = default, SqliteConnection? connection = null,
-        Action<GoalSnapshotReadObservation>? observer = null, Action? foundMarker = null)
+        Action<GoalSnapshotReadObservation>? observer = null)
     {
         using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
         var row = await GoalSnapshotByteAccounting.DeserializeAsync<GoalFields>(stream, options, cancellationToken)
             ?? throw new InvalidDataException("Missing provider seed goal evidence.");
+        return await ProjectDocumentAsync(id, row, options, cancellationToken, connection, observer);
+    }
+
+    internal static GoalFields? TryReadArchiveDocument(object payload, JsonSerializerOptions options,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
+            return GoalSnapshotByteAccounting.Deserialize<GoalFields>(stream, options);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    internal static async Task<ProviderUsageGoalEvidence> ProjectDocumentAsync(string id, GoalFields row,
+        JsonSerializerOptions options, CancellationToken cancellationToken, SqliteConnection? connection,
+        Action<GoalSnapshotReadObservation>? observer, Action? foundMarker = null, bool validateArchiveTimeline = true)
+    {
         if (row.Id != id) throw new InvalidDataException("Provider seed evidence goal identity mismatch.");
         var tasks = new List<ProviderUsageTaskEvidence>();
         var store = new GoalTaskHistoryStore(options);
@@ -82,7 +104,7 @@ internal static class ProviderHoldSeedEvidenceReader
                 task.LatestProviderBudgetRecoveryAt) { LastProcess = task.LastProcess });
         }
         var timeline = row.IsMetadataOnly ? [] : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
-            ? row.Timeline ?? [] : (await new GoalTimelineStore(options).ReadAsync(
+            ? row.Timeline ?? [] : SkipSidecarTimeline() ? [] : (await new GoalTimelineStore(options).ReadAsync(
                 connection, id, default, row.TimelineInTable, cancellationToken, TimelineSelectionSql,
                 observer is null ? null : size => observer(new("provider-seed-timeline-entry", id, size))))
                 .Select(entry => entry.Deserialize<EventFields>(options)!).ToArray();
@@ -92,6 +114,13 @@ internal static class ProviderHoldSeedEvidenceReader
             timeline.Select(evt => new ProgressEvent(new GoalId(id),
                 evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
                 OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray());
+
+        // A transition can affect a probe only in the timeline that owns its marker.
+        // Refusals still require canonical timeline validation before startup is ready.
+        bool SkipSidecarTimeline() => !validateArchiveTimeline &&
+            row.TimelineInTable.ValueKind == JsonValueKind.Number && row.TimelineInTable.TryGetInt32(out var count) &&
+            count >= 0 && !tasks.Any(task => task.VerificationHistory.Append(task.LastVerification)
+                .Any(ProviderHoldSeedDiscovery.IsRefusal));
     }
 
     private static TaskDispatchSnapshot ProjectDispatch(TaskDispatchSnapshot dispatch) =>
@@ -114,15 +143,15 @@ internal static class ProviderHoldSeedEvidenceReader
         ProviderBudgetHoldSchedules.TryParseProbe(evt, out _) || ProviderBudgetHoldSchedules.TryParseReset(evt, out _) ||
         ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out _);
 
-    private sealed record GoalFields(string Id, GoalStatus Status, bool IsMetadataOnly,
+    internal sealed record GoalFields(string Id, GoalStatus Status, bool IsMetadataOnly,
         IReadOnlyList<TaskFields>? Tasks, IReadOnlyList<EventFields>? Timeline, JsonElement TimelineInTable);
 
-    private sealed record EventFields(string? TaskId, ProgressKind Kind, string Message,
+    internal sealed record EventFields(string? TaskId, ProgressKind Kind, string Message,
         DateTimeOffset OccurredAt, DateTimeOffset? OperatorIntentCreatedAt);
 
     // Verification records remain intact: TaskSpec owns bounded history retention and same-round
     // enrichment. Stripping their identity/enrichment fields could merge different observations.
-    private sealed record TaskFields(string Id, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
+    internal sealed record TaskFields(string Id, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
         DispatchFields? LastDispatch,
         IReadOnlyList<DispatchFields>? DispatchHistory,
         TaskVerificationSnapshot? LastVerification,
@@ -130,7 +159,7 @@ internal static class ProviderHoldSeedEvidenceReader
         JsonElement HistoryInTable,
         DateTimeOffset? LatestProviderBudgetRecoveryAt, TaskProcessSnapshot? LastProcess);
 
-    private sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,
+    internal sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,
         DateTimeOffset DispatchedAt, string? ProviderName, string? ClaudeCredentialSourceDirectory,
         string? ModelName, string? ClaudeApiHoldIdentity)
     {

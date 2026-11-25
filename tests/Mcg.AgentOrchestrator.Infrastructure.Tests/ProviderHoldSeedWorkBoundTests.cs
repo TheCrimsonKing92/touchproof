@@ -82,6 +82,46 @@ public sealed class ProviderHoldSeedWorkBoundTests
     }
 
     [Fact]
+    public async Task Seed_ArchivedRecovery_DoesNotVisitUnrelatedTimelineRows()
+    {
+        var small = await ReadArchiveAsync(1);
+        var large = await ReadArchiveAsync(2048);
+        Assert.Equal(small, large);
+        Assert.Equal((0, 0), large);
+
+        static async Task<(int RecoveryTimelineReads, int MarkerScanSteps)> ReadArchiveAsync(int timelineRows)
+        {
+            using var fixture = new ProviderHoldSeedFixture();
+            var token = TestContext.Current.CancellationToken;
+            await fixture.PopulateArchivedRecoveryTimelineAsync(timelineRows);
+            var observations = new List<GoalSnapshotReadObservation>();
+            var repository = new SqliteOrchestratorStateRepository(fixture.Database, statementObserver: null,
+                telemetryOptions: null, readObserver: observations.Add);
+            var history = await repository.ReadProviderHoldSeedHistoryAsync(token);
+            Assert.Equal(ProviderHoldSeedFixture.Id(0), Assert.Single(history.Attempts).GoalId);
+            Assert.Equal(ProviderHoldSeedFixture.Id(805), Assert.Single(history.Recoveries).GoalId);
+            var seeded = Seed(repository, new());
+            Assert.Null(Assert.Single(seeded.Index.Evaluations).Value.Schedule);
+            var recoveryReads = observations.Count(row => row.GoalId == ProviderHoldSeedFixture.Id(805) &&
+                row.Operation == "provider-seed-timeline-entry");
+
+            using var connection = new SqliteConnection($"Data Source={fixture.Database};Mode=ReadOnly;Pooling=False");
+            connection.Open();
+            using var count = connection.CreateCommand();
+            count.CommandText = "SELECT count(*) FROM goal_timeline WHERE goal_id = $id";
+            count.Parameters.AddWithValue("$id", ProviderHoldSeedFixture.Id(805));
+            Assert.Equal((long)timelineRows, count.ExecuteScalar());
+            Assert.Equal(raw.SQLITE_OK, raw.sqlite3_prepare_v2(connection.Handle!, GoalTimelineStore.ProviderHoldMarkerGoalsSql,
+                out var statement));
+            using (statement)
+            {
+                Assert.Equal(raw.SQLITE_DONE, raw.sqlite3_step(statement));
+                return (recoveryReads, raw.sqlite3_stmt_status(statement, raw.SQLITE_STMTSTATUS_FULLSCAN_STEP, 0));
+            }
+        }
+    }
+
+    [Fact]
     public async Task Seed_MoreUnrelatedDispatches_LeavesIndexAndBindingWorkUnchanged()
     {
         using var fixture = new ProviderHoldSeedFixture();
@@ -774,6 +814,25 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
     }));
 
     internal Task AddUnrelatedAsync(int count) => SaveAsync(Enumerable.Range(3200, count).Select(MakeUnrelated));
+
+    internal async Task PopulateArchivedRecoveryTimelineAsync(int timelineRows)
+    {
+        var recovery = Make(805, At.AddMinutes(2), Credentials[0], success: true);
+        await SaveAsync([MakeHold(0), recovery with
+        {
+            Timeline = Enumerable.Range(0, timelineRows).Select(index => new ProgressEventSnapshot(recovery.Id,
+                recovery.Tasks[0].Id, ProgressKind.GoalPolicyDecision, "Unrelated fixture decision.",
+                At.AddMinutes(2).AddTicks(index))).ToArray()
+        }]);
+        using var connection = new SqliteConnection($"Data Source={Database};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM model_fit_history WHERE goal_id = $id";
+        command.Parameters.AddWithValue("$id", recovery.Id);
+        command.ExecuteNonQuery();
+        Assert.Equal(1, await Repository.ArchiveTerminalGoalSnapshotsAsync(At.AddDays(1),
+            cancellationToken: TestContext.Current.CancellationToken, compressSnapshots: true));
+    }
 
     internal Task PopulateBindingScopeCollisionAsync(string? heldCredential, string? recoveredCredential) => SaveAsync([
         Make(0, At, null, rule: Rules[0], kind: ProviderFailureKind.BudgetExhausted,

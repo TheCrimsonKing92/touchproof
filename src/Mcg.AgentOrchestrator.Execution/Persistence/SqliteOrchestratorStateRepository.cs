@@ -2389,22 +2389,30 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private async Task<ProviderHoldSeedHistory> ReadProviderHoldHistoryAsync(
         bool forStatus, CancellationToken cancellationToken)
     {
+        var timings = forStatus ? null : new Dictionary<string, long>(StringComparer.Ordinal);
         await using var connection = OpenConnection();
         var candidates = await ProviderHoldSeedDiscovery.ReadAsync(
-            connection, SerializerOptions, cancellationToken, _readObserver, filterTextCandidates: forStatus,
-            backfillArchiveDiscovery: !forStatus && _connectionProfile == StateDbConnectionProfile.ReadWrite);
+            connection, SerializerOptions, cancellationToken, _readObserver, filterTextCandidates: true,
+            backfillArchiveDiscovery: !forStatus && _connectionProfile == StateDbConnectionProfile.ReadWrite,
+            timings, sparseArchiveTimelines: !forStatus);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
+        RecordElapsed("historyFailureReadMs");
         var failureHistory = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals).ToArray();
         var dispatchMatchingVisits = 0;
         void RecordDispatchVisits(int visits) => dispatchMatchingVisits += visits;
         var attempts = failureHistory.SelectMany(goal => ProviderHoldHistory.SeedAttempts(goal, RecordDispatchVisits))
             .Distinct().ToArray();
+        RecordElapsed("historyFailureMatchMs");
         var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
             cancellationToken, attempts);
+        RecordElapsed("historyModelFitReadMs");
         var selection = ProviderHoldHistory.SelectSeedEvidence(rows, attempts, new HashSet<string>(StringComparer.Ordinal));
         var recoveryIds = await candidates.FindRecoveryCandidatesAsync(connection, selection, cancellationToken);
+        RecordElapsed("historyRecoverySelectMs");
         recoveryIds.ExceptWith(candidates.FailureGoals);
         var (recoveryEvidence, recoveryGoals) = await ReadAttemptsAsync(recoveryIds);
+        RecordElapsed("historyRecoveryReadMs");
         // An orphan refusal may have selected a goal that supplies an unindexed recovery.
         var unindexedFailureHistory = failureHistory.Where(goal =>
             !selection.Sources.Contains(goal.Id.Value) && !selection.Dependencies.Contains(goal.Id.Value));
@@ -2420,11 +2428,20 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             .Concat(candidates.MarkerGoals.Select(id => id.Value)))
             if (candidates.ArchiveEvidence.TryGetValue(new GoalId(id), out var archived))
                 replay.TryAdd(id, archived);
+        RecordElapsed("historyRecoveryMatchMs");
         return new(rows, attempts, candidates.MarkerGoals, replay.Values.ToArray())
         {
             Recoveries = recoveries,
-            DispatchMatchingVisits = dispatchMatchingVisits
+            DispatchMatchingVisits = dispatchMatchingVisits,
+            Timings = timings ?? new()
         };
+
+        void RecordElapsed(string phase)
+        {
+            if (timings is null) return;
+            timings[phase] = (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            started = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
 
         async Task<(IReadOnlyList<ProviderUsageGoalEvidence> Evidence, Goal[] Goals)> ReadAttemptsAsync(
             IReadOnlyCollection<GoalId> ids)
