@@ -141,7 +141,7 @@ try
         return 0;
     }
     if (CliShadowStartCommand.IsCommand(startupArgs))
-        return CliShadowStartCommand.Run(startupArgs, Console.Out, Console.Error);
+        return CliShadowStartCommand.RunFromConsole(startupArgs);
     if (CliArgumentParser.IsAskGoal(startupArgs))
         _ = CliArgumentParser.ParseAskGoalArgs(startupArgs);
 }

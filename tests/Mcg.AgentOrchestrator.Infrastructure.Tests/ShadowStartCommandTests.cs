@@ -69,6 +69,9 @@ public sealed class ShadowStartCommandTests
         private readonly string _root = Directory.CreateTempSubdirectory("shadow-start-").FullName;
         private readonly string _script;
         internal string Source { get; }
+        internal string Registry => Scratch("registry");
+        internal string Staging => Scratch("staging");
+        internal ShadowStartHooks Hooks => new(Registry, Staging, AvailableBytes: _ => long.MaxValue);
 
         internal Fixture()
         {
@@ -94,7 +97,9 @@ public sealed class ShadowStartCommandTests
             create.ExecuteNonQuery();
         }
 
-        internal (int Exit, string Output, string Error) Run(string mode, string scratch, string startupSeconds = "20")
+        internal (int Exit, string Output, string Error) Run(string mode, string scratch, string startupSeconds = "20",
+            string[]? extra = null, ShadowStartHooks? hooks = null, string? marker = null,
+            CancellationToken cancellationToken = default)
         {
             using var output = new StringWriter();
             using var error = new StringWriter();
@@ -104,8 +109,9 @@ public sealed class ShadowStartCommandTests
                  "--candidate-arg=-NoProfile", "--candidate-arg=-NonInteractive",
                  "--candidate-arg=-ExecutionPolicy", "--candidate-arg=Bypass",
                  "--candidate-arg=-File", $"--candidate-arg={_script}", $"--candidate-arg={mode}",
-                 "--startup-ceiling-seconds", startupSeconds, "--budget-seconds", "60"],
-                output, error);
+                 $"--candidate-arg={marker ?? "-"}",
+                 "--startup-ceiling-seconds", startupSeconds, "--budget-seconds", "60", .. (extra ?? [])],
+                output, error, hooks ?? Hooks, cancellationToken);
             return (exit, output.ToString(), error.ToString());
         }
 
@@ -127,6 +133,7 @@ public sealed class ShadowStartCommandTests
             $rootIndex -lt 0 -or $args[$rootIndex + 1] -ne $root -or
             $stateIndex -lt 0 -or $args[$stateIndex + 1] -ne $state -or
             $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -ne $root) { exit 3 }
+        if ($args[1] -ne '-') { [IO.File]::WriteAllText($args[1], 'started') }
         [IO.File]::WriteAllLines((Join-Path $root 'received.txt'), [string[]]($args + @(
             $root, $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT,
             "project=$env:MCG_ORCHESTRATOR_PROJECT", "tenant=$env:MCG_ORCHESTRATOR_TENANT")))
@@ -147,6 +154,10 @@ public sealed class ShadowStartCommandTests
             }
         }
         if ($mode -eq 'slow') { Start-Sleep -Seconds 30 }
+        if ($mode -eq 'no-first-tick') {
+            Wait-Event -SourceIdentifier 'fixture-release'
+            exit 4
+        }
         Write-Event 'startup-first-tick' 'STARTUP_FIRST_TICK'
         Write-Event 'tick' 'TICK tick=1'
         if ($mode -eq 'stdout-tick') {

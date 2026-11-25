@@ -25,46 +25,170 @@ internal static class CliShadowStartCommand
 
     internal static bool Execute(IReadOnlyList<string> args)
     {
-        if (Run(args, Console.Out, Console.Error) != 0)
+        if (RunFromConsole(args) != 0)
             throw new InvalidOperationException("Shadow startup check failed.");
         return false;
     }
 
-    internal static int Run(IReadOnlyList<string> args, TextWriter stdout, TextWriter stderr) =>
-        RunAsync(args, stdout, stderr).GetAwaiter().GetResult();
+    internal static int RunFromConsole(IReadOnlyList<string> args)
+    {
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler handler = (_, e) =>
+        {
+            e.Cancel = true;
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += handler;
+        try { return Run(args, Console.Out, Console.Error, cancellationToken: cancellation.Token); }
+        finally { Console.CancelKeyPress -= handler; }
+    }
 
-    private static async Task<int> RunAsync(IReadOnlyList<string> args, TextWriter stdout, TextWriter stderr)
+    internal static int Run(IReadOnlyList<string> args, TextWriter stdout, TextWriter stderr,
+        ShadowStartHooks? hooks = null, CancellationToken cancellationToken = default) =>
+        RunAsync(args, stdout, stderr, hooks ?? new(), cancellationToken).GetAwaiter().GetResult();
+
+    private static async Task<int> RunAsync(IReadOnlyList<string> args, TextWriter stdout, TextWriter stderr,
+        ShadowStartHooks hooks, CancellationToken cancellationToken)
     {
         var assertion = "arguments";
         string? scratch = null;
+        Options? options = null;
         try
         {
-            var options = Parse(args);
+            options = Parse(args);
             assertion = "scratch-containment";
             var source = ResolveDirectoryPath(options.Source);
             scratch = ResolveDirectoryPath(options.Scratch);
             if (!Directory.Exists(source))
                 throw new IOException($"Source state directory does not exist: {source}");
-            var relative = Path.GetRelativePath(source, scratch);
-            if (relative == "." || (!Path.IsPathRooted(relative) && relative != ".." &&
-                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
+            if (ContainsPath(source, scratch))
                 throw new IOException("Scratch must be outside the source state directory.");
+
+            var registryDirectory = ResolveDirectoryPath(hooks.RegistryDirectory ??
+                Path.Combine(OrchestratorDataRoot.Resolve().RootDirectory, "shadow-start", "runs"));
+            var stagingParent = ResolveDirectoryPath(hooks.StagingParent ??
+                Path.Combine(OrchestratorTempRoot.GetRoot(), "tmp", "store-inspection"));
+            var id = Guid.NewGuid();
+            var state = Path.Combine(scratch, StateDirectoryName);
+            var staging = Path.Combine(stagingParent, id.ToString("N"));
+            if (ShadowStartRunRegistry.Overlaps(registryDirectory, source) ||
+                ShadowStartRunRegistry.Overlaps(registryDirectory, scratch) ||
+                ShadowStartRunRegistry.Overlaps(staging, source) ||
+                ShadowStartRunRegistry.Overlaps(staging, scratch) ||
+                ShadowStartRunRegistry.Overlaps(staging, registryDirectory))
+                throw new IOException("Shadow-start registry and staging must be outside source and scratch.");
+
+            assertion = "ownership-registry";
+            using var registry = OpenRegistry(registryDirectory);
+            assertion = "scratch-containment";
+            registry.Recover(source, stderr);
             if (EntryExists(options.Scratch) || EntryExists(scratch))
                 throw new IOException("Scratch directory must be new.");
 
-            assertion = "database-backup";
-            CreateScratch(scratch);
-            var state = Directory.CreateDirectory(Path.Combine(scratch, StateDirectoryName)).FullName;
-            CopyStateDatabases(source, state);
-            assertion = "candidate-launch";
-            return await SuperviseAsync(options, scratch, state, stdout, stderr).ConfigureAwait(false);
+            assertion = "capacity-preflight";
+            var plan = ShadowStartCopyPlan.Create(source, state, staging, registryDirectory, options.Retention, hooks);
+            var shortfalls = plan.Capacity.Where(volume => volume.ShortfallBytes > 0).ToArray();
+            if (shortfalls.Length > 0)
+            {
+                Report(stderr, new(assertion, "Insufficient free space for shadow-start."), scratch, options.Retention);
+                foreach (var volume in shortfalls)
+                    stderr.WriteLine(FormattableString.Invariant(
+                        $"volume={volume.Volume} required_bytes={volume.RequiredBytes} available_bytes={volume.AvailableBytes} shortfall_bytes={volume.ShortfallBytes}"));
+                return 1;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ShadowStartRun? run = null;
+            if (plan.Retention == ShadowScratchRetention.Disposable)
+            {
+                assertion = "ownership-registry";
+                using var owner = Process.GetCurrentProcess();
+                run = new(id, plan.Retention, source, scratch, state, staging,
+                    plan.Stores.Select(store => Path.GetFileName(store.Destination)).ToArray(),
+                    owner.Id, owner.StartTime.ToUniversalTime(),
+                    ShadowStartPhase.Copying);
+                registry.Save(run);
+            }
+
+            ShadowStartMeasurement measurement;
+            try
+            {
+                assertion = "database-backup";
+                CreateScratch(scratch);
+                Directory.CreateDirectory(state);
+                if (run is not null && OperatingSystem.IsWindows())
+                    UpdateRun(run with
+                    {
+                        ScratchIdentity = ShadowStartReclaimer.CaptureDirectory(scratch),
+                        StateIdentity = ShadowStartReclaimer.CaptureDirectory(state)
+                    });
+                if (run is not null && plan.Stores.Count > 0)
+                {
+                    CreateScratch(staging);
+                    if (OperatingSystem.IsWindows())
+                        UpdateRun(run with { StagingIdentity = ShadowStartReclaimer.CaptureDirectory(staging) });
+                }
+                CopyStateDatabases(plan, hooks, cancellationToken);
+                assertion = "candidate-launch";
+                measurement = await SuperviseAsync(options, scratch, state, run?.JobName, SetPhase, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsRunFailure(ex))
+            {
+                measurement = new(ex is OperationCanceledException ? "cancelled" : assertion, ex.Message,
+                    ReleaseVerified: run?.Phase == ShadowStartPhase.Copying);
+            }
+
+            ShadowStartCleanup? cleanup = null;
+            if (run is not null)
+                cleanup = registry.Cleanup(run, measurement.ReleaseVerified ? null :
+                    OperatingSystem.IsWindows() ? "process-group-unconfirmed" : "release-unverifiable-platform",
+                    measurement, plan.Capacity, options.Candidate ?? typeof(CliShadowStartCommand).Assembly.Location);
+            Report(measurement.Assertion is null ? stdout : stderr, measurement, scratch, plan.Retention, id, cleanup);
+            if (measurement.Assertion is not null && measurement.OutputTail is { } tail)
+                foreach (var line in tail) stderr.WriteLine(line);
+            return measurement.Assertion is not null ? 1 : cleanup?.Status == "deferred" ? 2 : 0;
+
+            void SetPhase(ShadowStartPhase phase, int? candidatePid, DateTimeOffset? candidateStarted)
+            {
+                if (run is not null)
+                    UpdateRun(run with { Phase = phase, CandidatePid = candidatePid, CandidateStarted = candidateStarted });
+            }
+
+            void UpdateRun(ShadowStartRun updated)
+            {
+                registry.Save(updated);
+                run = updated;
+            }
+
+            ShadowStartRunRegistry OpenRegistry(string path)
+            {
+                try { return new(path); }
+                catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33 ||
+                    (!OperatingSystem.IsWindows() && (ex.HResult & 0xffff) == 11))
+                {
+                    assertion = "concurrent-run";
+                    throw;
+                }
+            }
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or
-            InvalidOperationException or SqliteException or Win32Exception or NotSupportedException)
+        catch (Exception ex) when (IsRunFailure(ex))
         {
-            Report(stderr, assertion, ex.Message, scratch, null, null, null);
+            Report(stderr, new(ex is OperationCanceledException ? "cancelled" : assertion, ex.Message),
+                scratch, options?.Retention);
             return 1;
         }
+    }
+
+    private static bool IsRunFailure(Exception ex) => ex is ArgumentException or IOException or UnauthorizedAccessException or
+        InvalidOperationException or SqliteException or Win32Exception or NotSupportedException or
+        OverflowException or OperationCanceledException;
+
+    internal static bool ContainsPath(string root, string path)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        return !Path.IsPathRooted(relative) && relative != ".." &&
+            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     private static Options Parse(IReadOnlyList<string> args)
@@ -77,7 +201,7 @@ internal static class CliShadowStartCommand
             var equals = arg.IndexOf('=');
             var flag = (equals < 0 ? arg : arg[..equals]).ToLowerInvariant();
             if (flag is not ("--source" or "--scratch" or "--candidate" or "--candidate-arg" or
-                "--startup-ceiling-seconds" or "--budget-seconds"))
+                "--startup-ceiling-seconds" or "--budget-seconds" or "--scratch-retention"))
                 throw new ArgumentException($"Unknown shadow-start argument: {arg}");
             var value = equals >= 0 ? arg[(equals + 1)..]
                 : ++i < args.Count && !args[i].StartsWith("--", StringComparison.Ordinal) ? args[i]
@@ -95,7 +219,13 @@ internal static class CliShadowStartCommand
         var candidate = values.GetValueOrDefault("--candidate");
         if (candidate is null && candidateArguments.Count > 0)
             throw new ArgumentException("--candidate-arg requires --candidate.");
-        return new(Absolute("--source"), Absolute("--scratch"), candidate, candidateArguments, startup, budget);
+        var retention = values.GetValueOrDefault("--scratch-retention")?.ToLowerInvariant() switch
+        {
+            null or "retain" => ShadowScratchRetention.Retain,
+            "disposable" => ShadowScratchRetention.Disposable,
+            _ => throw new ArgumentException("--scratch-retention requires retain or disposable.")
+        };
+        return new(Absolute("--source"), Absolute("--scratch"), candidate, candidateArguments, startup, budget, retention);
 
         string Absolute(string flag) =>
             values.TryGetValue(flag, out var path) && Path.IsPathFullyQualified(path)
@@ -159,24 +289,20 @@ internal static class CliShadowStartCommand
         finally { if (Directory.Exists(reservation)) Directory.Delete(reservation); }
     }
 
-    private static void CopyStateDatabases(string source, string state)
+    private static void CopyStateDatabases(ShadowStartCopyPlan plan, ShadowStartHooks hooks, CancellationToken cancellationToken)
     {
-        foreach (var database in StoreSchemaRegistry.Inventory.Select(entry => entry.Database)
-            .Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var store in plan.Stores)
         {
-            if (database is "per-database" or "impact-replay.checkpoint.db")
-                continue;
-            var sourcePath = Path.Combine(source, database);
-            if (!File.Exists(sourcePath))
-                continue;
-
+            cancellationToken.ThrowIfCancellationRequested();
             // A direct read-only open of a quiet WAL database can create source sidecars.
-            using var snapshot = new StoreInspectionSnapshot(sourcePath);
+            using var snapshot = new StoreInspectionSnapshot(store.Source,
+                stagingDirectory: plan.Retention == ShadowScratchRetention.Disposable ? Path.GetDirectoryName(store.Staged) : null);
             using var copy = new SqliteConnection(new SqliteConnectionStringBuilder
             {
-                DataSource = Path.Combine(state, database), Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
+                DataSource = store.Destination, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
             }.ToString());
             copy.Open();
+            hooks.BeforeBackup?.Invoke(store);
             snapshot.Connection.BackupDatabase(copy);
         }
     }
@@ -212,9 +338,10 @@ internal static class CliShadowStartCommand
         return info;
     }
 
-    private static async Task<int> SuperviseAsync(Options options, string scratch, string state,
-        TextWriter stdout, TextWriter stderr)
+    private static async Task<ShadowStartMeasurement> SuperviseAsync(Options options, string scratch, string state,
+        string? jobName, Action<ShadowStartPhase, int?, DateTimeOffset?> setPhase, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var info = BuildLaunch(options, scratch, state);
         var logs = Path.Combine(state, "logs");
         var stopFile = Path.Combine(scratch, ConductorBatchLoop.StopFileName);
@@ -225,18 +352,30 @@ internal static class CliShadowStartCommand
         string? failure = null;
         string? detail = null;
 
-        using var group = OwnedProcessGroup.CreateContained();
+        using var group = jobName is null ? OwnedProcessGroup.CreateContained() : OwnedProcessGroup.CreateNamedContained(jobName);
+        setPhase(ShadowStartPhase.LaunchPending, null, null);
         var launchedAt = DateTimeOffset.UtcNow;
         var elapsed = Stopwatch.StartNew();
-        using var child = group.StartRedirected(info);
+        HandleListLaunchedProcess child;
+        try { child = group.StartRedirected(info); }
+        catch (Exception ex) when (IsRunFailure(ex))
+        {
+            return new("candidate-launch", ex.Message, ReleaseVerified:
+                OperatingSystem.IsWindows() && group.TerminateAndConfirmEmpty(CleanupBudget));
+        }
+        using var launchedChild = child;
         using var process = TryAttach(child);
-        child.StandardInput.Close();
         var output = DrainAsync(child.StandardOutput, "stdout");
         var error = DrainAsync(child.StandardError, "stderr");
+        bool confirmed;
         try
         {
+            if (jobName is not null)
+                setPhase(ShadowStartPhase.Running, child.Id, TryReadStarted(process));
+            child.StandardInput.Close();
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (TryReadPeak(process) is { } sample)
                     peak = Math.Max(peak ?? 0, sample);
                 var exited = child.HasExited;
@@ -272,17 +411,17 @@ internal static class CliShadowStartCommand
                 var deadline = evidence.FirstTick is null ? options.StartupCeiling : options.Budget;
                 var remaining = deadline - elapsed.Elapsed;
                 if (remaining > TimeSpan.Zero)
-                    await Task.Delay(remaining < PollInterval ? remaining : PollInterval).ConfigureAwait(false);
+                    await Task.Delay(remaining < PollInterval ? remaining : PollInterval, cancellationToken).ConfigureAwait(false);
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception)
+        catch (Exception ex) when (IsRunFailure(ex))
         {
-            failure = "candidate-supervision";
+            failure = ex is OperationCanceledException ? "cancelled" : "candidate-supervision";
             detail = ex.Message;
         }
         finally
         {
-            var confirmed = OperatingSystem.IsWindows()
+            confirmed = OperatingSystem.IsWindows()
                 ? group.TerminateAndConfirmEmpty(CleanupBudget)
                 : StopPortableGroup(group, child);
             if (elapsed.IsRunning)
@@ -294,23 +433,22 @@ internal static class CliShadowStartCommand
             }
         }
 
-        try { await Task.WhenAll(output, error).WaitAsync(CleanupBudget).ConfigureAwait(false); }
+        var drained = false;
+        try
+        {
+            await Task.WhenAll(output, error).WaitAsync(CleanupBudget).ConfigureAwait(false);
+            drained = true;
+        }
         catch (Exception ex) when (ex is TimeoutException or IOException)
         {
             failure ??= "candidate-output";
             detail = $"{detail} Child output drain failed: {ex.Message}".Trim();
         }
 
-        var resultWriter = failure is null ? stdout : stderr;
-        Report(resultWriter, failure, detail, scratch, elapsed.ElapsedMilliseconds, peak,
-            evidence.FirstTick is { } observed ? (long)(observed - launchedAt).TotalMilliseconds : null);
-        if (failure is not null)
-        {
-            lock (tail)
-                foreach (var line in tail)
-                    stderr.WriteLine(line);
-        }
-        return failure is null ? 0 : 1;
+        lock (tail)
+            return new(failure, detail, elapsed.ElapsedMilliseconds, peak,
+                evidence.FirstTick is { } observed ? (long)(observed - launchedAt).TotalMilliseconds : null,
+                tail.ToArray(), OperatingSystem.IsWindows() && confirmed && drained);
 
         async Task DrainAsync(StreamReader stream, string channel)
         {
@@ -339,25 +477,40 @@ internal static class CliShadowStartCommand
         catch (Exception ex) when (ex is InvalidOperationException or Win32Exception) { return null; }
     }
 
+    private static DateTimeOffset? TryReadStarted(Process? process)
+    {
+        try { return process is null ? null : process.StartTime.ToUniversalTime(); }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception) { return null; }
+    }
+
     private static bool StopPortableGroup(OwnedProcessGroup group, HandleListLaunchedProcess child)
     {
         group.Kill();
         return child.WaitForExit(CleanupBudget);
     }
 
-    private static void Report(TextWriter writer, string? assertion, string? detail, string? scratch,
-        long? wall, long? peak, long? firstTick)
+    private static void Report(TextWriter writer, ShadowStartMeasurement measurement, string? scratch,
+        ShadowScratchRetention? retention, Guid? id = null, ShadowStartCleanup? cleanup = null)
     {
         static string Measurement(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
-        writer.WriteLine($"SHADOW_START result={(assertion is null ? "pass" : "fail")} assertion={assertion ?? "none"} " +
-            $"wall_ms={Measurement(wall)} peak_working_set_bytes={Measurement(peak)} " +
-            $"first_tick_ms={Measurement(firstTick)} scratch={scratch ?? "unavailable"}");
-        if (assertion is not null)
-            writer.WriteLine(detail ?? $"Shadow startup assertion failed: {assertion}.");
+        var line = $"SHADOW_START result={(measurement.Assertion is null ? "pass" : "fail")} assertion={measurement.Assertion ?? "none"} " +
+            $"wall_ms={Measurement(measurement.WallMs)} peak_working_set_bytes={Measurement(measurement.PeakWorkingSetBytes)} " +
+            $"first_tick_ms={Measurement(measurement.FirstTickMs)} scratch={scratch ?? "unavailable"}";
+        if (retention is not null)
+            line += $" mode={(retention == ShadowScratchRetention.Disposable ? "disposable" : "retain")}";
+        if (id is not null)
+            line += $" run_id={id:N}";
+        if (cleanup is not null)
+            line += $" cleanup={cleanup.Status} cleanup_reason={cleanup.Reason ?? "none"} cleanup_ms={Measurement(cleanup.Milliseconds)} receipt={cleanup.Receipt}";
+        else if (id is not null)
+            line += " cleanup=retained";
+        writer.WriteLine(line);
+        if (measurement.Assertion is not null)
+            writer.WriteLine(measurement.Detail ?? $"Shadow startup assertion failed: {measurement.Assertion}.");
     }
 
     private sealed record Options(string Source, string Scratch, string? Candidate,
-        IReadOnlyList<string> CandidateArguments, TimeSpan StartupCeiling, TimeSpan Budget);
+        IReadOnlyList<string> CandidateArguments, TimeSpan StartupCeiling, TimeSpan Budget, ShadowScratchRetention Retention);
 
     private sealed class JournalEvidence
     {
