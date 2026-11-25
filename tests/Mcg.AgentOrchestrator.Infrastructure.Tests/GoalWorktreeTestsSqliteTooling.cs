@@ -320,7 +320,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         {
             Assert.False(File.Exists(Path.Combine(repo, "mcg-orchestrator.cmd")));
             Assert.False(Directory.Exists(Path.Combine(repo, "src")));
-            using var appOutput = PrepareRepoProcessAppOutput(repo);
+            using var appOutput = PrepareRepoProcessAppOutput(repo, runtimeTemp: repo);
             string[] helperScripts =
             [
                 "Get-RepoProcessInfo.ps1",
@@ -1094,7 +1094,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
     }
 
-    private static PreparedAppOutput PrepareRepoProcessAppOutput(string repositoryRoot)
+    private static PreparedAppOutput PrepareRepoProcessAppOutput(string repositoryRoot, string? runtimeTemp = null)
     {
         var sourceRoot = FindCurrentSourceRoot();
         var appOutput = Path.Combine(
@@ -1121,12 +1121,18 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
             resolverStartInfo.ArgumentList.Add("-RepositoryRoot");
             resolverStartInfo.ArgumentList.Add(repositoryRoot);
             resolverStartInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput;
+            if (runtimeTemp is not null)
+                resolverStartInfo.Environment["TEMP"] = runtimeTemp;
             var resolverResult = RunRedirectedProcess(
                 resolverStartInfo,
                 "Resolve-RepoProcessAppDll.ps1 preparation");
             Assert.Equal(0, resolverResult.ExitCode);
+            var resolvedDll = resolverResult.Stdout.Trim();
+            if (runtimeTemp is not null)
+                Assert.StartsWith(Path.Combine(runtimeTemp, "mcg-run") + Path.DirectorySeparatorChar,
+                    resolvedDll, StringComparison.OrdinalIgnoreCase);
             Assert.True(
-                File.Exists(resolverResult.Stdout.Trim()),
+                File.Exists(resolvedDll),
                 $"Resolver preparation did not produce a runnable App assembly: {resolverResult.Stdout}");
 
             return new PreparedAppOutput(appOutput);
@@ -1197,6 +1203,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
 
         startInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput;
+        // Resolve against the fixture's cache, independent of other launcher invocations.
+        startInfo.Environment["TEMP"] = repo;
         return startInfo;
     }
 
@@ -1223,7 +1231,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
     private static void AssertRepoProcessHelperResult(string helperScript, RedirectedProcessResult result)
     {
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        Assert.Contains("MCG_PHASE=run-cli-direct", result.Stdout, StringComparison.Ordinal);
+        Assert.True(result.Stdout.Contains("MCG_PHASE=run-cli-direct", StringComparison.Ordinal),
+            $"{helperScript} did not launch the prepared App directly.{Environment.NewLine}{result.Stdout}");
         Assert.DoesNotContain("MCG_PHASE=rebuild-and-run-cli", result.Stdout, StringComparison.Ordinal);
         switch (helperScript)
         {

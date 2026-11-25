@@ -341,6 +341,17 @@ internal static class CliShadowStartCommand
                 stagingDirectory: plan.Retention == ShadowScratchRetention.Disposable ? Path.GetDirectoryName(store.Staged) : null,
                 createStagedFile: createOwnedStore, prepareStagedDatabase: prepareStagedDatabase);
             createOwnedStore?.Invoke(store.Destination).Dispose();
+            hooks.BeforeBackup?.Invoke(store);
+            if (createOwnedStore is not null)
+            {
+                // SQLite can remove existing sidecars during backup. Refuse foreign files before opening the destination.
+                foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
+                {
+                    var sidecar = store.Destination + suffix;
+                    if (EntryExists(sidecar))
+                        throw new IOException($"Destination sidecar already exists: {sidecar}.");
+                }
+            }
             using (var copy = new SqliteConnection(new SqliteConnectionStringBuilder
             {
                 DataSource = store.Destination, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
@@ -356,7 +367,6 @@ internal static class CliShadowStartCommand
                     if (!string.Equals(journal.ExecuteScalar() as string, "memory", StringComparison.OrdinalIgnoreCase))
                         throw new IOException($"Cannot configure the private backup journal: {store.Destination}.");
                 }
-                hooks.BeforeBackup?.Invoke(store);
                 snapshot.Connection.BackupDatabase(copy);
             }
             if (createOwnedStore is not null)

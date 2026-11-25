@@ -82,6 +82,7 @@ public sealed class ShadowStartReclamationTests
 
         Assert.Equal(1, result.Exit);
         Assert.Contains("assertion=database-backup", result.Error);
+        Assert.Contains($"Destination sidecar already exists: {database}-wal.", result.Error);
         Assert.Contains("cleanup=deferred", result.Error);
         Assert.False(File.Exists(marker));
         Assert.True(File.Exists(database));
