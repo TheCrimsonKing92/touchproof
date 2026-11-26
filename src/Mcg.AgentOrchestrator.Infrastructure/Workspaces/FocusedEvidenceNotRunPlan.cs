@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 using FocusedEvidenceFilterToken = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceFilterToken;
@@ -13,6 +14,7 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
     internal const string NoResultRecorded = "no-result-recorded";
     internal const string ExecutionNotDemonstrated = "execution-not-demonstrated";
     internal const string NoMatchingTest = "no-matching-test";
+    private static readonly Regex ReceiptClassName = new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
     internal sealed record NotRunCheck(string CheckName, string Reason, IReadOnlyList<FindingEvidenceSelection> Selections,
         IReadOnlyList<FindingEvidenceSelection>? UndemonstratedSelections = null,
         IReadOnlyDictionary<FindingEvidenceSelection, FocusedEvidenceUnexecutedClassCause>? Causes = null);
@@ -74,15 +76,18 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
                                 .Distinct(StringComparer.Ordinal).SelectMany(ExecutedIdentities).ToArray();
                             return group.Where(item => !executed.Any(identity =>
                                 GoalAcceptanceVerifierTestTelemetry.IsFocusedEvidenceIdentityMatch(identity, item.Value)));
-                        })
-                        .DistinctBy(item => item.Selection).ToArray();
+                        }).ToArray();
                     if (remainder.Length > 0)
                     {
-                        var selectionsWithoutResults = remainder.Select(item => item.Selection).ToArray();
-                        var causes = remainder.ToDictionary(item => item.Selection, item =>
+                        var receiptSelections = remainder.GroupBy(item => item.Target)
+                            .SelectMany(group => ReceiptSelections(group.Key, group.Select(item => item.Selection)))
+                            .Distinct().ToArray();
+                        var undemonstratedClasses = remainder.DistinctBy(item => item.Selection).ToArray();
+                        var causes = undemonstratedClasses.ToDictionary(item => item.Selection, item =>
                             FocusedEvidenceUnexecutedClassCause.Classify(worktreePath, item.Selection.TestProject,
                                 item.ContainingClass, check.Project));
-                        missing.Add(new(check.Name, $"not-run:{reason}", selectionsWithoutResults, selectionsWithoutResults, causes));
+                        missing.Add(new(check.Name, $"not-run:{reason}", receiptSelections,
+                            undemonstratedClasses.Select(item => item.Selection).ToArray(), causes));
                     }
                     continue;
                 }
@@ -141,6 +146,33 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
             if (token is not null || selectedTokens.Count == 0)
                 yield return (target, new(project, part), token?.Value ?? value, token?.ContainingClass ?? value);
         }
+    }
+
+    private static IEnumerable<FindingEvidenceSelection> ReceiptSelections(
+        FocusedEvidenceTargetCoverage target, IEnumerable<FindingEvidenceSelection> undemonstrated)
+    {
+        var filter = target.Target.Split(':', 2, StringSplitOptions.TrimEntries)[^1];
+        // FindingEvidenceRoundPlanner.TryExpandClasses expands only plain class alternatives.
+        // The receipt must retain the full filter for every request that consumer keeps whole.
+        return IsReceiptClassSet(filter) ? undemonstrated : [new(undemonstrated.First().TestProject, filter)];
+    }
+
+    private static bool IsReceiptClassSet(string filter)
+    {
+        var depth = 0;
+        foreach (var character in filter)
+        {
+            if (character == '(')
+                depth++;
+            else if (character == ')' && --depth < 0)
+                return false;
+        }
+
+        const string prefix = "FullyQualifiedName~";
+        return depth == 0 && filter.Split('|', StringSplitOptions.TrimEntries)
+            .Select(part => part.Trim('(', ')').Trim())
+            .Select(part => part.StartsWith(prefix, StringComparison.Ordinal) ? part[prefix.Length..] : part)
+            .All(ReceiptClassName.IsMatch);
     }
 
     internal string AppendSummary(string summary)

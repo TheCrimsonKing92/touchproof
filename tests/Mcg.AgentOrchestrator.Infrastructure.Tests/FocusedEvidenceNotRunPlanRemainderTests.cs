@@ -9,20 +9,23 @@ using Worktree = FocusedEvidenceUnexecutedClassCauseTests.Worktree;
 public sealed class FocusedEvidenceNotRunPlanRemainderTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void PartialVstestReceipt_ListsOnlyTheUnexecutedClass(bool includeSkipped)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void PartialVstestReceipt_ListsOnlyTheUnexecutedClass(bool includeSkipped, bool classUnion)
     {
         using var worktree = new Worktree();
         worktree.Declare(InfrastructureTestsProject, "AlphaTests", "BetaTests");
         worktree.Declare(CoreTestsProject, "GammaTests");
         var check = VstestCheck("partial selection");
         var fullyExecuted = VstestCheck("complete selection");
+        FocusedEvidenceTargetCoverage[] partialTargets = classUnion
+            ? [new("Infrastructure.Tests:AlphaTests|BetaTests|GammaTests", [check.Name])]
+            : [new("Infrastructure.Tests:AlphaTests", [check.Name]),
+                new("Infrastructure.Tests:BetaTests", [check.Name]),
+                new("Infrastructure.Tests:GammaTests", [check.Name])];
         var coverage = new FocusedEvidenceCoverage([
-            new("Infrastructure.Tests:AlphaTests", [check.Name]),
-            new("Infrastructure.Tests:BetaTests", [check.Name]),
-            new("Infrastructure.Tests:GammaTests", [check.Name]),
-            new("Infrastructure.Tests:DeltaTests", [fullyExecuted.Name])]);
+            .. partialTargets, new("Infrastructure.Tests:DeltaTests", [fullyExecuted.Name])]);
         var records = new List<TestResult>
         {
             Result("Fixture.AlphaTests.Runs", TestResultStatus.Passed),
