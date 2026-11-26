@@ -20,7 +20,7 @@ internal static class BoardFillPremiseBullets
         @"|^(?<continuationIndent>[ \t]*)(?:>|(?:\+|[0-9]{1,9}[.)])[ \t]+(?=\S)" +
         @"|(?:-(?:[ \t]*-){2,}|\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,})[ \t]*$" +
         @"|#{1,6}(?=[ \t]|$)|`{3,}[^`\n]*$|~{3,}|" + HtmlBlockStart + ")" +
-        @"|^(?<continuationIndent>[ \t]*)(?<plainText>\S)",
+        @"|^(?<continuationIndent>[ \t]*)(?<plainText>(?<setextEquals>=+[ \t]*$)|\S)",
         RegexOptions.Multiline | RegexOptions.CultureInvariant);
     private static readonly Regex EvidencePath = new("""(?:^|\s)\S*[/\\][^\s/\\]*\.[\p{L}\p{N}]+(?=[\x60'"\])>.,;:!?]*(?:\s|$))""");
     private static readonly Regex NoteCitation = new("""\bnote\s+[0-9a-fA-F]+(?=[*\x60'"\p{Pf}\])>.,;:!?]*(?:\s|$))""");
@@ -87,15 +87,20 @@ internal static class BoardFillPremiseBullets
         if (firstLineEnd < 0) return body.Length;
 
         var contentColumn = MarkdownColumnWidth(markerPrefix);
-        var hasIndentedContinuation = false;
+        var inOpeningParagraph = true;
         foreach (Match line in CitationLine.Matches(body, firstLineEnd + 1))
         {
             var indent = line.Groups["continuationIndent"];
+            var isPlainText = line.Groups["plainText"].Success;
             if (MarkdownColumnWidth(indent.ValueSpan) >= contentColumn)
-                hasIndentedContinuation = true;
-            // Outdented plain text can continue the opening paragraph before an indented continuation.
-            else if (hasIndentedContinuation || !line.Groups["plainText"].Success)
+            {
+                // Indented prose can continue the opening paragraph. A block or paragraph break ends it.
+                inOpeningParagraph &= isPlainText && !line.Groups["setextEquals"].Success;
+            }
+            else if (!inOpeningParagraph || !isPlainText)
+            {
                 return line.Index;
+            }
         }
 
         return body.Length;

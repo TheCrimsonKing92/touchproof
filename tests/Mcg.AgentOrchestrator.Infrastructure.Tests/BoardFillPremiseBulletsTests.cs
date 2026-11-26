@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 // Parallel-safe: the classifier uses only the supplied text.
@@ -22,6 +23,23 @@ public sealed class BoardFillPremiseBulletsTests
         var premise = WithSourceClaims($"runtime-observation: Results are recorded in {citation}");
 
         Assert.Equal(2, BoardFillVerifierContract.BulletCount(premise));
+    }
+
+    [Theory]
+    [InlineData("  ", "under note B7.")]
+    [InlineData("\t", "in operator-evidence/round.json.")]
+    public void SourceClaims_MixedIndentationInOpeningParagraph_ExcludeObservation(string indent, string citation)
+    {
+        var premise = WithSourceClaims($"runtime-observation: Figures are recorded\n{indent}for this round\n{citation}");
+        var prompt = BoardFillVerifierContract.Prompt(premise, BoardFillAssessmentTestFixture.Head);
+        using var document = JsonDocument.Parse(prompt[(prompt.LastIndexOf('\n') + 1)..]);
+
+        Assert.Equal(2, BoardFillVerifierContract.BulletCount(premise));
+        Assert.Equal("""
+            ## Measured premise
+            - The first source claim cites `src/First.cs:3`.
+            - The second source claim cites `src/Second.cs:8`.
+            """.ReplaceLineEndings("\n"), document.RootElement.GetProperty("measuredPremise").GetString());
     }
 
     [Theory]
