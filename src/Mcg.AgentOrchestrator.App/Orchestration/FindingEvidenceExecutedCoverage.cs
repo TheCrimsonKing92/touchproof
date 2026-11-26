@@ -4,6 +4,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class FindingEvidenceExecutedCoverage
 {
+    // A zero-match Candidate arm can have no omissions. Receipts predating arm data
+    // keep their existing coverage semantics.
+    internal static bool CanClaimSelectionAuthority(FindingEvidenceReceipt receipt) =>
+        receipt.Arms is not { Count: > 0 } arms ||
+        arms.Any(arm => arm is { Arm: FindingEvidenceArm.Candidate, ExecutedTestCount: > 0 });
+
     internal static IReadOnlyList<FindingEvidenceSelection> ExecutedSelections(
         FindingEvidenceReceipt receipt, Func<FindingEvidenceSelection, string> format)
     {
