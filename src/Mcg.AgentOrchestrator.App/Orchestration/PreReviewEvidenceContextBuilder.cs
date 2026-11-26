@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -7,8 +8,19 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class PreReviewEvidenceContextBuilder
 {
     internal static PreReviewEvidenceContext WithFailedGateClasses(
-        PreReviewEvidenceContext context, IReadOnlyList<(string Alias, string ClassName)> classes) =>
-        WithAdditionalClasses(context, classes, "failed-gate coverage");
+        PreReviewEvidenceContext context, IReadOnlyList<(string Alias, string ClassName)> classes)
+    {
+        if (classes.Count == 0 || context.MappingNeedsInput || context.RequiresSourceCleanup) return context;
+
+        var named = context.SelectedFocusedTests as DeferredBreadthSelections;
+        var fallback = named?.Fallback ?? context;
+        var withFailedGate = WithAdditionalClasses(fallback, classes, "failed-gate coverage");
+        if (ReferenceEquals(withFailedGate, fallback)) return context;
+
+        return named is null
+            ? withFailedGate
+            : WithResolvedNamedClasses(withFailedGate, named.Objective, named.Obligations);
+    }
 
     private static PreReviewEvidenceContext WithAdditionalClasses(
         PreReviewEvidenceContext context, IReadOnlyList<(string Alias, string ClassName)> classes, string reason)
@@ -44,10 +56,10 @@ internal static class PreReviewEvidenceContextBuilder
 
     internal static PreReviewEvidenceContext Build(
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan,
-        Action<string>? log = null)
+        Action<string>? log = null, Goal? goal = null, string? worktreePath = null)
     {
         var context = BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan, log ?? Console.WriteLine);
-        return context with
+        context = context with
         {
             MappingReason = context.NoApplicableTests
                 ? DescribeUnmappedTestSources(context.MappingReason, changeSummary, plan)
@@ -55,6 +67,64 @@ internal static class PreReviewEvidenceContextBuilder
             TestImpactDegradation = plan.ReverseDependencyDegradation,
             TestImpactHeadroom = plan.ReverseDependencyHeadroom
         };
+
+        return goal is not null && worktreePath is not null && ReverseDependencyBreadthBound.IsDeferred(plan) &&
+            !context.MappingNeedsInput && !context.RequiresSourceCleanup
+            ? WithNamedClasses(context, goal, worktreePath)
+            : context;
+    }
+
+    private static PreReviewEvidenceContext WithNamedClasses(
+        PreReviewEvidenceContext context, Goal goal, string worktreePath)
+    {
+        var objectiveNames = PreTesterNamedTestClasses.Harvest(goal.Objective).ToHashSet(StringComparer.Ordinal);
+        var obligationNames = GateTestObligationEffectiveSelectors.ForMembers([goal], [goal.Id])
+            .SelectMany(PreTesterNamedTestClasses.Harvest);
+        var names = objectiveNames.Concat(obligationNames).Distinct(StringComparer.Ordinal).ToArray();
+        if (names.Length == 0) return context;
+
+        var objectiveClasses = new List<(string Alias, string ClassName)>();
+        var obligationClasses = new List<(string Alias, string ClassName)>();
+        var resolved = DeveloperDeferredTestSelections.ResolveNames(worktreePath, names, requireUniqueSourceFile: true);
+        foreach (var selection in resolved.Selections)
+        {
+            if (PreReviewFocusedRequestSplitter.TryResolveBrokerAlias(selection.TestProject, out var alias))
+            {
+                var classes = objectiveNames.Contains(selection.TestClass) ? objectiveClasses : obligationClasses;
+                classes.Add((alias!, selection.TestClass));
+            }
+        }
+
+        return WithResolvedNamedClasses(context, objectiveClasses, obligationClasses);
+    }
+
+    private static PreReviewEvidenceContext WithResolvedNamedClasses(
+        PreReviewEvidenceContext fallback,
+        IReadOnlyList<(string Alias, string ClassName)> objectiveClasses,
+        IReadOnlyList<(string Alias, string ClassName)> obligationClasses)
+    {
+        var context = WithAdditionalClasses(fallback, objectiveClasses, "objective-named coverage");
+        context = WithAdditionalClasses(context, obligationClasses, "gate-obligation coverage");
+        if (ReferenceEquals(context, fallback)) return fallback;
+
+        // The evidence stage supplies failed-gate coverage after routing. Keep the mapped prefix
+        // and resolved sources so it can merge failures before deduplication and request splitting.
+        return context with
+        {
+            SelectedFocusedTests = new DeferredBreadthSelections(
+                context.SelectedFocusedTests.ToArray(), fallback, objectiveClasses, obligationClasses)
+        };
+    }
+
+    private sealed class DeferredBreadthSelections(
+        string[] selections,
+        PreReviewEvidenceContext fallback,
+        IReadOnlyList<(string Alias, string ClassName)> objective,
+        IReadOnlyList<(string Alias, string ClassName)> obligations) : ReadOnlyCollection<string>(selections)
+    {
+        internal PreReviewEvidenceContext Fallback { get; } = fallback;
+        internal IReadOnlyList<(string Alias, string ClassName)> Objective { get; } = objective;
+        internal IReadOnlyList<(string Alias, string ClassName)> Obligations { get; } = obligations;
     }
 
     private static PreReviewEvidenceContext BuildMappedPreReviewEvidenceContext(

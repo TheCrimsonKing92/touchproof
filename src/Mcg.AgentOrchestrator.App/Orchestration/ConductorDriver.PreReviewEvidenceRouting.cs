@@ -133,23 +133,23 @@ internal sealed partial class ConductorDriver
         return BuildPreReviewEvidenceContext(
             candidateSha,
             changedFiles,
-            worktreePath, targetHome, orchestratorDirectory ?? targetHome?.ProjectHomeDirectory ?? OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory);
+            worktreePath, targetHome, orchestratorDirectory ?? targetHome?.ProjectHomeDirectory ?? OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory, goal);
     }
 
     internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) => _getPreReviewEvidenceContext(goal);
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
-        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null)
+        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null, Goal? goal = null)
     {
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
         var boundedPlan = ReverseDependencyBreadthBound.Apply(GoalTargetImpactPlanScope.Plan(changeSummary, repositoryRoot, targetHome), changeSummary.Files.Select(file => file.Path));
         var plan = ReverseDependencyEvidenceCostGate.Apply(boundedPlan, selections => ReverseDependencyEvidenceCostHistory.Read(repositoryRoot, orchestratorDirectory, selections, changedFiles, targetHome?.ProjectHomeDirectory));
-        return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan);
+        return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan, goal, repositoryRoot);
     }
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
-        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan) =>
-        PreReviewEvidenceContextBuilder.Build(candidateSha, changeSummary, plan);
+        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan, Goal? goal = null, string? worktreePath = null) =>
+        PreReviewEvidenceContextBuilder.Build(candidateSha, changeSummary, plan, goal: goal, worktreePath: worktreePath);
 
     private static string BuildAddTesterCommand(string goalPrefix, string candidateSha) =>
         $"add-task --goal {goalPrefix} Tester Resolve pre-review mapping for candidate {candidateSha} --before-role Reviewer";
