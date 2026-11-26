@@ -727,8 +727,8 @@ internal sealed partial class ConductorContinuitySupervisor(
             var artifact = ConductorContinuityExitArtifact.TryRead(artifactPath);
             TryDeleteArtifact(artifactPath);
 
-            var observedCleanExit = result is
-                { ExitCodeObserved: true, ExitCode: 0, TerminationConfirmed: true, ForcedStop: false };
+            var observedZeroExit = result is { ExitCodeObserved: true, ExitCode: 0, ForcedStop: false };
+            var observedCleanExit = observedZeroExit && result.TerminationConfirmed;
             var inheritedArtifactOnly = activeChild is not null &&
                 result is { ExitCodeObserved: false, TerminationConfirmed: true, ForcedStop: false } &&
                 artifact is not null;
@@ -743,7 +743,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             }
 
             if (artifact is { RestartRequested: true } &&
-                (observedCleanExit || inheritedArtifactOnly || stallFailure is not null))
+                (observedZeroExit || inheritedArtifactOnly || stallFailure is not null))
             {
                 if (stallFailure is not null)
                     TryAppendConductEvent($"SUPERVISOR_STALL_RESTART_HONORED attempt={attempt} pid={result.ProcessId} stall={stallFailure}");
