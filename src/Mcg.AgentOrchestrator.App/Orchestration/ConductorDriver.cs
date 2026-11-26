@@ -255,8 +255,8 @@ internal sealed partial class ConductorDriver
         _cohortWorkspace = workspace;
         _soloBaselineRepair = new(workspace, kernel, acceptanceVerifier, ReadCurrentCohortAttributionRevisions,
             ReadSoloAcceptanceContext, () => SoloAcceptanceFailure, GetFacts, WriteEscalation,
-            (key, token) => CohortPartitionStableSlotLeaseSource?.Invoke(key, token) ??
-                _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token), PrepareSoloRepairAttribution, repairIntake);
+            (key, token) => CohortPartitionStableSlotLeaseSource?.Invoke(key, token) ?? _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token),
+            PrepareSoloRepairAttribution, repairIntake, runAcceptanceAttemptsInCurrentProcess ? null : OwnedChildAttemptCoordinatorFactory.CreateSoloRepairCheck(workspace, _cohortCleanupHooks.BuildStorageRoot));
         _runDeveloperCompletionStructuralPreflight = path =>
             DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
         _cohortAcceptanceVerifier = acceptanceVerifier;

@@ -24,6 +24,9 @@ internal static class OwnedChildWorkspaceResolver
         ConductorGroupedGateAttempt attempt, OrchestratorProjectRegistry? registry = null) =>
         Resolve(attempt.StateDirectory, attempt.ProjectName, attempt.ExecutionDirectory, null, registry);
 
+    internal static OrchestratorWorkspace ForSoloRepairCheckAttempt(SoloRepairCheckAttempt attempt) =>
+        Resolve(attempt.StateDirectory, attempt.ProjectName, attempt.ExecutionDirectory, attempt.IntegrationBranch, null);
+
     private static OrchestratorWorkspace Resolve(
         string? stateDirectory, string? projectName, string executionDirectory,
         string? integrationBranch, OrchestratorProjectRegistry? registry)
