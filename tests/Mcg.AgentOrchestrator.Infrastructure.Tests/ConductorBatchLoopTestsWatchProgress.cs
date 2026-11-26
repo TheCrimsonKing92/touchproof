@@ -362,7 +362,7 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         var stderr = Path.Combine(root, "planner.err.log");
         var exit = Path.Combine(root, "planner.exit.txt");
         var plannerPlan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
-            "`seed.txt`, ",
+            "`./seed.txt`, ",
             string.Empty,
             StringComparison.Ordinal).Replace(
             WorkerDispatchTestSupport.PlannerContractAcceptanceMappingBody,

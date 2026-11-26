@@ -558,12 +558,12 @@ public sealed class TaskIntentDispatchAdmissionTests
         var plan = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(),
             "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
             "658501ce-f6708f44-20260805012800.out.txt")).ReplaceLineEndings("\n");
-        // Validate against this disposable workspace, including the scout research contract.
+        // The disposable workspace has no Git index, so cite the fixture by its explicit path.
         File.WriteAllText(Path.Combine(seed.Root, "Admission.cs"), "// Task intent admission fixture.");
         var targetStart = plan.IndexOf("## Target seams and symbols", StringComparison.Ordinal);
         var targetEnd = plan.IndexOf("## Ownership and lifecycle", targetStart, StringComparison.Ordinal);
         plan = plan[..targetStart] + "## Target seams and symbols\n\n" +
-            "Developer owns `Admission.cs` and the task admission reconciliation seam.\n\n" + plan[targetEnd..];
+            "Developer owns `./Admission.cs` and the task admission reconciliation seam.\n\n" + plan[targetEnd..];
         var fixtureContract = PlannerOutputContract.Resolve(plan, "", seed.Root,
             acceptanceCriteria: seed.Goal.RefinedSpec!.AcceptanceCriteria);
         Xunit.Assert.True(fixtureContract.Succeeded, fixtureContract.Diagnostic);
