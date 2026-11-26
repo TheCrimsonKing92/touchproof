@@ -22,6 +22,7 @@ internal static class BoardFillPremiseBullets
         @"|#{1,6}(?=[ \t]|$)|`{3,}[^`\n]*$|~{3,}|" + HtmlBlockStart + ")" +
         @"|^(?<continuationIndent>[ \t]*)(?<plainText>(?<setextUnderline>(?:=+|-+)[ \t]*$)|\S)",
         RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    private static readonly Regex BareListMarker = new(@"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]*(?=\n|$)");
     private static readonly Regex EvidencePath = new("""(?:^|\s)\S*[/\\][^\s/\\]*\.[\p{L}\p{N}]+(?=[\x60'"\])>.,;:!?]*(?:\s|$))""");
     private static readonly Regex NoteCitation = new("""\bnote\s+[0-9a-fA-F]+(?=[*\x60'"\p{Pf}\])>.,;:!?]*(?:\s|$))""");
 
@@ -100,7 +101,8 @@ internal static class BoardFillPremiseBullets
                 inOpeningParagraph &= !line.Groups["blankLine"].Success
                     && (relativeIndent >= codeIndentWidth || (isPlainText && !line.Groups["setextUnderline"].Success));
             }
-            else if (!inOpeningParagraph || !isPlainText)
+            // An outdented empty list item ends the opening paragraph's lazy continuation.
+            else if (!inOpeningParagraph || !isPlainText || BareListMarker.IsMatch(body.AsSpan(line.Index)))
             {
                 return line.Index;
             }

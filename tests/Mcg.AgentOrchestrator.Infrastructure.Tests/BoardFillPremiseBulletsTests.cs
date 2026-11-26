@@ -19,6 +19,7 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("the following line.\n```inline``` cites note B7.")]
     [InlineData("the following line.\n<div-like>See note B7. </div-like>")]
     [InlineData("the following line.\n--\nSee note B7.")]
+    [InlineData("the following line.\n  *\nSee note B7.")]
     public void BulletCount_RuntimeObservationWithEvidencePathOrNoteId_CountsOnlySourceClaims(string citation)
     {
         var premise = WithSourceClaims($"runtime-observation: Results are recorded in {citation}");
@@ -100,6 +101,26 @@ public sealed class BoardFillPremiseBulletsTests
         Assert.Contains($"{marker} Separate item cites operator-evidence/round.json.", payload);
         Assert.DoesNotContain("runtime-observation: Figures are in note B7.", payload);
         Assert.Contains($"{marker} Separate item follows a cited observation.", payload);
+    }
+
+    [Theory]
+    [InlineData("-")]
+    [InlineData("- ")]
+    [InlineData("*")]
+    [InlineData("+")]
+    [InlineData("1.")]
+    [InlineData("1)")]
+    public void SourceClaims_OutdentedEmptyListItem_EndsCitationScope(string marker)
+    {
+        var uncitedItem = $"runtime-observation: Rounds failed often.\n{marker}\nProse cites note B7.";
+        var followingBlock = $"{marker}\nProse follows the cited observation.";
+        var premise = WithSourceClaims($"{uncitedItem}\n* runtime-observation: Figures are in note B7.\n{followingBlock}");
+        var prompt = BoardFillVerifierContract.Prompt(premise, BoardFillAssessmentTestFixture.Head);
+        using var document = JsonDocument.Parse(prompt[(prompt.LastIndexOf('\n') + 1)..]);
+
+        Assert.Equal(3, BoardFillVerifierContract.BulletCount(premise));
+        Assert.Equal(WithSourceClaims($"{uncitedItem}\n{followingBlock}").ReplaceLineEndings("\n"),
+            document.RootElement.GetProperty("measuredPremise").GetString());
     }
 
     [Theory]
