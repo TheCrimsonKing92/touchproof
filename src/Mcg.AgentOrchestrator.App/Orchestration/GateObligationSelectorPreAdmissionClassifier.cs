@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// Admission evidence is derived anew from the current brief and candidate; only answers persist.
+// Admission evidence is derived anew from the current brief and candidate.
 internal static class GateObligationSelectorPreAdmissionClassifier
 {
     internal enum Kind { Resolved, UniquelyMatched, Ambiguous, Unmatched }
@@ -106,8 +106,11 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                     var candidates = string.Join(", ", classification.CandidateFullNames);
                     if (classification.Kind != Kind.UniquelyMatched)
                     {
+                        var candidateClasses = candidates.Length == 0 ? "none" : candidates;
                         Hold($"candidate {candidateRevision}; effective selector {considered}; " +
-                            $"candidate classes considered: {(candidates.Length == 0 ? "none" : candidates)}");
+                            $"candidate classes considered: {candidateClasses}");
+                        GateObligationSelectorDeveloperRouting.Route(
+                            kernel, goal.Id, obligation.Id, selector, candidateRevision, classification, candidateClasses, emit);
                         continue;
                     }
 

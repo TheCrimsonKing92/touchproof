@@ -21,4 +21,22 @@ internal static class DeveloperDeferredTestSelectionNormalization
         }
         return new DeveloperDeferredTestSelection(selected, notRun);
     }
+
+    internal static void AddOpenFindingSelections(List<FindingEvidenceSelection> selected,
+        Goal goal, AcceptanceGateEngineSettings settings, Func<string, string, IReadOnlyList<string>> resolveSiblingClasses)
+    {
+        foreach (var finding in goal.Tasks
+                     .Where(task => task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer)
+                     .SelectMany(task => task.LastVerification?.MergedReviewFindings ?? [])
+                     .Where(finding => finding.State == ReviewFindingState.Open && finding.EvidenceRequest is not null))
+        {
+            foreach (var selection in finding.EvidenceRequest!.Selections)
+            {
+                if (FindingEvidenceRequestNormalization.TryNormalize(
+                        new FindingEvidenceRequest([selection]), settings, resolveSiblingClasses,
+                        out var normalized, out _, out _, out _))
+                    selected.AddRange(normalized.Selections);
+            }
+        }
+    }
 }

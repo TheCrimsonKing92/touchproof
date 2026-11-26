@@ -15,11 +15,14 @@ internal sealed class StoreInspectionSnapshot : IDisposable
     // exclusively prevents a new transaction while a quiet database is copied.
     private const long LockOffset = 0x40000000;
     private const long LockLength = 512;
+    private readonly bool _ownsDirectory;
     internal SqliteConnection Connection { get; }
 
     internal StoreInspectionSnapshot(string source, TimeProvider? timeProvider = null,
-        Action<TimeSpan>? waitForLockRetry = null)
+        Action<TimeSpan>? waitForLockRetry = null, string? stagingDirectory = null,
+        Func<string, FileStream>? createStagedFile = null, Action<string>? prepareStagedDatabase = null)
     {
+        _ownsDirectory = stagingDirectory is null;
         try
         {
             if (TryOpenLiveWal(source, out var live))
@@ -65,7 +68,8 @@ internal sealed class StoreInspectionSnapshot : IDisposable
             }
             try
             {
-                _directory = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("store-inspection"), Guid.NewGuid().ToString("N"));
+                _directory = stagingDirectory ??
+                    Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("store-inspection"), Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(_directory);
                 // The database lock also prevents an orphaned WAL from being adopted
                 // during copying. Preserve a crash journal so SQLite refuses an
@@ -78,19 +82,22 @@ internal sealed class StoreInspectionSnapshot : IDisposable
                 }
                 foreach (var handle in _handles)
                 {
-                    using var destination = File.Create(Path.Combine(_directory, Path.GetFileName(handle.Name)));
+                    var path = Path.Combine(_directory, Path.GetFileName(handle.Name));
+                    using var destination = createStagedFile?.Invoke(path) ??
+                        new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                     handle.CopyTo(destination);
                 }
             }
             finally { sourceHandle.Unlock(LockOffset, LockLength); }
             ReleaseHandles();
-            Connection = Open(Path.Combine(_directory, Path.GetFileName(source)));
+            var stagedDatabase = Path.Combine(_directory, Path.GetFileName(source));
+            prepareStagedDatabase?.Invoke(stagedDatabase);
+            Connection = Open(stagedDatabase);
         }
         catch
         {
-            Connection?.Dispose();
-            ReleaseHandles();
-            if (_directory is not null) Directory.Delete(_directory, recursive: true);
+            try { Connection?.Dispose(); }
+            finally { ReleaseSnapshotFiles(); }
             throw;
         }
     }
@@ -152,8 +159,13 @@ internal sealed class StoreInspectionSnapshot : IDisposable
 
     public void Dispose()
     {
-        Connection.Dispose();
+        try { Connection.Dispose(); }
+        finally { ReleaseSnapshotFiles(); }
+    }
+
+    private void ReleaseSnapshotFiles()
+    {
         ReleaseHandles();
-        if (_directory is not null) Directory.Delete(_directory, recursive: true);
+        if (_ownsDirectory && _directory is not null) Directory.Delete(_directory, recursive: true);
     }
 }

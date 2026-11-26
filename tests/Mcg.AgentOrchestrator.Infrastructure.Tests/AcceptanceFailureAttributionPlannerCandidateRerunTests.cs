@@ -178,7 +178,8 @@ public sealed class AcceptanceFailureAttributionPlannerCandidateRerunTests
     private static FocusedEvidenceArmRunResult RedBaseline(string identity) => new(
         FindingEvidenceArm.Baseline, BaselineSha, FindingEvidenceArmDisposition.Red,
         Accepted: true, Passed: false, "red",
-        [new AcceptanceCheckResult("focused", false, 1, "failed", FailingTestIdentities: [identity])]);
+        [new AcceptanceCheckResult("focused", false, 1, "failed", FailingTestIdentities: [identity])
+            { LaneToolResolution = new() }]);
 
     private sealed class FakeRerunner(CandidateFailureRerunResult outcome) : ICandidateFailureRerunner
     {

@@ -149,6 +149,7 @@ internal static class CliCommandHelp
             "--home-build-blocked-commit",
             ConductorContinuitySupervisor.ChildFlag,
             ConductorContinuitySupervisor.ExitArtifactFlag,
+            ConductorContinuitySupervisor.ResolverObservationHandoffPrefix[..^1],
             "--help",
             "-h"
         ]);

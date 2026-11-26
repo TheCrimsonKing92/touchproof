@@ -18,7 +18,9 @@ internal static class PreTesterReverseDependencySelections
     internal static (IReadOnlyList<FindingEvidenceSelection> Selections, IReadOnlyList<Provenance> Provenance) Select(
         string worktreePath, IReadOnlyList<string> changedPaths, Action<string>? progress = null,
         Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? selector = null,
-        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? costDecision = null)
+        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? costDecision = null,
+        PreTesterReverseDependencyObservation.Tick? resolverTick = null,
+        PreTesterReverseDependencyObservation.Boundary? resolverBoundary = null)
     {
         var paths = ShippingSourcePaths(changedPaths);
         if (paths.Length == 0) return ([], []);
@@ -48,7 +50,9 @@ internal static class PreTesterReverseDependencySelections
         }
         if (result.TestClasses.Count == 0) return ([], []);
 
-        var resolved = Measure("resolve-class-names", () =>
+        var ordinal = resolverBoundary is null ? null : resolverTick?.Enter();
+        IReadOnlyList<AcceptanceTestClassDescriptor>? observedInventory = null;
+        var unresolvedName = Measure("resolve-class-names", () =>
         {
             IReadOnlyList<AcceptanceTestClassDescriptor> inventory;
             try
@@ -59,33 +63,23 @@ internal static class PreTesterReverseDependencySelections
             {
                 inventory = [];
             }
-            // Resolve the entire contribution before emitting success or creating any obligation.
-            foreach (var name in result.TestClasses)
-                if (inventory.Count(item => item.FullName == name ||
-                        item.FullName.EndsWith("." + name, StringComparison.Ordinal)) != 1)
-                {
-                    (progress ?? Console.WriteLine)(
-                        $"PRE_TESTER_GUARD_SELECTED class={name} kind=reverse-dependency-unresolved reason=class-match-not-unique path={paths[0]}");
-                    return false;
-                }
-            return true;
+            if (ordinal.HasValue) observedInventory = inventory;
+            return FirstUnresolvedClass(result.TestClasses, inventory);
         });
-        if (!resolved) return ([], []);
-        var classes = result.TestClasses.Distinct(StringComparer.Ordinal).ToArray();
-        var decision = Measure("evaluate-cost-rule", () => (costDecision ?? ReadCostDecision)(classes));
-        if (!decision.Run)
-        {
-            (progress ?? Console.WriteLine)(
-                $"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-skipped-cost {decision.Line}");
-            return ([], []);
-        }
-        var selections = classes
-            .Select(name => new FindingEvidenceSelection(GoalAcceptanceVerifier.ProjectLabel(Project), name)).ToArray();
-        return (selections, selections.SelectMany(selection => paths.Select(path =>
-            new Provenance(selection.TestClass, "reverse-dependency", path))).ToArray());
+        var selected = CompleteSelection(result.TestClasses, unresolvedName, paths, progress ?? Console.WriteLine,
+            costDecision ?? ReadCostDecision, out var decision);
+        RecordObservation(decision);
+        return selected;
 
         void Degraded(string reason) => (progress ?? Console.WriteLine)(
             $"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-degraded reason={reason} path={paths[0]}");
+
+        void RecordObservation(ReverseDependencyEvidenceCostRule.Decision? cost)
+        {
+            if (ordinal is { } entered)
+                resolverTick!.Record(entered, resolverBoundary!, Project, result.TestClasses,
+                    observedInventory!, paths, unresolvedName, cost);
+        }
 
         ReverseDependencyEvidenceCostRule.Decision ReadCostDecision(IReadOnlyList<string> selectedClasses)
         {
@@ -97,6 +91,42 @@ internal static class PreTesterReverseDependencySelections
                 ? evaluated with { Line = $"{evaluated.Line} input_unavailable={reason.Replace('\r', ' ').Replace('\n', ' ')}" }
                 : evaluated;
         }
+    }
+
+    // Resolve the entire contribution before emitting success or creating any obligation.
+    internal static string? FirstUnresolvedClass(
+        IReadOnlyList<string> names, IEnumerable<AcceptanceTestClassDescriptor> inventory)
+    {
+        foreach (var name in names)
+            if (inventory.Count(item => item.FullName == name ||
+                    item.FullName.EndsWith("." + name, StringComparison.Ordinal)) != 1)
+                return name;
+        return null;
+    }
+
+    internal static (IReadOnlyList<FindingEvidenceSelection> Selections, IReadOnlyList<Provenance> Provenance)
+        CompleteSelection(IReadOnlyList<string> names, string? unresolved, IReadOnlyList<string> paths,
+            Action<string> progress, Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision> costDecision,
+            out ReverseDependencyEvidenceCostRule.Decision? evaluatedCost)
+    {
+        if (unresolved is not null)
+        {
+            evaluatedCost = null;
+            progress($"PRE_TESTER_GUARD_SELECTED class={unresolved} kind=reverse-dependency-unresolved reason=class-match-not-unique path={paths[0]}");
+            return ([], []);
+        }
+
+        var classes = names.Distinct(StringComparer.Ordinal).ToArray();
+        var decision = Measure("evaluate-cost-rule", () => costDecision(classes));
+        evaluatedCost = decision;
+        if (!decision.Run)
+        {
+            progress($"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-skipped-cost {decision.Line}");
+            return ([], []);
+        }
+        var selections = classes.Select(name => new FindingEvidenceSelection(GoalAcceptanceVerifier.ProjectLabel(Project), name)).ToArray();
+        return (selections, selections.SelectMany(selection => paths.Select(path =>
+            new Provenance(selection.TestClass, "reverse-dependency", path))).ToArray());
     }
 
     private static T Measure<T>(string part, Func<T> action) =>

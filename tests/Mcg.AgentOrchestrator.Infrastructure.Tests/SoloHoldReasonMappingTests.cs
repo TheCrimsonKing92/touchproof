@@ -35,6 +35,16 @@ public sealed class SoloHoldReasonMappingTests
     }
 
     [Fact]
+    public void ValidatedRepair_RequiresNormalAcceptanceByConductor()
+    {
+        var mapping = SoloHoldNextAction.For(SoloHoldReasons.RepairValidated);
+
+        Assert.Equal("solo baseline repair", mapping.Mechanism);
+        Assert.Equal("conductor", mapping.Owner);
+        Assert.Contains("normal acceptance", mapping.NextAction);
+    }
+
+    [Fact]
     public void UnknownReason_RemainsExplicitlyUnmapped()
     {
         Assert.Equal(("unmapped", "unmapped", "unmapped"), SoloHoldNextAction.For("unknown-solo-reason"));
