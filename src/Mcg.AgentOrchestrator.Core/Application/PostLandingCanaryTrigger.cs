@@ -177,6 +177,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/LocalAdmissionOrder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLaneSlowdownDiff",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLoadContextProbe",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateReplayReceipt",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardLaneClass",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool.Priority",

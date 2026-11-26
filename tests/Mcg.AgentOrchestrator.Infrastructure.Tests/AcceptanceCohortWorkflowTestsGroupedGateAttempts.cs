@@ -504,7 +504,7 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts(CohortCandi
 
         private void Capture(string worktreePath, GateHeartbeatContext heartbeat)
         {
-            var startInfo = new ProcessStartInfo(executable) { WorkingDirectory = worktreePath };
+            var startInfo = new ProcessStartInfo(executable) { WorkingDirectory = worktreePath, CreateNoWindow = true };
             startInfo.Environment.Clear();
             var launch = Assert.IsType<GateReplayReceipt.Launch>(GateReplayReceipt.CaptureLaunch(
                 new AcceptanceProcessRequest { HeartbeatContext = heartbeat }, startInfo, true, [executable]));
