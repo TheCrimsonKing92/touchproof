@@ -285,7 +285,9 @@ internal static class CSharpTestClassScanner
         bool IsPartial,
         IReadOnlySet<string> ReferencedIdentifiers,
         int StartLine,
-        int EndLine);
+        int EndLine,
+        IReadOnlyList<SourceMemberDeclaration> Members,
+        IReadOnlyList<SourceTypeDeclaration> NestedTypes);
 
     internal sealed record SourceSymbols(
         IReadOnlyList<SourceTypeDeclaration> DeclaredTypes,
@@ -326,34 +328,251 @@ internal static class CSharpTestClassScanner
         var declarationNameIndexes = declarations
             .Select(declaration => declaration.NameIndex)
             .ToHashSet();
+        var declarationsByKeyword = declarations.ToDictionary(declaration => declaration.KeywordIndex);
         var sourceTypeDeclarations = topLevelDeclarations
-            .Select(declaration => new SourceTypeDeclaration(
-                declaration.Name,
-                declaration.IsPartial,
-                ReadReferencedIdentifiers(tokens, declaration, declarationNameIndexes),
-                tokens[FindDeclarationStart(tokens, declaration.KeywordIndex)].Line,
-                tokens[declaration.CloseBraceIndex].Line))
+            .Select(ReadSourceTypeDeclaration)
             .OrderBy(declaration => declaration.Name, StringComparer.Ordinal)
             .ToArray();
         symbols = new SourceSymbols(
             sourceTypeDeclarations,
             classNames);
         return true;
+
+        SourceTypeDeclaration ReadSourceTypeDeclaration(TypeDeclaration declaration)
+        {
+            var members = new List<SourceMemberDeclaration>();
+            var nestedTypes = new List<SourceTypeDeclaration>();
+            if (tokens[declaration.KeywordIndex].Value == "record")
+            {
+                var parameterStart = declaration.NameIndex + 1;
+                if (tokens[parameterStart].Value == "<")
+                {
+                    parameterStart = FindMatching(tokens, parameterStart, "<", ">") + 1;
+                }
+
+                if (parameterStart > declaration.NameIndex && tokens[parameterStart].Value == "(")
+                {
+                    var parameterEnd = FindMatching(tokens, parameterStart, "(", ")");
+                    if (parameterEnd > parameterStart && parameterEnd <= declaration.CloseBraceIndex)
+                    {
+                        ReadNamedSegments(tokens, parameterStart + 1, parameterEnd, members);
+                    }
+                }
+            }
+
+            for (var start = declaration.OpenBraceIndex + 1; start < declaration.CloseBraceIndex;)
+            {
+                if (tokens[start].Value == "#")
+                {
+                    var directiveLine = tokens[start].Line;
+                    do { start++; } while (start < declaration.CloseBraceIndex &&
+                                          tokens[start].Line == directiveLine);
+                    continue;
+                }
+
+                var end = ReadMember(tokens, declaration, declarationsByKeyword, start, members, out var nested);
+                if (nested is not null)
+                {
+                    nestedTypes.Add(ReadSourceTypeDeclaration(nested));
+                }
+
+                start = end + 1;
+            }
+
+            return new SourceTypeDeclaration(
+                declaration.Name,
+                declaration.IsPartial,
+                ReadReferencedIdentifiers(tokens, declaration, declarationNameIndexes),
+                tokens[FindDeclarationStart(tokens, declaration.KeywordIndex)].Line,
+                tokens[declaration.CloseBraceIndex].Line,
+                members.Count == 0 ? [] : members.ToArray(),
+                nestedTypes.Count == 0 ? [] : nestedTypes.ToArray());
+        }
     }
 
     private static IReadOnlySet<string> ReadReferencedIdentifiers(
         IReadOnlyList<Token> tokens,
         TypeDeclaration declaration,
         IReadOnlySet<int> declarationNameIndexes) =>
-        tokens
-            .Select((token, index) => (token, index))
-            .Where(pair =>
-                declaration.KeywordIndex <= pair.index &&
-                pair.index <= declaration.CloseBraceIndex &&
-                pair.token.IsIdentifier &&
-                !declarationNameIndexes.Contains(pair.index))
-            .Select(pair => pair.token.Value)
+        Enumerable.Range(declaration.KeywordIndex, declaration.CloseBraceIndex - declaration.KeywordIndex + 1)
+            .Where(index => tokens[index].IsIdentifier && !declarationNameIndexes.Contains(index))
+            .Select(index => tokens[index].Value)
             .ToHashSet(StringComparer.Ordinal);
+
+    private static int ReadMember(
+        IReadOnlyList<Token> tokens,
+        TypeDeclaration owner,
+        IReadOnlyDictionary<int, TypeDeclaration> declarationsByKeyword,
+        int start,
+        List<SourceMemberDeclaration> members,
+        out TypeDeclaration? nested)
+    {
+        nested = null;
+        var end = owner.CloseBraceIndex;
+        var methodName = -1;
+        var genericName = -1;
+        var propertyName = -1;
+        var constantStart = -1;
+        var hasExpression = false;
+        var excluded = false;
+
+        for (var index = start; index < owner.CloseBraceIndex; index++)
+        {
+            var value = tokens[index].Value;
+            if (!hasExpression && declarationsByKeyword.TryGetValue(index, out var candidate) &&
+                candidate.CloseBraceIndex < owner.CloseBraceIndex &&
+                FindDeclarationStart(tokens, index) == start)
+            {
+                members.Add(new SourceMemberDeclaration(candidate.Name, tokens[start].Line,
+                    tokens[candidate.CloseBraceIndex].Line));
+                nested = candidate;
+                return candidate.CloseBraceIndex;
+            }
+
+            if (!hasExpression && (value is "event" or "operator" or "~") &&
+                (index == start || tokens[index - 1].Value != "@"))
+            {
+                excluded = true;
+            }
+
+            if (!hasExpression && value == "const" && (index == start || tokens[index - 1].Value != "@"))
+            {
+                constantStart = index + 1;
+            }
+
+            if (value == ";")
+            {
+                end = index;
+                break;
+            }
+
+            if (value is "=" or "=>")
+            {
+                if (!hasExpression && value == "=>" && index > start && tokens[index - 1].IsIdentifier)
+                {
+                    propertyName = index - 1;
+                }
+
+                hasExpression = true;
+                continue;
+            }
+
+            var groupEnd = FindGroupEnd(tokens, index, includeAngles: !hasExpression && !excluded);
+            if (groupEnd < 0 || groupEnd >= owner.CloseBraceIndex)
+            {
+                continue;
+            }
+
+            if (!hasExpression && value == "<")
+            {
+                genericName = tokens[groupEnd + 1].Value == "(" ? index - 1 : -1;
+            }
+            else if (!hasExpression && value == "(" && methodName < 0 && index > start &&
+                     tokens[groupEnd + 1].Value is "where" or ":" or ";" or "{" or "=>")
+            {
+                var nameIndex = genericName >= 0 ? genericName : index - 1;
+                if (tokens[nameIndex].IsIdentifier)
+                {
+                    methodName = nameIndex;
+                }
+
+                genericName = -1;
+            }
+            else if (!hasExpression && value == "{")
+            {
+                if (index > start && tokens[index - 1].IsIdentifier)
+                {
+                    propertyName = index - 1;
+                }
+
+                end = groupEnd;
+                if (tokens[groupEnd + 1].Value != "=")
+                {
+                    break;
+                }
+            }
+
+            index = groupEnd;
+        }
+
+        if (end >= owner.CloseBraceIndex || excluded)
+        {
+            return end;
+        }
+
+        if (constantStart >= 0)
+        {
+            ReadNamedSegments(tokens, constantStart, end, members, (tokens[start].Line, tokens[end].Line));
+        }
+        else if (methodName < 0 || tokens[methodName].Value != owner.Name ||
+                 (methodName > start && tokens[methodName - 1].Value == "."))
+        {
+            var nameIndex = methodName >= 0 ? methodName : propertyName;
+            if (nameIndex >= 0)
+            {
+                members.Add(new SourceMemberDeclaration(tokens[nameIndex].Value, tokens[start].Line, tokens[end].Line));
+            }
+        }
+
+        return end;
+    }
+
+    private static void ReadNamedSegments(
+        IReadOnlyList<Token> tokens,
+        int start,
+        int end,
+        List<SourceMemberDeclaration> members,
+        (int StartLine, int EndLine)? sharedSpan = null)
+    {
+        var segmentStart = start;
+        var nameIndex = -1;
+        var hasDefault = false;
+        for (var index = start; index <= end; index++)
+        {
+            if (index == end || tokens[index].Value == ",")
+            {
+                if (nameIndex >= 0)
+                {
+                    var (startLine, endLine) = sharedSpan ?? (tokens[segmentStart].Line, tokens[index - 1].Line);
+                    members.Add(new SourceMemberDeclaration(tokens[nameIndex].Value, startLine, endLine));
+                }
+
+                segmentStart = index + 1;
+                nameIndex = -1;
+                hasDefault = false;
+                continue;
+            }
+
+            if (tokens[index].Value == "=")
+            {
+                hasDefault = true;
+            }
+
+            var groupEnd = FindGroupEnd(tokens, index, includeAngles: true);
+            if (groupEnd > index && groupEnd < end &&
+                (!hasDefault || tokens[index].Value != "<" || tokens[groupEnd + 1].Value == "."))
+            {
+                index = groupEnd;
+            }
+            else if (!hasDefault && tokens[index].IsIdentifier)
+            {
+                nameIndex = index;
+            }
+        }
+    }
+
+    private static int FindGroupEnd(IReadOnlyList<Token> tokens, int index, bool includeAngles)
+    {
+        var close = tokens[index].Value switch
+        {
+            "(" => ")",
+            "[" => "]",
+            "{" => "}",
+            "<" when includeAngles => ">",
+            _ => null
+        };
+        return close is null ? -1 : FindMatching(tokens, index, tokens[index].Value, close);
+    }
 
     private static bool TryFindDeclarations(
         IReadOnlyList<Token> tokens,
@@ -656,6 +875,8 @@ internal static class CSharpTestClassScanner
 
             if (TrySkipStringOrCharacter(source, ref index, out var recognized))
             {
+                // A literal contributes no identifiers, but can end a positional parameter.
+                found.Add(At("literal", false, index - 1));
                 continue;
             }
 
