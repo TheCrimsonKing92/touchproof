@@ -664,23 +664,23 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<HumanInputRequest> requests,
         IReadOnlyList<HumanInputAnswerRecord> clarificationAnswerHistory)
     {
-        IReadOnlyList<string> Apply(IReadOnlyList<string> lines)
+        IReadOnlyList<string> RetractLines(IReadOnlyList<string> lines)
         {
-            return lines
-                .Select(line => HumanInputRetractionPolicy.Apply(
-                    line,
-                    requests,
-                    clarificationAnswerHistory))
-                .ToArray();
+            if (lines.Count == 0)
+                return lines;
+
+            var joined = string.Join('\n', lines);
+            var filtered = HumanInputRetractionPolicy.Apply(joined, requests, clarificationAnswerHistory);
+            return string.Equals(joined, filtered, StringComparison.Ordinal) ? lines : filtered.Split('\n');
         }
 
         return segments
             .Select(segment => segment with
             {
-                Lines = Apply(segment.Lines),
+                Lines = RetractLines(segment.Lines),
                 CollapsedLines = segment.CollapsedLines is null
                     ? null
-                    : Apply(segment.CollapsedLines)
+                    : RetractLines(segment.CollapsedLines)
             })
             .ToArray();
     }
