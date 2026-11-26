@@ -8,11 +8,6 @@ using static Mcg.AgentOrchestrator.App.Orchestration.ConductorRelaunchDrainInten
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record ConductorPolicyResolution(
-    ConductorAutonomyPolicy Policy,
-    string Source,
-    IReadOnlyList<string> Warnings);
-
 internal readonly record struct ParallelAcceptanceOldestWaiterObservation(
     Goal? Waiter,
     int ConsecutiveTicks)
@@ -256,6 +251,7 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
+        using var resolverObservation = driver.PreTesterResolverObservation;
         if (watchSleep.IsIgnoringInitialStopFile)
             Console.WriteLine($"[conduct --watch] The existing repo-wide stop file is ignored for named goal {ShortGoalId(onlyGoalId!)}.");
         using var activationAdmissionHealth = BeginActivationAdmission(emitActivationHeartbeat);
@@ -446,7 +442,14 @@ internal sealed partial class ConductorBatchLoop
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
             $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
             $"acceptanceWidth={policy.AcceptanceWidth} adoptedBuildPushEnabled={policy.AdoptedBuildPushEnabled} buildRootReapIntervalSeconds={policy.BuildRootReapIntervalSeconds} {policy.Features.ToLogFields()} gitPath={SanitizeReason(ConductorGitResolution.Current.LogValue)}" +
-            (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
+            (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}") +
+            $" pid={Environment.ProcessId} resolverObservationLaunch={(resolverObservation is null ? "unverified" : "verified")}");
+        void ReportUnverifiedResolverObservationRequest(Guid? request, int tick, Guid? previousRequest = null)
+        {
+            if (resolverObservation is null && request is { } windowId && request != previousRequest)
+                EmitProgress($"POLICY_WARNING tick={tick} window={windowId:D} message=pretester-resolver-launch-unverified");
+        }
+        ReportUnverifiedResolverObservationRequest(policy.PreTesterResolverObservationWindowId, tick: 0);
         SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)
         {
             if (pendingSelfRelaunch?.HomeBuildTarget is { } homeTarget)
@@ -792,9 +795,9 @@ internal sealed partial class ConductorBatchLoop
                             EmitProgress($"POLICY_WARNING tick={nextTick} message={SanitizeReason(warning)}");
                         }
 
-                        EmitProgress(
-                            $"POLICY_RELOAD tick={nextTick} source={SanitizeReason(reloaded.Source)} " +
-                            $"{FormatPolicyValues("old", policy)} {FormatPolicyValues("new", reloaded.Policy)}");
+                        EmitProgress(reloaded.FormatReload(nextTick, policy));
+                        ReportUnverifiedResolverObservationRequest(reloaded.Policy.PreTesterResolverObservationWindowId, nextTick,
+                            policy.PreTesterResolverObservationWindowId);
                         policy = reloaded.Policy;
                         policySource = reloaded.Source;
                     }
@@ -886,13 +889,16 @@ internal sealed partial class ConductorBatchLoop
                             escalatedGoals, completedGoals, reapedGoals, goalProjectionCache);
                         foreach (var line in drainIntentBoundary.Lines) EmitProgress(line);
                     }
+                    resolverObservation?.ObserveDrainPass(policy.PreTesterResolverObservationWindowId);
                     continue;
                 }
                 if (drainOutcome.Disposition == SelfRelaunchDrainDisposition.BreakLoop)
                 {
+                    resolverObservation?.ObserveDrainPass(policy.PreTesterResolverObservationWindowId);
                     break;
                 }
             }
+            using var resolverTick = resolverObservation?.BeginTick(policy.PreTesterResolverObservationWindowId, _utcNow);
             RunJanitorialPhase("readmit-resolved-set-aside-goals", nextTick, () =>
             {
                 var decisions = ReadmitResolvedSetAsideGoals(
@@ -1104,6 +1110,7 @@ internal sealed partial class ConductorBatchLoop
 
                     ObserveDrain();
                     CompleteActivationTick(totalTicks);
+                    resolverTick?.Complete();
                     if (drain.IsDraining)
                         continue;
                     if (!(keepAliveWhenIdle && watchInterval is not null))
@@ -1184,6 +1191,7 @@ internal sealed partial class ConductorBatchLoop
                               (transientLoadRecheckPending ? " loadHeld=true" : string.Empty) +
                               $" seconds={(int)idleInterval.TotalSeconds}"
                             : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
+                    resolverTick?.Complete();
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                         : watchSleep.Wait(idleInterval, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId), ObserveDrain);
@@ -1793,6 +1801,7 @@ internal sealed partial class ConductorBatchLoop
             {
                 PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
                 CompleteActivationTick(totalTicks);
+                resolverTick?.Complete();
                 break;
             }
             if (drain.IsDraining || (tickAdvanced == 0 && tickDone == 0))
@@ -1807,6 +1816,7 @@ internal sealed partial class ConductorBatchLoop
                     {
                         PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
                         CompleteActivationTick(totalTicks);
+                        resolverTick?.Complete();
                         continue;
                     }
 
@@ -1817,6 +1827,7 @@ internal sealed partial class ConductorBatchLoop
                         persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay,
                         checkpointGoalTick, checkpointHeldGoals);
                     PublishTick(tickSummary, tickSnapshotBytes);
+                    resolverTick?.Complete();
                     break;
                 }
 
@@ -1851,6 +1862,7 @@ internal sealed partial class ConductorBatchLoop
                     Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {sleepSeconds}s for workers to complete.");
                 }
                 PublishTick(tickSummary with { WatchSleeping = true }, tickSnapshotBytes);
+                resolverTick?.Complete();
 
                 var sleepResult = sleepFunc is not null
                     ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
@@ -1881,6 +1893,7 @@ internal sealed partial class ConductorBatchLoop
 
             PublishTick(tickSummary, tickSnapshotBytes, activationSweepFollows: true);
             CompleteActivationTick(totalTicks);
+            resolverTick?.Complete();
         }
 
         canaryDrain.Wait();
@@ -1903,7 +1916,15 @@ internal sealed partial class ConductorBatchLoop
         }
         if (stopReason == ConductorDrainSignal.DrainedReason)
             EmitProgress(drain.FormatDrained(totalTicks));
-        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds)) { HomeBuildTarget = handedOffHomeBuild };
+        var observationRenewal = maxDurationReached || selfRelaunchHandoff is
+            { Started: true, Reason: ConductorSelfRelaunch.SupervisorDelegatedReason };
+        if (!observationRenewal)
+            resolverObservation?.CloseOrderly(_utcNow);
+        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds))
+        {
+            HomeBuildTarget = handedOffHomeBuild,
+            ResolverObservationHandoff = observationRenewal ? resolverObservation?.CloseForRenewal(_utcNow) : null
+        };
         }
         catch (Exception ex)
         {
@@ -2301,27 +2322,6 @@ internal sealed partial class ConductorBatchLoop
 
     private static bool PoliciesMatch(ConductorAutonomyPolicy left, ConductorAutonomyPolicy right) =>
         string.Equals(left.ToJson(), right.ToJson(), StringComparison.Ordinal);
-
-    private static string FormatPolicyValues(string prefix, ConductorAutonomyPolicy policy)
-    {
-        var transitions = string.Join(',', policy.TransitionMap
-            .OrderBy(entry => entry.Key)
-            .Select(entry => $"{entry.Key}:{entry.Value}"));
-
-        return $"{prefix}Name={Sanitize(policy.Name)} " +
-               $"{prefix}MaxConcurrentPaidWorkers={policy.MaxConcurrentPaidWorkers} " +
-               $"{prefix}MaxCriterionRetries={policy.MaxCriterionRetries} {prefix}BuildRootReapIntervalSeconds={policy.BuildRootReapIntervalSeconds} " +
-               $"{prefix}AutoPromoteRiskThreshold={policy.AutoPromoteRiskThreshold?.ToString() ?? "none"} " +
-               $"{prefix}MaxEmptyOutputDispatchRetries={policy.MaxEmptyOutputDispatchRetries} " +
-               $"{prefix}MaxEmptyOutputAutoRecoverCycles={policy.MaxEmptyOutputAutoRecoverCycles} " +
-               $"{prefix}EmptyOutputRetryInitialDelaySeconds={policy.EmptyOutputRetryInitialDelaySeconds} " +
-               $"{prefix}EmptyOutputRetryBackoffMultiplier={policy.EmptyOutputRetryBackoffMultiplier} " +
-               $"{prefix}EmptyOutputRetryMaxDelaySeconds={policy.EmptyOutputRetryMaxDelaySeconds} " +
-               $"{prefix}ReviewAutoRetryWarningRound={policy.ReviewAutoRetryWarningRound} " +
-               $"{prefix}ReviewAutoRetryStopRound={policy.ReviewAutoRetryStopRound} " +
-               $"{prefix}ReviewAutoRetryLifetimeMultiplier={policy.ReviewAutoRetryLifetimeMultiplier} " +
-               $"{prefix}TransitionMap={transitions}";
-    }
 
     private IReadOnlyDictionary<string, ParallelLandingOutcome> ReconcileDrainingAcceptance(
         IReadOnlyList<Goal> goals, AgentOrchestratorKernel kernel, ConductorDriver driver,

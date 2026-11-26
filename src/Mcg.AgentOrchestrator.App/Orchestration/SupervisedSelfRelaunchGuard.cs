@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Presence is a fresh observation of the lease owner's process identity, never a cached launch claim.
 internal static class SupervisedSelfRelaunchGuard
 {
-    internal sealed record Presence(string Kind, string Reason);
+    internal sealed record Presence(string Kind, string Reason, ConductorSupervisorProcessIdentity? Owner = null);
     private sealed record Lease(ConductorSupervisorProcessIdentity? Process);
 
     internal static Presence Probe(string continuityDirectory, IConductLockPidProbe probe,
@@ -26,7 +26,7 @@ internal static class SupervisedSelfRelaunchGuard
                     if (owner is null || owner.ProcessId <= 0 || owner.StartedAt == default)
                         return new("unknown", "invalid-json");
                     return probe.IsSameProcess(owner.ProcessId, owner.StartedAt)
-                        ? new("present", "owner-running") : new("absent", "owner-not-running");
+                        ? new("present", "owner-running", owner) : new("absent", "owner-not-running");
                 }
                 catch (IOException ex) when (attempt < SystemConductorSupervisorHandoffSeam.LeaseOpenAttempts &&
                     SystemConductorSupervisorHandoffSeam.IsLeaseContention(ex))

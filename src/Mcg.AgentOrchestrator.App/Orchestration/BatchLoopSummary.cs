@@ -14,4 +14,5 @@ public sealed record BatchLoopSummary(
     int LandedGoals = 0)
 {
     internal HomeBuildAdoptionRecord? HomeBuildTarget { get; init; }
+    internal string? ResolverObservationHandoff { get; init; }
 }
