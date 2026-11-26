@@ -29,9 +29,24 @@ public sealed record GateReplayReceipt(
     ImmutableArray<GateReplayArtifact> ExpectedArtifacts,
     ImmutableDictionary<string, string> Environment,
     bool? RequiresAcceptanceLease,
-    ImmutableArray<string> DroppedEnvironmentNames)
+    ImmutableArray<string> DroppedEnvironmentNames,
+    int? PathLength = null,
+    bool? SystemDirectoryOnPath = null,
+    bool? WindowsPowerShellDirectoryOnPath = null,
+    bool? GitDirectoryOnPath = null,
+    bool? DotnetDirectoryOnPath = null)
 {
     public int DroppedEnvironmentCount => DroppedEnvironmentNames.IsDefault ? 0 : DroppedEnvironmentNames.Length;
+
+    internal sealed record LaunchIdentity(string GoalId, string CandidateSha, string MainSha, string RunId);
+
+    internal static LaunchIdentity? ResolveFocusedLaunchIdentity(IAcceptanceRunExecutionContext? context) => context switch
+    {
+        AcceptanceRunExecutionContextView view => ResolveFocusedLaunchIdentity(view.Owner),
+        AcceptanceFocusedVerificationOwner { FocusedRunBinding.ReplayObservedMainSha: { } main } owner =>
+            new(owner.Identity.GoalId, owner.Identity.CandidateSha, main, owner.Identity.FocusedRunId),
+        _ => null
+    };
 
     internal static Launch? CaptureLaunch(
         AcceptanceProcessRequest request,
@@ -39,7 +54,8 @@ public sealed record GateReplayReceipt(
         bool directLaunch,
         string[] checkArguments)
     {
-        if (request.HeartbeatContext?.AttemptIdentity is null || request.SuppressDiagnosticCaptures || checkArguments.Length == 0)
+        if (request.HeartbeatContext is not ({ AttemptIdentity: not null } or { FocusedReplayIdentity: not null }) ||
+            request.SuppressDiagnosticCaptures || checkArguments.Length == 0)
             return null;
 
         // Windows shell dispatch can select another image. On POSIX the shell receives a
@@ -53,7 +69,8 @@ public sealed record GateReplayReceipt(
             using var executable = File.OpenRead(executablePath);
             var executableSha256 = Convert.ToHexStringLower(SHA256.HashData(executable));
             return new Launch(startInfo.WorkingDirectory, executablePath, executableSha256,
-                [.. checkArguments.Skip(1)], GateReplayEnvironmentAllowlist.Capture(startInfo.Environment));
+                [.. checkArguments.Skip(1)], GateReplayEnvironmentAllowlist.Capture(startInfo.Environment),
+                GateToolResolutionPreflight.Current);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             ArgumentException or NotSupportedException)
@@ -68,11 +85,15 @@ public sealed record GateReplayReceipt(
         string ExecutablePath,
         string ExecutableSha256,
         ImmutableArray<string> Arguments,
-        GateReplayEnvironmentAllowlist.Projection Environment)
+        GateReplayEnvironmentAllowlist.Projection Environment,
+        GateToolResolutionResult? ToolResolution = null)
     {
         internal GateReplayReceipt? Bind(GateHeartbeatContext context, string stdoutPath, string stderrPath)
         {
-            if (context.AttemptIdentity is not { } attempt) return null;
+            var identity = context.AttemptIdentity is { } attempt
+                ? new LaunchIdentity(attempt.GoalId, attempt.VerifyingCommitSha, attempt.MainSha, attempt.AttemptId)
+                : context.FocusedReplayIdentity;
+            if (identity is null) return null;
 
             var artifacts = ImmutableArray.CreateBuilder<GateReplayArtifact>();
             artifacts.Add(new(GateReplayArtifactRole.Stdout, stdoutPath));
@@ -83,9 +104,12 @@ public sealed record GateReplayReceipt(
                 !string.IsNullOrWhiteSpace(timingPath))
                 artifacts.Add(new(GateReplayArtifactRole.Timing, timingPath));
 
-            return new GateReplayReceipt(attempt.GoalId, attempt.VerifyingCommitSha, attempt.MainSha, attempt.AttemptId,
+            return new GateReplayReceipt(identity.GoalId, identity.CandidateSha, identity.MainSha, identity.RunId,
                 context.CurrentTarget, WorkingDirectory, ExecutablePath, ExecutableSha256, Arguments,
-                artifacts.ToImmutable(), Environment.Values, context.RequiresAcceptanceLease, Environment.DroppedNames);
+                artifacts.ToImmutable(), Environment.Values, context.RequiresAcceptanceLease, Environment.DroppedNames,
+                ToolResolution?.PathLength, ToolResolution?.SystemDirectoryOnPath,
+                ToolResolution?.WindowsPowerShellDirectoryOnPath, ToolResolution?.GitDirectoryOnPath,
+                ToolResolution?.DotnetDirectoryOnPath);
         }
     }
 }

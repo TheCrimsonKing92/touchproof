@@ -67,6 +67,16 @@ internal sealed record GroupedGateAttemptOverlap(
     internal string Reason => "grouped-gate-attempt-overlap";
 }
 
+// Enter within the gate's infrastructure error handler and retain the result through attribution.
+internal sealed class GroupedGateToolResolutionScope(Func<string, IDisposable?>? enterPreflight) : IDisposable
+{
+    private IDisposable? _scope;
+
+    internal void Enter(string workingDirectory) => _scope = enterPreflight?.Invoke(workingDirectory);
+
+    public void Dispose() => _scope?.Dispose();
+}
+
 internal sealed class ConductorGroupedGateAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-grouped-gate-attempt";
