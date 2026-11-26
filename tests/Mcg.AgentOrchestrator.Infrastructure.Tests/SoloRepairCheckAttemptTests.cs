@@ -84,19 +84,22 @@ public sealed class SoloRepairCheckAttemptTests
             return Owner;
         });
         var background = Coordinator(workspace, verifier, (_, _) => throw new InvalidOperationException("Tick acquired the build slot."), attempts);
-        var tick = Task.Factory.StartNew(() =>
+        Task<int> StartPendingTick() => Task.Factory.StartNew(() =>
         {
             var caller = Environment.CurrentManagedThreadId;
             AssertPending(background, unmodified, finding.Request!);
             return caller;
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        var tick = StartPendingTick();
         int tickThread;
         try
         {
-            tickThread = await tick.WaitAsync(HangGuard);
-            var slotThread = await enteredSlot.Task.WaitAsync(HangGuard);
+            tickThread = await WaitForEventAsync(tick, "the first pending tick to return");
+            var slotThread = await WaitForEventAsync(enteredSlot.Task, "the child to reach the build-slot gate");
             Assert.NotEqual(tickThread, slotThread);
-            AssertPending(background, unmodified, finding.Request!);
+            tick = StartPendingTick();
+            await WaitForEventAsync(tick, "the second pending tick to return while the build-slot gate is closed");
             Assert.Equal(1, launches);
             Assert.Equal(1, attempts.CountLiveAttempts());
             Assert.Null(store.ReadCheck(key));
@@ -104,8 +107,13 @@ public sealed class SoloRepairCheckAttemptTests
         finally
         {
             releaseSlot.TrySetResult();
+            if (!tick.IsCompleted)
+            {
+                // Join a timed-out tick after unblocking it, preserving the original failure.
+                await WaitForEventAsync(Task.WhenAny(tick), "the pending tick to finish after the build-slot gate opens");
+            }
             if (child is not null)
-                Assert.Equal(0, await child.WaitAsync(HangGuard));
+                Assert.Equal(0, await WaitForEventAsync(child, "the child attempt to exit after the build-slot gate opens"));
         }
 
         Assert.NotEqual(0, verifierThread);
@@ -191,7 +199,7 @@ public sealed class SoloRepairCheckAttemptTests
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         try
         {
-            await held.Task.WaitAsync(HangGuard);
+            await WaitForEventAsync(held.Task, "the prior execution to acquire the check mutex");
             recovered.StartOrObserve(store, request);
             Assert.Single(launched);
             Assert.Null(store.ReadCheck(key));
@@ -199,7 +207,7 @@ public sealed class SoloRepairCheckAttemptTests
         finally
         {
             release.TrySetResult();
-            await legacy.WaitAsync(HangGuard);
+            await WaitForEventAsync(legacy, "the prior execution to release the check mutex and exit");
         }
 
         recovered.StartOrObserve(store, request);
@@ -216,6 +224,24 @@ public sealed class SoloRepairCheckAttemptTests
         Assert.Equal(staged.Proof, store.ReadVerifiedCheck(key, request.ProofIdentity)?.Proof);
         Assert.Null(store.ReadCheckExecution(key));
         Assert.Empty(verifier.FocusedRuns);
+    }
+
+    private static async Task WaitForEventAsync(Task completion, string eventDescription)
+    {
+        try
+        {
+            await completion.WaitAsync(HangGuard);
+        }
+        catch (TimeoutException exception)
+        {
+            throw new TimeoutException($"Timed out waiting for {eventDescription}.", exception);
+        }
+    }
+
+    private static async Task<T> WaitForEventAsync<T>(Task<T> completion, string eventDescription)
+    {
+        await WaitForEventAsync((Task)completion, eventDescription);
+        return await completion;
     }
 
     private static SoloRepairCheckAttemptCoordinator AttemptCoordinator(OrchestratorWorkspace workspace,
