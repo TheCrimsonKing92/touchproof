@@ -375,7 +375,8 @@ internal sealed partial class ConductorDriver
         string pairFingerprint,
         CancellationToken cancellationToken,
         Action? onGateAdmitted,
-        string? outerAttemptId = null)
+        string? outerAttemptId = null,
+        Func<string, IDisposable?>? enterToolPreflight = null)
     {
         var verifier = _cohortAcceptanceVerifier
             ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
@@ -406,8 +407,10 @@ internal sealed partial class ConductorDriver
         DotnetBuildEnvironmentLease? stableSlotLease = null;
         AcceptanceCohortReceipt? receipt = null;
         var gateExecutionComplete = false;
+        using var toolResolution = new GroupedGateToolResolutionScope(enterToolPreflight);
         try
         {
+            toolResolution.Enter(integration.Path);
             stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(
                 identity.Value, CohortStableSlotAcquisitionRounds.HolderLabel(bindings), CohortStableSlotRoundCount, cancellationToken);
             if (stableSlotLease is null) return null;
@@ -433,24 +436,8 @@ internal sealed partial class ConductorDriver
             cohortFailingTests = CohortFailingTestIdentities(verification);
             cohortFailedChecks = verification.Checks?.Where(check => !check.Passed && !check.Advisory).ToArray() ?? [];
             gateExecutionComplete = true;
-            gateClock.Stop();
-            receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
-                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
-                identity,
-                classification.Outcome,
-                _utcNow(),
-                checked((long)gateClock.Elapsed.TotalMilliseconds),
-                failedChecks,
-                GateExitCode: gateExitCode,
-                GateTestResultPaths: gateTestResultPaths,
-                ValidForLanding: classification.Outcome == AcceptanceCohortGateOutcome.Passed,
-                InfrastructureReasonCode: classification.InfrastructureReasonCode,
-                InfrastructureDetail: classification.InfrastructureDetail)
-                {
-                    GateChecks = classifiedVerification.Checks.Select(check => check.BindToCohort(identity)).ToArray(),
-                    GateAttemptId = verification.AttemptId,
-                    GateLanePlanPath = verification.GateLanePlanPath
-                });
+            receipt = AcceptanceCohortGateReceipts.Save(store, identity, classification, gateClock, _utcNow,
+                failedChecks, gateExitCode, gateTestResultPaths, classifiedVerification.Checks, verification);
         }
         catch (Exception ex) when (!gateExecutionComplete && ex is (
             AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or
@@ -471,24 +458,8 @@ internal sealed partial class ConductorDriver
 
         if (receipt is null)
         {
-            gateClock.Stop();
-            if (classification is null)
-            {
-                throw new InvalidOperationException(
-                    "Acceptance cohort gate ended without a structured classification.");
-            }
-            receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
-                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
-                identity,
-                classification.Outcome,
-                _utcNow(),
-                checked((long)gateClock.Elapsed.TotalMilliseconds),
-                failedChecks,
-                GateExitCode: gateExitCode,
-                GateTestResultPaths: gateTestResultPaths,
-                ValidForLanding: false,
-                InfrastructureReasonCode: classification.InfrastructureReasonCode,
-                InfrastructureDetail: classification.InfrastructureDetail));
+            receipt = AcceptanceCohortGateReceipts.Save(store, identity, classification, gateClock, _utcNow,
+                failedChecks, gateExitCode, gateTestResultPaths);
         }
 
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
