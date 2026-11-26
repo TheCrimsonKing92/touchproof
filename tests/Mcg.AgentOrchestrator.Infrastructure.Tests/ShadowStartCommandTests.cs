@@ -1,5 +1,6 @@
 using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.Infrastructure.Tests;
 using Microsoft.Data.Sqlite;
 
 // Parallel-safe. Each test owns its temporary tree and the supervised candidate process.
@@ -81,7 +82,6 @@ public sealed class ShadowStartCommandTests
         }
 
         internal string Scratch(string name) => Path.Combine(_root, name);
-        internal string CandidateScriptPath => _script;
 
         internal void CreateDatabase(string relativePath, string journalMode = "delete", string marker = "fixture")
         {
@@ -104,16 +104,24 @@ public sealed class ShadowStartCommandTests
         {
             using var output = new StringWriter();
             using var error = new StringWriter();
+            var candidate = mode == "reopen-wal" ? "dotnet" : OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
+            string[] candidateArgs = mode == "reopen-wal" ? ReopenWalCandidateArguments(marker) :
+                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", _script, mode, marker ?? "no-marker"];
             var exit = CliShadowStartCommand.Run(
                 ["shadow-start", "--source", Source, "--scratch", Scratch(scratch),
-                 "--candidate", OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh",
-                 "--candidate-arg=-NoProfile", "--candidate-arg=-NonInteractive",
-                 "--candidate-arg=-ExecutionPolicy", "--candidate-arg=Bypass",
-                 "--candidate-arg=-File", $"--candidate-arg={_script}", $"--candidate-arg={mode}",
-                 $"--candidate-arg={marker ?? "no-marker"}",
+                 "--candidate", candidate, .. candidateArgs.Select(arg => $"--candidate-arg={arg}"),
                  "--startup-ceiling-seconds", startupSeconds, "--budget-seconds", "60", .. (extra ?? [])],
                 output, error, hooks ?? Hooks, cancellationToken);
             return (exit, output.ToString(), error.ToString());
+        }
+
+        internal static string[] ReopenWalCandidateArguments(string? marker)
+        {
+            var location = DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(typeof(Fixture));
+            Assert.True(location.Directory is not null,
+                $"Supervisor launch probe is missing. Tried: {string.Join(", ", location.TriedPaths)}");
+            return [Path.Combine(location.Directory!, "Mcg.AgentOrchestrator.SupervisorLaunchProbe.dll"),
+                "shadow-reopen-wal", marker ?? "no-marker"];
         }
 
         public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -134,45 +142,6 @@ public sealed class ShadowStartCommandTests
             $rootIndex -lt 0 -or $args[$rootIndex + 1] -ne $root -or
             $stateIndex -lt 0 -or $args[$stateIndex + 1] -ne $state -or
             $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -ne $root) { exit 3 }
-        if ($mode -eq 'reopen-wal') {
-            Add-Type -TypeDefinition @'
-        using System;
-        using System.IO;
-        using System.Runtime.InteropServices;
-        using System.Text;
-
-        public static class ShadowFixtureSqlite {
-            [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
-            private static extern int sqlite3_open(byte[] path, out IntPtr database);
-            [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
-            private static extern int sqlite3_exec(IntPtr database, string sql, IntPtr callback, IntPtr state, IntPtr error);
-            [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
-            private static extern int sqlite3_close(IntPtr database);
-
-            public static void ReopenWalAndHold(string path) {
-                IntPtr first = OpenAndWriteWal(path);
-                if (sqlite3_close(first) != 0) throw new InvalidOperationException("SQLite did not close.");
-                if (File.Exists(path + "-wal") || File.Exists(path + "-shm"))
-                    throw new InvalidOperationException("The first SQLite connection did not remove its sidecars.");
-                OpenAndWriteWal(path); // Keep the second connection open until the containing job terminates.
-            }
-
-            private static IntPtr OpenAndWriteWal(string path) {
-                IntPtr database;
-                int result = sqlite3_open(Encoding.UTF8.GetBytes(path + "\0"), out database);
-                if (result == 0) {
-                    result = sqlite3_exec(database,
-                        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO grouped_attempts VALUES ('wal-fixture', NULL);",
-                        IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-                }
-                if (result != 0) throw new InvalidOperationException("SQLite error: " + result);
-                return database;
-            }
-        }
-        '@
-            [ShadowFixtureSqlite]::ReopenWalAndHold((Join-Path $state 'state.db'))
-            [Console]::WriteLine('wal-ready')
-        }
         if ($args[1] -ne 'no-marker') { [IO.File]::WriteAllText($args[1], 'started') }
         [IO.File]::WriteAllLines((Join-Path $root 'received.txt'), [string[]]($args + @(
             $root, $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT,
@@ -194,10 +163,6 @@ public sealed class ShadowStartCommandTests
             }
         }
         if ($mode -eq 'slow') { Start-Sleep -Seconds 30 }
-        if ($mode -eq 'reopen-wal') {
-            Wait-Event -SourceIdentifier 'fixture-release'
-            exit 4
-        }
         Write-Event 'startup-first-tick' 'STARTUP_FIRST_TICK'
         Write-Event 'tick' 'TICK tick=1'
         if ($mode -eq 'stdout-tick') {

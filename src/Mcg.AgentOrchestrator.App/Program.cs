@@ -248,6 +248,8 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    if (invocationBinding.DisposableFixture && startupArgs.Count > 0 && startupArgs[0] == "conduct")
+        ShadowStartSidecarTracking.InstallForCandidate(workspace.OrchestratorDirectory);
     PlannerCommandSelectorValidation.InstallDefaultSource(DeclaredGateCheckSource.For(workspace.ProjectHomeDirectoryOrNull));
     PlannerTestIdentityListing.InstallDefaultSource(CargoNextestTestIdentityListing.For(workspace.ProjectHomeDirectoryOrNull));
     CliAskGoalCommand.ValidateStartupArguments(startupArgs, workspace);
@@ -284,7 +286,7 @@ if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcom
         Console.Error.WriteLine("Acceptance custody requires explicit workspace binding.");
         return 1;
     }
-    return AcceptanceJobCustodianHost.Run(startupArgs, workspace.OrchestratorDirectory);
+    return AcceptanceJobCustodianHost.Run(startupArgs);
 }
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();

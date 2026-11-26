@@ -133,6 +133,7 @@ internal static class CliShadowStartCommand
                     trackCopies ? PrepareStagedDatabase : null, cancellationToken);
                 assertion = "candidate-launch";
                 measurement = await SuperviseAsync(options, scratch, state, run,
+                    run is null ? null : registry.RecordPath(run.Id),
                     run is null ? null : registry.SettlementPath(run.Id), SetPhase, cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -166,8 +167,7 @@ internal static class CliShadowStartCommand
                     Phase = phase,
                     CandidatePid = candidate?.ProcessId,
                     CandidateStarted = candidate?.StartedAt,
-                    CandidateImagePath = candidate?.ImagePath,
-                    CandidateMayCreateSidecars = phase == ShadowStartPhase.Running
+                    CandidateImagePath = candidate?.ImagePath
                 });
             }
 
@@ -404,11 +404,14 @@ internal static class CliShadowStartCommand
     }
 
     private static async Task<ShadowStartMeasurement> SuperviseAsync(Options options, string scratch, string state,
-        ShadowStartRun? run, string? settlementPath, Action<ShadowStartPhase, SpawnProcessIdentity?> setPhase,
+        ShadowStartRun? run, string? recordPath, string? settlementPath,
+        Action<ShadowStartPhase, SpawnProcessIdentity?> setPhase,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var info = BuildLaunch(options, scratch, state);
+        if (recordPath is not null && OperatingSystem.IsWindows())
+            info.Environment[ShadowStartSidecarTracking.RecordPathVariable] = recordPath;
         var logs = Path.Combine(state, "logs");
         var stopFile = Path.Combine(scratch, ConductorBatchLoop.StopFileName);
         var tail = new Queue<string>();

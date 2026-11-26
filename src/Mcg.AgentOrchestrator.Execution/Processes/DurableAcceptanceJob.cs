@@ -134,6 +134,4 @@ internal sealed class DurableAcceptanceJob : IDisposable
 }
 
 internal sealed record AcceptanceJobObservation(bool HolderMatches, bool Settled, string Detail);
-internal sealed record AcceptanceJobSettlement(string JobName, SpawnProcessIdentity Holder, bool Settled,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    JsonElement? Evidence = null);
+internal sealed record AcceptanceJobSettlement(string JobName, SpawnProcessIdentity Holder, bool Settled);

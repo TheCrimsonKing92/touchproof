@@ -43,37 +43,7 @@ internal static class ShadowStartReclaimer
         return ReadIdentity(handle);
     }
 
-    internal static Dictionary<string, ShadowFileIdentity> CaptureCandidateSidecars(ShadowStartRun run)
-    {
-        var directories = new Dictionary<string, SafeFileHandle>(StringComparer.OrdinalIgnoreCase);
-        var sidecars = new Dictionary<string, ShadowFileIdentity>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            PinDirectory(directories, run.Scratch, run.ScratchIdentity);
-            if (PinDirectory(directories, run.State, run.StateIdentity) is null) return sidecars;
-            foreach (var name in run.Databases)
-            {
-                var database = Path.Combine(run.State, name);
-                if (run.StoreIdentities?.TryGetValue(database, out var registered) != true) continue;
-                using var main = Open(database, directory: false, identityOnly: true);
-                if (main is null || ReadIdentity(main) != registered) continue;
-
-                foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
-                {
-                    var path = database + suffix;
-                    using var handle = Open(path, directory: false, identityOnly: true);
-                    if (handle is not null) sidecars.Add(path, ReadIdentity(handle));
-                }
-            }
-            return sidecars;
-        }
-        finally
-        {
-            foreach (var directory in directories.Values.Reverse()) directory.Dispose();
-        }
-    }
-
-    internal static void DeleteStores(ShadowStartRun run, Dictionary<string, ShadowFileIdentity>? candidateSidecars)
+    internal static void DeleteStores(ShadowStartRun run, Func<string, ShadowFileIdentity?> readCandidateSidecar)
     {
         var directories = new Dictionary<string, SafeFileHandle>(StringComparer.OrdinalIgnoreCase);
         var files = new List<SafeFileHandle>();
@@ -81,7 +51,7 @@ internal static class ShadowStartReclaimer
         {
             PinDirectory(directories, run.Scratch, run.ScratchIdentity);
             if (PinDirectory(directories, run.State, run.StateIdentity) is not null)
-                OpenStores(run.State, candidateSidecars);
+                OpenStores(run.State, readCandidateSidecar);
             var staging = PinDirectory(directories, run.Staging, run.StagingIdentity, delete: true);
             if (staging is not null)
                 OpenStores(run.Staging);
@@ -105,29 +75,27 @@ internal static class ShadowStartReclaimer
             foreach (var directory in directories.Values.Reverse()) directory.Dispose();
         }
 
-        void OpenStores(string root, Dictionary<string, ShadowFileIdentity>? settledSidecars = null)
+        void OpenStores(string root, Func<string, ShadowFileIdentity?>? readSidecar = null)
         {
             foreach (var name in run.Databases)
             {
                 var database = Path.Combine(root, name);
                 OpenStore(database, run.StoreIdentities);
                 foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
-                    OpenStore(database + suffix, run.CreatedSidecarIdentities, settledSidecars);
+                    OpenStore(database + suffix, run.CreatedSidecarIdentities, readSidecar);
             }
         }
 
         void OpenStore(string path, Dictionary<string, ShadowFileIdentity>? identities,
-            Dictionary<string, ShadowFileIdentity>? settledSidecars = null)
+            Func<string, ShadowFileIdentity?>? readSidecar = null)
         {
             var handle = Open(path, directory: false, delete: true);
             if (handle is null) return;
             files.Add(handle);
             var actual = ReadIdentity(handle);
-            if (!Matches(identities) && !Matches(settledSidecars))
+            if (!(identities?.TryGetValue(path, out var recorded) == true && actual == recorded) &&
+                actual != readSidecar?.Invoke(path))
                 throw new IOException($"Store file identity mismatch: {path}.");
-
-            bool Matches(Dictionary<string, ShadowFileIdentity>? registered) =>
-                registered?.TryGetValue(path, out var recorded) == true && actual == recorded;
         }
     }
 
@@ -154,14 +122,13 @@ internal static class ShadowStartReclaimer
         return true;
     }
 
-    private static SafeFileHandle? Open(string path, bool directory, bool delete = false, bool identityOnly = false)
+    private static SafeFileHandle? Open(string path, bool directory, bool delete = false)
     {
         var access = ReadAttributes | (delete ? DeleteAccess : 0);
         // GENERIC_READ ensures an existing opener must share read access, while share=0 excludes
         // every existing data handle and prevents reopening the file until it is gone.
-        if (!directory && !identityOnly) access |= 0x80000000;
-        var share = directory ? FileShare.ReadWrite :
-            identityOnly ? FileShare.ReadWrite | FileShare.Delete : FileShare.None;
+        if (!directory) access |= 0x80000000;
+        var share = directory ? FileShare.ReadWrite : FileShare.None;
         var handle = CreateFileW(path, access, (uint)share, 0, OpenExisting,
             OpenReparsePoint | (directory ? BackupSemantics : 0), 0);
         if (handle.IsInvalid)

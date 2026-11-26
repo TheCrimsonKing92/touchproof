@@ -17,8 +17,7 @@ internal sealed record ShadowStartRun(Guid Id, ShadowScratchRetention Intent, st
     ShadowFileIdentity? StagingIdentity = null, string? CleanupReason = null,
     int? CandidatePid = null, DateTimeOffset? CandidateStarted = null,
     Dictionary<string, ShadowFileIdentity>? StoreIdentities = null, string? CandidateImagePath = null,
-    Dictionary<string, ShadowFileIdentity>? CreatedSidecarIdentities = null,
-    bool CandidateMayCreateSidecars = false)
+    Dictionary<string, ShadowFileIdentity>? CreatedSidecarIdentities = null)
 {
     internal string JobName => $@"Global\McgShadowStart-{Id:N}";
 }
@@ -28,6 +27,9 @@ internal sealed record ShadowStartMeasurement(string? Assertion, string? Detail,
     bool ReleaseVerified = false);
 
 internal sealed record ShadowStartCleanup(string Status, string? Reason, long Milliseconds, string Receipt);
+
+internal sealed record ShadowStartSidecarCreation(Guid RunId, SpawnProcessIdentity Creator, string Path,
+    ShadowFileIdentity Identity);
 
 internal sealed class ShadowStartRunRegistry : IDisposable
 {
@@ -47,24 +49,38 @@ internal sealed class ShadowStartRunRegistry : IDisposable
     internal string SettlementPath(Guid id) => Path.Combine(_directory, $"{id:N}{SettlementSuffix}");
     internal void Save(ShadowStartRun run) => WriteJson(RecordPath(run.Id), run);
 
-    internal static JsonElement? CaptureSettlementSidecars(string path, string jobName, SpawnProcessIdentity holder,
-        string state)
+    internal static ShadowStartRun ReadCandidateRun(string path, string state, SpawnProcessIdentity creator)
     {
-        if (!path.EndsWith(SettlementSuffix, StringComparison.Ordinal)) return null;
+        if (!IsCanonical(path))
+            throw new IOException("Invalid shadow-start sidecar registration path.");
+        var run = JsonSerializer.Deserialize<ShadowStartRun>(File.ReadAllText(path));
+        if (run is not { Phase: ShadowStartPhase.Running } ||
+            !IsValid(run, Path.GetDirectoryName(path)!) || !PathsEqual(run.State, state) ||
+            !PathsEqual(Path.GetFileName(path), $"{run.Id:N}.run.json") ||
+            ReadCandidateIdentity(run) is not { } candidate || !ProcessImageResolution.SameProcess(candidate, creator))
+            throw new IOException("Shadow-start sidecar registration does not match the running candidate.");
+        return run;
+    }
+
+    internal static void SaveCandidateSidecar(string record, ShadowStartSidecarCreation creation) =>
+        WriteJson(CandidateSidecarPath(record, creation.Path), creation);
+
+    private static string CandidateSidecarPath(string record, string sidecar) =>
+        $"{record}.{Path.GetFileName(sidecar)}.creation.json";
+
+    private ShadowFileIdentity? ReadCandidateSidecar(ShadowStartRun run, string path)
+    {
+        if (ReadCandidateIdentity(run) is not { } candidate) return null;
+        var receipt = CandidateSidecarPath(RecordPath(run.Id), path);
         try
         {
-            var run = JsonSerializer.Deserialize<ShadowStartRun>(File.ReadAllText(path[..^SettlementSuffix.Length] + ".run.json"));
-            if (run is not { Phase: ShadowStartPhase.Running, CandidateMayCreateSidecars: true } ||
-                !IsValid(run, Path.GetDirectoryName(path)!) || !PathsEqual(run.State, state) ||
-                Path.GetFileName(path) != $"{run.Id:N}{SettlementSuffix}" || run.JobName != jobName ||
-                ReadCandidateIdentity(run) is not { } candidate || !ProcessImageResolution.SameProcess(candidate, holder))
-                return null;
-
-            return JsonSerializer.SerializeToElement(ShadowStartReclaimer.CaptureCandidateSidecars(run));
+            var creation = JsonSerializer.Deserialize<ShadowStartSidecarCreation>(File.ReadAllText(receipt));
+            return creation is { Creator: { } creator } && creation.RunId == run.Id && PathsEqual(creation.Path, path) &&
+                ProcessImageResolution.IsResolved(creator.ImagePath) &&
+                ProcessImageResolution.SameProcess(creator, candidate) ? creation.Identity : null;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception or JsonException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            // A settlement without file evidence can still establish release. Cleanup verifies file identities separately.
             return null;
         }
     }
@@ -105,15 +121,12 @@ internal sealed class ShadowStartRunRegistry : IDisposable
     }
 
     private bool HasCandidateSettlement(ShadowStartRun run) =>
-        ReadCandidateSettlement(run) is not null;
-
-    private AcceptanceJobSettlement? ReadCandidateSettlement(ShadowStartRun run) =>
-        ReadCandidateIdentity(run) is { } identity
-            ? DurableAcceptanceJob.ReadSettlementReceipt(SettlementPath(run.Id), run.JobName, identity) : null;
+        ReadCandidateIdentity(run) is { } identity &&
+        DurableAcceptanceJob.HasSettlementReceipt(SettlementPath(run.Id), run.JobName, identity);
 
     private static SpawnProcessIdentity? ReadCandidateIdentity(ShadowStartRun run) =>
         run is { CandidatePid: { } pid, CandidateStarted: { } started, CandidateImagePath: { } image } &&
-        pid > 0 && started != default && Path.IsPathFullyQualified(image)
+        pid > 0 && started != default && Path.IsPathFullyQualified(image) && ProcessImageResolution.IsResolved(image)
             ? new(pid, started, image) : null;
 
     internal ShadowStartCleanup Cleanup(ShadowStartRun run, string? reason, ShadowStartMeasurement? measurement,
@@ -152,13 +165,10 @@ internal sealed class ShadowStartRunRegistry : IDisposable
                     reason = "release-unverifiable-platform";
                 else
                 {
-                    var candidateSidecars = run.CandidateMayCreateSidecars
-                        ? ReadCandidateSettlement(run)?.Evidence?.Deserialize<Dictionary<string, ShadowFileIdentity>>()
-                        : null;
                     // Save the proof first so a crash during deletion can retry without a vanished job handle.
                     run = run with { Phase = ShadowStartPhase.Released };
                     Save(run);
-                    ShadowStartReclaimer.DeleteStores(run, candidateSidecars);
+                    ShadowStartReclaimer.DeleteStores(run, path => ReadCandidateSidecar(run, path));
                     run = run with { Phase = ShadowStartPhase.Reclaimed };
                 }
             }
@@ -217,8 +227,6 @@ internal sealed class ShadowStartRunRegistry : IDisposable
         run.Id != Guid.Empty && run is { Intent: ShadowScratchRetention.Disposable, OwnerPid: > 0 } &&
         run.OwnerStarted != default &&
         run.Phase is >= ShadowStartPhase.Copying and <= ShadowStartPhase.Reclaimed &&
-        (!run.CandidateMayCreateSidecars ||
-            (run.Phase >= ShadowStartPhase.Running && ReadCandidateIdentity(run) is not null)) &&
         IsCanonical(run.Source) && IsCanonical(run.Scratch) && IsCanonical(run.State) && IsCanonical(run.Staging) &&
         PathsEqual(run.State, Path.Combine(run.Scratch, ".orchestrator")) &&
         PathsEqual(Path.GetFileName(run.Staging), run.Id.ToString("N")) &&

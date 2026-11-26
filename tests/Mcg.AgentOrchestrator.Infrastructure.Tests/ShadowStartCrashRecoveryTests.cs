@@ -75,16 +75,17 @@ public sealed class ShadowStartCrashRecoveryTests
         fixture.CreateDatabase("state.db");
         var run = Seed(fixture, "settled-job", useRealDatabase: true);
         var database = Path.Combine(run.State, "state.db");
-        var start = new ProcessStartInfo("powershell.exe")
+        var start = new ProcessStartInfo("dotnet")
         {
             WorkingDirectory = run.Scratch, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            ArgumentList = { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-                fixture.CandidateScriptPath, "reopen-wal", "no-marker", "conduct", "--no-dispatch",
-                "--disposable-fixture", "--repository-root", run.Scratch, "--expected-state-directory", run.State }
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
-        start.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = run.Scratch;
+        string[] arguments = [.. ShadowStartCommandTests.Fixture.ReopenWalCandidateArguments(null), "conduct",
+            "--no-dispatch", "--disposable-fixture", "--repository-root", run.Scratch,
+            "--expected-state-directory", run.State];
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
         using var registry = new ShadowStartRunRegistry(fixture.Registry);
+        start.Environment[ShadowStartSidecarTracking.RecordPathVariable] = registry.RecordPath(run.Id);
         using var candidate = OwnedProcessGroup.StartSuspendedContainedRedirected(start);
         var identity = candidate.ReadSuspendedIdentity();
         using var custody = DurableAcceptanceJob.Attach(candidate, run.JobName,
@@ -96,8 +97,7 @@ public sealed class ShadowStartCrashRecoveryTests
             Phase = ShadowStartPhase.Running,
             CandidatePid = identity.ProcessId,
             CandidateStarted = identity.StartedAt,
-            CandidateImagePath = identity.ImagePath,
-            CandidateMayCreateSidecars = true
+            CandidateImagePath = identity.ImagePath
         };
         registry.Save(recorded);
         candidate.Resume();
