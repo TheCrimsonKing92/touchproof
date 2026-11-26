@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class GateToolResolutionPreflight
 {
+    internal const string MissingToolsReasonCode = "gate-tool-resolution-missing";
     private static readonly string[] RequiredTools = ["powershell", "cmd", "chcp", "git", "dotnet"];
     private static readonly AsyncLocal<GateToolResolutionResult?> AttemptResult = new();
 
@@ -46,7 +47,7 @@ internal static class GateToolResolutionPreflight
         var result = Evaluate(environment, workingDirectory);
         if (result is { MissingTools.IsEmpty: false })
         {
-            throw new AcceptanceInfrastructureDeferredException("gate-tool-resolution-missing", null,
+            throw new AcceptanceInfrastructureDeferredException(MissingToolsReasonCode, null,
                 $"Missing gate tools: {string.Join(", ", result.MissingTools)}. PATH length: {result.PathLength}.");
         }
 
@@ -64,9 +65,6 @@ internal static class GateToolResolutionPreflight
     }
 
     internal static IDisposable EnterAttempt(GateToolResolutionResult? result) => new AttemptScope(result);
-
-    // A dedicated owned child runs a single attempt on this execution flow and exits.
-    internal static void AdoptOwnedAttempt(GateToolResolutionResult result) => AttemptResult.Value = result;
 
     private static string? ReadVariable(IEnumerable<KeyValuePair<string, string?>> environment, string name) =>
         environment.LastOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;

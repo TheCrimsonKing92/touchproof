@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -331,6 +332,74 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts(CohortCandi
             Assert.Equal(AcceptanceCohortInvalidationReason.InfrastructureRetryExhausted,
                 receipt.Invalidation?.Reason);
             Assert.Equal(0, launches);
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OwnedGateResolvesRelativePathFromLaneWorktreeAndPersistsDeferral(bool train)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Requires Windows bare command resolution.");
+        var (repo, kernel, goals) = CreateReadyMembers(train ? 3 : 2);
+        var cleanup = CreateIsolatedCleanupContext(repo);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var verifier = new SequenceAcceptanceVerifier([]);
+            var driver = CreateDriver(kernel, workspace, verifier, cleanup.Hooks);
+            var launches = 0;
+            var ownerAlive = true;
+            driver.EnableOwnedGroupedGateAttempts(Coordinator(workspace, FirstGeneration,
+                _ => { launches++; return new ConductorGroupedGateLaunchResult(Environment.ProcessId, null, null); },
+                _ => ownerAlive));
+            var cohort = train ? null : ProjectSelection(driver, goals[0], goals[1]);
+            var trainSelection = train ? ProjectTrainSelection(driver, goals) : null;
+            Run(driver, goals, cohort, trainSelection);
+            var attempt = Assert.Single(Records(workspace));
+
+            var environment = GateToolResolutionPreflightTests.CreateToolEnvironment(workspace.OrchestratorDirectory);
+            var powershell = Path.Combine(environment["SystemRoot"]!, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+            var relativeTools = Path.Combine(".orchestrator", "relative-gate-tools");
+            var conductorTools = Path.Combine(attempt.ExecutionDirectory, relativeTools);
+            Directory.CreateDirectory(conductorTools);
+            File.Move(powershell, Path.Combine(conductorTools, "powershell.exe"));
+            environment["PATH"] += $";{relativeTools}";
+            Assert.Empty(GateToolResolutionPreflight.Evaluate(environment, attempt.ExecutionDirectory)!.MissingTools);
+
+            Assert.Equal(0, ConductorGroupedGateAttemptHost.Run(attempt.MetadataPath,
+                child => driver.RunGroupedGateAttemptBody(child, () => environment), (_, _) => Stream.Null));
+            using var result = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
+            Assert.Equal("completed", result.RootElement.GetProperty("Status").GetString());
+            Assert.Equal("infrastructure-failure", result.RootElement.GetProperty("Verdict").GetString());
+            var receiptId = result.RootElement.GetProperty("ReceiptId").GetString();
+            Assert.Equal(0, verifier.RunCount);
+
+            ownerAlive = false;
+            Run(driver, goals, cohort, trainSelection);
+            Assert.Equal(1, launches);
+            if (train)
+            {
+                var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
+                var receipt = Assert.IsType<MergeTrainReceipt>(store.TryReadReceipt(attempt.IdentityValue));
+                Assert.Equal(MergeTrainGateOutcome.InfrastructureFailure, receipt.Outcome);
+                Assert.Equal(receiptId, receipt.ReceiptId);
+                var failure = Assert.Single(receipt.FailedChecks);
+                Assert.StartsWith("infrastructure:gate-tool-resolution-missing:", failure);
+                Assert.Contains("Missing gate tools: powershell.", failure);
+                Assert.Contains($"PATH length: {environment["PATH"]!.Length}.", failure);
+            }
+            else
+            {
+                var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+                var receipt = Assert.IsType<AcceptanceCohortReceipt>(store.TryReadReceipt(attempt.IdentityValue));
+                Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, receipt.Outcome);
+                Assert.Equal(receiptId, receipt.ReceiptId);
+                Assert.Equal("gate-tool-resolution-missing", receipt.InfrastructureReasonCode);
+                Assert.Contains("Missing gate tools: powershell.", receipt.InfrastructureDetail);
+                Assert.Contains($"PATH length: {environment["PATH"]!.Length}.", receipt.InfrastructureDetail);
+            }
         }
         finally { DeleteDirectory(repo); }
     }
