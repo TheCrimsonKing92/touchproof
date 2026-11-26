@@ -18,7 +18,11 @@ public sealed class GateReplayReceiptToolResolutionTests
             using var scope = GateToolResolutionPreflight.EnterAttempt(result);
             var context = GateReplayReceiptTests.CreateContext(root);
             var executable = Path.Combine(root, "tools", "dotnet.exe");
-            var startInfo = new ProcessStartInfo(executable) { WorkingDirectory = root };
+            var startInfo = new ProcessStartInfo(executable)
+            {
+                WorkingDirectory = root,
+                CreateNoWindow = true
+            };
             startInfo.Environment.Clear();
             startInfo.Environment["PATH"] = string.Empty;
 
