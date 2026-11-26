@@ -36,7 +36,9 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
             }
 
             Xunit.Assert.Contains("every backticked target is a full repository-relative path that `git ls-files <path>` lists, or carries a new-file marker.", directive, StringComparison.Ordinal);
-            Xunit.Assert.Contains("Never cite a bare file name or a name with only a line suffix, because it can match several files; write the full path.", directive, StringComparison.Ordinal);
+            Xunit.Assert.Contains(
+                "Example `src/Mcg.AgentOrchestrator.Execution/Persistence/SqliteOrchestratorStateRepository.AttentionReads.cs:43`.",
+                directive, StringComparison.Ordinal);
             Xunit.Assert.Contains("Describe a runtime output, a file name pattern, or a conventional path this repository lacks in prose, not in backticks.", directive, StringComparison.Ordinal);
             Xunit.Assert.Contains(citationRule, directive, StringComparison.Ordinal);
             Xunit.Assert.Contains("Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file.", directive, StringComparison.Ordinal);
