@@ -311,6 +311,7 @@ internal static class FocusedEvidenceExecution
                 armContextApplied: true).ConfigureAwait(false);
         }
 
+        using var toolResolution = GateToolResolutionPreflight.EnterFocusedArm(worktreePath);
         var checks = GoPackageFocusedEvidence.AnnotateResults(focusedChecks, await runFocusedEvidenceChecks(
             worktreePath, focusedChecks, goalId, stableSlotIndex, stableSlotLease,
             executionEnvironment, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false));

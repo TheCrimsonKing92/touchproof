@@ -22,7 +22,10 @@ internal static class MergeTrainPrefixRunner
             var result = AcceptanceExecutionRunner.RunFocusedVerification(verifier, partition.Path, diagnosticGoal,
                 selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false, token,
                 integrationBranch: workspace.IntegrationBranch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull,
-                focusedRunBinding: new(build.Environment, runId));
+                focusedRunBinding: new(build.Environment, runId)
+                {
+                    ReplayObservedMainSha = GateToolResolutionPreflight.Current is null ? null : main
+                });
             partition.AssertGoalBranchesUnchanged();
             var interpreted = ConductorAcceptanceCohortFocusedAttribution.Interpret(result, selection);
             if (interpreted.Kind != ConductorCohortFocusedPassKind.Executed ||
