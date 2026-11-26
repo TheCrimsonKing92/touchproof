@@ -126,15 +126,41 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
     internal static void CreateSchema(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = $"""
             CREATE TABLE IF NOT EXISTS goal_timeline (
                 goal_id TEXT NOT NULL,
                 sequence INTEGER NOT NULL CHECK (sequence >= 0),
                 entry_json TEXT NOT NULL,
                 PRIMARY KEY (goal_id, sequence)
-            )
+            );
+            {ProviderHoldMarkerIndexSql}
             """;
         command.ExecuteNonQuery();
+    }
+
+    private const string ProviderHoldMarkerPredicate = """
+        CASE WHEN json_valid(entry_json)
+            THEN json_extract(entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*'
+            ELSE 1 END
+        """;
+
+    internal const string ProviderHoldMarkerGoalsSql =
+        "SELECT DISTINCT goal_id FROM goal_timeline WHERE " + ProviderHoldMarkerPredicate;
+
+    private const string ProviderHoldMarkerIndexSql =
+        "CREATE INDEX IF NOT EXISTS ix_goal_timeline_provider_hold_marker " +
+        "ON goal_timeline(goal_id) WHERE " + ProviderHoldMarkerPredicate;
+
+    internal static async Task EnsureProviderHoldMarkerIndexAsync(SqliteConnection connection, CancellationToken token)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandTimeout = 1;
+        command.CommandText = ProviderHoldMarkerIndexSql;
+        try { await command.ExecuteNonQueryAsync(token); }
+        catch (SqliteException)
+        {
+            // The same query remains authoritative while the optional index is unavailable.
+        }
     }
 
     private static InvalidDataException Error(string id, string defect, Exception? inner = null) =>
@@ -192,7 +218,8 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
             root.TryGetProperty(MarkerProperty, out var marker) ? marker : default, token);
 
     internal async Task<JsonElement[]> ReadAsync(SqliteConnection? connection, string id, JsonElement inline,
-        JsonElement marker, CancellationToken token = default)
+        JsonElement marker, CancellationToken token = default, string? includeSql = null,
+        Action<int>? observePayload = null)
     {
         var count = ReadMarker(id, marker);
         if (count is null)
@@ -200,30 +227,52 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
                 ? [] : inline.EnumerateArray().ToArray();
         if (connection is null) throw Error(id, "no timeline connection");
         var entries = new List<JsonElement>();
+        var seen = 0;
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT sequence, entry_json FROM goal_timeline WHERE goal_id = $id ORDER BY sequence";
+        // Validate every row. For excluded events, elide text that can deserialize as a
+        // string without error. Keep surrogate escapes so the serializer can check them.
+        command.CommandText = includeSql is null
+            ? "SELECT sequence, entry_json, 1 FROM goal_timeline WHERE goal_id = $id ORDER BY sequence"
+            : $"""
+            WITH selection AS (
+                SELECT sequence, entry_json, CASE
+                    WHEN NOT json_valid(entry_json) THEN 1
+                    WHEN json_type(entry_json) <> 'object' OR ({includeSql}) THEN 1
+                    ELSE 0 END AS included
+                FROM goal_timeline WHERE goal_id = $id
+            )
+            SELECT sequence, CASE
+                WHEN included THEN entry_json
+                WHEN json_type(entry_json, '$.Message') = 'text' AND entry_json NOT GLOB '*\u[dD][89a-fA-F]*'
+                    THEN json_replace(entry_json, '$.Message', '')
+                ELSE entry_json END, included
+            FROM selection ORDER BY sequence
+            """;
         command.Parameters.AddWithValue("$id", id);
         try
         {
             using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token))
             {
-                if (reader.GetInt64(0) != entries.Count) throw Error(id, $"sequence gap at {entries.Count}");
+                var sequence = seen++;
+                if (reader.GetInt64(0) != sequence) throw Error(id, $"sequence gap at {sequence}");
                 try
                 {
-                    using var document = JsonDocument.Parse(reader.GetString(1));
+                    var json = reader.GetString(1);
+                    observePayload?.Invoke(json.Length);
+                    using var document = JsonDocument.Parse(json);
                     if (document.RootElement.ValueKind != JsonValueKind.Object ||
                         document.RootElement.Deserialize<ProgressEventSnapshot>(options) is null)
                         throw new JsonException("Timeline entry must be an object.");
-                    entries.Add(document.RootElement.Clone());
+                    if (reader.GetBoolean(2)) entries.Add(document.RootElement.Clone());
                 }
-                catch (JsonException ex) { throw Error(id, $"unparseable entry at {entries.Count}", ex); }
+                catch (JsonException ex) { throw Error(id, $"unparseable entry at {sequence}", ex); }
             }
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
             ex.Message.Contains("no such table: goal_timeline", StringComparison.OrdinalIgnoreCase))
         { throw Error(id, "missing goal_timeline table", ex); }
-        if (entries.Count != count) throw Error(id, $"expected {count} rows, found {entries.Count}");
+        if (seen != count) throw Error(id, $"expected {count} rows, found {seen}");
         return entries.ToArray();
     }
 

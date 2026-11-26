@@ -239,9 +239,15 @@ public sealed class ProviderHoldStandaloneProbeTests
             Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Fixture provider failure");
             Kernel.EscalateTaskFailure(goal.Id, task.Id, "Fixture provider failure");
         }
-        internal WorkerSubscriptionPreflightResult Preflight(Goal goal, TaskSpec task, IEnumerable<Goal> scope) =>
-            new(task.Id != WaitingTask, "grok-cli", "fixture", task.Id == WaitingTask
-                ? [$"blocked: code=provider-budget-exhausted; binding xai::<provider-default> (fixture)"] : []);
+        internal WorkerSubscriptionPreflightResult Preflight(Goal goal, TaskSpec task, IEnumerable<Goal> scope)
+        {
+            var findings = new List<string>();
+            var hold = task.Id == WaitingTask
+                ? WorkerSubscriptionPreflightFindings.AddProviderBudgetExhaustionFinding(
+                    findings, scope, "xAI", null, null, goal, task, Clock.UtcNow)
+                : null;
+            return new(hold is null, "grok-cli", "fixture", findings) { BlockedProviderHold = hold };
+        }
         internal void Tick()
         {
             Watch.ObserveTick(Kernel.ProviderHoldScope, Clock.UtcNow);

@@ -228,12 +228,12 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
                 .Select(evt => evt.Message).ToArray(), scenario.Escalations.ToArray());
     }
 
-    private sealed class FakeClock : IClock
+    internal sealed class FakeClock : IClock
     {
         public DateTimeOffset UtcNow { get; set; } = DateTimeOffset.Parse("2026-10-17T11:07:00Z");
     }
 
-    private sealed class Scenario : WorkerDispatchTestSupport, IDisposable
+    internal sealed class Scenario : WorkerDispatchTestSupport, IDisposable
     {
         internal readonly string Root = CreateSeededDispatchRepository();
         internal readonly FakeClock Clock = new();

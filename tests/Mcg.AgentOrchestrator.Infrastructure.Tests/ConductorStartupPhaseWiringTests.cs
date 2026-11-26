@@ -103,7 +103,7 @@ public sealed class ConductorStartupPhaseWiringTests
             "STARTUP_PROGRESS phase=state-load elapsed_ms=0",
             "STARTUP_PROGRESS phase=state-load elapsed_ms=15000",
             "STARTUP_PROGRESS phase=state-load elapsed_ms=15000",
-            "LOOP_READY state=loaded", "sweep"
+            "sweep", "LOOP_READY state=loaded"
         }, lines.ToArray());
     }
 

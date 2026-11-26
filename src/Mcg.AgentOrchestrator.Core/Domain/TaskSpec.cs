@@ -588,115 +588,13 @@ public sealed partial class TaskSpec
         {
             foreach (var verification in snapshot.VerificationHistory)
             {
-                var output = VerificationSnapshotText.Expand(
-                    verification.AuthoritativeStandardOutput, verification.AuthoritativeStandardOutputUnavailableReason, verification.StandardOutput);
-                var error = VerificationSnapshotText.Expand(
-                    verification.AuthoritativeStandardError, verification.AuthoritativeStandardErrorUnavailableReason, verification.StandardError);
-                AddRestoredVerification(new TaskVerificationRecord(
-                    verification.Command,
-                    verification.WorkingDirectory,
-                    verification.ExitCode,
-                    verification.StandardOutput,
-                    verification.StandardError,
-                    verification.CompletedAt,
-                    verification.ModelFitNote,
-                    verification.StandardOutputPath,
-                    verification.StandardErrorPath,
-                    ProviderFailureKind: verification.ProviderFailureKind,
-                    WorkerResultPresent: verification.WorkerResultPresent,
-                    ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
-                    ReviewFindingTouchProofDiagnostic: verification.ReviewFindingTouchProofDiagnostic,
-                    ReviewedCommit: verification.ReviewedCommit,
-                    MergedReviewFindings: verification.MergedReviewFindings,
-                    ReviewFindingContractViolation: verification.ReviewFindingContractViolation,
-                    DispatchStartedAt: verification.DispatchStartedAt,
-                    ChildProcessId: verification.ChildProcessId,
-                    ChildExitCode: verification.ChildExitCode,
-                    FindingEvidenceReceipts: verification.FindingEvidenceReceipts,
-                    FullStandardOutput: verification.AuthoritativeStandardOutput is null ? null : output.Text,
-                    FullStandardError: verification.AuthoritativeStandardError is null ? null : error.Text,
-                    FullStandardOutputUnavailableReason: RestoredAuthorityUnavailableReason(
-                        output.Text,
-                        output.UnavailableReason),
-                    FullStandardErrorUnavailableReason: RestoredAuthorityUnavailableReason(
-                        error.Text,
-                        error.UnavailableReason),
-                    StandardOutputIsAuthoritative: output.Text is not null,
-                    StandardErrorIsAuthoritative: error.Text is not null,
-                    PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
-                    CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
-                    CompletionVerdictRule: verification.CompletionVerdictRule,
-                    AssignedScopeComplete: verification.AssignedScopeComplete,
-                    CandidateIdentity: verification.CandidateIdentity,
-                    AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash,
-                    InconclusiveRoundInputs: verification.InconclusiveRoundInputs,
-                    HumanInputStoreReference: verification.HumanInputStoreReference,
-                    EvidenceSource: verification.EvidenceSource,
-                    DispatchAttemptAt: verification.DispatchAttemptAt,
-                    FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: verification.PlannerEvidenceBatch, OrchestratorFailureReason: verification.OrchestratorFailureReason,
-                    FindingContractVersion: verification.FindingContractVersion,
-                    PendingPlannerArtifact: verification.PendingPlannerArtifact)
-                {
-                    AuthoritativeStandardOutput = output.Text,
-                    AuthoritativeStandardError = error.Text
-                });
+                AddRestoredVerification(RestoreVerification(verification));
             }
         }
 
         if (snapshot.LastVerification is not null)
         {
-            var output = VerificationSnapshotText.Expand(
-                snapshot.LastVerification.AuthoritativeStandardOutput, snapshot.LastVerification.AuthoritativeStandardOutputUnavailableReason, snapshot.LastVerification.StandardOutput);
-            var error = VerificationSnapshotText.Expand(
-                snapshot.LastVerification.AuthoritativeStandardError, snapshot.LastVerification.AuthoritativeStandardErrorUnavailableReason, snapshot.LastVerification.StandardError);
-            var latestVerification = new TaskVerificationRecord(
-                snapshot.LastVerification.Command,
-                snapshot.LastVerification.WorkingDirectory,
-                snapshot.LastVerification.ExitCode,
-                snapshot.LastVerification.StandardOutput,
-                snapshot.LastVerification.StandardError,
-                snapshot.LastVerification.CompletedAt,
-                snapshot.LastVerification.ModelFitNote,
-                snapshot.LastVerification.StandardOutputPath,
-                snapshot.LastVerification.StandardErrorPath,
-                ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind,
-                WorkerResultPresent: snapshot.LastVerification.WorkerResultPresent,
-                ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
-                ReviewFindingTouchProofDiagnostic: snapshot.LastVerification.ReviewFindingTouchProofDiagnostic,
-                ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
-                MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings,
-                ReviewFindingContractViolation: snapshot.LastVerification.ReviewFindingContractViolation,
-                DispatchStartedAt: snapshot.LastVerification.DispatchStartedAt,
-                ChildProcessId: snapshot.LastVerification.ChildProcessId,
-                ChildExitCode: snapshot.LastVerification.ChildExitCode,
-                FindingEvidenceReceipts: snapshot.LastVerification.FindingEvidenceReceipts,
-                FullStandardOutput: snapshot.LastVerification.AuthoritativeStandardOutput is null ? null : output.Text,
-                FullStandardError: snapshot.LastVerification.AuthoritativeStandardError is null ? null : error.Text,
-                FullStandardOutputUnavailableReason: RestoredAuthorityUnavailableReason(
-                    output.Text,
-                    output.UnavailableReason),
-                FullStandardErrorUnavailableReason: RestoredAuthorityUnavailableReason(
-                    error.Text,
-                    error.UnavailableReason),
-                StandardOutputIsAuthoritative: output.Text is not null,
-                StandardErrorIsAuthoritative: error.Text is not null,
-                PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
-                CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
-                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
-                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete,
-                CandidateIdentity: snapshot.LastVerification.CandidateIdentity,
-                AcceptanceCriteriaVersionHash: snapshot.LastVerification.AcceptanceCriteriaVersionHash,
-                InconclusiveRoundInputs: snapshot.LastVerification.InconclusiveRoundInputs,
-                HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference,
-                EvidenceSource: snapshot.LastVerification.EvidenceSource,
-                DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt,
-                FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: snapshot.LastVerification.PlannerEvidenceBatch, OrchestratorFailureReason: snapshot.LastVerification.OrchestratorFailureReason,
-                FindingContractVersion: snapshot.LastVerification.FindingContractVersion,
-                PendingPlannerArtifact: snapshot.LastVerification.PendingPlannerArtifact)
-            {
-                AuthoritativeStandardOutput = output.Text,
-                AuthoritativeStandardError = error.Text
-            };
+            var latestVerification = RestoreVerification(snapshot.LastVerification);
             var historyIndex = _verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -723,6 +621,62 @@ public sealed partial class TaskSpec
             LastVerification = _verificationHistory[historyIndex];
         }
 
+    }
+
+    internal static TaskVerificationRecord RestoreVerification(TaskVerificationSnapshot verification)
+    {
+        var output = VerificationSnapshotText.Expand(
+            verification.AuthoritativeStandardOutput, verification.AuthoritativeStandardOutputUnavailableReason, verification.StandardOutput);
+        var error = VerificationSnapshotText.Expand(
+            verification.AuthoritativeStandardError, verification.AuthoritativeStandardErrorUnavailableReason, verification.StandardError);
+        return new TaskVerificationRecord(
+            verification.Command,
+            verification.WorkingDirectory,
+            verification.ExitCode,
+            verification.StandardOutput,
+            verification.StandardError,
+            verification.CompletedAt,
+            verification.ModelFitNote,
+            verification.StandardOutputPath,
+            verification.StandardErrorPath,
+            ProviderFailureKind: verification.ProviderFailureKind,
+            WorkerResultPresent: verification.WorkerResultPresent,
+            ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
+            ReviewFindingTouchProofDiagnostic: verification.ReviewFindingTouchProofDiagnostic,
+            ReviewedCommit: verification.ReviewedCommit,
+            MergedReviewFindings: verification.MergedReviewFindings,
+            ReviewFindingContractViolation: verification.ReviewFindingContractViolation,
+            DispatchStartedAt: verification.DispatchStartedAt,
+            ChildProcessId: verification.ChildProcessId,
+            ChildExitCode: verification.ChildExitCode,
+            FindingEvidenceReceipts: verification.FindingEvidenceReceipts,
+            FullStandardOutput: verification.AuthoritativeStandardOutput is null ? null : output.Text,
+            FullStandardError: verification.AuthoritativeStandardError is null ? null : error.Text,
+            FullStandardOutputUnavailableReason: RestoredAuthorityUnavailableReason(
+                output.Text,
+                output.UnavailableReason),
+            FullStandardErrorUnavailableReason: RestoredAuthorityUnavailableReason(
+                error.Text,
+                error.UnavailableReason),
+            StandardOutputIsAuthoritative: output.Text is not null,
+            StandardErrorIsAuthoritative: error.Text is not null,
+            PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
+            CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
+            CompletionVerdictRule: verification.CompletionVerdictRule,
+            AssignedScopeComplete: verification.AssignedScopeComplete,
+            CandidateIdentity: verification.CandidateIdentity,
+            AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash,
+            InconclusiveRoundInputs: verification.InconclusiveRoundInputs,
+            HumanInputStoreReference: verification.HumanInputStoreReference,
+            EvidenceSource: verification.EvidenceSource,
+            DispatchAttemptAt: verification.DispatchAttemptAt,
+            FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: verification.PlannerEvidenceBatch, OrchestratorFailureReason: verification.OrchestratorFailureReason,
+            FindingContractVersion: verification.FindingContractVersion,
+            PendingPlannerArtifact: verification.PendingPlannerArtifact)
+        {
+            AuthoritativeStandardOutput = output.Text,
+            AuthoritativeStandardError = error.Text
+        };
     }
 
     private void RestoreDispatchRows(TaskSnapshot snapshot, IReadOnlyDictionary<int, string>? briefVersions)
@@ -1527,7 +1481,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion, WorkerToolsDirectory: dispatch.WorkerToolsDirectory)
+        dispatch.PlannerEvidenceCriteriaVersionHash, FindingContractVersion: dispatch.FindingContractVersion, WorkerToolsDirectory: dispatch.WorkerToolsDirectory, ClaudeApiHoldIdentity: dispatch.ClaudeApiHoldIdentity)
     {
         ReachCheck = dispatch.ReachCheck,
         ReviewerScope = dispatch.ReviewerScope
@@ -1576,7 +1530,7 @@ public sealed partial class TaskSpec
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
         dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
-        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion, dispatch.WorkerToolsDirectory)
+        dispatch.PlannerEvidenceCriteriaVersionHash, dispatch.FindingContractVersion, dispatch.WorkerToolsDirectory, ClaudeApiHoldIdentity: dispatch.ClaudeApiHoldIdentity)
     {
         ReachCheck = dispatch.ReachCheck,
         ReviewerScope = dispatch.ReviewerScope
