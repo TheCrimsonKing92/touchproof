@@ -16,7 +16,7 @@ internal static class BoardFillPremiseBullets
         @"nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[ \t>]|/>|$))";
 
     private static readonly Regex CitationLine = new(
-        @"^[ \t]*(?=\n(?<continuationIndent>[ \t]*)\S)" +
+        @"^(?<blankLine>[ \t]*)(?=\n(?<continuationIndent>[ \t]*)\S)" +
         @"|^(?<continuationIndent>[ \t]*)(?:>|(?:\+|[0-9]{1,9}[.)])[ \t]+(?=\S)" +
         @"|(?:-(?:[ \t]*-){2,}|\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,})[ \t]*$" +
         @"|#{1,6}(?=[ \t]|$)|`{3,}[^`\n]*$|~{3,}|" + HtmlBlockStart + ")" +
@@ -87,15 +87,18 @@ internal static class BoardFillPremiseBullets
         if (firstLineEnd < 0) return body.Length;
 
         var contentColumn = MarkdownColumnWidth(markerPrefix);
+        const int codeIndentWidth = 4;
         var inOpeningParagraph = true;
         foreach (Match line in CitationLine.Matches(body, firstLineEnd + 1))
         {
             var indent = line.Groups["continuationIndent"];
+            var relativeIndent = MarkdownColumnWidth(indent.ValueSpan) - contentColumn;
             var isPlainText = line.Groups["plainText"].Success;
-            if (MarkdownColumnWidth(indent.ValueSpan) >= contentColumn)
+            if (relativeIndent >= 0)
             {
-                // Indented prose can continue the opening paragraph. A block, Setext heading or paragraph break ends it.
-                inOpeningParagraph &= isPlainText && !line.Groups["setextUnderline"].Success;
+                // Lines at code indentation are literal text inside an open paragraph.
+                inOpeningParagraph &= !line.Groups["blankLine"].Success
+                    && (relativeIndent >= codeIndentWidth || (isPlainText && !line.Groups["setextUnderline"].Success));
             }
             else if (!inOpeningParagraph || !isPlainText)
             {

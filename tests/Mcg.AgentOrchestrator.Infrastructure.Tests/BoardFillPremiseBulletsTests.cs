@@ -44,6 +44,24 @@ public sealed class BoardFillPremiseBulletsTests
     }
 
     [Theory]
+    [InlineData("      --", "Prose cites note B7.")]
+    [InlineData("  \t  --", "Prose cites operator-evidence/round.json.")]
+    [InlineData("      ### Detail", "Prose cites note B7.")]
+    public void SourceClaims_OverIndentedOpeningParagraph_ExcludesObservation(string continuation, string citation)
+    {
+        var premise = WithSourceClaims($"runtime-observation: Rounds failed often.\n{continuation}\n{citation}");
+        var prompt = BoardFillVerifierContract.Prompt(premise, BoardFillAssessmentTestFixture.Head);
+        using var document = JsonDocument.Parse(prompt[(prompt.LastIndexOf('\n') + 1)..]);
+
+        Assert.Equal(2, BoardFillVerifierContract.BulletCount(premise));
+        Assert.Equal("""
+            ## Measured premise
+            - The first source claim cites `src/First.cs:3`.
+            - The second source claim cites `src/Second.cs:8`.
+            """.ReplaceLineEndings("\n"), document.RootElement.GetProperty("measuredPremise").GetString());
+    }
+
+    [Theory]
     [InlineData("runtime-observation: Rounds failed often.")]
     [InlineData("Observed in operator-evidence/round.json.")]
     [InlineData("Runtime-Observation: Observed in operator-evidence/round.json.")]
@@ -146,6 +164,7 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("  ~~~text\n  ~~~", "  ~~~text\n  See note B7.\n  ~~~")]
     [InlineData("  -", "  -\n  See note B7.")]
     [InlineData("  --", "  --\n  See note B7.")]
+    [InlineData("\n      --", "\n      --\n      See note B7.")]
     [InlineData("  ---", "  ---\n  See note B7.")]
     [InlineData("  ===", "  ===\n  See note B7.")]
     [InlineData("  <div>", "  <div>\n  See note B7.")]
