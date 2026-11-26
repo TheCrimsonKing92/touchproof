@@ -62,11 +62,13 @@ public sealed class ShadowStartCrashRecoveryTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("-journal")]
-    [InlineData("-wal")]
-    [InlineData("-shm")]
-    public async Task RecoveryUsesSettlementAfterTheOuterJobClosesAndCustodianExits(string? foreignSuffix)
+    [InlineData(null, false)]
+    [InlineData("-journal", false)]
+    [InlineData("-wal", false)]
+    [InlineData("-shm", false)]
+    [InlineData("-journal", true)]
+    public async Task RecoveryUsesSettlementAfterTheOuterJobClosesAndCustodianExits(
+        string? foreignSuffix, bool foreignBeforeSettlement)
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new ShadowStartCommandTests.Fixture();
@@ -103,6 +105,17 @@ public sealed class ShadowStartCrashRecoveryTests
         Assert.True(new FileInfo(database + "-wal").Length > 32);
         Assert.True(new FileInfo(database + "-shm").Length > 0);
 
+        var foreign = foreignSuffix is null ? null : database + foreignSuffix;
+        const string foreignContents = "foreign sidecar";
+        if (foreignBeforeSettlement)
+        {
+            // This file is created by the test process while the run-owned job is still active.
+            Assert.False(File.Exists(foreign));
+            using var stream = new FileStream(foreign!, FileMode.CreateNew);
+            using var writer = new StreamWriter(stream);
+            writer.Write(foreignContents);
+        }
+
         // Closing the sole outer-job handle exercises the kill-on-close path used on supervisor death.
         candidate.Group.Dispose();
         Assert.True(observer.WaitForExit(15000), "The job custodian did not settle and exit.");
@@ -125,19 +138,22 @@ public sealed class ShadowStartCrashRecoveryTests
             Assert.True(Directory.Exists(run.Staging));
         }
 
-        if (foreignSuffix is not null)
+        if (foreign is not null)
         {
-            var foreign = database + foreignSuffix;
             var displaced = foreign + ".settled";
-            if (File.Exists(foreign)) File.Move(foreign, displaced);
-            File.WriteAllText(foreign, "foreign sidecar after settlement");
+            if (!foreignBeforeSettlement)
+            {
+                if (File.Exists(foreign)) File.Move(foreign, displaced);
+                File.WriteAllText(foreign, foreignContents);
+            }
 
             // The release proof is already durable. Retries must not adopt identities from scratch.
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 var deferred = new StringWriter();
                 registry.Recover(fixture.Source, deferred);
-                Assert.Equal("foreign sidecar after settlement", File.ReadAllText(foreign));
+                Assert.True(File.Exists(foreign), $"Recovery deleted the foreign sidecar: {foreign}.");
+                Assert.Equal(foreignContents, File.ReadAllText(foreign));
                 Assert.Contains($"Store file identity mismatch: {foreign}", deferred.ToString());
                 Assert.True(File.Exists(database));
                 Assert.True(File.Exists(Path.Combine(run.Staging, "state.db")));
