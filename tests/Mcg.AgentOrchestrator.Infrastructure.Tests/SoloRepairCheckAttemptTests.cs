@@ -119,7 +119,15 @@ public sealed class SoloRepairCheckAttemptTests
         Assert.Equal(expectedReceipt.LaneEnvironmentVerified, actual.LaneEnvironmentVerified);
         Assert.Equal(expectedReceipt.Artifacts.Select(TrxContent), actual.Artifacts.Select(TrxContent));
         Assert.Equal(expectedReceipt.CandidateArtifacts?.Select(TrxContent), actual.CandidateArtifacts?.Select(TrxContent));
-        Assert.Equal(expectedReceipt.Feedback, actual.Feedback);
+        if (outcome == "passed")
+        {
+            Assert.Null(expectedReceipt.Feedback);
+            Assert.Null(actual.Feedback);
+        }
+        else
+        {
+            Assert.Equal(FailureMessage(expectedReceipt), FailureMessage(actual));
+        }
         Assert.NotNull(actual.Proof);
         Assert.Equal(1, launches);
         Assert.Single(verifier.FocusedRuns);
@@ -235,6 +243,15 @@ public sealed class SoloRepairCheckAttemptTests
         var root = XElement.Load(artifact.Path);
         root.Attribute("id")?.Remove();
         return root.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string FailureMessage(SoloRepairCheckReceipt receipt)
+    {
+        var feedback = Assert.IsType<string>(receipt.Feedback);
+        var failureArtifact = Assert.Single(receipt.CandidateArtifacts ?? receipt.Artifacts);
+        var artifactReference = $" (trx: {failureArtifact.Path})";
+        Assert.EndsWith(artifactReference, feedback, StringComparison.Ordinal);
+        return feedback[..^artifactReference.Length];
     }
 
     private static ConductorAdvanceResult? Advance(SoloBaselineRepairCoordinator coordinator, Goal goal) =>
