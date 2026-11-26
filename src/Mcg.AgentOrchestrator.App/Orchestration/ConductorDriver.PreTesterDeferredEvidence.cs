@@ -9,6 +9,7 @@ internal sealed partial class ConductorDriver
     internal Func<Goal, IReadOnlyList<string>, IReadOnlyDictionary<string, IReadOnlyList<string>>>? PreTesterFailureHistory { get; set; }
     internal Func<string, string>? PreTesterMainRevision { get; set; }
     internal PreTesterEvidenceRecorder? PreTesterRecorder { get; set; }
+    internal PreTesterResolverObservationWindow? PreTesterResolverObservation { get; set; }
     private readonly PreTesterChangedFileGuardClasses _preTesterChangedFileGuards = new();
 
     private void RecordPreTesterDeferredEvidenceExit(
@@ -112,24 +113,18 @@ internal sealed partial class ConductorDriver
         }
 
         // Open requests follow Developer declarations, then brief- and Planner-named classes.
-        foreach (var finding in goal.Tasks
-                     .Where(task => task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer)
-                     .SelectMany(task => task.LastVerification?.MergedReviewFindings ?? [])
-                     .Where(finding => finding.State == ReviewFindingState.Open && finding.EvidenceRequest is not null))
-        {
-            foreach (var selection in finding.EvidenceRequest!.Selections)
-            {
-                if (TryNormalizeFindingEvidenceRequest(
-                        new FindingEvidenceRequest([selection]), settings,
-                        (project, name) => _resolveFindingEvidenceSiblingClasses(goal, project, name),
-                        out var normalized, out _, out _, out _))
-                    selected.AddRange(normalized.Selections);
-            }
-        }
+        DeveloperDeferredTestSelectionNormalization.AddOpenFindingSelections(
+            selected, goal, settings, (project, name) => _resolveFindingEvidenceSiblingClasses(goal, project, name));
+        var resolverTick = PreTesterResolverObservation?.ActiveTick;
+        var resolverBoundary = resolverTick is not null && !goal.Tasks.Any(task =>
+            task.RequiredRole == AgentRole.Tester && (task.LastDispatch is not null || task.DispatchHistory.Count != 0))
+            ? new PreTesterReverseDependencyObservation.Boundary(goal.Id.Value, tester.Id.Value, candidateSha!)
+            : null;
         var (guards, augmented, abandoned) = PreTesterGuardSelections.CreateForRequest(_preTesterChangedFileGuards, worktreePath,
             _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
             PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), new(selected, notRun), settings, prior,
-            FormatFindingEvidenceSelection, (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line));
+            FormatFindingEvidenceSelection, (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line),
+            resolverTick, resolverBoundary);
         if (abandoned) prior = null;
         needsReplacementStartedEntry |= abandoned;
         var distinct = augmented.Selections.ToArray();
