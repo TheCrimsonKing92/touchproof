@@ -1133,18 +1133,21 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         var openRequests = humanInputRequests
             .Where(request => !request.IsCompleted)
             .ToArray();
-        foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.WaitingForHuman))
+        if (!AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status))
         {
-            if (!openRequests.Any(request => string.Equals(request.TaskId, task.Id, StringComparison.Ordinal)) &&
-                !humanInputRequests.Any(request => request.TaskId == task.Id &&
-                    task.RequiredRole == AgentRole.Planner && request.Kind == HumanWaitKind.PlannerBriefAmendment &&
-                    request.Amendment is not null && !request.AmendmentReplanRouted && request.IsCompleted && !request.WasDismissed &&
-                    request.AnswerHistory?.Any(answer => !answer.IsRetracted) == true &&
-                    (task.LatestRetryAt is null || request.RequestedAt >= task.LatestRetryAt)))
+            foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.WaitingForHuman))
             {
-                throw new InvalidOperationException(
-                    $"Goal '{ShortGoalId(goal.Id)}' task '{task.Id[..Math.Min(8, task.Id.Length)]}' " +
-                    "is WaitingForHuman but has no open human-input request.");
+                if (!openRequests.Any(request => string.Equals(request.TaskId, task.Id, StringComparison.Ordinal)) &&
+                    !humanInputRequests.Any(request => request.TaskId == task.Id &&
+                        task.RequiredRole == AgentRole.Planner && request.Kind == HumanWaitKind.PlannerBriefAmendment &&
+                        request.Amendment is not null && !request.AmendmentReplanRouted && request.IsCompleted && !request.WasDismissed &&
+                        request.AnswerHistory?.Any(answer => !answer.IsRetracted) == true &&
+                        (task.LatestRetryAt is null || request.RequestedAt >= task.LatestRetryAt)))
+                {
+                    throw new InvalidOperationException(
+                        $"Goal '{ShortGoalId(goal.Id)}' task '{task.Id[..Math.Min(8, task.Id.Length)]}' " +
+                        "is WaitingForHuman but has no open human-input request.");
+                }
             }
         }
 
