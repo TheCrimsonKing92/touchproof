@@ -398,7 +398,8 @@ public sealed class ProviderResetTerminalSourceTests
                 CliPersistentStateRunner.LoadConductLoopKernel(Repository, [], Root).ExportSnapshot(), Clock);
             var lines = new List<string>();
             ProviderHoldHistorySeed.Apply(restarted, Repository, lines.Add);
-            Assert.Matches($@"^PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals={Source.Id.Value[..8]} elapsedMs=\d+ loaded=1 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+$", Assert.Single(lines));
+            Assert.Matches($@"^PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals={Source.Id.Value[..8]} elapsedMs=\d+ loaded=1 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+ historyCpuMs=\d+(?: history[A-Za-z]+Ms=\d+)+$",
+                Assert.Single(lines));
             return restarted;
         }
 

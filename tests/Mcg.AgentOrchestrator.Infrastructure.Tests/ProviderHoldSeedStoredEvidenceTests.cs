@@ -27,7 +27,7 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         Assert.Empty(fixture.Decoded);
         Assert.Empty(fixture.Loaded);
         Assert.Empty(warm.ProviderHoldHistory.Retained);
-        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=65 retained=0 goals= elapsedMs=\d+ loaded=0 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+$",
+        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=65 retained=0 goals= elapsedMs=\d+ loaded=0 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+ historyCpuMs=\d+$",
             Assert.Single(fixture.Lines));
     }
 
