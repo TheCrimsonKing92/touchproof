@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 using Fixture = PreTesterCoupledClassSelectionsTests.Fixture;
 
+// Parallel-safe: isolated fixture directories, in-memory goals, and injected evidence and dispatch.
 public sealed class PreReviewHubFileBreadthDeferralTests
 {
     private const string HubPath = "src/Mcg.AgentOrchestrator.Execution/Processes/GitCli.cs";
@@ -13,6 +14,8 @@ public sealed class PreReviewHubFileBreadthDeferralTests
     private const string ObjectiveClass = "ObjectiveNamedTests";
     private const string ObligationClass = "ObligationNamedTests";
     private const string FailedGateClass = "FailedGateTests";
+    private const string SecondFailedGateClass = "SecondFailedGateTests";
+    private const string FailedGatePair = InfrastructurePrefix + FailedGateClass + "|FullyQualifiedName~" + SecondFailedGateClass;
     private static readonly string[] ExpectedSelections =
     [
         InfrastructurePrefix + ChangedClass,
@@ -21,9 +24,9 @@ public sealed class PreReviewHubFileBreadthDeferralTests
     private static readonly string[] ExpectedNamedSelections =
     [
         InfrastructurePrefix + ChangedClass,
+        InfrastructurePrefix + FailedGateClass,
         InfrastructurePrefix + ObjectiveClass,
-        InfrastructurePrefix + ObligationClass,
-        InfrastructurePrefix + FailedGateClass
+        InfrastructurePrefix + ObligationClass
     ];
 
     [Fact]
@@ -73,11 +76,14 @@ public sealed class PreReviewHubFileBreadthDeferralTests
         var (_, goal) = SoftwareGoal($"Cover {ObjectiveClass}.Works, AnotherObjectiveTests and {ObjectiveClass}.");
         RecordObligation(goal, ObjectiveClass, $"FullyQualifiedName~{ObligationClass}");
 
-        var context = ConductorDriver.BuildPreReviewEvidenceContext("candidate", [Fixture.Source], fixture.Root, goal: goal);
+        var mapped = ConductorDriver.BuildPreReviewEvidenceContext("candidate", [Fixture.Source], fixture.Root, goal: goal);
+        var context = PreReviewEvidenceContextBuilder.WithFailedGateClasses(mapped,
+            [("Infrastructure.Tests", ObjectiveClass), ("Infrastructure.Tests", FailedGateClass)]);
 
         string[] expected =
         [
-            InfrastructurePrefix + "AnotherObjectiveTests|FullyQualifiedName~" + ObjectiveClass,
+            InfrastructurePrefix + FailedGateClass + "|FullyQualifiedName~" + ObjectiveClass,
+            InfrastructurePrefix + "AnotherObjectiveTests",
             InfrastructurePrefix + ObligationClass
         ];
         Assert.Equal(expected, context.SelectedFocusedTests);
@@ -123,7 +129,7 @@ public sealed class PreReviewHubFileBreadthDeferralTests
         var context = BuildContext(goal, fixture.Root);
 
         Assert.Equal(
-            new[] { ExpectedSelections[0], InfrastructurePrefix + ObligationClass, ExpectedSelections[1] },
+            new[] { ExpectedSelections[0], ExpectedSelections[1], InfrastructurePrefix + ObligationClass },
             context.SelectedFocusedTests);
         Assert.False(context.MappingNeedsInput);
         Assert.False(context.RequiresSourceCleanup);
@@ -135,18 +141,25 @@ public sealed class PreReviewHubFileBreadthDeferralTests
     public void AdvanceOnce_HubBreadthDeferred_RecordsGreenAndDispatchesReviewerWithoutRetry(bool namedClasses)
     {
         using var fixture = new Fixture();
-        var (kernel, goal) = namedClasses ? NamedClassGoal(fixture) : SoftwareGoal();
-        var expected = namedClasses ? ExpectedNamedSelections : ExpectedSelections;
-        var context = namedClasses ? BuildContext(goal, fixture.Root) : BuildContext();
+        var (kernel, goal) = namedClasses ? NamedClassGoal(fixture, SecondFailedGateClass) : SoftwareGoal();
+        string[] expected = namedClasses
+            ? [InfrastructurePrefix + ChangedClass, FailedGatePair, InfrastructurePrefix + ObjectiveClass, InfrastructurePrefix + ObligationClass]
+            : ExpectedSelections;
+        var context = BuildMappedContext(namedClasses ? goal : null, fixture.Root);
         Assert.False(context.MappingNeedsInput);
         Assert.False(context.NoApplicableTests);
-        Assert.Equal(expected, context.SelectedFocusedTests);
         Assert.Contains("breadth was deferred to the full gate", context.MappingReason);
         Assert.Contains($"hub_file={HubPath}", context.MappingReason);
 
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
             PassVerification(kernel, goal, task);
+
+        string[] failedClasses = namedClasses ? [SecondFailedGateClass, FailedGateClass] : [FailedGateClass];
+        var failingTests = string.Join(", ", failedClasses.Select(name => $"Mcg.AgentOrchestrator.Infrastructure.Tests.{name}.Works"));
+        kernel.RecordAcceptanceFailure(goal.Id, ["gate"], "failed-candidate", "main",
+            [new("gate", AcceptanceFailureOrigin.Introduced, $"merge train RED attributed (recorded) receipt test: {failingTests}")]);
+        goal.DeferAcceptanceFailureForRetry();
 
         var receipts = new List<PreReviewEvidenceReceipt>();
         var retries = new List<TaskId>();
@@ -187,20 +200,25 @@ public sealed class PreReviewHubFileBreadthDeferralTests
         var receipt = Assert.Single(receipts);
         Assert.Equal(PreReviewEvidenceDisposition.Green, receipt.Disposition);
         Assert.Equal(expected, receipt.SelectedFocusedTests);
+        Assert.Contains("breadth was deferred to the full gate", receipt.MappingReason);
         Assert.Empty(retries);
-        Assert.DoesNotContain(escalations, message =>
-            message.Contains("PRE_REVIEW_MAPPING_RETRY_DID_NOT_CONVERGE", StringComparison.Ordinal) ||
-            message.Contains("PRE_REVIEW_SELECTION_APPARATUS_FAILURE", StringComparison.Ordinal));
+        Assert.Empty(escalations);
         Assert.Equal(reviewer.Id, Assert.Single(dispatches));
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal) NamedClassGoal(Fixture fixture)
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) NamedClassGoal(Fixture fixture, string? alsoNamed = null)
     {
         fixture.Test(ChangedClass);
         fixture.Test(ObjectiveClass);
         fixture.Test(ObligationClass);
         fixture.Test("StaleObligationTests");
-        var (kernel, goal) = SoftwareGoal($"Cover {ObjectiveClass}.Works and {ChangedClass}.");
+        var objective = $"Cover {ObjectiveClass}.Works and {ChangedClass}.";
+        if (alsoNamed is not null)
+        {
+            fixture.Test(alsoNamed);
+            objective += $" Also cover {alsoNamed}.";
+        }
+        var (kernel, goal) = SoftwareGoal(objective);
         RecordObligation(goal, ObjectiveClass, $"FullyQualifiedName~{ObligationClass}");
         goal.RecordGateTestObligation(new GateTestObligation("previous", goal.AuthoritativeBrief.Version - 1,
             ["StaleObligationTests"], null, "Prior brief coverage", DateTimeOffset.UnixEpoch));
@@ -212,6 +230,11 @@ public sealed class PreReviewHubFileBreadthDeferralTests
             selectors, null, "Current brief coverage", DateTimeOffset.UnixEpoch));
 
     private static PreReviewEvidenceContext BuildContext(
+        Goal? goal = null, string? worktreePath = null, bool hubChanged = true) =>
+        PreReviewEvidenceContextBuilder.WithFailedGateClasses(BuildMappedContext(goal, worktreePath, hubChanged),
+            [("Infrastructure.Tests", FailedGateClass)]);
+
+    private static PreReviewEvidenceContext BuildMappedContext(
         Goal? goal = null, string? worktreePath = null, bool hubChanged = true)
     {
         var changes = RepositoryChangeClassifier.Classify(
@@ -224,7 +247,6 @@ public sealed class PreReviewHubFileBreadthDeferralTests
             "changed-test coverage", RepositoryTestProject.Infrastructure) { ChangedTestClasses = [ChangedClass] };
         var plan = new RepositoryTestImpactPlan(true, false, "Original summary.", [reverse, changed]);
         var bounded = ReverseDependencyBreadthBound.Apply(plan, changes.Files.Select(file => file.Path));
-        var context = ConductorDriver.BuildPreReviewEvidenceContext("candidate", changes, bounded, goal, worktreePath);
-        return PreReviewEvidenceContextBuilder.WithFailedGateClasses(context, [("Infrastructure.Tests", FailedGateClass)]);
+        return ConductorDriver.BuildPreReviewEvidenceContext("candidate", changes, bounded, goal, worktreePath);
     }
 }
