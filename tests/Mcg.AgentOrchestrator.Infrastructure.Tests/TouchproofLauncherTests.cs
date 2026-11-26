@@ -144,6 +144,7 @@ public sealed class TouchproofLauncherTests
             info.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
                 Path.Combine(_root, "dotnet");
             info.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+            info.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
             info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
             info.Environment["DOTNET_NOLOGO"] = "1";
             info.Environment["GIT_CONFIG_NOSYSTEM"] = "1";

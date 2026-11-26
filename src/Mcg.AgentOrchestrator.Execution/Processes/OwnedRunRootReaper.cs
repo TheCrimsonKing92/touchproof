@@ -53,7 +53,7 @@ internal sealed class OwnedRunRootReaper(
         ArgumentOutOfRangeException.ThrowIfNegative(afterId);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxRoots, 1);
         var now = timeProvider.GetUtcNow();
-        var entries = store.ReadBatch(afterId, maxRoots, now);
+        var entries = store.ReadBatch(afterId, maxRoots, now, storageRoot);
         var removed = 0;
         var retained = 0;
         var failed = 0;

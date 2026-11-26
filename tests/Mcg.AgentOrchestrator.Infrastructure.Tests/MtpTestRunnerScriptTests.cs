@@ -694,6 +694,7 @@ public sealed class MtpTestRunnerScriptTests
             Directory.CreateDirectory(path);
             start.Environment[name] = path;
         }
+        start.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
         start.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = RepositoryRoot();
         foreach (var argument in new[] { assembly, "--no-ansi", "--progress", "off",
             "--filter-class", nameof(MtpTestRunnerScriptTests), "--filter-method",
