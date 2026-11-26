@@ -46,7 +46,7 @@ internal static class AuthorBriefDraftPrompt
         return $$"""
         You are the Author drafting one checked goal brief from a backlog item.
         Inspect the repository source at current main HEAD {{mainHead}} in this repository root.
-        Verify every premise against source at that HEAD and cite repository-relative `path:line` references.
+        Verify every source claim against source at that HEAD and cite repository-relative `path:line` references.
         Use git show {{mainHead}}:<path> when inspecting source; do not treat untracked artifacts as source.
         If the item cannot be drafted, return kind stale with a staleKind, a reason and evidenceReferences.
         staleKind delivered means every part of the item is already on main; name the implementing commits in implementingCommits and cite the path:line of each part in evidenceReferences.
@@ -78,7 +78,9 @@ internal static class AuthorBriefDraftPrompt
         Say the same thing in other words, and describe a file in prose instead of citing its path when the path contains one of those words.
         Cite every file by its full repository-relative path on every mention, never by bare file name, and cite a line range as path:start-end.
         In the Measured premise section put only repository files in code spans; name runtime files and stores in plain text.
-        Write the Measured premise as a bullet list in which each bullet is one source claim, and put any runtime observation or stated unknown in prose before the list.
+        Write one source claim per Measured premise bullet. Put stated unknowns in prose before the list, where you can also put runtime observations.
+        For each bullet, check that its text starts with the exact prefix runtime-observation: and that the same bullet cites either an operator-evidence file path in plain text with a directory separator and a file extension, or a backlog note as note <hex id>.
+        When both checks pass, the bullet is a runtime observation and is excluded from source verification. If either check fails, the bullet is counted and verified as a source claim.
         When the item names a goal it builds on that has not landed, draft against that goal's brief and criteria for the parts it provides.
         Write those premise bullets as provided-by-<goal-prefix>: <claim> without a HEAD citation, and return the goal prefixes in dependsOnGoals (6 to 32 hexadecimal characters each).
         Never return a refused result solely because that dependency has not landed.
