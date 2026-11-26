@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -26,7 +27,8 @@ internal sealed record ConductorSupervisorHandoffRecord(
     string? BlockedActivationCommit,
     int ConsecutiveFailures,
     string ReadyPath,
-    ConductorSupervisorActiveChild? ActiveChild = null);
+    ConductorSupervisorActiveChild? ActiveChild = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolverObservationHandoff = null);
 
 internal sealed record ConductorSupervisorReadyRecord(
     string Token, ConductorSupervisorProcessIdentity Successor,
@@ -184,39 +186,49 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
     {
         Process process;
         try { process = Process.GetProcessById(child.Process.ProcessId); }
-        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception) &&
-            ConductorContinuityExitArtifact.TryRead(child.ExitArtifactPath) is not null)
+        catch (ArgumentException)
         {
-            return new ConductorSupervisorProcessResult(0, child.Process.ProcessId,
-                child.StdoutPath, child.StderrPath);
+            return MissingExitCode();
         }
         using (process)
         {
-        if (!IsAlive(child.Process))
-        {
-            if (ConductorContinuityExitArtifact.TryRead(child.ExitArtifactPath) is not null)
-                return new ConductorSupervisorProcessResult(0, child.Process.ProcessId,
-                    child.StdoutPath, child.StderrPath);
-            throw new InvalidOperationException("Adopted child identity changed before attachment.");
-        }
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            var terminated = process.HasExited;
-            if (!terminated)
+            try
             {
-                process.Kill(entireProcessTree: true);
-                terminated = process.WaitForExit(5000);
+                // Keep the process handle through the identity check and exit observation.
+                _ = process.SafeHandle;
+                if (new DateTimeOffset(process.StartTime.ToUniversalTime()) != child.Process.StartedAt)
+                    return MissingExitCode();
             }
-            return new ConductorSupervisorProcessResult(-1, child.Process.ProcessId,
-                child.StdoutPath, child.StderrPath, terminated);
+            catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode is 87 or 1168)
+            {
+                return MissingExitCode();
+            }
+
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                var forcedStop = !process.HasExited;
+                if (forcedStop)
+                    process.Kill(entireProcessTree: true);
+                return MissingExitCode(!forcedStop || process.WaitForExit(5000), forcedStop);
+            }
+            try
+            {
+                return new ConductorSupervisorProcessResult(process.ExitCode, child.Process.ProcessId,
+                    child.StdoutPath, child.StderrPath, ProcessStartedAt: child.Process.StartedAt);
+            }
+            catch (InvalidOperationException)
+            {
+                return MissingExitCode();
+            }
         }
-        return new ConductorSupervisorProcessResult(process.ExitCode, child.Process.ProcessId,
-            child.StdoutPath, child.StderrPath);
-        }
+
+        ConductorSupervisorProcessResult MissingExitCode(bool terminated = true, bool forcedStop = false) =>
+            new(-1, child.Process.ProcessId, child.StdoutPath, child.StderrPath, terminated,
+                ForcedStop: forcedStop, ExitCodeObserved: false);
     }
 
     public void StopPending(ConductorSupervisorProcessIdentity identity)

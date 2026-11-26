@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class ConductorSelfRelaunch
 {
+    internal const string SupervisorDelegatedReason = "delegated-to-continuity-supervisor";
+
     internal static Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult> CreateSupervisorDelegated() =>
         _ => new ConductorSelfRelaunchResult(
             true,
@@ -12,5 +14,5 @@ internal static partial class ConductorSelfRelaunch
                 ProcessId: null,
                 StdoutPath: null,
                 StderrPath: null,
-                Reason: "delegated-to-continuity-supervisor"));
+                Reason: SupervisorDelegatedReason));
 }

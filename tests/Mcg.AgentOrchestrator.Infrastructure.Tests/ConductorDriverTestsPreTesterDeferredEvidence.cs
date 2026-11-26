@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -391,6 +392,131 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         Assert.Contains("state=executed-on-candidate",
             string.Join(Environment.NewLine, brief.Segments.SelectMany(segment => segment.Lines)),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorktreeResolverObservationPreservesEvidenceAndTesterTransitions()
+    {
+        var baseline = await Run(observe: false);
+        var observed = await Run(observe: true);
+        Assert.Equal(["focused", "Tester"], baseline.Order);
+        Assert.Equal(baseline.Order, observed.Order);
+        Assert.Equal(baseline.Outcomes, observed.Outcomes);
+        Assert.Contains("green", observed.Outcomes);
+
+        static async Task<(string[] Order, string[] Outcomes)> Run(bool observe)
+        {
+            using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+            var worktree = GoalWorktrees.WorktreePath(scenario.Root, scenario.Goal.Id);
+            const string source = PreTesterReverseDependencySelectionFixture.Source;
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(worktree, source))!);
+            File.WriteAllText(Path.Combine(worktree, source), "public class AppContract {}");
+            File.WriteAllText(Path.Combine(worktree, "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"), "<Project />");
+            var project = PreTesterReverseDependencySelectionFixture.Project;
+            File.WriteAllText(Path.Combine(worktree, project), """
+                <Project Sdk="Microsoft.NET.Sdk"><ItemGroup>
+                  <ProjectReference Include="../../src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj" />
+                </ItemGroup></Project>
+                """);
+            File.WriteAllText(Path.Combine(worktree, Path.GetDirectoryName(project)!, "DeferredAlphaTests.cs"), """
+                public class DeferredAlphaTests {
+                    [Xunit.Fact] public void Runs() { var item = new AppContract(); }
+                }
+                """);
+            var order = new List<string>();
+            var driver = scenario.Driver(request =>
+            {
+                order.Add("focused");
+                return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                    scenario.Root, request, CandidateSha);
+            }, role => order.Add(role.ToString()), changedPaths: [source]);
+            var id = Guid.NewGuid();
+            var workspace = InfrastructureTestSupport.CreateSetUpWorkspace(scenario.Root);
+            using var staged = new PreTesterResolverObservationTests.StagedProducerRevision();
+            var policy = ConductorAutonomyPolicy.Conservative with { PreTesterResolverObservationWindowId = observe ? id : null };
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            var policyPath = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+            File.WriteAllText(policyPath, policy.ToJson());
+            var path = PreTesterResolverObservationTests.CorpusPath(
+                Path.Combine(workspace.OrchestratorDirectory, "pretester-resolver-observation"), id);
+            var continuity = Path.Combine(workspace.OrchestratorDirectory, "continuity");
+            var supervisorSeam = new SystemConductorSupervisorHandoffSeam(continuity);
+            var child = new ResolverChildHost(request =>
+            {
+                var binding = WorkspaceInvocationBinding.Parse(request.Arguments);
+                var projectSelection = OrchestratorProjectSelection.FromArgs(binding.CommandArgs, environmentProject: null);
+                var tenantSelection = OrchestratorTenantSelection.FromArgs(projectSelection.CommandArgs, environmentTenant: null);
+                var commandArgs = CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
+                using var lease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+                var context = new CliExecutionContext(scenario.Kernel, workspace, new InMemoryModelProviderRegistry([]),
+                    [], WorkerProfileCatalog.Default(), scenario.Goal)
+                {
+                    ConductLoopDriverForTests = driver,
+                    ResolverObservationParentProcessIdForTests = _ => supervisorSeam.Self.ProcessId,
+                    RunInjectedAcceptanceVerifierInCurrentProcess = true,
+                    ConductorTickObserver = _ =>
+                    {
+                        if (observe)
+                        {
+                            // The writer is still open while the tick is being published.
+                            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                            using var reader = new StreamReader(stream);
+                            Assert.NotNull(reader.ReadLine());
+                            Assert.Null(reader.ReadLine());
+                        }
+                    }
+                };
+                Assert.True(CliCommandHandlers.Execute(commandArgs, context));
+                var artifact = ConductorContinuityExitArtifact.TryRead(request.ExitArtifactPath);
+                Assert.NotNull(artifact);
+                Assert.Equal(1, artifact.Ticks);
+                Assert.False(artifact.RestartRequested);
+            });
+            var events = new Mcg.AgentOrchestrator.Infrastructure.Tests.SupervisorHandoffFixture.RecordingEvents();
+            var supervisor = new ConductorContinuitySupervisor(child, events, maxUnexpectedRestarts: 0,
+                supervisorHandoff: new(supervisorSeam, SystemConductorSupervisorHandoffSeam.ReadOwnBuild(),
+                    TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)),
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
+            var exitCode = await supervisor.RunAsync(["conduct", "--loop", "--watch", "--max-iterations", "1"],
+                scenario.Root, continuity, workspace.ProjectName, workspace.TenantName);
+            Assert.True(exitCode == 0, $"Supervisor exited with {exitCode}. {string.Join(Environment.NewLine, events.Events.Select(entry => entry.Detail))}");
+            Assert.Equal(1, child.Launches);
+            if (observe)
+            {
+                var lines = File.ReadAllLines(path);
+                var producer = System.Text.Json.JsonSerializer.Deserialize<PreTesterReverseDependencyObservation.WindowHeader>(lines[0])!.Producer;
+                var tick = System.Text.Json.JsonSerializer.Deserialize<PreTesterReverseDependencyObservation.CompletedTick>(lines[1])!;
+                Assert.Equal(2, lines.Length);
+                Assert.Equal(staged.AppSha256, producer.AppSha256);
+                Assert.Equal(supervisorSeam.Self, producer.Supervisor);
+                var invocation = Assert.Single(tick.Rows);
+                Assert.Equal(scenario.Goal.Id.Value, invocation.Boundary.GoalId);
+                Assert.Equal(scenario.Tester.Id.Value, invocation.Boundary.TesterTaskId);
+                Assert.Contains("DeferredAlphaTests", invocation.Names);
+                Assert.Equal("incomplete", PreTesterResolverObservationTests.Receipt(path).Status);
+            }
+            else
+            {
+                Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
+            }
+            var currentGoal = scenario.Kernel.GetGoal(scenario.Goal.Id);
+            return (order.ToArray(), currentGoal.Timeline.Select(evt => PreTesterEvidenceIndexLines.Parse(evt.Message))
+                .OfType<PreTesterEvidenceEntry>().Select(entry => entry.Outcome).ToArray());
+        }
+    }
+
+    private sealed class ResolverChildHost(Action<ConductorSupervisorProcessRequest> run) : IConductorSupervisorProcessHost
+    {
+        internal int Launches { get; private set; }
+
+        public Task<ConductorSupervisorProcessResult> RunAsync(
+            ConductorSupervisorProcessRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Launches++;
+            run(request);
+            return Task.FromResult(new ConductorSupervisorProcessResult(0, Environment.ProcessId));
+        }
     }
 
     [Fact]

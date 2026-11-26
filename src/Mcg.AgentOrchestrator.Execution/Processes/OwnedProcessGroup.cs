@@ -721,6 +721,17 @@ internal sealed class OwnedProcessGroup : IDisposable
             int expectedProcessId) =>
             _suspended.ReadLifecycleIdentity(expectedProcessId);
 
+        internal SpawnProcessIdentity ReadSuspendedIdentity()
+        {
+            // The loader has not initialized MainModule. Read the retained launch handle.
+            var pid = Process.Id;
+            var read = ReadLifecycleIdentity(pid);
+            return read.Status == ProcessInspectionStatus.Available &&
+                   read.StartedAt is { } started && ProcessImageResolution.IsResolved(read.ExecutablePath)
+                ? new(pid, started, read.ExecutablePath!)
+                : throw new InvalidOperationException("Suspended holder identity is unavailable.");
+        }
+
         internal void Resume() => _suspended.Resume();
 
         internal RedirectedOwnedProcessStart TransferOwnership()
