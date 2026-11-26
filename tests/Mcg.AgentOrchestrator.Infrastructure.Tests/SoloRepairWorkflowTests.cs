@@ -1347,9 +1347,10 @@ public sealed class SoloRepairWorkflowTests
     [InlineData("unbound")]
     [InlineData("missing-tool")]
     [InlineData("missing-trx")]
+    [InlineData("vstest-missing-trx")]
     public async Task MixedCompletion_LinksRepairRoutesOnlyIntroducedFeedbackAndRetainsUnresolvedRow(string fault)
     {
-        using var fixture = new SoloAttributedFailureRouteFixture();
+        using var fixture = new SoloAttributedFailureRouteFixture(vstest: fault == "vstest-missing-trx");
         fixture.Git("checkout", "main");
         var main = fixture.Git("rev-parse", "HEAD");
         var workspace = Workspace(fixture);
@@ -1359,7 +1360,7 @@ public sealed class SoloRepairWorkflowTests
         await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(fixture.Kernel);
         await fixture.Produce(mixed: true, attemptId: goal.Id.Value, candidateWorktree: Worktree(fixture, goal), goal: goal,
             baselineMissingToolFor: fault == "missing-tool" ? Unknown : null,
-            baselineCrashFor: fault == "missing-trx" ? Unknown : null);
+            baselineCrashFor: fault is "missing-trx" or "vstest-missing-trx" ? Unknown : null);
         if (fault == "unbound")
         {
             fixture.ReplaceProof(proof => proof with

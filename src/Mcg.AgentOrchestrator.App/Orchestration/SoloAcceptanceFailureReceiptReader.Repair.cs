@@ -211,8 +211,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             (baseline.Check.LaneToolResolution is not { MissingTool: null } &&
              (finding.Inherited || baseline.Check is not { LaneToolResolution: null, BaselineSourceAbsence: not null })))
             throw new InvalidDataException(LaneEvidenceUnavailable);
-        if ((finding.Inherited || baseline.Check.BaselineSourceAbsence is null) &&
-            !MatchesRepairProject(finding.Project, baseline.Check.TestProjectPath))
+        if (!MatchesRepairProject(finding.Project, baseline.Check.TestProjectPath))
             throw new InvalidDataException(SoloHoldReasons.BaselineResultMismatch);
         if (!check.Artifacts.SequenceEqual(finding.CandidateArtifacts) ||
             !baseline.Artifacts.SequenceEqual(finding.BaselineArtifacts))
@@ -272,7 +271,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             return finding with { CandidateArtifacts = [], Reason = SoloHoldReasons.CandidateRerunUnconfirmed };
         if (baseline.Check.BaselineSourceAbsence is { } absence)
         {
-            if (baseline.Check.TestProjectPath is { } baselineProject && !MatchesRepairProject(project, baselineProject))
+            if (!MatchesRepairProject(project, baseline.Check.TestProjectPath))
                 return finding with { Reason = SoloHoldReasons.BaselineResultMismatch };
             if (origin != AcceptanceTestFailureOrigin.Introduced || absence.BaselineSha != receipt.BaselineSha ||
                 absence.Selector != selector || baseline.Check.FailureClassification != AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline ||
@@ -317,6 +316,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         return faults.Length > 0 && faults.All(check =>
             check.FailureClassification is AcceptanceFailureClassifications.MissingTool or
                 AcceptanceFailureClassifications.BuildPhaseTimeout ||
+            check is { Passed: false, FailureClassification: AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable } ||
             check is
             {
                 FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,

@@ -27,19 +27,24 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal int BaselineRuns { get; private set; }
     internal int CandidateRuns { get; private set; }
     internal Action? BeforeStart { get; set; }
+    private readonly bool _vstest;
 
-    internal SoloAttributedFailureRouteFixture(bool committed = true, bool collidingProjectLabels = false)
+    internal SoloAttributedFailureRouteFixture(bool committed = true, bool collidingProjectLabels = false,
+        bool vstest = false, bool firstTestAbsentAtBaseline = false)
     {
+        _vstest = vstest;
         var project = collidingProjectLabels ? SecondCollisionProject : Project;
         var shadowInvocation = collidingProjectLabels ? Invocation(FirstCollisionProject) + "," : "";
+        var invocations = vstest ? "" : shadowInvocation + Invocation(project);
+        var runner = vstest ? "vstest" : "mtp";
         Directory.CreateDirectory(Path.Combine(Repo, "config"));
-        WriteProject(project);
+        WriteProject(project, includeFirst: !firstTestAbsentAtBaseline);
         if (collidingProjectLabels) WriteProject(FirstCollisionProject);
         File.WriteAllText(Path.Combine(Repo, "config/acceptance-manifest.json"), $$"""
             { "version": 1, "engine": {
               "slotCount": 1, "maxConcurrentShards": 1, "enforceStructuralCoverage": false,
-              "mtpInvocations": [{{shadowInvocation}}{{Invocation(project)}}] }, "checks": [
-              { "name": "{{ManifestCheckName}}", "type": "dotnet-test", "runner": "mtp",
+              "mtpInvocations": [{{invocations}}] }, "checks": [
+              { "name": "{{ManifestCheckName}}", "type": "dotnet-test", "runner": "{{runner}}",
                 "project": "{{project}}", "arguments": [] }
             ], "forbiddenChangedPathGlobs": [] }
             """);
@@ -52,6 +57,11 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Git("checkout", "-b", "candidate");
         File.WriteAllText(Path.Combine(Repo, "README.md"), "candidate");
         Git("add", "README.md");
+        if (firstTestAbsentAtBaseline)
+        {
+            WriteProject(project);
+            Git("add", Path.GetDirectoryName(project)!);
+        }
         Git("commit", "-m", "Candidate");
         Context = new(Git("rev-parse", "HEAD"), main, Git("rev-parse", "HEAD^{tree}"), main);
         Goal = CompletedGoal(Kernel, committed: committed);
@@ -62,15 +72,16 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
              "arguments":["{executable}","--results-directory","{resultsDirectory}","--report-trx","--report-trx-filename","{trxFileName}"]}
             """;
 
-        void WriteProject(string path)
+        void WriteProject(string path, bool includeFirst = true)
         {
             var projectDirectory = Path.GetDirectoryName(Path.Combine(Repo, path))!;
             Directory.CreateDirectory(projectDirectory);
             File.WriteAllText(Path.Combine(Repo, path), "<Project />");
-            File.WriteAllText(Path.Combine(projectDirectory, "SoloTests.cs"), """
+            var first = includeFirst ? "[Xunit.Fact] public void Fails() { }" : "";
+            File.WriteAllText(Path.Combine(projectDirectory, "SoloTests.cs"), $$"""
                 namespace Sample.Tests;
                 public class SoloTests {
-                    [Xunit.Fact] public void Fails() { }
+                    {{first}}
                     [Xunit.Fact] public void Long() { }
                     [Xunit.Fact] public void Unknown() { }
                 }
@@ -100,16 +111,31 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                     "SoloTests.cs(1,1): error CS1002: ; expected\nBuild FAILED."));
             }
             if (results < 0) return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
-            var filename = Array.IndexOf(args, "--report-trx-filename");
-            Assert.True(filename >= 0, "The fixture must execute the MTP TRX path.");
+            Assert.Equal(_vstest, GoalAcceptanceVerifier.IsDotnetTestCommand(args));
+            var filename = Array.IndexOf(args, _vstest ? "--logger" : "--report-trx-filename");
+            Assert.True(filename >= 0, "The selected runner must request a TRX receipt.");
+            var trxFile = args[filename + 1];
+            if (_vstest)
+            {
+                const string trxLogger = "trx;LogFileName=";
+                Assert.StartsWith(trxLogger, trxFile);
+                trxFile = trxFile[trxLogger.Length..];
+            }
             var baseline = !Path.GetFullPath(directory).Equals(Path.GetFullPath(checkout), StringComparison.OrdinalIgnoreCase);
             if (baseline) BaselineRuns++; else CandidateRuns++;
             if (baseline && (baselineThrows || baselineException is not null))
                 throw baselineException ?? new InvalidOperationException("Fixture baseline runner failed.");
-            var method = Array.IndexOf(args, "--filter-method");
-            string[] names = method < 0
+            var method = Array.IndexOf(args, _vstest ? "--filter" : "--filter-method");
+            var selection = method < 0 ? null : args[method + 1];
+            if (_vstest && selection is not null)
+            {
+                const string vstestFilter = "FullyQualifiedName~";
+                Assert.StartsWith(vstestFilter, selection);
+                selection = selection[vstestFilter.Length..];
+            }
+            string[] names = selection is null
                 ? collidingPassedRows || singleRow ? [First] : mixed ? [First, Long, Unknown] : [First, Long]
-                : [args[method + 1].Trim('*')];
+                : [selection.Trim('*')];
             if (baseline && baselineMissingToolFor is not null && names.SequenceEqual([baselineMissingToolFor]))
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(9009,
                     "'dotnet' is not recognized as an internal or external command") { LaneToolResolution = new() });
@@ -120,7 +146,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                 names = names.Select(name => name == First ? name + firstCase : name).ToArray();
             Directory.CreateDirectory(args[results + 1]);
             var passed = baseline && (mixed ? names.SequenceEqual([Long]) : !baselineFails);
-            var path = Path.Combine(args[results + 1], args[filename + 1]);
+            var path = Path.Combine(args[results + 1], trxFile);
             if (collidingPassedRows && !baseline && method < 0) File.WriteAllText(path, CollisionTrx);
             else WriteTrx(path, passed, names);
             if (captureFails)

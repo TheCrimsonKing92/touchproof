@@ -2802,7 +2802,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
-            return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
+            return (VstestAcceptanceResultEvidence.Attach(new AcceptanceCheckResult(
                 IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
@@ -2831,7 +2831,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
                 ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)
-                { LaneToolResolution = result.LaneToolResolution }), lockRemediationApplied);
+                { LaneToolResolution = result.LaneToolResolution }, check.IsFocusedEvidenceSelection), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -2891,7 +2891,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
-            return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
+            return (VstestAcceptanceResultEvidence.Attach(new AcceptanceCheckResult(
                 IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
@@ -2920,7 +2920,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
                 ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)
-                { LaneToolResolution = result.LaneToolResolution }), true);
+                { LaneToolResolution = result.LaneToolResolution }, check.IsFocusedEvidenceSelection), true);
         }
         finally
         {

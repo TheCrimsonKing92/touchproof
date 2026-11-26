@@ -168,7 +168,7 @@ public sealed class SoloRepairEvidenceTests
 
     [Theory]
     [InlineData(AcceptanceFailureClassifications.BuildPhaseTimeout, true)]
-    [InlineData(AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable, false)]
+    [InlineData(AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable, true)]
     [InlineData(AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, false)]
     public async Task BaselineApparatusFailure_RequiresEvidenceOfCheckLocalFault(string classification, bool partitions)
     {
@@ -217,20 +217,25 @@ public sealed class SoloRepairEvidenceTests
     }
 
     [Theory]
-    [InlineData("tests/Other.Tests/Other.Tests.csproj")]
-    [InlineData(null)]
-    public async Task IntroducedRow_RequiresExecutedProjectOnInitialReadAndReplay(string? observedProject)
+    [InlineData("tests/Other.Tests/Other.Tests.csproj", false)]
+    [InlineData(null, false)]
+    [InlineData("tests/Other.Tests/Other.Tests.csproj", true)]
+    [InlineData(null, true)]
+    public async Task IntroducedRow_RequiresProjectBindingOnInitialReadAndReplay(string? observedProject, bool sourceAbsent)
     {
-        using var fixture = new SoloAttributedFailureRouteFixture();
+        using var fixture = new SoloAttributedFailureRouteFixture(firstTestAbsentAtBaseline: sourceAbsent);
         await fixture.Produce();
         fixture.Record(fixture.Summary);
         var original = Assert.Single(Read(fixture).Findings.Where(row => row.Identity == First));
         Assert.Null(original.Reason);
         Assert.NotNull(original.Feedback);
+        SoloAcceptanceFailureReceiptReader.VerifyRetainedRepairProof(fixture.Goal.Id.Value, original);
 
         fixture.ReplaceProof(proof =>
         {
             var name = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == First)).BaselineCheckName;
+            var baseline = Assert.Single(proof.BaselineChecks.Where(item => item.Check.Name == name));
+            Assert.Equal(sourceAbsent, baseline.Check.BaselineSourceAbsence is not null);
             var checks = proof.BaselineChecks.Select(item => item.Check.Name == name
                 ? item with { Check = item.Check with { TestProjectPath = observedProject } }
                 : item).ToArray();

@@ -81,6 +81,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                     var selector = AcceptanceFailureAttributionPlanner.NormalizeIdentity(identity);
                     if (baseline.Check.BaselineSourceAbsence is { } absent)
                     {
+                        if (!MatchesRepairProject(check.TestProjectPath, baseline.Check.TestProjectPath))
+                            return Refuse(SoloHoldReasons.BaselineResultMismatch);
                         if (absent.BaselineSha != receipt.BaselineSha || absent.Selector != selector ||
                             baseline.Check.FailureClassification != AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline ||
                             baseline.Check.ExecutedTestCount != 0 || baseline.Check.Passed || baseline.Artifacts.Count != 0)
