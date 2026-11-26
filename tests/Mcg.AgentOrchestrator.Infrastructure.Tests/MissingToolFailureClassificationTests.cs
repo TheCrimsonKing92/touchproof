@@ -79,12 +79,26 @@ public sealed class MissingToolFailureClassificationTests
         // Any recorded entry excludes the check, even an unusable path or blank identity.
         var check = new AcceptanceCheckResult("test-check", false, 127, "bash: cargo: command not found",
             TestResultPaths: hasPaths ? [""] : null,
-            FailingTestIdentities: hasIdentities ? [identity!] : null);
+            FailingTestIdentities: hasIdentities ? [identity!] : null)
+            { LaneToolResolution = new("powershell.exe") };
 
         var result = AcceptanceFailureCauseAdjudicator.Attach(check);
 
         Assert.Null(result.FailureClassification);
         Assert.Null(result.FailureCauseEvidence);
+    }
+
+    [Fact]
+    public void CheckLaunchFailure_RecordsTheToolIdentifiedByThatCheck()
+    {
+        var check = new AcceptanceCheckResult("declared-build: cargo", false, 9009, WindowsCargo)
+            { LaneToolResolution = new("powershell.exe") };
+
+        var result = AcceptanceFailureCauseAdjudicator.Attach(check);
+
+        Assert.Equal(AcceptanceFailureClassifications.MissingTool, result.FailureClassification);
+        Assert.Equal("cargo", result.LaneToolResolution?.MissingTool);
+        Assert.Contains("tool=cargo", result.FailureCauseEvidence?.Evidence);
     }
 
     [Theory]

@@ -39,13 +39,7 @@ public sealed class MultiRepositoryHomeLandingPreflightTests
         var home = fixture.Repositories.Home;
         var crosswalk = fixture.Repositories.Crosswalk;
         var order = new List<string>();
-        using var git = LandingExecutor.UseGitRunner((root, args) =>
-        {
-            var result = GitCli.Run(root, args);
-            if (result.Succeeded && args.Length >= 2 && args[0] == "update-ref" && args[1] == "refs/heads/main")
-                order.Add(root == home.CheckoutPath ? "default" : "crosswalk");
-            return result;
-        });
+        using var git = fixture.ObserveLandingOrder(order);
         var landing = Landing(fixture);
         var preflights = 0;
 

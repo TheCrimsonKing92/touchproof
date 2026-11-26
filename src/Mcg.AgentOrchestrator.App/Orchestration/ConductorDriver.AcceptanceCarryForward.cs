@@ -9,6 +9,13 @@ internal sealed partial class ConductorDriver
     private const string AcceptanceMainAdvanceOperation = "conductor:acceptance-main-advance";
     internal const string AcceptanceMainAdvanceCarryOperation = "conductor:acceptance-main-advance-carry";
 
+    private ConductorAdvanceResult? PrepareSoloRepairAttribution(Goal goal, string prefix, ConductorAutonomyPolicy policy)
+    {
+        using var mutation = _tryAcquireEvidenceMutationLease(goal, "conductor:solo-repair-attribution");
+        return mutation is null ? ReplacementEvidenceMutationHeld(goal, prefix, policy) :
+            RebaseBeforeAcceptance(goal, prefix, policy, applySideEffects: true, out _);
+    }
+
     private ConductorAdvanceResult? RebaseBeforeAcceptance(
         Goal goal,
         string goalPrefix,
@@ -118,6 +125,8 @@ internal sealed partial class ConductorDriver
             disposition = ClassifyMainAdvance(candidate, acceptance, out var currentBranchSha, out currentMainSha);
             if (disposition is AcceptanceMainAdvanceDisposition.Disjoint)
             {
+                if (_soloBaselineRepair?.HasObligations(candidate.Goal) == true)
+                    return new AcceptanceMainAdvanceDisposition.Unknown("solo-repair-requires-exact-acceptance");
                 GoalOperationJournal.AcceptancePassed(
                     _executionDirectory!,
                     candidate.Goal,

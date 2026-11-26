@@ -1427,7 +1427,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         taskId),
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
                     recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
-                    cleanupHooks: context.CleanupHooks)
+                    cleanupHooks: context.CleanupHooks,
+                    repairIntake: new CliSoloBaselineRepairIntake(context.Workspace))
                 {
                     MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains
                 };
@@ -1790,7 +1791,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         taskId),
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
                      recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
-                     cleanupHooks: context.CleanupHooks)
+                     cleanupHooks: context.CleanupHooks,
+                     repairIntake: new CliSoloBaselineRepairIntake(context.Workspace))
             {
                 MergeTrainsFeatureEnabled = conductPolicy.Features.MergeTrains
             };

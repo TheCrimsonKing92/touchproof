@@ -4,6 +4,37 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceMtpFailureOutput
 {
+    internal static AcceptanceCheckResult AttachResultEvidence(
+        CommandResult result, TrxCompletionEvidence trxEvidence, AcceptanceCheckResult check)
+    {
+        if (!check.Passed && trxEvidence.FailedPredicate == AcceptanceShardCompletionPredicates.MissingTrx)
+        {
+            // The telemetry path is planned. A failed run with no TRX has no file to retain.
+            check = check with { TestResultPaths = [] };
+        }
+
+        if (result.ExitCode != 0 && !IsInterrupted(result) &&
+            trxEvidence.FailedPredicate == AcceptanceShardCompletionPredicates.MissingTrx)
+        {
+            // Prefer the launch diagnostic when it explains the missing receipt.
+            var launchFailure = AcceptanceMissingToolClassifier.Attach(check with
+            {
+                OutputTail = TailOutput(result.Output),
+                FailureClassification = null
+            });
+            if (launchFailure.FailureClassification == AcceptanceFailureClassifications.MissingTool)
+            {
+                return launchFailure with
+                {
+                    ResultSummary = AcceptanceCommandResultSummary.GenericCommand(result,
+                        AcceptanceCommandResultSummary.ExtractResultSummary(result.Output))
+                };
+            }
+        }
+
+        return GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(check);
+    }
+
     internal static string BuildMtpFailureOutput(
         string checkName,
         CommandResult result,

@@ -81,12 +81,15 @@ internal sealed partial class ConductorDriver
         return _parallelAcceptanceAttemptCoordinator.ReplayPassedReconciledReceipt(candidate,
             decision =>
             {
+                var original = decision.Run!.Candidate;
+                if ((original.BranchHeadSha != candidate.BranchHeadSha || original.MainHeadSha != candidate.MainHeadSha) &&
+                    _soloBaselineRepair?.HasObligations(goal) == true)
+                    return null;
                 if (PassedAcceptanceReceiptReplay.LandingHold(goal, policy,
                     () => HasActiveOwnerReviewHold(goal, out var sha, out var receipt)
                         ? OwnerReviewHeld(goal, candidate.GoalPrefix, policy, sha, receipt!) : null,
                     () => HasActiveApparatusHold(goal, out _), FormatAcceptanceCandidate) is { } hold)
                 {
-                    var original = decision.Run!.Candidate;
                     var current = _resolveAcceptanceHeads(goal);
                     if ((original.BranchHeadSha != current.BranchHeadSha || original.MainHeadSha != current.MainHeadSha) &&
                         CarryForwardGreenVerdict(original, decision.Run.Acceptance!) is not
@@ -178,6 +181,7 @@ internal sealed partial class ConductorDriver
             var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
             if (early is not null) return early;
             if (TryHoldRepeatSoloAcceptance(goal, policy, bindingOnly: true) is { } bindingHold) return bindingHold;
+            if (_soloBaselineRepair?.HoldIfUnprepared(goal, goalPrefix, policy) is { } repairHold) return repairHold;
 
             if (EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Verified, forGate: true) is { } environmentHold) return environmentHold;
             var gateStart = VerifiedGateStartExecutor.Execute(
@@ -550,7 +554,9 @@ internal sealed partial class ConductorDriver
             {
                 var early = RebaseBeforeAcceptance(candidate.Goal, candidate.GoalPrefix, policy,
                     applySideEffects: false, out var earlyOutcome);
-                return early is null ? null : ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+                if (early is not null) return ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+                return _soloBaselineRepair?.HoldIfUnprepared(candidate.Goal, candidate.GoalPrefix, policy) is { } hold
+                    ? ConductorParallelAcceptanceRunResult.Early(candidate, hold, null) : null;
             },
             () => RefreshParallelAcceptanceCandidate(candidate),
             effective => _runAcceptanceVerification(effective.Goal,

@@ -277,6 +277,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         internal string? StandardOutput { get; init; }
         internal string? ResolvedCommandPath { get; init; }
+        internal AcceptanceLaneToolResolution? LaneToolResolution { get; init; }
     }
 
     internal static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
@@ -1010,7 +1011,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             var selectionPlan = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
-                ProjectLabel(manifestCheck.Project), selectors, engineSettings, worktreePath);
+                manifestCheck.Project, selectors, engineSettings, worktreePath);
             if (!selectionPlan.Succeeded)
             {
                 results[index] = AcceptanceFailureAttributionPlanner.Unattributed(check, identities, selectionPlan.FailureEvidence!);
@@ -1078,15 +1079,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         foreach (var item in prepared)
         {
-            var attributions = AcceptanceFailureAttributionPlanner.IncludeOmittedAsUnattributed(
-                AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
-                    item.IdentitySelection.Selected,
-                    item.Selectors,
-                    item.SelectionPlan.CheckNamesBySelector,
-                    baseline),
-                item.IdentitySelection.Omitted,
-                MaxFailureAttributionFocusedEvidenceIdentities);
-            results[item.Index] = item.Check with { FailingTestAttributions = attributions };
+            results[item.Index] = AcceptanceFailureAttributionPlanner.AttachBaselineFailures(
+                item.Check, item.IdentitySelection, item.Selectors, item.SelectionPlan.CheckNamesBySelector,
+                baseline, MaxFailureAttributionFocusedEvidenceIdentities);
         }
 
         await ApplyCandidateRerunToChecksAsync(prepared, results, baselineSha, worktreePath,
@@ -1198,8 +1193,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             candidateWorktreePath, baselineSha, goalId, focusedChecks, coverage, stableSlotIndex,
             stableSlotLease, cancellationToken, classifyMissingSelectionsAsAbsent, executionOwner,
             partitionCandidateOnlySelections,
-            classifyMissingSelectionsAsAbsent && _executionContext is not null
-                ? Path.Combine(_executionContext.ResultsPrefix, "solo-baseline") : null);
+            SoloAcceptanceFailureEvidenceWriter.BaselineResultsRoot(_executionContext, executionOwner, classifyMissingSelectionsAsAbsent));
     }
 
     internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(
@@ -2580,7 +2574,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 $"{(unreadableReceipts.Count > 0 ? "focused-selection-receipt-unreadable" : "focused-selection-apparatus-failure")} executed={executedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}",
                 BuildGenericCommandResultSummary(result))
             : BuildGenericCommandResultSummary(result);
-        return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
+        return (AcceptanceMtpFailureOutput.AttachResultEvidence(result, trxEvidence, new AcceptanceCheckResult(
             IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
             passed,
             result.ExitCode,
@@ -2608,7 +2602,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ChildProcessId: result.ChildProcessId,
             ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling,
             AllSkippedSelections: selectionCoverage.AllSkippedSelections is { Count: > 0 }
-                ? selectionCoverage.AllSkippedSelections : null)), false);
+                ? selectionCoverage.AllSkippedSelections : null) { LaneToolResolution = result.LaneToolResolution }), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -2808,7 +2802,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
-            return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
+            return (VstestAcceptanceResultEvidence.Attach(new AcceptanceCheckResult(
                 IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
@@ -2836,7 +2830,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
-                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)), lockRemediationApplied);
+                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)
+                { LaneToolResolution = result.LaneToolResolution }, check.IsFocusedEvidenceSelection), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -2896,7 +2891,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
-            return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
+            return (VstestAcceptanceResultEvidence.Attach(new AcceptanceCheckResult(
                 IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
@@ -2924,7 +2919,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
-                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)), true);
+                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)
+                { LaneToolResolution = result.LaneToolResolution }, check.IsFocusedEvidenceSelection), true);
         }
         finally
         {
@@ -3527,7 +3523,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         JunitCommandEnvironmentInputs? commandEnvironment = null,
         bool suppressDiagnosticCaptures = false)
     {
-        return _requiresTestTelemetryReceipt
+        var result = _requiresTestTelemetryReceipt
             ? await AcceptanceProcessRunner.RunProcessAsync(
                 arguments,
                 workingDirectory,
@@ -3548,6 +3544,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 commandEnvironment: commandEnvironment,
                 suppressDiagnosticCaptures: suppressDiagnosticCaptures).ConfigureAwait(false)
             : await _runner(arguments, workingDirectory, timeout, cancellationToken).ConfigureAwait(false);
+        return !_requiresTestTelemetryReceipt && heartbeatContext.RequiresAcceptanceLease && result.LaneToolResolution is null
+            ? result with { LaneToolResolution = new() }
+            : result;
     }
     private GateHeartbeatContext CreateGateHeartbeatContext(
         AcceptanceManifestCheck check,
