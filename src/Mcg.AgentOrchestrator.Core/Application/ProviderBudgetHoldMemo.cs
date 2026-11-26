@@ -10,6 +10,7 @@ public sealed class ProviderBudgetHoldMemo
     private readonly Evaluator _evaluate;
     private readonly Dictionary<SubscriptionLimitEvidence.ProviderBindingKey,
         (bool Found, ProviderBudgetExhaustionHold Hold)> _results = new();
+    private readonly Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetExhaustionHold?> _modelResults = new();
 
     public ProviderBudgetHoldMemo(IReadOnlyCollection<Goal> goals)
         : this(goals, ProviderLimitSignals.TryGetProviderBudgetExhaustionHold)
@@ -25,6 +26,21 @@ public sealed class ProviderBudgetHoldMemo
     }
 
     public int EvaluationCount { get; private set; }
+
+    internal bool TryGetExact(ProviderHoldBinding binding, out ProviderBudgetExhaustionHold hold)
+    {
+        if (binding.Model is null) return TryGet(binding.Provider, binding.Credential, out hold);
+        var key = binding.ScopedKey;
+        if (!_modelResults.TryGetValue(key, out var found))
+        {
+            EvaluationCount++;
+            ProviderLimitSignals.TryGetExactHold(_goals, binding, out hold);
+            found = hold;
+            _modelResults.Add(key, found);
+        }
+        hold = found!;
+        return found is not null;
+    }
 
     public bool TryGet(string providerName, string? credentialBinding, out ProviderBudgetExhaustionHold hold)
     {

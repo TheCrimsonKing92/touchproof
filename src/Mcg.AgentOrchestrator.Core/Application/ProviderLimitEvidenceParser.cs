@@ -149,21 +149,25 @@ public static partial class ProviderLimitEvidenceParser
     private static bool TryGetStructuredBudgetExhaustionEvidence(string text)
     {
         var withoutAnsi = AnsiControlSequence().Replace(text, string.Empty);
-        for (var jsonStart = 0; jsonStart < withoutAnsi.Length; jsonStart++)
-        {
-            if (withoutAnsi[jsonStart] is not ('{' or '['))
-            {
-                continue;
-            }
+        // The matching word must come from a property name or raw value. An escaped
+        // property name can supply it even when the original text does not contain it.
+        if (!withoutAnsi.Contains("exhausted", StringComparison.OrdinalIgnoreCase) &&
+            !withoutAnsi.Contains("\\u", StringComparison.Ordinal))
+            return false;
+        var first = withoutAnsi.AsSpan().IndexOfAny('{', '[');
+        if (first < 0) return false;
 
+        var json = Encoding.UTF8.GetBytes(withoutAnsi[first..]);
+        var options = new JsonReaderOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        };
+        for (var remaining = json.AsSpan(); !remaining.IsEmpty;)
+        {
             try
             {
-                var json = Encoding.UTF8.GetBytes(withoutAnsi[jsonStart..]);
-                var reader = new Utf8JsonReader(json, new JsonReaderOptions
-                {
-                    AllowTrailingCommas = true,
-                    CommentHandling = JsonCommentHandling.Skip
-                });
+                var reader = new Utf8JsonReader(remaining, options);
                 using var document = JsonDocument.ParseValue(ref reader);
                 if (ContainsBudgetExhaustionObject(document.RootElement))
                 {
@@ -176,6 +180,9 @@ public static partial class ProviderLimitEvidenceParser
                 // Continue scanning for the next complete JSON value instead of assuming the
                 // first brace owns the remainder of the stream.
             }
+            var next = remaining[1..].IndexOfAny((byte)'{', (byte)'[');
+            if (next < 0) break;
+            remaining = remaining[(next + 1)..];
         }
 
         return false;

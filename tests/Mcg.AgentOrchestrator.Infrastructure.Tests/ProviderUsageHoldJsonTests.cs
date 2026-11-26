@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 // Parallel-safe: private databases, AsyncLocal output capture and injected time.
 public sealed class ProviderUsageHoldJsonTests
@@ -14,7 +15,7 @@ public sealed class ProviderUsageHoldJsonTests
     private static readonly string[] LegacyFields = ["bindingKey", "provider", "sourceGoalId", "sourceTaskId", "placedAt", "evidence",
         "scheduleAvailable", "attempt", "nextProbeAt", "resetSource", "resetAt", "probeInFlight", "admittedGoalId", "admittedTaskId", "lastProbe", "resetCommand"];
     private static readonly string[] DiagnosticFields = ["lastProbeAt", "lastActionableFailure", "lastActionableFailureAt", "diagnosis", "resetIntentId"];
-    private static readonly string[] Fields = [.. LegacyFields, .. DiagnosticFields];
+    private static readonly string[] Fields = [.. LegacyFields, .. DiagnosticFields, "providerResetAt"];
 
     [Fact]
     public async Task HeldBinding_StatusAndAttentionEmitIdenticalOrderedRows()
@@ -36,6 +37,7 @@ public sealed class ProviderUsageHoldJsonTests
         Assert.Equal(ProviderBudgetHoldSchedules.FormatInstant(projected.Schedule!.NextProbeAt), row.GetProperty("nextProbeAt").GetString());
         Assert.Equal(projected.Schedule.Attempt, row.GetProperty("attempt").GetInt32());
         Assert.Equal(projected.Schedule.ResetSource, row.GetProperty("resetSource").GetString());
+        Assert.Equal("unknown", row.GetProperty("providerResetAt").GetString());
         Assert.Equal(JsonValueKind.Null, row.GetProperty("lastProbe").ValueKind);
         Assert.Equal($"provider-reset {Key} <ISO-8601 instant> --text-file <path>", row.GetProperty("resetCommand").GetString());
         Assert.Equal(projected.Hold.PlacedAt, row.GetProperty("lastProbeAt").GetDateTimeOffset());
@@ -79,6 +81,70 @@ public sealed class ProviderUsageHoldJsonTests
         Assert.Equal(source.Id, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, Start.AddMinutes(2))).Hold.SourceGoalId);
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task Status_PreservesHistoricalHoldWithClassifiedOrUnreadableArchive(bool corrupt, bool classified)
+    {
+        using var fixture = new Fixture();
+        var unrelated = fixture.NewGoal();
+        fixture.Kernel.CancelGoal(unrelated.Id, "Archive fixture unrelated to provider holds.");
+        var cancelled = fixture.Kernel.ExportGoalSnapshot(unrelated.Id);
+        fixture.Kernel.ReplaceGoalWithSnapshot(cancelled with
+        {
+            Tasks = [cancelled.Tasks.Single() with { Status = WorkTaskStatus.Cancelled }]
+        });
+        var source = fixture.Exhaust();
+        fixture.Kernel.ReplaceGoalWithSnapshot(fixture.Kernel.ExportGoalSnapshot(source.Id) with { Status = GoalStatus.Completed });
+        await fixture.Save();
+
+        var path = fixture.Workspace.SqliteStatePath;
+        var token = TestContext.Current.CancellationToken;
+        var writer = new SqliteOrchestratorStateRepository(path);
+        Assert.Equal(1, await writer.ArchiveTerminalGoalSnapshotsAsync(Start.AddSeconds(30), cancellationToken: token,
+            compressSnapshots: true));
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+        {
+            await connection.OpenAsync(token);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT typeof(snapshot_json) FROM goal_snapshot_archive WHERE goal_id = $id";
+            command.Parameters.AddWithValue("$id", unrelated.Id.Value);
+            Assert.Equal("blob", await command.ExecuteScalarAsync(token));
+            if (corrupt)
+            {
+                command.CommandText = """
+                    UPDATE goal_snapshot_archive SET snapshot_json = X'00',
+                        provider_hold_empty_version = CASE WHEN $classified THEN provider_hold_empty_version END
+                    WHERE goal_id = $id
+                    """;
+                command.Parameters.AddWithValue("$classified", classified);
+                Assert.Equal(1, await command.ExecuteNonQueryAsync(token));
+            }
+        }
+
+        var reader = SqliteOrchestratorStateRepository.OpenReadOnly(path);
+        if (!classified)
+            await Assert.ThrowsAsync<InvalidDataException>(() => reader.ReadProviderHoldSeedHistoryAsync(token));
+        else
+            Assert.Contains((await reader.ReadProviderHoldSeedHistoryAsync(token)).Rows, row =>
+                row.GoalId == source.Id.Value && row.OutcomeRule == TaskOutcomeRules.ProviderBudgetExhausted.Token);
+        Assert.Contains(await reader.ListModelFitHistoryAsync(token), row =>
+            row.GoalId == source.Id.Value && row.OutcomeRule == TaskOutcomeRules.ProviderBudgetExhausted.Token);
+        var observations = new List<GoalSnapshotReadObservation>();
+        using var status = JsonDocument.Parse(fixture.Status(json: true, observer: observations.Add));
+        var row = Assert.Single(status.RootElement.GetProperty("payload").GetProperty("providerHolds").EnumerateArray());
+        Assert.Equal(source.Id.Value, row.GetProperty("sourceGoalId").GetString());
+        if (classified)
+        {
+            Assert.Contains(observations, read => read.Operation == "provider-evidence-decoded" && read.GoalId == source.Id.Value);
+            Assert.DoesNotContain(observations, read => read.GoalId == unrelated.Id.Value);
+        }
+        else
+            Assert.Contains(observations, read => read.Operation == "provider-seed-discovery" && read.GoalId == unrelated.Id.Value);
+        Assert.Equal(source.Id, Assert.Single(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, Start.AddMinutes(2))).Hold.SourceGoalId);
+    }
+
     [Fact]
     public void NoHistoryCandidates_NeverLoadsGoalsAndMatchesPlainView()
     {
@@ -103,6 +169,7 @@ public sealed class ProviderUsageHoldJsonTests
         spy.FailHistory = true;
         Assert.Single(ProviderUsageHoldReader.Read(repository, fixture.Kernel.Goals, Start.AddMinutes(2)));
         Assert.Equal(1, spy.HistoryCalls);
+        Assert.Equal(1, spy.FallbackHistoryCalls);
         Assert.Equal(0, spy.LoadCalls);
     }
 
@@ -126,16 +193,20 @@ public sealed class ProviderUsageHoldJsonTests
     public class QueryProbe : DispatchProxy
     {
         internal int HistoryCalls;
+        internal int FallbackHistoryCalls;
         internal int LoadCalls;
         internal bool FailHistory;
         protected override object? Invoke(MethodInfo? method, object?[]? args)
         {
             switch (method!.Name)
             {
-                case nameof(IOrchestratorStateRepository.ListModelFitHistoryAsync):
+                case nameof(IOrchestratorStateRepository.ReadProviderHoldSeedHistoryAsync):
                     HistoryCalls++;
-                    return FailHistory ? Task.FromException<IReadOnlyList<ModelFitHistoryRow>>(new IOException("fixture history failure"))
-                        : Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
+                    return FailHistory ? Task.FromException<ProviderHoldSeedHistory>(new IOException("fixture history failure"))
+                        : Task.FromResult(new ProviderHoldSeedHistory([], [], new HashSet<GoalId>(), []));
+                case nameof(IOrchestratorStateRepository.ListModelFitHistoryAsync):
+                    FallbackHistoryCalls++;
+                    return Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
                 case nameof(IOrchestratorStateQueries.LoadGoalsAsync):
                     LoadCalls++;
                     return Task.FromResult(new AgentOrchestratorKernel());
@@ -184,13 +255,13 @@ public sealed class ProviderUsageHoldJsonTests
         internal Task Save() => InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath)
             .SaveAsync(Kernel, Xunit.TestContext.Current.CancellationToken);
         internal OperatorInboxReport Inbox(Goal goal) => OperatorInbox.Build(Kernel, [_agent], WorkerProfileCatalog.Default(), Workspace, goal.Id.Value[..8]);
-        internal string Status(bool json = false)
+        internal string Status(bool json = false, Action<GoalSnapshotReadObservation>? observer = null)
         {
             using var output = new StringWriter();
             using var error = new StringWriter();
             Assert.Equal(0, CliConductorCommand.Run(json ? ["conductor", "status", "--json"] : ["conductor", "status"], Workspace,
                 lockProbe: new ConductorVerbStartTests.FixedProbe(null), bootTime: () => Start.AddDays(-1),
-                mainCommit: () => "fixture", output: output, error: error, time: new FixedTime()));
+                mainCommit: () => "fixture", output: output, error: error, time: new FixedTime(), readObserver: observer));
             Assert.Equal("", error.ToString());
             return output.ToString();
         }

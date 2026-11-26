@@ -5,9 +5,8 @@ public static class DirtyDispatchEvidence
     public static bool TryBuildDirtyDispatchRecovery(TaskSpec task, out DirtyDispatchRecovery recovery)
     {
         recovery = DirtyDispatchRecovery.None;
-        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester) ||
-            task.LastVerification is not { Succeeded: false } verification ||
-            !IsDirtyDispatchGuardFailure(verification))
+        if (task.LastVerification is not { } verification ||
+            !IsRecoverableDirtyDispatch(task.RequiredRole, verification))
         {
             return false;
         }
@@ -22,6 +21,10 @@ public static class DirtyDispatchEvidence
             verification.WorkingDirectory);
         return true;
     }
+
+    internal static bool IsRecoverableDirtyDispatch(AgentRole role, TaskVerificationRecord verification) =>
+        role is AgentRole.Developer or AgentRole.Tester &&
+        !verification.Succeeded && IsDirtyDispatchGuardFailure(verification);
 
     internal static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)
     {

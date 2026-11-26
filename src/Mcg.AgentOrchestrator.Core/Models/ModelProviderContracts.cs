@@ -372,7 +372,9 @@ public sealed record TaskDispatchRecord(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     string? WorkerToolsDirectory = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    ReviewerDispatchScope? ReviewerScope = null)
+    ReviewerDispatchScope? ReviewerScope = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? ClaudeApiHoldIdentity = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

@@ -27,7 +27,7 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         Assert.Empty(fixture.Decoded);
         Assert.Empty(fixture.Loaded);
         Assert.Empty(warm.ProviderHoldHistory.Retained);
-        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=65 retained=0 goals= elapsedMs=\d+ loaded=0 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+$",
+        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=65 retained=0 goals= elapsedMs=\d+ loaded=0 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+ historyCpuMs=\d+$",
             Assert.Single(fixture.Lines));
     }
 
@@ -65,6 +65,96 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
             Assert.Equal(ProviderBudgetHoldSchedules.Evaluate(oracle.Scope([]), expected, expected.PlacedAt.AddHours(1)),
                 ProviderBudgetHoldSchedules.Evaluate(actual.ProviderHoldScope, hold, expected.PlacedAt.AddHours(1)));
             Assert.Equal(2L, fixture.Scalar("SELECT count(*) FROM provider_hold_seed_evidence"));
+        }
+    }
+
+    [Fact]
+    public async Task Seed_RecoveryWitnessSkipsFullLoadAndRestoresRunningProcessAcrossEvidenceVersions()
+    {
+        using var fixture = new Fixture();
+        var first = Snapshot(0, false);
+        var witness = Snapshot(1, true);
+        var latest = Snapshot(2, false);
+        var task = witness.Tasks[0];
+        witness = witness with
+        {
+            Tasks = [task with
+            {
+                LastProcess = new(1234, "fixture", ".", "stdout", "stderr", "exit",
+                    task.LastDispatch!.DispatchedAt, CompletedAt: null, ExitCode: null)
+            }]
+        };
+        await fixture.Insert(first, witness, latest);
+        fixture.UseRows(first, witness, latest);
+        var witnessRow = $"SELECT snapshot_json FROM goals WHERE id = '{witness.Id}'";
+        var canonicalBefore = fixture.Scalar(witnessRow);
+
+        for (var round = 0; round < 3; round++)
+        {
+            if (round == 2)
+            {
+                var rows = await fixture.ReadProviderHoldSeedEvidenceAsync([new(witness.Id)]);
+                var evidence = Assert.Single(rows!);
+                fixture.ReplaceEvidence(witness.Id, 2, JsonSerializer.Serialize(evidence with
+                {
+                    Tasks = [Assert.Single(evidence.Tasks) with { LastProcess = null }]
+                }, Options));
+            }
+
+            var kernel = fixture.Seed();
+            Assert.Contains(latest.Id, fixture.Loaded);
+            Assert.DoesNotContain(witness.Id, fixture.Loaded);
+            Assert.Equal(round != 1, fixture.Decoded.Contains(witness.Id));
+            var retained = Assert.Single(kernel.ProviderHoldHistory.Retained, goal => goal.Id.Value == witness.Id);
+            Assert.True(Assert.Single(retained.Tasks).LastProcess is { ProcessId: 1234, IsRunning: true });
+            Assert.Equal(latest.Id, Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, At.AddHours(1)))
+                .Hold.SourceGoalId.Value);
+            Assert.Equal("blob", fixture.Scalar($"SELECT typeof(evidence_json) FROM provider_hold_seed_evidence WHERE goal_id = '{witness.Id}'"));
+            Assert.Equal(canonicalBefore, fixture.Scalar(witnessRow));
+        }
+    }
+
+    [Fact]
+    public async Task Read_BackfillAdvancesWithinByteLimitAndReturnsEveryProjection()
+    {
+        using var fixture = new Fixture();
+        const int backfillByteLimit = 4 * 1024 * 1024;
+        var snapshots = Enumerable.Range(0, 3).Select(index =>
+        {
+            var goal = Snapshot(index, false);
+            var task = Assert.Single(goal.Tasks);
+            // Spread the byte pressure across valid verification previews that survive replay.
+            var tasks = Enumerable.Range(0, 72).Select(taskIndex =>
+            {
+                var output = new string((char)('a' + taskIndex % 26), 16 * 1024);
+                var verification = task.LastVerification! with { StandardOutput = output };
+                return task with
+                {
+                    Id = $"{goal.Id}-{taskIndex}",
+                    LastVerification = verification,
+                    VerificationHistory = [verification]
+                };
+            }).ToArray();
+            return goal with { Tasks = tasks };
+        }).ToArray();
+        await fixture.Insert(snapshots);
+        var ids = snapshots.Select(snapshot => new GoalId(snapshot.Id)).ToArray();
+        var expected = snapshots.Select(snapshot => JsonSerializer.SerializeToUtf8Bytes(
+            new ProviderUsageGoalEvidence(snapshot.Id, snapshot.Status, snapshot.Tasks.Select(task =>
+                new ProviderUsageTaskEvidence(task.Id, task.RequiredRole, task.Status, task.AssignedAgentId,
+                    task.LastDispatch, task.DispatchHistory!, task.LastVerification, task.VerificationHistory,
+                    task.LatestProviderBudgetRecoveryAt)).ToArray(), []), Options)).ToArray();
+        Assert.All(expected, json => Assert.InRange(json.Length, backfillByteLimit / 2 + 1, backfillByteLimit));
+
+        for (var backfilled = 1; backfilled <= ids.Length; backfilled++)
+        {
+            fixture.Decoded.Clear();
+            var evidence = await fixture.ReadProviderHoldSeedEvidenceAsync(ids);
+            Assert.Equal(ids.Select(id => id.Value), evidence!.Select(row => row.GoalId));
+            Assert.Equal(ids.Skip(backfilled - 1).Select(id => id.Value), fixture.Decoded);
+            foreach (var (row, json) in evidence!.Zip(expected))
+                Assert.Equal(json, JsonSerializer.SerializeToUtf8Bytes(row, Options));
+            Assert.Equal((long)backfilled, fixture.Scalar("SELECT count(*) FROM provider_hold_seed_evidence"));
         }
     }
 
@@ -145,21 +235,72 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
     }
 
     [Theory]
-    [InlineData("UPDATE provider_hold_seed_evidence SET format_version = 999")]
-    [InlineData("UPDATE provider_hold_seed_evidence SET evidence_json = 'invalid'")]
-    [InlineData("UPDATE provider_hold_seed_evidence SET evidence_json = json_set(evidence_json, '$.GoalId', 'wrong')")]
-    public async Task Seed_UnusableStoredRow_ProjectsAndReplaces(string mutation)
+    [InlineData("version")]
+    [InlineData("frame")]
+    [InlineData("goal-id")]
+    public async Task Seed_UnusableStoredRow_ProjectsAndReplaces(string defect)
     {
         using var fixture = new Fixture();
         var snapshot = Snapshot(0, false);
         await fixture.Insert(snapshot);
         fixture.UseRows(snapshot);
         fixture.Seed();
-        fixture.Execute(mutation);
+        var (version, payload) = defect switch
+        {
+            "version" => (999, (byte[])fixture.Scalar("SELECT evidence_json FROM provider_hold_seed_evidence")),
+            "frame" => (ProviderHoldSeedEvidenceStore.FormatVersion, "MGB1"u8.ToArray()),
+            "goal-id" => (ProviderHoldSeedEvidenceStore.FormatVersion,
+                GoalSnapshotArchiveCodec.Encode("""{"GoalId":"wrong","Tasks":[],"Timeline":[]}""")),
+            _ => throw new ArgumentOutOfRangeException(nameof(defect))
+        };
+        fixture.ReplaceEvidence(snapshot.Id, version, payload);
         Assert.Single(fixture.Seed().ProviderHoldHistory.Retained);
         Assert.Equal(new[] { snapshot.Id }, fixture.Decoded);
         Assert.Single(fixture.Seed().ProviderHoldHistory.Retained);
         Assert.Empty(fixture.Decoded);
+    }
+
+    [Fact]
+    public async Task Seed_LegacyProjection_ReplaysApiAndModelIdentityFromCanonicalHistory()
+    {
+        using var fixture = new Fixture();
+        var snapshot = Snapshot(0, false);
+        var task = snapshot.Tasks.Single();
+        var dispatch = task.LastDispatch! with
+        {
+            ModelName = "claude-sonnet-4-6",
+            ClaudeCredentialSourceDirectory = "C:/fixture",
+            ClaudeApiHoldIdentity = "claude-api:c:/fixture"
+        };
+        var verification = task.LastVerification! with
+        {
+            StandardError = "",
+            StandardOutput = "You've hit your sonnet limit",
+            ProviderFailureKind = ProviderFailureKind.Unknown
+        };
+        snapshot = snapshot with
+        {
+            Tasks = [task with
+            {
+                LastDispatch = dispatch, DispatchHistory = [dispatch],
+                LastVerification = verification, VerificationHistory = [verification]
+            }]
+        };
+        await fixture.Insert(snapshot);
+        fixture.UseRows(snapshot);
+        fixture.Seed();
+        var evidence = Assert.Single((await fixture.ReadProviderHoldSeedEvidenceAsync([new(snapshot.Id)]))!);
+        var oldDispatch = dispatch with { ModelName = null, ClaudeApiHoldIdentity = null };
+        fixture.ReplaceEvidence(snapshot.Id, 1, JsonSerializer.Serialize(evidence with
+        {
+            Tasks = [Assert.Single(evidence.Tasks) with { LastDispatch = oldDispatch, DispatchHistory = [oldDispatch] }]
+        }, Options));
+
+        var kernel = fixture.Seed();
+        Assert.Equal(new[] { snapshot.Id }, fixture.Decoded);
+        var hold = Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, At)).Hold;
+        Assert.Equal("xai::claude-api:c:/fixture|model=claude-sonnet-4-6", hold.BindingKey);
+        Assert.Equal("claude-sonnet-4-6", hold.ModelName);
     }
 
     [Fact]
@@ -207,6 +348,141 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         Assert.Empty(fixture.Decoded);
         Assert.Equal(JsonSerializer.Serialize(cold, Options), JsonSerializer.Serialize(warm, Options));
         Assert.Single(Assert.Single(warm!).Timeline);
+    }
+
+    [Fact]
+    public async Task Seed_ColdDiscoveryAndProjection_SkipUnrelatedPayloadsAndReplayMixedHistory()
+    {
+        using var fixture = new Fixture();
+        var source = Snapshot(0, false);
+        var irrelevant = new string('x', 100_000);
+        var witness = Snapshot(1, true) with { Objective = irrelevant };
+        var taskId = witness.Tasks[0].Id;
+        var reset = ProviderBudgetHoldSchedules.FormatReset(new("xai::<provider-default>", At, "intent"));
+        source = source with { Timeline = [new(source.Id, null, ProgressKind.GoalPolicyDecision, irrelevant, At),
+            new(source.Id, null, ProgressKind.TaskNote, reset, At, OperatorIntentCreatedAt: At)] };
+        await fixture.Insert(source, witness);
+        fixture.Execute($$"""
+            INSERT INTO goal_timeline (goal_id, sequence, entry_json)
+            SELECT goals.id, e.key, e.value FROM goals JOIN json_each(snapshot_json, '$.Timeline') e WHERE goals.id = '{{source.Id}}';
+            UPDATE goals SET snapshot_json = json_remove(json_set(snapshot_json, '$.TimelineInTable', 2), '$.Timeline')
+            WHERE id = '{{source.Id}}';
+            INSERT INTO goal_task_history (goal_id, task_id, kind, sequence, entry_json)
+            SELECT id, '{{taskId}}', 'verification', 0, json_extract(snapshot_json, '$.Tasks[0].LastVerification')
+            FROM goals WHERE id = '{{witness.Id}}';
+            UPDATE goals SET snapshot_json = json_remove(json_set(snapshot_json, '$.Tasks[0].HistoryInTable',
+                json('{"Verification":1,"Dispatch":null,"LatestVerificationInTable":true}')),
+                '$.Tasks[0].LastVerification', '$.Tasks[0].VerificationHistory')
+            WHERE id = '{{witness.Id}}';
+            """);
+        var observations = new List<GoalSnapshotReadObservation>();
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Path, observations.Add);
+        var token = TestContext.Current.CancellationToken;
+        var history = await repository.ReadProviderHoldSeedHistoryAsync(token);
+        Assert.Equal(source.Id, Assert.Single(history.Attempts).GoalId);
+        Assert.Equal(witness.Id, Assert.Single(history.Recoveries).GoalId);
+        Assert.Equal(2, observations.Count(row => row.Operation == "provider-seed-discovery"));
+        Assert.All(observations.Where(row => row.Operation == "provider-seed-discovery"),
+            row => Assert.InRange(row.MaterializedCharacters, 1, irrelevant.Length - 1));
+        var payloads = observations.Where(row => row.Operation == "provider-seed-timeline-entry").ToArray();
+        Assert.Equal(2, payloads.Length);
+        Assert.All(payloads, payload =>
+        {
+            Assert.Equal(source.Id, payload.GoalId);
+            Assert.InRange(payload.MaterializedCharacters, 1, irrelevant.Length - 1);
+        });
+        var projected = Assert.Single(history.Evidence, row => row.GoalId == source.Id);
+        Assert.Equal(reset, Assert.Single(projected.Timeline).Message);
+        var canonical = await repository.LoadGoalsAsync([new(source.Id), new(witness.Id)], token);
+        var kernel = new AgentOrchestratorKernel();
+        Assert.NotNull(ProviderHoldHistoryStartupSeed.Apply(kernel, repository, _ => { }));
+        Assert.Equal(ProviderUsageHoldView.Read(canonical.Goals, At.AddHours(1)).ToArray(),
+            ProviderUsageHoldView.Read(kernel.ProviderHoldScope, At.AddHours(1)).ToArray());
+
+        fixture.Execute($"DELETE FROM goal_timeline WHERE goal_id = '{source.Id}' AND sequence = 0");
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            repository.ReadProviderHoldSeedEvidenceAsync([new(source.Id)], token));
+        Assert.Contains("sequence gap", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("C:/primary", true, true)]
+    [InlineData("C:/alternate", true, false)]
+    [InlineData("C:/primary", false, false)]
+    public async Task Seed_CompressedArchives_ReuseEvidenceAndPreserveScopedRecovery(string credential,
+        bool sameAttempt, bool clears)
+    {
+        using var fixture = new Fixture();
+        var source = WithCredential(Snapshot(0, false), "C:/primary");
+        var sourceTask = source.Tasks[0];
+        var refusal = sourceTask.LastVerification! with
+        {
+            StandardError = "", AuthoritativeStandardError = "ERROR: weekly usage limit reached",
+            ProviderFailureKind = ProviderFailureKind.Unknown, EvidenceSource = VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt = sourceTask.LastDispatch!.DispatchedAt
+        };
+        source = source with { Tasks = [sourceTask with { LastVerification = refusal, VerificationHistory = [refusal] }] };
+        var witness = WithCredential(Snapshot(1, true), credential);
+        var witnessTask = witness.Tasks[0];
+        var attempt = witnessTask.LastDispatch!.DispatchedAt.AddSeconds(sameAttempt ? 0 : -1);
+        var receipt = new FindingEvidenceReceipt("fixture-receipt", "fixture-sha", new FindingEvidenceRequest([]),
+            true, true, "fixture");
+        var success = witnessTask.LastVerification! with
+        {
+            AuthoritativeStandardOutput = new string('x', 100_000),
+            ModelFitNote = new string('y', 100_000),
+            FindingEvidenceReceipts = [receipt],
+            EvidenceSource = VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt = attempt
+        };
+        witness = witness with { Tasks = [witnessTask with { LastVerification = success, VerificationHistory = [success] }] };
+        await fixture.Insert(source, witness);
+        var token = TestContext.Current.CancellationToken;
+        var writer = new SqliteOrchestratorStateRepository(fixture.Path);
+        await writer.EnsureTerminalOpenWorkIndexAsync(token);
+        Assert.Equal(2, await writer.ArchiveTerminalGoalSnapshotsAsync(At.AddDays(2), compressSnapshots: true));
+        Assert.Equal(2L, fixture.Scalar("SELECT count(*) FROM goal_snapshot_archive WHERE typeof(snapshot_json) = 'blob'"));
+
+        var observations = new List<GoalSnapshotReadObservation>();
+        var reader = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Path, observations.Add);
+        var history = await reader.ReadProviderHoldSeedHistoryAsync(token);
+        Assert.Equal(source.Id, Assert.Single(history.Attempts).GoalId);
+        if (sameAttempt)
+            Assert.Equal(witness.Id, Assert.Single(history.Recoveries).GoalId);
+        else
+            Assert.Empty(history.Recoveries);
+        Assert.Equal(refusal.AuthoritativeStandardError,
+            Assert.Single(history.Evidence.Single(row => row.GoalId == source.Id).Tasks).LastVerification!.AuthoritativeStandardError);
+        if (sameAttempt)
+        {
+            var projected = Assert.Single(history.Evidence.Single(row => row.GoalId == witness.Id).Tasks).LastVerification!;
+            Assert.Equal(attempt, projected.DispatchAttemptAt);
+            Assert.True(projected.CompletionVerdictVerifiedSuccess);
+            Assert.Equal(receipt.ReceiptId, Assert.Single(projected.FindingEvidenceReceipts!).ReceiptId);
+            Assert.Null(projected.AuthoritativeStandardOutput);
+            Assert.Null(projected.ModelFitNote);
+        }
+        else
+            Assert.DoesNotContain(history.Evidence, row => row.GoalId == witness.Id);
+
+        observations.Clear();
+        var kernel = new AgentOrchestratorKernel();
+        Assert.NotNull(ProviderHoldHistoryStartupSeed.Apply(kernel, reader, _ => { }));
+        Assert.Equal(new[] { source.Id, witness.Id }, observations.Where(row => row.Operation == "provider-seed-archive-projection")
+            .Select(row => row.GoalId).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(observations, row => row.Operation == "provider-seed-snapshot-decode");
+
+        var canonical = await reader.LoadGoalsAsync([new(source.Id), new(witness.Id)], token);
+        var expected = ProviderUsageHoldView.Read(canonical.Goals, At.AddHours(1));
+        Assert.Equal(clears ? 0 : 1, expected.Count);
+        Assert.Equal(expected.ToArray(), ProviderUsageHoldView.Read(kernel.ProviderHoldScope, At.AddHours(1)).ToArray());
+
+        static GoalSnapshot WithCredential(GoalSnapshot snapshot, string credential)
+        {
+            var task = snapshot.Tasks[0];
+            var dispatch = task.LastDispatch! with { ClaudeCredentialSourceDirectory = credential };
+            return snapshot with { Tasks = [task with { LastDispatch = dispatch, DispatchHistory = [dispatch] }] };
+        }
     }
 
     private static readonly DateTimeOffset At = DateTimeOffset.Parse("2026-10-17T11:07:00Z");
@@ -315,6 +591,20 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
             using var command = connection.CreateCommand();
             command.CommandText = sql;
             return command.ExecuteScalar()!;
+        }
+
+        internal void ReplaceEvidence(string goalId, int format, object payload)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE provider_hold_seed_evidence SET format_version = $format, evidence_json = $payload
+                WHERE goal_id = $id
+                """;
+            command.Parameters.AddWithValue("$format", format);
+            command.Parameters.AddWithValue("$payload", payload);
+            command.Parameters.AddWithValue("$id", goalId);
+            Assert.Equal(1, command.ExecuteNonQuery());
         }
 
         public async Task<IReadOnlyList<ProviderUsageGoalEvidence>?> ReadProviderHoldSeedEvidenceAsync(

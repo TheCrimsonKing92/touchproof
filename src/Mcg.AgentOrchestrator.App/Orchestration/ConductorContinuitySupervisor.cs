@@ -525,8 +525,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         continue;
                     }
 
-                    var timeoutTask = _delay(_readinessTimeout, timeoutCts.Token);
-                    var completed = await Task.WhenAny(runTask, readiness!.Task, timeoutTask)
+                    var completed = await WaitForSuccessorReadinessAsync(runTask, readiness!.Task, activationMonitor, timeoutCts.Token)
                         .ConfigureAwait(false);
                     if (readiness.Task.IsCompletedSuccessfully)
                     {
