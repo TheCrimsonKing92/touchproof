@@ -120,6 +120,30 @@ public sealed class BoardFillPremiseBulletsTests
             """.ReplaceLineEndings("\n"), BoardFillPremiseBullets.SourceClaimPremise(premise));
     }
 
+    [Theory]
+    [InlineData("  ### Detail", "  ### Detail cites note B7.")]
+    [InlineData("  ```text\n  ```", "  ```text\n  See note B7.\n  ```")]
+    [InlineData("  ```text", "  ```text\n  See note B7.")]
+    [InlineData("  ~~~text\n  ~~~", "  ~~~text\n  See note B7.\n  ~~~")]
+    [InlineData("  ---", "  ---\n  See note B7.")]
+    [InlineData("  ===", "  ===\n  See note B7.")]
+    [InlineData("  <div>", "  <div>\n  See note B7.")]
+    public void SourceClaims_OutdentedProseAfterNestedBlock_StaysOutsideItem(string block, string citedBlock)
+    {
+        var uncitedItem = $"runtime-observation: Rounds failed often.\n{block}\nProse cites note B7.";
+        const string followingProse = "Prose follows the cited observation.";
+        var premise = WithSourceClaims($"""
+            {uncitedItem}
+            - runtime-observation: Figures are recorded below.
+            {citedBlock}
+            {followingProse}
+            """);
+
+        Assert.Equal(3, BoardFillVerifierContract.BulletCount(premise));
+        Assert.Equal(WithSourceClaims($"{uncitedItem}\n{followingProse}").ReplaceLineEndings("\n"),
+            BoardFillPremiseBullets.SourceClaimPremise(premise));
+    }
+
     private static string WithSourceClaims(string bullet) => $"""
         ## Measured premise
         - The first source claim cites `src/First.cs:3`.
